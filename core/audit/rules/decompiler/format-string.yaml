@@ -1,0 +1,60 @@
+rules:
+  - id: decompiler-printf-nonliteral
+    patterns:
+      - pattern: printf($ARG)
+      - pattern-not: printf("...")
+    message: "printf called with non-literal format string"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-134"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-fprintf-nonliteral
+    patterns:
+      - pattern: fprintf($FP, $ARG)
+      - pattern-not: fprintf($FP, "...")
+    message: "fprintf called with non-literal format string"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-134"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-sprintf-nonliteral
+    patterns:
+      - pattern: sprintf($BUF, $ARG)
+      - pattern-not: sprintf($BUF, "...")
+    message: "sprintf called with non-literal format string"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-134"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-snprintf-nonliteral
+    patterns:
+      - pattern: snprintf($BUF, $SZ, $ARG)
+      - pattern-not: snprintf($BUF, $SZ, "...")
+    message: "snprintf called with non-literal format string"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-134"
+      confidence: MEDIUM
+      source: decompiler
+
+  - id: decompiler-syslog-nonliteral
+    patterns:
+      - pattern: syslog($PRI, $ARG)
+      - pattern-not: syslog($PRI, "...")
+    message: "syslog called with non-literal format string"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-134"
+      confidence: MEDIUM
+      source: decompiler

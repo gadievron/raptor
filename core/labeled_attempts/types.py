@@ -21,7 +21,7 @@ import re
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 # Finding signature is a hex hash (compute_finding_signature returns 32
 # chars). Tolerate the SHA-256 full width too. NO path-traversal chars
@@ -37,12 +37,12 @@ _MAX_EXPLOIT_CODE_LEN = 1024 * 1024     # 1 MB of source is generous
 _SHA256_HEX_LEN = 64
 
 __all__ = [
+    "CodeQLEvidence",
     "FailureMode",
     "LabeledAttempt",
-    "SandboxEvidence",
-    "CodeQLEvidence",
-    "WebEvidence",
     "Outcome",
+    "SandboxEvidence",
+    "WebEvidence",
 ]
 
 
@@ -173,7 +173,7 @@ class SandboxEvidence:
     # Trigger bytes
     bytes_hash: str                       # SHA-256 of the trigger bytes
     bytes_len: int                        # for quick filtering without re-hashing
-    bytes_path: Optional[str] = None      # absolute or project-relative file path
+    bytes_path: str | None = None      # absolute or project-relative file path
 
     # Outcome — string value of :class:`core.witness.types.WitnessOutcome`.
     # Keeping the wire format as a string (rather than an Enum field)
@@ -184,18 +184,18 @@ class SandboxEvidence:
     outcome_detail: dict[str, Any] = field(default_factory=dict)
 
     # Target binding
-    target_binary_hash: Optional[str] = None
-    target_source_hash: Optional[str] = None
-    commit_sha: Optional[str] = None      # source-tree commit (ZKPoX-forward)
+    target_binary_hash: str | None = None
+    target_source_hash: str | None = None
+    commit_sha: str | None = None      # source-tree commit (ZKPoX-forward)
 
     # Environment
     mitigations_active: list[str] = field(default_factory=list)
-    arch: Optional[str] = None            # "x86_64" / "aarch64" / ...
-    libc_version: Optional[str] = None
+    arch: str | None = None            # "x86_64" / "aarch64" / ...
+    libc_version: str | None = None
 
     # The exploit source (when applicable — /exploit's LLM-emitted code)
-    exploit_code: Optional[str] = None
-    exploit_language: Optional[str] = None  # "c" / "cpp" / "py" / ...
+    exploit_code: str | None = None
+    exploit_language: str | None = None  # "c" / "cpp" / "py" / ...
 
     def __post_init__(self) -> None:
         # observed_outcome must come from the WitnessOutcome closed
@@ -274,8 +274,8 @@ class CodeQLEvidence:
     after_count: int                      # findings on post-fix DB (want 0)
     is_sound: bool                        # before_count >= 1 AND after_count == 0
 
-    sink_class: Optional[str] = None      # "SQL" / "CommandInjection" / ...
-    database_path: Optional[str] = None   # for reproducibility
+    sink_class: str | None = None      # "SQL" / "CommandInjection" / ...
+    database_path: str | None = None   # for reproducibility
 
 
 @dataclass(frozen=True)
@@ -317,9 +317,9 @@ class LabeledAttempt:
     outcome: Outcome
 
     # === Oracle evidence (exactly one set) ===
-    sandbox_evidence: Optional[SandboxEvidence] = None
-    codeql_evidence: Optional[CodeQLEvidence] = None
-    web_evidence: Optional[WebEvidence] = None
+    sandbox_evidence: SandboxEvidence | None = None
+    codeql_evidence: CodeQLEvidence | None = None
+    web_evidence: WebEvidence | None = None
 
     # === Provenance ===
     producing_model: str = ""             # "claude-haiku-4-5" / "claude-opus-4-7" / ...
@@ -338,7 +338,7 @@ class LabeledAttempt:
     # for outcome="success" runs (no failure to classify) and for
     # records produced before unit #11 (schema-evolution safe via
     # from_dict defaulting).
-    failure_mode: Optional[FailureMode] = None
+    failure_mode: FailureMode | None = None
 
     # === Reproducibility ===
     # Sandbox + CodeQL: deterministic replay → True.
@@ -403,6 +403,12 @@ class LabeledAttempt:
                 f"failure_mode={self.failure_mode!r}. A successful "
                 f"attempt has no failure to classify."
             )
+        # Reproducibility invariant: web evidence is a live-HTTP
+        # point-in-time confirmation — never replayable. Derived (not
+        # rejected) so records persisted by producers that left the
+        # default ``reproducible=True`` load with the correct value.
+        if self.web_evidence is not None and self.reproducible:
+            object.__setattr__(self, "reproducible", False)
         # Normalise timestamp at construction so it is always ISO-8601
         # parseable. Producers that pass garbage get rejected here,
         # not silently mismatched with the filename later. Empty
@@ -440,7 +446,7 @@ class LabeledAttempt:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LabeledAttempt":
+    def from_dict(cls, data: dict[str, Any]) -> LabeledAttempt:
         """Inverse of :meth:`to_dict`. Tolerant of extra keys.
 
         Each evidence sub-construction and the final dataclass init are
@@ -484,7 +490,7 @@ class LabeledAttempt:
         )
         web = _build("web_evidence", WebEvidence, data.get("web_evidence"))
 
-        # Whitelist the spine + provenance fields; ignore unknown keys
+        # Allowlist the spine + provenance fields; ignore unknown keys
         # so schema additions in newer RAPTOR versions don't break old
         # persisted records.
         known = {f.name for f in fields(cls)} - {
@@ -501,9 +507,7 @@ class LabeledAttempt:
         # whole record load (forward-compat for new enum values).
         if "failure_mode" in kw:
             raw_fm = kw["failure_mode"]
-            if raw_fm is None:
-                pass
-            elif isinstance(raw_fm, FailureMode):
+            if raw_fm is None or isinstance(raw_fm, FailureMode):
                 pass
             else:
                 try:

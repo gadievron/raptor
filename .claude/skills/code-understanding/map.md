@@ -77,6 +77,9 @@ Find all dangerous operations:
 - Network requests with user-controlled URLs (SSRF candidates)
 - Template rendering with user data
 - Cryptographic operations (especially key material handling)
+- LDAP injection (`DirContext.search`, `LdapContext` with string-concatenated filters)
+- JNDI lookup (`InitialContext.lookup`, `Context.lookup` with user-controlled names)
+- XXE (`DocumentBuilderFactory`, `SAXParserFactory`, `XMLInputFactory` without disabling external entities)
 
 For each: record file path, line number, and what data reaches it.
 
@@ -269,19 +272,19 @@ and `function`:
   semantics worth its own evidence shape and is deferred.
 * `crypto_inventory` — cryptographic primitive calls + RNG sources. Entry
   `kind` is the call kind (`primitive_call` or `rng_source`); extras:
-  `api` (`openssl` / `kernel` / `libsodium` / `libc`) and `fn` (concrete
-  function matched, e.g. `EVP_EncryptInit_ex`). Covers OpenSSL modern EVP
-  + legacy primitives (AES_/SHA_/HMAC_/DES_/RC4_/MD5_/BF_), Linux kernel
-  crypto API (`crypto_alloc_*`, `crypto_skcipher_*`, `crypto_shash_*`,
-  `crypto_ahash_*`, `crypto_aead_*`), libsodium (`crypto_secretbox_*`,
-  `crypto_box_*`, `crypto_sign_*`, `crypto_aead_*`, `crypto_pwhash_*`),
-  and RNG sources (`RAND_bytes`, `randombytes_buf`, `getrandom`,
-  `get_random_bytes`, libc `rand`/`random`). MbedTLS, Windows BCrypt,
-  Bouncy Castle / Java crypto, and C++ wrappers (Botan, Crypto++) are
-  intentionally out of scope here — add as separate rules when target
-  corpus shows demand. **Soundness**: identifier matching is name-only;
-  a non-crypto project that defines its own `SHA256_Update` will fire.
-  Short names (`rand`, `random`) have highest collision risk.
+  `api` (`openssl` / `kernel` / `libsodium` / `libc` / any tag a shipped
+  pack declares) and `fn` (concrete function matched, e.g.
+  `EVP_EncryptInit_ex`). Per-library coverage is DATA: prefix families +
+  exact names live in per-library API packs
+  (`engine/coccinelle/source_intel/crypto/packs/*.json` — openssl,
+  kernel-crypto, libsodium today) and are rendered into
+  `crypto_calls.cocci` at analyze time; only the universal libc RNG list
+  (`rand`/`random`/`*rand48`) is hardcoded in the rule. Adding MbedTLS /
+  Windows BCrypt / Botan coverage = adding a pack file (see the packs
+  README), not editing cocci. **Soundness**: identifier matching is
+  name-only; a non-crypto project that defines its own `SHA256_Update`
+  will fire. Prefix families deliberately cover future same-namespace
+  members. Short names (`rand`, `random`) have highest collision risk.
 
 ```bash
 libexec/raptor-enrich-context-map-sites "$WORKDIR"
@@ -359,6 +362,40 @@ Tri-state honest — `format_n_write: null` means CONDITIONAL, distinct
 from `false`; consumers must not collapse `null` to `false`. Cache-keyed
 on `(binary_sha256, build_flags_source, schema_version)` — one
 `analyze_binary` call per run. Idempotent.
+
+**[MAP-5h] Build Joern CPG cache (optional)**
+
+When Joern is available and the target contains C/C++/Java/Scala source,
+pre-build a cached CPG so that later `/audit` and `/agentic` runs can
+query callers/callees without the cold-start penalty:
+
+```bash
+libexec/raptor-build-cpg-cache "$WORKDIR"
+```
+
+The script takes only the understand dir — it reads the target path
+from `$WORKDIR/checklist.json` and resolves the cache directory itself,
+so run it after MAP-0 has built the inventory.
+
+Opt-in — skipped when Joern is not installed or the target has no
+supported source files. Writes `cpg-cache-manifest.json` to `$WORKDIR`.
+
+**[MAP-5i] Enrich with Joern taint-flow confirmation (optional)**
+
+After building the CPG cache (MAP-5h), confirm which entry-point → sink
+pairs have a mechanically-verified taint flow. Annotates entry points
+with `has_taint_flow` and `taint_reaches_sinks`, sinks with
+`taint_reached_from`, and adds a `taint_summary` to the context map.
+
+```bash
+libexec/raptor-enrich-context-map-taint "$WORKDIR"
+```
+
+Opt-in — skipped when no CPG cache exists or Joern is not installed.
+Caps at 500 (entry × sink) pairs to prevent combinatorial explosion.
+Idempotent. Downstream consumers: `/validate` Stage B imports
+`has_taint_flow` via the understand bridge, pre-confirming B-3.1
+reachability. `/diagram` renders confirmed flows as solid edges.
 
 **[MAP-6] Record Coverage**
 

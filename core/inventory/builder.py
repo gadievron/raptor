@@ -9,26 +9,25 @@ needs a cached call-graph view of the project.
 import ast
 import fnmatch
 import hashlib
+import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
 
+from core.build.macro_config import extract_build_tus, extract_macro_config
+from core.build.rust_modules import extract_rust_crate_modules
 from core.config import RaptorConfig
 from core.hash import sha256_bytes
 from core.json import load_json
 
-from .languages import LANGUAGE_MAP, detect_language
-from .exclusions import (
-    DEFAULT_EXCLUDES,
-    ROOT_ANCHORED_EXCLUDE_DIRS,
-    is_binary_file,
-    is_generated_file,
-    match_exclusion_reason,
+from .build_membership import (
+    crate_module_excluded,
+    detect_build_excluded,
+    tu_membership_excluded,
 )
-from .extractors import extract_items, count_sloc, compute_interstitial_items
 from .call_graph import (
     extract_call_graph_c,
     extract_call_graph_cpp,
@@ -36,36 +35,38 @@ from .call_graph import (
     extract_call_graph_go,
     extract_call_graph_java,
     extract_call_graph_javascript,
+    extract_call_graph_kotlin,
     extract_call_graph_lua,
     extract_call_graph_php,
     extract_call_graph_python,
     extract_call_graph_ruby,
     extract_call_graph_rust,
+    extract_call_graph_scala,
+    extract_call_graph_swift,
 )
-from .diff import compare_inventories
-from core.build.macro_config import extract_build_tus, extract_macro_config
-from core.build.rust_modules import extract_rust_crate_modules
 from .dead_scope import detect_dead_scopes
-from .build_membership import (
-    crate_module_excluded,
-    detect_build_excluded,
-    tu_membership_excluded,
+from .diff import compare_inventories
+from .exclusions import (
+    DEFAULT_EXCLUDES,
+    ROOT_ANCHORED_EXCLUDE_DIRS,
+    generated_marker_corroborated,
+    is_binary_file,
+    is_generated_file,
+    match_exclusion_reason,
+)
+from .extractors import compute_interstitial_items, count_sloc, extract_items
+from .languages import (
+    LANGUAGE_MAP,
+    RECORD_ONLY_EXTENSIONS,
+    detect_language,
+    refine_language,
 )
 from .module_load_abort import detect_module_load_abort
 from .translation_view import detect_macro_call_targets, preprocess_view
 
 logger = logging.getLogger(__name__)
 
-# Worker cap for the per-file extractor pool. Tree-sitter Tree
-# objects can briefly hold tens of MB per file (large TS / JS
-# sources in particular). On a high-core box ``os.cpu_count()``
-# returns 16+, and the resulting transient peak — workers × tree
-# size — dominated inventory peak RSS on Grafana-scale repos
-# (observed 5.7 GB across the reach stage). Sourced from
-# ``tuning.json`` (``max_inventory_workers``) so operators tune it
-# alongside the other RAPTOR pool sizes; default "auto" resolves to
-# half the available CPU count, capped at 8.
-def _extract_python_dunder_all(content: str) -> Optional[List[str]]:
+def _extract_python_dunder_all(content: str) -> list[str] | None:
     """Return the list of names declared in module-level ``__all__``, or
     ``None`` if not declared (or the file isn't valid Python).
 
@@ -86,7 +87,7 @@ def _extract_python_dunder_all(content: str) -> Optional[List[str]]:
         tree = ast.parse(content)
     except (SyntaxError, ValueError):
         return None
-    names: List[str] = []
+    names: list[str] = []
     saw_declaration = False
     for node in tree.body:
         targets = []
@@ -112,6 +113,15 @@ def _extract_python_dunder_all(content: str) -> Optional[List[str]]:
     return names
 
 
+# Worker cap for the per-file extractor pool. Tree-sitter Tree
+# objects can briefly hold tens of MB per file (large TS / JS
+# sources in particular). On a high-core box ``os.cpu_count()``
+# returns 16+, and the resulting transient peak — workers × tree
+# size — dominated inventory peak RSS on Grafana-scale repos
+# (observed 5.7 GB across the reach stage). Sourced from
+# ``tuning.json`` (``max_inventory_workers``) so operators tune it
+# alongside the other RAPTOR pool sizes; default "auto" resolves to
+# half the available CPU count, capped at 8.
 def _resolved_max_workers() -> int:
     try:
         from core.tuning import load_tuning
@@ -178,14 +188,15 @@ def default_cache_dir(
 
 def build_inventory(
     target_path: str,
-    output_dir: Optional[str] = None,
-    exclude_patterns: Optional[List[str]] = None,
-    extensions: Optional[Set[str]] = None,
+    output_dir: str | None = None,
+    exclude_patterns: list[str] | None = None,
+    extensions: set[str] | None = None,
     skip_generated: bool = True,
     parallel: bool = True,
     allow_unreachable: bool = False,
-    treat_exports_as_entries: Union[bool, str] = "auto",
-) -> Dict[str, Any]:
+    treat_exports_as_entries: bool | str = "auto",
+    scope: list[str] | None = None,
+) -> dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
     Enumerates source files, detects languages, extracts functions via
@@ -269,7 +280,24 @@ def build_inventory(
 
     # Collect files in single pass
     file_list, pruned_dirs = _collect_source_files(target, extensions)
-    logger.info(f"Found {len(file_list)} source files to process")
+    if scope:
+        scope_prefixes = tuple(
+            str((target / s).resolve()) for s in scope
+        )
+        before = len(file_list)
+        # separator-aware: scope "src/a" must not match "src/abc".
+        def _in_scope(f):
+            fp = str(f.resolve())
+            return any(
+                fp == pre.rstrip("/") or fp.startswith(pre.rstrip("/") + "/")
+                for pre in scope_prefixes
+            )
+        file_list = [f for f in file_list if _in_scope(f)]
+        logger.info(
+            "scope filter: %d → %d files (%d excluded)",
+            before, len(file_list), before - len(file_list),
+        )
+    logger.info("Found %d source files to process", len(file_list))
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -308,35 +336,55 @@ def build_inventory(
             total_sloc += result.get('sloc', 0)
 
     if parallel and len(file_list) > 10:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(
+        initargs = (
+            target, exclude_patterns, skip_generated,
+            old_files_by_path, allow_unreachable,
+            macro_config, build_tus, crate_modules,
+        )
+        try:
+            pool = ProcessPoolExecutor(
+                max_workers=MAX_WORKERS,
+                initializer=_init_inventory_worker,
+                initargs=initargs,
+            )
+        except (OSError, RuntimeError):
+            pool = None
+        if pool is None:
+            pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+
+            def submit_fn(fp, pool=pool):
+                return pool.submit(
                     _process_single_file, fp, target, exclude_patterns,
                     skip_generated, old_files_by_path, allow_unreachable,
                     macro_config, build_tus, crate_modules,
-                ): fp
-                for fp in file_list
-            }
+                )
+        else:
+            def submit_fn(fp, pool=pool):
+                return pool.submit(_process_file_in_worker, fp)
+        with pool:
+            futures = {submit_fn(fp): fp for fp in file_list}
             for future in as_completed(futures):
-                # Per-future exception isolation: pre-fix a single
-                # worker raising (tree-sitter parser bug, encoding
-                # issue, or any unforeseen extractor error) bubbled
-                # up through ``future.result()`` and killed the
-                # whole ``as_completed`` loop, abandoning every other
-                # in-flight future. The inventory was then partial
-                # without the operator seeing why. Now: the failing
-                # file is logged at WARNING (file path included so
-                # the operator can reproduce), counted as a skip,
-                # and the rest of the pool finishes.
                 fp = futures[future]
                 try:
-                    _collect_result(future.result())
-                except Exception as exc:
+                    _collect_result(future.result(timeout=300))
+                except Exception as exc:  # noqa: BLE001 — one bad file must not sink the pool
                     logger.warning(
                         "inventory: per-file extractor raised on "
                         "%s — skipping (%s: %s)",
                         fp, exc.__class__.__name__, exc,
                     )
+                    # Record it — a skipped file must never be silently
+                    # invisible in the artifact.
+                    try:
+                        rel = str(fp.relative_to(target)
+                                  if target.is_dir() else fp.name)
+                    except ValueError:
+                        rel = str(fp)
+                    excluded_files.append({
+                        "path": rel,
+                        "reason": "processing_error",
+                        "pattern_matched": exc.__class__.__name__,
+                    })
                     skipped += 1
     else:
         for filepath in file_list:
@@ -420,6 +468,22 @@ def build_inventory(
         try:
             from core.analysis.binary_oracle import enrich_inventory_with_binary_oracle
             enrich_inventory_with_binary_oracle(inventory, bin_paths)
+            # Persist per-binary verdicts into the build-ID-keyed cache
+            # so later runs (and external consumers of the shared cache
+            # dir) can reuse them without re-analysing the binary.
+            # Best-effort — cache trouble never blocks the inventory.
+            try:
+                from core.audit.build_id_cache import (
+                    load_build_id_cache,
+                    store_oracle_verdicts,
+                )
+                store_oracle_verdicts(
+                    load_build_id_cache(), inventory,
+                    source_command="inventory-builder",
+                )
+            except Exception:
+                logger.debug("build-id cache population failed",
+                             exc_info=True)
         except Exception as exc:                          # noqa: BLE001
             logger.warning("binary_oracle enrichment failed for %r: %s",
                            bin_paths, exc)
@@ -430,8 +494,8 @@ def build_inventory(
         if RaptorConfig.BINARY_ORACLE_EDGES:
             try:
                 from core.analysis.binary_oracle_edges import (
-                    extract_direct_call_edges,
                     annotate_inventory_with_edges,
+                    extract_direct_call_edges,
                 )
                 indices = [extract_direct_call_edges(Path(p))
                            for p in bin_paths]
@@ -439,6 +503,20 @@ def build_inventory(
             except Exception as exc:                      # noqa: BLE001
                 logger.warning("binary_oracle_edges extraction failed: %s",
                                exc)
+
+    # Perlasm generated-asm enrichment (asm option b): structurally
+    # detect perlasm generators, run them under the strict sandbox
+    # (fail-closed), and inventory the emitted assembly as
+    # ``asm-generated`` records so shipped generated kernels become
+    # enumerable, reviewable units. Detected-but-unanalysed generators
+    # append loud notes to ``inventory['limitations']`` — never a
+    # silent miss. Best-effort like the binary-oracle enrichment.
+    try:
+        from core.inventory.perlasm import enrich_inventory_with_perlasm
+        enrich_inventory_with_perlasm(inventory, target_path)
+    except Exception as exc:                              # noqa: BLE001
+        logger.warning("perlasm enrichment failed for %s: %s",
+                       target_path, exc)
 
     # Cumulative coverage: carry forward checked_by from previous inventory
     if old_inventory is not None:
@@ -449,6 +527,7 @@ def build_inventory(
                 inventory['source_unchanged'] = True
                 # Carry forward all checked_by data from old inventory
                 _carry_forward_coverage(old_inventory, inventory)
+                _write_inventory_diff(output_path, None)
             else:
                 logger.info(
                     "Source material changed: %d added, %d removed, %d modified",
@@ -457,24 +536,61 @@ def build_inventory(
                 inventory['changes_since_last'] = diff
                 # Carry forward checked_by only for unchanged files
                 _carry_forward_coverage(old_inventory, inventory, modified=set(diff['modified']))
+                _write_inventory_diff(output_path, diff, old_inventory, inventory)
         except (KeyError, TypeError):
             logger.debug("incompatible old inventory, skipping diff", exc_info=True)
 
     from core.inventory import save_checklist
     save_checklist(str(output_path), inventory)
 
-    logger.info(f"Built inventory: {len(files_info)} files, {total_items} items "
-                f"({total_functions} functions, {total_sloc} SLOC, "
-                f"{skipped} skipped, {len(excluded_files)} excluded)")
-    logger.info(f"Saved to: {checklist_file}")
+    logger.info("Built inventory: %d files, %d items "
+                "(%d functions, %d SLOC, %d skipped, %d excluded)",
+                len(files_info), total_items, total_functions,
+                total_sloc, skipped, len(excluded_files))
+    logger.debug("Saved to: %s", checklist_file)
 
     return inventory
 
 
+def _write_inventory_diff(
+    output_path: Path,
+    diff: dict[str, Any] | None,
+    old_inventory: dict[str, Any] | None = None,
+    new_inventory: dict[str, Any] | None = None,
+) -> None:
+    """Persist ``inventory-diff.json`` next to the checklist.
+
+    Consumed by ``core.audit.priority.load_new_functions`` to boost
+    new/changed functions in gap scoring. ``diff=None`` (source
+    unchanged) writes an empty diff so a stale file from an earlier
+    build cannot keep boosting functions that are no longer new.
+    Best-effort — a write failure never blocks the inventory.
+    """
+    payload: dict[str, Any] = {
+        'added': [], 'removed': [], 'modified': [],
+        'functions_added': [], 'functions_changed': [],
+    }
+    if diff is not None:
+        for k in ('added', 'removed', 'modified'):
+            payload[k] = list(diff.get(k) or [])
+        if old_inventory is not None and new_inventory is not None:
+            try:
+                from .diff import function_level_diff
+                payload.update(
+                    function_level_diff(old_inventory, new_inventory))
+            except Exception:
+                logger.debug("function-level diff failed", exc_info=True)
+    try:
+        (output_path / 'inventory-diff.json').write_text(
+            json.dumps(payload, indent=2), encoding='utf-8')
+    except OSError:
+        logger.debug("could not write inventory-diff.json", exc_info=True)
+
+
 def _carry_forward_coverage(
-    old: Dict[str, Any],
-    new: Dict[str, Any],
-    modified: Optional[set] = None,
+    old: dict[str, Any],
+    new: dict[str, Any],
+    modified: set | None = None,
 ) -> None:
     """Carry forward checked_by from old inventory to new for unchanged files.
 
@@ -510,7 +626,7 @@ def _carry_forward_coverage(
                 item['checked_by'] = list(old_coverage[key])
 
 
-def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) -> int:
+def _count_source_files(dirpath: Path, extensions: set[str], cap: int = 1000) -> int:
     """Count files under ``dirpath`` whose extension is a recognised source
     extension, bounded at ``cap`` (we only need "holds source? roughly how
     many" for an operator warning — not an exact census of a huge tree).
@@ -528,8 +644,8 @@ def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) ->
 
 
 def _collect_source_files(
-    target: Path, extensions: Set[str],
-) -> tuple[List[Path], List[Dict[str, Any]]]:
+    target: Path, extensions: set[str],
+) -> tuple[list[Path], list[dict[str, Any]]]:
     """Collect all source files in a single pass.
 
     Returns ``(file_list, pruned_dirs)`` where ``pruned_dirs`` lists
@@ -565,9 +681,9 @@ def _collect_source_files(
         else:
             exact_dir_names.add(bare)
 
-    file_list: List[Path] = []
-    pruned_dirs: List[Dict[str, Any]] = []
-    # Hidden-dir whitelist: pre-fix the blanket `d.startswith('.')`
+    file_list: list[Path] = []
+    pruned_dirs: list[dict[str, Any]] = []
+    # Hidden-dir allowlist: pre-fix the blanket `d.startswith('.')`
     # check pruned EVERY dot-dir, including ones that legitimately
     # carry analysable security-relevant source. Concrete misses:
     #
@@ -584,7 +700,7 @@ def _collect_source_files(
     # `.vscode/`, `.gradle/`, etc.) remain pruned — they're either
     # VCS metadata, tool caches, or editor state with no security
     # value.
-    _HIDDEN_DIR_WHITELIST = frozenset({
+    _HIDDEN_DIR_ALLOWLIST = frozenset({
         ".github",
         ".gitlab",
         ".gitlab-ci",
@@ -594,7 +710,7 @@ def _collect_source_files(
         # that matches a DEFAULT_EXCLUDES dir-shaped pattern.
         kept_dirs = []
         for d in dirs:
-            if d.startswith('.') and d not in _HIDDEN_DIR_WHITELIST:
+            if d.startswith('.') and d not in _HIDDEN_DIR_ALLOWLIST:
                 continue
             if (Path(root) / d).is_symlink():
                 continue
@@ -645,23 +761,90 @@ def _collect_source_files(
             if filepath.is_symlink():
                 continue  # Don't follow symlinks into files outside the repo
             ext = Path(filename).suffix.lower()
-            if ext in extensions:
+            # RECORD_ONLY_EXTENSIONS are source-like files we cannot
+            # parse (parser grammars etc.) — collected so the per-file
+            # pass records them in ``excluded_files`` with a reason
+            # instead of leaving them silently invisible.
+            if ext in extensions or ext in RECORD_ONLY_EXTENSIONS:
                 file_list.append(filepath)
 
     return file_list, pruned_dirs
 
 
+def _is_github_workflow(rel_path: str, content: str) -> bool:
+    """True when a YAML file is a CI workflow with reviewable units.
+
+    Path-based primary signal (anything under ``.github/workflows/``),
+    plus a content check for workflow-shaped YAML found elsewhere
+    (both a trigger block and a ``jobs:`` block at top level — the
+    combination is unique to GitHub workflows among common YAML
+    dialects).
+    """
+    norm = rel_path.replace(os.sep, "/")
+    if ".github/workflows/" in norm or norm.startswith(".github/workflows/"):
+        return True
+    has_jobs = False
+    has_on = False
+    for line in content.split("\n"):
+        if line.startswith("jobs:"):
+            has_jobs = True
+        elif line.startswith(("on:", '"on":', "'on':")):
+            # Quoted spellings included — authors quote the key to
+            # dodge YAML 1.1's on→true boolean coercion.
+            has_on = True
+        if has_jobs and has_on:
+            return True
+    return False
+
+
+_worker_ctx: dict[str, Any] = {}
+
+
+def _init_inventory_worker(
+    target: Path,
+    exclude_patterns: list[str],
+    skip_generated: bool,
+    old_files: dict[str, Any],
+    allow_unreachable: bool,
+    macro_config,
+    build_tus,
+    crate_modules,
+) -> None:
+    _worker_ctx["target"] = target
+    _worker_ctx["exclude_patterns"] = exclude_patterns
+    _worker_ctx["skip_generated"] = skip_generated
+    _worker_ctx["old_files"] = old_files
+    _worker_ctx["allow_unreachable"] = allow_unreachable
+    _worker_ctx["macro_config"] = macro_config
+    _worker_ctx["build_tus"] = build_tus
+    _worker_ctx["crate_modules"] = crate_modules
+
+
+def _process_file_in_worker(filepath: Path) -> dict[str, Any] | None:
+    return _process_single_file(
+        filepath,
+        _worker_ctx["target"],
+        _worker_ctx["exclude_patterns"],
+        _worker_ctx["skip_generated"],
+        _worker_ctx["old_files"],
+        _worker_ctx["allow_unreachable"],
+        _worker_ctx["macro_config"],
+        _worker_ctx["build_tus"],
+        _worker_ctx["crate_modules"],
+    )
+
+
 def _process_single_file(
     filepath: Path,
     target: Path,
-    exclude_patterns: List[str],
+    exclude_patterns: list[str],
     skip_generated: bool = True,
-    old_files: Dict[str, Any] = None,
+    old_files: dict[str, Any] | None = None,
     allow_unreachable: bool = False,
-    macro_config: Optional[object] = None,
-    build_tus: Optional[frozenset] = None,
-    crate_modules: Optional[frozenset] = None,
-) -> Optional[Dict[str, Any]]:
+    macro_config: object | None = None,
+    build_tus: frozenset | None = None,
+    crate_modules: frozenset | None = None,
+) -> dict[str, Any] | None:
     """Process a single file for the inventory.
 
     If old_files contains an entry for this file with a matching SHA-256,
@@ -681,11 +864,22 @@ def _process_single_file(
     # Detect language
     language = detect_language(str(filepath))
     if not language:
+        # Source-like files we still don't parse (parser grammars,
+        # inline-include fragments, Solidity) were previously dropped
+        # with only a counter — invisible in the artifact. Record them
+        # as exclusions so the recall loss is operator-visible; plain
+        # non-source files (docs, data) stay silent.
+        if filepath.suffix.lower() in RECORD_ONLY_EXTENSIONS:
+            return {"path": rel_path, "_excluded": True,
+                    "_reason": "unsupported_source_extension",
+                    "_pattern": filepath.suffix.lower()}
         return None
 
-    # Skip binary files
+    # Skip binary files — recorded, not silent: a source-extension file
+    # with binary content is a skip the operator should see.
     if is_binary_file(filepath):
-        return None
+        return {"path": rel_path, "_excluded": True,
+                "_reason": "binary_content", "_pattern": None}
 
     try:
         try:
@@ -739,8 +933,37 @@ def _process_single_file(
                     "_pattern": f"size>{MAX_FILE_BYTES}"}
         content = raw_bytes.decode('utf-8', errors='ignore')
 
+        _uncorroborated_generated = False
         if skip_generated and is_generated_file(content):
-            return {"path": rel_path, "_excluded": True, "_reason": "generated_file", "_pattern": None}
+            if generated_marker_corroborated(rel_path):
+                return {"path": rel_path, "_excluded": True,
+                        "_reason": "generated_file", "_pattern": None}
+            # The in-file marker is target-controlled text; honouring
+            # it alone let one comment line self-exclude a file from
+            # every analysis tier (evasion channel). Without path
+            # corroboration the file STAYS in the inventory and the
+            # claim rides along as a visible flag consumers may use
+            # to deprioritise — never to skip silently.
+            _uncorroborated_generated = True
+            logger.info(
+                "inventory: %s carries a generated-file marker but no "
+                "generated-shaped path/name — keeping it in the "
+                "inventory (marker alone does not exclude)", rel_path,
+            )
+
+        # Content-based routing: .h headers with C++ markers parse as
+        # C++ (class methods / templates otherwise silently drop);
+        # .inc fragments route to php / asm / c by content.
+        language = refine_language(language, str(filepath), content)
+
+        # YAML is in the inventory for GitHub workflow files (jobs /
+        # steps are the reviewable units — workflow injection surface).
+        # Other YAML has no extractable units; record it as excluded
+        # rather than dropping it silently.
+        if language == "yaml" and not _is_github_workflow(rel_path, content):
+            return {"path": rel_path, "_excluded": True,
+                    "_reason": "yaml_without_reviewable_units",
+                    "_pattern": None}
 
         line_count = content.count('\n') + 1
         sha256 = sha256_bytes(raw_bytes)
@@ -773,7 +996,7 @@ def _process_single_file(
         items = items + compute_interstitial_items(items, parse_text)
         sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             'path': rel_path,
             'language': language,
             'lines': line_count,
@@ -782,6 +1005,35 @@ def _process_single_file(
             '_stat': file_stat,
             'items': [item.to_dict() for item in items],
         }
+        if _uncorroborated_generated:
+            record['generated_marker'] = 'uncorroborated'
+        # Per-item span hashes (core.staleness format: SHA-256[:12] of
+        # the raw span lines). The function-level inventory diff
+        # compares these across runs to find added/changed functions
+        # without needing the previous run's source. Interstitial
+        # residue is skipped (synthetic, not a reviewable unit).
+        # Best-effort — a hash failure just leaves the field absent.
+        try:
+            from core.staleness import hash_spans_text
+            span_items = []
+            spans = []
+            for item_dict in record['items']:
+                ls = item_dict.get('line_start')
+                le = item_dict.get('line_end')
+                if (isinstance(ls, int) and not isinstance(ls, bool)
+                        and isinstance(le, int) and not isinstance(le, bool)
+                        and 0 < ls <= le
+                        and item_dict.get('kind') != 'interstitial'):
+                    span_items.append(item_dict)
+                    spans.append((ls, le))
+            if spans:
+                for item_dict, h in zip(span_items,
+                                        hash_spans_text(content, spans)):
+                    if h:
+                        item_dict['span_hash'] = h
+        except Exception:
+            logger.debug("span-hash stamping failed for %s", rel_path,
+                         exc_info=True)
         # S3: per-function lexical-dead tagging. Functions whose
         # definition lies inside an always-false guard (``if False:``,
         # ``if (false) {…}``, ``#[cfg(any())]``) never bind — the
@@ -846,6 +1098,18 @@ def _process_single_file(
             ).to_dict()
         elif language == 'lua':
             record['call_graph'] = extract_call_graph_lua(
+                parse_text,
+            ).to_dict()
+        elif language == 'scala':
+            record['call_graph'] = extract_call_graph_scala(
+                parse_text,
+            ).to_dict()
+        elif language == 'kotlin':
+            record['call_graph'] = extract_call_graph_kotlin(
+                parse_text,
+            ).to_dict()
+        elif language == 'swift':
+            record['call_graph'] = extract_call_graph_swift(
                 parse_text,
             ).to_dict()
         elif language == 'c':
@@ -931,6 +1195,10 @@ def _process_single_file(
                 }
         return record
 
-    except Exception:
+    except Exception as exc:
         logger.warning("Failed to process %s", filepath, exc_info=True)
-        return None
+        # Recorded, not silent: the file stays visible in the artifact
+        # with a reason instead of vanishing behind a counter.
+        return {"path": rel_path, "_excluded": True,
+                "_reason": "processing_error",
+                "_pattern": exc.__class__.__name__}

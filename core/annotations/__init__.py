@@ -1,18 +1,31 @@
 """Per-function prose annotations stored as markdown mirroring the
 source tree.
 
-An annotation is free-form prose written by the LLM or by a human
-operator, attached to one function in one source file. Annotations
-are markdown files at ``<base>/<source_path>.md`` containing
-``## <function>`` sections, each with an HTML-comment metadata line
-and a prose body.
+An annotation is free-form prose attached to one function in one
+source file. Annotations are markdown files at
+``<base>/<source_path>.md`` containing ``## <function>`` sections,
+each with an HTML-comment metadata line and a prose body.
 
-Initial consumers:
-  * ``/audit`` (Phase A) — captures hypothesis-then-validate evidence
-    per function.
-  * ``/understand`` — exploration notes during code-mapping.
-  * ``/agentic`` — false-positive triage prose, attached to the
-    function the LLM analysed.
+Annotations are the OPERATOR's layer: they are written through the
+``/annotate`` CLI (and the ``/review note`` wrapper), never by
+pipelines. LLM review verdicts live in the review journal
+(``core.coverage.journal``) — the pre-migration LLM annotation
+producers were removed, and machinery only READS annotation files
+(feedback vetoes, FP primers, coverage evidence, IRIS promotion,
+context slices).
+
+Provenance model (see :mod:`core.annotations.provenance`):
+``metadata.source`` is caller-asserted — honest framing: nothing
+here proves a human typed the note, and cryptographic
+proof-of-human was deliberately rejected as overkill. Instead every
+CLI add/edit records the invocation context (which std fds were
+TTYs) alongside the claim, so a laundered "human" note is
+structurally detectable rather than impossible: readers grant
+human-grade weight only to ``source=human`` plus an interactive
+stamp (or legacy stamp-less notes), and demote everything else to
+their machine/hint tier. A genuinely human but fully-detached add
+(cron, all fds redirected) is stamped ``non-tty``; re-run
+interactively or accept hint-tier weight.
 
 Why markdown not JSON:
   * Operator-readable. A reviewer can ``cat`` an annotation file
@@ -40,6 +53,15 @@ Companion design doc: the design memo (sections "Annotations
 from __future__ import annotations
 
 from .models import Annotation
+from .provenance import (
+    INTERACTIVE_TTY,
+    LEGACY,
+    NON_TTY,
+    PROVENANCE_KEYS,
+    classify_provenance,
+    detect_invocation_context,
+    is_human_grade,
+)
 from .storage import (
     annotation_path,
     compute_function_hash,
@@ -50,11 +72,17 @@ from .storage import (
     write_annotation,
 )
 
-
 __all__ = [
+    "INTERACTIVE_TTY",
+    "LEGACY",
+    "NON_TTY",
+    "PROVENANCE_KEYS",
     "Annotation",
     "annotation_path",
+    "classify_provenance",
     "compute_function_hash",
+    "detect_invocation_context",
+    "is_human_grade",
     "iter_all_annotations",
     "read_annotation",
     "read_file_annotations",

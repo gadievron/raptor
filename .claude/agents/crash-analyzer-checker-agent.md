@@ -1,6 +1,7 @@
 ---
 name: crash-analysis-checker
 description: Carefully analyze root cause analysis reports for crashes to make sure they are correct
+tools: Read, Write, Bash, Grep, Glob
 model: inherit
 ---
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Normalise a context-map.json in place using the run dir's checklist.json.
 
 Usage: raptor-normalize-context-map <understand_dir>
@@ -13,13 +15,14 @@ Idempotent — safe to run more than once. Logs warnings for any
 hallucinated files / out-of-range lines / cross-ref typos but never
 errors out (a usable context-map should still get saved).
 """
-import json
 import sys
 from pathlib import Path
 
 # libexec/raptor-normalize-context-map -> repo root (parents[1])
+
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -28,13 +31,18 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-
-from core.json import load_json, save_json
-from core.orchestration.understand_bridge import normalize_context_map
+from core.artifacts.provenance import (  # noqa: E402
+    CONTEXT_MAP_TEXT_SCHEMA,
+    sanitise_free_text,
+    stamp_provenance,
+)
+from core.json import load_json, save_json  # noqa: E402
+from core.orchestration.understand_bridge import normalize_context_map  # noqa: E402
 
 
 def main() -> int:
@@ -65,7 +73,19 @@ def main() -> int:
     target_path = checklist.get("target_path") if isinstance(checklist, dict) else None
 
     normalize_context_map(context_map, checklist, target_path=target_path)
+
+    # Writer-side provenance chokepoint for the in-session /understand
+    # --map artifact: defang free-text fields and stamp the map as
+    # LLM-derived (untrusted) so raptor-validate-schema and downstream
+    # consumers get a mechanical trust signal. Keeps any generator id
+    # an earlier writer recorded (e.g. the binary-analysis pipeline).
+    sanitised = sanitise_free_text(context_map, CONTEXT_MAP_TEXT_SCHEMA)
+    stamp_provenance(context_map, "understand:map",
+                     untrusted=True, overwrite_generator=False)
     save_json(context_map_path, context_map)
+    if sanitised:
+        print(f"raptor-normalize-context-map: sanitised {len(sanitised)} "
+              "free-text field(s)")
     print(f"raptor-normalize-context-map: normalised {context_map_path}")
     return 0
 

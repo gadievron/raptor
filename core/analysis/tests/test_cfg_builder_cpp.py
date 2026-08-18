@@ -22,7 +22,6 @@ from core.analysis.cfg_builder_cpp import (
     build_cpp_intraproc_cfg,
 )
 
-
 # Skip the entire module if the tree-sitter grammar isn't installed
 # in this environment. The repo declares the grammars as optional in
 # ``requirements.txt``; CI installs them. Local dev without the
@@ -56,14 +55,6 @@ def _reachable(cfg: CPPCFG, src: CPPCFGNode) -> set[CPPCFGNode]:
                 seen.add(nxt)
                 stack.append(nxt)
     return seen
-
-
-def _predecessors_of(cfg: CPPCFG, target: CPPCFGNode) -> set[CPPCFGNode]:
-    out = set()
-    for n in cfg.nodes():
-        if target in cfg.successors(n):
-            out.add(n)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +448,7 @@ class TestReturn:
             "}\n"
         )
         cfg = _build(src)
-        ret = [n for n in cfg.nodes() if n.lineno == 2 and "x" in n.uses][0]
+        ret = next(n for n in cfg.nodes() if n.lineno == 2 and "x" in n.uses)
         # `dead()` may still exist as a node but isn't reached by return
         reached_from_ret = _reachable(cfg, ret) - {ret}
         # The only thing the return reaches is the exit

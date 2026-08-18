@@ -12,16 +12,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ._symbols import strip_import_prefix
 from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
+    MACOS_FILESYSTEM_URL_SUBSTRINGS,
+    MACOS_PARSER_SUBSTRINGS,
+    MACOS_PROCESS_EXEC_SUBSTRINGS,
+    MACOS_SECURITY_BOUNDARY_PREFIXES,
     MEMORY_COPY_FUNCS,
     PARSER_FUNCS,
     SCAN_FAMILY_FUNCS,
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
 )
+
+from ._symbols import strip_import_prefix
 
 
 @dataclass(frozen=True)
@@ -69,29 +74,50 @@ def classify_security_api(name: str) -> SurfaceClassification | None:
         return SurfaceClassification(raw, "surface", "parser", False,
                                      "Parser/input API worth tracing, but not a consequence by itself.")
 
+    # macOS categories come from the taxonomy's grouped substring sets
+    # (this consumer used to re-list a drifting subset of them). Match
+    # semantics per the taxonomy contract: substring-in-demangled-name
+    # for dotted Swift symbols, token match for bare Obj-C class names.
     _raw_parts = stripped.replace(".", " ").replace(":", " ").split()
-    if any(token in _raw_parts for token in ("NSTask",)) or stripped.startswith("Foundation.Process"):
+    if _matches_macos_group(stripped, _raw_parts, MACOS_PROCESS_EXEC_SUBSTRINGS):
         return SurfaceClassification(raw, "sink", "process_execution", True,
                                      "Foundation process execution API.")
-    if any(stripped.startswith(prefix) for prefix in (
-        "Foundation.JSONDecoder",
-        "Foundation.JSONSerialization",
-        "Foundation.PropertyList",
-        "Foundation.Data.base64Encoded",
-    )) or base in ("inflate", "CFXML"):
+    if (_matches_macos_group(stripped, _raw_parts, MACOS_PARSER_SUBSTRINGS)
+            or base in ("inflate", "CFXML")):
         return SurfaceClassification(raw, "surface", "parser", False,
                                      "Structured-data parser surface.")
-    if any(stripped.startswith(prefix) for prefix in (
-        "Foundation.Data.contentsOf",
-        "Foundation.URL.fileURLWithPath",
-        "Foundation.URL.absoluteString",
-    )) or base in ("CFURLCreateWithBytes", "readlink"):
+    if (_matches_macos_group(
+            stripped, _raw_parts, MACOS_FILESYSTEM_URL_SUBSTRINGS,
+    ) or base == "readlink"):
         return SurfaceClassification(raw, "surface", "filesystem_or_url", False,
                                      "Filesystem/URL handling surface.")
-    if any(part.startswith(prefix) for part in _raw_parts for prefix in ("SecTrust", "SecPolicy", "SecItem", "SecKeychain")):
+    if any(
+        part.startswith(prefix)
+        for part in _raw_parts
+        for prefix in MACOS_SECURITY_BOUNDARY_PREFIXES
+    ):
         return SurfaceClassification(raw, "surface", "security_boundary", False,
                                      "Security-framework boundary API.")
     return None
+
+
+def _matches_macos_group(
+    stripped: str, parts: list[str], group: frozenset,
+) -> bool:
+    """Substring-match a demangled symbol against a taxonomy group.
+
+    Dotted entries (Swift symbol paths) match as prefixes/substrings of
+    the stripped name; bare entries (Obj-C class / CF function names)
+    match as whole tokens or name prefixes, mirroring the pre-taxonomy
+    branch logic.
+    """
+    for entry in group:
+        if "." in entry:
+            if stripped.startswith(entry) or entry in stripped:
+                return True
+        elif entry in parts or stripped.startswith(entry):
+            return True
+    return False
 
 
 __all__ = ["SurfaceClassification", "classify_security_api"]

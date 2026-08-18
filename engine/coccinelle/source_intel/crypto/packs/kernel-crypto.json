@@ -1,0 +1,30 @@
+{
+  "api": "kernel",
+  "description": "Linux kernel crypto API call surface. Prefix families cover the per-tfm-type verb namespaces (crypto_alloc_*, crypto_skcipher_*, crypto_shash_*, crypto_ahash_*, crypto_akcipher_*) and the RNG sources (get_random_*, prandom_*). The crypto_aead_* verbs are exact names, NOT a prefix: libsodium owns the algorithm-qualified crypto_aead_<alg>_* namespace and a kernel crypto_aead_ prefix would mis-attribute those calls.",
+  "kinds": {
+    "primitive_call": {
+      "prefixes": [
+        "crypto_alloc_",
+        "crypto_skcipher_",
+        "crypto_shash_",
+        "crypto_ahash_",
+        "crypto_akcipher_"
+      ],
+      "names": [
+        "crypto_aead_encrypt",
+        "crypto_aead_decrypt",
+        "crypto_aead_setkey",
+        "crypto_aead_setauthsize"
+      ]
+    },
+    "rng_source": {
+      "prefixes": [
+        "get_random_",
+        "prandom_"
+      ],
+      "names": [
+        "getrandom"
+      ]
+    }
+  }
+}

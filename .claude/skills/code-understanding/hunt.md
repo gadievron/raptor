@@ -47,8 +47,15 @@ Example: *"Pattern: `cursor.execute()` called with a string that contains an f-s
 Search the codebase for the structural pattern:
 - Use Grep for API calls, function names, and syntax patterns
 - Cast wide first, then narrow — start with the sink, then filter for taint
+- If a CPG is available (built by `--map` MAP-5h or present in the project
+  cache), also call `core.orchestration.joern_hunt.find_sink_callsites()`
+  for the target sink — this catches indirect calls, function-pointer
+  dispatch, and vtable calls that grep misses. Merge results with grep
+  hits (union, deduplicate by file:line). If no CPG, fall back to
+  grep-only as today.
 
 Record every match with file path, line number, and the matched code.
+When Joern was used, annotate each match with `joern_callers_found: true`.
 
 **[HUNT-3] Taint Qualification**
 
@@ -56,6 +63,13 @@ For each structural match, quickly assess whether attacker-controlled input can 
 - Is there an obvious untrusted source in the same function?
 - Is the variable populated from a request, file, or external source?
 - Does the call sit behind a public entry point?
+- If a CPG is available, call
+  `core.orchestration.joern_hunt.classify_taint_batch()` to mechanically
+  pre-classify each match. Map Joern `True` to `confirmed_tainted`, Joern
+  `False` to `likely_tainted` (not `false_positive` — Joern's
+  inter-procedural depth is bounded). The LLM still reviews each to make
+  the final call but has mechanical evidence. Annotate each match with
+  `joern_tainted: true/false`.
 
 Classify each match:
 - `confirmed_tainted`: direct evidence of user input reaching the sink
@@ -88,6 +102,8 @@ Rank variants by exploitability:
 
 ```json
 {
+  "provenance": {"generator": "understand:hunt", "untrusted": true, "schema_validated": false},
+  "raptor_schema_version": 2,
   "meta": {
     "seed": "FIND-001 | pattern description",
     "pattern": "cursor.execute() with non-parameterized string",
@@ -142,6 +158,14 @@ Rank variants by exploitability:
 ## Output
 
 OUTPUT: `$WORKDIR/variants.json`
+
+Include the `provenance` block and `raptor_schema_version` exactly as shown in the template — your output is LLM-derived, so `untrusted` is always `true`. Keep free-text fields (`notes`, `description`, `fix_strategy`) as plain prose (no line-leading markdown, no ANSI escapes). Then validate:
+
+```bash
+libexec/raptor-validate-schema variants "$WORKDIR/variants.json"
+```
+
+Fix any reported errors before displaying the summary.
 
 Display a summary to the user:
 - N total matches

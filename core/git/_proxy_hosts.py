@@ -40,7 +40,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ _DEFAULT_GIT_HOSTS: tuple[str, ...] = (
 )
 
 
-def _load_override() -> Optional[list[str]]:
+def _load_override() -> list[str] | None:
     """Return the operator override list, or None when no override is
     configured. Tolerant: malformed JSON, non-UTF-8 bytes, or an
     unexpected schema all degrade to None — production failure mode

@@ -218,7 +218,7 @@ def refine_maven_verdicts(
                     "high",
                     reason=(
                         f"Maven dep declared but the "
-                        f"{len(qualified_names)} OSV-listed "
+                        f"{len(paired)} OSV-listed "
                         f"affected symbol(s) are not called from "
                         f"non-test Java source"
                     ),

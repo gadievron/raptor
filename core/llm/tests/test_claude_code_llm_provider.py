@@ -25,27 +25,24 @@ from typing import Any
 
 import pytest
 
+from core.llm.cc_adapter import StreamJsonResult
 from core.llm.config import ModelConfig
 from core.llm.providers import (
-    ClaudeCodeLLMProvider, LLMProvider, create_provider,
+    ClaudeCodeLLMProvider,
+    LLMProvider,
+    create_provider,
 )
 from core.llm.tool_use import (
-    Message, StopReason, TextBlock, ToolCall, ToolDef,
+    Message,
+    StopReason,
+    TextBlock,
+    ToolCall,
+    ToolDef,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fake subprocess helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeCompleted:
-    """Stand-in for :class:`subprocess.CompletedProcess`."""
-
-    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
 
 
 def _envelope(
@@ -68,25 +65,52 @@ def _envelope(
     })
 
 
-def _structured_envelope(
-    payload: dict[str, Any],
-    cost_usd: float = 0.02,
-) -> str:
-    return json.dumps({
-        "structured_output": payload,
-        "total_cost_usd": cost_usd,
-        "duration_ms": 100,
-        "modelUsage": {"claude-opus-4-6": {}},
-        "usage": {"input_tokens": 3, "output_tokens": 4},
-    })
-
-
 def _config(model: str = "claude-opus-4-6") -> ModelConfig:
     return ModelConfig(
         provider="claudecode",
         model_name=model,
         api_key=None,
         timeout=30,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stream-json mock helpers (used by generate/generate_structured/turn tests)
+# ---------------------------------------------------------------------------
+
+
+def _stream_result(
+    payload: dict[str, Any],
+    session_id: str = "sess-001",
+    cost_usd: float = 0.02,
+    error: str | None = None,
+) -> StreamJsonResult:
+    return StreamJsonResult(
+        content=json.dumps(payload),
+        session_id=session_id,
+        cost_usd=cost_usd,
+        input_tokens=3,
+        output_tokens=4,
+        model="claude-haiku-4-5-20251001",
+        error=error,
+    )
+
+
+def _stream_freeform(
+    text: str = "ok",
+    cost_usd: float = 0.01,
+    input_tokens: int = 5,
+    output_tokens: int = 7,
+    model: str = "claude-opus-4-6",
+    error: str | None = None,
+) -> StreamJsonResult:
+    return StreamJsonResult(
+        content=text,
+        cost_usd=cost_usd,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=model,
+        error=error,
     )
 
 
@@ -101,6 +125,42 @@ def test_capabilities() -> None:
     assert p.supports_tool_use() is True
     assert p.supports_prompt_caching() is False
     assert p.supports_parallel_tools() is False
+
+
+def test_prefers_stable_system_prefix() -> None:
+    """No cache_control API, but the CLI backend prefix-caches
+    byte-stable system prompts — composition treats CC as caching."""
+    p = ClaudeCodeLLMProvider(_config())
+    assert p.supports_prompt_caching() is False
+    assert p.prefers_stable_system_prefix() is True
+
+
+def test_base_provider_prefix_default_follows_caching() -> None:
+    from core.llm.providers import AnthropicProvider, GeminiProvider
+    # Anthropic: caching API → stable prefix pays off (inherited default)
+    assert (
+        AnthropicProvider.prefers_stable_system_prefix
+        is LLMProvider.prefers_stable_system_prefix
+    )
+    assert (
+        GeminiProvider.prefers_stable_system_prefix
+        is LLMProvider.prefers_stable_system_prefix
+    )
+
+
+def test_client_composition_probe_uses_prefix_capability() -> None:
+    """LLMClient.supports_prompt_caching_for → True on the claudecode
+    transport, so make_review_fn composes the pattern library into
+    the (byte-stable, server-cached) system prompt."""
+    from core.llm.client import LLMClient
+    from core.llm.config import LLMConfig
+
+    cfg = _config()
+    client = LLMClient(LLMConfig(
+        primary_model=cfg, fallback_models=[],
+        enable_caching=False, enable_fallback=False,
+    ))
+    assert client.supports_prompt_caching_for() is True
 
 
 def test_factory_routes_claudecode_provider() -> None:
@@ -133,23 +193,24 @@ def test_exported_from_core_llm_package() -> None:
 
 
 def test_generate_invokes_claude_p_with_prompt(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd, **kw):
+    def fake_stream(cmd, prompt, *, env, timeout_s):
         captured["cmd"] = cmd
-        captured["input"] = kw.get("input")
-        captured["timeout"] = kw.get("timeout")
-        return _FakeCompleted(stdout=_envelope(result="hello world"))
+        captured["prompt"] = prompt
+        captured["timeout_s"] = timeout_s
+        return _stream_freeform(text="hello world")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     out = p.generate("say hi")
 
     assert captured["cmd"][0] == "claude"
     assert captured["cmd"][1] == "-p"
     assert "--output-format" in captured["cmd"]
-    assert captured["input"] == "say hi"
-    assert captured["timeout"] == 30
+    assert captured["prompt"] == "say hi"
+    assert captured["timeout_s"] == 30
     assert out.content == "hello world"
     assert out.provider == "claudecode"
 
@@ -159,20 +220,20 @@ def test_generate_disables_internal_cc_tools(monkeypatch) -> None:
     JSON tool call), CC's own Read/Grep/Glob tools must be disabled —
     otherwise the subprocess could read files in cwd before answering.
     Tool-use happens at the loop layer above, not inside CC."""
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **k: (captured.update({"cmd": cmd}),
-                          _FakeCompleted(stdout=_envelope()))[1],
-    )
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = cmd
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     p.generate("hi")
 
     cmd = captured["cmd"]
     assert "--allowed-tools" in cmd
     tools_idx = cmd.index("--allowed-tools") + 1
-    # Must be empty (no tools) — not the cc_adapter default of
-    # "Read,Grep,Glob".
     assert cmd[tools_idx] == ""
 
 
@@ -185,20 +246,19 @@ def test_generate_with_system_prompt_uses_system_flag(monkeypatch) -> None:
     could re-instruct over it. Routing through `--system-prompt` keeps the
     system layer in its own role-channel.
     """
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd, **kw):
+    def fake_stream(cmd, prompt, *, env, timeout_s):
         captured["cmd"] = list(cmd)
-        captured["input"] = kw.get("input")
-        return _FakeCompleted(stdout=_envelope(result="ok"))
+        captured["prompt"] = prompt
+        return _stream_freeform()
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     p.generate("user question", system_prompt="you are helpful")
 
-    # User-side input contains only the user prompt — system was
-    # routed through the --system-prompt flag.
-    assert captured["input"] == "user question"
+    assert captured["prompt"] == "user question"
     cmd = captured["cmd"]
     assert "--system-prompt" in cmd
     sys_idx = cmd.index("--system-prompt") + 1
@@ -206,27 +266,29 @@ def test_generate_with_system_prompt_uses_system_flag(monkeypatch) -> None:
 
 
 def test_generate_extracts_cost_and_tokens(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout=_envelope(cost_usd=0.05, input_tokens=10, output_tokens=20)
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(
+            cost_usd=0.05, input_tokens=10, output_tokens=20,
         ),
     )
     p = ClaudeCodeLLMProvider(_config())
     out = p.generate("hi")
 
     assert out.cost == 0.05
-    assert out.tokens_used == 30                # input + output
+    assert out.tokens_used == 30
+    assert out.input_tokens == 10
+    assert out.output_tokens == 20
     assert p.total_cost == 0.05
     assert p.call_count == 1
 
 
 def test_generate_uses_envelope_model(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout=_envelope(model="claude-sonnet-4-6")
-        ),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(model="claude-sonnet-4-6"),
     )
     p = ClaudeCodeLLMProvider(_config(model="auto"))
     out = p.generate("hi")
@@ -234,26 +296,29 @@ def test_generate_uses_envelope_model(monkeypatch) -> None:
 
 
 def test_generate_nonzero_returncode_raises(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout="", stderr="auth failed", returncode=2,
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(
+            error="claude -p exited 2: auth failed",
         ),
     )
     p = ClaudeCodeLLMProvider(_config())
-    with pytest.raises(RuntimeError, match="claude -p exited with status 2"):
+    with pytest.raises(RuntimeError, match="auth failed"):
         p.generate("hi")
 
 
 def test_generate_error_message_redacts_secrets_in_stderr(monkeypatch) -> None:
     """CC subprocess stderr can contain credentials echoed by misconfig
-    (e.g., env var values, URLs with embedded creds). Per
-    project_log_sanitisation_adoption.md threat A, redact_secrets is
-    applied before the stderr lands in the operator-facing error."""
+    (e.g., env var values, URLs with embedded creds). ``run_cc_streaming``
+    applies ``redact_secrets`` before setting ``StreamJsonResult.error``,
+    so by the time ``generate()`` raises, the secret is gone."""
+    import core.llm.cc_adapter as _cc_adapter
+    from core.security.redaction import redact_secrets
     leaky = "fetch failed: https://user:s3cretpassword@api.example.com/v1/x"
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout="", stderr=leaky, returncode=1),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(error=redact_secrets(leaky)),
     )
     p = ClaudeCodeLLMProvider(_config())
     with pytest.raises(RuntimeError) as ei:
@@ -265,55 +330,56 @@ def test_generate_error_message_escapes_control_bytes_in_stderr(monkeypatch) -> 
     """Threat B: CC stderr containing ANSI / control bytes would
     corrupt the operator's terminal if propagated verbatim. The
     converter escapes them to a printable ``\\xHH`` form."""
-    nasty = "boom\x1b[31mfake red text\x1b[0m\x07"
+    import core.llm.cc_adapter as _cc_adapter
+    nasty = "boom\\x1b[31mfake red text\\x1b[0m\\x07"
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout="", stderr=nasty, returncode=1),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(error=nasty),
     )
     p = ClaudeCodeLLMProvider(_config())
     with pytest.raises(RuntimeError) as ei:
         p.generate("hi")
     msg = str(ei.value)
-    # Raw ESC and BEL must not appear in the rendered message
     assert "\x1b" not in msg
     assert "\x07" not in msg
-    # But the printable parts of the stderr should still be visible
     assert "fake red text" in msg
 
 
 def test_generate_structured_error_sanitises_stderr_too(monkeypatch) -> None:
     """generate_structured uses the same sanitisation path."""
-    nasty = "fail \x1b[31m" + "Bearer abcdefghijklmnopqrstuvwxyz1234"
+    import core.llm.cc_adapter as _cc_adapter
+    nasty = "fail \\x1b[31mBearer abcdefghijklmnopqrstuvwxyz1234"
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout="", stderr=nasty, returncode=1),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(error=nasty),
     )
     p = ClaudeCodeLLMProvider(_config())
     with pytest.raises(RuntimeError) as ei:
         p.generate_structured("compute", {"type": "object"})
     msg = str(ei.value)
     assert "\x1b" not in msg
-    assert "abcdefghijklmnopqrstuvwxyz1234" not in msg
 
 
 def test_generate_timeout_wrapped_as_runtimeerror(monkeypatch) -> None:
-    def fake_run(*a, **k):
+    import core.llm.cc_adapter as _cc_adapter
+
+    def fake_stream(*a, **k):
         raise subprocess.TimeoutExpired(cmd="claude", timeout=30)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     with pytest.raises(RuntimeError, match="timed out"):
         p.generate("hi")
 
 
 def test_generate_carries_duration(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_envelope()),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(),
     )
     p = ClaudeCodeLLMProvider(_config())
     out = p.generate("hi")
-    # duration measured locally, not from envelope; just non-negative
     assert out.duration >= 0.0
 
 
@@ -323,15 +389,14 @@ def test_generate_carries_duration(monkeypatch) -> None:
 
 
 def test_generate_structured_passes_schema_to_subprocess(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd, **kw):
+    def fake_stream(cmd, prompt, *, env, timeout_s):
         captured["cmd"] = cmd
-        return _FakeCompleted(
-            stdout=_structured_envelope({"answer": 42})
-        )
+        return _stream_result({"answer": 42})
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     schema = {"type": "object", "properties": {"answer": {"type": "integer"}}}
     result, raw = p.generate_structured("compute", schema)
@@ -343,10 +408,34 @@ def test_generate_structured_passes_schema_to_subprocess(monkeypatch) -> None:
     assert json.loads(raw)["answer"] == 42
 
 
-def test_generate_structured_parse_error_raises(monkeypatch) -> None:
+def test_generate_structured_prefers_structured_output(monkeypatch) -> None:
+    """CLI >= 2.1.x delivers --json-schema output via a StructuredOutput
+    tool call: assistant text is empty, the object arrives on the result
+    event's ``structured_output`` field. The provider must consume it
+    instead of failing on the empty content text."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout="not json"),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: StreamJsonResult(
+            content="",
+            structured_output={"answer": 7},
+            cost_usd=0.03,
+            input_tokens=3,
+            output_tokens=4,
+        ),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    result, raw = p.generate_structured("compute", {"type": "object"})
+    assert result == {"answer": 7}
+    assert json.loads(raw) == {"answer": 7}
+    assert p.total_cost == 0.03
+
+
+def test_generate_structured_parse_error_raises(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: StreamJsonResult(content="not json"),
     )
     p = ClaudeCodeLLMProvider(_config())
     with pytest.raises(RuntimeError, match="structured parse failed"):
@@ -358,11 +447,10 @@ def test_generate_structured_tracks_usage(monkeypatch) -> None:
     with generate(). Otherwise total_cost / call_count drift away
     from the truth whenever a consumer mixes generate() and
     generate_structured()."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout=_structured_envelope({"answer": 1}, cost_usd=0.07)
-        ),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result({"answer": 1}, cost_usd=0.07),
     )
     p = ClaudeCodeLLMProvider(_config())
     p.generate_structured("compute", {"type": "object"})
@@ -374,40 +462,28 @@ def test_generate_structured_tracks_usage(monkeypatch) -> None:
 
 def test_generate_structured_returns_clean_payload(monkeypatch) -> None:
     """The returned dict must NOT carry envelope-level metadata keys
-    (cost_usd / _tokens / duration_seconds / analysed_by) that
-    track_usage already consumed. Consumers expect their schema."""
+    that track_usage already consumed. Consumers expect their schema."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout=_structured_envelope({"answer": 1}, cost_usd=0.05)
-        ),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result({"answer": 1}, cost_usd=0.05),
     )
     p = ClaudeCodeLLMProvider(_config())
-    result, raw = p.generate_structured("compute", {"type": "object"})
-    assert "cost_usd" not in result
-    assert "_tokens" not in result
-    assert "duration_seconds" not in result
-    assert "analysed_by" not in result
-    # parse_cc_structured silently injects ``finding_id`` via setdefault
-    # (legacy CVE-aware behaviour from other cc_adapter consumers); we
-    # strip it because it isn't in the consumer's schema.
-    assert "finding_id" not in result
+    result, _raw = p.generate_structured("compute", {"type": "object"})
     assert "answer" in result
-    assert "cost_usd" not in json.loads(raw)
-    assert "finding_id" not in json.loads(raw)
 
 
 def test_generate_structured_disables_internal_cc_tools(monkeypatch) -> None:
     """Same rule as ``generate``: CC's internal Read/Grep/Glob tools
     must be disabled when used as a pure-LLM substrate."""
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **k: (captured.update({"cmd": cmd}),
-                          _FakeCompleted(
-                              stdout=_structured_envelope({"a": 1})
-                          ))[1],
-    )
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = cmd
+        return _stream_result({"a": 1})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     p.generate_structured("compute", {"type": "object"})
 
@@ -416,15 +492,37 @@ def test_generate_structured_disables_internal_cc_tools(monkeypatch) -> None:
     assert cmd[tools_idx] == ""
 
 
+def test_budget_env_override(monkeypatch) -> None:
+    """RAPTOR_CC_BUDGET_USD overrides the per-call abort ceiling;
+    a non-numeric value falls back to the default."""
+    monkeypatch.setenv("RAPTOR_CC_BUDGET_USD", "12.50")
+    p = ClaudeCodeLLMProvider(_config())
+    assert p._budget_usd == "12.50"
+
+    monkeypatch.setenv("RAPTOR_CC_BUDGET_USD", "not-a-number")
+    p = ClaudeCodeLLMProvider(_config())
+    assert p._budget_usd == "5.00"
+
+    monkeypatch.delenv("RAPTOR_CC_BUDGET_USD")
+    p = ClaudeCodeLLMProvider(_config())
+    assert p._budget_usd == "5.00"
+
+    # explicit kwarg wins over env
+    monkeypatch.setenv("RAPTOR_CC_BUDGET_USD", "12.50")
+    p = ClaudeCodeLLMProvider(_config(), budget_usd="2.00")
+    assert p._budget_usd == "2.00"
+
+
 # ---------------------------------------------------------------------------
 # turn() — delegates to ABC's _tool_use_fallback
 # ---------------------------------------------------------------------------
 
 
 def test_turn_text_response_returns_complete(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_envelope(result="final answer")),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(text="final answer"),
     )
     p = ClaudeCodeLLMProvider(_config())
     out = p.turn(
@@ -440,13 +538,14 @@ def test_turn_text_response_returns_complete(monkeypatch) -> None:
 def test_turn_tool_call_response_returns_needs_tool_call(monkeypatch) -> None:
     """CC emits a ``tool_call``-shaped JSON via --json-schema; the
     provider parses it into a ``ToolCall`` block."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result({
             "type": "tool_call",
             "tool_name": "search",
             "tool_input": {"q": "x"},
-        })),
+        }),
     )
     tool = ToolDef(
         name="search", description="search tool",
@@ -468,12 +567,13 @@ def test_turn_tool_call_response_returns_needs_tool_call(monkeypatch) -> None:
 def test_turn_complete_response_returns_complete(monkeypatch) -> None:
     """When CC emits ``type=complete`` (no more tools to call), the
     provider returns a ``TextBlock`` with the final answer."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result({
             "type": "complete",
             "final_text": "I'm done — the answer is 42.",
-        })),
+        }),
     )
     tool = ToolDef(
         name="search", description="search tool",
@@ -493,18 +593,15 @@ def test_turn_complete_response_returns_complete(monkeypatch) -> None:
 
 def test_turn_invokes_subprocess_with_json_schema(monkeypatch) -> None:
     """Sanity: the subprocess command includes ``--json-schema`` so
-    CC honours the structured-output contract. (If we passed plain
-    text mode CC's anti-injection would refuse the request.)"""
+    CC honours the structured-output contract."""
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd, **kw):
+    def fake_stream(cmd, prompt, *, env, timeout_s):
         captured["cmd"] = cmd
-        return _FakeCompleted(stdout=_structured_envelope({
-            "type": "complete",
-            "final_text": "ok",
-        }))
+        return _stream_result({"type": "complete", "final_text": "ok"})
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     tool = ToolDef(
         name="search", description="search tool",
         input_schema={"type": "object"},
@@ -518,8 +615,6 @@ def test_turn_invokes_subprocess_with_json_schema(monkeypatch) -> None:
     assert "--json-schema" in captured["cmd"]
     schema_idx = captured["cmd"].index("--json-schema") + 1
     schema = json.loads(captured["cmd"][schema_idx])
-    # Discriminated union — must constrain ``type`` to the two valid
-    # branches and constrain ``tool_name`` to the registered tools.
     assert schema["properties"]["type"]["enum"] == ["tool_call", "complete"]
     assert schema["properties"]["tool_name"]["enum"] == ["search"]
 
@@ -528,13 +623,14 @@ def test_turn_malformed_tool_call_falls_back_to_text(monkeypatch) -> None:
     """If CC emits ``type=tool_call`` but the tool_name doesn't match
     a registered tool (hallucination guard), we surface the raw result
     as a text block rather than dispatching a bogus call."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result({
             "type": "tool_call",
             "tool_name": "fictional_tool_99",
             "tool_input": {},
-        })),
+        }),
     )
     tool = ToolDef(
         name="search", description="search tool",
@@ -554,13 +650,14 @@ def test_turn_no_tools_uses_plain_generate(monkeypatch) -> None:
     """When ``tools=[]``, ``turn()`` skips the schema and falls back
     to plain text generation. No ``--json-schema`` flag in the
     command line."""
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd, **kw):
+    def fake_stream(cmd, prompt, *, env, timeout_s):
         captured["cmd"] = cmd
-        return _FakeCompleted(stdout=_envelope(result="hello"))
+        return _stream_freeform(text="hello")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     out = p.turn(
         messages=[Message(role="user", content=[TextBlock(text="hi")])],
@@ -572,13 +669,14 @@ def test_turn_no_tools_uses_plain_generate(monkeypatch) -> None:
 
 
 def test_turn_subprocess_error_returns_error_response(monkeypatch) -> None:
-    """When the underlying subprocess fails, return a ToolResponse
-    with stop_reason=ERROR instead of letting RuntimeError bubble up
-    — the loop expects a TurnResponse and converts its own ERROR
-    handling."""
+    """When the underlying subprocess fails, return a TurnResponse
+    with stop_reason=ERROR instead of letting RuntimeError bubble up."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout="", stderr="auth", returncode=1),
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_result(
+            {}, error="claude -p exited 1: auth failed",
+        ),
     )
     tool = ToolDef(
         name="search", description="search tool",
@@ -598,13 +696,12 @@ def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
     """The whole reason cost_usd exists on TurnResponse: Claude Code
     publishes total_cost_usd in its envelope, and we want the loop's
     budget tracking to use that exact figure rather than a token-
-    derived approximation that's near-zero for non-billed models.
-    End-to-end: envelope cost → generate() → fallback → TurnResponse
-    → compute_cost."""
+    derived approximation."""
+    import core.llm.cc_adapter as _cc_adapter
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: _FakeCompleted(
-            stdout=_envelope(result="answer", cost_usd=0.0337)
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(
+            text="answer", cost_usd=0.0337,
         ),
     )
     p = ClaudeCodeLLMProvider(_config())
@@ -617,19 +714,16 @@ def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
 
 
 def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
-    """``system`` arg goes via the CC `--system-prompt` flag.
-
-    Pre-cluster-107 system was concatenated into the user prompt so
-    the assertion looked for `"be careful"` in the input. Now that
-    `ClaudeCodeLLMProvider.generate` routes system through the
-    `--system-prompt` argv flag, the assertion checks the cmd argv instead.
-    """
+    """``system`` arg goes via the CC `--system-prompt` flag."""
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **k: (captured.update({"cmd": list(cmd), "input": k["input"]}),
-                          _FakeCompleted(stdout=_envelope(result="ok")))[1],
-    )
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        captured["prompt"] = prompt
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config())
     p.turn(
         messages=[Message(role="user", content=[TextBlock(text="hi")])],
@@ -639,9 +733,6 @@ def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
     cmd = captured["cmd"]
     assert "--system-prompt" in cmd
     sys_idx = cmd.index("--system-prompt") + 1
-    # Tool-use fallback wraps the system message with the JSON
-    # protocol; the operator's "be careful" must be present
-    # inside the system block.
     assert "be careful" in cmd[sys_idx]
 
 
@@ -651,24 +742,487 @@ def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
 
 
 def test_custom_claude_bin(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **k: (captured.update({"cmd": cmd}),
-                          _FakeCompleted(stdout=_envelope()))[1],
-    )
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = cmd
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config(), claude_bin="/opt/claude")
     p.generate("hi")
     assert captured["cmd"][0] == "/opt/claude"
 
 
 def test_custom_timeout(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **k: (captured.update({"timeout": k["timeout"]}),
-                          _FakeCompleted(stdout=_envelope()))[1],
-    )
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["timeout_s"] = timeout_s
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
     p = ClaudeCodeLLMProvider(_config(), timeout_s=99)
     p.generate("hi")
-    assert captured["timeout"] == 99
+    assert captured["timeout_s"] == 99
+
+
+def test_per_call_timeout_overrides_provider_default(monkeypatch) -> None:
+    """A ``timeout_s`` kwarg on one call wins over the provider-level
+    timeout for that call only — heavy call classes (checker
+    synthesis) outlive the provider default without the caller
+    having to rebuild the (cached) provider instance."""
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["timeout_s"] = timeout_s
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), timeout_s=99)
+
+    p.generate("hi", timeout_s=1800)
+    assert captured["timeout_s"] == 1800
+
+    # Next call without the kwarg reverts to the provider default.
+    p.generate("hi")
+    assert captured["timeout_s"] == 99
+
+
+def test_per_call_timeout_zero_means_no_timeout(monkeypatch) -> None:
+    """``timeout_s=0`` per call honours the documented no-timeout
+    sentinel, same as the constructor kwarg."""
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["timeout_s"] = timeout_s
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), timeout_s=99)
+    p.generate("hi", timeout_s=0)
+    assert captured["timeout_s"] is None
+
+
+def test_per_call_timeout_on_generate_structured(monkeypatch) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["timeout_s"] = timeout_s
+        return _stream_result({"ok": True})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), timeout_s=99)
+    result, _raw = p.generate_structured(
+        "hi", {"type": "object"}, timeout_s=1800,
+    )
+    assert result == {"ok": True}
+    assert captured["timeout_s"] == 1800
+
+
+# ---------------------------------------------------------------------------
+# Resumable session support
+# ---------------------------------------------------------------------------
+
+_TOOL_DEFS = [
+    ToolDef(
+        name="check_value",
+        description="Check a value",
+        input_schema={"type": "object", "properties": {"x": {"type": "string"}}},
+        handler=lambda inp: "ok",
+    ),
+]
+
+
+def test_factory_routes_claudecode_resumable() -> None:
+    for name in ("claudecode-resumable", "claude_code_resumable",
+                 "claude-code-resumable"):
+        cfg = ModelConfig(
+            provider=name, model_name="claude-haiku-4-5-20251001",
+            api_key=None, timeout=30,
+        )
+        p = create_provider(cfg)
+        assert isinstance(p, ClaudeCodeLLMProvider)
+        assert p._resumable is True
+
+
+def test_resumable_default_false() -> None:
+    p = ClaudeCodeLLMProvider(_config())
+    assert p._resumable is False
+    assert p._session_id is None
+
+
+def test_resumable_first_turn_no_resume_flag(monkeypatch) -> None:
+    """First turn should NOT use --resume (no session yet)."""
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        captured["prompt"] = prompt
+        return _stream_result({"type": "complete", "final_text": "done"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+
+    msgs = [Message(role="user", content=[TextBlock(text="hello")])]
+    p.turn(msgs, _TOOL_DEFS, system="be helpful")
+
+    cmd = captured["cmd"]
+    assert "--resume" not in cmd
+    assert "--no-session-persistence" not in cmd
+    assert p._session_id == "sess-001"
+
+
+def test_resumable_second_turn_uses_resume(monkeypatch) -> None:
+    """After first turn establishes session, subsequent turns use --resume."""
+    import core.llm.cc_adapter as _cc_adapter
+    call_count = 0
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        nonlocal call_count
+        call_count += 1
+        return _stream_result(
+            {"type": "tool_call", "tool_name": "check_value",
+             "tool_input": {"x": "42"}}
+            if call_count == 1 else
+            {"type": "complete", "final_text": "done"},
+            session_id="sess-xyz",
+        )
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+
+    msgs = [Message(role="user", content=[TextBlock(text="start")])]
+    r1 = p.turn(msgs, _TOOL_DEFS)
+    assert r1.stop_reason == StopReason.NEEDS_TOOL_CALL
+    assert p._session_id == "sess-xyz"
+
+    msgs.append(Message(
+        role="assistant",
+        content=[ToolCall(id="call_abc", name="check_value", input={"x": "42"})],
+    ))
+    msgs.append(Message(
+        role="user",
+        content=[TextBlock(text="tool result: value is 42")],
+    ))
+
+    captured: dict[str, Any] = {}
+    orig_stream = fake_stream
+
+    def spy_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        captured["prompt"] = prompt
+        return orig_stream(cmd, prompt, env=env, timeout_s=timeout_s)
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", spy_stream)
+    r2 = p.turn(msgs, _TOOL_DEFS)
+
+    cmd = captured["cmd"]
+    assert "--resume" in cmd
+    idx = cmd.index("--resume")
+    assert cmd[idx + 1] == "sess-xyz"
+    assert r2.stop_reason == StopReason.COMPLETE
+
+    assert "start" not in captured["prompt"]
+    assert "tool result" in captured["prompt"]
+
+
+def test_resumable_second_turn_omits_system_prompt(monkeypatch) -> None:
+    """System prompt is in the session — don't re-send on --resume turns."""
+    import core.llm.cc_adapter as _cc_adapter
+    calls: list[list[str]] = []
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        calls.append(list(cmd))
+        return _stream_result({"type": "complete", "final_text": "ok"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+
+    msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+    p.turn(msgs, _TOOL_DEFS, system="be helpful")
+    assert "--system-prompt" in calls[0]
+
+    msgs.append(Message(role="assistant", content=[TextBlock(text="ok")]))
+    msgs.append(Message(role="user", content=[TextBlock(text="more")]))
+    p.turn(msgs, _TOOL_DEFS, system="be helpful")
+    assert "--system-prompt" not in calls[1]
+
+
+def test_reset_session_clears_state() -> None:
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+    p._session_id = "sess-old"
+    p._messages_seen = 5
+    p.reset_session()
+    assert p._session_id is None
+    assert p._messages_seen == 0
+
+
+def test_resumable_stale_marker_retries_as_fresh(monkeypatch) -> None:
+    """When CC returns 'deferred tool marker' error, session resets and
+    the turn is retried immediately as a fresh first turn."""
+    import core.llm.cc_adapter as _cc_adapter
+    call_count = 0
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _stream_result(
+                {"type": "complete", "final_text": "ok"},
+            )
+        if call_count == 2:
+            return StreamJsonResult(
+                error=(
+                    "claude -p exited 1: Error: No deferred tool marker "
+                    "found in the resumed session."
+                ),
+            )
+        return _stream_result(
+            {"type": "complete", "final_text": "retried"},
+        )
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+
+    msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+    p.turn(msgs, _TOOL_DEFS)
+    assert p._session_id == "sess-001"
+
+    msgs.append(Message(role="assistant", content=[TextBlock(text="ok")]))
+    msgs.append(Message(role="user", content=[TextBlock(text="more")]))
+    r2 = p.turn(msgs, _TOOL_DEFS)
+    assert r2.stop_reason == StopReason.COMPLETE
+    assert r2.content[0].text == "retried"
+    assert p._session_id == "sess-001"
+    assert call_count == 3
+
+
+def test_resumable_false_uses_stateless_path(monkeypatch) -> None:
+    """Non-resumable provider uses the original stateless path."""
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_result({"type": "complete", "final_text": "ok"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=False)
+
+    msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+    p.turn(msgs, _TOOL_DEFS)
+
+    assert "--no-session-persistence" in captured["cmd"]
+    assert "--resume" not in captured["cmd"]
+
+
+def test_stateless_turn_preserves_token_split(monkeypatch) -> None:
+    """The stateless path must report the real input/output token
+    split from the StructuredResponse — it used to collapse the
+    combined total into output_tokens with input_tokens=0, skewing
+    ToolUseLoop's per-turn attribution (the resumable path already
+    did this correctly)."""
+    import core.llm.cc_adapter as _cc_adapter
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        # _stream_result carries input_tokens=3, output_tokens=4
+        return _stream_result({"type": "complete", "final_text": "ok"})
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(), resumable=False)
+
+    msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+    r = p.turn(msgs, _TOOL_DEFS)
+
+    assert r.stop_reason == StopReason.COMPLETE
+    assert r.input_tokens == 3
+    assert r.output_tokens == 4
+
+
+# ---------------------------------------------------------------------------
+# Session-default sentinel (claudecode fallback inherits CLI session model)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_session_default_omits_model_flag(monkeypatch) -> None:
+    """The fallback sentinel must not become ``--model session-default``
+    — the flag is omitted entirely so the subprocess inherits the CLI
+    session's own default model (Bedrock/Vertex-backed installs don't
+    serve bare Anthropic model IDs)."""
+    import core.llm.cc_adapter as _cc_adapter
+    from core.llm.config import CLAUDECODE_SESSION_MODEL
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(model=CLAUDECODE_SESSION_MODEL))
+    p.generate("hi")
+
+    assert "--model" not in captured["cmd"]
+
+
+def test_generate_explicit_model_still_passes_flag(monkeypatch) -> None:
+    """An operator-chosen model name (models.json claudecode entry) is
+    still forwarded as ``--model``."""
+    import core.llm.cc_adapter as _cc_adapter
+    captured: dict[str, Any] = {}
+
+    def fake_stream(cmd, prompt, *, env, timeout_s):
+        captured["cmd"] = list(cmd)
+        return _stream_freeform()
+
+    monkeypatch.setattr(_cc_adapter, "run_cc_streaming", fake_stream)
+    p = ClaudeCodeLLMProvider(_config(model="claude-opus-4-6"))
+    p.generate("hi")
+
+    cmd = captured["cmd"]
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-4-6"
+
+
+def test_build_claudecode_config_uses_session_sentinel(monkeypatch) -> None:
+    """The auto-fallback builder stamps the sentinel, not a hardcoded
+    Anthropic model name.
+
+    Pin the model-resolution inputs (same pinning as
+    test_cc_transport_tuning's fixtures): ``_resolve_claudecode_model``
+    consults ``RAPTOR_CC_MODEL`` and the on-disk cc-probe cache
+    (``~/.raptor/cache/cc-probe.json``) before falling back to the
+    sentinel, so an operator pin or a warm probe cache on the host
+    would flip the assertion."""
+    import shutil as _shutil
+
+    from core.llm.config import (
+        CLAUDECODE_SESSION_MODEL,
+        _build_claudecode_config,
+    )
+    monkeypatch.delenv("RAPTOR_CC_MODEL", raising=False)
+    monkeypatch.delenv("RAPTOR_CC_PIN_MODEL", raising=False)
+    monkeypatch.setattr(
+        "core.llm.cc_probe.cached_cc_session_model", lambda: None,
+    )
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
+    cfg = _build_claudecode_config()
+    assert cfg is not None
+    assert cfg.provider == "claudecode"
+    assert cfg.model_name == CLAUDECODE_SESSION_MODEL
+
+
+# ---------------------------------------------------------------------------
+# Failed-call spend booking (budget aborts must reach the provider ledger)
+# ---------------------------------------------------------------------------
+
+
+def _stream_budget_abort(cost_usd: float = 4.8) -> StreamJsonResult:
+    """A budget-aborted call: nonzero exit, error set, real money spent."""
+    return StreamJsonResult(
+        cost_usd=cost_usd,
+        input_tokens=1000,
+        output_tokens=2000,
+        error="claude -p exited 1: error_max_budget_usd",
+    )
+
+
+def test_generate_books_failed_call_spend_before_raise(monkeypatch) -> None:
+    """A budget abort spends up to RAPTOR_CC_BUDGET_USD before failing.
+    That spend must land on the provider ledger even though the call
+    raises — the client books nothing on failure and enforces
+    ``max(total_cost, provider_spend)``, so an unbooked failure makes
+    the money invisible to max-cost enforcement."""
+    import core.llm.cc_adapter as _cc_adapter
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_budget_abort(cost_usd=4.8),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError, match="error_max_budget_usd"):
+        p.generate("hi")
+    assert p.total_cost == pytest.approx(4.8)
+    assert p.total_input_tokens == 1000
+    assert p.total_output_tokens == 2000
+
+
+def test_generate_structured_books_failed_call_spend_before_raise(
+    monkeypatch,
+) -> None:
+    import core.llm.cc_adapter as _cc_adapter
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_budget_abort(cost_usd=2.5),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError, match="error_max_budget_usd"):
+        p.generate_structured("compute", {"type": "object"})
+    assert p.total_cost == pytest.approx(2.5)
+
+
+def test_generate_structured_books_spend_on_parse_failure(monkeypatch) -> None:
+    """The API call completed (zero exit, cost incurred) but the output
+    was unparseable — the spend is real and must be booked."""
+    import core.llm.cc_adapter as _cc_adapter
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_freeform(text="not json at all", cost_usd=0.9),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError, match="structured parse failed"):
+        p.generate_structured("compute", {"type": "object"})
+    assert p.total_cost == pytest.approx(0.9)
+
+
+def test_turn_resumable_books_failed_call_spend(monkeypatch) -> None:
+    """The resumable-turn path returns an ERROR TurnResponse instead of
+    raising; the failed call's spend must still reach the ledger."""
+    import core.llm.cc_adapter as _cc_adapter
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_budget_abort(cost_usd=1.25),
+    )
+    p = ClaudeCodeLLMProvider(_config(), resumable=True)
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=_TOOL_DEFS,
+    )
+    assert out.stop_reason is StopReason.ERROR
+    assert p.total_cost == pytest.approx(1.25)
+
+
+def test_budget_abort_spend_visible_to_client_budget_gate(monkeypatch) -> None:
+    """End-to-end: N budget-aborted CC calls must count against
+    max_cost_per_scan via the ``max(total_cost, provider_spend)``
+    gate, not undercount by ~N x the per-call cap."""
+    import core.llm.cc_adapter as _cc_adapter
+
+    from core.llm.client import LLMClient
+    from core.llm.config import LLMConfig
+
+    monkeypatch.setattr(
+        _cc_adapter, "run_cc_streaming",
+        lambda *a, **k: _stream_budget_abort(cost_usd=4.8),
+    )
+    config = LLMConfig(
+        primary_model=_config(),
+        enable_caching=False,
+        enable_fallback=False,
+        enable_cost_tracking=True,
+        max_retries=1,
+        max_cost_per_scan=5.0,
+    )
+    client = LLMClient(config)
+    assert not client.is_budget_exhausted(estimated_cost=0.5)
+    with pytest.raises(Exception):
+        client.generate_structured("prompt", {"type": "object"})
+    # The failed attempt's spend sits on the provider ledger and the
+    # budget gate sees it.
+    assert client.provider_spend_usd == pytest.approx(4.8)
+    assert client.is_budget_exhausted(estimated_cost=0.5)

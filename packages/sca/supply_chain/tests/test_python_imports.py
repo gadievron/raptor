@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
-from packages.sca.supply_chain.python_imports import scan_target
+from packages.sca.supply_chain.python_imports import (
+    _SUSPICIOUS_ATTR_PAIRS,
+    _SUSPICIOUS_MODULE_PREFIXES,
+    _is_suspicious_call,
+    scan_target,
+)
 
 
 def _write(p: Path, body: str) -> None:
@@ -288,3 +294,61 @@ else:
         "function def inside else-branch should not flag — "
         f"got {findings}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Suspicious-call config — the (module, attr) pair set vs the prefix set
+# ---------------------------------------------------------------------------
+
+
+def _call(src: str) -> ast.Call:
+    node = ast.parse(src).body[0]
+    assert isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+    return node.value
+
+
+def test_no_pair_root_shadowed_by_prefix_set() -> None:
+    """Every attr-pair root must be reachable: a root that is also in
+    the prefix set is dead config, because the prefix match returns
+    first and already flags every call on it."""
+    for root, _attr in _SUSPICIOUS_ATTR_PAIRS:
+        assert root not in _SUSPICIOUS_MODULE_PREFIXES, (
+            f"pair root {root!r} is dead config — the prefix match "
+            "already flags every call on it"
+        )
+
+
+def test_prefix_modules_still_flagged() -> None:
+    """Calls on prefix-set modules are flagged by the prefix match
+    alone — the pair set does not need to (redundantly) list them."""
+    for src in (
+        "os.system('id')",
+        "os.popen('id')",
+        "subprocess.run(['id'])",
+        "subprocess.Popen(['id'])",
+        "socket.create_connection(('h', 80))",
+        "urllib.request.urlopen('http://x')",
+        "requests.get('http://x')",
+        "httpx.post('http://x')",
+        "http.client.HTTPConnection('x')",
+    ):
+        assert _is_suspicious_call(_call(src)), src
+
+
+def test_importlib_pairs_still_flagged() -> None:
+    assert _is_suspicious_call(_call("importlib.import_module('x')"))
+    assert _is_suspicious_call(_call("importlib.__import__('x')"))
+
+
+def test_benign_calls_not_flagged() -> None:
+    for src in (
+        "json.loads('{}')",
+        "logging.getLogger('x')",
+        "importlib.reload(mod)",
+    ):
+        assert not _is_suspicious_call(_call(src)), src
+
+
+def test_bare_calls_still_flagged() -> None:
+    assert _is_suspicious_call(_call("eval('1')"))
+    assert _is_suspicious_call(_call("__import__('os')"))

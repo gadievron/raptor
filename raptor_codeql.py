@@ -26,15 +26,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.config import RaptorConfig
 from core.json import save_json
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-
 from core.logging import get_logger
-from core.sarif.parser import load_sarif
 from core.sage.hooks import (
-    format_sage_memories_for_prompt,
-    recall_context_for_codeql_build,
     store_codeql_build_reliability,
 )
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.sarif.parser import load_sarif
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
 
@@ -43,7 +40,7 @@ logger = get_logger()
 
 def get_llm_client():
     """Initialize LLM client from existing RAPTOR system."""
-    from packages.llm_analysis import get_client
+    from core.llm.factory import get_client
     return get_client()
 
 
@@ -52,8 +49,8 @@ def get_exploit_validator(work_dir: Path):
     try:
         from packages.autonomous.exploit_validator import ExploitValidator
         return ExploitValidator(work_dir)
-    except Exception as e:
-        logger.warning(f"Exploit validator not available: {e}")
+    except Exception as e:  # noqa: BLE001 — optional component, degrade
+        logger.warning("Exploit validator not available: %s", e)
         return None
 
 
@@ -62,8 +59,8 @@ def get_multi_turn_analyzer(llm_client):
     try:
         from packages.autonomous.dialogue import MultiTurnAnalyser
         return MultiTurnAnalyser(llm_client)
-    except Exception as e:
-        logger.warning(f"Multi-turn analyzer not available: {e}")
+    except Exception as e:  # noqa: BLE001 — optional component, degrade
+        logger.warning("Multi-turn analyzer not available: %s", e)
         return None
 
 
@@ -74,9 +71,16 @@ def run_autonomous_workflow(args):
     Args:
         args: Parsed command-line arguments
     """
-    logger.info(f"{'=' * 70}")
+    logger.info("%s", "=" * 70)
     logger.info("RAPTOR CODEQL - AUTONOMOUS SECURITY ANALYSIS")
-    logger.info(f"{'=' * 70}")
+    logger.info("%s", "=" * 70)
+
+    # Flip the IRIS Tier 1 master switch for this invocation. The
+    # config is process-scoped, so this run's QueryRunner pack
+    # analysis and any in-process dataflow validation see it without
+    # bleeding into other consumers. Reset is implicit (process exit).
+    if getattr(args, "no_iris_tier1", False):
+        RaptorConfig.IRIS_TIER1_ENABLED = False
 
     # Parse languages — filter out empty entries from leading /
     # trailing / consecutive commas. Pre-fix `--languages
@@ -104,11 +108,6 @@ def run_autonomous_workflow(args):
             logger.error("--build-command requires exactly one language")
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
-    sage_rows = recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
-    sage_build_ctx = format_sage_memories_for_prompt(sage_rows)
-    if sage_build_ctx:
-        logger.info("SAGE CodeQL build recall (methodology domain):\n%s", sage_build_ctx[:4000])
-
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
     logger.info("PHASE 1: CODEQL SCANNING")
@@ -126,7 +125,7 @@ def run_autonomous_workflow(args):
         force_db_creation=args.force,
         use_extended=args.extended,
         min_files=args.min_files,
-        sage_build_recall=sage_build_ctx or None,
+        traced_build=args.traced_build,
     )
 
     if not scan_result.success:
@@ -134,7 +133,7 @@ def run_autonomous_workflow(args):
         agent.print_summary(scan_result)
         sys.exit(1)
 
-    logger.info(f"\n✓ Phase 1 complete: {scan_result.total_findings} findings")
+    logger.info("\n✓ Phase 1 complete: %d findings", scan_result.total_findings)
 
     # Check if we should do autonomous analysis
     if args.scan_only:
@@ -145,6 +144,18 @@ def run_autonomous_workflow(args):
     if scan_result.total_findings == 0:
         logger.info("No findings - skipping autonomous analysis")
         agent.print_summary(scan_result)
+        # Record the build outcome for cross-run reliability memory —
+        # a build that completed but produced zero findings is a
+        # distinct (and useful) signal from "success with findings".
+        # Pre-fix this early return skipped the store entirely, so
+        # "no_findings" was never recorded.
+        store_codeql_build_reliability(
+            repo_path=args.repo,
+            languages=languages or [],
+            build_command=args.build_command or "auto",
+            auto_detect_outcome="no_findings",
+            analyses_completed=0,
+        )
         return
 
     # PHASE 2: Autonomous Analysis
@@ -180,7 +191,7 @@ def run_autonomous_workflow(args):
     total_exploits_compiled = 0
 
     for sarif_file in scan_result.sarif_files:
-        logger.info(f"\nAnalyzing SARIF: {sarif_file}")
+        logger.info("\nAnalyzing SARIF: %s", sarif_file)
 
         sarif = load_sarif(Path(sarif_file))
         if not sarif:
@@ -188,7 +199,7 @@ def run_autonomous_workflow(args):
 
         runs = sarif.get("runs", [])
         if not runs:
-            logger.warning(f"No runs in SARIF file: {sarif_file}")
+            logger.warning("No runs in SARIF file: %s", sarif_file)
             continue
         run = runs[0]
         results = run.get("results", [])
@@ -198,12 +209,12 @@ def run_autonomous_workflow(args):
         if remaining <= 0:
             break
         findings_to_analyze = results[:remaining]
-        logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
+        logger.info("Analyzing %d findings...", len(findings_to_analyze))
 
         from core.reporting.formatting import display_rule_id
         for i, result in enumerate(findings_to_analyze, 1):
             rule_id = result.get("ruleId", "unknown")
-            logger.info(f"\n[{i}/{len(findings_to_analyze)}] {display_rule_id(rule_id)}")
+            logger.info("\n[%d/%d] %s", i, len(findings_to_analyze), display_rule_id(rule_id))
 
             try:
                 analysis = autonomous_analyzer.analyze_finding_autonomous(
@@ -227,9 +238,9 @@ def run_autonomous_workflow(args):
 
                 # Log results
                 if analysis.exploitable:
-                    logger.info(f"✓ Exploitable (score: {analysis.analysis.exploitability_score:.2f})")
+                    logger.info("✓ Exploitable (score: %.2f)", analysis.analysis.exploitability_score)
                     if analysis.exploit_code:
-                        logger.info(f"  Exploit generated: {len(analysis.exploit_code)} bytes")
+                        logger.info("  Exploit generated: %d bytes", len(analysis.exploit_code))
                         if analysis.exploit_compiled:
                             logger.info("  ✓ Exploit compiled successfully")
                         else:
@@ -238,7 +249,8 @@ def run_autonomous_workflow(args):
                     logger.info("✗ Not exploitable")
 
             except Exception as e:
-                logger.error(f"Analysis failed: {e}", exc_info=True)
+                # RaptorLogger has no .exception method
+                logger.error("Analysis failed: %s", e, exc_info=True)  # noqa: G201
 
     # Save autonomous analysis summary
     short_circuits = getattr(llm_client, "short_circuits", 0)
@@ -249,6 +261,18 @@ def run_autonomous_workflow(args):
         "exploits_generated": total_exploits_generated,
         "exploits_compiled": total_exploits_compiled,
         "fast_tier_short_circuits": short_circuits,
+        # Refinement/duration provenance: distinguishes "compiled first
+        # try" from "compiled after N LLM repairs" and shows where the
+        # wall-clock went.
+        "findings_needing_refinement": sum(
+            1 for r in autonomous_results if r.refinement_iterations
+        ),
+        "total_refinement_iterations": sum(
+            r.refinement_iterations for r in autonomous_results
+        ),
+        "total_analysis_seconds": round(
+            sum(r.total_duration_seconds for r in autonomous_results), 2
+        ),
         "scan_result": scan_result.to_dict(),
     }
 
@@ -256,6 +280,8 @@ def run_autonomous_workflow(args):
     save_json(summary_file, summary)
     # Future-agent note: post-run reliability memory is additive only; failures
     # inside SAGE hooks must not fail the CodeQL workflow.
+    # total_findings > 0 is guaranteed here — the zero-findings path
+    # early-returned above (recording "no_findings").
     store_codeql_build_reliability(
         repo_path=args.repo,
         languages=languages or [],
@@ -264,7 +290,7 @@ def run_autonomous_workflow(args):
         analyses_completed=total_analyzed,
     )
 
-    logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
+    logger.info("\n✓ Autonomous analysis summary saved: %s", summary_file)
 
     # Print final summary
     print(f"\n{'=' * 70}")
@@ -310,7 +336,20 @@ Examples:
 
     parser.add_argument("--repo", required=True, help="Repository path")
     parser.add_argument("--languages", help="Comma-separated languages")
-    parser.add_argument("--build-command", help="Custom build command")
+    parser.add_argument("--build-command", help="Custom build command (implies a traced build for that language)")
+    parser.add_argument(
+        "--traced-build", action="store_true",
+        help="Opt into traced-build C/C++ extraction. Default is buildless "
+             "(--build-mode=none, CodeQL >= 2.16): the repo's build scripts "
+             "never execute. Traced builds run repo-controlled code under "
+             "the sandbox — only use on repos you trust.",
+    )
+    parser.add_argument(
+        "--no-traced-build", action="store_true",
+        help="Force buildless extraction for this run, overriding both "
+             "--traced-build and the active project's 'build' trust "
+             "marker (raptor project trust build).",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument(
         "--force", action="store_true",
@@ -323,6 +362,13 @@ Examples:
     parser.add_argument("--extended", action="store_true", help="Use extended security suites")
     parser.add_argument("--min-files", type=int, default=3, help="Min files to detect language")
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI")
+    parser.add_argument(
+        "--no-iris-tier1", action="store_true",
+        help="Skip the IRIS Tier 1 in-repo LocalFlowSource pack analysis "
+             "for this run (flips RaptorConfig.IRIS_TIER1_ENABLED). Use "
+             "when the in-repo packs produce noise on a specific target "
+             "or when comparing stdlib-only vs LocalFlowSource verdicts.",
+    )
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
     parser.add_argument(
         "--allow-unreachable",
@@ -366,6 +412,11 @@ Examples:
                         help="Trust the target repo's config and skip safety checks "
                              "(.claude/settings*.json, .mcp.json, codeql-pack.yml, "
                              "qlpack.yml, .github/codeql/codeql-config.yml).")
+    parser.add_argument("--no-trust-repo", action="store_true",
+                        help="Keep the strict trust checks for this run, "
+                             "overriding both --trust-repo and the active "
+                             "project's 'config' trust marker "
+                             "(raptor project trust config).")
     parser.add_argument(
         "--phase-timeout", type=int,
         default=RaptorConfig.CODEQL_TIMEOUT, metavar="SECONDS",
@@ -400,7 +451,7 @@ Examples:
         args, run_dir=args.out, export_env=True,
     )
     if _sc is not None:
-        logger.info(f"Sanitizer-cut mode: {_sc.mode}")
+        logger.info("Sanitizer-cut mode: %s", _sc.mode)
     # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
     # lives in the shared CLI helper — explicit path validation,
     # auto-detect walk, active-project binary layering, RaptorConfig
@@ -408,6 +459,13 @@ Examples:
     # uses the same call site to keep behaviour aligned.
     from core.analysis.binary_oracle_cli import apply_to_config
     apply_to_config(args, Path(args.repo), parser=parser)
+    # Project trust markers (schema v4): resolve the active project's
+    # 'config' / 'build' markers into args.trust_repo / args.traced_build.
+    # Per-run flags always win (negative > positive > marker > off);
+    # a banner line prints when a marker affects this run. Mirrors the
+    # persisted-binaries loading path above.
+    from core.project.trust import apply_project_trust_flags
+    apply_project_trust_flags(args)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
     # caller-supplied paths against project trust state). Pre-fix
@@ -440,7 +498,8 @@ Examples:
         )
         sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
+        # RaptorLogger has no .exception method
+        logger.error("Fatal error: %s", e, exc_info=True)  # noqa: G201
         print(f"\n✗ Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 

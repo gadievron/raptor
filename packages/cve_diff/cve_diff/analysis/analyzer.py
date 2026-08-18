@@ -18,11 +18,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
+from core.security.prompt_defense_profiles import CONSERVATIVE
+from core.security.prompt_envelope import UntrustedBlock, build_prompt
+
 from cve_diff.core.models import DiffBundle
 from cve_diff.llm.client import ResilientLLMClient
 
 DEFAULT_MODEL = "claude-opus-4-7"
 DIFF_PROMPT_LIMIT = 32_000  # Bytes of diff passed to the model.
+
+_SYSTEM_PROMPT = (
+    "You are a precise, concise security engineer. Always respond "
+    "with a single valid JSON object matching the requested schema. "
+    "No prose before or after the JSON."
+)
 
 # The single LLM prompt template uses ``${var}`` substitutions only —
 # no loops, no conditionals, no inheritance — so ``string.Template``
@@ -74,15 +83,11 @@ class RootCauseAnalyzer:
     diff_limit: int = DIFF_PROMPT_LIMIT
 
     def analyze(self, bundle: DiffBundle) -> RootCause:
-        prompt = self._render_prompt(bundle)
+        system, prompt = self._render_prompt(bundle)
         response = self.client.complete(
             model_id=self.model_id,
             prompt=prompt,
-            system=(
-                "You are a precise, concise security engineer. Always respond "
-                "with a single valid JSON object matching the requested schema. "
-                "No prose before or after the JSON."
-            ),
+            system=system,
             max_tokens=1500,
         )
         data = _parse_json_payload(response.text)
@@ -116,15 +121,47 @@ class RootCauseAnalyzer:
                 f"response missing required field: {exc}. got={_safe_data}"
             ) from exc
 
-    def _render_prompt(self, bundle: DiffBundle) -> str:
+    def _render_prompt(self, bundle: DiffBundle) -> tuple[str, str]:
+        """Render ``(system, user)`` for the root-cause call.
+
+        The diff body is attacker-authored content (the patched repo's
+        own bytes) — it is routed through ``build_prompt`` /
+        ``UntrustedBlock`` so it lands inside a nonce'd untrusted
+        envelope (tag-forgery neutralisation, autofetch strip,
+        control-char escape) rather than being Template-substituted
+        into the trusted prompt as raw text. CONSERVATIVE keeps the
+        floor defences without base64/datamarking, so the model still
+        reads the diff verbatim. The system message carries the
+        envelope priming produced by ``build_prompt``.
+        """
         tmpl = _load_template("root_cause.txt")
         diff_text = bundle.diff_text
         if len(diff_text) > self.diff_limit:
             diff_text = diff_text[: self.diff_limit] + "\n[...truncated...]"
+        pb = build_prompt(
+            system=_SYSTEM_PROMPT,
+            profile=CONSERVATIVE,
+            untrusted_blocks=(
+                UntrustedBlock(
+                    content=diff_text,
+                    kind="patch-diff",
+                    origin=(
+                        f"{bundle.repo_ref.repository_url}"
+                        f"@{bundle.commit_after}"
+                    ),
+                ),
+            ),
+        )
+        system = "\n\n".join(
+            m.content for m in pb.messages if m.role == "system"
+        )
+        diff_block = "\n\n".join(
+            m.content for m in pb.messages if m.role == "user"
+        )
         # ``substitute`` (not ``safe_substitute``) so a missing key
         # raises immediately rather than silently leaving ``$placeholder``
         # in the rendered prompt.
-        return tmpl.substitute(
+        user = tmpl.substitute(
             cve_id=bundle.cve_id,
             repository_url=bundle.repo_ref.repository_url,
             commit_after=bundle.commit_after,
@@ -132,8 +169,9 @@ class RootCauseAnalyzer:
             files_changed=bundle.files_changed,
             diff_bytes=bundle.bytes_size,
             diff_limit=self.diff_limit,
-            diff_text=diff_text,
+            diff_block=diff_block,
         )
+        return system, user
 
 
 # `\{.*?\}` lazy + DOTALL on hostile input: a response containing

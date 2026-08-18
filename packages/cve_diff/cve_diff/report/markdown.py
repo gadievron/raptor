@@ -13,17 +13,6 @@ from cve_diff.core.models import DiffBundle
 DIFF_BODY_LIMIT_BYTES = 256 * 1024
 
 
-_DISCOVER_TOOLS: frozenset[str] = frozenset({
-    "osv_raw", "osv_expand_aliases", "nvd_raw", "deterministic_hints",
-    "gh_search_repos", "gh_search_commits", "gh_commit_detail",
-    "gh_list_commits_by_path", "gh_compare", "git_ls_remote",
-    "gitlab_commit", "cgit_fetch", "fetch_distro_advisory",
-    "oracle_check", "check_diff_shape", "http_fetch",
-})
-_VERIFY_TOOLS: frozenset[str] = frozenset({
-    "gh_commit_detail", "gitlab_commit", "cgit_fetch",
-})
-
 # Group tool names by intent so the per-tool flow reads as a high-level
 # strategy ("Look up known data" / "Verify candidate" / etc.) rather
 # than a raw 17-tool log. Adjacent same-intent calls collapse into one
@@ -157,9 +146,6 @@ def render_flow(cve_id: str, jsonl_lines: list[str], *,
     paths to draw stage 2-5 headers correctly.
     """
     out: list[str] = [f"# {cve_id} — pipeline trace", ""]
-    if not jsonl_lines:
-        out.append("_(no tool calls were captured)_")
-        return "\n".join(out) + "\n"
 
     # Headline outcome
     out.append("## Outcome")
@@ -184,10 +170,28 @@ def render_flow(cve_id: str, jsonl_lines: list[str], *,
         discover_glyph = "✓"
     out.append(f"## Stage 1 — DISCOVER {discover_glyph}")
     out.append("")
-    out.append(f"_Agent's strategy ({n_calls} tool call{'s' if n_calls != 1 else ''}):_")
-    out.append("")
-    for step in steps:
-        out.append(_render_intent_step(step))
+    if not steps:
+        # Zero-tool-call path (e.g. client init failed before the
+        # first call). The outcome and all 5 stage headers still
+        # render below — only the strategy list is replaced.
+        out.append("_(no tool calls were captured)_")
+    else:
+        out.append(f"_Agent's strategy ({n_calls} tool call{'s' if n_calls != 1 else ''}):_")
+        out.append("")
+        for step in steps:
+            out.append(_render_intent_step(step))
+    disc = (stage_signals or {}).get("discover") or {}
+    if disc.get("rationale"):
+        out.append("")
+        out.append(f"**Verdict rationale:** {disc['rationale']}")
+    if disc.get("tokens") or disc.get("cost_usd") or disc.get("elapsed_s"):
+        verified = disc.get("verified_candidates") or 0
+        out.append(
+            f"**Loop cost:** {disc.get('tokens', 0)} tokens, "
+            f"${disc.get('cost_usd', 0.0):.4f}, "
+            f"{disc.get('elapsed_s', 0.0):.1f}s"
+            + (f" · {verified} candidate(s) verified" if verified else "")
+        )
     out.append("")
 
     # ---- Stages 2-5: ALWAYS rendered ----
@@ -279,9 +283,11 @@ def render_flow(cve_id: str, jsonl_lines: list[str], *,
     return "\n".join(out)
 
 
-# Verdict glyphs for the Stage 4 agreement line. Same vocabulary as the
-# per-CVE markdown table (`_render_extraction_agreement`) so the on-disk
-# report and the trace use the same labels.
+# Verdict glyphs for the Stage 4 agreement line. Covers the three
+# core verdicts with worded labels; the per-CVE markdown table
+# (`_render_extraction_agreement`) uses its own icon-only map, which
+# renders "partial" as "≈" and also knows ``majority_agree`` /
+# ``single_source``.
 _VERDICT_GLYPHS = {
     "agree": "✓ agree",
     "partial": "⚠ partial",
@@ -505,6 +511,7 @@ def _humanize_class(error_class: str) -> str:
         "budget_s": "Wall-clock cap reached",
         "AnalysisError": "Diff invariant rejected the agent's pick",
         "AcquisitionError": "Repository / commit unavailable",
+        "IdenticalCommitsError": "Fix commit and its parent resolved to the same commit",
         "DiscoveryError": "Discovery failed",
         "repeated_tool_call": "Agent repeated the same tool call",
         "sha_not_found_in_repo": "Submitted SHA not on the named repo",
@@ -547,7 +554,7 @@ def _neutralize_diff_fence(diff_text: str) -> str:
     Inserting U+200B between any three consecutive backticks defangs the
     fence without changing the visible characters in monospace render.
     """
-    return diff_text.replace("```", "`​`​`")
+    return diff_text.replace("```", "`\u200b`\u200b`")
 
 
 def render(bundle: DiffBundle, root_cause: RootCause | None = None) -> str:
@@ -558,8 +565,16 @@ def render(bundle: DiffBundle, root_cause: RootCause | None = None) -> str:
 
     diff_body = bundle.diff_text
     truncated_note = ""
-    if len(diff_body) > DIFF_BODY_LIMIT_BYTES:
-        diff_body = diff_body[:DIFF_BODY_LIMIT_BYTES]
+    # The limit is a BYTE count (matching bundle.bytes_size, also
+    # bytes), so measure and slice the UTF-8 encoding — a char-count
+    # check lets multi-byte diffs run up to ~4x past the advertised
+    # cap. errors="ignore" on the decode drops only the partial
+    # trailing character a mid-codepoint cut can leave behind.
+    diff_body_utf8 = diff_body.encode("utf-8")
+    if len(diff_body_utf8) > DIFF_BODY_LIMIT_BYTES:
+        diff_body = diff_body_utf8[:DIFF_BODY_LIMIT_BYTES].decode(
+            "utf-8", errors="ignore",
+        )
         truncated_note = (
             f"\n\n_…diff truncated at {DIFF_BODY_LIMIT_BYTES} bytes "
             f"(full size {bundle.bytes_size} bytes)._"
@@ -711,13 +726,12 @@ def _matches(c: dict, bundle: DiffBundle) -> bool:
     from urllib.parse import urlparse
     try:
         path = urlparse(bundle.repo_ref.repository_url).path
-    except Exception:
+    except Exception:  # noqa: BLE001 — unparseable URL means "no match", not a render crash
         return False
     # Strip leading `/` and trailing `.git`/`/` so the path is
     # the bare `owner/repo` slug.
     repo_slug = path.lstrip("/").rstrip("/").lower()
-    if repo_slug.endswith(".git"):
-        repo_slug = repo_slug[:-4]
+    repo_slug = repo_slug.removesuffix(".git")
     if cs != repo_slug:
         return False
     return bundle.commit_after.lower().startswith(chs)

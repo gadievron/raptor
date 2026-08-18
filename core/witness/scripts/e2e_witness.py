@@ -18,7 +18,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -30,11 +29,16 @@ from pathlib import Path
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
-os.environ.setdefault("RAPTOR_DIR", str(REPO))
+# Hard-SET (never setdefault): children of this tree must import this
+# tree even when the launching shell exported RAPTOR_DIR for another
+# checkout (see core.config.pin_raptor_dir).
+from core.config import pin_raptor_dir_in_environ
 
-from core.witness import WitnessOutcome, WitnessSource, WitnessStore  # noqa: E402
-from packages.fuzzing.crash_collector import Crash  # noqa: E402
-from packages.fuzzing.witness_adapter import witness_from_crash  # noqa: E402
+pin_raptor_dir_in_environ()
+
+from core.witness import WitnessOutcome, WitnessSource, WitnessStore
+from packages.fuzzing.crash_collector import Crash
+from packages.fuzzing.witness_adapter import witness_from_crash
 
 
 def _hr(title: str) -> None:
@@ -114,8 +118,7 @@ def main() -> int:
         _hr("Stage 6: store enumeration")
         # Add a second witness so list() has multiple to surface
         second_data = b"different bytes"
-        from core.witness.types import Witness
-        from core.witness.types import compute_bytes_hash
+        from core.witness.types import Witness, compute_bytes_hash
         second_witness = Witness(
             bytes_hash=compute_bytes_hash(second_data),
             source=WitnessSource.MANUAL,

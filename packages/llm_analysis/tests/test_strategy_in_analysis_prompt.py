@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-
 from packages.llm_analysis.prompts.analysis import (
     build_analysis_prompt_bundle,
     build_analysis_prompt_bundle_from_finding,
@@ -77,24 +76,29 @@ class TestCweTriggersStrategy:
 
 
 class TestNonCweSignals:
-    def test_path_signal_fires_without_cwe(self):
-        """File under ``net/`` matches input_handling's path signal."""
+    def test_path_signal_fires_without_cwe(self, tmp_path):
+        """File under ``net/`` matches input_handling's path signal
+        (kernel profile — ``net/`` is kernel path vocabulary)."""
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         bundle = build_analysis_prompt_bundle(
             rule_id="x", level="warning",
             file_path="net/parser.c",
             start_line=1, end_line=10,
             message="m",
+            repo_path=str(tmp_path),
         )
         sys = _system_message(bundle)
         assert "## Strategy: input_handling" in sys
 
-    def test_function_calls_signal(self):
+    def test_function_calls_signal(self, tmp_path):
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         bundle = build_analysis_prompt_bundle(
             rule_id="x", level="warning",
             file_path="src/foo.c",
             start_line=1, end_line=10,
             message="m",
             function_calls_made=["mutex_lock", "mutex_unlock"],
+            repo_path=str(tmp_path),
         )
         sys = _system_message(bundle)
         assert "## Strategy: concurrency" in sys
@@ -143,13 +147,15 @@ class TestFromFinding:
         sys = _system_message(bundle)
         assert "## Strategy: input_handling" in sys
 
-    def test_finding_metadata_function_name(self):
+    def test_finding_metadata_function_name(self, tmp_path):
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         finding = {
             "rule_id": "x",
             "level": "warning",
             "file_path": "src/foo.c",
             "start_line": 1, "end_line": 5,
             "message": "m",
+            "repo_path": str(tmp_path),
             "metadata": {
                 "name": "parse_request",
                 "calls": ["mutex_lock"],
@@ -259,10 +265,13 @@ class TestStrategyInSystemPrompt:
 
 
 class TestLifecycleDriftReachesPrompt:
-    def test_get_dumpable_call_selects_lifecycle_drift(self):
+    def test_get_dumpable_call_selects_lifecycle_drift(self, tmp_path):
         """A function calling get_dumpable() pulls the lifecycle_drift
         lens into the system prompt — exemplar and all. This is the full
-        chain: signal -> picker -> render -> system message."""
+        chain: signal -> picker -> render -> system message. The
+        lifecycle_drift signals are kernel vocabulary (linux_kernel
+        profile), so the repo is kernel-marked."""
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         bundle = build_analysis_prompt_bundle(
             rule_id="x", level="warning",
             file_path="kernel/ptrace.c",
@@ -270,19 +279,22 @@ class TestLifecycleDriftReachesPrompt:
             message="access check",
             function_name="__ptrace_may_access",
             function_calls_made=["get_dumpable"],
+            repo_path=str(tmp_path),
         )
         sys = _system_message(bundle)
         assert "## Strategy: lifecycle_drift" in sys
         # The worked exemplar — the actual content the LLM reads.
         assert "CVE-2026-46333" in sys
 
-    def test_dumpable_keyword_selects_lifecycle_drift(self):
+    def test_dumpable_keyword_selects_lifecycle_drift(self, tmp_path):
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         bundle = build_analysis_prompt_bundle(
             rule_id="x", level="warning",
             file_path="src/foo.c",
             start_line=1, end_line=10,
             message="m",
             function_name="check_dumpable",
+            repo_path=str(tmp_path),
         )
         sys = _system_message(bundle)
         assert "## Strategy: lifecycle_drift" in sys

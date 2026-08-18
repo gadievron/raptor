@@ -178,6 +178,33 @@ class TestPersistReload:
             tmp_path / cfg.DEFAULT_PARITY_LOG_NAME
         )
 
+    def _write_persist(self, tmp_path, payload):
+        import json
+        (tmp_path / "sanitizer-cut-config.json").write_text(
+            json.dumps(payload), encoding="utf-8",
+        )
+
+    def test_load_invalid_mode_string_is_noop(self, tmp_path, monkeypatch):
+        # Version-skewed persist (a mode this build doesn't know) must
+        # degrade like an unreadable file: None returned, env fallback
+        # still active — never a ValueError out of configure().
+        self._write_persist(tmp_path, {"mode": "hyper-strict"})
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
+        assert cfg.load_persisted(str(tmp_path), export_env=False) is None
+        assert cfg.current().mode == "on"  # env fallback untouched
+
+    def test_load_non_string_mode_is_noop(self, tmp_path):
+        # A non-string mode would AttributeError inside config_for_mode
+        # (.strip() on an int) — must degrade to no-op instead.
+        self._write_persist(tmp_path, {"mode": 3})
+        assert cfg.load_persisted(str(tmp_path), export_env=False) is None
+        assert cfg.current().mode == "off"
+
+    def test_load_non_dict_payload_is_noop(self, tmp_path):
+        self._write_persist(tmp_path, ["strict"])
+        assert cfg.load_persisted(str(tmp_path), export_env=False) is None
+        assert cfg.current().mode == "off"
+
 
 class TestEnvExport:
     def test_export_sets_canonical_env_for_strict(self, monkeypatch):

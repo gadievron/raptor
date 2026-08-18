@@ -36,13 +36,15 @@ Limitations (also noted in :doc:`README`):
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import re
 import sqlite3
 import struct
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,6 @@ class InstalledPackage:
     ecosystem: str
     name: str
     version: str
-    source_layer_digest: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ class InstalledPackage:
 # ---------------------------------------------------------------------------
 
 
-def parse_dpkg_status(content: bytes) -> List[InstalledPackage]:
+def parse_dpkg_status(content: bytes) -> list[InstalledPackage]:
     """Parse ``var/lib/dpkg/status``.
 
     The format is RFC 822-ish: stanzas separated by blank lines,
@@ -80,7 +81,7 @@ def parse_dpkg_status(content: bytes) -> List[InstalledPackage]:
     Half-removed / unpacked / config-files-only states aren't
     real installs from a CVE-matching perspective.
     """
-    out: List[InstalledPackage] = []
+    out: list[InstalledPackage] = []
     text = content.decode("utf-8", errors="replace")
     for stanza in _split_rfc822_stanzas(text):
         fields = _parse_rfc822_stanza(stanza)
@@ -100,7 +101,7 @@ def parse_dpkg_status(content: bytes) -> List[InstalledPackage]:
 
 def _split_rfc822_stanzas(text: str) -> Iterator[str]:
     """Split on blank lines. Tolerates Windows line endings."""
-    cur: List[str] = []
+    cur: list[str] = []
     for line in text.splitlines():
         if not line.strip():
             if cur:
@@ -118,7 +119,7 @@ def _parse_rfc822_stanza(stanza: str) -> dict:
     get joined with the leading whitespace stripped per dpkg
     convention."""
     out: dict = {}
-    current_key: Optional[str] = None
+    current_key: str | None = None
     for line in stanza.splitlines():
         if not line:
             continue
@@ -152,7 +153,7 @@ def _dpkg_status_is_installed(status: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def parse_apk_installed(content: bytes) -> List[InstalledPackage]:
+def parse_apk_installed(content: bytes) -> list[InstalledPackage]:
     """Parse ``lib/apk/db/installed``.
 
     Format: stanzas separated by blank lines. Each line is
@@ -165,11 +166,11 @@ def parse_apk_installed(content: bytes) -> List[InstalledPackage]:
     this file (uninstalled packages have their stanzas removed),
     so every parsed stanza is a real install.
     """
-    out: List[InstalledPackage] = []
+    out: list[InstalledPackage] = []
     text = content.decode("utf-8", errors="replace")
     for stanza in _split_rfc822_stanzas(text):
-        package: Optional[str] = None
-        version: Optional[str] = None
+        package: str | None = None
+        version: str | None = None
         for line in stanza.splitlines():
             if line.startswith("P:"):
                 package = line[2:].strip()
@@ -195,9 +196,10 @@ _RPMTAG_RELEASE = 1002
 _RPMTAG_EPOCH = 1003
 
 _RPMTAG_TYPE_STRING = 6
+_RPMTAG_TYPE_INT32 = 4
 
 
-def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
+def parse_rpm_sqlite(content: bytes) -> list[InstalledPackage]:
     """Parse ``var/lib/rpm/rpmdb.sqlite``.
 
     The DB has a ``Packages`` table whose ``blob`` column holds
@@ -217,26 +219,60 @@ def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
     copy of the bytes — sqlite3 wants a path, not bytes. The
     tempfile is auto-cleaned on context exit.
     """
-    out: List[InstalledPackage] = []
-
-    with tempfile.NamedTemporaryFile(
-        prefix="raptor-rpm-", suffix=".sqlite", delete=False,
-    ) as fp:
-        fp.write(content)
-        tmp_path = Path(fp.name)
+    out: list[InstalledPackage] = []
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(
+            prefix="raptor-rpm-", suffix=".sqlite", delete=False,
+        ) as fp:
+            tmp_path = Path(fp.name)
+            fp.write(content)
         # ``mode=ro`` URI open guards against any accidental writes.
         conn = sqlite3.connect(
             f"file:{tmp_path}?mode=ro", uri=True,
         )
         try:
+            # The database bytes come from an image layer, so the engine
+            # runs in its least-trusting configuration: no extension
+            # loading, no SQL from the schema itself (a view named
+            # ``Packages`` would otherwise execute its author's
+            # expressions when selected), cell-size validation against
+            # corrupt pages, and a heap ceiling so a crafted DB can't
+            # balloon the host process.
+            with contextlib.suppress(AttributeError):
+                conn.enable_load_extension(False)
             cur = conn.cursor()
             try:
+                cur.execute("PRAGMA trusted_schema=OFF")
+                cur.execute("PRAGMA cell_size_check=ON")
+                cur.execute("PRAGMA hard_heap_limit=268435456")  # 256 MB
+                row = cur.execute(
+                    "SELECT type, sql FROM sqlite_master "
+                    "WHERE name = 'Packages'",
+                ).fetchone()
+                if row is None:
+                    logger.debug(
+                        "core.oci.sbom: rpmdb.sqlite has no Packages "
+                        "object; skipping",
+                    )
+                    return out
+                obj_type, obj_sql = row[0], row[1] or ""
+                if obj_type != "table" or re.match(
+                    r"\s*CREATE\s+VIRTUAL\s+TABLE", obj_sql, re.IGNORECASE,
+                ):
+                    # Only a plain table is acceptable — views and
+                    # virtual tables evaluate schema-author SQL/module
+                    # code on SELECT.
+                    logger.debug(
+                        "core.oci.sbom: Packages is %s, not a plain "
+                        "table; skipping", obj_type,
+                    )
+                    return out
                 cur.execute("SELECT blob FROM Packages")
-            except sqlite3.OperationalError as e:
+            except sqlite3.Error as e:
                 logger.debug(
-                    "core.oci.sbom: rpmdb.sqlite missing Packages "
-                    "table (%s); skipping", e,
+                    "core.oci.sbom: rpmdb.sqlite unreadable (%s); "
+                    "skipping", e,
                 )
                 return out
             for (blob,) in cur:
@@ -248,14 +284,15 @@ def parse_rpm_sqlite(content: bytes) -> List[InstalledPackage]:
         finally:
             conn.close()
     finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
     return out
 
 
-def _parse_rpm_header(blob: bytes) -> Optional[InstalledPackage]:
+def _parse_rpm_header(blob: bytes) -> InstalledPackage | None:
     """Parse one RPM header blob → InstalledPackage.
 
     Tolerant: malformed / truncated headers return None rather
@@ -299,19 +336,21 @@ def _parse_rpm_header(blob: bytes) -> Optional[InstalledPackage]:
             value = _read_rpm_string(blob, data_start + off, data_end)
             if value is not None:
                 fields[tag] = value
-        elif tag == _RPMTAG_EPOCH:
-            # Epoch is INT32 (type 4); keep it as bytes for now,
-            # we'll only use it if both name+version are found.
-            pass
+        elif tag == _RPMTAG_EPOCH and typ == _RPMTAG_TYPE_INT32:
+            epoch_off = data_start + off
+            if epoch_off + 4 <= len(blob):
+                fields[_RPMTAG_EPOCH] = struct.unpack(
+                    ">i", blob[epoch_off:epoch_off + 4],
+                )[0]
 
     name = fields.get(_RPMTAG_NAME)
     version = fields.get(_RPMTAG_VERSION)
     release = fields.get(_RPMTAG_RELEASE)
     if not name or not version:
         return None
-    full_version = (
-        f"{version}-{release}" if release else version
-    )
+    epoch = fields.get(_RPMTAG_EPOCH)
+    ver_str = f"{version}-{release}" if release else version
+    full_version = f"{epoch}:{ver_str}" if epoch else ver_str
     # OSV's "Red Hat" ecosystem covers RHEL / Rocky / Alma / older
     # CentOS. SUSE / openSUSE use a separate ecosystem; we'd need
     # ``/etc/os-release`` parsing to distinguish. For now,
@@ -323,7 +362,7 @@ def _parse_rpm_header(blob: bytes) -> Optional[InstalledPackage]:
     )
 
 
-def _read_rpm_string(blob: bytes, offset: int, data_end: int) -> Optional[str]:
+def _read_rpm_string(blob: bytes, offset: int, data_end: int) -> str | None:
     """RPM strings are NUL-terminated. Read from ``offset`` until
     NUL or end of data section; decode as UTF-8 (with permissive
     error handling for non-ASCII package descriptions)."""
@@ -353,7 +392,7 @@ LAYER_FILE_PATHS = {
 
 def packages_from_layer_files(
     layer_files: dict,
-) -> List[InstalledPackage]:
+) -> list[InstalledPackage]:
     """Dispatch each known path through its parser. Used by the
     consumer pipeline as the post-:func:`extract_files_from_layer`
     step.
@@ -362,7 +401,7 @@ def packages_from_layer_files(
     its own package set; the caller overlays later-layer packages
     onto earlier-layer ones (later wins on name collision — that's
     Docker's overlay semantics for state files)."""
-    out: List[InstalledPackage] = []
+    out: list[InstalledPackage] = []
     for path, parser in LAYER_FILE_PATHS.items():
         if path in layer_files:
             try:
@@ -376,10 +415,10 @@ def packages_from_layer_files(
 
 
 __all__ = [
-    "InstalledPackage",
     "LAYER_FILE_PATHS",
-    "parse_dpkg_status",
-    "parse_apk_installed",
-    "parse_rpm_sqlite",
+    "InstalledPackage",
     "packages_from_layer_files",
+    "parse_apk_installed",
+    "parse_dpkg_status",
+    "parse_rpm_sqlite",
 ]

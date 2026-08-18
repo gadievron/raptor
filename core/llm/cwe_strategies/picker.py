@@ -21,7 +21,7 @@ Five signal dimensions, in roughly descending strength:
      functions the target calls. The strongest mechanical signal
      — a function calling ``mutex_lock`` IS concurrency-relevant
      regardless of path or name.
-  3. ``includes`` — substring match on the function's headers.
+  3. ``includes`` — exact match on the function's header includes.
   4. ``paths`` — substring match on the file path.
   5. ``function_keywords`` — token match against components of the
      function name. Token semantics (split on ``_``/``-``) prevent
@@ -40,13 +40,74 @@ call graph + any /agentic-emitted finding CWEs.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Tuple
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
-from .loader import load_all
-from .models import Strategy
+from .loader import apply_supplements, builtin_profile, load_all
+from .models import Signals, Strategy
 
 # Sentinel name for the always-on default strategy.
 GENERAL = "general"
+
+# Which DomainVocabulary classes supplement which strategy's
+# function_calls. Learned project vocabulary (plus any target-kind
+# checker pack) routes a function to the right adversarial lens the
+# same way the hand-written callee signals do — additively, per
+# target, instead of as hardcoded names in the generic YAMLs.
+_VOCAB_CALL_CLASSES: dict[str, tuple[str, ...]] = {
+    "memory_management": (
+        "allocators", "deallocators", "refcount_gets", "refcount_puts",
+        "callback_registers", "callback_cancels",
+    ),
+    "concurrency": ("lock_acquires", "lock_releases"),
+    "input_handling": ("boundary_transfers",),
+}
+
+
+def _vocab_supplements(
+    domain_vocab: Any,
+    discovered_sinks: Iterable[str] = (),
+) -> dict[str, Signals]:
+    """Per-strategy Signals supplements from learned vocabulary.
+
+    ``auth_predicates`` is a set of ``(name, kind)`` tuples; the name
+    classes are plain frozensets. Discovered sinks (context-map /
+    IRIS) feed ``input_handling`` alongside boundary transfers.
+    """
+    out: dict[str, Signals] = {}
+    for strategy_name, classes in _VOCAB_CALL_CLASSES.items():
+        names: list[str] = []
+        for cls_attr in classes:
+            names.extend(
+                n for n in getattr(domain_vocab, cls_attr, None) or ()
+                if isinstance(n, str) and n
+            )
+        if strategy_name == "input_handling":
+            names.extend(s for s in discovered_sinks if s)
+        if names:
+            out[strategy_name] = Signals(
+                function_calls=tuple(dict.fromkeys(sorted(names))),
+            )
+    auth = [
+        name for name, _kind in sorted(
+            getattr(domain_vocab, "auth_predicates", None) or (),
+        )
+        if name
+    ]
+    if auth:
+        out["auth_privilege"] = Signals(function_calls=tuple(auth))
+    return out
+
+
+def _is_kernel_target(target_path: str | Path) -> bool:
+    """Kernel-tree detection — the same markers that gate the checker
+    vocab packs (``core.audit.vocab_packs``). Fail-open to False."""
+    try:
+        from core.audit.vocab_packs import is_kernel_tree
+        return is_kernel_tree(target_path)
+    except Exception:  # noqa: BLE001 — picker must never block a review
+        return False
 
 # Identifier-component splitter: any run of non-word characters.
 # ``parse_packet-locked`` → {"parse", "packet", "locked"}.
@@ -170,7 +231,11 @@ def pick_strategies(
     strategies: Iterable[Strategy] | None = None,
     max_strategies: int = 3,
     always_include_general: bool = True,
-) -> List[Strategy]:
+    target_path: str | Path | None = None,
+    profile: str | None = None,
+    domain_vocab: Any = None,
+    discovered_sinks: Iterable[str] = (),
+) -> list[Strategy]:
     """Pick the highest-signal-scoring strategies for a function.
 
     Args:
@@ -188,6 +253,23 @@ def pick_strategies(
             cap when ``always_include_general`` is True.
         always_include_general: if True, the ``general`` strategy
             is always included in the result regardless of score.
+        target_path: root of the target under analysis. When it is
+            detected as a Linux kernel tree/module, the bundled
+            ``linux_kernel`` signal profile is merged into the pool
+            (the kernel API signal bulk lives there, not in the
+            generic strategy YAMLs).
+        profile: explicit signal-profile name (operator assertion) —
+            merged regardless of target detection. Unknown names are
+            ignored (fail-open).
+        domain_vocab: optional study-learned DomainVocabulary; its
+            classes supplement the matching strategies'
+            ``function_calls`` additively (allocators/refcounts →
+            memory_management, lock verbs → concurrency, auth
+            predicates → auth_privilege, boundary transfers →
+            input_handling).
+        discovered_sinks: sink callee names discovered for this
+            target (context map / IRIS) — supplement
+            ``input_handling`` alongside boundary transfers.
 
     Returns:
         List of strategies sorted by score descending, with
@@ -199,12 +281,29 @@ def pick_strategies(
     if max_strategies <= 0:
         return []
 
-    pool: List[Strategy] = list(strategies) if strategies is not None else load_all()
+    pool: list[Strategy] = list(strategies) if strategies is not None else load_all()
     if not pool:
         return []
 
+    profile_name = profile
+    if profile_name is None and target_path is not None \
+            and _is_kernel_target(target_path):
+        profile_name = "linux_kernel"
+    if profile_name:
+        try:
+            supplements = builtin_profile(profile_name)
+        except Exception:  # noqa: BLE001 — malformed profile must not block review
+            supplements = None
+        if supplements:
+            pool = apply_supplements(pool, supplements)
+
+    if domain_vocab is not None or discovered_sinks:
+        learned = _vocab_supplements(domain_vocab, discovered_sinks)
+        if learned:
+            pool = apply_supplements(pool, learned)
+
     # Score each strategy.
-    scored: List[Tuple[Strategy, int]] = [
+    scored: list[tuple[Strategy, int]] = [
         (
             s,
             _score_strategy(
@@ -230,7 +329,7 @@ def pick_strategies(
     # Sort by score desc, then name asc for stable tiebreaking.
     nonzero.sort(key=lambda item: (-item[1], item[0].name))
 
-    out: List[Strategy] = []
+    out: list[Strategy] = []
     if always_include_general and general is not None:
         out.append(general)
 
@@ -241,8 +340,10 @@ def pick_strategies(
 
     # When general is NOT pinned, allow it to compete on score 0
     # only if there's room and nothing else scored.
-    if not always_include_general and general is not None:
-        if not out and len(out) < max_strategies:
-            out.append(general)
+    if (
+        not always_include_general and general is not None
+        and not out and len(out) < max_strategies
+    ):
+        out.append(general)
 
     return out

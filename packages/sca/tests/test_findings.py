@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 from packages.sca.findings import (
     build_vuln_findings,
@@ -13,17 +12,16 @@ from packages.sca.findings import (
     write_findings_json,
 )
 from packages.sca.models import (
-    AffectedRange,
     Advisory,
-    CVSSScore,
+    AffectedRange,
     Confidence,
+    CVSSScore,
     Dependency,
     HygieneFinding,
     PinStyle,
     Reachability,
 )
 from packages.sca.osv import OsvResult
-
 
 # ---------------------------------------------------------------------------
 # Fixture builders
@@ -49,8 +47,8 @@ def _dep(name: str = "lodash", version: str = "4.17.20",
 
 def _adv(
     osv_id: str = "GHSA-x",
-    aliases: List[str] | None = None,
-    fixed: List[str] | None = None,
+    aliases: list[str] | None = None,
+    fixed: list[str] | None = None,
     severity_score: float = 9.8,
     severity_label: str = "critical",
 ) -> Advisory:
@@ -76,7 +74,7 @@ def _adv(
 
 
 class FakeKev:
-    def __init__(self, hits: List[str] | None = None) -> None:
+    def __init__(self, hits: list[str] | None = None) -> None:
         self.hits = {h.upper() for h in (hits or [])}
 
     def contains(self, cve: str) -> bool:
@@ -210,8 +208,8 @@ def test_write_findings_json_shape(tmp_path: Path) -> None:
     types = {row["vuln_type"] for row in data}
     assert "sca:vulnerable_dependency" in types
     assert "sca:hygiene:loose_pin" in types
-    vuln_row = [r for r in data
-                if r["vuln_type"] == "sca:vulnerable_dependency"][0]
+    vuln_row = next(r for r in data
+                    if r["vuln_type"] == "sca:vulnerable_dependency")
     assert vuln_row["sca"]["ecosystem"] == "npm"
     assert vuln_row["sca"]["name"] == "lodash"
     assert vuln_row["sca"]["fixed_version"] == "5.0.0"
@@ -249,8 +247,8 @@ def test_hygiene_finding_downgraded_to_info_when_commented() -> None:
     should produce hygiene findings at ``info`` severity (the
     operator doesn't want CI gated on commented hints).
     Mirrors the vuln-finding downgrade in _vuln_finding_to_row."""
-    from packages.sca.models import HygieneFinding
     from packages.sca.findings import _hygiene_finding_to_row
+    from packages.sca.models import HygieneFinding
     d = _dep()
     d.commented_out = True
     f = HygieneFinding(
@@ -265,8 +263,8 @@ def test_hygiene_finding_downgraded_to_info_when_commented() -> None:
 
 def test_hygiene_finding_retains_severity_when_uncommented() -> None:
     """Non-commented entries keep their original severity."""
-    from packages.sca.models import HygieneFinding
     from packages.sca.findings import _hygiene_finding_to_row
+    from packages.sca.models import HygieneFinding
     d = _dep()
     assert not d.commented_out
     f = HygieneFinding(
@@ -306,3 +304,23 @@ def test_vuln_row_includes_commented_out_in_sca_block() -> None:
     # ``build_vuln_findings`` time (not at row emission), so
     # this row-builder test passes through whatever severity
     # the VulnFinding already carries.
+
+
+# ---------------------------------------------------------------------------
+# Advisory CWE ids in findings.json (P40)
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryCweExport:
+    def test_cwe_ids_surfaced(self):
+        from packages.sca.findings import _advisory_summary
+
+        adv = _adv()
+        adv.cwe_ids = ["CWE-502", "CWE-400"]
+        out = _advisory_summary(adv)
+        assert out["cwe_ids"] == ["CWE-502", "CWE-400"]
+
+    def test_no_cwe_ids_key_when_absent(self):
+        from packages.sca.findings import _advisory_summary
+
+        out = _advisory_summary(_adv())
+        assert "cwe_ids" not in out

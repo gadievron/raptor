@@ -35,22 +35,25 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Set, Tuple
+from typing import Any, Literal
 
 # ``_qualified_from_demangled`` / ``_find_arglist_open`` /
 # ``_METHOD_TRAILING_QUALS`` live in ``binary_oracle`` so the classifier
 # can demangle DWARF linkage names with the same logic. Re-exported here
 # for any external importer.
 from core.analysis.binary_oracle import (  # noqa: F401  (re-export)
+    _METHOD_TRAILING_QUALS,
     _demangle_linkage_names,
     _find_arglist_open,
-    _METHOD_TRAILING_QUALS,
     _qualified_from_demangled,
+)
+from core.inventory.binary_oracle_corpora._sandbox_exec import (
+    run_build_step,
+    run_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +71,7 @@ _LLVM_PROFDATA_CANDIDATES = ("llvm-profdata-21", "llvm-profdata-20",
                              "llvm-profdata-19", "llvm-profdata")
 
 
-def _resolve(candidates: Tuple[str, ...]) -> str:
+def _resolve(candidates: tuple[str, ...]) -> str:
     for c in candidates:
         if shutil.which(c):
             return c
@@ -103,7 +106,7 @@ class _SnappyDriver:
         "(single -O2 build, no O0/O2 differential).")
     mode: Literal["gcov"] = "gcov"   # harness cross-tab is liveness-based
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         sha_dir = work_dir / SNAPPY_SHA[:12]
         sentinel = sha_dir / "sentinel.ok"
@@ -141,7 +144,9 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     subprocess.run(
         safe_git_command("-C", str(src), "fetch", "--depth", "1",
                          "origin", SNAPPY_SHA),
-        env=get_safe_git_env(), check=True, timeout=60,
+        # Dials origin outside the sandbox egress proxy — keep the
+        # operator proxy vars (get_safe_git_env contract).
+        env=get_safe_git_env(preserve_proxy=True), check=True, timeout=60,
     )
     subprocess.run(
         safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
@@ -150,7 +155,8 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     subprocess.run(
         safe_git_command("-C", str(src), "submodule", "update",
                          "--init", "--recursive", "--depth", "1"),
-        env=get_safe_git_env(), check=True, timeout=300,
+        # Submodule init dials remotes too.
+        env=get_safe_git_env(preserve_proxy=True), check=True, timeout=300,
     )
 
     if build_dir.exists():
@@ -166,7 +172,11 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
                 "-fprofile-instr-generate -fcoverage-mapping "
                 "-Wno-error=uninitialized-const-pointer")
     ldflags = "-Wl,--gc-sections -fprofile-instr-generate"
-    subprocess.run([
+    # Fetched build system — sandboxed with sanitised env (see
+    # _sandbox_exec). scope=sha_dir: out-of-tree build — under
+    # mount-ns isolation the sibling src/ tree is invisible unless the
+    # sandbox root spans both.
+    run_build_step([
         "cmake", str(src),
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_C_COMPILER=clang",
@@ -177,16 +187,20 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
         "-DSNAPPY_BUILD_BENCHMARKS=OFF",
         # snappy's CMake declares min 3.1; newer CMake refuses without this.
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-    ], cwd=build_dir, check=True, timeout=300)
-    subprocess.run(["cmake", "--build", ".", "-j4"],
-                   cwd=build_dir, check=True, timeout=600)
+    ], cwd=build_dir, scope=sha_dir, timeout=300)
+    run_build_step(["cmake", "--build", ".", "-j4"],
+                   cwd=build_dir, scope=sha_dir, timeout=600)
 
     # Run tests with profile output. ``%m`` expands to a unique-per-image
     # ID at runtime so concurrent processes don't trample one file.
     profraw_pattern = str(sha_dir / "snappy_%m.profraw")
-    env = {**os.environ, "LLVM_PROFILE_FILE": profraw_pattern}
-    subprocess.run(["ctest", "--output-on-failure"],
-                   cwd=build_dir, env=env, check=True, timeout=300)
+    # ctest executes the just-built (untrusted-origin) test binaries;
+    # they write profraw into sha_dir — covered by scope=sha_dir
+    # (writable_paths don't survive into the mount-ns view).
+    run_build_step(["ctest", "--output-on-failure"],
+                   cwd=build_dir, scope=sha_dir,
+                   extra_env={"LLVM_PROFILE_FILE": profraw_pattern},
+                   timeout=300)
 
     profraw = list(sha_dir.glob("snappy_*.profraw"))
     if not profraw:
@@ -195,10 +209,10 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
             f"{profraw_pattern}); coverage instrumentation may be broken")
 
     profdata_tool = _resolve(_LLVM_PROFDATA_CANDIDATES)
-    subprocess.run(
+    run_tool(
         [profdata_tool, "merge", "-sparse", *(str(p) for p in profraw),
          "-o", str(profdata)],
-        check=True, timeout=120,
+        timeout=120,
     )
 
     shutil.rmtree(src, ignore_errors=True)
@@ -219,14 +233,14 @@ def _strip_llvm_file_prefix(name: str) -> str:
 
 def _liveness_from_llvm_cov(
     binary: Path, profdata: Path,
-) -> Tuple[Set[str], Set[str]]:
+) -> tuple[set[str], set[str]]:
     """Run ``llvm-cov export`` → JSON, demangle mangled function names
     via ``c++filt``, and reduce to qualified-no-args form. Returns
     ``(live_set, candidate_set)``."""
     cov_tool = _resolve(_LLVM_COV_CANDIDATES)
-    proc = subprocess.run(
+    proc = run_tool(
         [cov_tool, "export", f"--instr-profile={profdata}", str(binary)],
-        capture_output=True, text=True, check=False, timeout=120,
+        check=False, timeout=120,
     )
     if proc.returncode != 0 or not proc.stdout:
         logger.warning("snappy: llvm-cov export failed: %s",
@@ -249,8 +263,8 @@ def _liveness_from_llvm_cov(
                            for f in fns if f.get("name")})
     demangled_map = _demangle_linkage_names(bare_mangled)
 
-    live: Set[str] = set()
-    candidates: Set[str] = set()
+    live: set[str] = set()
+    candidates: set[str] = set()
     for fn in fns:
         bare = _strip_llvm_file_prefix(fn.get("name") or "")
         full = demangled_map.get(bare, bare)

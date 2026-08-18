@@ -9,6 +9,7 @@ Provides:
 
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,105 @@ import pytest
 # .claude/skills/oss-forensics/github-evidence-kit/tests/conftest.py -> .claude/skills/oss-forensics/github-evidence-kit
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from src import EvidenceStore, load_evidence_from_json
 
+def _stub_google_modules() -> None:
+    """Keep the suite hermetic when google-cloud-bigquery is absent.
+
+    ``src.clients.gharchive`` imports the Google client libraries at
+    module level, so on hosts without them every test module that
+    (transitively) imports ``src.clients`` died at collection. The
+    unit tests never touch live BigQuery — they only need the imports
+    to resolve — so inject a minimal module tree. Real installs are
+    untouched (the stub only fills a missing import), and any test
+    that accidentally reaches for a live query on a stubbed host
+    fails loudly.
+    """
+    try:
+        import google.auth
+        import google.cloud.bigquery
+        import google.oauth2.service_account
+        return
+    except ImportError:
+        pass
+
+    google = sys.modules.setdefault("google", types.ModuleType("google"))
+
+    auth = types.ModuleType("google.auth")
+    auth_exceptions = types.ModuleType("google.auth.exceptions")
+
+    class _GoogleAuthError(Exception):
+        pass
+
+    class _DefaultCredentialsError(_GoogleAuthError):
+        pass
+
+    auth_exceptions.GoogleAuthError = _GoogleAuthError
+    auth_exceptions.DefaultCredentialsError = _DefaultCredentialsError
+    auth.exceptions = auth_exceptions
+
+    def _default(scopes=None):
+        raise _DefaultCredentialsError(
+            "stubbed google.auth — no live credentials in unit tests")
+    auth.default = _default
+
+    oauth2 = types.ModuleType("google.oauth2")
+    service_account = types.ModuleType("google.oauth2.service_account")
+
+    class _Credentials:
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            return object()
+
+        @staticmethod
+        def from_service_account_file(path, scopes=None):
+            return object()
+
+    service_account.Credentials = _Credentials
+    oauth2.service_account = service_account
+
+    cloud = types.ModuleType("google.cloud")
+    bigquery = types.ModuleType("google.cloud.bigquery")
+
+    class _QueryJobConfig:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    class _ScalarQueryParameter:
+        def __init__(self, name, type_, value):
+            self.name, self.type_, self.value = name, type_, value
+
+    class _Client:
+        def __init__(self, credentials=None, project=None):
+            self.project = project
+
+        def query(self, *args, **kwargs):
+            raise RuntimeError(
+                "stubbed google.cloud.bigquery — unit tests must not "
+                "issue live queries")
+
+    bigquery.Client = _Client
+    bigquery.QueryJobConfig = _QueryJobConfig
+    bigquery.ScalarQueryParameter = _ScalarQueryParameter
+    cloud.bigquery = bigquery
+
+    google.auth = auth
+    google.oauth2 = oauth2
+    google.cloud = cloud
+    for name, mod in {
+        "google.auth": auth,
+        "google.auth.exceptions": auth_exceptions,
+        "google.oauth2": oauth2,
+        "google.oauth2.service_account": service_account,
+        "google.cloud": cloud,
+        "google.cloud.bigquery": bigquery,
+    }.items():
+        sys.modules.setdefault(name, mod)
+
+
+_stub_google_modules()
+
+from src import EvidenceStore, load_evidence_from_json
 
 # =============================================================================
 # FIXTURE DATA PATHS

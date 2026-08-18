@@ -141,9 +141,10 @@ class TestSandboxContextBlockEventCapture(unittest.TestCase):
                 self.calls: list = []
                 self._next_token = 0
 
-            def register_sandbox(self, caller_label=None):
+            def register_sandbox(self, caller_label=None,
+                                 lane_key=None):
                 self._next_token += 1
-                self.calls.append(("register", caller_label))
+                self.calls.append(("register", caller_label, lane_key))
                 return self._next_token
 
             def unregister_sandbox(self, token):

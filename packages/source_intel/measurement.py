@@ -20,6 +20,8 @@ Usage:
                       tabular stdout only.
   --target-prefix S   filter corpus entries by filename prefix
                       (e.g. ``source_intel_``).
+  --model NAME        pin the LLM model for both conditions;
+                      otherwise the LLMClient default applies.
   --verdict V         restrict the sample to entries with this
                       ground-truth verdict (``true_positive`` or
                       ``false_positive``). Cannot be combined with
@@ -63,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import sys
 import time
 from pathlib import Path
@@ -87,6 +90,8 @@ from packages.source_intel import (
     make_source_intel_collector,
 )
 from packages.source_intel.cache import SourceIntelCache
+
+logger = logging.getLogger(__name__)
 
 
 # packages/source_intel/measurement.py → repo root is parents[2].
@@ -184,6 +189,7 @@ def _iter_memory_corruption_corpus(
         try:
             finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug("skipping %s: parse error", fp.name, exc_info=True)
             continue
         if not _is_memory_corruption(finding):
             continue
@@ -193,6 +199,10 @@ def _iter_memory_corruption_corpus(
         try:
             label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug(
+                "skipping %s: label parse error",
+                label_path.name, exc_info=True,
+            )
             continue
         if verdict and label.verdict != verdict:
             continue
@@ -215,7 +225,7 @@ def _iter_memory_corruption_corpus(
         buckets[key].append(entry)
     out: List[tuple] = []
     while len(out) < count and any(buckets.values()):
-        for key in sorted(buckets.keys()):
+        for key in sorted(buckets):
             if not buckets[key]:
                 continue
             out.append(buckets[key].pop(0))
@@ -324,7 +334,7 @@ def main() -> int:
     print()
 
     from core.llm.client import LLMClient
-    llm = LLMClient()
+    llm = LLMClient(pinned_model=args.model) if args.model else LLMClient()
 
     # Two validators differ only in collector.
     # Baseline: sanitizer-only (the PR1 V2 default for non-injection

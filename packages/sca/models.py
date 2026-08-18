@@ -1,8 +1,9 @@
 """Data model for the /sca pipeline.
 
 Every signal in the pipeline carries a Confidence; every finding has a single
-canonical schema; risk is surfaced as components only (no composite score
-yet
+canonical schema; risk is surfaced both as per-signal components
+(``risk_components``) and as a composite score
+(``VulnFinding.raptor_risk_estimate``, computed in :mod:`.risk`).
 
 All dataclasses are JSON-serialisable via dataclasses.asdict; the report and
 findings.json layers handle that wrapping.
@@ -14,8 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
-
+from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
 # Confidence — cross-cutting uncertainty type
@@ -44,7 +44,7 @@ class Confidence:
 
     level: ConfidenceLevel
     reason: str = ""
-    numeric: Optional[float] = None
+    numeric: float | None = None
 
     def __post_init__(self) -> None:
         if self.numeric is None:
@@ -79,7 +79,7 @@ class Dependency:
     ecosystem: str               # "Maven", "PyPI", "npm", "Cargo", "Go",
                                  # "RubyGems", "NuGet", "Packagist"
     name: str                    # canonical (purl-ready), case-normalised
-    version: Optional[str]       # None = unpinned manifest entry
+    version: str | None       # None = unpinned manifest entry
     declared_in: Path            # which manifest/lockfile observed it
     scope: str                   # "main" | "dev" | "test" | "peer" |
                                  # "optional" | "build"
@@ -88,7 +88,7 @@ class Dependency:
     direct: bool                 # True if declared, False if transitive
     purl: str                    # pkg:maven/group/artifact@version
     parser_confidence: Confidence  # exact (POM XML) | heuristic (Gradle DSL)
-    declared_license: Optional[str] = None  # SPDX expr; SBOM use only
+    declared_license: str | None = None  # SPDX expr; SBOM use only
     commented_out: bool = False    # True when extracted from a commented
                                     # line (e.g. `# z3-solver==4.16.0.0`); the
                                     # findings layer downgrades severity to
@@ -106,7 +106,7 @@ class Dependency:
                                     # registry-metadata recursion (less
                                     # accurate); ``review`` is operator-
                                     # supplied to ``raptor-sca check``.
-    source_extra: Optional[Dict[str, Any]] = None
+    source_extra: dict[str, Any] | None = None
                                     # Per-source diagnostic context.
                                     # Examples:
                                     #   ``dockerfile_from`` rows carry
@@ -118,7 +118,7 @@ class Dependency:
                                     #     finding came from.
                                     # Renderers that don't consume the
                                     # field treat it as a black box.
-    workspace_root: Optional[Path] = None  # set when this dep was
+    workspace_root: Path | None = None  # set when this dep was
                                             # parsed from a npm / Yarn /
                                             # pnpm workspace member; the
                                             # path of the monorepo root
@@ -134,15 +134,26 @@ class Dependency:
                                             # use this as the cluster
                                             # key.
 
-    version_floor: Optional[str] = None     # tightest lower bound
+    inline_comment: str | None = None    # trailing ``# note`` text
+                                            # from the raw line, preserved
+                                            # for round-trip rewriting
+    version_floor: str | None = None     # tightest lower bound
                                             # (``>=`` / ``>``) from the
                                             # original specifier — the
                                             # downgrade floor harden
                                             # honours when remediating
                                             # below the current pin.
-    version_ceiling: Optional[str] = None   # tightest upper bound
+    version_ceiling: str | None = None   # tightest upper bound
                                             # (``<`` / ``<=``) — the
                                             # upgrade ceiling.
+
+    def __post_init__(self) -> None:
+        # Provenance correction: lockfile-parsed rows that don't set an
+        # explicit source_kind would otherwise carry the "manifest"
+        # default and misreport their origin in findings.json / SBOM.
+        # Explicit non-default source_kinds are always preserved.
+        if self.is_lockfile and self.source_kind == "manifest":
+            self.source_kind = "lockfile"
 
     def key(self) -> str:
         """Stable identity for dedup / cross-reference."""
@@ -158,8 +169,8 @@ class AffectedRange:
     """One range entry from OSV's affected[].ranges[]."""
 
     type: Literal["SEMVER", "ECOSYSTEM", "GIT"]
-    events: List[Dict[str, str]]  # [{"introduced": "0"}, {"fixed": "2.17.1"}]
-    repo: Optional[str] = None    # for type=GIT
+    events: list[dict[str, str]]  # [{"introduced": "0"}, {"fixed": "2.17.1"}]
+    repo: str | None = None    # for type=GIT
 
 
 @dataclass
@@ -176,16 +187,16 @@ class Advisory:
     """A single OSV / GHSA / PYSEC advisory."""
 
     osv_id: str                  # "GHSA-jfh8-c2jp-5v3q" or "PYSEC-2024-..."
-    aliases: List[str]           # ["CVE-2021-44228", ...]
+    aliases: list[str]           # ["CVE-2021-44228", ...]
     summary: str                 # one-line summary
     details: str                 # full markdown details (length-bounded)
-    affected: List[AffectedRange]
-    severity: Optional[CVSSScore]
-    fixed_versions: List[str]    # extracted from affected.ranges.events.fixed
-    references: List[str]        # URLs
-    published: Optional[datetime] = None
-    modified: Optional[datetime] = None
-    ecosystem_specific: Optional[Dict[str, Any]] = None
+    affected: list[AffectedRange]
+    severity: CVSSScore | None
+    fixed_versions: list[str]    # extracted from affected.ranges.events.fixed
+    references: list[str]        # URLs
+    published: datetime | None = None
+    modified: datetime | None = None
+    ecosystem_specific: dict[str, Any] | None = None
     # ecosystem_specific.imports[].symbols populated for Go advisories;
     # used by Go function-level reachability.
     # RUSTSEC ``informational`` tag (and similar non-security markers
@@ -197,7 +208,12 @@ class Advisory:
     # from exploitation ground-truth so they don't inflate the
     # signal set. ``None`` for advisories that are real
     # vulnerabilities (vast majority).
-    informational: Optional[str] = None
+    informational: str | None = None
+    # Weakness classes from the record's ``database_specific.cwe_ids``
+    # (GHSA populates these; other ecos usually don't). Normalised
+    # "CWE-NNN" strings. Consumed by the audit-side advisory bridge to
+    # derive per-component CWE-family priors.
+    cwe_ids: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +249,7 @@ ReachabilityVerdict = Literal[
 class Reachability:
     verdict: ReachabilityVerdict
     confidence: Confidence
-    evidence: List[str] = field(default_factory=list)  # file:line refs
+    evidence: list[str] = field(default_factory=list)  # file:line refs
 
 
 # Operator-facing display labels for each verdict. Title-cased for the
@@ -276,14 +292,14 @@ class VulnFinding:
 
     finding_id: str              # stable, deterministic; used in cross-refs
     dependency: Dependency
-    advisories: List[Advisory]
+    advisories: list[Advisory]
     in_kev: bool                 # CISA known-exploited
-    epss: Optional[float]        # FIRST.org probability, 0.0-1.0
-    fixed_version: Optional[str] # smallest fix
+    epss: float | None        # FIRST.org probability, 0.0-1.0
+    fixed_version: str | None # smallest fix
     reachability: Reachability
     version_match_confidence: Confidence
-    cvss_score: Optional[float]  # max across advisories
-    cvss_vector: Optional[str]
+    cvss_score: float | None  # max across advisories
+    cvss_vector: str | None
     severity: Severity
     exposure_factor: float       # 0.0-1.0; call-site density
     transitive_depth: int        # 0 = direct, N = N levels deep
@@ -292,15 +308,15 @@ class VulnFinding:
     # module for the status. ``risk_components`` carries the per-
     # multiplier breakdown so operators can read off "why is this
     # score what it is" without re-deriving it.
-    raptor_risk_estimate: Optional[float] = None
-    risk_components: Optional[Dict[str, Any]] = None
+    raptor_risk_estimate: float | None = None
+    risk_components: dict[str, Any] | None = None
     # Exploit-existence evidence from the calibration corpus.
     # Augments ``in_kev`` with concrete references operators can
     # follow up on (Exploit-DB entry IDs, Metasploit module paths).
     # None when the corpus hasn't been loaded; an empty
     # ExploitEvidence (all-fields-empty) when loaded but no
     # signals matched any of this finding's CVE aliases.
-    exploit_evidence: Optional["ExploitEvidence"] = None
+    exploit_evidence: ExploitEvidence | None = None
     # CISA Vulnrichment SSVC `Exploitation` decision — one of
     # ``"active"`` / ``"poc"`` / ``"none"`` / ``None``. Closes the
     # cold-start eco gap where KEV / EPSS / EDB / MSF / PoC return
@@ -310,7 +326,7 @@ class VulnFinding:
     # itself); ``poc`` is an ExploitEvidence-equivalent signal.
     # ``None`` means either CISA hasn't enriched the CVE yet, or
     # the Vulnrichment lookup wasn't wired into this run.
-    ssvc_exploitation: Optional[str] = None
+    ssvc_exploitation: str | None = None
     # SSVC ``Automatable`` decision — one of ``"yes"`` /
     # ``"no"`` / ``None``. Indicates whether the steps of an
     # attack can be reliably automated (think: wormable
@@ -320,10 +336,10 @@ class VulnFinding:
     # =no (skilled-actor-only). The risk formula applies a small
     # bonus multiplier on top of the SSVC tier when both
     # Exploitation>=poc AND Automatable=yes hold.
-    ssvc_automatable: Optional[str] = None
-    related_findings: List[str] = field(default_factory=list)
+    ssvc_automatable: str | None = None
+    related_findings: list[str] = field(default_factory=list)
     suppressed: bool = False
-    suppression_reason: Optional[str] = None
+    suppression_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -336,9 +352,9 @@ class ExploitEvidence:
     etc. Operators triaging vulns benefit from seeing all three.
     """
     kev_listed: bool = False
-    edb_ids: List[int] = field(default_factory=list)
-    msf_modules: List[str] = field(default_factory=list)
-    github_poc_urls: List[str] = field(default_factory=list)
+    edb_ids: list[int] = field(default_factory=list)
+    msf_modules: list[str] = field(default_factory=list)
+    github_poc_urls: list[str] = field(default_factory=list)
 
     @property
     def has_any(self) -> bool:
@@ -376,9 +392,9 @@ class HygieneFinding:
     detail: str
     severity: Severity
     confidence: Confidence
-    related_findings: List[str] = field(default_factory=list)
+    related_findings: list[str] = field(default_factory=list)
     suppressed: bool = False
-    suppression_reason: Optional[str] = None
+    suppression_reason: str | None = None
 
 
 LicenseKind = Literal[
@@ -401,12 +417,12 @@ class LicenseFinding:
     finding_id: str
     kind: LicenseKind
     dependency: Dependency
-    spdx: Optional[str]              # the license string we evaluated; None on unknown
+    spdx: str | None              # the license string we evaluated; None on unknown
     detail: str
     severity: Severity
     confidence: Confidence
     suppressed: bool = False
-    suppression_reason: Optional[str] = None
+    suppression_reason: str | None = None
 
 
 SupplyChainKind = Literal[
@@ -454,32 +470,12 @@ class SupplyChainFinding:
     kind: SupplyChainKind
     dependency: Dependency
     detail: str
-    evidence: Dict[str, Any]     # raw signals (sanitised before display)
+    evidence: dict[str, Any]     # raw signals (sanitised before display)
     severity: Severity
     confidence: Confidence
-    related_findings: List[str] = field(default_factory=list)
+    related_findings: list[str] = field(default_factory=list)
     suppressed: bool = False
-    suppression_reason: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Risk metadata — NOT findings; inputs to risk and triage context
-# ---------------------------------------------------------------------------
-
-@dataclass
-class RiskMetadata:
-    """Risk-context signals — NOT findings.
-
-    Operators don't 'fix' a heavy dep tree or large maintainer count — those
-    are facts about the project's supply-chain shape. They flow into risk
-    score components and triage prompt context, but never appear as findings.
-    """
-
-    dependency: Dependency
-    transitive_count: int        # > N triggers triage-context note
-    call_site_count: int         # blast radius if compromised
-    unique_maintainers_in_tree: int
-    max_tree_depth: int
+    suppression_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +505,7 @@ class Manifest:
     path: Path                   # absolute path
     ecosystem: str               # which parser handles it
     is_lockfile: bool
-    workspace_root: Optional[Path] = None
+    workspace_root: Path | None = None
     # Set when this manifest is a workspace member; used to qualify
     # cross_manifest_inconsistency (deps differing across manifests
     # within a workspace are intentional, not a finding).

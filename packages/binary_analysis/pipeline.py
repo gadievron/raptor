@@ -14,20 +14,35 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from core.json import load_json, save_json
+from core.artifacts.provenance import (
+    CONTEXT_MAP_TEXT_SCHEMA,
+    sanitise_free_text,
+    stamp_provenance,
+)
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from core.hash import sha256_file
+from core.json import load_json, save_json
 
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 from .fuzz_evidence import CrashEvidence, FuzzEvidenceBundle, load_fuzz_evidence
 from .fuzz_suitability import assess_fuzz_suitability
-from .graph_store import BinaryGraphStore, graph_path_for_run, graph_summary, stable_node_id
+from .graph_store import (
+    BinaryGraphStore,
+    graph_path_for_run,
+    graph_summary,
+    stable_node_id,
+)
 from .ingress import recover_external_ingress
-from .input_channels import InputChannel, event_channel_kind, merge_observed_channels, recover_static_channels
+from .input_channels import (
+    InputChannel,
+    event_channel_kind,
+    merge_observed_channels,
+    recover_static_channels,
+)
 from .manifest import BinaryManifest, build_manifest
 from .parser_boundary import extract_parser_boundaries
 from .radare2_understand import BinaryContextMap, FunctionInfo, analyse_binary_context
@@ -37,6 +52,18 @@ from .topology import build_component_topology
 from .validation_handoff import build_validation_handoff
 
 logger = logging.getLogger(__name__)
+
+
+def _stamp_context_map(context_map: dict) -> None:
+    """Provenance chokepoint for the binary pipeline's context maps.
+
+    The map mixes mechanical r2 extraction with LLM investigation
+    content, so it is stamped untrusted per docs/security.md I2-(b);
+    marked free-text fields are defanged before persisting.
+    """
+    sanitise_free_text(context_map, CONTEXT_MAP_TEXT_SCHEMA)
+    stamp_provenance(context_map, "binary-analysis", untrusted=True,
+                     overwrite_generator=False)
 
 _RUNTIME_SUPPORT_PREFIXES = (
     "sym.___afl_",
@@ -75,12 +102,12 @@ _FRAMEWORK_CALLBACK_SELECTORS = {
 class BinaryAnalysisResult:
     manifest: BinaryManifest
     context_map: dict[str, Any]
-    evidence: list[EvidenceRecord]
+    evidence: list[BinaryEvidenceRecord]
     input_channels: list[InputChannel]
     graph_path: Path
     fuzz: FuzzEvidenceBundle = field(default_factory=FuzzEvidenceBundle)
-    constraints: Optional[dict[str, Any]] = None
-    diff: Optional[dict[str, Any]] = None
+    constraints: dict[str, Any] | None = None
+    diff: dict[str, Any] | None = None
     decompilations: dict[str, Any] = field(default_factory=dict)
     validation_handoff: dict[str, Any] = field(default_factory=dict)
 
@@ -157,13 +184,14 @@ def _is_graph_worthy_method(name: str) -> bool:
     normalised = str(name or "")
     if not normalised or normalised.isdigit():
         return False
-    if normalised.startswith("func.") and normalised[5:].replace("_", "").isalnum():
-        return False
-    return True
+    return not (
+        normalised.startswith("func.")
+        and normalised[5:].replace("_", "").isalnum()
+    )
 
 
-def _static_evidence(manifest: BinaryManifest, context: BinaryContextMap) -> list[EvidenceRecord]:
-    evidence: list[EvidenceRecord] = []
+def _static_evidence(manifest: BinaryManifest, context: BinaryContextMap) -> list[BinaryEvidenceRecord]:
+    evidence: list[BinaryEvidenceRecord] = []
     digest = manifest.binary_sha256
     if context.imports:
         evidence.append(make_evidence(
@@ -240,8 +268,8 @@ def _runtime_observation_summary(
 def _decompilation_artifact(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[dict[str, Any], list[EvidenceRecord]]:
-    records: list[EvidenceRecord] = []
+) -> tuple[dict[str, Any], list[BinaryEvidenceRecord]]:
+    records: list[BinaryEvidenceRecord] = []
     functions: list[dict[str, Any]] = []
     for fn in context.interesting_functions:
         if not fn.decompiled:
@@ -297,7 +325,7 @@ def _runtime_input_flows(
     context: BinaryContextMap,
     channels: list[InputChannel],
     runtime_events: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     channel_by_kind = {channel.kind: channel for channel in channels}
     raw_functions = [
         fn for fn in context.interesting_functions
@@ -330,7 +358,7 @@ def _runtime_input_flows(
         item["events"].append(event)
 
     flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for index, ((kind, fn_id), item) in enumerate(sorted(grouped.items()), start=1):
         channel = item["channel"]
         fn = item["function"]
@@ -378,7 +406,7 @@ def _runtime_parser_flows(
     context: BinaryContextMap,
     surface_details: list[dict[str, Any]],
     runtime_events: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Bind observed parser API callsites back to recovered functions."""
     parser_surfaces = {
         symbol_base_name(str(item.get("name") or "")): item
@@ -454,7 +482,7 @@ def _runtime_parser_flows(
             item["backtrace_function_names"].append(function_name)
 
     flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for index, ((_surface_id, fn_id), item) in enumerate(sorted(grouped.items()), start=1):
         surface = item["surface"]
         fn = item["function"]
@@ -537,7 +565,7 @@ def _call_graph_edges(
         for fn in functions_by_name.values()
     }
 
-    def resolve_ingress_function(ingress: dict[str, Any]) -> Optional[FunctionInfo]:
+    def resolve_ingress_function(ingress: dict[str, Any]) -> FunctionInfo | None:
         bound_id = str(ingress.get("bound_function_id") or "")
         if bound_id in functions_by_id:
             return functions_by_id[bound_id]
@@ -614,9 +642,9 @@ def _call_graph_edges(
 def _build_entry_points(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     entry_points: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     for fn in context.entry_points:
         if _is_runtime_support_name(fn.name):
             continue
@@ -653,10 +681,10 @@ def _build_entry_points(
 def _build_surfaces_and_sinks(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     surface_details: list[dict[str, Any]] = []
     sink_details: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
 
     for fn in context.dangerous_sinks:
         classification = classify_security_api(fn.name)
@@ -744,9 +772,9 @@ def _build_candidate_flows(
     manifest: BinaryManifest,
     context: BinaryContextMap,
     sink_details: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     candidate_flows: list[dict[str, Any]] = []
-    evidence: list[EvidenceRecord] = []
+    evidence: list[BinaryEvidenceRecord] = []
     sink_by_name = {symbol_base_name(item["name"]): item["id"] for item in sink_details}
     for fn in context.interesting_functions:
         if _is_runtime_support_name(fn.name):
@@ -821,15 +849,15 @@ def _context_map(
     context: BinaryContextMap,
     channels: list[InputChannel],
     runtime_events: list[dict[str, Any]],
-    runtime_records: list[EvidenceRecord],
+    runtime_records: list[BinaryEvidenceRecord],
     fuzz: FuzzEvidenceBundle,
-    constraints: Optional[dict[str, Any]],
+    constraints: dict[str, Any] | None,
     graph_path: Path,
-    static_records: list[EvidenceRecord],
+    static_records: list[BinaryEvidenceRecord],
     decompilations: dict[str, Any],
     runtime_input_flows: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[EvidenceRecord]]:
-    generated_evidence: list[EvidenceRecord] = []
+) -> tuple[dict[str, Any], list[BinaryEvidenceRecord]]:
+    generated_evidence: list[BinaryEvidenceRecord] = []
     class_inventory_evidence_ids = [
         record.id for record in static_records
         if record.kind == "class_metadata_inventory"
@@ -1199,94 +1227,6 @@ def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:
     with BinaryGraphStore(result.graph_path) as store, store.batch():
         _ingest_graph_body(store, result, out_dir)
 
-
-_STATUS_MAP = {
-    "binary_entry_point_candidate": "entry_point",
-    "binary_sink_candidate": "sink",
-    "binary_surface_candidate": "flow_step",
-}
-
-
-def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None:
-    try:
-        from core.annotations.models import Annotation
-        from core.annotations.storage import write_annotation
-    except ImportError:
-        return
-    ann_dir = out_dir / "annotations"
-    binary_file = Path(result.manifest.binary_path).name
-    count = 0
-
-    for ep in (result.context_map.get("entry_points") or []):
-        if not ep.get("name"):
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=ep["name"],
-            body=ep.get("evidence_note", ""),
-            metadata={
-                "status": "entry_point",
-                "source": "llm",
-                "evidence_tier": ep.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for sink in (result.context_map.get("sink_details") or []):
-        if not sink.get("name"):
-            continue
-        status = _STATUS_MAP.get(sink.get("type", ""), "flow_step")
-        ann = Annotation(
-            file=binary_file,
-            function=sink["name"],
-            body=sink.get("evidence_note", ""),
-            metadata={
-                "status": status,
-                "source": "llm",
-                "category": sink.get("category", ""),
-                "evidence_tier": sink.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for boundary in (result.context_map.get("boundary_details") or []):
-        boundary_name = boundary.get("name") or boundary.get("id", "")
-        if not boundary_name:
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=boundary_name,
-            body=boundary.get("description", ""),
-            metadata={
-                "status": "trust_boundary",
-                "source": "llm",
-                "evidence_tier": boundary.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    for ingress in (result.context_map.get("external_ingress_candidates") or []):
-        if not ingress.get("name"):
-            continue
-        ann = Annotation(
-            file=binary_file,
-            function=ingress["name"],
-            body=ingress.get("evidence_note", ""),
-            metadata={
-                "status": "entry_point",
-                "source": "llm",
-                "kind": ingress.get("kind", ""),
-                "evidence_tier": ingress.get("evidence_tier", ""),
-            },
-        )
-        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
-            count += 1
-
-    if count:
-        logger.info("synthesised %d annotations in %s", count, ann_dir)
 
 
 def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, out_dir: Path) -> None:
@@ -1681,7 +1621,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
         )
         ingress_node = ingress_nodes.get(boundary.get("ingress_id") or "")
         function_node = function_nodes.get(boundary.get("boundary_function_id") or "")
-        surface_node = surface_nodes.get(boundary.get("parser_surface_id") or "")
+        surface_node = all_surface_nodes.get(boundary.get("parser_surface_id") or "")
         store.add_edge(
             snapshot_id,
             manifest.binary_sha256,
@@ -1824,11 +1764,11 @@ def analyse_blackbox_binary(
     llm: Any = None,
     quick: bool = False,
     max_decompile: int = 20,
-    slice_arch: Optional[str] = None,
-    runtime_dir: Optional[Path] = None,
-    fuzz_dir: Optional[Path] = None,
-    constraint_file: Optional[Path] = None,
-    compare_binary: Optional[Path] = None,
+    slice_arch: str | None = None,
+    runtime_dir: Path | None = None,
+    fuzz_dir: Path | None = None,
+    constraint_file: Path | None = None,
+    compare_binary: Path | None = None,
 ) -> BinaryAnalysisResult:
     binary = Path(binary_path).resolve()
     out_dir = Path(out_dir).resolve()
@@ -1857,7 +1797,7 @@ def analyse_blackbox_binary(
     evidence.extend(channel_evidence)
 
     runtime_events: list[dict[str, Any]] = []
-    runtime_records: list[EvidenceRecord] = []
+    runtime_records: list[BinaryEvidenceRecord] = []
     if runtime_dir is not None:
         runtime_events, runtime_records = load_runtime_evidence(
             Path(runtime_dir),
@@ -2008,6 +1948,7 @@ def analyse_blackbox_binary(
 
     save_json(out_dir / "binary-manifest.json", manifest.to_dict())
     save_json(out_dir / "binary-evidence.json", {"evidence": [record.to_dict() for record in evidence]})
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-decompilations.json", decompilations)
@@ -2063,7 +2004,6 @@ def analyse_blackbox_binary(
         _ingest_graph(result, out_dir)
     except Exception:
         logger.warning("graph ingest failed; JSON artifacts are intact", exc_info=True)
-    _synthesise_annotations(result, out_dir)
     return result
 
 
@@ -2071,8 +2011,8 @@ def append_fuzz_evidence_to_run(
     binary_path: Path,
     *,
     out_dir: Path,
-    fuzz_dir: Optional[Path] = None,
-) -> Optional[FuzzEvidenceBundle]:
+    fuzz_dir: Path | None = None,
+) -> FuzzEvidenceBundle | None:
     """Append completed fuzz evidence to an existing binary run.
 
     The fuzz orchestrator uses this after the campaign finishes so the pre-fuzz
@@ -2114,7 +2054,9 @@ def append_fuzz_evidence_to_run(
     for record in bundle.evidence:
         if record.id not in seen:
             existing.append(record.to_dict())
+            seen.add(record.id)
     context_map["evidence"] = existing
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
@@ -2204,8 +2146,8 @@ def append_fuzz_evidence_to_run(
     return bundle
 
 
-def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[EvidenceRecord]:
-    records: list[EvidenceRecord] = []
+def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[BinaryEvidenceRecord]:
+    records: list[BinaryEvidenceRecord] = []
     for item in items:
         if not isinstance(item, dict) or not item.get("id") or not item.get("tier"):
             continue
@@ -2214,7 +2156,7 @@ def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[Evidence
         except ValueError:
             logger.warning("skipping evidence record with unrecognised tier %r", item.get("tier"))
             continue
-        records.append(EvidenceRecord(
+        records.append(BinaryEvidenceRecord(
             id=str(item.get("id") or ""),
             kind=str(item.get("kind") or ""),
             source=str(item.get("source") or ""),
@@ -2304,7 +2246,7 @@ def append_runtime_evidence_to_run(
     *,
     out_dir: Path,
     runtime_dir: Path,
-) -> Optional[BinaryAnalysisResult]:
+) -> BinaryAnalysisResult | None:
     """Append parser/input runtime evidence to an existing binary run.
 
     This is used by `/binary trace-parser`: it preserves the original static
@@ -2410,6 +2352,7 @@ def append_runtime_evidence_to_run(
         decompilations=decompilations,
     )
     context_map["evidence"] = existing
+    _stamp_context_map(context_map)
     save_json(out_dir / "binary-context-map.json", context_map)
     save_json(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})

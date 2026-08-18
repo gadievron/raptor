@@ -1,11 +1,60 @@
 rules:
-  - id: raptor.tls.skip-verify
-    message: TLS verification disabled (insecure). Do not set verify=False or TrustAllHosts in production.
-    languages: [python, java, javascript]
+  # ---------------------------------------------------------------------------
+  # Python — TLS certificate verification disabled (CWE-295)
+  # Covers requests library methods that accept verify=False.
+  # ---------------------------------------------------------------------------
+  - id: raptor.tls.skip-verify.python
+    message: >-
+      TLS certificate verification is disabled via verify=False. An attacker
+      in a network position can intercept and modify traffic. Always verify
+      certificates against a trusted CA bundle.
+    languages: [python]
     severity: HIGH
     pattern-either:
-      - pattern: requests.get(..., verify=False)
-      - pattern: HttpsURLConnection.setDefaultHostnameVerifier($X)
+      - pattern: requests.get(..., verify=False, ...)
+      - pattern: requests.post(..., verify=False, ...)
+      - pattern: requests.put(..., verify=False, ...)
+      - pattern: requests.patch(..., verify=False, ...)
+      - pattern: requests.delete(..., verify=False, ...)
+      - pattern: requests.head(..., verify=False, ...)
+      - pattern: requests.options(..., verify=False, ...)
+      - pattern: requests.request(..., verify=False, ...)
     metadata:
       cwe: ["CWE-295"]
       asvs: ["V14.1"]
+      tags: ["security", "tls", "misconfiguration"]
+
+  # ---------------------------------------------------------------------------
+  # Java — TLS hostname verification disabled (CWE-295)
+  # ---------------------------------------------------------------------------
+  - id: raptor.tls.skip-verify.java
+    message: >-
+      Default TLS hostname verifier overridden globally. This typically
+      disables hostname verification for all HTTPS connections in the JVM.
+      Use the default verifier or configure per-connection verification.
+    languages: [java]
+    severity: HIGH
+    pattern: HttpsURLConnection.setDefaultHostnameVerifier($X)
+    metadata:
+      cwe: ["CWE-295"]
+      asvs: ["V14.1"]
+      tags: ["security", "tls", "misconfiguration"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — TLS verification disabled (CWE-295)
+  # ---------------------------------------------------------------------------
+  - id: raptor.tls.skip-verify.javascript
+    message: >-
+      TLS certificate verification is disabled. An attacker in a network
+      position can intercept and modify traffic. Do not set
+      rejectUnauthorized to false or NODE_TLS_REJECT_UNAUTHORIZED to "0"
+      in production.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern-either:
+      - pattern: 'process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"'
+      - pattern: 'new $MODULE.Agent({..., rejectUnauthorized: false, ...})'
+    metadata:
+      cwe: ["CWE-295"]
+      asvs: ["V14.1"]
+      tags: ["security", "tls", "misconfiguration"]

@@ -27,7 +27,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+
 # ``_ET`` kept for its ``ParseError`` exception type — defusedxml
 # raises the stdlib's ParseError subclass on malformed XML, so
 # catching ``_ET.ParseError`` works for both parsers. The actual
@@ -35,7 +35,7 @@ from typing import List, Optional, Tuple
 from xml.etree import ElementTree as _ET
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ _PURL_TYPE = "nuget"
 # ---------------------------------------------------------------------------
 
 @register(suffixes=[".csproj", ".fsproj", ".vbproj"])
-def parse_msbuild_project(path: Path) -> List[Dependency]:
+def parse_msbuild_project(path: Path) -> list[Dependency]:
     """Parse an MSBuild project file and emit one Dependency per
     ``<PackageReference>``.
 
@@ -129,10 +129,12 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             "stdlib parser (XXE / billion-laughs exposure)", path,
         )
         return []
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
+    # Bounded read — same posture as sibling parsers: a hostile
+    # oversized (or symlinked) csproj is treated as unparseable
+    # rather than fed to the XML parser.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
     try:
@@ -141,7 +143,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.nuget: invalid XML in %s: %s", path, e)
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     # Extract the project's target framework(s). Modern SDK-style
     # csproj uses ``<TargetFramework>`` (singular) or
@@ -183,7 +185,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             if override:
                 version = override.strip()
                 source_origin = "version_override"
-        cpm_resolved_in: Optional[Path] = None
+        cpm_resolved_in: Path | None = None
         if not version and cpm_map:
             # Fall through to the CPM map walked from the
             # csproj's directory. ``cpm_map`` carries (version, central_file)
@@ -205,6 +207,9 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             skipped_no_version.append(name)
             continue
         pin_style, normalised = _classify_version_spec(version)
+        # Corridor bounds come from the raw spec — capture them before
+        # the bare-version normalisation below discards the range.
+        floor, ceiling = _spec_corridor(version)
         if normalised is not None:
             version = normalised
         scope = _scope_from_msbuild(el)
@@ -217,6 +222,8 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             source_origin=source_origin,
             pin_style=pin_style,
             resolved_in=cpm_resolved_in,
+            version_floor=floor,
+            version_ceiling=ceiling,
         )
         if dep.key() in seen_keys:
             continue
@@ -257,10 +264,12 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
 
 def _build_msbuild_dep(
     *, name: str, version: str, scope: str, declared_in: Path,
-    source_extra: Optional[dict] = None,
+    source_extra: dict | None = None,
     source_origin: str = "inline_version",
     pin_style: PinStyle = PinStyle.EXACT,
-    resolved_in: Optional[Path] = None,
+    resolved_in: Path | None = None,
+    version_floor: str | None = None,
+    version_ceiling: str | None = None,
 ) -> Dependency:
     """Construct a Dependency carrying the MSBuild source-origin
     annotation. ``source_origin`` records where the version came
@@ -306,15 +315,18 @@ def _build_msbuild_dep(
         ),
         source_kind="manifest",
         source_extra=extra,
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
 def _resolve_cpm_chain(start_dir: Path):
     """Walk MSBuild auto-import files (``Directory.Packages.props``
-    + ``Directory.Build.props``) from ``start_dir`` upward and
-    return ``(merged_version_map, global_packages)``.
+    + ``Directory.Build.props`` + ``Directory.Build.targets``) from
+    ``start_dir`` upward and return
+    ``(merged_version_map, global_packages)``.
 
-    Two file types contribute:
+    Three file types contribute:
 
       * ``Directory.Packages.props`` — CPM (NuGet 6.2+). Primary
         version source for modern .NET. PackageVersion entries
@@ -325,14 +337,22 @@ def _resolve_cpm_chain(start_dir: Path):
         ``version_map`` (treated as non-global central
         declarations). No GlobalPackageReference shape in this
         file type.
+      * ``Directory.Build.targets`` — the post-project MSBuild
+        auto-import. Same ``<Project>``/PackageReference shape as
+        Directory.Build.props (read with the same parser); pre-CPM
+        monorepos often centralise their version table here.
+        Feeds ``version_map`` only.
 
     Merge semantics:
       * version_map merges OUTER → INNER (innermost wins).
-        Within the same directory, CPM (Directory.Packages.props)
-        outranks Directory.Build.props.
-      * global_packages from ALL CPM files in the chain are
-        concatenated; the rule "GlobalPackageReference applies
-        to every csproj" doesn't care about hierarchy.
+        Within the same directory the precedence is
+        Directory.Build.props < Directory.Build.targets < CPM
+        (Directory.Packages.props).
+      * global_packages are collected per package name across the
+        CPM files, outer-to-inner: an inner CPM file's
+        GlobalPackageReference replaces an outer one's, and an
+        inner CPM file that redeclares the package as a plain
+        (non-global) PackageVersion removes the global entirely.
       * When ANY CPM file in the chain disables CPM
         (``<ManagePackageVersionsCentrally>false</>``), the
         CPM-version-map becomes ineffective and we fall through
@@ -342,8 +362,11 @@ def _resolve_cpm_chain(start_dir: Path):
     Returns ``({}, [])`` for the no-MSBuild-auto-import case.
     """
     from .directory_packages_props import (
-        find_build_props_chain, find_build_targets_chain, find_cpm_chain,
-        parse_directory_build_props, parse_directory_packages_props,
+        find_build_props_chain,
+        find_build_targets_chain,
+        find_cpm_chain,
+        parse_directory_build_props,
+        parse_directory_packages_props,
     )
 
     cpm_paths = find_cpm_chain(start_dir)
@@ -371,23 +394,33 @@ def _resolve_cpm_chain(start_dir: Path):
     merged: dict = {}
     globals_by_name: dict = {}
 
-    # Apply outer-to-inner; within a directory, Directory.Build.props
-    # is applied FIRST, then Directory.Packages.props overrides
-    # (matching MSBuild's import order — CPM is the more recent
-    # and more authoritative system).
-    for build_file in reversed(build_files):
-        for pkg in build_file.packages:
-            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
-    # Directory.Build.targets is auto-imported AFTER the project (and after
-    # Directory.Build.props), so it wins over .props for the same package.
-    for targets_file in reversed(targets_files):
-        for pkg in targets_file.packages:
-            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
-
+    # Interleave all file types by directory depth so that innermost
+    # directory always wins regardless of file type (MSBuild's
+    # import model). Within the same directory the precedence is:
+    #   Directory.Build.props < Directory.Build.targets < CPM
+    # Assign a sub-priority: 0 = build_props, 1 = build_targets,
+    # 2 = cpm.  Sort outer-to-inner (deepest last = last-write-wins).
+    all_entries: list = []
+    for bf in build_files:
+        depth = len(bf.path.parent.parts)
+        all_entries.append((depth, 0, bf, False))
+    for tf in targets_files:
+        depth = len(tf.path.parent.parts)
+        all_entries.append((depth, 1, tf, False))
     if cpm_active:
-        for cpm_file in reversed(cpm_files):
-            for pkg in cpm_file.packages:
-                merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
+        for cf in cpm_files:
+            depth = len(cf.path.parent.parts)
+            all_entries.append((depth, 2, cf, True))
+
+    # Sort: shallowest first (outer-to-inner), then by sub-priority
+    # within the same directory. Last-write-wins gives innermost +
+    # highest sub-priority the final say.
+    all_entries.sort(key=lambda e: (e[0], e[1]))
+
+    for _depth, _prio, parsed_file, is_cpm in all_entries:
+        for pkg in parsed_file.packages:
+            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
+            if is_cpm:
                 if pkg.is_global:
                     globals_by_name[pkg.name.lower()] = pkg
                 elif pkg.name.lower() in globals_by_name:
@@ -396,7 +429,7 @@ def _resolve_cpm_chain(start_dir: Path):
     return merged, list(globals_by_name.values())
 
 
-def _extract_target_frameworks(root) -> List[str]:
+def _extract_target_frameworks(root) -> list[str]:
     """Pull the project's target frameworks from ``<TargetFramework>``
     or ``<TargetFrameworks>``. Returns a list of TFMs (e.g. ``["net6.0",
     "net8.0"]``); empty if neither element is present.
@@ -404,21 +437,22 @@ def _extract_target_frameworks(root) -> List[str]:
     Per-PackageReference TFM (`Condition="'$(TargetFramework)' == ..."`)
     isn't handled — for v1 we treat all package refs as applying to
     the full TFM set."""
-    out: List[str] = []
+    out: list[str] = []
     for elem in root.iter():
         tag = elem.tag
         if tag.endswith("}TargetFramework") or tag == "TargetFramework":
             if elem.text and elem.text.strip():
                 out.append(elem.text.strip())
-        elif tag.endswith("}TargetFrameworks") or tag == "TargetFrameworks":
-            if elem.text:
-                for t in elem.text.split(";"):
-                    t = t.strip()
-                    if t:
-                        out.append(t)
+        elif (
+            tag.endswith("}TargetFrameworks") or tag == "TargetFrameworks"
+        ) and elem.text:
+            for t in elem.text.split(";"):
+                t = t.strip()
+                if t:
+                    out.append(t)
     # Deduplicate preserving order.
     seen: set = set()
-    deduped: List[str] = []
+    deduped: list[str] = []
     for t in out:
         if t not in seen:
             seen.add(t)
@@ -462,7 +496,7 @@ def _scope_from_msbuild(el) -> str:
 # ---------------------------------------------------------------------------
 
 @register(filenames=["packages.config"])
-def parse_packages_config(path: Path) -> List[Dependency]:
+def parse_packages_config(path: Path) -> list[Dependency]:
     if not _AVAILABLE:
         logger.warning(
             "sca.parsers.nuget: skipping %s — 'defusedxml' not "
@@ -481,7 +515,7 @@ def parse_packages_config(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.nuget: invalid XML in %s: %s", path, e)
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     for el in root.iter():
         tag = el.tag.rsplit("}", 1)[-1]
@@ -492,6 +526,7 @@ def parse_packages_config(path: Path) -> List[Dependency]:
         if not (name and version):
             continue
         pin_style, normalised = _classify_version_spec(version)
+        floor, ceiling = _spec_corridor(version)
         if normalised is not None:
             version = normalised
         purl = _build_purl(name, version)
@@ -510,6 +545,8 @@ def parse_packages_config(path: Path) -> List[Dependency]:
                 reason="packages.config XML — deterministic structure",
             ),
             source_kind="manifest",
+            version_floor=floor,
+            version_ceiling=ceiling,
         )
         if dep.key() in seen_keys:
             continue
@@ -523,7 +560,7 @@ def parse_packages_config(path: Path) -> List[Dependency]:
 # ---------------------------------------------------------------------------
 
 @register(filenames=["packages.lock.json"])
-def parse_lockfile(path: Path) -> List[Dependency]:
+def parse_lockfile(path: Path) -> list[Dependency]:
     """Parse a NuGet ``packages.lock.json`` and emit one Dependency per
     resolved entry.
 
@@ -545,12 +582,14 @@ def parse_lockfile(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.nuget: cannot read %s: %s", path, e)
         return []
 
-    out: List[Dependency] = []
+    if not isinstance(data, dict):
+        return []
+    out: list[Dependency] = []
     seen_keys: set = set()
     deps_block = data.get("dependencies") or {}
     if not isinstance(deps_block, dict):
         return []
-    for _target, entries in deps_block.items():
+    for entries in deps_block.values():
         if not isinstance(entries, dict):
             continue
         for name, spec in entries.items():
@@ -590,12 +629,25 @@ def parse_lockfile(path: Path) -> List[Dependency]:
 # NuGet version-spec grammar
 # ---------------------------------------------------------------------------
 
+# Deterministic bracket-range grammar. The previous form interleaved
+# ``\s*`` quantifiers with lazy value classes that ALSO matched
+# whitespace, so adjacent quantified subexpressions overlapped and a
+# hostile ``"[" + " "*N`` spec explored O(N^2)+ splits. Here each
+# value is captured greedily (its class excludes the structural
+# ``,[]()`` delimiters, so every position has exactly one match) and
+# surrounding whitespace is stripped in Python afterwards — same
+# accepted language, same outputs, linear-time matching.
 _BRACKET_RE = re.compile(
-    r"^\s*([\[\(])\s*([^,\[\]\(\)]*?)\s*(?:,\s*([^,\[\]\(\)]*?)\s*)?([\]\)])\s*$"
+    r"^\s*([\[\(])([^,\[\]\(\)]*)(?:,([^,\[\]\(\)]*))?([\]\)])\s*$"
 )
 
+# Length bound applied before the regex runs. Real NuGet version
+# specs are tens of characters; anything longer is hostile or
+# garbage and is classified UNKNOWN without touching the regex.
+_MAX_VERSION_SPEC_LEN = 256
 
-def _classify_version_spec(spec: Optional[str]) -> Tuple[PinStyle, Optional[str]]:
+
+def _classify_version_spec(spec: str | None) -> tuple[PinStyle, str | None]:
     """Return ``(pin_style, bare_version)`` for a NuGet version string.
 
     Rules:
@@ -611,12 +663,21 @@ def _classify_version_spec(spec: Optional[str]) -> Tuple[PinStyle, Optional[str]
     """
     if spec is None:
         return PinStyle.UNKNOWN, None
+    if len(spec) > _MAX_VERSION_SPEC_LEN:
+        return PinStyle.UNKNOWN, None
     s = spec.strip()
     if not s:
         return PinStyle.UNKNOWN, None
     m = _BRACKET_RE.match(s)
     if m:
         lb, lv, uv, ub = m.group(1), m.group(2), m.group(3), m.group(4)
+        # Values are captured with surrounding whitespace (the regex
+        # keeps its value classes delimiter-only for determinism);
+        # trim here. ``uv is None`` (no comma) stays distinct from
+        # ``uv == ""`` (open bound).
+        lv = lv.strip()
+        if uv is not None:
+            uv = uv.strip()
         if uv is None:
             # Single-value form. Only ``[V]`` (both inclusive) is a
             # valid EXACT pin per NuGet spec; ``(V)`` / ``[V)`` /
@@ -643,7 +704,36 @@ def _classify_version_spec(spec: Optional[str]) -> Tuple[PinStyle, Optional[str]
     return PinStyle.UNKNOWN, None
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _spec_corridor(spec: str | None) -> tuple[str | None, str | None]:
+    """Return ``(floor, ceiling)`` corridor bounds from a NuGet version
+    spec, or ``(None, None)`` when unbounded or unparseable.
+
+    ``"[1.0,2.0)"`` → ``("1.0", "2.0")``; plain ``"1.2.3"`` (NuGet's
+    implicit minimum) → ``("1.2.3", None)``. Exact pins (``[1.2.3]``)
+    and pathological single-value forms carry no corridor — mirrors
+    ``requirements._spec_bounds`` ignoring ``==`` clauses. harden's
+    candidate clamp treats the ceiling strictly (``< ceiling``), which
+    is conservative for inclusive ``]`` upper bounds.
+    """
+    if spec is None or len(spec) > _MAX_VERSION_SPEC_LEN:
+        return None, None
+    s = spec.strip()
+    if not s:
+        return None, None
+    m = _BRACKET_RE.match(s)
+    if m:
+        lv, uv = m.group(2).strip(), m.group(3)
+        if uv is None:
+            # Single-value form — exact pin or empty interval.
+            return None, None
+        uv = uv.strip()
+        return (lv or None), (uv or None)
+    if re.match(r"^\d[\w.\-+]*$", s):
+        return s, None
+    return None, None
+
+
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{name}"
     if version:
         return f"{base}@{version}"
@@ -651,7 +741,7 @@ def _build_purl(name: str, version: Optional[str]) -> str:
 
 
 __all__ = [
+    "parse_lockfile",
     "parse_msbuild_project",
     "parse_packages_config",
-    "parse_lockfile",
 ]

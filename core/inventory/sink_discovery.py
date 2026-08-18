@@ -24,11 +24,13 @@ Primary consumers:
 
 from __future__ import annotations
 
+import functools
+import heapq
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any
 
 from core.inventory.call_graph import FileCallGraph
 
@@ -45,7 +47,7 @@ logger = logging.getLogger(__name__)
 # core.function_taxonomy.EXEC_FUNCS. They're merged at runtime
 # to avoid duplication.
 
-_SOURCE_LEVEL_SINKS: FrozenSet[str] = frozenset({
+_SOURCE_LEVEL_SINKS: frozenset[str] = frozenset({
     # Python — shell execution
     "os.system",
     "os.popen",
@@ -202,7 +204,6 @@ _SOURCE_LEVEL_SINKS: FrozenSet[str] = frozenset({
     "unserialize",
     # Ruby — deserialization
     "YAML.load",
-    "Marshal.load",
     # .NET — deserialization
     "BinaryFormatter.Deserialize",
     "JsonConvert.DeserializeObject",
@@ -229,21 +230,26 @@ _SOURCE_LEVEL_SINKS: FrozenSet[str] = frozenset({
 })
 
 
-def _build_dangerous_set() -> FrozenSet[str]:
+def _build_dangerous_set() -> frozenset[str]:
     """Merge source-level sinks with C-level sinks from function_taxonomy."""
     combined = set(_SOURCE_LEVEL_SINKS)
     try:
-        from core.function_taxonomy import EXEC_FUNCS
-        combined |= EXEC_FUNCS
+        from core.function_taxonomy import (
+            EXEC_FUNCS,
+            MEMORY_COPY_FUNCS,
+            SCAN_FAMILY_FUNCS,
+            STRING_OVERFLOW_FUNCS,
+        )
+        combined |= EXEC_FUNCS | MEMORY_COPY_FUNCS | SCAN_FAMILY_FUNCS | STRING_OVERFLOW_FUNCS
     except ImportError:
         pass
     return frozenset(combined)
 
 
-DANGEROUS_TARGETS: FrozenSet[str] = _build_dangerous_set()
+DANGEROUS_TARGETS: frozenset[str] = _build_dangerous_set()
 
 
-@dataclass
+@dataclass(slots=True)
 class SinkInfo:
     """A mechanically-discovered dangerous sink."""
     file: str
@@ -253,49 +259,53 @@ class SinkInfo:
     direct: bool = True  # True = direct caller, False = transitive
 
 
-@dataclass
+@dataclass(slots=True)
 class ChainHop:
     """One hop in a mechanical call chain toward a dangerous sink."""
     file: str
     function: str
 
 
-@dataclass
+@dataclass(slots=True)
 class TransitiveReach:
     """A function that transitively reaches a dangerous sink."""
     file: str
     function: str
     distance: int        # hop count to nearest dangerous sink
-    sinks: List[str]     # dangerous targets reachable (transitively)
-    chain: Optional[List[ChainHop]] = None  # forward path toward sink
+    sinks: list[str]     # dangerous targets reachable (transitively)
+    chain: list[ChainHop] | None = None  # forward path toward sink
 
 
-@dataclass
+@dataclass(slots=True)
 class FrameworkAPI:
     """An autonomously discovered framework API target."""
     name: str            # dotted name (e.g. "luci.http.formvalue")
     caller_count: int    # number of distinct callers
-    files: List[str]     # files that call it (sample)
+    files: list[str]     # files that call it (sample)
 
 
-@dataclass
+@dataclass(slots=True)
 class UnreachableVerdict:
-    """Per-function verdict for sink unreachability eligibility."""
+    """Per-function verdict for sink unreachability eligibility.
+
+    The CWE classes actually narrowed for eligible functions come from
+    the evidence layer's ``_SINK_DEPENDENT_CWES`` constant, not from
+    the verdict.
+    """
     file: str
     function: str
     eligible: bool
     reason: str
-    narrowed_classes: List[str]
 
 
 @dataclass
 class SinkDiscoveryResult:
     """Complete result of mechanical sink discovery."""
-    direct_sinks: List[SinkInfo]
-    transitive_reach: List[TransitiveReach]
-    framework_apis: List[FrameworkAPI]
-    dangerous_target_counts: Dict[str, int]
-    unreachable_eligible: Optional[Dict[Tuple[str, str], UnreachableVerdict]] = None
+    direct_sinks: list[SinkInfo]
+    transitive_reach: list[TransitiveReach]
+    framework_apis: list[FrameworkAPI]
+    dangerous_target_counts: dict[str, int]
+    unreachable_eligible: dict[tuple[str, str], UnreachableVerdict] | None = None
 
     def as_dict(self) -> dict:
         """Serialise for JSON output / context-map enrichment."""
@@ -341,13 +351,13 @@ class SinkDiscoveryResult:
 
 def _reconstruct_chain(
     start: FuncKey,
-    successor: Dict[FuncKey, FuncKey],
+    successor: dict[FuncKey, FuncKey],
     max_depth: int,
-) -> List[ChainHop]:
+) -> list[ChainHop]:
     """Walk the successor links to build a forward chain toward a sink."""
-    hops: List[ChainHop] = []
+    hops: list[ChainHop] = []
     node = start
-    seen: Set[FuncKey] = set()
+    seen: set[FuncKey] = set()
     for _ in range(max_depth + 1):
         if node in seen:
             break
@@ -360,7 +370,7 @@ def _reconstruct_chain(
     return hops
 
 
-def _is_dangerous(chain: List[str]) -> Optional[str]:
+def _is_dangerous(chain: list[str]) -> str | None:
     """Check if a call chain targets a dangerous function.
 
     Returns the matched target name, or None.  Matching order:
@@ -372,6 +382,11 @@ def _is_dangerous(chain: List[str]) -> Optional[str]:
     """
     if not chain:
         return None
+    return _is_dangerous_cached(tuple(chain))
+
+
+@functools.lru_cache(maxsize=1024)
+def _is_dangerous_cached(chain: tuple[str, ...]) -> str | None:
     dotted = ".".join(chain)
     if dotted in DANGEROUS_TARGETS:
         return dotted
@@ -384,7 +399,7 @@ def _is_dangerous(chain: List[str]) -> Optional[str]:
     return None
 
 
-_LANGUAGE_BUILTINS: FrozenSet[str] = frozenset({
+_LANGUAGE_BUILTINS: frozenset[str] = frozenset({
     # JS builtins — high-frequency but not framework signals
     "Promise.all", "Promise.resolve", "Promise.reject", "Promise.race",
     "Array.isArray", "Array.from", "Array.of",
@@ -430,11 +445,11 @@ def _is_language_builtin(target: str) -> bool:
     return target in _LANGUAGE_BUILTINS
 
 
-FuncKey = Tuple[str, str]  # (file, function)
+FuncKey = tuple[str, str]  # (file, function)
 
 
 def discover_sinks(
-    call_graphs: Dict[str, FileCallGraph],
+    call_graphs: dict[str, FileCallGraph],
     *,
     max_depth: int = 10,
     framework_threshold: int = 5,
@@ -462,20 +477,20 @@ def discover_sinks(
         Direct sinks, transitive reachability, and framework APIs.
     """
     # Phase 1: Find direct dangerous callers
-    direct_sinks: List[SinkInfo] = []
+    direct_sinks: list[SinkInfo] = []
     # Build forward call graph: (file, caller) → set of (file, callee)
-    forward_edges: Dict[FuncKey, Set[FuncKey]] = defaultdict(set)
+    forward_edges: dict[FuncKey, set[FuncKey]] = defaultdict(set)
     # Build reverse call graph: (file, callee) → set of (file, caller)
-    reverse_edges: Dict[FuncKey, Set[FuncKey]] = defaultdict(set)
+    reverse_edges: dict[FuncKey, set[FuncKey]] = defaultdict(set)
     # Track which functions directly call dangerous targets
-    direct_dangerous: Dict[FuncKey, Set[str]] = defaultdict(set)
+    direct_dangerous: dict[FuncKey, set[str]] = defaultdict(set)
     # Track all call targets for framework discovery
-    target_callers: Dict[str, Set[FuncKey]] = defaultdict(set)
-    target_files: Dict[str, Set[str]] = defaultdict(set)
+    target_callers: dict[str, set[FuncKey]] = defaultdict(set)
+    target_files: dict[str, set[str]] = defaultdict(set)
     # Build cross-file function index: function name → files where it is
     # defined (approximated by where it appears as a caller in call graphs).
     # This enables cross-file edge building below.
-    _func_defined_in: Dict[str, Set[str]] = defaultdict(set)
+    _func_defined_in: dict[str, set[str]] = defaultdict(set)
     for filepath, graph in call_graphs.items():
         for call in graph.calls:
             if call.caller and call.caller != "<module>":
@@ -534,15 +549,15 @@ def discover_sinks(
 
     # Phase 2: Transitive reverse reachability from dangerous callers
     # BFS backwards from every function that directly calls a dangerous target
-    transitive_reach: List[TransitiveReach] = []
-    visited: Dict[FuncKey, int] = {}  # key → distance
-    reachable_sinks: Dict[FuncKey, Set[str]] = defaultdict(set)
+    transitive_reach: list[TransitiveReach] = []
+    visited: dict[FuncKey, int] = {}  # key → distance
+    reachable_sinks: dict[FuncKey, set[str]] = defaultdict(set)
     # successor[caller] = next hop toward sink (reverse BFS predecessor
     # = forward call chain successor). Used to reconstruct chains.
-    successor: Dict[FuncKey, FuncKey] = {}
+    successor: dict[FuncKey, FuncKey] = {}
 
     # Seed: all direct dangerous callers at distance 0
-    queue: List[Tuple[FuncKey, int]] = []
+    queue: list[tuple[FuncKey, int]] = []
     for key, targets in direct_dangerous.items():
         visited[key] = 0
         reachable_sinks[key] = set(targets)
@@ -590,7 +605,7 @@ def discover_sinks(
     # Phase 3: Framework API discovery
     # Filter: must have enough distinct callers AND span multiple files.
     # Exclude well-known language builtins — they're not framework signals.
-    framework_apis: List[FrameworkAPI] = []
+    framework_apis: list[FrameworkAPI] = []
     for target, callers in target_callers.items():
         n_callers = len(callers)
         n_files = len(target_files[target])
@@ -603,12 +618,12 @@ def discover_sinks(
         framework_apis.append(FrameworkAPI(
             name=target,
             caller_count=n_callers,
-            files=sorted(target_files[target])[:5],
+            files=heapq.nsmallest(5, target_files[target]),
         ))
     framework_apis.sort(key=lambda f: -f.caller_count)
 
     # Dangerous target usage summary
-    dangerous_counts: Dict[str, int] = defaultdict(int)
+    dangerous_counts: dict[str, int] = defaultdict(int)
     for si in direct_sinks:
         dangerous_counts[si.target] += 1
 
@@ -624,7 +639,7 @@ def discover_sinks(
     # by the catalog — blocking on them made tier 0 a no-op for C code
     # (every function calls libc).
 
-    all_func_keys: Set[FuncKey] = set()
+    all_func_keys: set[FuncKey] = set()
     for filepath, graph in call_graphs.items():
         for call in graph.calls:
             c = call.caller or "<module>"
@@ -632,12 +647,34 @@ def discover_sinks(
 
     reachable_keys = set(visited.keys())
 
-    file_has_indirection: Dict[str, Set[str]] = {}
+    file_has_indirection: dict[str, set[str]] = {}
     for filepath, graph in call_graphs.items():
         if graph.indirection:
             file_has_indirection[filepath] = graph.indirection
 
-    unreachable_eligible: Dict[Tuple[str, str], UnreachableVerdict] = {}
+    # Per-function indirect-call awareness (C only). In C a call whose
+    # callee is a field expression — ``ctx->remove_session_cb(ctx, c)``,
+    # chain length > 1 — is definitionally a call through a function
+    # pointer: C has no methods, so the callee set is statically
+    # unknowable. Such a function must never earn ``sink_unreachable``
+    # ("no sink path, no dangerous callees") — the unseen callback may
+    # be anything, including a sink. The file-level indirection flags
+    # (L1) only cover ``(*fp)(...)`` and local fn-ptr variables; the
+    # field-call form was the blind spot that triage-skipped a real
+    # callback-invoking function. Consumes the existing call-graph
+    # chains — no new parsing. Scoped to ``.c`` files: in C++/Python/JS
+    # an ``a.b(...)`` chain is an ordinary method call.
+    c_indirect_callers: set[FuncKey] = set()
+    for filepath, graph in call_graphs.items():
+        if not filepath.endswith(".c"):
+            continue
+        for call in graph.calls:
+            if call.chain and len(call.chain) > 1:
+                c_indirect_callers.add(
+                    (filepath, call.caller or "<module>"),
+                )
+
+    unreachable_eligible: dict[tuple[str, str], UnreachableVerdict] = {}
     for key in all_func_keys:
         if key in reachable_keys:
             continue
@@ -649,7 +686,14 @@ def discover_sinks(
                 function=funcname,
                 eligible=False,
                 reason=f"indirection flags: {sorted(indir)}",
-                narrowed_classes=[],
+            )
+            continue
+        if key in c_indirect_callers:
+            unreachable_eligible[key] = UnreachableVerdict(
+                file=filepath,
+                function=funcname,
+                eligible=False,
+                reason="indirect call through function-pointer field",
             )
             continue
         unreachable_eligible[key] = UnreachableVerdict(
@@ -657,7 +701,6 @@ def discover_sinks(
             function=funcname,
             eligible=True,
             reason="no transitive reach, no indirection",
-            narrowed_classes=[],
         )
 
     logger.info(
@@ -680,10 +723,12 @@ def discover_sinks(
 def discover_sinks_for_target(
     target: Path,
     *,
-    languages: Optional[Set[str]] = None,
+    languages: set[str] | None = None,
     max_depth: int = 10,
     framework_threshold: int = 5,
     framework_min_files: int = 3,
+    scope_dirs: list | None = None,
+    collect_call_graphs: dict[str, Any] | None = None,
 ) -> SinkDiscoveryResult:
     """Convenience: build call graphs for a target directory and run discovery.
 
@@ -707,12 +752,21 @@ def discover_sinks_for_target(
 
     from core.inventory.languages import detect_language
 
-    call_graphs: Dict[str, FileCallGraph] = {}
+    call_graphs: dict[str, FileCallGraph] = {}
 
     # Language → extractor function
     extractors = _get_call_graph_extractors()
 
+    scope_prefixes = (
+        tuple(str(Path(s).resolve()) for s in scope_dirs)
+        if scope_dirs else None
+    )
+
     for source_file in _iter_source_files(target):
+        if scope_prefixes and not str(
+            source_file.resolve()
+        ).startswith(scope_prefixes):
+            continue
         try:
             rel = str(source_file.relative_to(target))
         except ValueError:
@@ -730,9 +784,15 @@ def discover_sinks_for_target(
             graph = extractor(content)
             if graph.calls:
                 call_graphs[rel] = graph
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("sink discovery: callgraph extraction failed for %s", rel, exc_info=True)
             continue
+
+    if collect_call_graphs is not None:
+        # Caller wants the per-file call graphs too (e.g. the map
+        # enricher reuses them for heuristic wrapper-sink discovery
+        # without a second parse of the tree).
+        collect_call_graphs.update(call_graphs)
 
     return discover_sinks(
         call_graphs,
@@ -747,15 +807,15 @@ def _get_call_graph_extractors():
     from functools import partial
 
     from core.inventory.call_graph import (
-        extract_call_graph_python,
-        extract_call_graph_javascript,
         extract_call_graph_c,
         extract_call_graph_cpp,
         extract_call_graph_csharp,
         extract_call_graph_go,
         extract_call_graph_java,
+        extract_call_graph_javascript,
         extract_call_graph_lua,
         extract_call_graph_php,
+        extract_call_graph_python,
         extract_call_graph_ruby,
         extract_call_graph_rust,
     )

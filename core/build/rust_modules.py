@@ -18,7 +18,9 @@ toward INCLUSION: a missed ``mod`` edge under-counts the reachable set, which
 at worst marks a genuinely-compiled file build_excluded — and since the witness
 only demotes/surfaces (never hard-suppresses), that is noise, not a false
 negative. ``#[path]`` and per-target path overrides in ``Cargo.toml`` and
-workspaces are best-effort; unresolved cases stay conservative.
+workspaces are best-effort; unresolved cases stay conservative. All candidate
+files are confined to the repo root (symlink-aware): analysed sources cannot
+direct probes or reads outside the tree.
 """
 
 from __future__ import annotations
@@ -81,14 +83,29 @@ def _module_base_dir(parent_file: Path) -> Path:
     return parent_file.parent / parent_file.stem
 
 
+def _in_root(cand: Path, root: Path) -> bool:
+    """True when ``cand`` resolves inside ``root`` (the resolved repo root).
+    ``#[path = "…"]`` values come from the analysed (untrusted) sources: an
+    absolute value discards the join base and ``../`` escapes the crate tree,
+    so every candidate is confined BEFORE any filesystem probe — otherwise
+    ``is_file`` is a host file-existence oracle and out-of-tree files get
+    read. Symlinks are followed by ``resolve``, so a link pointing out of the
+    repo is rejected too."""
+    try:
+        resolved = cand.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return resolved.is_relative_to(root)
+
+
 def _resolve_child(parent_file: Path, mod_name: str,
-                   path_attr: Optional[str]) -> Optional[Path]:
+                   path_attr: Optional[str], root: Path) -> Optional[Path]:
     if path_attr:
-        cand = (parent_file.parent / path_attr)
-        return cand if cand.is_file() else None
+        cand = parent_file.parent / path_attr
+        return cand if _in_root(cand, root) and cand.is_file() else None
     base = _module_base_dir(parent_file)
     for cand in (base / f"{mod_name}.rs", base / mod_name / "mod.rs"):
-        if cand.is_file():
+        if _in_root(cand, root) and cand.is_file():
             return cand
     return None
 
@@ -108,6 +125,10 @@ def extract_rust_crate_modules(target: Path) -> Optional[frozenset]:
     target = Path(target)
     if not target.is_dir() or not (target / "Cargo.toml").is_file():
         return None
+    try:
+        root = target.resolve()
+    except OSError:
+        return None  # can't confine candidates → membership unknown
     roots = _crate_roots(target)
     if not roots:
         return None
@@ -118,13 +139,13 @@ def extract_rust_crate_modules(target: Path) -> Optional[frozenset]:
         try:
             rf = f.resolve()
         except OSError:
-            rf = f
+            continue  # unresolvable → containment unverifiable, skip
         key = str(rf)
-        if key in reachable or not f.is_file():
+        if key in reachable or not rf.is_relative_to(root) or not f.is_file():
             continue
         reachable.add(key)
         for path_attr, mod_name in _file_mods(f):
-            child = _resolve_child(f, mod_name, path_attr)
+            child = _resolve_child(f, mod_name, path_attr, root)
             if child is not None:
                 queue.append(child)
     return frozenset(reachable) if reachable else None

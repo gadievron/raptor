@@ -20,9 +20,10 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, TextIO
+from typing import Any, TextIO
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,9 @@ class FuzzEvent:
                                # path_new | coverage_update | corpus_grow |
                                # payload_generated | plateau | campaign_end
     timestamp: float           # epoch seconds
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "ts": self.timestamp, **self.payload}
 
 
@@ -82,7 +83,7 @@ class CampaignStats:
         self.last_update = time.time()
         self.duration_s = self.last_update - self.started if self.started else 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
 
 
@@ -100,7 +101,7 @@ class StatusLineReporter:
 
     def __init__(
         self,
-        stream: Optional[TextIO] = None,
+        stream: TextIO | None = None,
         refresh_interval_seconds: float = 2.0,
     ) -> None:
         self.stream = stream or sys.stderr
@@ -190,7 +191,7 @@ class FuzzingTelemetry:
         target: str = "",
         refresh_interval_seconds: float = 2.0,
         plateau_threshold_seconds: int = 300,
-        on_event: Optional[Callable[[FuzzEvent], None]] = None,
+        on_event: Callable[[FuzzEvent], None] | None = None,
     ) -> None:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -198,7 +199,7 @@ class FuzzingTelemetry:
         self.summary_path = self.out_dir / "fuzz-summary.json"
 
         self._lock = threading.Lock()
-        self._events_fp: Optional[TextIO] = None
+        self._events_fp: TextIO | None = None
         self._reporter = StatusLineReporter(
             refresh_interval_seconds=refresh_interval_seconds
         )
@@ -218,7 +219,7 @@ class FuzzingTelemetry:
         if self._events_fp:
             try:
                 self._events_fp.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 — broad by design: __del__ may run during interpreter teardown, where object state and module globals are unreliable; a raise here only spams stderr
                 pass
 
     def start(self) -> None:
@@ -290,10 +291,6 @@ class FuzzingTelemetry:
                     payload={"source": source, "excerpt": excerpt, "rationale": rationale[:200]},
                 ))
 
-    def record_payload_failure(self, reason: str = "") -> None:
-        with self._lock:
-            self.stats.payloads_failed += 1
-
     def update_stats(self, **kwargs) -> None:
         """Update the cumulative stats. Triggers status line refresh."""
         with self._lock:
@@ -347,7 +344,7 @@ class FuzzingTelemetry:
                 timestamp=time.time(),
                 payload={"path": str(crash_path), "signal": signal},
             ))
-            logger.warning(f"CRASH FOUND: {crash_path} ({signal})")
+            logger.warning("CRASH FOUND: %s (%s)", crash_path, signal)
 
     def record_timeout(self, input_path: str = "") -> None:
         with self._lock:
@@ -374,27 +371,28 @@ class FuzzingTelemetry:
                 timestamp=time.time(),
                 payload={"message": message[:500]},
             ))
-            logger.error(f"Fuzzer error: {message}")
+            logger.error("Fuzzer error: %s", message)
 
     def _emit(self, event: FuzzEvent, *, force_disk: bool = True) -> None:
         """Write to JSONL and call the optional callback. Caller holds the lock."""
         # Significant events: log line + disk
         is_significant = event.kind in self._significant_event_kinds
-        if is_significant or force_disk:
-            if self._events_fp:
-                try:
-                    self._events_fp.write(
-                        json.dumps(event.to_dict(), default=str) + "\n"
-                    )
-                except Exception as e:
-                    logger.debug(f"Telemetry write failed: {e}")
+        if (is_significant or force_disk) and self._events_fp:
+            try:
+                self._events_fp.write(
+                    json.dumps(event.to_dict(), default=str) + "\n"
+                )
+            except (OSError, ValueError) as e:
+                # OSError: disk/pipe failure; ValueError: closed file
+                # or circular reference in the event payload.
+                logger.debug("Telemetry write failed: %s", e)
         if self.on_event:
             try:
                 self.on_event(event)
             except Exception:
-                pass
+                logger.debug("telemetry on_event callback failed", exc_info=True)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """Return the current stats snapshot (for the UI)."""
         with self._lock:
             return self.stats.to_dict()

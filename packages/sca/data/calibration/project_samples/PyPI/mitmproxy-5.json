@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:53:34Z",
+    "fetched_at": "2026-08-01T08:25:57Z",
     "git_ref": "v5.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of mitmproxy-5",
@@ -857,7 +857,7 @@
       "dep_name": "ansi-regex",
       "dep_version": "3.0.0",
       "ecosystem": "npm",
-      "epss": 0.03304,
+      "epss": 0.03552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -868,7 +868,7 @@
       "finding_id": "sca:vuln:npm:ansi-regex:3.0.0:GHSA-93q8-gq69-wqmw",
       "in_kev": false,
       "purl": "pkg:npm/ansi-regex@3.0.0",
-      "raptor_risk_estimate": 6.6892993283868725,
+      "raptor_risk_estimate": 6.709641495540101,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -883,10 +883,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.416160312,
+        "epss_multiplier": 0.417425856,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.6892993283868725,
+        "final": 6.709641495540101,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -929,7 +929,7 @@
       "dep_name": "ansi-regex",
       "dep_version": "4.1.0",
       "ecosystem": "npm",
-      "epss": 0.03304,
+      "epss": 0.03552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -940,7 +940,7 @@
       "finding_id": "sca:vuln:npm:ansi-regex:4.1.0:GHSA-93q8-gq69-wqmw",
       "in_kev": false,
       "purl": "pkg:npm/ansi-regex@4.1.0",
-      "raptor_risk_estimate": 6.6892993283868725,
+      "raptor_risk_estimate": 6.709641495540101,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -955,10 +955,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.416160312,
+        "epss_multiplier": 0.417425856,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.6892993283868725,
+        "final": 6.709641495540101,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1001,7 +1001,7 @@
       "dep_name": "ansi-regex",
       "dep_version": "5.0.0",
       "ecosystem": "npm",
-      "epss": 0.03304,
+      "epss": 0.03552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1012,7 +1012,7 @@
       "finding_id": "sca:vuln:npm:ansi-regex:5.0.0:GHSA-93q8-gq69-wqmw",
       "in_kev": false,
       "purl": "pkg:npm/ansi-regex@5.0.0",
-      "raptor_risk_estimate": 6.6892993283868725,
+      "raptor_risk_estimate": 6.709641495540101,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1027,10 +1027,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.416160312,
+        "epss_multiplier": 0.417425856,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.6892993283868725,
+        "final": 6.709641495540101,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1422,7 +1422,7 @@
       "dep_name": "bl",
       "dep_version": "1.2.2",
       "ecosystem": "npm",
-      "epss": 0.02123,
+      "epss": 0.02183,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1433,7 +1433,7 @@
       "finding_id": "sca:vuln:npm:bl:1.2.2:GHSA-pp7h-53gx-mx7r",
       "in_kev": false,
       "purl": "pkg:npm/bl@1.2.2",
-      "raptor_risk_estimate": 5.713437565165523,
+      "raptor_risk_estimate": 5.7177028582782965,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1448,10 +1448,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.410133669,
+        "epss_multiplier": 0.41043984899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.713437565165523,
+        "final": 5.7177028582782965,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2022,6 +2022,77 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-13149"
+        ],
+        "fixed_versions": [
+          "5.0.7",
+          "1.1.16",
+          "2.1.2"
+        ],
+        "id": "GHSA-3jxr-9vmj-r5cp",
+        "modified": "2026-07-21T14:59:37.393087+00:00",
+        "published": "2026-07-20T20:51:09+00:00",
+        "references": [
+          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-3jxr-9vmj-r5cp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-13149",
+          "https://github.com/juliangruber/brace-expansion/pull/122",
+          "https://github.com/juliangruber/brace-expansion/pull/123",
+          "https://github.com/juliangruber/brace-expansion/commit/835d6be91201122d9adffb0c0c8c094189ace265"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "brace-expansion",
+      "dep_version": "1.1.6",
+      "ecosystem": "npm",
+      "epss": 0.00348,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:brace-expansion:1.1.6:GHSA-3jxr-9vmj-r5cp",
+      "in_kev": false,
+      "purl": "pkg:npm/brace-expansion@1.1.6",
+      "raptor_risk_estimate": 4.555762566062093,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'brace-expansion' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401075844,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.555762566062093,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2017-18077"
         ],
         "fixed_versions": [
@@ -2048,7 +2119,7 @@
       "dep_name": "brace-expansion",
       "dep_version": "1.1.6",
       "ecosystem": "npm",
-      "epss": 0.0263,
+      "epss": 0.0258,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2059,7 +2130,7 @@
       "finding_id": "sca:vuln:npm:brace-expansion:1.1.6:GHSA-832h-xg76-4gv6",
       "in_kev": false,
       "purl": "pkg:npm/brace-expansion@1.1.6",
-      "raptor_risk_estimate": 6.634014567655918,
+      "raptor_risk_estimate": 6.629913324278251,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2074,10 +2145,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41272089,
+        "epss_multiplier": 0.41246573999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.634014567655918,
+        "final": 6.629913324278251,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2163,6 +2234,78 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-14257"
+        ],
+        "fixed_versions": [
+          "5.0.8",
+          "3.0.3",
+          "2.1.3",
+          "1.1.17"
+        ],
+        "id": "GHSA-mh99-v99m-4gvg",
+        "modified": "2026-07-31T19:45:20.213748+00:00",
+        "published": "2026-07-24T21:53:14+00:00",
+        "references": [
+          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-mh99-v99m-4gvg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-14257",
+          "https://github.com/juliangruber/brace-expansion/pull/129",
+          "https://github.com/juliangruber/brace-expansion/pull/130",
+          "https://github.com/juliangruber/brace-expansion/pull/136"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "brace-expansion",
+      "dep_version": "1.1.6",
+      "ecosystem": "npm",
+      "epss": 0.00339,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:brace-expansion:1.1.6:GHSA-mh99-v99m-4gvg",
+      "in_kev": false,
+      "purl": "pkg:npm/brace-expansion@1.1.6",
+      "raptor_risk_estimate": 6.446095596091209,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'brace-expansion' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401029917,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.446095596091209,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-5889"
         ],
         "fixed_versions": [
@@ -2236,6 +2379,77 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-13149"
+        ],
+        "fixed_versions": [
+          "5.0.7",
+          "1.1.16",
+          "2.1.2"
+        ],
+        "id": "GHSA-3jxr-9vmj-r5cp",
+        "modified": "2026-07-21T14:59:37.393087+00:00",
+        "published": "2026-07-20T20:51:09+00:00",
+        "references": [
+          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-3jxr-9vmj-r5cp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-13149",
+          "https://github.com/juliangruber/brace-expansion/pull/122",
+          "https://github.com/juliangruber/brace-expansion/pull/123",
+          "https://github.com/juliangruber/brace-expansion/commit/835d6be91201122d9adffb0c0c8c094189ace265"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "brace-expansion",
+      "dep_version": "1.1.8",
+      "ecosystem": "npm",
+      "epss": 0.00348,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:brace-expansion:1.1.8:GHSA-3jxr-9vmj-r5cp",
+      "in_kev": false,
+      "purl": "pkg:npm/brace-expansion@1.1.8",
+      "raptor_risk_estimate": 4.555762566062093,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'brace-expansion' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401075844,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.555762566062093,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-33750"
         ],
         "fixed_versions": [
@@ -2302,6 +2516,78 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-14257"
+        ],
+        "fixed_versions": [
+          "5.0.8",
+          "3.0.3",
+          "2.1.3",
+          "1.1.17"
+        ],
+        "id": "GHSA-mh99-v99m-4gvg",
+        "modified": "2026-07-31T19:45:20.213748+00:00",
+        "published": "2026-07-24T21:53:14+00:00",
+        "references": [
+          "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-mh99-v99m-4gvg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-14257",
+          "https://github.com/juliangruber/brace-expansion/pull/129",
+          "https://github.com/juliangruber/brace-expansion/pull/130",
+          "https://github.com/juliangruber/brace-expansion/pull/136"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "brace-expansion",
+      "dep_version": "1.1.8",
+      "ecosystem": "npm",
+      "epss": 0.00339,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:brace-expansion:1.1.8:GHSA-mh99-v99m-4gvg",
+      "in_kev": false,
+      "purl": "pkg:npm/brace-expansion@1.1.8",
+      "raptor_risk_estimate": 6.446095596091209,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'brace-expansion' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401029917,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.446095596091209,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -2801,7 +3087,7 @@
           "1.0.5"
         ],
         "id": "GHSA-cpq7-6gpm-g9rc",
-        "modified": "2026-03-16T03:00:21.789891+00:00",
+        "modified": "2026-07-08T07:59:25.427129+00:00",
         "published": "2025-08-21T14:47:35+00:00",
         "references": [
           "https://github.com/browserify/cipher-base/security/advisories/GHSA-cpq7-6gpm-g9rc",
@@ -2821,7 +3107,7 @@
       "dep_name": "cipher-base",
       "dep_version": "1.0.3",
       "ecosystem": "npm",
-      "epss": 0.0047,
+      "epss": 0.00504,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2832,7 +3118,7 @@
       "finding_id": "sca:vuln:npm:cipher-base:1.0.3:GHSA-cpq7-6gpm-g9rc",
       "in_kev": false,
       "purl": "pkg:npm/cipher-base@1.0.3",
-      "raptor_risk_estimate": 11.280608909632154,
+      "raptor_risk_estimate": 11.285481242104266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2847,10 +3133,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40169841,
+        "epss_multiplier": 0.401871912,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.280608909632154,
+        "final": 11.285481242104266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2891,7 +3177,7 @@
       "dep_name": "codemirror",
       "dep_version": "5.31.0",
       "ecosystem": "npm",
-      "epss": 0.05197,
+      "epss": 0.0526,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2902,7 +3188,7 @@
       "finding_id": "sca:vuln:npm:codemirror:5.31.0:GHSA-4gw3-8f77-f72c",
       "in_kev": false,
       "purl": "pkg:npm/codemirror@5.31.0",
-      "raptor_risk_estimate": 7.128817174240123,
+      "raptor_risk_estimate": 7.1341993421474985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2919,10 +3205,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.42582029099999996,
+        "epss_multiplier": 0.42614177999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.128817174240123,
+        "final": 7.1341993421474985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3870,7 +4156,7 @@
       "dep_name": "elliptic",
       "dep_version": "6.3.3",
       "ecosystem": "npm",
-      "epss": 0.00507,
+      "epss": 0.00496,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3881,7 +4167,7 @@
       "finding_id": "sca:vuln:npm:elliptic:6.3.3:GHSA-434g-2637-qmqr",
       "in_kev": false,
       "purl": "pkg:npm/elliptic@6.3.3",
-      "raptor_risk_estimate": 4.5649788801803854,
+      "raptor_risk_estimate": 4.564341273543271,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3896,10 +4182,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40188722099999996,
+        "epss_multiplier": 0.401831088,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.5649788801803854,
+        "final": 4.564341273543271,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4214,7 +4500,7 @@
       "dep_name": "elliptic",
       "dep_version": "6.3.3",
       "ecosystem": "npm",
-      "epss": 0.00556,
+      "epss": 0.00553,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4225,7 +4511,7 @@
       "finding_id": "sca:vuln:npm:elliptic:6.3.3:GHSA-fc9h-whq2-v747",
       "in_kev": false,
       "purl": "pkg:npm/elliptic@6.3.3",
-      "raptor_risk_estimate": 9.910479482971814,
+      "raptor_risk_estimate": 9.91010220003268,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4240,10 +4526,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402137268,
+        "epss_multiplier": 0.402121959,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.910479482971814,
+        "final": 9.91010220003268,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4876,7 +5162,7 @@
       "dep_name": "flatted",
       "dep_version": "2.0.1",
       "ecosystem": "npm",
-      "epss": 0.00777,
+      "epss": 0.00807,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4887,7 +5173,7 @@
       "finding_id": "sca:vuln:npm:flatted:2.0.1:GHSA-25h7-pfq9-p65f",
       "in_kev": false,
       "purl": "pkg:npm/flatted@2.0.1",
-      "raptor_risk_estimate": 13.227840909778175,
+      "raptor_risk_estimate": 13.232862545697996,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4902,10 +5188,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403265031,
+        "epss_multiplier": 0.40341812099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.227840909778175,
+        "final": 13.232862545697996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4942,7 +5228,7 @@
       "dep_name": "flatted",
       "dep_version": "2.0.1",
       "ecosystem": "npm",
-      "epss": 0.00704,
+      "epss": 0.00808,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4953,7 +5239,7 @@
       "finding_id": "sca:vuln:npm:flatted:2.0.1:GHSA-rf6f-7fwh-wjgh",
       "in_kev": false,
       "purl": "pkg:npm/flatted@2.0.1",
-      "raptor_risk_estimate": 13.215621595706606,
+      "raptor_risk_estimate": 13.233029933561989,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4968,10 +5254,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402892512,
+        "epss_multiplier": 0.40342322399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.215621595706606,
+        "final": 13.233029933561989,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4994,7 +5280,7 @@
           "4.0.4"
         ],
         "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-02-04T03:03:46.049440+00:00",
+        "modified": "2026-07-16T03:59:27.270440+00:00",
         "published": "2025-07-21T19:04:54+00:00",
         "references": [
           "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
@@ -5082,7 +5368,7 @@
       "dep_name": "form-data",
       "dep_version": "2.1.2",
       "ecosystem": "npm",
-      "epss": 0.00409,
+      "epss": 0.00535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5093,7 +5379,7 @@
       "finding_id": "sca:vuln:npm:form-data:2.1.2:GHSA-hmw2-7cc7-3qxx",
       "in_kev": false,
       "purl": "pkg:npm/form-data@2.1.2",
-      "raptor_risk_estimate": 13.166242175828351,
+      "raptor_risk_estimate": 13.187333046691606,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5108,10 +5394,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401387127,
+        "epss_multiplier": 0.40203010499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.166242175828351,
+        "final": 13.187333046691606,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5134,7 +5420,7 @@
           "4.0.4"
         ],
         "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-02-04T03:03:46.049440+00:00",
+        "modified": "2026-07-16T03:59:27.270440+00:00",
         "published": "2025-07-21T19:04:54+00:00",
         "references": [
           "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
@@ -5222,7 +5508,7 @@
       "dep_name": "form-data",
       "dep_version": "2.1.4",
       "ecosystem": "npm",
-      "epss": 0.00409,
+      "epss": 0.00535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5233,7 +5519,7 @@
       "finding_id": "sca:vuln:npm:form-data:2.1.4:GHSA-hmw2-7cc7-3qxx",
       "in_kev": false,
       "purl": "pkg:npm/form-data@2.1.4",
-      "raptor_risk_estimate": 13.166242175828351,
+      "raptor_risk_estimate": 13.187333046691606,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5248,10 +5534,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401387127,
+        "epss_multiplier": 0.40203010499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.166242175828351,
+        "final": 13.187333046691606,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5274,7 +5560,7 @@
           "4.0.4"
         ],
         "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-02-04T03:03:46.049440+00:00",
+        "modified": "2026-07-16T03:59:27.270440+00:00",
         "published": "2025-07-21T19:04:54+00:00",
         "references": [
           "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
@@ -5362,7 +5648,7 @@
       "dep_name": "form-data",
       "dep_version": "2.3.1",
       "ecosystem": "npm",
-      "epss": 0.00409,
+      "epss": 0.00535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5373,7 +5659,7 @@
       "finding_id": "sca:vuln:npm:form-data:2.3.1:GHSA-hmw2-7cc7-3qxx",
       "in_kev": false,
       "purl": "pkg:npm/form-data@2.3.1",
-      "raptor_risk_estimate": 13.166242175828351,
+      "raptor_risk_estimate": 13.187333046691606,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5388,10 +5674,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401387127,
+        "epss_multiplier": 0.40203010499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.166242175828351,
+        "final": 13.187333046691606,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5414,7 +5700,7 @@
           "4.0.4"
         ],
         "id": "GHSA-fjxv-7rqg-78g4",
-        "modified": "2026-02-04T03:03:46.049440+00:00",
+        "modified": "2026-07-16T03:59:27.270440+00:00",
         "published": "2025-07-21T19:04:54+00:00",
         "references": [
           "https://github.com/form-data/form-data/security/advisories/GHSA-fjxv-7rqg-78g4",
@@ -5502,7 +5788,7 @@
       "dep_name": "form-data",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.00409,
+      "epss": 0.00535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5513,7 +5799,7 @@
       "finding_id": "sca:vuln:npm:form-data:2.3.3:GHSA-hmw2-7cc7-3qxx",
       "in_kev": false,
       "purl": "pkg:npm/form-data@2.3.3",
-      "raptor_risk_estimate": 13.166242175828351,
+      "raptor_risk_estimate": 13.187333046691606,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5528,10 +5814,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401387127,
+        "epss_multiplier": 0.40203010499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.166242175828351,
+        "final": 13.187333046691606,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5836,7 +6122,7 @@
       "dep_name": "fstream",
       "dep_version": "1.0.10",
       "ecosystem": "npm",
-      "epss": 0.02781,
+      "epss": 0.02416,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5847,7 +6133,7 @@
       "finding_id": "sca:vuln:npm:fstream:1.0.10:GHSA-xf7w-r453-m56c",
       "in_kev": false,
       "purl": "pkg:npm/fstream@1.0.10",
-      "raptor_risk_estimate": 6.646400322656474,
+      "raptor_risk_estimate": 6.616461245999503,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5862,10 +6148,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.413491443,
+        "epss_multiplier": 0.411628848,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.646400322656474,
+        "final": 6.616461245999503,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5905,7 +6191,7 @@
       "dep_name": "fstream",
       "dep_version": "1.0.11",
       "ecosystem": "npm",
-      "epss": 0.02781,
+      "epss": 0.02416,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5916,7 +6202,7 @@
       "finding_id": "sca:vuln:npm:fstream:1.0.11:GHSA-xf7w-r453-m56c",
       "in_kev": false,
       "purl": "pkg:npm/fstream@1.0.11",
-      "raptor_risk_estimate": 6.646400322656474,
+      "raptor_risk_estimate": 6.616461245999503,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5931,10 +6217,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.413491443,
+        "epss_multiplier": 0.411628848,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.646400322656474,
+        "final": 6.616461245999503,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5975,7 +6261,7 @@
       "dep_name": "glob-parent",
       "dep_version": "5.1.0",
       "ecosystem": "npm",
-      "epss": 0.04456,
+      "epss": 0.04579,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5986,7 +6272,7 @@
       "finding_id": "sca:vuln:npm:glob-parent:5.1.0:GHSA-ww39-953v-wcq6",
       "in_kev": false,
       "purl": "pkg:npm/glob-parent@5.1.0",
-      "raptor_risk_estimate": 6.783791975808324,
+      "raptor_risk_estimate": 6.793881034517386,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6001,10 +6287,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.422038968,
+        "epss_multiplier": 0.422666637,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.783791975808324,
+        "final": 6.793881034517386,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6108,7 +6394,7 @@
       "dep_name": "handlebars",
       "dep_version": "4.0.6",
       "ecosystem": "npm",
-      "epss": 0.00232,
+      "epss": 0.00276,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6119,7 +6405,7 @@
       "finding_id": "sca:vuln:npm:handlebars:4.0.6:GHSA-2qvq-rjwj-gvw9",
       "in_kev": false,
       "purl": "pkg:npm/handlebars@4.0.6",
-      "raptor_risk_estimate": 9.869732925545755,
+      "raptor_risk_estimate": 9.875266408652996,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6134,10 +6420,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400483896,
+        "epss_multiplier": 0.400708428,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.869732925545755,
+        "final": 9.875266408652996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6178,7 +6464,7 @@
       "dep_name": "handlebars",
       "dep_version": "4.0.6",
       "ecosystem": "npm",
-      "epss": 0.01739,
+      "epss": 0.0178,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6189,7 +6475,7 @@
       "finding_id": "sca:vuln:npm:handlebars:4.0.6:GHSA-2w6w-674q-4c4q",
       "in_kev": false,
       "purl": "pkg:npm/handlebars@4.0.6",
-      "raptor_risk_estimate": 16.430116045882386,
+      "raptor_risk_estimate": 16.438537839490305,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6204,10 +6490,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408174117,
+        "epss_multiplier": 0.40838334,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 16.430116045882386,
+        "final": 16.438537839490305,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6222,14 +6508,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2019-20920"
+          "CVE-2019-20920",
+          "SNYK-JS-HANDLEBARS-534478"
         ],
         "fixed_versions": [
           "3.0.8",
           "4.5.3"
         ],
         "id": "GHSA-3cqr-58rm-57f8",
-        "modified": "2026-03-13T21:56:47.659989+00:00",
+        "modified": "2026-07-08T06:49:41.617676+00:00",
         "published": "2022-02-10T20:38:19+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2019-20920",
@@ -6318,7 +6605,7 @@
       "dep_name": "handlebars",
       "dep_version": "4.0.6",
       "ecosystem": "npm",
-      "epss": 0.00692,
+      "epss": 0.00709,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6329,7 +6616,7 @@
       "finding_id": "sca:vuln:npm:handlebars:4.0.6:GHSA-3mfm-83xf-c92r",
       "in_kev": false,
       "purl": "pkg:npm/handlebars@4.0.6",
-      "raptor_risk_estimate": 10.06929903672931,
+      "raptor_risk_estimate": 10.071467492389978,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6344,10 +6631,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402831276,
+        "epss_multiplier": 0.402918027,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.06929903672931,
+        "final": 10.071467492389978,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6428,13 +6715,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2019-20922"
+          "CVE-2019-20922",
+          "SNYK-JS-HANDLEBARS-480388"
         ],
         "fixed_versions": [
           "4.4.5"
         ],
         "id": "GHSA-62gr-4qp9-h98f",
-        "modified": "2026-03-13T22:26:04.034956+00:00",
+        "modified": "2026-07-08T06:49:32.364286+00:00",
         "published": "2022-02-10T20:38:22+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2019-20922",
@@ -6592,7 +6880,7 @@
       "dep_name": "handlebars",
       "dep_version": "4.0.6",
       "ecosystem": "npm",
-      "epss": 0.00602,
+      "epss": 0.00616,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6603,7 +6891,7 @@
       "finding_id": "sca:vuln:npm:handlebars:4.0.6:GHSA-9cx6-37pm-9jff",
       "in_kev": false,
       "purl": "pkg:npm/handlebars@4.0.6",
-      "raptor_risk_estimate": 13.198548033579208,
+      "raptor_risk_estimate": 13.200891463675125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6618,10 +6906,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402372006,
+        "epss_multiplier": 0.402443448,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.198548033579208,
+        "final": 13.200891463675125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7049,7 +7337,7 @@
       "dep_name": "handlebars",
       "dep_version": "4.0.6",
       "ecosystem": "npm",
-      "epss": 0.00687,
+      "epss": 0.00703,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7060,7 +7348,7 @@
       "finding_id": "sca:vuln:npm:handlebars:4.0.6:GHSA-xhpv-hc6g-r9c6",
       "in_kev": false,
       "purl": "pkg:npm/handlebars@4.0.6",
-      "raptor_risk_estimate": 10.068661255652644,
+      "raptor_risk_estimate": 10.070702155097976,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7075,10 +7363,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402805761,
+        "epss_multiplier": 0.402887409,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.068661255652644,
+        "final": 10.070702155097976,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7189,7 +7477,7 @@
       "dep_name": "hawk",
       "dep_version": "3.1.3",
       "ecosystem": "npm",
-      "epss": 0.01028,
+      "epss": 0.01088,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7200,7 +7488,7 @@
       "finding_id": "sca:vuln:npm:hawk:3.1.3:GHSA-44pw-h2cw-w3vq",
       "in_kev": false,
       "purl": "pkg:npm/hawk@3.1.3",
-      "raptor_risk_estimate": 6.415909253437656,
+      "raptor_risk_estimate": 6.420765125596814,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7215,10 +7503,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40454588399999997,
+        "epss_multiplier": 0.404852064,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.415909253437656,
+        "final": 6.420765125596814,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7258,7 +7546,7 @@
       "dep_name": "hawk",
       "dep_version": "6.0.2",
       "ecosystem": "npm",
-      "epss": 0.01028,
+      "epss": 0.01088,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7269,7 +7557,7 @@
       "finding_id": "sca:vuln:npm:hawk:6.0.2:GHSA-44pw-h2cw-w3vq",
       "in_kev": false,
       "purl": "pkg:npm/hawk@6.0.2",
-      "raptor_risk_estimate": 6.415909253437656,
+      "raptor_risk_estimate": 6.420765125596814,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7284,10 +7572,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40454588399999997,
+        "epss_multiplier": 0.404852064,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.415909253437656,
+        "final": 6.420765125596814,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7327,7 +7615,7 @@
       "dep_name": "hoek",
       "dep_version": "2.16.3",
       "ecosystem": "npm",
-      "epss": 0.00925,
+      "epss": 0.00986,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7338,7 +7626,7 @@
       "finding_id": "sca:vuln:npm:hoek:2.16.3:GHSA-c429-5p7v-vgjp",
       "in_kev": false,
       "purl": "pkg:npm/hoek@2.16.3",
-      "raptor_risk_estimate": 7.013695141955664,
+      "raptor_risk_estimate": 7.019098940230079,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7353,10 +7641,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404020275,
+        "epss_multiplier": 0.404331558,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.013695141955664,
+        "final": 7.019098940230079,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7397,7 +7685,7 @@
       "dep_name": "hoek",
       "dep_version": "2.16.3",
       "ecosystem": "npm",
-      "epss": 0.04226,
+      "epss": 0.04307,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7408,7 +7696,7 @@
       "finding_id": "sca:vuln:npm:hoek:2.16.3:GHSA-jp4x-w63m-7wgm",
       "in_kev": false,
       "purl": "pkg:npm/hoek@2.16.3",
-      "raptor_risk_estimate": 7.937513474024706,
+      "raptor_risk_estimate": 7.945309117436975,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7423,10 +7711,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.420865278,
+        "epss_multiplier": 0.42127862099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.937513474024706,
+        "final": 7.945309117436975,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7466,7 +7754,7 @@
       "dep_name": "hoek",
       "dep_version": "4.2.0",
       "ecosystem": "npm",
-      "epss": 0.00925,
+      "epss": 0.00986,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7477,7 +7765,7 @@
       "finding_id": "sca:vuln:npm:hoek:4.2.0:GHSA-c429-5p7v-vgjp",
       "in_kev": false,
       "purl": "pkg:npm/hoek@4.2.0",
-      "raptor_risk_estimate": 7.013695141955664,
+      "raptor_risk_estimate": 7.019098940230079,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7492,10 +7780,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404020275,
+        "epss_multiplier": 0.404331558,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.013695141955664,
+        "final": 7.019098940230079,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7536,7 +7824,7 @@
       "dep_name": "hoek",
       "dep_version": "4.2.0",
       "ecosystem": "npm",
-      "epss": 0.04226,
+      "epss": 0.04307,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7547,7 +7835,7 @@
       "finding_id": "sca:vuln:npm:hoek:4.2.0:GHSA-jp4x-w63m-7wgm",
       "in_kev": false,
       "purl": "pkg:npm/hoek@4.2.0",
-      "raptor_risk_estimate": 7.937513474024706,
+      "raptor_risk_estimate": 7.945309117436975,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7562,10 +7850,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.420865278,
+        "epss_multiplier": 0.42127862099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.937513474024706,
+        "final": 7.945309117436975,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7994,6 +8282,77 @@
     },
     {
       "advisory": {
+        "aliases": [
+          "CVE-2026-59869"
+        ],
+        "fixed_versions": [
+          "3.15.0",
+          "4.3.0"
+        ],
+        "id": "GHSA-52cp-r559-cp3m",
+        "modified": "2026-07-21T20:59:34.129922+00:00",
+        "published": "2026-07-20T21:19:09+00:00",
+        "references": [
+          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
+          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
+          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
+          "https://github.com/nodeca/js-yaml"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "js-yaml",
+      "dep_version": "3.10.0",
+      "ecosystem": "npm",
+      "epss": 0.00423,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:js-yaml:3.10.0:GHSA-52cp-r559-cp3m",
+      "in_kev": false,
+      "purl": "pkg:npm/js-yaml@3.10.0",
+      "raptor_risk_estimate": 13.168585605924267,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'js-yaml' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401458569,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.168585605924267,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [],
         "fixed_versions": [
           "3.13.1"
@@ -8081,7 +8440,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.10.0",
       "ecosystem": "npm",
-      "epss": 0.00259,
+      "epss": 0.00378,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8092,7 +8451,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.10.0:GHSA-h67p-54hq-rp68",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.10.0",
-      "raptor_risk_estimate": 4.550603748725439,
+      "raptor_risk_estimate": 4.557501493254223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8107,10 +8466,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400621677,
+        "epss_multiplier": 0.401228934,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.550603748725439,
+        "final": 4.557501493254223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8131,7 +8490,7 @@
           "3.14.2"
         ],
         "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-02-04T03:18:35.160526+00:00",
+        "modified": "2026-07-08T07:59:25.678676+00:00",
         "published": "2025-11-14T14:29:48+00:00",
         "references": [
           "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
@@ -8151,7 +8510,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.10.0",
       "ecosystem": "npm",
-      "epss": 0.0037,
+      "epss": 0.00414,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8162,7 +8521,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.10.0:GHSA-mh29-5h37-fv8m",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.10.0",
-      "raptor_risk_estimate": 4.557037779336323,
+      "raptor_risk_estimate": 4.559588205884781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8177,10 +8536,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40118811,
+        "epss_multiplier": 0.401412642,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.557037779336323,
+        "final": 4.559588205884781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8188,6 +8547,77 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59869"
+        ],
+        "fixed_versions": [
+          "3.15.0",
+          "4.3.0"
+        ],
+        "id": "GHSA-52cp-r559-cp3m",
+        "modified": "2026-07-21T20:59:34.129922+00:00",
+        "published": "2026-07-20T21:19:09+00:00",
+        "references": [
+          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
+          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
+          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
+          "https://github.com/nodeca/js-yaml"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "js-yaml",
+      "dep_version": "3.13.1",
+      "ecosystem": "npm",
+      "epss": 0.00423,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:js-yaml:3.13.1:GHSA-52cp-r559-cp3m",
+      "in_kev": false,
+      "purl": "pkg:npm/js-yaml@3.13.1",
+      "raptor_risk_estimate": 13.168585605924267,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'js-yaml' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401458569,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.168585605924267,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -8219,7 +8649,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.13.1",
       "ecosystem": "npm",
-      "epss": 0.00259,
+      "epss": 0.00378,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8230,7 +8660,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.13.1:GHSA-h67p-54hq-rp68",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.13.1",
-      "raptor_risk_estimate": 4.550603748725439,
+      "raptor_risk_estimate": 4.557501493254223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8245,10 +8675,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400621677,
+        "epss_multiplier": 0.401228934,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.550603748725439,
+        "final": 4.557501493254223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8269,7 +8699,7 @@
           "3.14.2"
         ],
         "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-02-04T03:18:35.160526+00:00",
+        "modified": "2026-07-08T07:59:25.678676+00:00",
         "published": "2025-11-14T14:29:48+00:00",
         "references": [
           "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
@@ -8289,7 +8719,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.13.1",
       "ecosystem": "npm",
-      "epss": 0.0037,
+      "epss": 0.00414,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8300,7 +8730,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.13.1:GHSA-mh29-5h37-fv8m",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.13.1",
-      "raptor_risk_estimate": 4.557037779336323,
+      "raptor_risk_estimate": 4.559588205884781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8315,10 +8745,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40118811,
+        "epss_multiplier": 0.401412642,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.557037779336323,
+        "final": 4.559588205884781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8393,6 +8823,77 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59869"
+        ],
+        "fixed_versions": [
+          "3.15.0",
+          "4.3.0"
+        ],
+        "id": "GHSA-52cp-r559-cp3m",
+        "modified": "2026-07-21T20:59:34.129922+00:00",
+        "published": "2026-07-20T21:19:09+00:00",
+        "references": [
+          "https://github.com/nodeca/js-yaml/security/advisories/GHSA-52cp-r559-cp3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59869",
+          "https://github.com/nodeca/js-yaml/commit/24f13e79ee1343a7e30bd6f6c9d9cdbf0ac9b2b7",
+          "https://github.com/nodeca/js-yaml/commit/59423c6f8cdc78742ac00e25a4dd39ef16b702e4",
+          "https://github.com/nodeca/js-yaml"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "js-yaml",
+      "dep_version": "3.8.4",
+      "ecosystem": "npm",
+      "epss": 0.00423,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:js-yaml:3.8.4:GHSA-52cp-r559-cp3m",
+      "in_kev": false,
+      "purl": "pkg:npm/js-yaml@3.8.4",
+      "raptor_risk_estimate": 13.168585605924267,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'js-yaml' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401458569,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.168585605924267,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -8485,7 +8986,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.8.4",
       "ecosystem": "npm",
-      "epss": 0.00259,
+      "epss": 0.00378,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8496,7 +8997,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.8.4:GHSA-h67p-54hq-rp68",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.8.4",
-      "raptor_risk_estimate": 4.550603748725439,
+      "raptor_risk_estimate": 4.557501493254223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8511,10 +9012,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400621677,
+        "epss_multiplier": 0.401228934,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.550603748725439,
+        "final": 4.557501493254223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8535,7 +9036,7 @@
           "3.14.2"
         ],
         "id": "GHSA-mh29-5h37-fv8m",
-        "modified": "2026-02-04T03:18:35.160526+00:00",
+        "modified": "2026-07-08T07:59:25.678676+00:00",
         "published": "2025-11-14T14:29:48+00:00",
         "references": [
           "https://github.com/nodeca/js-yaml/security/advisories/GHSA-mh29-5h37-fv8m",
@@ -8555,7 +9056,7 @@
       "dep_name": "js-yaml",
       "dep_version": "3.8.4",
       "ecosystem": "npm",
-      "epss": 0.0037,
+      "epss": 0.00414,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8566,7 +9067,7 @@
       "finding_id": "sca:vuln:npm:js-yaml:3.8.4:GHSA-mh29-5h37-fv8m",
       "in_kev": false,
       "purl": "pkg:npm/js-yaml@3.8.4",
-      "raptor_risk_estimate": 4.557037779336323,
+      "raptor_risk_estimate": 4.559588205884781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8581,10 +9082,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40118811,
+        "epss_multiplier": 0.401412642,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.557037779336323,
+        "final": 4.559588205884781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8763,7 +9264,7 @@
       "dep_name": "jsonpointer",
       "dep_version": "4.0.1",
       "ecosystem": "npm",
-      "epss": 0.0261,
+      "epss": 0.02539,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8774,7 +9275,7 @@
       "finding_id": "sca:vuln:npm:jsonpointer:4.0.1:GHSA-282f-qqgm-c34q",
       "in_kev": false,
       "purl": "pkg:npm/jsonpointer@4.0.1",
-      "raptor_risk_estimate": 4.952172639160955,
+      "raptor_risk_estimate": 4.947824227515727,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8789,10 +9290,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41261883,
+        "epss_multiplier": 0.412256517,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.952172639160955,
+        "final": 4.947824227515727,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8832,7 +9333,7 @@
       "dep_name": "kind-of",
       "dep_version": "6.0.2",
       "ecosystem": "npm",
-      "epss": 0.02278,
+      "epss": 0.02342,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8843,7 +9344,7 @@
       "finding_id": "sca:vuln:npm:kind-of:6.0.2:GHSA-6c8f-qphg-qjgp",
       "in_kev": false,
       "purl": "pkg:npm/kind-of@6.0.2",
-      "raptor_risk_estimate": 6.605141814277142,
+      "raptor_risk_estimate": 6.610391405800556,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8858,10 +9359,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.410924634,
+        "epss_multiplier": 0.41125122599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.605141814277142,
+        "final": 6.610391405800556,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8944,13 +9445,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -8970,7 +9473,7 @@
       "dep_name": "lodash-es",
       "dep_version": "4.17.4",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8981,7 +9484,7 @@
       "finding_id": "sca:vuln:npm:lodash-es:4.17.4:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash-es@4.17.4",
-      "raptor_risk_estimate": 7.9262077899466155,
+      "raptor_risk_estimate": 7.841400638885863,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8996,10 +9499,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.9262077899466155,
+        "final": 7.841400638885863,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9013,13 +9516,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-2950"
+          "CVE-2025-13465",
+          "CVE-2026-2950",
+          "GHSA-xxjr-mmjv-4gpg"
         ],
         "fixed_versions": [
           "4.18.0"
         ],
         "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-04-02T17:29:51.565211+00:00",
+        "modified": "2026-07-08T07:10:26.957853+00:00",
         "published": "2026-04-01T23:50:27+00:00",
         "references": [
           "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
@@ -9038,7 +9543,7 @@
       "dep_name": "lodash-es",
       "dep_version": "4.17.4",
       "ecosystem": "npm",
-      "epss": 0.00317,
+      "epss": 0.01535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9049,7 +9554,7 @@
       "finding_id": "sca:vuln:npm:lodash-es:4.17.4:GHSA-f23m-r3pf-42rh",
       "in_kev": false,
       "purl": "pkg:npm/lodash-es@4.17.4",
-      "raptor_risk_estimate": 5.585052242471029,
+      "raptor_risk_estimate": 5.671637692660339,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9064,10 +9569,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400917651,
+        "epss_multiplier": 0.407133105,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.585052242471029,
+        "final": 5.671637692660339,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9223,75 +9728,6 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-4800"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-04-02T17:29:57.498155+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
-      },
-      "cvss_score": 8.1,
-      "dep_name": "lodash-es",
-      "dep_version": "4.17.4",
-      "ecosystem": "npm",
-      "epss": 0.01735,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash-es:4.17.4:GHSA-r5fr-rjxr-66jc",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash-es@4.17.4",
-      "raptor_risk_estimate": 7.08545049609133,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'lodash-es' found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408153705,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.08545049609133,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "CVE-2019-1010266"
         ],
         "fixed_versions": [
@@ -9348,75 +9784,6 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 5.781184637440081,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-13465"
-        ],
-        "fixed_versions": [
-          "4.17.23"
-        ],
-        "id": "GHSA-xxjr-mmjv-4gpg",
-        "modified": "2026-06-09T11:15:10.330415+00:00",
-        "published": "2026-01-21T23:01:22+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
-          "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
-          "https://cert-portal.siemens.com/productcert/html/ssa-253495.html",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions"
-      },
-      "cvss_score": 6.5,
-      "dep_name": "lodash-es",
-      "dep_version": "4.17.4",
-      "ecosystem": "npm",
-      "epss": 0.01535,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash-es:4.17.4:GHSA-xxjr-mmjv-4gpg",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash-es@4.17.4",
-      "raptor_risk_estimate": 5.671637692660339,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'lodash-es' found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407133105,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.671637692660339,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9736,13 +10103,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -9762,7 +10131,7 @@
       "dep_name": "lodash.template",
       "dep_version": "2.4.1",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9773,7 +10142,7 @@
       "finding_id": "sca:vuln:npm:lodash.template:2.4.1:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash.template@2.4.1",
-      "raptor_risk_estimate": 7.9262077899466155,
+      "raptor_risk_estimate": 7.841400638885863,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9788,10 +10157,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.9262077899466155,
+        "final": 7.841400638885863,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9805,13 +10174,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -9831,7 +10202,7 @@
       "dep_name": "lodash.template",
       "dep_version": "3.6.2",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9842,7 +10213,7 @@
       "finding_id": "sca:vuln:npm:lodash.template:3.6.2:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash.template@3.6.2",
-      "raptor_risk_estimate": 7.9262077899466155,
+      "raptor_risk_estimate": 7.841400638885863,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9857,10 +10228,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.9262077899466155,
+        "final": 7.841400638885863,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -9874,13 +10245,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -9900,7 +10273,7 @@
       "dep_name": "lodash.template",
       "dep_version": "4.4.0",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9911,7 +10284,7 @@
       "finding_id": "sca:vuln:npm:lodash.template:4.4.0:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash.template@4.4.0",
-      "raptor_risk_estimate": 7.9262077899466155,
+      "raptor_risk_estimate": 7.841400638885863,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9926,79 +10299,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.9262077899466155,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-4800"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-04-02T17:29:57.498155+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
-      },
-      "cvss_score": 8.1,
-      "dep_name": "lodash.template",
-      "dep_version": "4.4.0",
-      "ecosystem": "npm",
-      "epss": 0.01735,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash.template:4.4.0:GHSA-r5fr-rjxr-66jc",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash.template@4.4.0",
-      "raptor_risk_estimate": 7.08545049609133,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'lodash.template' found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408153705,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.08545049609133,
+        "final": 7.841400638885863,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10059,9 +10363,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10088,13 +10392,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -10114,7 +10420,7 @@
       "dep_name": "lodash",
       "dep_version": "4.17.15",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10125,7 +10431,7 @@
       "finding_id": "sca:vuln:npm:lodash:4.17.15:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash@4.17.15",
-      "raptor_risk_estimate": 16.688755892699998,
+      "raptor_risk_estimate": 16.51019309451,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10135,9 +10441,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10147,10 +10453,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 16.688755892699998,
+        "final": 16.51019309451,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -10164,13 +10470,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-2950"
+          "CVE-2025-13465",
+          "CVE-2026-2950",
+          "GHSA-xxjr-mmjv-4gpg"
         ],
         "fixed_versions": [
           "4.18.0"
         ],
         "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-04-02T17:29:51.565211+00:00",
+        "modified": "2026-07-08T07:10:26.957853+00:00",
         "published": "2026-04-01T23:50:27+00:00",
         "references": [
           "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
@@ -10189,7 +10497,7 @@
       "dep_name": "lodash",
       "dep_version": "4.17.15",
       "ecosystem": "npm",
-      "epss": 0.00317,
+      "epss": 0.01535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10200,7 +10508,7 @@
       "finding_id": "sca:vuln:npm:lodash:4.17.15:GHSA-f23m-r3pf-42rh",
       "in_kev": false,
       "purl": "pkg:npm/lodash@4.17.15",
-      "raptor_risk_estimate": 11.759415850893749,
+      "raptor_risk_estimate": 11.941722886031247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10210,9 +10518,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10222,10 +10530,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400917651,
+        "epss_multiplier": 0.407133105,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.759415850893749,
+        "final": 11.941722886031247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -10287,9 +10595,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10310,158 +10618,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-4800"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-04-02T17:29:57.498155+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
-      },
-      "cvss_score": 8.1,
-      "dep_name": "lodash",
-      "dep_version": "4.17.15",
-      "ecosystem": "npm",
-      "epss": 0.01735,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash:4.17.15:GHSA-r5fr-rjxr-66jc",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash@4.17.15",
-      "raptor_risk_estimate": 14.91852810988125,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "web/gulpfile.js:21",
-          "web/src/js/utils.js:1",
-          "web/src/js/ducks/options.js:3",
-          "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
-          "... and 17 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408153705,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.91852810988125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-13465"
-        ],
-        "fixed_versions": [
-          "4.17.23"
-        ],
-        "id": "GHSA-xxjr-mmjv-4gpg",
-        "modified": "2026-06-09T11:15:10.330415+00:00",
-        "published": "2026-01-21T23:01:22+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
-          "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
-          "https://cert-portal.siemens.com/productcert/html/ssa-253495.html",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions"
-      },
-      "cvss_score": 6.5,
-      "dep_name": "lodash",
-      "dep_version": "4.17.15",
-      "ecosystem": "npm",
-      "epss": 0.01535,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash:4.17.15:GHSA-xxjr-mmjv-4gpg",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash@4.17.15",
-      "raptor_risk_estimate": 11.941722886031247,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "web/gulpfile.js:21",
-          "web/src/js/utils.js:1",
-          "web/src/js/ducks/options.js:3",
-          "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
-          "... and 17 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407133105,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.941722886031247,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -10515,9 +10671,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10544,13 +10700,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2021-23337"
+          "CVE-2021-23337",
+          "CVE-2026-4800",
+          "GHSA-r5fr-rjxr-66jc"
         ],
         "fixed_versions": [
           "4.17.21"
         ],
         "id": "GHSA-35jh-r3h4-6jhm",
-        "modified": "2025-08-12T21:55:57.719943+00:00",
+        "modified": "2026-07-08T18:29:36.682352+00:00",
         "published": "2021-05-06T16:05:51+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
@@ -10570,7 +10728,7 @@
       "dep_name": "lodash",
       "dep_version": "4.17.4",
       "ecosystem": "npm",
-      "epss": 0.2241,
+      "epss": 0.21333,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10581,7 +10739,7 @@
       "finding_id": "sca:vuln:npm:lodash:4.17.4:GHSA-35jh-r3h4-6jhm",
       "in_kev": false,
       "purl": "pkg:npm/lodash@4.17.4",
-      "raptor_risk_estimate": 11.682129124889997,
+      "raptor_risk_estimate": 11.557135166156998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10591,9 +10749,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10603,10 +10761,10 @@
         "cvss_base": 72.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.51365823,
+        "epss_multiplier": 0.508162299,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.682129124889997,
+        "final": 11.557135166156998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -10663,9 +10821,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10692,13 +10850,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-2950"
+          "CVE-2025-13465",
+          "CVE-2026-2950",
+          "GHSA-xxjr-mmjv-4gpg"
         ],
         "fixed_versions": [
           "4.18.0"
         ],
         "id": "GHSA-f23m-r3pf-42rh",
-        "modified": "2026-04-02T17:29:51.565211+00:00",
+        "modified": "2026-07-08T07:10:26.957853+00:00",
         "published": "2026-04-01T23:50:27+00:00",
         "references": [
           "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
@@ -10717,7 +10877,7 @@
       "dep_name": "lodash",
       "dep_version": "4.17.4",
       "ecosystem": "npm",
-      "epss": 0.00317,
+      "epss": 0.01535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10728,7 +10888,7 @@
       "finding_id": "sca:vuln:npm:lodash:4.17.4:GHSA-f23m-r3pf-42rh",
       "in_kev": false,
       "purl": "pkg:npm/lodash@4.17.4",
-      "raptor_risk_estimate": 8.231591095625623,
+      "raptor_risk_estimate": 8.359206020221873,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -10738,9 +10898,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10750,10 +10910,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400917651,
+        "epss_multiplier": 0.407133105,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.231591095625623,
+        "final": 8.359206020221873,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -10814,9 +10974,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10893,9 +11053,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10970,9 +11130,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10986,82 +11146,6 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 9.95535134864025,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-4800"
-        ],
-        "fixed_versions": [
-          "4.18.0"
-        ],
-        "id": "GHSA-r5fr-rjxr-66jc",
-        "modified": "2026-04-02T17:29:57.498155+00:00",
-        "published": "2026-04-01T23:51:12+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
-          "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names"
-      },
-      "cvss_score": 8.1,
-      "dep_name": "lodash",
-      "dep_version": "4.17.4",
-      "ecosystem": "npm",
-      "epss": 0.01735,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash:4.17.4:GHSA-r5fr-rjxr-66jc",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash@4.17.4",
-      "raptor_risk_estimate": 10.442969676916874,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "web/gulpfile.js:21",
-          "web/src/js/utils.js:1",
-          "web/src/js/ducks/options.js:3",
-          "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
-          "... and 17 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408153705,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.442969676916874,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -11122,9 +11206,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/flow/utils.js:1",
           "web/src/js/ducks/options.js:3",
           "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -11138,82 +11222,6 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 8.520662997892499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-13465"
-        ],
-        "fixed_versions": [
-          "4.17.23"
-        ],
-        "id": "GHSA-xxjr-mmjv-4gpg",
-        "modified": "2026-06-09T11:15:10.330415+00:00",
-        "published": "2026-01-21T23:01:22+00:00",
-        "references": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
-          "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
-          "https://cert-portal.siemens.com/productcert/html/ssa-253495.html",
-          "https://github.com/lodash/lodash"
-        ],
-        "severity": {
-          "score": 6.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
-        },
-        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions"
-      },
-      "cvss_score": 6.5,
-      "dep_name": "lodash",
-      "dep_version": "4.17.4",
-      "ecosystem": "npm",
-      "epss": 0.01535,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:lodash:4.17.4:GHSA-xxjr-mmjv-4gpg",
-      "in_kev": false,
-      "purl": "pkg:npm/lodash@4.17.4",
-      "raptor_risk_estimate": 8.359206020221873,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "web/gulpfile.js:21",
-          "web/src/js/utils.js:1",
-          "web/src/js/ducks/options.js:3",
-          "web/src/js/ducks/ui/flow.js:4",
-          "web/src/js/components/FlowView.jsx:3",
-          "... and 17 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 65.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407133105,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.359206020221873,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -11797,7 +11805,7 @@
           "3.0.5"
         ],
         "id": "GHSA-f8q6-p94x-37v3",
-        "modified": "2024-02-14T18:15:16+00:00",
+        "modified": "2026-07-08T18:29:36.290089+00:00",
         "published": "2022-10-18T12:00:32+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-3517",
@@ -11817,7 +11825,7 @@
       "dep_name": "minimatch",
       "dep_version": "3.0.3",
       "ecosystem": "npm",
-      "epss": 0.01674,
+      "epss": 0.01751,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11828,7 +11836,7 @@
       "finding_id": "sca:vuln:npm:minimatch:3.0.3:GHSA-f8q6-p94x-37v3",
       "in_kev": false,
       "purl": "pkg:npm/minimatch@3.0.3",
-      "raptor_risk_estimate": 6.555598794274921,
+      "raptor_risk_estimate": 6.561914709076529,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11843,10 +11851,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407842422,
+        "epss_multiplier": 0.40823535299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.555598794274921,
+        "final": 6.561914709076529,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12089,7 +12097,7 @@
           "3.0.5"
         ],
         "id": "GHSA-f8q6-p94x-37v3",
-        "modified": "2024-02-14T18:15:16+00:00",
+        "modified": "2026-07-08T18:29:36.290089+00:00",
         "published": "2022-10-18T12:00:32+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-3517",
@@ -12109,7 +12117,7 @@
       "dep_name": "minimatch",
       "dep_version": "3.0.4",
       "ecosystem": "npm",
-      "epss": 0.01674,
+      "epss": 0.01751,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12120,7 +12128,7 @@
       "finding_id": "sca:vuln:npm:minimatch:3.0.4:GHSA-f8q6-p94x-37v3",
       "in_kev": false,
       "purl": "pkg:npm/minimatch@3.0.4",
-      "raptor_risk_estimate": 6.555598794274921,
+      "raptor_risk_estimate": 6.561914709076529,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12135,10 +12143,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407842422,
+        "epss_multiplier": 0.40823535299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.555598794274921,
+        "final": 6.561914709076529,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12179,7 +12187,7 @@
       "dep_name": "minimist",
       "dep_version": "0.0.8",
       "ecosystem": "npm",
-      "epss": 0.01884,
+      "epss": 0.01931,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12190,7 +12198,7 @@
       "finding_id": "sca:vuln:npm:minimist:0.0.8:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
       "purl": "pkg:npm/minimist@0.0.8",
-      "raptor_risk_estimate": 4.907708598957639,
+      "raptor_risk_estimate": 4.91058712497631,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12205,10 +12213,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408914052,
+        "epss_multiplier": 0.409153893,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.907708598957639,
+        "final": 4.91058712497631,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12319,7 +12327,7 @@
       "dep_name": "minimist",
       "dep_version": "0.2.0",
       "ecosystem": "npm",
-      "epss": 0.01884,
+      "epss": 0.01931,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12330,7 +12338,7 @@
       "finding_id": "sca:vuln:npm:minimist:0.2.0:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
       "purl": "pkg:npm/minimist@0.2.0",
-      "raptor_risk_estimate": 4.907708598957639,
+      "raptor_risk_estimate": 4.91058712497631,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12345,10 +12353,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408914052,
+        "epss_multiplier": 0.409153893,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.907708598957639,
+        "final": 4.91058712497631,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12459,7 +12467,7 @@
       "dep_name": "minimist",
       "dep_version": "1.2.0",
       "ecosystem": "npm",
-      "epss": 0.01884,
+      "epss": 0.01931,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12470,7 +12478,7 @@
       "finding_id": "sca:vuln:npm:minimist:1.2.0:GHSA-vh95-rmgr-6w4m",
       "in_kev": false,
       "purl": "pkg:npm/minimist@1.2.0",
-      "raptor_risk_estimate": 4.907708598957639,
+      "raptor_risk_estimate": 4.91058712497631,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12485,10 +12493,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408914052,
+        "epss_multiplier": 0.409153893,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.907708598957639,
+        "final": 4.91058712497631,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13117,7 +13125,7 @@
           "3.1.3"
         ],
         "id": "GHSA-v62p-rq8g-8h59",
-        "modified": "2026-02-22T23:19:17.628731+00:00",
+        "modified": "2026-07-03T22:29:26.226114+00:00",
         "published": "2025-06-23T22:42:00+00:00",
         "references": [
           "https://github.com/browserify/pbkdf2/security/advisories/GHSA-v62p-rq8g-8h59",
@@ -13201,7 +13209,7 @@
       "dep_name": "qs",
       "dep_version": "6.3.1",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13212,7 +13220,7 @@
       "finding_id": "sca:vuln:npm:qs:6.3.1:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.3.1",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13227,10 +13235,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13419,7 +13427,7 @@
       "dep_name": "qs",
       "dep_version": "6.3.2",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13430,7 +13438,7 @@
       "finding_id": "sca:vuln:npm:qs:6.3.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.3.2",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13445,10 +13453,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13565,7 +13573,7 @@
       "dep_name": "qs",
       "dep_version": "6.4.0",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13576,7 +13584,7 @@
       "finding_id": "sca:vuln:npm:qs:6.4.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.4.0",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13591,10 +13599,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13711,7 +13719,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.1",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13722,7 +13730,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.1:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.1",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13737,10 +13745,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13857,7 +13865,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.2",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13868,7 +13876,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.2",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13883,10 +13891,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14003,7 +14011,7 @@
       "dep_name": "qs",
       "dep_version": "6.9.1",
       "ecosystem": "npm",
-      "epss": 0.0041,
+      "epss": 0.00417,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14014,7 +14022,7 @@
       "finding_id": "sca:vuln:npm:qs:6.9.1:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.9.1",
-      "raptor_risk_estimate": 3.182946885099164,
+      "raptor_risk_estimate": 3.1832301443084488,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14029,10 +14037,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40139222999999996,
+        "epss_multiplier": 0.401427951,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.182946885099164,
+        "final": 3.1832301443084488,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14130,7 +14138,7 @@
           "6.14.2"
         ],
         "id": "GHSA-w7fw-mjwx-w883",
-        "modified": "2026-03-16T03:13:41.822762+00:00",
+        "modified": "2026-07-08T07:14:00.737913+00:00",
         "published": "2026-02-12T17:04:39+00:00",
         "references": [
           "https://github.com/ljharb/qs/security/advisories/GHSA-w7fw-mjwx-w883",
@@ -14313,9 +14321,9 @@
         "evidence": [
           "web/src/js/app.jsx:2",
           "web/src/js/components/FlowTable.jsx:3",
+          "web/src/js/components/FlowView/Headers.jsx:3",
           "web/src/js/components/Header/FilterInput.jsx:3",
           "web/src/js/components/common/Splitter.jsx:2",
-          "web/src/js/components/FlowView/Headers.jsx:3",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -14368,7 +14376,7 @@
       "dep_name": "request",
       "dep_version": "2.79.0",
       "ecosystem": "npm",
-      "epss": 0.00719,
+      "epss": 0.00713,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14379,7 +14387,7 @@
       "finding_id": "sca:vuln:npm:request:2.79.0:GHSA-p8p7-x288-28g6",
       "in_kev": false,
       "purl": "pkg:npm/request@2.79.0",
-      "raptor_risk_estimate": 5.268175570552669,
+      "raptor_risk_estimate": 5.267775289199008,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14394,10 +14402,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40296905699999996,
+        "epss_multiplier": 0.402938439,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.268175570552669,
+        "final": 5.267775289199008,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14437,7 +14445,7 @@
       "dep_name": "request",
       "dep_version": "2.81.0",
       "ecosystem": "npm",
-      "epss": 0.00719,
+      "epss": 0.00713,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14448,7 +14456,7 @@
       "finding_id": "sca:vuln:npm:request:2.81.0:GHSA-p8p7-x288-28g6",
       "in_kev": false,
       "purl": "pkg:npm/request@2.81.0",
-      "raptor_risk_estimate": 5.268175570552669,
+      "raptor_risk_estimate": 5.267775289199008,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14463,10 +14471,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40296905699999996,
+        "epss_multiplier": 0.402938439,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.268175570552669,
+        "final": 5.267775289199008,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14506,7 +14514,7 @@
       "dep_name": "request",
       "dep_version": "2.83.0",
       "ecosystem": "npm",
-      "epss": 0.00719,
+      "epss": 0.00713,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14517,7 +14525,7 @@
       "finding_id": "sca:vuln:npm:request:2.83.0:GHSA-p8p7-x288-28g6",
       "in_kev": false,
       "purl": "pkg:npm/request@2.83.0",
-      "raptor_risk_estimate": 5.268175570552669,
+      "raptor_risk_estimate": 5.267775289199008,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14532,10 +14540,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40296905699999996,
+        "epss_multiplier": 0.402938439,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.268175570552669,
+        "final": 5.267775289199008,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14575,7 +14583,7 @@
       "dep_name": "request",
       "dep_version": "2.88.0",
       "ecosystem": "npm",
-      "epss": 0.00719,
+      "epss": 0.00713,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14586,7 +14594,7 @@
       "finding_id": "sca:vuln:npm:request:2.88.0:GHSA-p8p7-x288-28g6",
       "in_kev": false,
       "purl": "pkg:npm/request@2.88.0",
-      "raptor_risk_estimate": 5.268175570552669,
+      "raptor_risk_estimate": 5.267775289199008,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -14601,10 +14609,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40296905699999996,
+        "epss_multiplier": 0.402938439,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.268175570552669,
+        "final": 5.267775289199008,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14981,7 +14989,7 @@
           "2.4.12"
         ],
         "id": "GHSA-95m3-7q98-8xr5",
-        "modified": "2026-03-16T03:13:46.974066+00:00",
+        "modified": "2026-07-08T07:14:01.827760+00:00",
         "published": "2025-08-21T14:47:55+00:00",
         "references": [
           "https://github.com/browserify/sha.js/security/advisories/GHSA-95m3-7q98-8xr5",
@@ -15001,7 +15009,7 @@
       "dep_name": "sha.js",
       "dep_version": "2.4.8",
       "ecosystem": "npm",
-      "epss": 0.00651,
+      "epss": 0.00676,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15012,7 +15020,7 @@
       "finding_id": "sca:vuln:npm:sha.js:2.4.8:GHSA-95m3-7q98-8xr5",
       "in_kev": false,
       "purl": "pkg:npm/sha.js@2.4.8",
-      "raptor_risk_estimate": 11.306546914851342,
+      "raptor_risk_estimate": 11.310129512257307,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15027,10 +15035,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402622053,
+        "epss_multiplier": 0.40274962799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.306546914851342,
+        "final": 11.310129512257307,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -15039,6 +15047,76 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-13311"
+        ],
+        "fixed_versions": [
+          "1.9.0"
+        ],
+        "id": "GHSA-395f-4hp3-45gv",
+        "modified": "2026-07-28T21:00:01.958762+00:00",
+        "published": "2026-07-20T21:49:34+00:00",
+        "references": [
+          "https://github.com/ljharb/shell-quote/security/advisories/GHSA-395f-4hp3-45gv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-13311",
+          "https://github.com/ljharb/shell-quote/commit/7ff5488599d01c323514f02f5efb74088dd134ec",
+          "https://github.com/ljharb/shell-quote",
+          "https://github.com/ljharb/shell-quote/releases/tag/v1.9.0"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "shell-quote: Quadratic-complexity Denial of Service in `parse()` (CWE-407)"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "shell-quote",
+      "dep_version": "1.6.1",
+      "ecosystem": "npm",
+      "epss": 0.0036,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:shell-quote:1.6.1:GHSA-395f-4hp3-45gv",
+      "in_kev": false,
+      "purl": "pkg:npm/shell-quote@1.6.1",
+      "raptor_risk_estimate": 13.15804017049264,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'shell-quote' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40113708,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.15804017049264,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -15315,6 +15393,76 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59873"
+        ],
+        "fixed_versions": [
+          "7.5.19"
+        ],
+        "id": "GHSA-23hp-3jrh-7fpw",
+        "modified": "2026-07-21T14:59:37.690492+00:00",
+        "published": "2026-07-20T21:52:03+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59873",
+          "https://github.com/isaacs/node-tar/commit/2812e9338665659b183aa7226518c307044957d3",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.19"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "node-tar: Decompression/parse DoS via unlimited input"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "tar",
+      "dep_version": "2.2.1",
+      "ecosystem": "npm",
+      "epss": 0.00424,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-23hp-3jrh-7fpw",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@2.2.1",
+      "raptor_risk_estimate": 13.16875299378826,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401463672,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.16875299378826,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-24842"
         ],
         "fixed_versions": [
@@ -15393,7 +15541,7 @@
           "6.1.1"
         ],
         "id": "GHSA-3jfq-g458-7qm9",
-        "modified": "2026-03-13T22:15:59.918909+00:00",
+        "modified": "2026-07-08T06:28:51.409971+00:00",
         "published": "2021-08-03T19:06:36+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-3jfq-g458-7qm9",
@@ -15464,7 +15612,7 @@
           "6.1.9"
         ],
         "id": "GHSA-5955-9wpr-37jh",
-        "modified": "2026-03-13T22:01:42.516929+00:00",
+        "modified": "2026-07-08T06:28:41.552506+00:00",
         "published": "2021-08-31T16:05:05+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-5955-9wpr-37jh",
@@ -15661,6 +15809,76 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59874"
+        ],
+        "fixed_versions": [
+          "7.5.18"
+        ],
+        "id": "GHSA-8x88-c5mf-7j5w",
+        "modified": "2026-07-21T14:59:37.465292+00:00",
+        "published": "2026-07-20T21:51:39+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-8x88-c5mf-7j5w",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59874",
+          "https://github.com/isaacs/node-tar/commit/9e78bf058b2c22dd4d52e00d8922d5c06fc2f7b5",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "node-tar: Negative tar entry size causes infinite loop in archive replace"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "tar",
+      "dep_version": "2.2.1",
+      "ecosystem": "npm",
+      "epss": 0.00418,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-8x88-c5mf-7j5w",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@2.2.1",
+      "raptor_risk_estimate": 13.167748666604298,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401433054,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.167748666604298,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-31802"
         ],
         "fixed_versions": [
@@ -15786,6 +16004,76 @@
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59875"
+        ],
+        "fixed_versions": [
+          "7.5.17"
+        ],
+        "id": "GHSA-gvwx-54wh-qm9j",
+        "modified": "2026-07-21T14:59:36.966687+00:00",
+        "published": "2026-07-20T21:51:12+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-gvwx-54wh-qm9j",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59875",
+          "https://github.com/isaacs/node-tar/commit/7a635c29f5edbf083557374d43984273ecfed5b3",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.17"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "2.2.1",
+      "ecosystem": "npm",
+      "epss": 0.00292,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-gvwx-54wh-qm9j",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@2.2.1",
+      "raptor_risk_estimate": 13.146657795741044,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400790076,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.146657795741044,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
@@ -15930,6 +16218,72 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.5.21"
+        ],
+        "id": "GHSA-r292-9mhp-454m",
+        "modified": "2026-07-25T21:44:39.695568+00:00",
+        "published": "2026-07-24T16:26:16+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-r292-9mhp-454m",
+          "https://github.com/isaacs/node-tar/commit/631ae59121bf8fc8a22bbae35f074cb9b789cd4a",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.21"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "2.2.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-r292-9mhp-454m",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@2.2.1",
+      "raptor_risk_estimate": 7.433802997518186,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.433802997518186,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2026-23950"
         ],
@@ -15956,7 +16310,7 @@
       "dep_name": "tar",
       "dep_version": "2.2.1",
       "ecosystem": "npm",
-      "epss": 0.00233,
+      "epss": 0.00225,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15967,7 +16321,7 @@
       "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-r6q2-hw4h-h46w",
       "in_kev": false,
       "purl": "pkg:npm/tar@2.2.1",
-      "raptor_risk_estimate": 7.553217126553185,
+      "raptor_risk_estimate": 7.552447186463082,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15982,10 +16336,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400488999,
+        "epss_multiplier": 0.40044817499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.553217126553185,
+        "final": 7.552447186463082,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -16018,7 +16372,7 @@
       "dep_name": "tar",
       "dep_version": "2.2.1",
       "ecosystem": "npm",
-      "epss": 0.00107,
+      "epss": 0.00141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16029,7 +16383,7 @@
       "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-vmf3-w455-68vh",
       "in_kev": false,
       "purl": "pkg:npm/tar@2.2.1",
-      "raptor_risk_estimate": 9.854012803081996,
+      "raptor_risk_estimate": 9.858288676392139,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16044,10 +16398,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399846021,
+        "epss_multiplier": 0.400019523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.854012803081996,
+        "final": 9.858288676392139,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -16056,6 +16410,146 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59871"
+        ],
+        "fixed_versions": [
+          "7.5.18"
+        ],
+        "id": "GHSA-w8wr-v893-vjvp",
+        "modified": "2026-07-21T14:59:36.743040+00:00",
+        "published": "2026-07-20T21:53:14+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-w8wr-v893-vjvp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59871",
+          "https://github.com/isaacs/node-tar/commit/e02a4e9e013c4be95302e2eb2047a942b883c27b",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Process crash via PAX numeric path type confusion"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "2.2.1",
+      "ecosystem": "npm",
+      "epss": 0.0041,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-w8wr-v893-vjvp",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@2.2.1",
+      "raptor_risk_estimate": 13.166409563692344,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40139222999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.166409563692344,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59873"
+        ],
+        "fixed_versions": [
+          "7.5.19"
+        ],
+        "id": "GHSA-23hp-3jrh-7fpw",
+        "modified": "2026-07-21T14:59:37.690492+00:00",
+        "published": "2026-07-20T21:52:03+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59873",
+          "https://github.com/isaacs/node-tar/commit/2812e9338665659b183aa7226518c307044957d3",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.19"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "node-tar: Decompression/parse DoS via unlimited input"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "tar",
+      "dep_version": "4.4.13",
+      "ecosystem": "npm",
+      "epss": 0.00424,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-23hp-3jrh-7fpw",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@4.4.13",
+      "raptor_risk_estimate": 13.16875299378826,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401463672,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.16875299378826,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -16140,7 +16634,7 @@
           "6.1.1"
         ],
         "id": "GHSA-3jfq-g458-7qm9",
-        "modified": "2026-03-13T22:15:59.918909+00:00",
+        "modified": "2026-07-08T06:28:51.409971+00:00",
         "published": "2021-08-03T19:06:36+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-3jfq-g458-7qm9",
@@ -16211,7 +16705,7 @@
           "6.1.9"
         ],
         "id": "GHSA-5955-9wpr-37jh",
-        "modified": "2026-03-13T22:01:42.516929+00:00",
+        "modified": "2026-07-08T06:28:41.552506+00:00",
         "published": "2021-08-31T16:05:05+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-5955-9wpr-37jh",
@@ -16408,6 +16902,76 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59874"
+        ],
+        "fixed_versions": [
+          "7.5.18"
+        ],
+        "id": "GHSA-8x88-c5mf-7j5w",
+        "modified": "2026-07-21T14:59:37.465292+00:00",
+        "published": "2026-07-20T21:51:39+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-8x88-c5mf-7j5w",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59874",
+          "https://github.com/isaacs/node-tar/commit/9e78bf058b2c22dd4d52e00d8922d5c06fc2f7b5",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "node-tar: Negative tar entry size causes infinite loop in archive replace"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "tar",
+      "dep_version": "4.4.13",
+      "ecosystem": "npm",
+      "epss": 0.00418,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-8x88-c5mf-7j5w",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@4.4.13",
+      "raptor_risk_estimate": 13.167748666604298,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401433054,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.167748666604298,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-31802"
         ],
         "fixed_versions": [
@@ -16481,7 +17045,7 @@
           "6.1.7"
         ],
         "id": "GHSA-9r2w-394v-53qc",
-        "modified": "2026-03-13T21:59:15.959332+00:00",
+        "modified": "2026-07-08T06:29:15.266514+00:00",
         "published": "2021-08-31T16:05:27+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-9r2w-394v-53qc",
@@ -16614,6 +17178,76 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59875"
+        ],
+        "fixed_versions": [
+          "7.5.17"
+        ],
+        "id": "GHSA-gvwx-54wh-qm9j",
+        "modified": "2026-07-21T14:59:36.966687+00:00",
+        "published": "2026-07-20T21:51:12+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-gvwx-54wh-qm9j",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59875",
+          "https://github.com/isaacs/node-tar/commit/7a635c29f5edbf083557374d43984273ecfed5b3",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.17"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "4.4.13",
+      "ecosystem": "npm",
+      "epss": 0.00292,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-gvwx-54wh-qm9j",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@4.4.13",
+      "raptor_risk_estimate": 13.146657795741044,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400790076,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.146657795741044,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-29786"
         ],
         "fixed_versions": [
@@ -16687,7 +17321,7 @@
           "6.1.9"
         ],
         "id": "GHSA-qq89-hq3f-393p",
-        "modified": "2026-03-13T21:59:56.227641+00:00",
+        "modified": "2026-07-08T06:28:24.989628+00:00",
         "published": "2021-08-31T16:05:17+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-qq89-hq3f-393p",
@@ -16749,6 +17383,72 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.5.21"
+        ],
+        "id": "GHSA-r292-9mhp-454m",
+        "modified": "2026-07-25T21:44:39.695568+00:00",
+        "published": "2026-07-24T16:26:16+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-r292-9mhp-454m",
+          "https://github.com/isaacs/node-tar/commit/631ae59121bf8fc8a22bbae35f074cb9b789cd4a",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.21"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "4.4.13",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-r292-9mhp-454m",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@4.4.13",
+      "raptor_risk_estimate": 7.433802997518186,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.433802997518186,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2021-32803"
         ],
@@ -16759,7 +17459,7 @@
           "6.1.2"
         ],
         "id": "GHSA-r628-mhmh-qjhw",
-        "modified": "2026-03-13T22:15:10.657869+00:00",
+        "modified": "2026-07-08T06:27:29.457953+00:00",
         "published": "2021-08-03T19:00:40+00:00",
         "references": [
           "https://github.com/npm/node-tar/security/advisories/GHSA-r628-mhmh-qjhw",
@@ -16847,7 +17547,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.13",
       "ecosystem": "npm",
-      "epss": 0.00233,
+      "epss": 0.00225,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16858,7 +17558,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-r6q2-hw4h-h46w",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.13",
-      "raptor_risk_estimate": 7.553217126553185,
+      "raptor_risk_estimate": 7.552447186463082,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16873,10 +17573,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400488999,
+        "epss_multiplier": 0.40044817499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.553217126553185,
+        "final": 7.552447186463082,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -16909,7 +17609,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.13",
       "ecosystem": "npm",
-      "epss": 0.00107,
+      "epss": 0.00141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16920,7 +17620,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-vmf3-w455-68vh",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.13",
-      "raptor_risk_estimate": 9.854012803081996,
+      "raptor_risk_estimate": 9.858288676392139,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16935,14 +17635,84 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399846021,
+        "epss_multiplier": 0.400019523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.854012803081996,
+        "final": 9.858288676392139,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59871"
+        ],
+        "fixed_versions": [
+          "7.5.18"
+        ],
+        "id": "GHSA-w8wr-v893-vjvp",
+        "modified": "2026-07-21T14:59:36.743040+00:00",
+        "published": "2026-07-20T21:53:14+00:00",
+        "references": [
+          "https://github.com/isaacs/node-tar/security/advisories/GHSA-w8wr-v893-vjvp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59871",
+          "https://github.com/isaacs/node-tar/commit/e02a4e9e013c4be95302e2eb2047a942b883c27b",
+          "https://github.com/isaacs/node-tar",
+          "https://github.com/isaacs/node-tar/releases/tag/v7.5.18"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "node-tar: Process crash via PAX numeric path type confusion"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "tar",
+      "dep_version": "4.4.13",
+      "ecosystem": "npm",
+      "epss": 0.0041,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-w8wr-v893-vjvp",
+      "in_kev": false,
+      "purl": "pkg:npm/tar@4.4.13",
+      "raptor_risk_estimate": 13.166409563692344,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tar' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40139222999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.166409563692344,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
@@ -16979,7 +17749,7 @@
       "dep_name": "tmp",
       "dep_version": "0.0.31",
       "ecosystem": "npm",
-      "epss": 0.00309,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16990,7 +17760,7 @@
       "finding_id": "sca:vuln:npm:tmp:0.0.31:GHSA-52f5-9888-hmc6",
       "in_kev": false,
       "purl": "pkg:npm/tmp@0.0.31",
-      "raptor_risk_estimate": 9.87941652098343,
+      "raptor_risk_estimate": 9.88218326253705,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17005,10 +17775,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400876827,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.87941652098343,
+        "final": 9.88218326253705,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17114,7 +17884,7 @@
       "dep_name": "tmp",
       "dep_version": "0.0.33",
       "ecosystem": "npm",
-      "epss": 0.00309,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17125,7 +17895,7 @@
       "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-52f5-9888-hmc6",
       "in_kev": false,
       "purl": "pkg:npm/tmp@0.0.33",
-      "raptor_risk_estimate": 9.87941652098343,
+      "raptor_risk_estimate": 9.88218326253705,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17140,10 +17910,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400876827,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.87941652098343,
+        "final": 9.88218326253705,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17248,7 +18018,7 @@
       "dep_name": "tmpl",
       "dep_version": "1.0.4",
       "ecosystem": "npm",
-      "epss": 0.01257,
+      "epss": 0.01298,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17259,7 +18029,7 @@
       "finding_id": "sca:vuln:npm:tmpl:1.0.4:GHSA-jgrx-mgxx-jf9v",
       "in_kev": false,
       "purl": "pkg:npm/tmpl@1.0.4",
-      "raptor_risk_estimate": 6.521394424505177,
+      "raptor_risk_estimate": 6.524757444074865,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17274,10 +18044,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40571447099999997,
+        "epss_multiplier": 0.405923694,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.521394424505177,
+        "final": 6.524757444074865,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17317,7 +18087,7 @@
       "dep_name": "tough-cookie",
       "dep_version": "2.3.2",
       "ecosystem": "npm",
-      "epss": 0.02139,
+      "epss": 0.02542,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17328,7 +18098,7 @@
       "finding_id": "sca:vuln:npm:tough-cookie:2.3.2:GHSA-72xf-g2v4-qvf3",
       "in_kev": false,
       "purl": "pkg:npm/tough-cookie@2.3.2",
-      "raptor_risk_estimate": 13.455823180538115,
+      "raptor_risk_estimate": 13.523280489727732,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17343,10 +18113,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41021531699999997,
+        "epss_multiplier": 0.412271826,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.455823180538115,
+        "final": 13.523280489727732,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17456,7 +18226,7 @@
       "dep_name": "tough-cookie",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.02139,
+      "epss": 0.02542,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17467,7 +18237,7 @@
       "finding_id": "sca:vuln:npm:tough-cookie:2.3.3:GHSA-72xf-g2v4-qvf3",
       "in_kev": false,
       "purl": "pkg:npm/tough-cookie@2.3.3",
-      "raptor_risk_estimate": 13.455823180538115,
+      "raptor_risk_estimate": 13.523280489727732,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17482,10 +18252,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41021531699999997,
+        "epss_multiplier": 0.412271826,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.455823180538115,
+        "final": 13.523280489727732,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17526,7 +18296,7 @@
       "dep_name": "tough-cookie",
       "dep_version": "2.4.3",
       "ecosystem": "npm",
-      "epss": 0.02139,
+      "epss": 0.02542,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17537,7 +18307,7 @@
       "finding_id": "sca:vuln:npm:tough-cookie:2.4.3:GHSA-72xf-g2v4-qvf3",
       "in_kev": false,
       "purl": "pkg:npm/tough-cookie@2.4.3",
-      "raptor_risk_estimate": 13.455823180538115,
+      "raptor_risk_estimate": 13.523280489727732,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17552,10 +18322,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41021531699999997,
+        "epss_multiplier": 0.412271826,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.455823180538115,
+        "final": 13.523280489727732,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17577,7 +18347,7 @@
           "4.0.1"
         ],
         "id": "GHSA-7p7h-4mm5-852v",
-        "modified": "2023-11-08T04:06:06.114400+00:00",
+        "modified": "2026-07-08T15:29:23.416486+00:00",
         "published": "2021-06-07T22:10:39+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2021-33623",
@@ -17839,7 +18609,8 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-41907"
+          "CVE-2026-41907",
+          "CVE-2026-41988"
         ],
         "fixed_versions": [
           "11.1.1",
@@ -17847,7 +18618,7 @@
           "13.0.1"
         ],
         "id": "GHSA-w5hq-g745-h8pq",
-        "modified": "2026-05-21T18:30:08.363810+00:00",
+        "modified": "2026-07-08T08:11:13.328634+00:00",
         "published": "2026-04-22T20:53:24+00:00",
         "references": [
           "https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq",
@@ -17911,7 +18682,8 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-41907"
+          "CVE-2026-41907",
+          "CVE-2026-41988"
         ],
         "fixed_versions": [
           "11.1.1",
@@ -17919,7 +18691,7 @@
           "13.0.1"
         ],
         "id": "GHSA-w5hq-g745-h8pq",
-        "modified": "2026-05-21T18:30:08.363810+00:00",
+        "modified": "2026-07-08T08:11:13.328634+00:00",
         "published": "2026-04-22T20:53:24+00:00",
         "references": [
           "https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq",
@@ -17983,7 +18755,8 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-41907"
+          "CVE-2026-41907",
+          "CVE-2026-41988"
         ],
         "fixed_versions": [
           "11.1.1",
@@ -17991,7 +18764,7 @@
           "13.0.1"
         ],
         "id": "GHSA-w5hq-g745-h8pq",
-        "modified": "2026-05-21T18:30:08.363810+00:00",
+        "modified": "2026-07-08T08:11:13.328634+00:00",
         "published": "2026-04-22T20:53:24+00:00",
         "references": [
           "https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq",
@@ -18055,13 +18828,140 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2020-7662"
+          "CVE-2026-54490"
+        ],
+        "fixed_versions": [
+          "0.7.5"
+        ],
+        "id": "GHSA-mp7j-qc5w-4988",
+        "modified": "2026-07-21T14:59:37.620741+00:00",
+        "published": "2026-07-15T22:08:17+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-node/security/advisories/GHSA-mp7j-qc5w-4988",
+          "https://github.com/faye/websocket-driver-node",
+          "https://github.com/faye/websocket-driver-node/releases/tag/0.7.5"
+        ],
+        "severity": null,
+        "summary": "websocket-driver: Resource limit bypass via message compression"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.7.3",
+      "ecosystem": "npm",
+      "epss": 0.00263,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:websocket-driver:0.7.3:GHSA-mp7j-qc5w-4988",
+      "in_kev": false,
+      "purl": "pkg:npm/websocket-driver@0.7.3",
+      "raptor_risk_estimate": 3.4345929099504815,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'websocket-driver' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400642089,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.4345929099504815,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-54466"
+        ],
+        "fixed_versions": [
+          "0.7.5"
+        ],
+        "id": "GHSA-xv26-6w52-cph6",
+        "modified": "2026-07-21T14:59:37.882111+00:00",
+        "published": "2026-07-15T22:07:24+00:00",
+        "references": [
+          "https://github.com/faye/websocket-driver-node/security/advisories/GHSA-xv26-6w52-cph6",
+          "https://github.com/faye/websocket-driver-node",
+          "https://github.com/faye/websocket-driver-node/releases/tag/0.7.5"
+        ],
+        "severity": null,
+        "summary": "websocket-driver: Message corruption via abuse of protocol length headers"
+      },
+      "cvss_score": null,
+      "dep_name": "websocket-driver",
+      "dep_version": "0.7.3",
+      "ecosystem": "npm",
+      "epss": 0.00263,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:websocket-driver:0.7.3:GHSA-xv26-6w52-cph6",
+      "in_kev": false,
+      "purl": "pkg:npm/websocket-driver@0.7.3",
+      "raptor_risk_estimate": 3.4345929099504815,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'websocket-driver' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400642089,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.4345929099504815,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-7662",
+          "SNYK-JS-WEBSOCKETEXTENSIONS-570623"
         ],
         "fixed_versions": [
           "0.1.4"
         ],
         "id": "GHSA-g78m-2chm-r7qv",
-        "modified": "2026-03-13T22:16:08.017200+00:00",
+        "modified": "2026-07-08T06:50:02.226952+00:00",
         "published": "2020-06-05T16:16:12+00:00",
         "references": [
           "https://github.com/faye/websocket-extensions-node/security/advisories/GHSA-g78m-2chm-r7qv",
@@ -18081,7 +18981,7 @@
       "dep_name": "websocket-extensions",
       "dep_version": "0.1.1",
       "ecosystem": "npm",
-      "epss": 0.02955,
+      "epss": 0.03012,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18092,7 +18992,7 @@
       "finding_id": "sca:vuln:npm:websocket-extensions:0.1.1:GHSA-g78m-2chm-r7qv",
       "in_kev": false,
       "purl": "pkg:npm/websocket-extensions@0.1.1",
-      "raptor_risk_estimate": 7.2823354302410905,
+      "raptor_risk_estimate": 7.287447219987016,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -18107,10 +19007,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.414379365,
+        "epss_multiplier": 0.41467023599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2823354302410905,
+        "final": 7.287447219987016,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -18265,7 +19165,8 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2020-7608"
+          "CVE-2020-7608",
+          "SNYK-JS-YARGSPARSER-560381"
         ],
         "fixed_versions": [
           "13.1.2",
@@ -18274,7 +19175,7 @@
           "5.0.1"
         ],
         "id": "GHSA-p9pc-299p-vxgp",
-        "modified": "2026-03-13T22:11:22.367493+00:00",
+        "modified": "2026-07-08T06:49:37.726276+00:00",
         "published": "2020-09-04T18:00:54+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2020-7608",
@@ -18337,7 +19238,8 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2020-7608"
+          "CVE-2020-7608",
+          "SNYK-JS-YARGSPARSER-560381"
         ],
         "fixed_versions": [
           "13.1.2",
@@ -18346,7 +19248,7 @@
           "5.0.1"
         ],
         "id": "GHSA-p9pc-299p-vxgp",
-        "modified": "2026-03-13T22:11:22.367493+00:00",
+        "modified": "2026-07-08T06:49:37.726276+00:00",
         "published": "2020-09-04T18:00:54+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2020-7608",

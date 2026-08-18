@@ -20,7 +20,6 @@ from src.clients.github import GitHubClient
 from src.clients.wayback import WaybackClient
 from src.schema.common import EvidenceSource
 
-
 # =============================================================================
 # GITHUB CLIENT TESTS
 # =============================================================================
@@ -140,6 +139,56 @@ class TestGitClient:
         assert hasattr(client, "get_commit")
         assert hasattr(client, "get_commit_files")
         assert hasattr(client, "get_log")
+
+    def test_overrides_carry_core_pin_list(self):
+        """The inlined override list must not drift behind core.git's
+        read-only pin set (hostile .git/config neutralisation)."""
+        from src.clients.git import _SAFE_GIT_OVERRIDES
+        required = {
+            "core.fsmonitor=", "core.editor=true", "core.pager=cat",
+            "core.askPass=true", "core.hooksPath=/dev/null",
+            "credential.helper=", "core.gitProxy=",
+            "gpg.program=true", "gpg.x509.program=true",
+            "gpg.ssh.program=true", "diff.external=",
+            "protocol.allow=never", "protocol.file.allow=never",
+            "protocol.ext.allow=never", "core.sshCommand=false",
+        }
+        missing = required - set(_SAFE_GIT_OVERRIDES)
+        assert not missing, f"pins missing from fork: {missing}"
+
+    def test_run_uses_sanitised_env_and_timeout(self, monkeypatch):
+        """git children must not inherit injection env vars, must not
+        read host git config, and must be time-bounded."""
+        import subprocess as sp
+
+        from src.clients import git as git_mod
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured.update(kwargs)
+
+            class R:
+                returncode = 0
+                stdout = "x\n"
+                stderr = ""
+            return R()
+
+        monkeypatch.setenv("LD_PRELOAD", "/tmp/evil.so")
+        monkeypatch.setenv("GIT_SSH", "/tmp/evil-ssh")
+        monkeypatch.setenv("GIT_EXTERNAL_DIFF", "/tmp/evil-diff")
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        GitClient(repo_path=".")._run("cat-file", "-p", "HEAD")
+
+        env = captured["env"]
+        assert "LD_PRELOAD" not in env
+        assert "GIT_SSH" not in env
+        assert "GIT_EXTERNAL_DIFF" not in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert captured["timeout"] == git_mod._GIT_TIMEOUT_S
 
 
 # =============================================================================

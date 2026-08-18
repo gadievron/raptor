@@ -223,7 +223,7 @@ def _detect_build_systems(
         return out
     try:
         import logging
-        from packages.codeql.build_detector import BuildDetector
+        from core.build.build_detector import BuildDetector
 
         # Drop the per-language probe chatter from the report.
         # BuildDetector uses ``get_logger()`` (no name), which

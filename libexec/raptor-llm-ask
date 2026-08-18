@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Send a prompt to an arbitrary LLM model and print the response.
+
+Developer tool for debugging model behaviour, comparing outputs across
+providers, and diagnosing audit/scan verdict reasoning.
+
+Usage:
+    raptor-llm-ask --model gemini-2.5-pro "Why did you classify this as suspicious?"
+    raptor-llm-ask --model gemini-2.5-pro --system "You are a code auditor" < prompt.txt
+    raptor-llm-ask --model claude-opus-4-7 --file context.txt "Summarise this"
+
+The prompt is built from positional arguments (joined by spaces) plus any
+--file contents prepended as context.  If no positional args and stdin is
+a pipe, stdin is the prompt.
+"""
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Send a prompt to an LLM and print the response",
+    )
+    parser.add_argument(
+        "--model", default=None,
+        help="Model to query (e.g. gemini-2.5-pro, claude-opus-4-7). "
+             "Omit to use the configured default model.",
+    )
+    parser.add_argument(
+        "--system", default=None,
+        help="System prompt",
+    )
+    parser.add_argument(
+        "--file", type=Path, action="append", default=[],
+        help="Prepend file contents as context (repeatable)",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=4096,
+        help="Maximum output tokens (default: 4096)",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=None,
+        help="Sampling temperature (default: model default)",
+    )
+    parser.add_argument(
+        "--json-schema", type=Path, default=None,
+        help="Path to a JSON schema file for structured output",
+    )
+    parser.add_argument(
+        "--raw", action="store_true",
+        help="Print response text only (no JSON formatting for structured output)",
+    )
+    parser.add_argument(
+        "--system-file", type=Path, default=None,
+        help="Load system prompt from a file",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Show model metadata, cost, and provider logging",
+    )
+    parser.add_argument(
+        "prompt", nargs="*",
+        help="Prompt text (reads stdin if omitted and stdin is a pipe)",
+    )
+    args = parser.parse_args()
+
+    quiet = not args.debug
+    if quiet:
+        os.environ["RAPTOR_LLM_QUIET"] = "1"
+
+    # --- build prompt ---
+    parts = []
+    for fpath in args.file:
+        if not fpath.is_file():
+            print(f"error: file not found: {fpath}", file=sys.stderr)
+            return 1
+        parts.append(fpath.read_text(encoding="utf-8", errors="replace"))
+
+    if args.prompt:
+        parts.append(" ".join(args.prompt))
+    elif not sys.stdin.isatty():
+        parts.append(sys.stdin.read())
+
+    prompt = "\n\n".join(parts).strip()
+    if not prompt:
+        print("error: no prompt provided", file=sys.stderr)
+        return 1
+
+    # --- resolve system prompt ---
+    system_prompt = args.system
+    if args.system_file:
+        if not args.system_file.is_file():
+            print(f"error: system file not found: {args.system_file}",
+                  file=sys.stderr)
+            return 1
+        system_prompt = args.system_file.read_text(
+            encoding="utf-8", errors="replace")
+
+    # --- create client + model config ---
+    from core.llm.client import LLMClient
+
+    if quiet:
+        for name in ("", "raptor", "httpx", "httpcore"):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.CRITICAL)
+            for h in lg.handlers:
+                h.setLevel(logging.CRITICAL)
+
+    try:
+        client = LLMClient()
+    except Exception as exc:
+        print(f"error: could not create LLM client: {exc}", file=sys.stderr)
+        return 1
+
+    if args.model:
+        try:
+            model_config = client.config.config_for_model(args.model)
+        except (ValueError, AttributeError) as exc:
+            print(f"error: could not resolve model {args.model!r}: {exc}",
+                  file=sys.stderr)
+            return 1
+    else:
+        # No --model: the configured default (models.json primary /
+        # env autodetect / claudecode last resort) — same resolution
+        # every pipeline consumer gets from a bare LLMConfig().
+        model_config = client.config.primary_model
+        if model_config is None:
+            print(
+                "error: no model configured — pass --model <name> or "
+                "configure one in ~/.config/raptor/models.json",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Bedrock is dispatcher-only (this process holds the AWS
+    # credentials; the SDK client itself never does). Pipeline runs
+    # get the dispatcher from raptor.py; this standalone CLI is its
+    # own parent, so it self-serves an in-process one (shared gate
+    # with the audit pipeline's standalone entry — no-op unless a
+    # resolved model is dispatcher-only and no route exists).
+    try:
+        from core.llm.dispatcher.lifecycle import (
+            ensure_route_for_model_configs,
+        )
+        ensure_route_for_model_configs(
+            [model_config], label="raptor-llm-ask",
+        )
+    except Exception as exc:  # noqa: BLE001 — provider errors below
+        print(f"warning: could not start LLM dispatcher: {exc}",
+              file=sys.stderr)
+
+    kwargs = {"model_config": model_config}
+    if args.temperature is not None:
+        kwargs["temperature"] = args.temperature
+    if args.max_tokens:
+        kwargs["max_tokens"] = args.max_tokens
+
+    # --- structured or free-form ---
+    try:
+        if args.json_schema:
+            schema = json.loads(args.json_schema.read_text())
+            response = client.generate_structured(
+                prompt, schema,
+                system_prompt=system_prompt,
+                **kwargs,
+            )
+            if args.raw:
+                print(json.dumps(response.result))
+            else:
+                print(json.dumps(response.result, indent=2))
+            if args.debug:
+                print(f"\n--- model={response.model} "
+                      f"cost=${response.cost:.4f} ---",
+                      file=sys.stderr)
+        else:
+            response = client.generate(
+                prompt,
+                system_prompt=system_prompt,
+                **kwargs,
+            )
+            print(response.content)
+            if args.debug:
+                print(f"\n--- model={response.model} "
+                      f"provider={response.provider} "
+                      f"cost=${response.cost:.4f} "
+                      f"tokens={response.tokens_used} ---",
+                      file=sys.stderr)
+    except Exception as exc:
+        print(f"error: LLM call failed: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

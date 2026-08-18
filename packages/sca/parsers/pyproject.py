@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register
+from .requirements import _spec_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -67,25 +68,9 @@ _POETRY_PREFIX_OPS = ("^", "~")
 
 
 def parse(path: Path) -> List[Dependency]:
-    if _tomllib is None:
-        logger.warning(
-            "sca.parsers.pyproject: skipping %s — no TOML reader available",
-            path,
-        )
+    data = _load(path)
+    if data is None:
         return []
-    try:
-        text = path.read_bytes()
-    except OSError as e:
-        logger.warning("sca.parsers.pyproject: read failed for %s: %s", path, e)
-        return []
-
-    try:
-        data = _tomllib.loads(text.decode("utf-8", errors="replace"))
-    except _tomllib.TOMLDecodeError as e:
-        logger.warning("sca.parsers.pyproject: TOML parse failed for %s: %s", path, e)
-        return []
-
-    project_license = _extract_license(data)
 
     deps: List[Dependency] = []
 
@@ -95,8 +80,6 @@ def parse(path: Path) -> List[Dependency]:
         for spec in project.get("dependencies", []) or []:
             d = _from_pep508(spec, path, scope="main")
             if d is not None:
-                if project_license:
-                    d.declared_license = project_license
                 deps.append(d)
         opt = project.get("optional-dependencies") or {}
         if isinstance(opt, dict):
@@ -104,8 +87,6 @@ def parse(path: Path) -> List[Dependency]:
                 for spec in items or []:
                     d = _from_pep508(spec, path, scope="optional")
                     if d is not None:
-                        if project_license:
-                            d.declared_license = project_license
                         deps.append(d)
 
     # --- Poetry ----------------------------------------------------------
@@ -159,9 +140,45 @@ def parse(path: Path) -> List[Dependency]:
     return deps
 
 
+def extract_project_license(path: Path) -> Optional[str]:
+    """License the manifest declares for the PROJECT ITSELF.
+
+    ``[project].license`` / ``[tool.poetry].license`` describe the
+    project, not its deps — the value feeds the SBOM metadata/root
+    component, never ``Dependency.declared_license`` (dep licenses
+    come from registry enrichment, or stay None for the policy's
+    ``on_unknown`` path).
+    """
+    data = _load(path)
+    if data is None:
+        return None
+    return _extract_license(data)
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+def _load(path: Path) -> Optional[Dict[str, Any]]:
+    """Read + TOML-parse a pyproject.toml; None on any failure."""
+    if _tomllib is None:
+        logger.warning(
+            "sca.parsers.pyproject: skipping %s — no TOML reader available",
+            path,
+        )
+        return None
+    try:
+        text = path.read_bytes()
+    except OSError as e:
+        logger.warning("sca.parsers.pyproject: read failed for %s: %s", path, e)
+        return None
+
+    try:
+        return _tomllib.loads(text.decode("utf-8", errors="replace"))
+    except _tomllib.TOMLDecodeError as e:
+        logger.warning("sca.parsers.pyproject: TOML parse failed for %s: %s", path, e)
+        return None
+
 
 def _extract_license(data: Dict[str, Any]) -> Optional[str]:
     """Read the project license from PEP 621 ``[project]`` or Poetry's
@@ -209,6 +226,9 @@ def _from_pep508(
         return None
 
     pin_style, version = _classify_specifier(req)
+    # Corridor bounds — same recording the requirements.txt parser does,
+    # so harden's ceiling clamp works for pyproject deps too.
+    version_floor, version_ceiling = _spec_bounds(req.specifier)
     if req.url:
         if req.url.startswith(("git+", "git:", "git@", "hg+", "svn+", "bzr+")):
             pin_style = PinStyle.GIT
@@ -226,6 +246,8 @@ def _from_pep508(
         direct=True,
         purl=_build_purl(req.name, version),
         parser_confidence=_confidence_for_pep508(pin_style, version),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
@@ -258,6 +280,7 @@ def _from_poetry(
                 break
         else:
             return None
+        version_floor, version_ceiling = _poetry_bounds(pin_style, version)
         return Dependency(
             ecosystem=ECOSYSTEM,
             name=_normalise_name(name),
@@ -272,10 +295,13 @@ def _from_poetry(
                 "medium",
                 reason="Poetry multi-constraint entry; first match recorded",
             ),
+            version_floor=version_floor,
+            version_ceiling=version_ceiling,
         )
     else:
         return None
 
+    version_floor, version_ceiling = _poetry_bounds(pin_style, version)
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=_normalise_name(name),
@@ -287,6 +313,8 @@ def _from_poetry(
         direct=True,
         purl=_build_purl(name, version),
         parser_confidence=_confidence_for_poetry(pin_style, version),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
@@ -334,6 +362,29 @@ def _classify_poetry_dict(spec: Dict[str, Any]) -> Tuple[PinStyle, Optional[str]
     if "version" in spec and isinstance(spec["version"], str):
         return _classify_poetry_string(spec["version"])
     return PinStyle.UNKNOWN, None
+
+
+def _poetry_bounds(
+    pin_style: PinStyle, version: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Corridor bounds for a Poetry RANGE string (PEP 440 grammar).
+
+    Caret/tilde shapes imply their ceiling through ``pin_style`` and
+    are left unbounded here; exact / wildcard / git / path specs carry
+    no corridor. Unparseable range strings fail safe to ``(None,
+    None)`` — harden then falls back to the rewriter's fail-closed
+    backstop.
+    """
+    if pin_style is not PinStyle.RANGE or not version:
+        return None, None
+    if not _HAS_PACKAGING:
+        return None, None
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    try:
+        spec = SpecifierSet(version)
+    except InvalidSpecifier:
+        return None, None
+    return _spec_bounds(spec)
 
 
 def _confidence_for_pep508(

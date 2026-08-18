@@ -344,11 +344,14 @@ def parse_member_event(row: dict[str, Any], table: str | None = None) -> MemberE
     action = ctx.payload.get("action", "added")
 
     # MemberEvent actions in GitHub are: added, removed, edited
-    action_map = {"added": "added", "removed": "removed"}
+    action_map = {"added": "added", "removed": "removed", "edited": "edited"}
     normalized_action = action_map.get(action, "added")
 
     return MemberEvent(
-        evidence_id=generate_evidence_id("member", ctx.repository.full_name, member.get("login", ""), action),
+        # Keyed on the NORMALIZED action so the id and the record's
+        # action field can never disagree (an unknown raw action used
+        # to produce an id citing it while the record said "added").
+        evidence_id=generate_evidence_id("member", ctx.repository.full_name, member.get("login", ""), normalized_action),
         when=ctx.when,
         who=ctx.who,
         what=f"Collaborator {member.get('login', 'unknown')} {normalized_action}",

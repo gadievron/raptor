@@ -164,6 +164,16 @@ class TestPredicates:
         for s in ALL_STATUSES:
             assert is_terminal({"status": s}) is True
 
+    def test_is_terminal_false_for_in_flight_finding(self):
+        # No explicit status stamped yet — the documented in-flight
+        # case. Pre-fix is_terminal routed through get_status, whose
+        # derive fallback always lands in ALL_STATUSES, so this could
+        # never be False.
+        assert is_terminal({}) is False
+        assert is_terminal({"is_true_positive": True}) is False
+        # Unknown/garbage explicit status is not terminal either.
+        assert is_terminal({"status": "in_progress"}) is False
+
 
 class TestPredicatesWithDerivedStatus:
     """Predicates work against the derive fallback too — pre-#19

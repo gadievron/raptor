@@ -26,10 +26,11 @@ import argparse
 import io
 import json
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen, Request
+from urllib.request import Request, urlopen
 
 SEMGREP_ENGINE_DIR = Path(__file__).resolve().parents[1]
 CACHE_DIR = SEMGREP_ENGINE_DIR / "rules" / "registry-cache"
@@ -64,7 +65,7 @@ def fetch_pack(pack_id: str) -> bytes:
     url = REGISTRY_URL.format(pack_id=pack_id)
     req = Request(url, headers={"Accept": "application/json"})
     try:
-        resp = urlopen(req, timeout=FETCH_TIMEOUT)  # noqa: S310
+        resp = urlopen(req, timeout=FETCH_TIMEOUT)
         data = resp.read()
     except URLError as exc:
         raise SystemExit(
@@ -107,14 +108,17 @@ def cmd_list(args: argparse.Namespace) -> None:
                 items = rules if isinstance(rules, list) else []
                 for r in items:
                     if isinstance(r, dict):
-                        lic = r.get("metadata", {}).get("license", "")
-                        if lic:
+                        meta = r.get("metadata")
+                        lic = meta.get("license", "") if isinstance(meta, dict) else ""
+                        if lic and isinstance(lic, str):
                             lics.add(lic[:40])
                 lic_str = "; ".join(sorted(lics)) if lics else "unknown"
-            except Exception:
+            except (OSError, ValueError):
+                # Unreadable or invalid-JSON cache file — report and
+                # keep listing the rest.
                 count = "?"
                 lic_str = "error reading"
-            print(f"  p/{pid:<23} {'yes':<10} {str(count):<8} {lic_str}")
+            print(f"  p/{pid:<23} {'yes':<10} {count!s:<8} {lic_str}")
         else:
             print(f"  p/{pid:<23} {'no':<10} {'—':<8} —")
 
@@ -158,7 +162,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 parsed = json.loads(data)
                 rules = parsed.get("rules", parsed) if isinstance(parsed, dict) else parsed
                 count = len(rules) if isinstance(rules, list) else "?"
-            except Exception:
+            except ValueError:
+                # Registry returned non-JSON — count is cosmetic.
                 count = "?"
             print(f"ok ({count} rules)")
             fetched += 1
@@ -217,10 +222,15 @@ def cmd_import(args: argparse.Namespace) -> None:
 
         # Show manifest info if present
         if "manifest.json" in zf.namelist():
+            # Cosmetic manifest display: a corrupt bundle member
+            # (BadZipFile / zlib.error), undecodable or invalid JSON
+            # (ValueError) or a read error (OSError) shouldn't fail
+            # the import.
             try:
                 m = json.loads(zf.read("manifest.json"))
-                print(f"\n  Bundle fetched: {m.get('fetched_utc', 'unknown')}")
-            except Exception:
+                if isinstance(m, dict):
+                    print(f"\n  Bundle fetched: {m.get('fetched_utc', 'unknown')}")
+            except (OSError, ValueError, zipfile.BadZipFile, zlib.error):
                 pass
 
     print(f"\n  {imported} pack(s) imported, {skipped} skipped")
@@ -252,7 +262,8 @@ def cmd_update(args: argparse.Namespace) -> None:
             parsed = json.loads(data)
             rules = parsed.get("rules", parsed) if isinstance(parsed, dict) else parsed
             count = len(rules) if isinstance(rules, list) else "?"
-        except Exception:
+        except ValueError:
+            # Registry returned non-JSON — count is cosmetic.
             count = "?"
         status = "updated" if existed else "added"
         print(f"ok ({count} rules, {status})")

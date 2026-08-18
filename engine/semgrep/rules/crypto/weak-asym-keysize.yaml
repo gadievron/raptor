@@ -6,8 +6,8 @@ rules:
     patterns:
       - pattern: |
           KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA");
-      - pattern: |
-          $KPG.initialize($N, ...)
+          ...
+          $KPG.initialize($N, ...);
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048

@@ -24,6 +24,7 @@ pytestmark = _pytest.mark.skipif(
 
 import logging  # noqa: E402
 import os  # noqa: E402
+import signal  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -68,7 +69,7 @@ class TestProbeCache:
     def test_subsequent_calls_use_cache(self, monkeypatch):
         # First call populates the cache.
         first = ptrace_probe.check_ptrace_available()
-        # Counter-pattern detection (NOT exception-based): the H1
+        # Counter-pattern detection (NOT exception-based): the
         # try/except in check_ptrace_available catches Exception, so a
         # raised AssertionError would be silently swallowed and the
         # cache-broken case would fail with a less-informative
@@ -160,7 +161,7 @@ class TestProbeWarning:
 
 
 class TestEintrSafe:
-    """G1 regression: a transient signal during the probe must not be
+    """Regression guard: a transient signal during the probe must not be
     misinterpreted as 'ptrace unavailable'. The waitpid call retries on
     EINTR rather than failing through to the False-return path."""
 
@@ -195,7 +196,7 @@ class TestEintrSafe:
 
 
 class TestProbeNeverRaises:
-    """H1 regression: a future change that introduces an unexpected
+    """Regression guard: a future change that introduces an unexpected
     raise in _run_probe must not crash sandbox setup. The public API
     must always return a bool, even when the internals misbehave."""
 
@@ -238,6 +239,82 @@ class TestProbeNoZombies:
         assert after - before <= 1, (
             f"real probe leaked children: before={before}, after={after}"
         )
+
+
+_FAKE_PID = 424242
+_STOPPED = (signal.SIGSTOP << 8) | 0x7F  # WIFSTOPPED(SIGSTOP)
+
+
+class _FakePtrace:
+    """Stands in for libc.ptrace; accepts the restype/argtypes pokes."""
+
+    restype = None
+    argtypes = None
+
+    def __call__(self, request, pid, addr, data):
+        return 0
+
+
+class _FakeLibc:
+    ptrace = _FakePtrace()
+
+
+def _run_probe_with(monkeypatch, waitpid_impl):
+    reaped = []
+    monkeypatch.setattr(ptrace_probe, "_get_libc", lambda: _FakeLibc())
+    monkeypatch.setattr(os, "fork", lambda: _FAKE_PID)
+    monkeypatch.setattr(
+        ptrace_probe, "_waitpid_eintr_safe", waitpid_impl,
+    )
+    monkeypatch.setattr(
+        ptrace_probe, "_try_kill_and_reap",
+        lambda pid: reaped.append(pid),
+    )
+    result = ptrace_probe._run_probe()
+    return result, reaped
+
+
+class TestFinalWaitpidCleanup:
+    """The final-waitpid OSError exit path must run _try_kill_and_reap
+    like every other failure path, so a probe child is never leaked
+    unreaped."""
+
+    def test_final_waitpid_error_reaps_child(self, monkeypatch):
+        calls = []
+
+        def fake_waitpid(pid, options):
+            calls.append(options)
+            if len(calls) == 1:
+                return (pid, _STOPPED)   # child stopped as expected
+            raise OSError("simulated final-waitpid failure")
+
+        result, reaped = _run_probe_with(monkeypatch, fake_waitpid)
+        assert result is False
+        assert reaped == [_FAKE_PID], (
+            "final-waitpid failure must reap the resumed child"
+        )
+
+    def test_first_waitpid_error_still_reaps(self, monkeypatch):
+        # Guard for the sibling failure paths.
+        def fake_waitpid(pid, options):
+            raise OSError("simulated first-waitpid failure")
+
+        result, reaped = _run_probe_with(monkeypatch, fake_waitpid)
+        assert result is False
+        assert reaped == [_FAKE_PID]
+
+    def test_happy_path_no_reap(self, monkeypatch):
+        calls = []
+
+        def fake_waitpid(pid, options):
+            calls.append(options)
+            if len(calls) == 1:
+                return (pid, _STOPPED)
+            return (pid, 0)  # WIFEXITED, status 0
+
+        result, reaped = _run_probe_with(monkeypatch, fake_waitpid)
+        assert result is True
+        assert reaped == []
 
 
 def _count_children() -> int:

@@ -89,7 +89,7 @@ When the user says things like:
 **You**: "I'll help you scan your web application. What's the URL? (Make sure you own this application or have permission to test it)"
 
 **User**: "Fuzz /usr/local/bin/myapp"
-**You**: "I'll fuzz that binary with AFL++. How long would you like to fuzz? (Default is 110 minutes, but we can do a quick 10-minute test first)"
+**You**: "I'll fuzz that binary with AFL++. How long would you like to fuzz? (Default is 60 minutes, but we can do a quick 10-minute test first)"
 
 **User**: "Check this code for security issues"
 **You**: "I'll run a comprehensive security scan. What's the path to your code repository?"

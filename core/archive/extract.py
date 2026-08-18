@@ -47,6 +47,12 @@ def _keep_files(info: Any) -> Optional[str]:
     return getattr(info, "filename", None) or getattr(info, "name", None)
 
 
+def _iter_file_chunks(fh, chunk_bytes: int = 1 << 20):
+    """Yield ``fh`` in bounded chunks so the tar primitive can stream the
+    archive without the whole file ever being resident in memory."""
+    return iter(lambda: fh.read(chunk_bytes), b"")
+
+
 def _single_file_name(src: Path) -> str:
     """Filename for a single decompressed file: the archive name minus its
     compression suffix (``notes.txt.gz`` → ``notes.txt``), else ``<name>.out``."""
@@ -136,10 +142,14 @@ def extract_to_dir(path, dest, *,
                 src, selector=_keep_files, max_member_bytes=max_member_bytes,
                 max_entry_count=max_files, max_total_bytes=max_total_bytes)
         elif fmt == "tar":
-            members = extract_files_from_tar(
-                src.read_bytes(), selector=_keep_files, mode="r:*",
-                max_member_bytes=max_member_bytes,
-                max_total_bytes=max_total_bytes, max_entry_count=max_files)
+            # Stream the on-disk tar member-by-member ("r|*"). read_bytes()
+            # would materialise the whole archive in RAM before any cap
+            # applies — the caps below only bound bytes already read.
+            with open(src, "rb") as fh:
+                members = extract_files_from_tar(
+                    _iter_file_chunks(fh), selector=_keep_files, mode="r|*",
+                    max_member_bytes=max_member_bytes,
+                    max_total_bytes=max_total_bytes, max_entry_count=max_files)
         else:
             # gz/bz2/xz/zst: a compressed tar OR a single compressed file.
             raw = decompress_single(src, fmt, max_bytes=max_total_bytes)

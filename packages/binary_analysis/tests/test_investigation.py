@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import plistlib
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +24,7 @@ def _write_binary(path: Path, data: bytes = b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
     return path
 
 
+@pytest.mark.slow
 def test_investigation_ranks_leads_and_discovers_declared_helper(tmp_path: Path) -> None:
     app = tmp_path / "Demo.app" / "Contents"
     binary = _write_binary(app / "MacOS" / "Demo")

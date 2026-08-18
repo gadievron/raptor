@@ -1,0 +1,48 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — JWT decoded without signature verification (CWE-345)
+  # Pattern rules (not taint) — the issue is missing verification, not
+  # data flow.
+  # ---------------------------------------------------------------------------
+  - id: raptor.auth.jwt-no-verify.python
+    message: >-
+      JWT is decoded without signature verification. An attacker can forge
+      arbitrary tokens. Always verify the signature with a trusted key
+      and explicit algorithm.
+    languages: [python]
+    severity: CRITICAL
+    pattern-either:
+      # PyJWT >= 2.x — options dict disables verification
+      - pattern: 'jwt.decode($TOKEN, ..., options={"verify_signature": False}, ...)'
+      # PyJWT >= 2.x — algorithms=["none"] accepts unsigned tokens
+      - pattern: jwt.decode($TOKEN, ..., algorithms=["none"], ...)
+      # PyJWT < 2.x — verify kwarg
+      - pattern: jwt.decode($TOKEN, ..., verify=False, ...)
+    metadata:
+      cwe: ["CWE-345"]
+      owasp_top_10: ["A2:2021-Cryptographic Failures"]
+      tags: ["security", "auth", "jwt", "misconfiguration"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — JWT decoded without signature verification
+  # jsonwebtoken: decode() never verifies; verify() with empty secret is
+  # equivalent to no verification.
+  # ---------------------------------------------------------------------------
+  - id: raptor.auth.jwt-no-verify.javascript
+    message: >-
+      JWT is decoded without signature verification. jwt.decode() never
+      verifies the signature — use jwt.verify() with a trusted secret.
+      An empty string secret is effectively no verification.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    pattern-either:
+      # jsonwebtoken — decode() skips verification entirely
+      - pattern: jwt.decode($TOKEN, ...)
+      # jsonwebtoken — verify with empty string secret
+      - pattern: jwt.verify($TOKEN, "", ...)
+      # jose — disabling verification
+      - pattern: jose.decodeJwt($TOKEN)
+    metadata:
+      cwe: ["CWE-345"]
+      owasp_top_10: ["A2:2021-Cryptographic Failures"]
+      tags: ["security", "auth", "jwt", "misconfiguration"]

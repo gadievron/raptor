@@ -89,9 +89,13 @@ class SourceIntelAdapter(ToolAdapter):
 
     Args:
         cache: Shared :class:`~packages.source_intel.SourceIntelCache`.
-            When supplied, spatch runs once per (target, rules_hash)
-            and every adapter call reads from cache. When ``None``,
-            every call re-runs spatch (do not do this for production).
+            When supplied, spatch runs once per target and every
+            subsequent adapter call reads from cache. The adapter
+            always analyses with the shipped default rules
+            (``rules_dir=None`` → the cache's ``default-rules``
+            sentinel in the rules slot), so keying is effectively
+            per-target. When ``None``, every call re-runs spatch (do
+            not do this for production).
         sandbox: Whether the underlying spatch invocation runs in a
             network-blocked sandbox. Default ``True``. Passed through
             via :func:`packages.source_intel.analyze.analyze` — that
@@ -128,6 +132,8 @@ class SourceIntelAdapter(ToolAdapter):
                 "double-free observations for memory-corruption findings",
                 "Privilege gradient: capability_check, LSM hooks, "
                 "credential manipulation, setuid/setgid call sites",
+                "Variant signals: checked-alloc patterns and structural "
+                "fingerprints for locating siblings of a known bug shape",
                 "Build-flag context: FORTIFY_SOURCE level, "
                 "-fstack-protector, -fdelete-null-pointer-checks, "
                 "active sanitizers",
@@ -218,50 +224,69 @@ class SourceIntelAdapter(ToolAdapter):
         kind_filter = query.get("kind")
         file_filter = query.get("file")
 
-        if not self.is_available():
-            return ToolEvidence(
-                tool=self.name, rule=rule, success=False,
-                error="spatch is not installed",
+        try:
+            if not self.is_available():
+                return ToolEvidence(
+                    tool=self.name, rule=rule, success=False,
+                    error="spatch is not installed",
+                )
+
+            result = self._load_result(target)
+
+            if result.is_skipped:
+                return ToolEvidence(
+                    tool=self.name, rule=rule, success=False,
+                    error=(
+                        f"source_intel skipped: "
+                        f"{result.skipped_reason}"
+                    ),
+                )
+
+            matches: List[Dict[str, Any]] = []
+            for axis in axes_req:
+                matches.extend(
+                    self._collect_axis(
+                        axis=axis,
+                        result=result,
+                        function_name=function_name,
+                        kind_filter=kind_filter,
+                        file_filter=file_filter,
+                        target=target,
+                    )
+                )
+
+            n = len(matches)
+            files = sorted(
+                {m["file"] for m in matches if m.get("file")},
             )
-
-        result = self._load_result(target)
-
-        if result.is_skipped:
-            return ToolEvidence(
-                tool=self.name, rule=rule, success=False,
-                error=f"source_intel skipped: {result.skipped_reason}",
-            )
-
-        matches: List[Dict[str, Any]] = []
-        for axis in axes_req:
-            matches.extend(
-                self._collect_axis(
-                    axis=axis,
-                    result=result,
-                    function_name=function_name,
-                    kind_filter=kind_filter,
-                    file_filter=file_filter,
-                    target=target,
+            summary = (
+                f"{n} match{'es' if n != 1 else ''} "
+                f"for {function_name} "
+                f"across {len(axes_req)} "
+                f"{'axes' if len(axes_req) != 1 else 'axis'} "
+                f"in {len(files)} "
+                f"file{'s' if len(files) != 1 else ''}"
+                if n
+                else (
+                    f"no source_intel observation "
+                    f"matches {function_name}"
                 )
             )
 
-        n = len(matches)
-        files = sorted({m["file"] for m in matches if m.get("file")})
-        summary = (
-            f"{n} match{'es' if n != 1 else ''} for {function_name} "
-            f"across {len(axes_req)} axis{'es' if len(axes_req) != 1 else ''} "
-            f"in {len(files)} file{'s' if len(files) != 1 else ''}"
-            if n
-            else f"no source_intel observation matches {function_name}"
-        )
-
-        return ToolEvidence(
-            tool=self.name,
-            rule=rule,
-            success=True,
-            matches=matches,
-            summary=summary,
-        )
+            return ToolEvidence(
+                tool=self.name,
+                rule=rule,
+                success=True,
+                matches=matches,
+                summary=summary,
+            )
+        except Exception as exc:
+            return ToolEvidence(
+                tool=self.name,
+                rule=rule,
+                success=False,
+                error=f"source_intel internal error: {exc}",
+            )
 
     # ---- internal --------------------------------------------------
 

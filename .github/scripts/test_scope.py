@@ -101,18 +101,35 @@ TIERS: dict[str, dict] = {
             "packages/hypothesis_validation/runner.py",
             "packages/codeql/autonomous_analyzer.py",
             "packages/codeql/dataflow_validator.py",
-            "packages/codeql/build_detector.py",
+            "core/build/build_detector.py",
             "packages/web/fuzzer.py",
             "packages/autonomous/dialogue.py",
             "core/llm/multi_model/prompt_helpers.py",
             "packages/cve_diff/cve_diff/agent/loop.py",
             "packages/cve_diff/cve_diff/agent/prompt.py",
             "packages/cve_diff/cve_diff/analysis/analyzer.py",
+            "core/audit/llm_summaries.py",
+            "core/audit/context.py",
+            "core/audit/batch_glance.py",
+            "core/audit/spec_inference.py",
+            "core/audit/security_classifier.py",
+            "core/audit/chain_detector.py",
+            "core/audit/refinement.py",
+            "core/audit/validate.py",
+            "core/audit/sibling_analysis.py",
+            "core/audit/checker_synthesis.py",
+            "core/audit/adversarial_refute.py",
+            "core/audit/dark_verify/_prompts.py",
+            "packages/checker_synthesis/prompts.py",
+            "packages/checker_synthesis/synthesise.py",
+            "core/concepts/compiler.py",
+            "packages/fuzzing/harness_generator.py",
+            "packages/binary_analysis/radare2_understand.py",
         ],
         "outside_graph": True,
     },
     "ci_lint": {
-        "test_dirs": [".github/tests"],
+        "test_dirs": [".github/tests", ".github/scripts/tests"],
         "extra_triggers": [".github/scripts"],
         "outside_graph": True,
     },
@@ -136,8 +153,15 @@ FAST_TIER_IGNORES = {
 
 def is_test_file(path: Path) -> bool:
     """Heuristic: a .py file is a test if its name starts with test_ or
-    ends with _test, or it lives under a tests/ directory."""
+    ends with _test, or it lives under a tests/ directory.
+
+    Files under ``fixtures/`` are excluded — they are test data (e.g.
+    Flask apps) that pytest must not collect as test modules.
+    """
     if not path.name.endswith(".py"):
+        return False
+    parts = path.parts
+    if "fixtures" in parts:
         return False
     name = path.stem
     if name.startswith("test_") or name.endswith("_test"):
@@ -298,11 +322,14 @@ def compute_tier_dispatch(
             result[tier_name] = {"run": triggered, "files": tier_files if triggered else []}
         else:
             affected = [f for f in closure
-                        if file_matches_tier(f, tier_config) and is_test_file(f)]
+                        if file_matches_tier(f, tier_config)
+                        and is_test_file(f)
+                        and (repo / f).is_file()]
             result[tier_name] = {"run": bool(affected), "files": affected}
 
     # Fast tier: tests in core/ and packages/ that aren't carved out.
-    fast_files = [f for f in closure if file_in_fast_tier(f)]
+    fast_files = [f for f in closure
+                  if file_in_fast_tier(f) and (repo / f).is_file()]
     # Also trigger fast tier for non-Python changes that affect the
     # test infrastructure (requirements, pyproject.toml, etc.).
     infra_changed = any(

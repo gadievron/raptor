@@ -30,9 +30,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
 
 # Ecosystem -> CVEfixes ``repo_language`` value.  Restricted to languages
 # the walker explicitly supports (cvefix_walk._LANG_MAP).  npm packages
@@ -75,7 +75,7 @@ class HarvestedFix:
     repo_url: str
     repo_language: str
     fix_hash: str
-    parent_hash: Optional[str]  # None if resolution failed
+    parent_hash: str | None  # None if resolution failed
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ class HarvestedFix:
 
 def _iter_advisories(
     root: Path, years: Iterable[str], cwes: set, ecosystems: set,
-) -> Iterable[Tuple[Path, dict]]:
+) -> Iterable[tuple[Path, dict]]:
     """Yield ``(json_path, advisory_dict)`` for advisories matching the
     CWE + ecosystem filter.  Subtree restricted to ``github-reviewed/<year>``
     (the curated namespace; ``unreviewed`` is auto-imported NVD with much
@@ -113,7 +113,7 @@ def _iter_advisories(
             yield jp, adv
 
 
-def _first_commit_ref(adv: dict) -> Optional[Tuple[str, str, str]]:
+def _first_commit_ref(adv: dict) -> tuple[str, str, str] | None:
     """Return ``(owner, repo, sha)`` for the first
     ``github.com/.../commit/SHA`` URL in ``references``, or None."""
     for r in adv.get("references", []):
@@ -123,7 +123,7 @@ def _first_commit_ref(adv: dict) -> Optional[Tuple[str, str, str]]:
     return None
 
 
-def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
+def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> tuple[str, str]:
     """Pick ONE (CWE, ecosystem) tuple from the advisory's intersection
     with our filter — sorted for determinism so the same advisory always
     gets the same label across runs.  Multi-CWE advisories are
@@ -144,7 +144,7 @@ def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
 # Parent SHA resolution via shallow fetch
 # ---------------------------------------------------------------------------
 
-def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional[str]:
+def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> str | None:
     """Depth-2 shallow-fetch ``fix_hash`` and return ``fix^1``.  Returns
     None on fetch / parse failure (gone repos, missing SHAs, merges with
     multiple parents).  No GitHub API — pure git protocol, no rate
@@ -152,30 +152,46 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional
 
     Each call creates and destroys its own scratch dir so failures don't
     pollute later calls; the parent walker repeats the fetch on its own,
-    so we don't bother caching the clone."""
+    so we don't bother caching the clone.
+
+    HARDENING: the scratch repo receives internet-sourced objects, so
+    every git argv comes from ``core.git``'s shared helpers (never a
+    bare ``["git", ...]`` list): the strict read-only variant for the
+    local steps (init / remote add / rev-list — ``protocol.allow=
+    never``), the network-capable ``safe_git_command`` for the fetch
+    (it needs the https transport).  Env is the shared sanitised git
+    env; ``preserve_proxy`` because the fetch dials the REMOTE
+    repo_url — git honours proxy env, and on mandatory-egress-proxy
+    hosts there is no direct route."""
     with tempfile.TemporaryDirectory(prefix="ghsa-resolve-") as td:
         td_p = Path(td)
-        from core.config import RaptorConfig
+        from core.git.clone import (
+            get_safe_git_env,
+            safe_git_command,
+            safe_git_readonly_command,
+        )
         from core.sandbox.preexec import set_pdeathsig
-        _env = RaptorConfig.get_safe_env()
+        _env = get_safe_git_env(preserve_proxy=True)
         _pds = set_pdeathsig()
         try:
-            subprocess.run(["git", "init", "-q", str(td_p)],
+            subprocess.run(safe_git_readonly_command("init", "-q", str(td_p)),
                            check=True, timeout=15, capture_output=True,
                            env=_env, preexec_fn=_pds)
-            subprocess.run(["git", "-C", str(td_p), "remote", "add", "origin", repo_url],
+            subprocess.run(safe_git_readonly_command(
+                               "-C", str(td_p), "remote", "add", "origin", repo_url),
                            check=True, timeout=15, capture_output=True,
                            env=_env, preexec_fn=_pds)
             r = subprocess.run(
-                ["git", "-C", str(td_p), "fetch", "-q", "--depth", "2",
-                 "origin", fix_hash],
+                safe_git_command("-C", str(td_p), "fetch", "-q", "--depth", "2",
+                                 "origin", fix_hash),
                 check=False, timeout=timeout, capture_output=True,
                 env=_env, preexec_fn=_pds,
             )
             if r.returncode != 0:
                 return None
             r = subprocess.run(
-                ["git", "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash],
+                safe_git_readonly_command(
+                    "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash),
                 check=False, timeout=15, capture_output=True, text=True,
                 env=_env, preexec_fn=_pds,
             )
@@ -253,7 +269,7 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ghsa-root", required=True, type=Path,
                     help="path to the cloned github/advisory-database repo")

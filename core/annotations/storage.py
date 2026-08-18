@@ -26,9 +26,10 @@ section; the immediately-following HTML comment carries metadata;
 the rest until the next ``##`` (or EOF) is the prose body.
 
 Atomic write: each save writes to a sibling tempfile and renames
-into place. Concurrent writers may race the rename; last-writer-wins
-is acceptable for the audit / annotation workflow (the operator
-adding manual notes shouldn't conflict with an LLM run).
+into place. Concurrent writers may race the rename; the file lock
+around each read-modify-write cycle serialises them (two operators,
+or an operator and a scripted pass, editing the same file's
+annotations).
 """
 
 from __future__ import annotations
@@ -38,7 +39,6 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from core.atomic_fs import write_text_atomically
 
@@ -48,9 +48,16 @@ try:
 except ImportError:  # pragma: no cover — only triggers on Windows
     _HAS_FCNTL = False
 
-from .models import Annotation
-
 import logging
+
+from .models import Annotation
+from .provenance import (
+    INTERACTIVE_TTY,
+    NON_TTY,
+    PROVENANCE_KEY,
+    TTY_KEY,
+    valid_tty_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +85,10 @@ _VERSION_MARKER_RE = re.compile(
 # Allowed values for ``write_annotation(overwrite=...)``. ``all``
 # matches the original behaviour. ``respect-manual`` refuses to
 # overwrite an existing same-name annotation whose
-# ``metadata.source == "human"`` — used by LLM-driven callers
-# (``/agentic``, ``/understand`` post-processor) so a manual edit
-# is never silently clobbered.
+# ``metadata.source == "human"`` — for scripted / non-interactive
+# adds, so a manual note is never silently clobbered. (The one-time
+# LLM annotation producers that used this are gone; the mode remains
+# for any scripted caller.)
 _OVERWRITE_MODES = ("all", "respect-manual")
 
 
@@ -166,7 +174,11 @@ _MAX_META_VALUE_LEN = 4096
 
 def _validate_metadata(metadata) -> None:
     """Reject metadata key/value pairs that would corrupt the
-    HTML-comment frontmatter on disk."""
+    HTML-comment frontmatter on disk, and reject enum-valued keys
+    (``source``, ``provenance``, ``tty``) carrying values outside
+    their enums — a typoed ``source=humman`` or a hand-rolled
+    provenance stamp must fail the write, not silently skew every
+    consumer that branches on the value."""
     if metadata is None:
         return
     for k, v in dict(metadata).items():
@@ -199,13 +211,89 @@ def _validate_metadata(metadata) -> None:
                     f"(would corrupt the on-disk HTML-comment format): "
                     f"{v_str!r}"
                 )
+        if k == "source" and v_str not in _VALID_ANNOTATION_SOURCES:
+            raise ValueError(
+                f"invalid annotation source {v_str!r}; expected one of "
+                f"{sorted(_VALID_ANNOTATION_SOURCES)}"
+            )
+        if k == PROVENANCE_KEY and v_str not in (INTERACTIVE_TTY, NON_TTY):
+            raise ValueError(
+                f"invalid provenance tag {v_str!r}; expected "
+                f"{INTERACTIVE_TTY!r} or {NON_TTY!r}"
+            )
+        if k == TTY_KEY and not valid_tty_value(v_str):
+            raise ValueError(
+                f"invalid tty stamp {v_str!r}; expected 'none' or a "
+                f"comma-joined subset of stdin,stdout,stderr"
+            )
+
+
+# Reserved on-disk grammar inside a section body. A body line matching
+# the section-heading pattern is parsed as a NEW section on the next
+# read, and a meta comment line directly below it is parsed as that
+# section's provenance — the annotation-forgery primitive:
+#
+#   raptor-annotate add f.py fn -m $'note\n## victim\n<!-- meta:
+#   source=human provenance=interactive-tty -->'
+#
+# fabricates a human-graded section for `victim` through the
+# sanctioned CLI, defeating the TTY provenance model (Reflexion veto,
+# IRIS promotion both key on human-grade annotations). The write path
+# must refuse such bodies; level-3+ headings (###) and indented text
+# remain available for legitimate structured prose.
+_BODY_FORGED_HEADING_RE = re.compile(r"^##[ \t]", re.MULTILINE)
+_BODY_FORGED_META_RE = re.compile(
+    r"^<!--\s*(?:meta:|annotations-version)", re.MULTILINE,
+)
+
+
+def _validate_body(body) -> None:
+    """Reject annotation bodies that would forge on-disk structure.
+
+    Multiline prose is legitimate and preserved; only lines that the
+    reader would re-parse as a section heading (``## `` at line start)
+    or as metadata/format-marker comments (``<!-- meta:`` /
+    ``<!-- annotations-version``) are refused."""
+    if not body:
+        return
+    body_str = str(body)
+    if _BODY_FORGED_HEADING_RE.search(body_str):
+        raise ValueError(
+            "annotation body may not contain a line starting with '## ' — "
+            "it would be re-parsed as a new section heading on disk "
+            "(use '###' or indent the line)"
+        )
+    if _BODY_FORGED_META_RE.search(body_str):
+        raise ValueError(
+            "annotation body may not contain a '<!-- meta:' or "
+            "'<!-- annotations-version' comment line — it would forge "
+            "on-disk metadata"
+        )
 
 
 def annotation_path(base_dir: Path, source_file: str) -> Path:
     """Resolve the annotation .md path for one source file. Doesn't
-    create the file; callers do."""
+    create the file; callers do.
+
+    Beyond the lexical checks in ``_validate_source_path``, the final
+    parent is resolve()-checked against ``base_dir`` — a symlinked
+    intermediate directory inside the annotation tree could otherwise
+    redirect reads/writes outside it even though every path component
+    passed the lexical validation."""
     _validate_source_path(source_file)
-    return base_dir / (source_file + ".md")
+    path = Path(base_dir) / (source_file + ".md")
+    base_resolved = Path(base_dir).resolve()
+    parent_resolved = path.parent.resolve()
+    if not (
+        parent_resolved == base_resolved
+        or base_resolved in parent_resolved.parents
+    ):
+        raise ValueError(
+            f"annotation path escapes base dir: {source_file!r} "
+            f"(resolved parent {parent_resolved} is not under "
+            f"{base_resolved})"
+        )
+    return path
 
 
 @contextmanager
@@ -213,8 +301,8 @@ def _file_lock(path: Path):
     """Cross-process exclusive lock on the annotation file's read-
     modify-write window.
 
-    Two operators (or LLM + operator) writing to the same source
-    file's annotations concurrently could otherwise lose data via
+    Two operators (or a scripted pass + operator) writing to the same
+    source file's annotations concurrently could otherwise lose data via
     last-writer-wins on the read-modify-write cycle: both read state
     A, both write back A+B1 / A+B2 → one of B1/B2 is dropped.
 
@@ -233,7 +321,14 @@ def _file_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     # Open with O_CREAT — creates if absent, doesn't truncate.
-    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    # O_NOFOLLOW: the lock file has a predictable sibling name; a
+    # symlink squatted there must fail loudly (ELOOP) rather than be
+    # followed to an attacker-chosen target.
+    fd = os.open(
+        str(lock_path),
+        os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
@@ -244,25 +339,48 @@ def _file_lock(path: Path):
         os.close(fd)
 
 
-def _parse_meta(comment_body: str) -> Dict[str, str]:
+# Who authored the annotation. ``human`` — operator via an
+# interactive CLI (see ``provenance`` for how the claim is graded);
+# ``agent`` — a non-interactive / agent-driven CLI invocation (the
+# default when no fd is a TTY); ``llm`` — legacy pre-migration LLM
+# annotations (new LLM verdicts go to the review journal instead).
+_VALID_ANNOTATION_SOURCES = frozenset({"human", "llm", "agent"})
+
+
+def _parse_meta(comment_body: str) -> dict[str, str]:
     """Parse ``key=value`` pairs from the inside of a meta comment.
     Quoted values keep spaces; bare values are whitespace-delimited.
-    Escaped double-quotes (``\\"``) inside quoted values are unescaped."""
-    out: Dict[str, str] = {}
+    Escaped double-quotes (``\\"``) inside quoted values are unescaped.
+
+    Amendment §6 (Phase 3.5): warn when ``source=`` carries a value
+    outside the ``{human, llm, agent}`` enum. The read path stays
+    permissive (legacy / hand-edited files must remain readable);
+    the write path (``_validate_metadata``) rejects such values
+    outright.
+    """
+    import logging as _log
+    out: dict[str, str] = {}
     for m in _META_KV_RE.finditer(comment_body):
         key = m.group(1)
         value = m.group(2) if m.group(2) is not None else m.group(3)
         if m.group(2) is not None:
             value = value.replace('\\"', '"').replace('\\\\', '\\')
         out[key] = value
+    src = out.get("source")
+    if src is not None and src not in _VALID_ANNOTATION_SOURCES:
+        _log.getLogger(__name__).warning(
+            "annotation metadata: unknown source=%r (expected one of %s) — "
+            "consumers checking source=='human' will treat as non-human",
+            src, sorted(_VALID_ANNOTATION_SOURCES),
+        )
     return out
 
 
-def _format_meta(metadata: Dict[str, str]) -> str:
+def _format_meta(metadata: dict[str, str]) -> str:
     """Render ``metadata`` back to the comment's body string. Keys
     sorted for stable output; values quoted only when they contain
     spaces or quotes."""
-    parts: List[str] = []
+    parts: list[str] = []
     for k in sorted(metadata):
         v = str(metadata[k])
         if (" " in v) or ('"' in v) or v == "":
@@ -273,13 +391,13 @@ def _format_meta(metadata: Dict[str, str]) -> str:
     return " ".join(parts)
 
 
-def _split_sections(text: str) -> List[tuple[str, int, int]]:
+def _split_sections(text: str) -> list[tuple[str, int, int]]:
     """Split a markdown body into ``(name, start_offset, end_offset)``
     triples, one per ``## name`` heading. Offsets are byte positions
     of the heading line (start) and start of next heading or EOF (end).
     """
     headings = list(_SECTION_HEADING_RE.finditer(text))
-    out: List[tuple[str, int, int]] = []
+    out: list[tuple[str, int, int]] = []
     for i, m in enumerate(headings):
         name = m.group(1).strip()
         start = m.start()
@@ -290,7 +408,7 @@ def _split_sections(text: str) -> List[tuple[str, int, int]]:
 
 def _parse_section(
     text: str, name: str, start: int, end: int,
-) -> tuple[Dict[str, str], str]:
+) -> tuple[dict[str, str], str]:
     """Parse one section: returns (metadata, body)."""
     section = text[start:end]
     # Drop the heading line.
@@ -312,7 +430,7 @@ def _parse_section(
 
 def read_file_annotations(
     base_dir: Path, source_file: str,
-) -> List[Annotation]:
+) -> list[Annotation]:
     """Read all annotations for one source file. Returns an empty
     list if no annotation file exists for the source path."""
     path = annotation_path(base_dir, source_file)
@@ -341,7 +459,7 @@ def read_file_annotations(
                 f"(reader supports up to {CURRENT_VERSION}); "
                 f"attempting to parse anyway"
             )
-    out: List[Annotation] = []
+    out: list[Annotation] = []
     for name, start, end in _split_sections(text):
         meta, body = _parse_section(text, name, start, end)
         out.append(Annotation(
@@ -355,7 +473,7 @@ def read_file_annotations(
 
 def read_annotation(
     base_dir: Path, source_file: str, function: str,
-) -> Optional[Annotation]:
+) -> Annotation | None:
     """Read one specific annotation. Returns None if absent."""
     for ann in read_file_annotations(base_dir, source_file):
         if ann.function == function:
@@ -366,7 +484,7 @@ def read_annotation(
 def write_annotation(
     base_dir: Path, ann: Annotation,
     *, overwrite: str = "all",
-) -> Optional[Path]:
+) -> Path | None:
     """Write or replace one function's annotation in its source
     file's annotation .md.
 
@@ -379,9 +497,9 @@ def write_annotation(
         functions in the same file are still preserved.
       * ``"respect-manual"`` — if an existing same-name annotation
         carries ``metadata.source == "human"``, skip this write
-        (return ``None``). LLM-driven callers should pass this so
-        operator notes never get clobbered. LLM-over-LLM and
-        write-when-no-prior-record proceed normally.
+        (return ``None``). Scripted callers should pass this so
+        operator notes never get clobbered. Overwriting non-human
+        records and write-when-no-prior-record proceed normally.
 
     Atomic via tempfile + rename — concurrent readers see either the
     pre-write or post-write content, never a partial rewrite.
@@ -393,6 +511,7 @@ def write_annotation(
         )
     _validate_function_name(ann.function)
     _validate_metadata(ann.metadata)
+    _validate_body(ann.body)
 
     path = annotation_path(base_dir, ann.file)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -492,7 +611,7 @@ def _render_file(source_file: str, anns) -> str:
     objects. Sections are sorted by function name for stable output
     (diff-friendly under git)."""
     sorted_anns = sorted(anns, key=lambda a: a.function)
-    lines: List[str] = []
+    lines: list[str] = []
     # Format version marker — first line. Reader uses this to detect
     # future format changes and warn rather than silently mis-parse.
     lines.append(f"<!-- annotations-version: {CURRENT_VERSION} -->")

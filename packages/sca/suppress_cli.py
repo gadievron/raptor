@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from datetime import date
 from pathlib import Path
@@ -35,8 +34,6 @@ from .suppressions import (
     SuppressionEntry,
     load,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def main(argv: Sequence[str]) -> int:
@@ -180,7 +177,7 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
     return 1 if (orphan or expired) else 0
 
 
-def _describe_entry(e: SuppressionEntry) -> "tuple[str, str]":
+def _describe_entry(e: SuppressionEntry) -> tuple[str, str]:
     if e.finding_id:
         return ("finding_id", e.finding_id)
     if e.advisory_id:

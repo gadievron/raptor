@@ -78,7 +78,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,8 @@ _MAX_DEPTH = 10
 _MAVEN_COORD_RE = re.compile(r"^[A-Za-z0-9._+\-]+$")
 
 
-def _valid_coord(group: Optional[str], artifact: Optional[str],
-                 version: Optional[str]) -> bool:
+def _valid_coord(group: str | None, artifact: str | None,
+                 version: str | None) -> bool:
     """True iff all three coord components are well-formed Maven
     identifiers. Anything outside ``[A-Za-z0-9._+-]`` is rejected
     so we never construct a URL from attacker-controlled
@@ -125,20 +125,20 @@ def _valid_coord(group: Optional[str], artifact: Optional[str],
 # depMgmt is NOT in this map (the caller already has it); only
 # inherited values.
 class InheritanceView:
-    __slots__ = ("properties", "managed")
+    __slots__ = ("managed", "properties")
 
     def __init__(self) -> None:
-        self.properties: Dict[str, str] = {}
-        self.managed: Dict[Tuple[str, str], str] = {}
+        self.properties: dict[str, str] = {}
+        self.managed: dict[tuple[str, str], str] = {}
 
 
 # Module-level resolver — injected by the scan pipeline. ``None`` =
 # inheritance resolution disabled (default, no behaviour change).
-_RESOLVER: Optional["PomInheritanceResolver"] = None
+_RESOLVER: PomInheritanceResolver | None = None
 
 
 def set_inheritance_resolver(
-    resolver: Optional["PomInheritanceResolver"],
+    resolver: PomInheritanceResolver | None,
 ) -> None:
     """Install the resolver used by :func:`packages.sca.parsers.pom.parse`.
 
@@ -151,7 +151,7 @@ def set_inheritance_resolver(
     _RESOLVER = resolver
 
 
-def get_inheritance_resolver() -> Optional["PomInheritanceResolver"]:
+def get_inheritance_resolver() -> PomInheritanceResolver | None:
     """Public accessor — used by :mod:`pom` to consult the resolver."""
     return _RESOLVER
 
@@ -176,7 +176,7 @@ class PomInheritanceResolver:
         *,
         offline: bool = False,
         max_depth: int = _MAX_DEPTH,
-        scan_root: Optional[Path] = None,
+        scan_root: Path | None = None,
     ) -> None:
         """``maven_client`` is a :class:`MavenRegistry`-shaped object
         with a ``get_pom(coord, version) -> Optional[dict]`` method.
@@ -203,7 +203,7 @@ class PomInheritanceResolver:
         # ``(group, artifact, version) → InheritanceView``. Caches the
         # MERGED view for a coordinate, so reuse across many child
         # POMs that share a parent is O(1).
-        self._cache: Dict[Tuple[str, str, str], InheritanceView] = {}
+        self._cache: dict[tuple[str, str, str], InheritanceView] = {}
 
     def resolve(
         self,
@@ -227,7 +227,7 @@ class PomInheritanceResolver:
         if not _AVAILABLE:
             return InheritanceView()
         view = InheritanceView()
-        visited: Set[Tuple[str, str, str]] = set()
+        visited: set[tuple[str, str, str]] = set()
         self._walk_parents(
             pom_path, root_element, view, visited, depth=0,
         )
@@ -239,10 +239,10 @@ class PomInheritanceResolver:
 
     def _walk_parents(
         self,
-        pom_path: Optional[Path],
+        pom_path: Path | None,
         root: Any,
         view: InheritanceView,
-        visited: Set[Tuple[str, str, str]],
+        visited: set[tuple[str, str, str]],
         *,
         depth: int,
     ) -> None:
@@ -283,6 +283,16 @@ class PomInheritanceResolver:
             return
 
         coord_key = (group, artifact, version)
+        # Cache hit: merge the cached view + carry on. Checked BEFORE
+        # the cycle guard — same order as ``_absorb_boms`` — because
+        # cache entries exist only for fully-resolved coords, so a hit
+        # merges without recursion or fetch and never needs the guard.
+        if coord_key in self._cache:
+            cached = self._cache[coord_key]
+            _merge_into(view, cached)
+            # Process BOM imports declared in the child's own depMgmt
+            # too (handled by the caller via _absorb_boms).
+            return
         if coord_key in visited:
             logger.debug(
                 "sca.pom_inheritance: cycle detected on %s:%s:%s — "
@@ -290,14 +300,6 @@ class PomInheritanceResolver:
             )
             return
         visited.add(coord_key)
-
-        # Cache hit: merge the cached view + carry on.
-        if coord_key in self._cache:
-            cached = self._cache[coord_key]
-            _merge_into(view, cached)
-            # Process BOM imports declared in the child's own depMgmt
-            # too (handled by the caller via _absorb_boms).
-            return
 
         # Resolve the parent POM. Try local relativePath first
         # (Phase 1), fall back to network (Phase 2).
@@ -320,8 +322,8 @@ class PomInheritanceResolver:
         _merge_into(view, parent_view)
 
     def _load_parent_xml(
-        self, parent_el: Any, child_path: Optional[Path],
-    ) -> Optional[Any]:
+        self, parent_el: Any, child_path: Path | None,
+    ) -> Any | None:
         """Try Phase 1 (local), fall back to Phase 2 (network).
         Returns the parsed XML root, or ``None`` if neither works."""
         local = self._read_local_parent(parent_el, child_path)
@@ -330,19 +332,20 @@ class PomInheritanceResolver:
         return self._read_network_parent(parent_el)
 
     def _read_local_parent(
-        self, parent_el: Any, child_path: Optional[Path],
-    ) -> Optional[Any]:
+        self, parent_el: Any, child_path: Path | None,
+    ) -> Any | None:
         """Phase 1: resolve ``<parent><relativePath>`` against the
         child's filesystem location. Default is ``../pom.xml``; an
         explicit ``<relativePath>`` overrides. Returns ``None`` when
         the file doesn't exist or the coord doesn't match."""
         if child_path is None:
             return None
-        rel = _text(parent_el, "relativePath")
-        if rel is None:
-            rel = "../pom.xml"
         # relativePath of an empty string is the Maven convention for
-        # "no local parent, only network" — respect it.
+        # "no local parent, only network" — respect it. ``_relative_path``
+        # (not ``_text``) is load-bearing here: ``_text`` collapses an
+        # empty element to ``None``, which would apply the ``../pom.xml``
+        # default and read a local file Maven itself would never touch.
+        rel = _relative_path(parent_el)
         if rel == "":
             return None
         # SECURITY: reject absolute paths in relativePath. Maven
@@ -396,9 +399,9 @@ class PomInheritanceResolver:
         _strip_namespaces(root)
         # Verify the coordinates match — a relative-path parent that
         # doesn't actually have the declared (group, artifact,
-        # version) is a misconfigured POM. We could fall through to
-        # network, but Maven itself errors here; we follow suit and
-        # treat the local read as authoritative.
+        # version) is a misconfigured POM. Maven itself errors here;
+        # we instead return None, which ``_load_parent_xml`` turns
+        # into a network fetch for the declared coordinate.
         if not _coord_matches(parent_el, root):
             logger.debug(
                 "sca.pom_inheritance: local parent at %s coord mismatch; "
@@ -408,7 +411,7 @@ class PomInheritanceResolver:
             return None
         return root
 
-    def _read_network_parent(self, parent_el: Any) -> Optional[Any]:
+    def _read_network_parent(self, parent_el: Any) -> Any | None:
         """Phase 2: fetch the parent POM from Maven Central via the
         configured client. Returns the parsed XML root or ``None``
         when network is disabled / fetch failed."""
@@ -454,7 +457,9 @@ class PomInheritanceResolver:
             return None
         try:
             root = DET.fromstring(raw_xml)
-        except (DET.ParseError, Exception) as e:                # noqa: BLE001
+        except Exception as e:                                  # noqa: BLE001
+            # Covers DET.ParseError plus defusedxml's defence
+            # exceptions (billion-laughs / XXE).
             logger.debug(
                 "sca.pom_inheritance: network parent XML parse "
                 "failed for %s@%s: %s", coord, version, e,
@@ -464,14 +469,17 @@ class PomInheritanceResolver:
         return root
 
     def _parent_path(
-        self, parent_el: Any, child_path: Optional[Path],
-    ) -> Optional[Path]:
+        self, parent_el: Any, child_path: Path | None,
+    ) -> Path | None:
         """Compute the on-disk path of a local parent for recursive
         walks. Returns ``None`` for network parents (no local
         location)."""
         if child_path is None:
             return None
-        rel = _text(parent_el, "relativePath") or "../pom.xml"
+        # Same empty-vs-missing distinction as ``_read_local_parent``:
+        # an empty <relativePath/> means "network only", never a local
+        # file, so there is no local path to return.
+        rel = _relative_path(parent_el)
         if rel == "":
             return None
         # Mirror the security checks in ``_read_local_parent``: any
@@ -500,7 +508,7 @@ class PomInheritanceResolver:
         self,
         root: Any,
         view: InheritanceView,
-        visited: Set[Tuple[str, str, str]],
+        visited: set[tuple[str, str, str]],
         depth: int,
     ) -> None:
         """Walk ``<dependencyManagement>`` for entries with
@@ -550,7 +558,7 @@ class PomInheritanceResolver:
 
     def _read_network_parent_by_coord(
         self, group: str, artifact: str, version: str,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Same as :meth:`_read_network_parent` but takes the
         coordinate directly. Used by the BOM walker which doesn't
         have a <parent> element to read from."""
@@ -578,6 +586,10 @@ class PomInheritanceResolver:
             return None
         raw_xml = pom_dict.get("raw_xml")
         if not raw_xml:
+            logger.debug(
+                "sca.pom_inheritance: BOM POM for %s@%s lacks "
+                "raw_xml; treating as unresolved", coord, version,
+            )
             return None
         try:
             root = DET.fromstring(raw_xml)
@@ -642,8 +654,8 @@ def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
 
 
 def _resolve_property(
-    value: Optional[str], view: InheritanceView,
-) -> Optional[str]:
+    value: str | None, view: InheritanceView,
+) -> str | None:
     """Resolve a single ``${prop}`` reference using ``view.properties``.
     Returns ``value`` unchanged when it's not a property reference,
     or when the property is undefined. Does not recurse on chained
@@ -674,12 +686,27 @@ def _coord_matches(parent_el: Any, candidate_root: Any) -> bool:
         return True
     if c_artifact is not None and c_artifact != p_artifact:
         return False
-    if c_group is not None and p_group is not None and c_group != p_group:
-        return False
-    return True
+    return not (
+        c_group is not None and p_group is not None and c_group != p_group
+    )
 
 
-def _text(el: Any, tag: str) -> Optional[str]:
+def _relative_path(parent_el: Any) -> str:
+    """``<relativePath>`` with Maven's empty-element convention intact.
+
+    Absent element → Maven's default ``../pom.xml``. Present but empty
+    (``<relativePath/>`` or ``<relativePath></relativePath>``) → ``""``,
+    Maven's "no local parent, resolve from the network only" marker.
+    ``_text`` cannot be used here because it collapses empty text to
+    ``None``, erasing exactly that distinction.
+    """
+    child = parent_el.find("./relativePath")
+    if child is None:
+        return "../pom.xml"
+    return (child.text or "").strip()
+
+
+def _text(el: Any, tag: str) -> str | None:
     if el is None:
         return None
     child = el.find(f"./{tag}")

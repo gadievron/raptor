@@ -1,10 +1,11 @@
 """Test 10: Verify Ollama warning for exploit PoC generation limitations."""
 
-import pytest
-import sys
-import os
 import logging
+import os
+import sys
 from pathlib import Path
+
+import pytest
 
 # Add parent directories to path for imports
 # packages/llm_analysis/tests/test_ollama_warning.py -> repo root
@@ -12,7 +13,29 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.config import RaptorConfig
 from core.llm.client import LLMClient
-from core.llm.config import ModelConfig, LLMConfig
+from core.llm.config import LLMConfig, ModelConfig
+
+
+def _skip_unless_ollama_available():
+    """Probe Ollama via loopback_safe_get, NOT plain requests.get.
+
+    Plain requests honours the proxy env; on mandatory-proxy hosts
+    whose NO_PROXY misses loopback, every suite run sent
+    GET http://localhost:11434/api/tags THROUGH the egress proxy —
+    recurring (denied) entries in the proxy log, and the probe could
+    never succeed there even with Ollama up, so these tests silently
+    always skipped. Same fix as core/llm/detection.py.
+    """
+    from core.llm.egress import loopback_safe_get
+    try:
+        response = loopback_safe_get(
+            f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2,
+        )
+        if response.status_code != 200:
+            pytest.skip("Ollama not available")
+    except Exception:  # noqa: BLE001 — any probe failure means "not available"
+        pytest.skip("Ollama not available")
+
 
 
 @pytest.fixture(autouse=True)
@@ -33,13 +56,7 @@ class TestOllamaWarning:
 
     def test_ollama_warning_on_init(self, caplog):
         """Test warning appears when LLMClient initialized with Ollama model."""
-        import requests
-        try:
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code != 200:
-                pytest.skip("Ollama not available")
-        except Exception:
-            pytest.skip("Ollama not available")
+        _skip_unless_ollama_available()
 
         caplog.set_level(logging.WARNING)
 
@@ -60,14 +77,7 @@ class TestOllamaWarning:
 
     def test_ollama_warning_message_content(self, caplog):
         """Test warning message contains specific guidance."""
-        # Check if Ollama is available
-        import requests
-        try:
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code != 200:
-                pytest.skip("Ollama not available")
-        except Exception:
-            pytest.skip("Ollama not available")
+        _skip_unless_ollama_available()
 
         caplog.set_level(logging.WARNING)
 
@@ -137,13 +147,7 @@ class TestOllamaWarning:
 
     def test_warning_appears_once(self, caplog):
         """Test warning appears only once per client initialization."""
-        import requests
-        try:
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code != 200:
-                pytest.skip("Ollama not available")
-        except Exception:
-            pytest.skip("Ollama not available")
+        _skip_unless_ollama_available()
 
         caplog.set_level(logging.WARNING)
 
@@ -166,14 +170,7 @@ class TestOllamaWarning:
 
     def test_warning_format(self, caplog):
         """Test warning uses proper logging format."""
-        # Check if Ollama is available
-        import requests
-        try:
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code != 200:
-                pytest.skip("Ollama not available")
-        except Exception:
-            pytest.skip("Ollama not available")
+        _skip_unless_ollama_available()
 
         caplog.set_level(logging.WARNING)
 

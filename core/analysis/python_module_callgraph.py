@@ -85,11 +85,12 @@ MODULE_ENTRY_NAME = "<module>"
 class PyCallGraphNode:
     """One function / method in a module-local call graph.
 
-    Equality / hash are over ``(name, lineno)`` — two functions
-    with the same qualified name at the same line are the same
-    node. (Duplicate qualified names at different lines can occur
-    when a module conditionally redefines a function; we treat
-    those as distinct nodes so taint summaries don't fight.)
+    Equality / hash are the frozen-dataclass defaults over all
+    fields. In practice ``(name, lineno)`` identifies a node — the
+    remaining fields are derived from the def found there.
+    (Duplicate qualified names at different lines can occur when a
+    module conditionally redefines a function; we treat those as
+    distinct nodes so taint summaries don't fight.)
     """
     name: str               # qualified — "foo", "C.method", "outer.inner"
     lineno: int             # 1-indexed start line of the def
@@ -111,10 +112,21 @@ class PyModuleCallGraph:
     Implements :class:`core.analysis.dominators.Graph`. Plus two
     consumer-side accessors:
 
-    * :meth:`find(name)` — qualified name → node, or None.
+    * :meth:`find(name)` — qualified name → node, or None. For a
+      conditionally-redefined name this is the LAST definition
+      (Python's runtime winner for sequential module-level defs);
+      :meth:`find_all` returns every variant.
     * :meth:`function_ast(name)` — qualified name →
       ``ast.FunctionDef`` / ``ast.AsyncFunctionDef`` / ``ast.Lambda``,
-      or None. Phase 13's per-function CFG builder reads this.
+      or None. Phase 13's per-function CFG builder reads this. For
+      redefined names this is the last variant's AST;
+      :meth:`function_asts` returns all.
+
+    Conditional redefinitions (``if X: def f() / else: def f()``)
+    produce DISTINCT nodes — both appear in :meth:`nodes`, call
+    edges to the name fan out to every variant (sound
+    over-approximation), and calls made inside each variant's body
+    attribute to that variant's own node.
     """
     file_path: str
     entry_node: PyCallGraphNode
@@ -125,6 +137,12 @@ class PyModuleCallGraph:
     # frozen dataclass equality still works because dicts compare by
     # content. Kept private; access via :meth:`function_ast`.
     _ast_by_name: Dict[str, ast.AST] = field(default_factory=dict)
+    # All variants per qualified name, in definition order. Singleton
+    # tuples for the (overwhelmingly common) unredefined case.
+    _variants_by_name: Dict[str, Tuple[PyCallGraphNode, ...]] = field(
+        default_factory=dict)
+    _asts_by_node: Dict[Tuple[str, int], ast.AST] = field(
+        default_factory=dict)
 
     @property
     def entry(self) -> PyCallGraphNode:
@@ -148,6 +166,24 @@ class PyModuleCallGraph:
         functions whose AST wasn't preserved (e.g. a lambda whose
         binding was lost)."""
         return self._ast_by_name.get(name)
+
+    def find_all(self, name: str) -> Tuple[PyCallGraphNode, ...]:
+        """Every definition of ``name``, in source order. Empty tuple
+        for unknown names; a singleton for the common unredefined
+        case."""
+        return self._variants_by_name.get(name, ())
+
+    def function_asts(self, name: str) -> Tuple[ast.AST, ...]:
+        """The AST of every definition of ``name``, in source order.
+        Consumers analysing behaviour must consider ALL variants —
+        a conditionally-redefined function's runtime body depends on
+        module-import-time state."""
+        out = []
+        for node in self._variants_by_name.get(name, ()):
+            a = self._asts_by_node.get((node.name, node.lineno))
+            if a is not None:
+                out.append(a)
+        return tuple(out)
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +270,16 @@ def _collect_functions(tree: ast.AST) -> List[_FunctionRecord]:
                 # Methods: class_name is set when this def is at the
                 # immediate body of a class. Nested functions inside
                 # methods inherit class_name=None — they're not
-                # bound to the receiver.
+                # bound to the receiver. class_name carries the full
+                # dotted class prefix (inner classes get
+                # "Outer.Inner", identical to prefix), so the
+                # prefix == class_name comparison identifies
+                # class-body defs; the endswith comparison is a
+                # belt-and-braces guard over the same dotted form.
                 is_method = (
                     class_name is not None
-                    and prefix == class_name
+                    and (prefix == class_name
+                         or prefix.endswith("." + class_name))
                 )
                 out.append(_FunctionRecord(
                     qualified_name=qualified,
@@ -329,7 +371,7 @@ def _enclosing_function_chain(
 def _resolve_callee(
     chain: List[str],
     caller: Optional[_FunctionRecord],
-    function_records_by_name: Dict[str, _FunctionRecord],
+    function_records_by_name: Dict[str, List[_FunctionRecord]],
     class_methods: Dict[str, Set[str]],
 ) -> Optional[str]:
     """Resolve a call's attribute chain to a callee's qualified
@@ -464,9 +506,9 @@ def build_python_module_callgraph(
         return None
 
     fn_records = _collect_functions(tree)
-    by_name: Dict[str, _FunctionRecord] = {
-        fr.qualified_name: fr for fr in fn_records
-    }
+    by_name: Dict[str, List[_FunctionRecord]] = {}
+    for fr in fn_records:
+        by_name.setdefault(fr.qualified_name, []).append(fr)
     class_methods: Dict[str, Set[str]] = {}
     for fr in fn_records:
         if fr.is_method and fr.class_name is not None:
@@ -479,9 +521,15 @@ def build_python_module_callgraph(
         params=(), is_method=False, class_name=None,
         is_module_entry=True,
     )
-    fn_nodes: Dict[str, PyCallGraphNode] = {}
+    # Nodes are keyed by (qualified_name, lineno) so conditional
+    # redefinitions materialise as DISTINCT nodes — a name-keyed dict
+    # silently dropped every variant but the last, which (a) lost the
+    # earlier body from the graph entirely and (b) mis-attributed the
+    # earlier body's outgoing calls to the later variant's node.
+    fn_node_by_key: Dict[Tuple[str, int], PyCallGraphNode] = {}
+    variants_by_name: Dict[str, List[PyCallGraphNode]] = {}
     for fr in fn_records:
-        fn_nodes[fr.qualified_name] = PyCallGraphNode(
+        node = PyCallGraphNode(
             name=fr.qualified_name,
             lineno=fr.lineno,
             end_lineno=fr.end_lineno,
@@ -489,12 +537,23 @@ def build_python_module_callgraph(
             is_method=fr.is_method,
             class_name=fr.class_name,
         )
+        fn_node_by_key[(fr.qualified_name, fr.lineno)] = node
+        variants_by_name.setdefault(fr.qualified_name, []).append(node)
+    # Name-keyed views: last definition wins (Python's runtime
+    # semantics for sequential module-level defs) — the variant
+    # tuples carry the rest.
+    fn_nodes: Dict[str, PyCallGraphNode] = {
+        name: nodes[-1] for name, nodes in variants_by_name.items()
+    }
     all_nodes_by_name: Dict[str, PyCallGraphNode] = {
         MODULE_ENTRY_NAME: entry,
         **fn_nodes,
     }
     ast_by_name: Dict[str, ast.AST] = {
         fr.qualified_name: fr.ast_node for fr in fn_records
+    }
+    asts_by_node: Dict[Tuple[str, int], ast.AST] = {
+        (fr.qualified_name, fr.lineno): fr.ast_node for fr in fn_records
     }
 
     # Build edges. Two sources:
@@ -519,15 +578,20 @@ def build_python_module_callgraph(
             continue
         if "." in fr.qualified_name:
             continue        # nested under another function — not top-level
-        _add_edge(entry, fn_nodes[fr.qualified_name])
+        _add_edge(entry, fn_node_by_key[(fr.qualified_name, fr.lineno)])
 
-    # Module-level calls.
+    # Module-level calls. A call to a conditionally-redefined name
+    # fans out to EVERY variant — which body runs depends on
+    # module-import-time state, so the sound graph reaches both.
     for call, chain in _module_level_calls(tree, fn_records):
         callee = _resolve_callee(chain, None, by_name, class_methods)
-        if callee is not None and callee in fn_nodes:
-            _add_edge(entry, fn_nodes[callee])
+        if callee is not None:
+            for dst in variants_by_name.get(callee, ()):
+                _add_edge(entry, dst)
 
-    # Per-function calls.
+    # Per-function calls. The CALLER side binds exactly (each
+    # variant's body attributes to its own node); the CALLEE side
+    # fans out across variants, same as above.
     all_calls = _collect_calls(tree)
     for call, chain in all_calls:
         caller_record = _enclosing_function_chain(call, fn_records)
@@ -538,11 +602,13 @@ def build_python_module_callgraph(
         )
         if callee_name is None:
             continue
-        src_node = fn_nodes.get(caller_record.qualified_name)
-        dst_node = fn_nodes.get(callee_name)
-        if src_node is None or dst_node is None:
+        src_node = fn_node_by_key.get(
+            (caller_record.qualified_name, caller_record.lineno),
+        )
+        if src_node is None:
             continue
-        _add_edge(src_node, dst_node)
+        for dst_node in variants_by_name.get(callee_name, ()):
+            _add_edge(src_node, dst_node)
 
     # Materialise immutable adjacency. Sort deterministically by
     # (name, lineno) so test snapshots are stable.
@@ -551,7 +617,7 @@ def build_python_module_callgraph(
         final_adj[src] = tuple(sorted(dsts, key=lambda n: (n.name, n.lineno)))
 
     ordered_nodes: List[PyCallGraphNode] = [entry] + sorted(
-        fn_nodes.values(), key=lambda n: (n.lineno, n.name),
+        fn_node_by_key.values(), key=lambda n: (n.lineno, n.name),
     )
 
     return PyModuleCallGraph(
@@ -561,6 +627,10 @@ def build_python_module_callgraph(
         _adjacency=final_adj,
         _by_name=all_nodes_by_name,
         _ast_by_name=ast_by_name,
+        _variants_by_name={
+            name: tuple(nodes) for name, nodes in variants_by_name.items()
+        },
+        _asts_by_node=asts_by_node,
     )
 
 

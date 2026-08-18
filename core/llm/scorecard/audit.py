@@ -20,7 +20,7 @@ Verdict thresholds (configurable):
 * ``red``    — < 10 %% reach N=30. D–S reduces to prior almost
   everywhere; revisit prior design before proceeding to Phase 2.
 
-See ``docs/design-aggregation-dominators-wp.md`` Phase 1 for context.
+See the calibrated-aggregation arc design for context.
 """
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
     identical. No locking, no mutation.
     """
     raw = _load_raw(path)
-    if raw is None:
+    if raw is None or not isinstance(raw, dict):
         return AuditReport(
             scorecard_path=str(path),
             schema_version=None,
@@ -131,7 +131,11 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
             decision_class_summaries=[],
             primary_event_type=PRIMARY_EVENT_TYPE,
             verdict="no-data",
-            verdict_reason=f"scorecard file not found at {path}",
+            verdict_reason=(
+                f"scorecard file not found at {path}"
+                if raw is None
+                else f"scorecard is not a JSON object at {path}"
+            ),
         )
 
     schema_version = raw.get("version")
@@ -184,10 +188,13 @@ def audit(path: Path = DEFAULT_PATH) -> AuditReport:
     dc_summaries: List[DecisionClassSummary] = []
     for dc, obs_list in sorted(dc_obs_primary.items()):
         obs_list_sorted = sorted(obs_list)
-        median = (
-            obs_list_sorted[len(obs_list_sorted) // 2]
-            if obs_list_sorted else 0.0
-        )
+        if not obs_list_sorted:
+            median = 0.0
+        elif len(obs_list_sorted) % 2 == 1:
+            median = obs_list_sorted[len(obs_list_sorted) // 2]
+        else:
+            mid = len(obs_list_sorted) // 2
+            median = (obs_list_sorted[mid - 1] + obs_list_sorted[mid]) / 2
         dc_summaries.append(DecisionClassSummary(
             decision_class=dc,
             distinct_models=len(dc_models[dc]),
@@ -290,15 +297,15 @@ def render_markdown(report: AuditReport) -> str:
         + "|---:|"
     )
     for summary in report.event_type_summaries:
-        row = (
+        row_parts = [
             f"| `{summary.event_type}` "
             f"| {summary.total_cells} "
-            f"| {summary.cells_with_any_data} "
-        )
+            f"| {summary.cells_with_any_data} ",
+        ]
         for t in THRESHOLDS:
-            row += f"| {summary.cells_at_thresholds.get(t, 0)} "
-        row += f"| {summary.total_observations} |"
-        lines.append(row)
+            row_parts.append(f"| {summary.cells_at_thresholds.get(t, 0)} ")
+        row_parts.append(f"| {summary.total_observations} |")
+        lines.append("".join(row_parts))
     lines.append("")
     lines.append(
         f"## Per-decision-class coverage ({report.primary_event_type})"

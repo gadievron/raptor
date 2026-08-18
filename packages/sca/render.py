@@ -342,7 +342,8 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
             f" ({aliases[0]})" if aliases else ""
         )
         kev = "yes" if sca.get("in_kev") else ""
-        epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
+        epss_val = sca.get("epss")
+        epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
         fix = sca.get("fixed_version") or ""
         reach = REACHABILITY_LABELS.get(
             _row_reachability_verdict(r),

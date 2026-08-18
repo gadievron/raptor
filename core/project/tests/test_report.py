@@ -1,16 +1,20 @@
 """Tests for project report — merged view across all runs."""
 
 import json
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.project.project import Project
 from core.project.report import (
+    _finding_fingerprint,
     generate_project_report,
+    render_annotations_markdown,
+    render_finding_markdown,
     render_grouped_findings_markdown,
 )
-from core.run import start_run, complete_run
+from core.run import complete_run, start_run
 
 
 def _sca_row(name, *, severity="high", escalation_reasons=None):
@@ -83,10 +87,10 @@ class TestProjectReport(unittest.TestCase):
         the on-disk contract (SCA findings.json shape vs report reader).
         Skipped if the optional SCA package isn't importable."""
         try:
+            from packages.sca.findings import write_findings_json
             from packages.sca.parsers.package_json import parse as parse_pkg
             from packages.sca.supply_chain import _slopsquat_to_finding
             from packages.sca.supply_chain.slopsquat import check_dep
-            from packages.sca.findings import write_findings_json
         except ImportError:
             self.skipTest("optional SCA package not importable")
 
@@ -260,6 +264,107 @@ class TestRenderGroupedFindingsMarkdownSca(unittest.TestCase):
         md = render_grouped_findings_markdown(
             [], "proj", sca_findings=[_sca_row("react-helper")])
         self.assertNotIn("escalated:", md)
+
+
+    def test_finding_fingerprint_line_start_fallback(self):
+        """Findings with line_start instead of line must produce the same
+        fingerprint as those with line set to the same value."""
+        base = {"id": "F-1", "file": "a.c", "function": "f", "type": "cwe-120"}
+        with_line = {**base, "line": 42}
+        with_line_start = {**base, "line_start": 42}
+        self.assertEqual(
+            _finding_fingerprint(with_line),
+            _finding_fingerprint(with_line_start),
+        )
+
+    def test_finding_fingerprint_prefers_line_over_line_start(self):
+        base = {"id": "F-1", "file": "a.c", "function": "f", "type": "cwe-120"}
+        both = {**base, "line": 42, "line_start": 99}
+        line_only = {**base, "line": 42}
+        self.assertEqual(
+            _finding_fingerprint(both),
+            _finding_fingerprint(line_only),
+        )
+
+
+class TestMarkdownInertness(unittest.TestCase):
+    """Consistency tests: finding-derived strings stay inert in the
+    generated Markdown — fences can't be terminated early, headings
+    stay single-line, table cells can't add columns."""
+
+    @staticmethod
+    def _lines_outside_fences(md):
+        """Return the lines of ``md`` that render outside any ``` fence."""
+        outside = []
+        in_fence = False
+        for line in md.splitlines():
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not in_fence:
+                outside.append(line)
+        return outside
+
+    def test_description_cannot_terminate_fence(self):
+        finding = {
+            "id": "F-INJ-1",
+            "title": "Fence injection",
+            "description": "before\n```\n# fake heading\n```\nafter",
+        }
+        md = render_finding_markdown(finding)
+        # The embedded ``` must not close the wrapping fence — the
+        # fake heading stays inside the code block.
+        self.assertNotIn("# fake heading", self._lines_outside_fences(md))
+        # Fences balance: an odd count would leave the rest of the
+        # document swallowed by an unterminated block.
+        fence_lines = [ln for ln in md.splitlines() if ln.startswith("```")]
+        self.assertEqual(len(fence_lines) % 2, 0)
+
+    def test_title_with_newline_renders_single_heading_line(self):
+        finding = {
+            "id": "F-INJ-2",
+            "title": "Login bypass\n# injected heading\n- injected list",
+        }
+        md = render_finding_markdown(finding)
+        lines = md.splitlines()
+        self.assertTrue(lines[0].startswith("# Login bypass"))
+        self.assertNotIn("# injected heading", lines)
+        self.assertNotIn("- injected list", lines)
+
+    def test_table_cells_with_pipe_do_not_add_columns(self):
+        finding = {
+            "id": "F-INJ-3",
+            "title": "Pipe cell",
+            "vuln_type": "cmd|injection",
+            "file": "src/x|y.c",
+        }
+        md = render_finding_markdown(finding)
+        table_lines = [ln for ln in md.splitlines() if ln.startswith("|")]
+        self.assertTrue(table_lines)
+        for line in table_lines:
+            # Two columns → exactly 3 unescaped pipes per row.
+            self.assertEqual(len(re.findall(r"(?<!\\)\|", line)), 3, line)
+
+    def test_grouped_markdown_title_stays_on_one_bullet_line(self):
+        code = [{
+            "id": "F-1", "file": "a.c", "severity": "high",
+            "title": "Overflow\n# injected heading",
+        }]
+        md = render_grouped_findings_markdown(code, "proj")
+        self.assertNotIn("# injected heading", md.splitlines())
+
+    def test_annotation_body_markdown_is_inert(self):
+        records = [{
+            "file": "src/auth.py", "function": "check_pw",
+            "status": "clean", "source": "manual",
+            "body": "```\n# fake heading\n```\n<script>x</script>",
+            "metadata": {},
+        }]
+        md = render_annotations_markdown(records, "proj")
+        lines = md.splitlines()
+        self.assertNotIn("# fake heading", lines)
+        self.assertNotIn("```", lines)
+        self.assertNotIn("<script>x</script>", md)
 
 
 if __name__ == "__main__":

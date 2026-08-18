@@ -18,7 +18,9 @@ from typer.testing import CliRunner
 
 from cve_diff.agent.types import AgentOutput, AgentSurrender
 from cve_diff.cli.main import _budget_reason, app
+from cve_diff.core.exceptions import IdenticalCommitsError
 from cve_diff.core.models import CommitSha, PatchTuple
+from cve_diff.pipeline import Pipeline
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -161,6 +163,73 @@ def test_run_no_evidence_exits_5(tmp_path, monkeypatch):
     assert result.exit_code == 5
     assert (out / "CVE-2024-99003.md").exists()
     assert (out / "CVE-2024-99003.flow.md").exists()
+
+
+# ---------- IdenticalCommitsError → exit 7, unified class label ----------
+# _write_failure_md and _flow_from_pipeline must receive one identical
+# error-class string ("IdenticalCommitsError"), like every sibling
+# handler — not a split "IdenticalCommits" / "IdenticalCommitsError".
+
+_IDENTICAL_CVE = "CVE-2024-99007"
+
+
+def _patch_pipeline_identical(monkeypatch) -> None:
+    """Pipeline.run raises IdenticalCommitsError after recording agent
+    telemetry, so the flow files carry tool calls and render the FAIL
+    outcome line with the error class."""
+
+    def stub_run(self, cve_id, work_dir):
+        self.agent.last_telemetry = {
+            "iterations": 2, "tokens": 100, "cost_usd": 0.01,
+            "elapsed_s": 0.1,
+            "tool_calls": ["osv_raw", "submit_result"],
+            "tool_calls_with_args": [
+                ("osv_raw", '{"cve_id": "%s"}' % cve_id),
+                ("submit_result", '{"outcome": "rescued"}'),
+            ],
+        }
+        raise IdenticalCommitsError(
+            f"{cve_id}: fix sha and parent resolved to the same commit"
+        )
+
+    monkeypatch.setattr(Pipeline, "run", stub_run)
+
+
+def _invoke_identical(tmp_path):
+    out = tmp_path / "out"
+    result = CliRunner().invoke(app, [
+        "run", _IDENTICAL_CVE,
+        "--output-dir", str(out),
+        "--disk-limit", "99.9",
+        "--quiet",
+    ])
+    return out, result
+
+
+def test_identical_commits_exits_7_with_unified_class_label(tmp_path, monkeypatch):
+    _patch_pipeline_identical(monkeypatch)
+    out, result = _invoke_identical(tmp_path)
+    assert result.exit_code == 7
+
+    failure_md = (out / f"{_IDENTICAL_CVE}.md").read_text(encoding="utf-8")
+    flow_md = (out / f"{_IDENTICAL_CVE}.flow.md").read_text(encoding="utf-8")
+
+    # One identical string reaches both output artifacts.
+    assert "`IdenticalCommitsError`" in failure_md
+    assert "`IdenticalCommitsError`" in flow_md
+    # The split label must not reach the failure report.
+    assert "`IdenticalCommits`" not in failure_md
+
+
+def test_identical_commits_outcome_is_humanized(tmp_path, monkeypatch):
+    """With the class label unified, _humanize_class maps it — the
+    Outcome header must not fall back to the raw 'Other (…)' form."""
+    _patch_pipeline_identical(monkeypatch)
+    out, result = _invoke_identical(tmp_path)
+    assert result.exit_code == 7
+    failure_md = (out / f"{_IDENTICAL_CVE}.md").read_text(encoding="utf-8")
+    assert "Other (" not in failure_md
+    assert "resolved to the same commit" in failure_md
 
 
 def test_run_writes_flow_md_with_pipeline_trace(tmp_path, monkeypatch):

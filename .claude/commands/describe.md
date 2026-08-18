@@ -7,7 +7,7 @@ dispatch: libexec/raptor-describe --target <path>
 
 Tell me what THIS target is. **Read-only**: /describe inspects the tree and prints a description. It never executes target code, never runs builds, never recommends operator-typed shell commands.
 
-**Complementary to `/doctor`**: /doctor is the host-level diagnostic ("is RAPTOR set up on this machine"); /describe is the target-level pre-flight ("what is this target and what would RAPTOR do with it"). Operators typically run both at first contact with a new target: `/doctor` once per host, `/describe` per target.
+**Complementary to `raptor doctor`**: `raptor doctor` (also `python3 raptor.py doctor`) is the host-level diagnostic ("is RAPTOR set up on this machine"); /describe is the target-level pre-flight ("what is this target and what would RAPTOR do with it"). Operators typically run both at first contact with a new target: `raptor doctor` once per host, `/describe` per target.
 
 ## Usage
 
@@ -58,7 +58,7 @@ To start analysis, run `raptor.py agentic --repo <target>` (prints same estimate
 
 - **No runnable commands.** /describe never recommends `./configure`, `make`, `apt install`, or any shell command the operator should type. A Makefile can do anything (`rm -rf /`, exfiltrate, format disk); recommending the operator type `make` against arbitrary target code is a security boundary RAPTOR doesn't cross.
 - **No execution.** Description only. Target code is never invoked.
-- **No host diagnostics.** Binary presence, API keys, env vars — all live in `/doctor`. /describe only checks target-specific signals (build deps for THIS build system, rule pack vs THIS language, etc.).
+- **No host diagnostics.** Binary presence, API keys, env vars — all live in `raptor doctor`. /describe only checks target-specific signals (build deps for THIS build system, rule pack vs THIS language, etc.).
 
 When RAPTOR needs to build the target (for /codeql's database, for /agentic's binary-oracle enrichment), it'll do so inside its own sandbox — not by telling you to type `make`.
 
@@ -67,5 +67,5 @@ When RAPTOR needs to build the target (for /codeql's database, for /agentic's bi
 `packages/describe/` — composes existing substrates:
 - `core/run/target_types` (catalog-driven defaults; QoL #17)
 - `core/run/estimator` (cost/time hints; QoL #21)
-- `packages/codeql/language_detector` + `build_detector` (language + build-system inference)
+- `packages/codeql/language_detector` + `core/build/build_detector` (language + build-system inference)
 - `core/build/recipe` (build-command construction — kept as future /codeql consumer; not invoked by /describe)

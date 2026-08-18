@@ -18,7 +18,8 @@ update (Phase 4). Given one or more historical
 
 The harness does *not* mutate the input files and does not touch any
 scorecard. It is read-only and side-effect-free except for stdout
-output and the optional ``--out`` JSON dump.
+output and the optional ``--out`` files (the rendered report —
+markdown unless ``--json`` — plus a ``.json`` sibling).
 
 Why it ships as a CLI now even though phase 3 already attaches
 calibrated verdicts inline at orchestration time:
@@ -146,6 +147,8 @@ def _recorded_verdict_index(
             # Mirror panel_log's tolerance — bad files surfaced via
             # the loader's own error path; here we just skip so a
             # corrupt file in a big corpus doesn't abort the replay.
+            continue
+        if not isinstance(payload, dict):
             continue
         results = payload.get("results")
         if not isinstance(results, list):
@@ -374,7 +377,7 @@ def render_markdown(report: ReplayReport) -> str:
                 per_model_beta.setdefault(r["model"], []).append(r["beta"])
         lines.append("| model | mean α | mean β | n classes |")
         lines.append("|---|---:|---:|---:|")
-        for model in sorted(per_model_alpha.keys()):
+        for model in sorted(per_model_alpha):
             alphas = per_model_alpha[model]
             betas = per_model_beta[model]
             lines.append(
@@ -467,7 +470,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         json_out = args.out.with_suffix(args.out.suffix + ".json")
         json_out.write_text(render_json(report), encoding="utf-8")
 
-    # Exit 0 always — replay is informational, no pass/fail semantics.
+    # Exit 0 on any completed replay — informational, no pass/fail
+    # semantics.  (Usage errors return 2 above, before replaying.)
     return 0
 
 

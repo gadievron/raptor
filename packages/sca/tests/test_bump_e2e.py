@@ -13,10 +13,15 @@ under ``packages/sca/bump/tests/``; this tier validates that:
   * ``--json`` emits structurally-valid JSON
   * ``--pr-comment`` emits structurally-valid markdown
 
-Network calls (OSV / KEV / EPSS / upstream-latest) are blocked at
-the HttpClient layer via egress allowlist — the bumper handles
-network failure gracefully (warnings + ``Unknown`` verdicts). The
-test asserts shape not verdicts.
+Network is disabled via ``--offline`` (the no-op HttpClient): every
+OSV / KEV / EPSS / upstream-latest lookup fails fast and the bumper
+degrades gracefully (warnings + ``Unknown`` verdicts). The test
+asserts shape not verdicts. Do NOT drop the flag: github.com and
+the feed hosts are ON the SCA egress allowlist, so without it these
+tests really fetch — and on a host where the fetches fail slowly
+(unreachable proxy, rate-limited API), each candidate burns the
+HTTP retry-backoff schedule and every test dies at its subprocess
+timeout instead.
 
 Eight bump surfaces:
 
@@ -38,7 +43,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -99,20 +105,23 @@ def _build_bump_fixture(repo: Path) -> None:
 
 
 def _run_bump(
-    args: List[str], *,
-    extra_env: dict = None,
+    args: list[str], *,
+    extra_env: dict | None = None,
     timeout: int = 90,
 ) -> subprocess.CompletedProcess:
     """Invoke ``raptor-sca bump`` via the package's ``__main__``
     style entry. Run from REPO_ROOT so ``packages.sca.cli`` is
-    importable; pass the fixture path as a positional argument."""
-    cmd = [sys.executable, "-m", "packages.sca.cli", "bump"] + args
+    importable; pass the fixture path as a positional argument.
+
+    ``--offline`` is always appended — see the module docstring for
+    why hermeticity depends on it."""
+    cmd = [sys.executable, "-m", "packages.sca.cli", "bump"] + args + ["--offline"]
     env = {**os.environ}
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
         cmd, capture_output=True, text=True,
-        cwd=str(REPO_ROOT), env=env, timeout=timeout,
+        cwd=str(REPO_ROOT), env=env, timeout=timeout, check=False,
     )
 
 
@@ -120,6 +129,7 @@ def _run_bump(
 # Tier 3a: discovery surfaces — every bump surface walked
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_bump_whatif_emits_valid_json(tmp_path: Path) -> None:
     """``raptor-sca bump --json --whatif`` runs to completion, emits
     JSON parsing successfully."""
@@ -144,6 +154,7 @@ def test_bump_whatif_emits_valid_json(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.slow
 def test_bump_discovery_finds_each_surface(tmp_path: Path) -> None:
     """The fixture has 7 declared surfaces (Dockerfile ARG x2 +
     FROM + 2 inline pip + 2 GHA uses + Helm + submodule). Each
@@ -184,6 +195,7 @@ def test_bump_discovery_finds_each_surface(tmp_path: Path) -> None:
 # Tier 3b: --whatif is non-mutating; --apply only mutates Clean
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_bump_whatif_does_not_mutate_tree(tmp_path: Path) -> None:
     """``--whatif`` (default) MUST NOT touch any file."""
     repo = tmp_path / "repo"
@@ -209,6 +221,7 @@ def test_bump_whatif_does_not_mutate_tree(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.slow
 def test_bump_apply_does_not_crash_offline(tmp_path: Path) -> None:
     """``--apply`` runs to completion offline. The bumper may
     locally apply some rewrites that don't need network (e.g. GHA
@@ -245,6 +258,7 @@ def test_bump_apply_does_not_crash_offline(tmp_path: Path) -> None:
 # Tier 3c: --pr-comment markdown shape
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_bump_pr_comment_produces_markdown(tmp_path: Path) -> None:
     """``--pr-comment`` emits markdown suitable for piping to
     ``gh pr comment --body-file -``. Asserts:
@@ -270,6 +284,7 @@ def test_bump_pr_comment_produces_markdown(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.slow
 def test_bump_pr_comment_with_repo_label(tmp_path: Path) -> None:
     """``--repo-label MYREPO`` makes the label appear in the
     header so the PR-comment is attributable when posted across
@@ -345,6 +360,7 @@ def test_bump_proxy_allowlist_covers_helm_repository_hosts(
     )
 
 
+@pytest.mark.slow
 def test_bump_pr_comment_lists_skipped_locators(
     tmp_path: Path,
 ) -> None:

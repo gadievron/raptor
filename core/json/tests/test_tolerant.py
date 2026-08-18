@@ -17,7 +17,6 @@ Coverage priorities, most-important-first:
 
 from core.json.tolerant import parse_llm_json
 
-
 # ─────────────────────────────────────────────────────────────────
 # Naturalistic capture — a plausible model output shape.
 # ─────────────────────────────────────────────────────────────────
@@ -45,7 +44,7 @@ class TestNaturalisticCapture:
     """The shape the shared parser was built to rescue."""
 
     def test_naturalistic_capture_parses(self):
-        parsed, diag = parse_llm_json(NATURALISTIC_CAPTURE)
+        parsed, _diag = parse_llm_json(NATURALISTIC_CAPTURE)
         assert parsed is not None
         assert parsed["action"] == "propose"
         assert parsed["detail"]["slug"] == "adopt_structured_helper"
@@ -274,7 +273,7 @@ class TestQuasiJsonFixups:
 
     def test_trailing_comma_array(self):
         text = '{"items": [1, 2, 3,]}'
-        parsed, diag = parse_llm_json(text)
+        parsed, _diag = parse_llm_json(text)
         assert parsed == {"items": [1, 2, 3]}
 
     def test_python_literal_none(self):
@@ -285,7 +284,7 @@ class TestQuasiJsonFixups:
 
     def test_python_literal_true_false(self):
         text = '{"ok": True, "broken": False}'
-        parsed, diag = parse_llm_json(text)
+        parsed, _diag = parse_llm_json(text)
         assert parsed == {"ok": True, "broken": False}
 
     def test_python_literal_at_start_of_string(self):
@@ -467,11 +466,11 @@ class TestNeverRaises:
         assert diag.strategy == "failed"
 
     def test_unbalanced_open_brace(self):
-        parsed, diag = parse_llm_json('{"a": 1')
+        parsed, _diag = parse_llm_json('{"a": 1')
         assert parsed is None
 
     def test_unbalanced_close_brace(self):
-        parsed, diag = parse_llm_json('a": 1}')
+        parsed, _diag = parse_llm_json('a": 1}')
         assert parsed is None
 
     def test_input_exceeds_size_cap_fails_closed(self):
@@ -495,7 +494,7 @@ class TestNeverRaises:
         text = "{" * 10_000 + "}" * 10_000
         import time
         t0 = time.perf_counter()
-        parsed, diag = parse_llm_json(text, require_object=False)
+        _parsed, diag = parse_llm_json(text, require_object=False)
         elapsed = time.perf_counter() - t0
         # May or may not parse as strict; must not hang.
         assert elapsed < 0.5, f"nested-brace parser took {elapsed:.2f}s"
@@ -532,12 +531,12 @@ class TestAdversarial:
 
     def test_nested_object_with_prose_wrapper(self):
         text = 'analysis: {"outer": {"inner": {"deep": [1, 2]}}} done'
-        parsed, diag = parse_llm_json(text)
+        parsed, _diag = parse_llm_json(text)
         assert parsed == {"outer": {"inner": {"deep": [1, 2]}}}
 
     def test_escaped_quote_in_string(self):
         text = r'{"reason": "quote: \"inside\" here"}'
-        parsed, diag = parse_llm_json(text)
+        parsed, _diag = parse_llm_json(text)
         assert parsed == {"reason": 'quote: "inside" here'}
 
 
@@ -577,3 +576,61 @@ class TestConsumerShapes:
         parsed, diag = parse_llm_json(text)
         assert parsed == {"verdict": "UNCERTAIN", "note": "evidence weak"}
         assert diag.strategy == "quasi_json_fixup"
+
+
+# ─────────────────────────────────────────────────────────────────
+# Fence extraction — linear-scan behaviour and performance.
+# ─────────────────────────────────────────────────────────────────
+
+
+class TestFenceScan:
+    """The line-based fence scan replaced a MULTILINE-regex
+    implementation that went quadratic on open-without-close inputs.
+    Lock both the semantics and the linear-time bound."""
+
+    def test_first_complete_fence_wins_over_earlier_unclosed_opener(self):
+        """An unclosed ~~~ opener before a well-formed ``` fence must
+        not shadow it — the first COMPLETE fence is extracted, same as
+        the old whole-text regex search."""
+        text = '~~~\nprose that never closes the tilde fence\n```json\n{"ok": 1}\n```'
+        parsed, diag = parse_llm_json(text)
+        assert parsed == {"ok": 1}
+        assert diag.strategy == "fence"
+        assert diag.fence_language == "json"
+
+    def test_indented_fences(self):
+        text = '  ```json\n  {"ok": 1}\n  ```'
+        parsed, diag = parse_llm_json(text)
+        assert parsed == {"ok": 1}
+        assert diag.strategy == "fence"
+
+    def test_blank_line_inside_body_preserved(self):
+        text = '```json\n{"a": 1,\n\n"b": 2}\n```'
+        parsed, diag = parse_llm_json(text)
+        assert parsed == {"a": 1, "b": 2}
+        assert diag.strategy == "fence"
+
+    def test_adversarial_open_without_close_is_linear_time(self):
+        """200 KB of newline/space runs after a fence open with no
+        close — the old lazy-body regex burned seconds-to-minutes of
+        CPU here (quadratic close-scan restarts); the linear scan must
+        finish effectively instantly. Generous 5s bound for slow CI."""
+        import time
+        text = "```json\n" + (" \n \n  " * 40_000)  # ~200 KB, no close
+        assert len(text) > 200_000
+        t0 = time.perf_counter()
+        parsed, diag = parse_llm_json(text)
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 5.0, f"fence scan took {elapsed:.2f}s on hostile input"
+        assert parsed is None
+        assert diag.strategy == "failed"
+
+    def test_adversarial_many_near_openers_linear_time(self):
+        """Many opener-shaped lines with whitespace padding and no
+        parseable payload — must also stay linear."""
+        import time
+        text = ("```x\n" + " " * 40 + "\n") * 4_000  # ~200 KB
+        t0 = time.perf_counter()
+        parse_llm_json(text)
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 5.0, f"fence scan took {elapsed:.2f}s on hostile input"

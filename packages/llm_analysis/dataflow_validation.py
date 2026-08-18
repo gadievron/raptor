@@ -21,9 +21,12 @@ exhausted, the helper is a no-op.
 
 import functools
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
+from core.llm.coerce import structured_result
+from core.paths import strip_file_uri
 from core.security.prompt_envelope import neutralize_tag_forgery
 from packages.hypothesis_validation import Hypothesis
 from packages.hypothesis_validation.adapters import CodeQLAdapter
@@ -67,7 +70,7 @@ _COMPILE_ERROR_MARKERS = (
 DEFAULT_BUDGET_THRESHOLD = 0.60
 
 
-def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
+def discover_codeql_databases(out_dir: Path) -> dict[str, Path]:
     """Find all CodeQL databases produced by the CodeQL agent for this run.
 
     Returns a dict {language: database_path} keyed by the database's
@@ -94,7 +97,7 @@ def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
     if not codeql_dir.is_dir():
         return {}
 
-    out: Dict[str, Path] = {}
+    out: dict[str, Path] = {}
 
     # Strategy 1: read the agent's report for authoritative DB paths.
     report_path = codeql_dir / "codeql_report.json"
@@ -134,8 +137,8 @@ def discover_codeql_databases(out_dir: Path) -> Dict[str, Path]:
 def discover_codeql_database(
     out_dir: Path,
     *,
-    language: Optional[str] = None,
-) -> Optional[Path]:
+    language: str | None = None,
+) -> Path | None:
     """Backward-compatible single-DB discovery.
 
     When `language` is provided, returns the matching DB or None.
@@ -151,7 +154,7 @@ def discover_codeql_database(
     return next(iter(dbs.values()))
 
 
-def _read_codeql_db_language(marker: Path) -> Optional[str]:
+def _read_codeql_db_language(marker: Path) -> str | None:
     """Read primaryLanguage from a codeql-database.yml without importing yaml.
 
     The CodeQL marker file is small (usually <1KB) and uses simple
@@ -170,7 +173,7 @@ def _read_codeql_db_language(marker: Path) -> Optional[str]:
     return None
 
 
-def _infer_language_from_dirname(name: str) -> Optional[str]:
+def _infer_language_from_dirname(name: str) -> str | None:
     """Fallback when codeql-database.yml lacks primaryLanguage.
 
     Recognises the DatabaseManager naming convention: `<lang>-db`,
@@ -199,7 +202,7 @@ _LANGUAGE_ALIASES = {
 }
 
 
-def _normalise_language(lang: str) -> Optional[str]:
+def _normalise_language(lang: str) -> str | None:
     """Map any language tag to the CodeQL canonical form, lowercase."""
     if not lang:
         return None
@@ -207,7 +210,7 @@ def _normalise_language(lang: str) -> Optional[str]:
     return _LANGUAGE_ALIASES.get(s, s)
 
 
-def _eligible_for_validation(finding: Dict, analysis: Dict) -> bool:
+def _eligible_for_validation(finding: dict, analysis: dict) -> bool:
     """Filter: should this finding's dataflow claim be validated?
 
     Eligibility is conservative — we only validate when we're confident
@@ -244,9 +247,7 @@ def _eligible_for_validation(finding: Dict, analysis: Dict) -> bool:
     if finding.get("has_dataflow"):
         return False
     summary = analysis.get("dataflow_summary") or ""
-    if not summary.strip():
-        return False
-    return True
+    return bool(summary.strip())
 
 
 # Validation-specific guidance prepended to every Hypothesis.context. Tells
@@ -336,19 +337,19 @@ _MAX_REASONING_EXCERPT = 800
 
 
 def validate_dataflow_claims(
-    findings: List[Dict],
-    results_by_id: Dict[str, Dict],
+    findings: list[dict],
+    results_by_id: dict[str, dict],
     *,
-    codeql_db: Optional[Path] = None,
-    codeql_dbs: Optional[Dict[str, Path]] = None,
+    codeql_db: Path | None = None,
+    codeql_dbs: dict[str, Path] | None = None,
     repo_path: Path,
     llm_client: Any,
-    cost_tracker: Optional[Any] = None,
+    cost_tracker: Any | None = None,
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
-    progress_callback: Optional[Callable[[str], None]] = None,
+    progress_callback: Callable[[str], None] | None = None,
     deep_validate: bool = False,
     deep_validate_disabled: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Validate LLM dataflow claims via hypothesis_validation + CodeQL.
 
     Updates `results_by_id` in place. Returns a metrics dict with:
@@ -390,7 +391,7 @@ def validate_dataflow_claims(
 
     Never raises — returns 0 and logs on any error.
     """
-    metrics: Dict[str, Any] = {
+    metrics: dict[str, Any] = {
         "n_eligible": 0,
         "n_validated": 0,
         "n_cache_hits": 0,
@@ -410,9 +411,15 @@ def validate_dataflow_claims(
         "n_deep_validate_auto_enabled": 0,
     }
 
-    # Master kill-switch — bail before doing any work.
+    # Master kill-switches — bail before doing any work.
     try:
         from core.config import RaptorConfig
+        if not RaptorConfig.CODEQL_ENABLED:
+            logger.info(
+                "dataflow validation skipped: CODEQL_ENABLED is False",
+            )
+            metrics["skipped_reason"] = "codeql_disabled"
+            return metrics
         if not RaptorConfig.IRIS_TIER1_ENABLED:
             logger.info(
                 "dataflow validation skipped: IRIS_TIER1_ENABLED is False",
@@ -443,7 +450,7 @@ def validate_dataflow_claims(
         return metrics
 
     # Drop missing-on-disk entries up front so we don't pretend a DB exists.
-    valid_dbs: Dict[str, Path] = {}
+    valid_dbs: dict[str, Path] = {}
     for lang, p in codeql_dbs.items():
         p = Path(p)
         if p.exists():
@@ -470,7 +477,7 @@ def validate_dataflow_claims(
 
     # Cache one adapter per database so repeated findings reuse the
     # same instance (cheap; adapters are stateless beyond the path).
-    adapters: Dict[str, Any] = {}
+    adapters: dict[str, Any] = {}
     for lang, db in valid_dbs.items():
         a = CodeQLAdapter(database_path=db)
         if a.is_available():
@@ -488,12 +495,61 @@ def validate_dataflow_claims(
         metrics["skipped_reason"] = "adapter_unavailable"
         return metrics
 
+    # ── Tier 1 batch pre-pass ──────────────────────────────────────────
+    # Collect all prebuilt query paths that the per-finding loop would
+    # invoke individually, then run them in a single JVM invocation per
+    # adapter. Saves ~4-6s of JVM+DB overhead per additional query.
+    tier1_batch: dict[str, ToolEvidence] = {}
+    _batch_by_adapter: dict[str, set] = {}
+    for _f in findings:
+        _fid = _f.get("finding_id")
+        if not _fid or _fid not in results_by_id:
+            continue
+        if not _eligible_for_validation(_f, results_by_id[_fid]):
+            continue
+        _adapter = _pick_adapter_for_finding(_f, adapters)
+        if _adapter is None:
+            continue
+        _lang = _finding_language(_f)
+        _cwe = (_f.get("cwe_id") or "").upper().strip()
+        if not _cwe:
+            _cwe = (infer_cwe_from_rule_id(_f.get("rule_id", "")) or "").upper().strip()
+        if _lang and _cwe:
+            _qp = discover_prebuilt_query(_lang, _cwe)
+            if _qp is not None:
+                _adapter_key = _adapter.name + ":" + str(getattr(_adapter, "_database_path", ""))
+                _batch_by_adapter.setdefault(_adapter_key, set()).add(str(_qp))
+    # Run one batch per adapter (typically just one).
+    _adapter_lookup = {}
+    for lang, a in adapters.items():
+        _akey = a.name + ":" + str(getattr(a, "_database_path", ""))
+        _adapter_lookup[_akey] = a
+    for _akey, _qpaths in _batch_by_adapter.items():
+        _a = _adapter_lookup.get(_akey)
+        if _a is None:
+            continue
+        _n = len(_qpaths)
+        if _n < 2:
+            continue
+        if progress_callback:
+            progress_callback(f"Batch-running {_n} prebuilt CodeQL queries")
+        _batch_results = _a.run_prebuilt_queries_batch(
+            [Path(p) for p in _qpaths],
+        )
+        tier1_batch.update(_batch_results)
+    if tier1_batch:
+        logger.debug(
+            "Tier 1 batch pre-pass: %d queries across %d adapter(s)",
+            sum(len(v) for v in _batch_by_adapter.values()),
+            len(_batch_by_adapter),
+        )
+
     # Within-run cache: two findings with the same claim+target+function+cwe
     # produce the same Hypothesis hash and the same validation result.
     # Re-running them through the LLM costs 2× and yields nothing new.
     # Cache scope is the call only — cross-run caching is a future feature
     # (would need a persistent store keyed on the project + revision).
-    cache: Dict[str, Any] = {}
+    cache: dict[str, Any] = {}
 
     for finding in findings:
         fid = finding.get("finding_id")
@@ -570,8 +626,9 @@ def validate_dataflow_claims(
             result, tier_used = _validate_one_hypothesis(
                 hypothesis, finding, adapter, llm_client,
                 deep_validate=effective_deep_validate,
+                tier1_batch=tier1_batch,
             )
-        except Exception as e:  # never let a single validation crash the loop
+        except Exception as e:  # noqa: BLE001 — never let a single validation crash the loop
             logger.warning(
                 "dataflow validation errored on %s (lang adapter %s): %s",
                 fid, adapter.name, e,
@@ -623,7 +680,7 @@ def validate_dataflow_claims(
             # which defeats the breakdown's purpose.
             cwe = (
                 (finding.get("cwe_id") or "").strip()
-                or (analysis or {}).get("cwe_id", "").strip()
+                or ((analysis or {}).get("cwe_id") or "").strip()
             ).upper() or "UNKNOWN"
             metrics["path_conditions_by_cwe"][cwe] = (
                 metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
@@ -679,7 +736,8 @@ def _build_strategy_block(
     cwe: str,
     file_path: str,
     function: str,
-    finding: Dict,
+    finding: dict,
+    repo_path: Path | None = None,
 ) -> str:
     """Render CWE-strategy guidance for the IRIS validator prompt.
 
@@ -694,9 +752,10 @@ def _build_strategy_block(
     """
     try:
         from core.llm.cwe_strategies import (
-            pick_strategies, render_strategies,
+            pick_strategies,
+            render_strategies,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — fail-open validation loop
         return ""
 
     candidate_cwes = [cwe] if cwe else []
@@ -712,11 +771,13 @@ def _build_strategy_block(
             function_calls_made=tuple(function_calls),
             candidate_cwes=tuple(candidate_cwes),
             max_strategies=3,
+            # Kernel targets get the linux_kernel signal profile.
+            target_path=repo_path,
         )
         if not picked:
             return ""
         rendered = render_strategies(picked)
-    except Exception:
+    except Exception:  # noqa: BLE001 — fail-open validation loop
         return ""
     return (
         "## Bug-class lenses for this validation\n"
@@ -730,7 +791,7 @@ def _build_strategy_block(
     )
 
 
-def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
+def _build_hypothesis(finding: dict, analysis: dict, repo_path: Path):
     """Construct a Hypothesis from a finding + LLM analysis.
 
     Target-derived content (scanner `message`, LLM `reasoning`,
@@ -756,7 +817,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     # specifically: it's not a generic hypothesis test, it's testing a
     # Semgrep-found candidate against a CodeQL database. Concrete
     # guidance reduces wasted query-generation iterations.
-    trusted_parts: List[str] = [_VALIDATION_TASK_GUIDANCE]
+    trusted_parts: list[str] = [_VALIDATION_TASK_GUIDANCE]
     if file_path:
         trusted_parts.append(
             f"Reported location: {_sanitize_for_prompt(str(file_path))}:{start_line}"
@@ -782,13 +843,14 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     # exposure than for SQL injection / XSS.
     strategy_block = _build_strategy_block(
         cwe=cwe, file_path=file_path, function=function, finding=finding,
+        repo_path=repo_path,
     )
     if strategy_block:
         trusted_parts.append(strategy_block)
 
     # Target-derived bits (LLM-rendered or directly from target source)
     # go inside an untrusted-block envelope.
-    untrusted_inner: List[str] = []
+    untrusted_inner: list[str] = []
     message = finding.get("message") or ""
     if message:
         untrusted_inner.append(
@@ -802,18 +864,25 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
         )
 
     # RAPTOR's own prior verified outcomes for this finding (Tier-3
-    # retrieval). Self-collects from the active project's sibling runs;
+    # retrieval). L3-retrieved exemplars first (recency / dedup /
+    # diversity ranked), legacy VerifiedOutcome rollup as fallback;
     # best-effort, empty (no prior corpus) -> no block. These carry
-    # scanned-repo-derived fields (file paths), so they go INSIDE the
-    # untrusted envelope, not trusted_parts; the renderer already
-    # tag-forgery-defangs the values.
+    # scanned-repo-derived fields (exploit code, file paths), so they
+    # go INSIDE the untrusted envelope, not trusted_parts; the renderer
+    # already tag-forgery-defangs the values.
     try:
-        from core.labeled_attempts.view import exemplar_block_for_finding
-        ve_block = exemplar_block_for_finding(
+        from core.labeled_attempts.view import exemplar_slot_for_finding
+        slot = exemplar_slot_for_finding(
             {"id": rule_id, "cwe_id": cwe, "file": file_path},
         )
-        if ve_block:
-            untrusted_inner.append(ve_block)
+        if slot.block:
+            untrusted_inner.append(slot.block)
+        if slot.exemplar_ids:
+            # The analysis record persists with the run output — carry
+            # which exemplars were in the validator's prompt so A/B
+            # attribution can join them to the validation outcome
+            # (same shape as LabeledAttempt.exemplars_used).
+            analysis["exemplars_used"] = list(slot.exemplar_ids)
     except Exception:
         logger.warning("exemplar lookup failed for %s", rule_id, exc_info=True)
 
@@ -859,10 +928,10 @@ def _hypothesis_cache_key(h) -> str:
 
 
 def tier1_check_finding(
-    finding: Dict,
-    codeql_dbs: Dict[str, Path],
+    finding: dict,
+    codeql_dbs: dict[str, Path],
     *,
-    target_path: Optional[Path] = None,
+    target_path: Path | None = None,
 ) -> str:
     """Free Tier 1 dataflow check for a single finding — no LLM,
     no Hypothesis context, no orchestration. Instrumented wrapper
@@ -931,10 +1000,10 @@ def tier1_check_finding(
 
 
 def _tier1_check_finding_inner(
-    finding: Dict,
-    codeql_dbs: Dict[str, Path],
+    finding: dict,
+    codeql_dbs: dict[str, Path],
     *,
-    target_path: Optional[Path] = None,
+    target_path: Path | None = None,
 ) -> str:
     """Inner implementation of ``tier1_check_finding`` — split out so
     the public wrapper can time + log around all return paths without
@@ -1005,7 +1074,7 @@ def _tier1_check_finding_inner(
     target = Path(target_path) if target_path is not None else Path(db)
     try:
         ev = adapter.run_prebuilt_query(prebuilt_path, target)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — fail-open validation loop
         logger.debug("tier1_check_finding: adapter raised: %s", e)
         return "no_check"
 
@@ -1019,11 +1088,12 @@ def _tier1_check_finding_inner(
 
 def _validate_one_hypothesis(
     hypothesis: "Hypothesis",
-    finding: Dict,
+    finding: dict,
     adapter: Any,
     llm_client: Any,
     *,
     deep_validate: bool = False,
+    tier1_batch: dict[str, ToolEvidence] | None = None,
 ) -> "tuple[ValidationResult, str]":
     """Run a hypothesis through Tier 1 → Tier 2 → Tier 3 in order.
 
@@ -1095,7 +1165,11 @@ def _validate_one_hypothesis(
                     adapter_db,
                 )
             else:
-                ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
+                _qp_key = str(prebuilt_path)
+                if tier1_batch and _qp_key in tier1_batch:
+                    ev = tier1_batch[_qp_key]
+                else:
+                    ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
                 verdict = _verdict_from_prebuilt(
                     ev, finding, prebuilt_path, codeql_db=adapter_db,
                 )
@@ -1151,7 +1225,7 @@ def _validate_one_hypothesis(
 
 def _try_template_with_retry(
     hypothesis: "Hypothesis",
-    finding: Dict,
+    finding: dict,
     adapter: Any,
     llm_client: Any,
     language: str,
@@ -1162,8 +1236,8 @@ def _try_template_with_retry(
     exhausted retries without a compile-able query — caller should fall
     through to the next tier.
     """
-    last_compile_error: Optional[str] = None
-    last_evidence: Optional[ToolEvidence] = None
+    last_compile_error: str | None = None
+    last_evidence: ToolEvidence | None = None
 
     for attempt in range(_MAX_COMPILE_RETRIES + 1):
         # Ask the LLM for source/sink predicates only. On retry, the
@@ -1231,9 +1305,9 @@ def _is_compile_error(error_text: str) -> bool:
 
 def _tier4_smt_refine(
     result: "ValidationResult",
-    finding: Dict,
-    analysis: Dict,
-    metrics: Optional[Dict[str, Any]] = None,
+    finding: dict,
+    analysis: dict,
+    metrics: dict[str, Any] | None = None,
 ) -> "tuple[ValidationResult, str]":
     """Tier 4: SMT path-feasibility refinement on a Tier 1/2/3 result.
 
@@ -1307,7 +1381,7 @@ def _tier4_smt_refine(
         # rather than crashing the whole tier loop.
         logger.debug("Tier 4 SMT: input rejected: %s", e)
         return result, "smt_error"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — fail-open validation loop
         logger.debug("Tier 4 SMT: check raised: %s", e)
         return result, "smt_error"
 
@@ -1471,9 +1545,9 @@ def _wrap_result(
 
 def _verdict_from_prebuilt(
     evidence: ToolEvidence,
-    finding: Dict,
-    query_path: Optional[Path] = None,
-    codeql_db: Optional[Path] = None,
+    finding: dict,
+    query_path: Path | None = None,
+    codeql_db: Path | None = None,
 ) -> str:
     """Derive verdict from a prebuilt-query result.
 
@@ -1602,6 +1676,7 @@ def _db_indexed_files(db_path: Path) -> "frozenset[str]":
         return frozenset()
     try:
         import zipfile
+
         from core.zip import UnsafeMemberReason, safe_member_reason
         names = []
         with zipfile.ZipFile(src_zip) as zf:
@@ -1621,7 +1696,7 @@ def _db_indexed_files(db_path: Path) -> "frozenset[str]":
         return frozenset()
 
 
-def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
+def _resolve_finding_in_db(finding: dict, db_path: Path) -> str | None:
     """Return the indexed-source entry that matches the finding's file,
     or None if no match.
 
@@ -1639,8 +1714,7 @@ def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
     if not file_path:
         return None
     # Strip uri-style prefixes some scanners use
-    if file_path.startswith("file://"):
-        file_path = file_path[len("file://"):]
+    file_path = strip_file_uri(file_path)
     indexed = _db_indexed_files(Path(db_path))
     if not indexed:
         return None
@@ -1659,7 +1733,7 @@ def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
     return None
 
 
-def _finding_file_in_db(finding: Dict, db_path: Path) -> bool:
+def _finding_file_in_db(finding: dict, db_path: Path) -> bool:
     """True when the finding's file path appears in the DB's source
     archive. Thin wrapper over `_resolve_finding_in_db`.
 
@@ -1670,7 +1744,7 @@ def _finding_file_in_db(finding: Dict, db_path: Path) -> bool:
 
 
 @functools.lru_cache(maxsize=128)
-def _read_db_source(db_path: Path, indexed_path: str) -> Optional[str]:
+def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
     """Read a single indexed source file's text from `<db>/src.zip`.
 
     Returns None on any error — caller treats that as 'can't verify'
@@ -1682,6 +1756,7 @@ def _read_db_source(db_path: Path, indexed_path: str) -> Optional[str]:
         return None
     try:
         import zipfile
+
         from core.zip import UnsafeMemberReason, safe_member_reason
         with zipfile.ZipFile(src_zip) as zf:
             info = zf.getinfo(indexed_path)
@@ -1699,7 +1774,7 @@ def _read_db_source(db_path: Path, indexed_path: str) -> Optional[str]:
         return None
 
 
-def _finding_function_in_db(finding: Dict, db_path: Path) -> bool:
+def _finding_function_in_db(finding: dict, db_path: Path) -> bool:
     """Layer 2 coverage check: does the finding's named function appear
     in the indexed source text?
 
@@ -1748,7 +1823,7 @@ def _finding_function_in_db(finding: Dict, db_path: Path) -> bool:
 _LAYER3_LANGUAGES = frozenset({"java"})
 
 
-def _layer3_probe_path(language: str) -> Optional[Path]:
+def _layer3_probe_path(language: str) -> Path | None:
     """Locate the callable-inventory probe `.ql` shipped with the
     in-repo extras pack for `language`. Returns None if no probe is
     available — caller treats that as 'Layer 3 disabled' and biases
@@ -1773,7 +1848,7 @@ def _layer3_probe_path(language: str) -> Optional[Path]:
 @functools.lru_cache(maxsize=8)
 def _db_callable_inventory(
     db_path: Path, language: str,
-) -> "Optional[frozenset[tuple[str, str]]]":
+) -> "frozenset[tuple[str, str]] | None":
     """Return the set of `(relative_path, function_name)` callables
     extracted in the DB, by running a one-time probe query.
 
@@ -1807,7 +1882,7 @@ def _db_callable_inventory(
             logger.debug("Layer 3 probe: CodeQL adapter unavailable")
             return None
         ev = adapter.run_prebuilt_query(probe_path, Path(db_path))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — fail-open validation loop
         logger.warning(
             "Layer 3 callable-inventory probe failed for %s (%s): %s",
             db_path, language, e,
@@ -1839,8 +1914,8 @@ def _db_callable_inventory(
 
 
 def _function_in_codeql_inventory(
-    finding: Dict, db_path: Path, language: str,
-) -> Optional[bool]:
+    finding: dict, db_path: Path, language: str,
+) -> bool | None:
     """Layer 3 coverage check: does the finding's named function
     actually exist in the CodeQL-extracted callable inventory?
 
@@ -1866,8 +1941,7 @@ def _function_in_codeql_inventory(
     if inventory is None:
         return None  # probe unavailable — defer to Layer 2
     file_path = (finding.get("file_path") or finding.get("file") or "").strip()
-    if file_path.startswith("file://"):
-        file_path = file_path[len("file://"):]
+    file_path = strip_file_uri(file_path)
     needle = file_path.lstrip("/")
     # Suffix match — finding's path may not anchor to DB's source root.
     for entry_file, entry_fn in inventory:
@@ -1912,7 +1986,7 @@ def _query_is_in_extras_pack(query_path: Path) -> bool:
 
 def _verdict_from_template(
     evidence: ToolEvidence,
-    finding: Dict,
+    finding: dict,
 ) -> str:
     """Derive verdict from a Tier 2 LLM-customised query result.
 
@@ -1937,7 +2011,7 @@ def _verdict_from_template(
 
 
 def _any_match_at_finding_location(
-    matches: List[Dict], finding: Dict,
+    matches: list[dict], finding: dict,
 ) -> bool:
     """True when any match's file:line is close to the finding's location.
 
@@ -1966,12 +2040,18 @@ def _any_match_at_finding_location(
             m_line = int(m.get("line") or 0)
         except (ValueError, TypeError):
             m_line = 0
+        # m_line == 0 means the engine could NOT localize the match —
+        # that is not an at-location match (the Tier-2 verdict would
+        # read "confirmed" precisely when the engine has no line
+        # evidence). Only a missing target_line relaxes the check.
+        if m_line == 0:
+            continue
         if target_line == 0 or abs(m_line - target_line) <= 5:
             return True
     return False
 
 
-def _finding_language(finding: Dict) -> Optional[str]:
+def _finding_language(finding: dict) -> str | None:
     """Infer the finding's language from file extension or language field.
 
     Same precedence as _pick_adapter_for_finding so the tier-selection
@@ -1983,6 +2063,7 @@ def _finding_language(finding: Dict) -> Optional[str]:
         ".java": "java", ".kt": "java",
         ".c":  "cpp", ".h": "cpp", ".cc": "cpp", ".cpp": "cpp",
         ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+        ".hh": "cpp", ".c++": "cpp", ".h++": "cpp", ".tcc": "cpp",
         ".js": "javascript", ".jsx": "javascript",
         ".ts": "javascript", ".tsx": "javascript",
         ".go": "go",
@@ -2006,13 +2087,76 @@ def _finding_language(finding: Dict) -> Optional[str]:
     return None
 
 
+# Promoted IRIS taint specs, rendered once per target path. The store
+# lookup is cheap but disk-touching; the Tier 2 retry loop can call
+# _ask_llm_for_predicates several times per finding.
+_IRIS_NOTE_CACHE: dict[str, str] = {}
+_IRIS_NOTE_MAX_PER_ROLE = 8
+
+
+def _iris_spec_note(target: Any) -> str:
+    """Prompt note listing promoted project taint specs (provenance: iris).
+
+    Loaded from the persistent per-project IRIS store; empty string
+    when no store / no specs / any failure. Spec names originate from
+    target-derived analysis, so they are defanged before injection.
+    """
+    key = str(target or "")
+    cached = _IRIS_NOTE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    note = ""
+    try:
+        from core.iris.api import load_project_specs
+
+        specs = load_project_specs(
+            target_path=Path(key) if key else None,
+        )
+        if specs:
+            by_role: dict[str, list] = {}
+            for spec in specs:
+                by_role.setdefault(spec.role, []).append(spec)
+            lines = [
+                (
+                    "Project-specific taint knowledge (promoted IRIS "
+                    "specs from the persistent project store — "
+                    "provenance: iris):"
+                ),
+            ]
+            for role in ("source", "sink", "sanitiser", "propagator"):
+                entries = by_role.get(role, [])[:_IRIS_NOTE_MAX_PER_ROLE]
+                if not entries:
+                    continue
+                rendered = ", ".join(
+                    neutralize_tag_forgery(
+                        f"{s.function} ({s.file})" if s.file else s.function
+                    )[:120]
+                    for s in entries
+                )
+                lines.append(f"- {role}s: {rendered}")
+            if len(lines) > 1:
+                lines.append(
+                    "Consider these project functions when writing the "
+                    "isSource/isSink predicate bodies — flows through "
+                    "them are invisible to stock catalogs."
+                )
+                note = "\n".join(lines)
+    except Exception:
+        logger.debug("IRIS spec note failed", exc_info=True)
+        note = ""
+
+    _IRIS_NOTE_CACHE[key] = note
+    return note
+
+
 def _ask_llm_for_predicates(
     hypothesis: "Hypothesis",
     llm_client: Any,
     language: str,
     *,
-    previous_error: Optional[str] = None,
-) -> Optional[Dict[str, str]]:
+    previous_error: str | None = None,
+) -> dict[str, str] | None:
     """Ask the LLM to write JUST the source and sink predicate bodies.
 
     The system prompt and Hypothesis.context already contain the IRIS
@@ -2038,6 +2182,9 @@ def _ask_llm_for_predicates(
         prompt_parts.append(f"CWE: {hypothesis.cwe}")
     if hypothesis.context:
         prompt_parts.append(_sanitize_for_prompt(hypothesis.context))
+    iris_note = _iris_spec_note(getattr(hypothesis, "target", None))
+    if iris_note:
+        prompt_parts.append(iris_note)
     prompt_parts.append(
         "Write ONLY the bodies of the isSource(DataFlow::Node n) and "
         "isSink(DataFlow::Node n) predicates. The surrounding query "
@@ -2083,23 +2230,19 @@ def _ask_llm_for_predicates(
             system_prompt=None,
             task_type="audit",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — fail-open validation loop
         logger.warning("LLM call for predicates failed: %s", e)
         return None
-    if not isinstance(response, dict):
-        # DispatchClient returns a dict on success, None on failure.
-        # Other client implementations may return objects with .result.
-        result = getattr(response, "result", None)
-        if isinstance(result, dict):
-            response = result
-        else:
-            return None
-    return response
+    # DispatchClient returns a dict on success, None on failure; other
+    # client implementations return objects with .result — one
+    # spelling of that tolerance lives in core.llm.coerce.
+    result = structured_result(response)
+    return result if isinstance(result, dict) else None
 
 
 def _pick_adapter_for_finding(
-    finding: Dict, adapters: Dict[str, Any],
-) -> Optional[Any]:
+    finding: dict, adapters: dict[str, Any],
+) -> Any | None:
     """Return the adapter whose DB matches the finding's language.
 
     Priority order:
@@ -2186,8 +2329,7 @@ def _db_is_stale(db_path: Path, repo_path: Path) -> bool:
                 st = child.stat().st_mtime
             except OSError:
                 continue
-            if st > newest_source:
-                newest_source = st
+            newest_source = max(newest_source, st)
             sampled += 1
 
     return newest_source > db_mtime + _DB_STALE_GRACE_SECONDS
@@ -2214,13 +2356,13 @@ def _sanitize_for_prompt(text: str) -> str:
 
 
 def _try_structural_fallback(
-    findings: List[Dict],
-    results_by_id: Dict[str, Dict],
+    findings: list[dict],
+    results_by_id: dict[str, dict],
     *,
     repo_path: Path,
-    metrics: Dict[str, Any],
-    progress_callback: Optional[Callable[[str], None]] = None,
-) -> Optional[Dict[str, Any]]:
+    metrics: dict[str, Any],
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
     """Structural validation fallback when no CodeQL database is available.
 
     Only processes findings that already have a ``dataflow_path``
@@ -2265,7 +2407,7 @@ def _try_structural_fallback(
             n_validated += 1
             if result.refuted and analysis.get("is_exploitable"):
                 n_downgrades += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — fail-open validation loop
             logger.debug(
                 "structural validation error for %s: %s", finding_id, exc,
             )
@@ -2287,7 +2429,7 @@ def _try_structural_fallback(
 
 
 def _attach_result(
-    analysis: Dict,
+    analysis: dict,
     result,
     *,
     method: str = "codeql-iris",
@@ -2332,21 +2474,21 @@ def _attach_result(
 
 def run_validation_pass(
     *,
-    findings: List[Dict],
-    results_by_id: Dict[str, Dict],
+    findings: list[dict],
+    results_by_id: dict[str, dict],
     out_dir: Path,
     repo_path: Path,
     dispatch_fn: Callable,
     analysis_model: Any,
-    role_resolution: Dict[str, Any],
+    role_resolution: dict[str, Any],
     dispatch_mode: str,
-    cost_tracker: Optional[Any] = None,
-    cross_family_resolver: Optional[Callable] = None,
-    progress_callback: Optional[Callable[[str], None]] = None,
+    cost_tracker: Any | None = None,
+    cross_family_resolver: Callable | None = None,
+    progress_callback: Callable[[str], None] | None = None,
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
     deep_validate: bool = False,
     deep_validate_disabled: bool = False,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Orchestrator-side hook: discover DB, pick model, run the pass.
 
     Tier 1 (free, CodeQL-only) runs whenever a database is available.
@@ -2380,7 +2522,7 @@ def run_validation_pass(
 
     codeql_dbs = discover_codeql_databases(out_dir)
     if not codeql_dbs:
-        metrics: Dict[str, Any] = {
+        metrics: dict[str, Any] = {
             "n_eligible": 0, "n_validated": 0, "n_cache_hits": 0,
             "n_recommended_downgrades": 0, "n_errors": 0,
             "n_skipped_no_db_for_language": 0, "n_stale_db_warnings": 0,
@@ -2407,12 +2549,12 @@ def run_validation_pass(
     ):
         try:
             cross = cross_family_resolver(analysis_model, role_resolution)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — fail-open validation loop
             logger.debug("cross_family_resolver raised: %s", e)
             cross = None
         if cross is not None:
             validation_model = cross
-            logger.info(
+            logger.debug(
                 "dataflow validation: cross-family checker = %s",
                 getattr(cross, "model_name", "?"),
             )
@@ -2434,7 +2576,7 @@ def run_validation_pass(
     )
 
 
-def reconcile_dataflow_validation(results_by_id: Dict[str, Dict]) -> Dict[str, int]:
+def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, int]:
     """Apply downgrades from the validation pass after consensus/judge.
 
     Called at the end of orchestration (after consensus, judge, retry,
@@ -2510,7 +2652,7 @@ def reconcile_dataflow_validation(results_by_id: Dict[str, Dict]) -> Dict[str, i
         try:
             from packages.cvss import score_finding
             score_finding(analysis)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — fail-open validation loop
             logger.debug("score_finding failed during reconciliation: %s", e)
         n_hard += 1
 

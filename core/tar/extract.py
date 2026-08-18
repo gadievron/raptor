@@ -115,9 +115,12 @@ class TarEntryCountExceeded(Exception):
 
 
 class TarTotalBytesExceeded(Exception):
-    """Raised when the cumulative extracted-bytes total exceeds
+    """Raised when the cumulative decompressed-bytes total exceeds
     ``max_total_bytes`` (opt-in) — the aggregate-size bomb defense (per-member
-    cap doesn't bound the sum). Always raises, never silently truncates."""
+    cap doesn't bound the sum). Counts every member's header-declared size,
+    kept OR skipped: in stream mode tarfile must decompress a member's data
+    even to skip past it, so uncounted skipped members would leave a
+    gzip-bomb CPU DoS open. Always raises, never silently truncates."""
 
 
 def extract_files_from_tar(
@@ -130,7 +133,7 @@ def extract_files_from_tar(
     expected_count: Optional[int] = None,
     unique_keys: bool = False,
     max_total_bytes: Optional[int] = None,
-    max_entry_count: Optional[int] = None,
+    max_entry_count: Optional[int] = 50_000,
 ) -> Dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -180,6 +183,21 @@ def extract_files_from_tar(
             if max_entry_count is not None and count > max_entry_count:
                 raise TarEntryCountExceeded(
                     f"tar exceeds {max_entry_count} entries (bomb-shape); refusing")
+            if max_total_bytes is not None:
+                # Count the header-declared size of EVERY member —
+                # including ones the safety filter or selector will
+                # skip — and check the budget before advancing. In
+                # stream mode advancing past a member decompresses
+                # its full data, so checking here (header read, data
+                # not yet consumed) is what bounds the decompression
+                # work; counting only kept members would let a
+                # gzip-bomb member burn unbounded CPU while being
+                # "skipped".
+                total_bytes += member.size
+                if total_bytes > max_total_bytes:
+                    raise TarTotalBytesExceeded(
+                        f"tar decompression exceeds {max_total_bytes} bytes "
+                        f"(bomb-shape); refusing")
             if not member.isfile():
                 continue
             reason = safe_member_reason(
@@ -217,12 +235,6 @@ def extract_files_from_tar(
                 data = f.read()
             finally:
                 f.close()
-            if max_total_bytes is not None:
-                total_bytes += len(data)
-                if total_bytes > max_total_bytes:
-                    raise TarTotalBytesExceeded(
-                        f"tar extraction exceeds {max_total_bytes} bytes "
-                        f"(bomb-shape); refusing")
             found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break

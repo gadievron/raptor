@@ -1,7 +1,7 @@
 """Prompt budget: estimate token cost and shed low-priority sections.
 
-Reusable across any prompt-assembly site — /agentic analysis bundles,
-tool-use loop preambles.  The estimator uses the
+Reusable across any prompt-assembly site — /audit context, /agentic
+analysis bundles, tool-use loop preambles.  The estimator uses the
 same 4-chars-per-token heuristic as ``providers.estimate_tokens``
 (intentionally over-estimates; the safe direction).
 
@@ -172,4 +172,4 @@ def context_budget_for_model(
         window = context_window_for(model)
     except (KeyError, ImportError):
         window = 200_000
-    return window - system_prompt_tokens - response_headroom
+    return max(0, window - system_prompt_tokens - response_headroom)

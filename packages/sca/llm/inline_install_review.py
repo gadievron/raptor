@@ -107,7 +107,10 @@ def review_inline_installs(
         if (item.ecosystem.lower(), item.name.lower()) in mechanical_names:
             continue
 
-        eco_lower = item.ecosystem.lower().replace("pypi", "pypi")
+        eco_lower = {
+            "PyPI": "pypi", "npm": "npm", "crates.io": "cargo",
+            "RubyGems": "gem", "Go": "golang",
+        }.get(item.ecosystem, item.ecosystem.lower())
         purl = f"pkg:{eco_lower}/{item.name}"
         if item.version:
             purl += f"@{item.version}"

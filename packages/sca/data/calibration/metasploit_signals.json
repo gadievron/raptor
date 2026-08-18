@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-07-21T08:07:29Z",
+    "fetched_at": "2026-08-18T06:24:33Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7110,
+    "modules_scanned": 7138,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -18661,6 +18661,12 @@
         "exploit_multi/http/roundcube_auth_rce_cve_2025_49113"
       ]
     },
+    "CVE-2025-49132": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/pterodactyl_locales_locale_json"
+      ]
+    },
     "CVE-2025-49136": {
       "has_msf_module": true,
       "module_paths": [
@@ -18953,6 +18959,12 @@
         "exploit_linux/http/ivanti_epmm_rce"
       ]
     },
+    "CVE-2026-15409": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/sonicwall_sma1000_wsproxy_rce"
+      ]
+    },
     "CVE-2026-1731": {
       "has_msf_module": true,
       "module_paths": [
@@ -18975,6 +18987,12 @@
       "has_msf_module": true,
       "module_paths": [
         "auxiliary_gather/osticket_arbitrary_file_read"
+      ]
+    },
+    "CVE-2026-22594": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/ghostcms_auth_rce_cve_2026_29053"
       ]
     },
     "CVE-2026-2329": {
@@ -19019,6 +19037,12 @@
         "exploit_multi/http/freescout_htaccess_rce"
       ]
     },
+    "CVE-2026-27760": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/opencats_installer_rce"
+      ]
+    },
     "CVE-2026-27966": {
       "has_msf_module": true,
       "module_paths": [
@@ -19055,6 +19079,12 @@
         "exploit_linux/http/opendcim_install_sqli_rce"
       ]
     },
+    "CVE-2026-29053": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/ghostcms_auth_rce_cve_2026_29053"
+      ]
+    },
     "CVE-2026-29058": {
       "has_msf_module": true,
       "module_paths": [
@@ -19079,6 +19109,12 @@
         "exploit_multi/http/xerte_unauthenticated_template_import_rce"
       ]
     },
+    "CVE-2026-33017": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_unauth_rce_cve_2026_33017"
+      ]
+    },
     "CVE-2026-34197": {
       "has_msf_module": true,
       "module_paths": [
@@ -19101,6 +19137,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/xerte_unauthenticated_mediaupload"
+      ]
+    },
+    "CVE-2026-3891": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/wp_plugin_pix_unauth_rce_cve_2026_3891"
       ]
     },
     "CVE-2026-41264": {
@@ -19157,10 +19199,40 @@
         "exploit_linux/http/dalfox_server_rce_cve_2026_45087"
       ]
     },
+    "CVE-2026-46300": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/cve_2026_46300_fragnesia"
+      ]
+    },
     "CVE-2026-46333": {
       "has_msf_module": true,
       "module_paths": [
         "post_linux/gather/cve_2026_46333_chage"
+      ]
+    },
+    "CVE-2026-48907": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/joomla_com_jce_unauth_file_upload_rce"
+      ]
+    },
+    "CVE-2026-52806": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/gogs_rebase_rce"
+      ]
+    },
+    "CVE-2026-60137": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/wp_batch_desync_rce"
+      ]
+    },
+    "CVE-2026-63030": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/wp_batch_desync_rce"
       ]
     }
   }

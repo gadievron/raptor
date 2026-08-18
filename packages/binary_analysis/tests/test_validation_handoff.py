@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from packages.binary_analysis.evidence import EvidenceTier, make_evidence
+from core.evidence import EvidenceTier, make_evidence
 from packages.binary_analysis.validation_handoff import build_validation_handoff
 
 SHA = "a" * 64

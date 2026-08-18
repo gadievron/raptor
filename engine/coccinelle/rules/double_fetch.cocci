@@ -6,6 +6,7 @@
 // first fetch validated.
 //
 // Covers CWE-367: TOCTOU race in userspace reads.
+// @role: verification
 
 @first_fetch@
 expression uptr, dst1;
@@ -15,7 +16,8 @@ position p1;
 copy_from_user@p1(dst1, uptr, ...)
 
 @second_fetch@
-expression uptr, dst2;
+expression first_fetch.uptr;
+expression dst2;
 position p2;
 position first_fetch.p1;
 @@

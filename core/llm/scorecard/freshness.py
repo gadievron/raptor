@@ -118,6 +118,8 @@ def flatten_counts(
     correct = 0.0
     incorrect = 0.0
     for counts in buckets.values():
+        if not isinstance(counts, dict):
+            continue
         correct += _coerce_count(counts.get("correct", 0))
         incorrect += _coerce_count(counts.get("incorrect", 0))
     return correct, incorrect
@@ -141,6 +143,8 @@ def weighted_counts(
     correct = 0.0
     incorrect = 0.0
     for bucket, counts in buckets.items():
+        if not isinstance(counts, dict):
+            continue
         w = decay_weight(bucket_age_days(bucket, now), half_life_days)
         correct += w * _coerce_count(counts.get("correct", 0))
         incorrect += w * _coerce_count(counts.get("incorrect", 0))

@@ -109,8 +109,81 @@ def _classify(path: str) -> str | None:
     return None
 
 
+def _normalise(source: str) -> str:
+    """Approximate translation phases 2-3 so directive regexes see what
+    the preprocessor sees.
+
+    Two legal spellings the raw regexes miss:
+
+      - ``#include \\`` + newline + ``"path"`` — phase 2 splices
+        backslash-newline continuations before directives are parsed.
+      - ``#include/*x*/"path"`` — phase 3 replaces each block comment
+        with a single space.
+
+    The comment pass is a small state walk, not a regex substitution:
+    ``/*`` inside a string literal or line comment must NOT open a
+    comment, otherwise an attacker could hide a live directive inside
+    text the stripper wrongly deletes (the compiler would still
+    process it). Newlines inside block comments are preserved so
+    reported line numbers stay aligned; spliced continuations do
+    shift later line numbers by the number of splices above them,
+    which is acceptable at PoC scale.
+    """
+    # Phase 2: splice line continuations (CRLF variant first).
+    source = source.replace("\\\r\n", "").replace("\\\n", "")
+
+    out: list[str] = []
+    i = 0
+    n = len(source)
+    state = "code"  # code | string | char | line_comment | block_comment
+    while i < n:
+        c = source[i]
+        if state == "code":
+            if c == '"':
+                state = "string"
+                out.append(c)
+            elif c == "'":
+                state = "char"
+                out.append(c)
+            elif c == "/" and i + 1 < n and source[i + 1] == "*":
+                state = "block_comment"
+                out.append(" ")
+                i += 2
+                continue
+            elif c == "/" and i + 1 < n and source[i + 1] == "/":
+                state = "line_comment"
+                out.append(c)
+            else:
+                out.append(c)
+        elif state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            if c == "\\" and i + 1 < n:
+                out.append(source[i:i + 2])
+                i += 2
+                continue
+            if c == quote or c == "\n":
+                # A literal can't span a raw newline; drop back to code
+                # so an unterminated quote can't swallow the file.
+                state = "code"
+            out.append(c)
+        elif state == "line_comment":
+            if c == "\n":
+                state = "code"
+            out.append(c)
+        else:  # block_comment
+            if c == "*" and i + 1 < n and source[i + 1] == "/":
+                state = "code"
+                i += 2
+                continue
+            if c == "\n":
+                out.append("\n")  # keep line numbers aligned
+        i += 1
+    return "".join(out)
+
+
 def scan(source: str) -> list[SourceScanViolation]:
     """Return all violations found in ``source``. Empty list = OK to compile."""
+    source = _normalise(source)
     violations: list[SourceScanViolation] = []
     for directive, pattern in _DIRECTIVE_PATTERNS:
         for m in pattern.finditer(source):

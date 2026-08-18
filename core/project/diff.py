@@ -93,8 +93,8 @@ def diff_runs(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
     index_a = _index_by_location(findings_a)
     index_b = _index_by_location(findings_b)
 
-    keys_a = set(index_a.keys())
-    keys_b = set(index_b.keys())
+    keys_a = set(index_a)
+    keys_b = set(index_b)
 
     new = [index_b[k] for k in sorted(keys_b - keys_a)]
     removed = [index_a[k] for k in sorted(keys_a - keys_b)]

@@ -4,8 +4,11 @@ Walks a target repo finding files the parsers know about. Skips vendored
 trees, doesn't follow symlinks, soft-caps depth.
 
 Output: List[Manifest], one per discovered file. The parsers are keyed by
-filename in parsers/__init__.py; discovery is parser-agnostic — it just
-identifies candidates.
+filename in parsers/__init__.py; discovery identifies candidates and does
+not parse them, but it is not fully parser-agnostic: it resets the CPM and
+Gradle-catalog parser caches at the scan boundary, and enriches ``.sln``
+hits via the sln parser's csproj resolver so solution-referenced projects
+outside the walk are still found.
 """
 
 from __future__ import annotations
@@ -448,8 +451,6 @@ def _should_skip_dir(name: str, excludes: Set[str]) -> bool:
     ``.raptor-sca-venv-<pid>`` so the suffix varies per run.
     """
     if name.startswith(".raptor-sca-venv-"):
-        return True
-    if name.startswith(".") and name in excludes:
         return True
     return name in excludes
 

@@ -12,11 +12,11 @@ from __future__ import annotations
 import gzip
 import io
 import tarfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any
 from unittest.mock import MagicMock
-
 
 from packages.sca.dockerfile_from import (
     FromEntry,
@@ -29,7 +29,6 @@ from packages.sca.dockerfile_from import (
 )
 from packages.sca.models import PinStyle
 
-
 # ---------------------------------------------------------------------------
 # Helpers — synthesize manifests + layer tarballs
 # ---------------------------------------------------------------------------
@@ -38,12 +37,12 @@ from packages.sca.models import PinStyle
 @dataclass
 class FakeManifestResp:
     """Mimic ``ManifestResponse`` for the bits we read."""
-    parsed: Dict[str, Any]
+    parsed: dict[str, Any]
     content_type: str
-    digest: Optional[str]
+    digest: str | None
 
 
-def _make_layer_blob(file_payloads: Dict[str, bytes]) -> bytes:
+def _make_layer_blob(file_payloads: dict[str, bytes]) -> bytes:
     """Build a gzipped tar layer containing the given files."""
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as tf:
@@ -60,8 +59,8 @@ def _chunk(data: bytes, size: int = 1024) -> Iterator[bytes]:
 
 
 def _make_client(
-    manifests: Dict[str, FakeManifestResp],
-    blobs: Dict[str, bytes],
+    manifests: dict[str, FakeManifestResp],
+    blobs: dict[str, bytes],
 ) -> MagicMock:
     """Build a fake OCI client. ``manifests`` is keyed by reference
     (tag or digest) used in fetch_manifest; ``blobs`` is keyed by
@@ -195,16 +194,16 @@ def test_fetch_single_platform_manifest_with_dpkg(tmp_path):
     """Single-platform manifest pointing at one layer that
     contains a dpkg status file."""
     dpkg_status = (
-        "Package: zlib1g\n"
-        "Status: install ok installed\n"
-        "Version: 1:1.2.13.dfsg-1\n"
-        "Architecture: amd64\n"
-        "\n"
-        "Package: openssl\n"
-        "Status: install ok installed\n"
-        "Version: 3.0.11-1~deb12u2\n"
-        "\n"
-    ).encode()
+        b"Package: zlib1g\n"
+        b"Status: install ok installed\n"
+        b"Version: 1:1.2.13.dfsg-1\n"
+        b"Architecture: amd64\n"
+        b"\n"
+        b"Package: openssl\n"
+        b"Status: install ok installed\n"
+        b"Version: 3.0.11-1~deb12u2\n"
+        b"\n"
+    )
     layer_blob = _make_layer_blob({"var/lib/dpkg/status": dpkg_status})
     layer_digest = "sha256:" + "a" * 64
 
@@ -502,11 +501,11 @@ def test_scan_dockerfiles_end_to_end(tmp_path):
     )
     layer_blob = _make_layer_blob({
         "var/lib/dpkg/status": (
-            "Package: openssl\n"
-            "Status: install ok installed\n"
-            "Version: 3.0.11-1~deb12u2\n"
-            "\n"
-        ).encode(),
+            b"Package: openssl\n"
+            b"Status: install ok installed\n"
+            b"Version: 3.0.11-1~deb12u2\n"
+            b"\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     manifest = FakeManifestResp(
@@ -549,9 +548,9 @@ def test_scan_dockerfiles_continues_after_image_failure(tmp_path):
 
     layer_blob = _make_layer_blob({
         "var/lib/dpkg/status": (
-            "Package: ok\nStatus: install ok installed\n"
-            "Version: 1.0\n\n"
-        ).encode(),
+            b"Package: ok\nStatus: install ok installed\n"
+            b"Version: 1.0\n\n"
+        ),
     })
     layer_digest = "sha256:" + "a" * 64
     good = FakeManifestResp(
@@ -716,6 +715,7 @@ def test_at_tag_ref_demoted_to_debug(tmp_path: Path, caplog) -> None:
     multiple WARN-level lines for this exact pattern.
     """
     import logging
+
     from packages.sca.dockerfile_from import fetch_image_sbom
 
     class _UnusedClient:
@@ -737,3 +737,192 @@ def test_at_tag_ref_demoted_to_debug(tmp_path: Path, caplog) -> None:
         f"@<tag> noise should be at DEBUG, not WARNING; got "
         f"{[r.getMessage() for r in warning_records]}"
     )
+
+
+def test_gitlab_ci_default_section_extracted():
+    from packages.sca.dockerfile_from import _walk_gitlab_image_refs
+
+    data = {
+        "default": {
+            "image": "ruby:3.2",
+        },
+        "stages": ["test"],
+        "test_job": {
+            "stage": "test",
+            "script": ["echo hi"],
+        },
+    }
+    refs = list(_walk_gitlab_image_refs(data))
+    images = [img for img, _label in refs]
+    assert "ruby:3.2" in images
+
+
+# ---------------------------------------------------------------------------
+# Symlink rejection + bounded reads on the image-source walkers
+# ---------------------------------------------------------------------------
+
+
+def test_find_dockerfiles_skips_symlinked_entries(tmp_path: Path):
+    """A symlinked Dockerfile in a scanned repo can point anywhere on
+    the host filesystem — the walker must not list it."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / "Dockerfile"
+    real.write_text("FROM alpine:3.18\n")
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "Dockerfile").symlink_to(real)
+    (target / "Dockerfile.kept").write_text("FROM debian:12\n")
+
+    found = find_dockerfiles(target)
+    names = {p.name for p in found}
+    assert names == {"Dockerfile.kept"}, (
+        f"symlinked Dockerfile must be skipped, got: {names}"
+    )
+
+
+def test_find_compose_image_refs_skips_symlinked_file(tmp_path: Path):
+    """Symlinked docker-compose file is skipped; a regular one in the
+    same tree is still picked up."""
+    from packages.sca.dockerfile_from import find_compose_image_refs
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / "docker-compose.yml"
+    real.write_text(
+        "services:\n  evil:\n    image: attacker/planted:1\n")
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "docker-compose.yml").symlink_to(real)
+    sub = target / "deploy"
+    sub.mkdir()
+    (sub / "docker-compose.yml").write_text(
+        "services:\n  web:\n    image: nginx:1.25\n")
+
+    refs = find_compose_image_refs(target)
+    images = {r.image for r in refs}
+    assert images == {"nginx:1.25"}, (
+        f"symlinked compose file must be skipped, got: {images}"
+    )
+
+
+def test_find_kubernetes_image_refs_skips_symlinked_file(tmp_path: Path):
+    from packages.sca.dockerfile_from import find_kubernetes_image_refs
+
+    manifest = (
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "        - name: web\n"
+        "          image: nginx:1.25\n"
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / "deployment.yaml"
+    real.write_text(manifest)
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "deployment.yaml").symlink_to(real)
+
+    assert find_kubernetes_image_refs(target) == []
+
+
+def test_find_gitlab_ci_image_refs_skips_symlinked_file(tmp_path: Path):
+    from packages.sca.dockerfile_from import find_gitlab_ci_image_refs
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / ".gitlab-ci.yml"
+    real.write_text("image: ruby:3.2\n")
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / ".gitlab-ci.yml").symlink_to(real)
+
+    assert find_gitlab_ci_image_refs(target) == []
+
+
+# ---------------------------------------------------------------------------
+# Digest grammar validation + registry-namespaced cache keys
+# ---------------------------------------------------------------------------
+
+
+def _dpkg_manifest(digest: str) -> tuple:
+    """Build (manifest, blobs) for a single-layer dpkg image with the
+    supplied manifest digest."""
+    dpkg_status = (
+        b"Package: zlib1g\nStatus: install ok installed\n"
+        b"Version: 1.0\n\n"
+    )
+    layer_blob = _make_layer_blob({"var/lib/dpkg/status": dpkg_status})
+    layer_digest = "sha256:" + "a" * 64
+    manifest = FakeManifestResp(
+        parsed={
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"digest": "sha256:" + "c" * 64},
+            "layers": [{
+                "digest": layer_digest, "size": len(layer_blob),
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            }],
+        },
+        content_type="application/vnd.oci.image.manifest.v1+json",
+        digest=digest,
+    )
+    return manifest, {layer_digest: layer_blob}
+
+
+def test_malformed_digest_skips_caching_but_fetch_still_works(
+    tmp_path: Path,
+):
+    """A registry-claimed digest that fails the sha256 grammar must
+    never become a cache key — the fetch proceeds uncached and still
+    returns data; a re-fetch hits the network again."""
+    from core.json.cache import JsonCache
+    cache = JsonCache(root=tmp_path)
+    bad_digest = "sha256:../../" + "e" * 52   # path chars, wrong length
+    manifest, blobs = _dpkg_manifest(bad_digest)
+    client = _make_client(manifests={"11": manifest}, blobs=blobs)
+
+    sbom1 = fetch_image_sbom("debian:11", client=client, disk_cache=cache)
+    assert sbom1 is not None and sbom1.packages, "fetch must still work"
+    first = client.fetch_manifest.call_count
+
+    sbom2 = fetch_image_sbom("debian:11", client=client, disk_cache=cache)
+    assert sbom2 is not None and sbom2.packages
+    assert client.fetch_manifest.call_count > first, (
+        "malformed digest must not have produced a cache entry"
+    )
+
+
+def test_valid_digest_cached_under_registry_namespaced_key(
+    tmp_path: Path,
+):
+    """The SBOM disk-cache key is namespaced by registry host so a
+    digest claimed by one registry can never serve content for
+    another."""
+    from core.json.cache import TTL_FOREVER, JsonCache
+    cache = JsonCache(root=tmp_path)
+    digest = "sha256:" + "9" * 64
+    manifest, blobs = _dpkg_manifest(digest)
+    client = _make_client(
+        manifests={"24.04": manifest, digest: manifest}, blobs=blobs)
+
+    sbom = fetch_image_sbom(
+        "ubuntu:24.04", client=client, disk_cache=cache)
+    assert sbom is not None and sbom.packages
+    # Namespaced key present; bare-digest key absent.
+    assert isinstance(
+        cache.get(f"sbom/docker.io/{digest}", ttl_seconds=TTL_FOREVER),
+        dict,
+    )
+    assert cache.get(digest, ttl_seconds=TTL_FOREVER) is None
+
+
+def test_sbom_cache_key_distinct_per_registry():
+    from packages.sca.dockerfile_from import _sbom_cache_key
+
+    digest = "sha256:" + "9" * 64
+    assert (_sbom_cache_key("docker.io", digest)
+            != _sbom_cache_key("ghcr.io", digest))

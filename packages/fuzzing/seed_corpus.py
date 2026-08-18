@@ -121,6 +121,23 @@ DEFAULT_MAX_FILE_SIZE = 1024 * 1024
 GENERATED_SEED_KINDS = set(TEXT_EXTENSIONS.values()) | {"binary"}
 BUILTIN_SEED_CORPUS_DIR = Path(__file__).resolve().parent / "data" / "seed_corpus"
 
+# packages/fuzzing/seed_corpus.py → repo root is two levels up.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _portable_path(path: Path) -> str:
+    """Repo-relative POSIX form for paths inside the checkout.
+
+    Generated manifests can be committed (seeds/); an absolute path
+    would embed the local checkout location into the repository.
+    Paths outside the checkout (run output dirs) keep their absolute
+    form — there is nothing stable to relativise them against.
+    """
+    try:
+        return path.resolve().relative_to(_REPO_ROOT).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
 
 @dataclass(frozen=True)
 class SeedCorpusOptions:
@@ -239,10 +256,13 @@ def _reset_generated_output(out_dir: Path) -> None:
 
     for kind in GENERATED_SEED_KINDS:
         kind_dir = out_dir / kind
-        if kind_dir.is_dir() and not kind_dir.is_symlink():
-            shutil.rmtree(kind_dir)
-        else:
-            kind_dir.unlink(missing_ok=True)
+        try:
+            if kind_dir.is_dir() and not kind_dir.is_symlink():
+                shutil.rmtree(kind_dir)
+            else:
+                kind_dir.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
 
     manifest_path = out_dir / "manifest.json"
     manifest_path.unlink(missing_ok=True)
@@ -324,8 +344,8 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
             skipped.append({"path": rel, "reason": f"unreadable: {type(exc).__name__}"})
 
     manifest = {
-        "source_dir": str(source_dir),
-        "out_dir": str(out_dir),
+        "source_dir": _portable_path(source_dir),
+        "out_dir": _portable_path(out_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "max_file_size": options.max_file_size,
         "include_lockfiles": options.include_lockfiles,
@@ -409,10 +429,10 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
 
     manifest = {
         "source": "raptor_builtin_seed_corpus",
-        "source_manifest": str(manifest_path),
+        "source_manifest": _portable_path(manifest_path),
         "version": source_manifest.get("version", 1),
         "profile": profile,
-        "out_dir": str(out_dir),
+        "out_dir": _portable_path(out_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "seed_count": len(copied),
         "seeds": copied,
@@ -449,10 +469,13 @@ def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
 
     for name in generated_names:
         path = out_dir / name
-        if path.is_file() or path.is_symlink():
-            path.unlink()
-        elif path.is_dir():
-            shutil.rmtree(path)
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+        except (FileNotFoundError, OSError):
+            pass
 
 
 __all__ = [

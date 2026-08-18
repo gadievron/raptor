@@ -25,7 +25,6 @@ from core.llm.tool_use import (
 from core.llm.tool_use.loop import ToolUseLoop
 from core.llm.tool_use.types import ToolResultPreflight
 
-
 # ---------------------------------------------------------------------------
 # Minimal in-memory provider (parallels the one in test_loop.py but
 # kept private to this file to avoid cross-test fixture coupling)
@@ -525,7 +524,7 @@ class TestXSourceExtraction:
         "discovered"`` validation can match them. If extraction ran on
         the WRAPPED content, the envelope tokens (``untrusted-``,
         ``tool-result``, ``Read``) would pollute the discovered set
-        and falsely whitelist any tool input containing those literals.
+        and falsely allowlist any tool input containing those literals.
 
         Verify by chaining: tool_call_1 returns a known SHA; tool_call_2
         passes that SHA as a discovered field → must dispatch (in the

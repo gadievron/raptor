@@ -25,13 +25,13 @@ Failure modes surface as typed exceptions (``DiscoveryError``,
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-import time
-from typing import Any, Callable
+from typing import Any
 
 from core.http import HttpError as _HttpError
-
 from cve_diff.acquisition.layers import CascadingRepoAcquirer
 from cve_diff.agent.invariants import check_diff_shape, discover_validator
 from cve_diff.agent.loop import AgentConfig, AgentLoop
@@ -51,7 +51,6 @@ from cve_diff.diffing.extract_via_api import extract_via_api
 from cve_diff.diffing.extractor import extract_diff
 from cve_diff.infra import disk_budget
 
-
 # Maximum number of post-submit retries (i.e. extra agent runs after
 # stages 2-5 fail on the agent's first pick). One retry = two total
 # attempts. Empirically (501-CVE OSS 2022-2024 bench, 2026-04-26)
@@ -60,14 +59,16 @@ from cve_diff.infra import disk_budget
 _MAX_POST_SUBMIT_RETRIES: int = 1
 
 
-# Map every internal ``_emit`` stage name to one of the 5 canonical
-# pipeline stages (discover/acquire/resolve/diff/render). The trace
-# renderer needs this to draw all 5 stage headers correctly on FAIL
-# paths — see ``cve_diff/report/markdown.py::render_flow``.
+# Map each stage-verdict ``_emit`` stage name to one of the 5
+# canonical pipeline stages (discover/acquire/resolve/diff/render).
+# The trace renderer needs this to draw all 5 stage headers correctly
+# on FAIL paths — see ``cve_diff/report/markdown.py::render_flow``.
 #
 # Auxiliary steps (``extraction_agreement``, ``consensus``) are NOT
 # in this map — their success/failure is informational, not a stage
-# verdict. Stage status is populated only for the structural events
+# verdict. ``disk_check`` is also absent: it only ever emits
+# ``start``, and _emit records stage status solely for ok/fail
+# events. Stage status is populated only for the structural events
 # that mark "the pipeline reached this stage and (succeeded | failed)
 # decisively here". On a clean pipeline.run() return, render="ok" is
 # stamped at the end (whether or not consensus / agreement ran).
@@ -127,7 +128,7 @@ class Pipeline:
     # When set, called at each stage transition with
     # (stage_name: str, status: str, info: dict). The CLI's --verbose
     # flag wires this to a stderr-printer; bench leaves it None.
-    progress_callback: "Callable[[str, str, dict], None] | None" = None
+    progress_callback: Callable[[str, str, dict], None] | None = None
     # Set true after _maybe_retry runs the second AgentLoop. Read by
     # the bench harness for retry-effectiveness telemetry.
     _last_meta_retry_attempted: bool = field(default=False, init=False, repr=False)
@@ -144,14 +145,14 @@ class Pipeline:
     # ``<cve>.<forge>.patch`` file alongside the clone-extracted patch.
     # This gives users two independent diff files to compare manually
     # whenever extraction_agreement comes back ``partial`` or ``disagree``.
-    _last_api_bundle: "DiffBundle | None" = field(
+    _last_api_bundle: DiffBundle | None = field(
         default=None, init=False, repr=False
     )
     # ``_last_extra_bundles`` is the FULL list of second-source bundles
     # the agreement check produced — not just one. Today there can be
     # up to two (JSON API + patch URL); cgit yields just patch_url.
     # Each bundle gets persisted as ``<cve>.<method>.patch``.
-    _last_extra_bundles: "list[tuple[str, DiffBundle]]" = field(
+    _last_extra_bundles: list[tuple[str, DiffBundle]] = field(
         default_factory=list, init=False, repr=False
     )
     # Per-canonical-stage status. Populated by ``_emit`` whenever an
@@ -161,7 +162,7 @@ class Pipeline:
     # can ALWAYS render all 5 stage headers — including on FAIL paths,
     # where it's the only signal of "where in the pipeline did we
     # actually stop?". User-stated requirement (2026-05-01).
-    _stage_status: "dict[str, dict]" = field(
+    _stage_status: dict[str, dict] = field(
         default_factory=dict, init=False, repr=False
     )
 
@@ -215,7 +216,22 @@ class Pipeline:
                 _HttpError,
             ) as exc:
                 if attempt == _MAX_POST_SUBMIT_RETRIES:
-                    raise
+                    if isinstance(
+                        exc,
+                        (AcquisitionError, AnalysisError, IdenticalCommitsError),
+                    ):
+                        raise
+                    # ValueError / RuntimeError / HttpError are outside
+                    # the typed-exception contract the CLI maps to
+                    # failure.md + exit codes (module docstring). All
+                    # three arise while materialising the repo / commit
+                    # for the agent's pick, so they surface as
+                    # AcquisitionError with the original chained for
+                    # diagnosis.
+                    raise AcquisitionError(
+                        f"{cve_id}: {type(exc).__name__} while acquiring "
+                        f"{ref.repository_url}@{ref.fix_commit[:12]}: {exc}"
+                    ) from exc
                 self._emit("post_submit_retry", "start", {
                     "failed_class": type(exc).__name__,
                     "failed_slug": ref.repository_url,
@@ -384,7 +400,7 @@ class Pipeline:
         if self.progress_callback is not None:
             try:
                 self.progress_callback(stage, status, info)
-            except Exception as exc:  # noqa: BLE001 — never break pipeline on bad callback
+            except Exception as exc:
                 # Log at DEBUG so a misbehaving callback is
                 # diagnosable from --verbose without aborting the
                 # pipeline. Pre-fix this was completely silent.
@@ -466,13 +482,14 @@ class Pipeline:
         the original).
 
         Triggered when:
-          * ``AgentSurrender`` reason in budget_* family
+          * ``AgentSurrender`` reason in the budget_* family or
+            ``llm_error`` (transient — a fresh request may succeed)
           * at least one ``gh_commit_detail``-confirmed (slug, sha) was
             captured during the first run
 
-        Other surrender reasons (``UnsupportedSource``, ``no_evidence``,
-        ``llm_error`` after retries, etc.) are not retried — the agent
-        already concluded the right answer.
+        Other surrender reasons (``UnsupportedSource``,
+        ``no_evidence``, etc.) are not retried — the agent already
+        concluded the right answer.
         """
         if not isinstance(result, AgentSurrender):
             return None

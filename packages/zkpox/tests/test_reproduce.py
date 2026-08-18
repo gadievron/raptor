@@ -14,15 +14,18 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
-
 
 # packages/zkpox/tests/test_reproduce.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
+import core.sandbox  # noqa: E402
+from core.hash import sha256_file  # noqa: E402
+from core.sandbox import SandboxSetupError  # noqa: E402
 from core.witness.store import WitnessStore  # noqa: E402
 from core.witness.types import (  # noqa: E402
     Witness,
@@ -160,6 +163,37 @@ def test_sanitizer_flag_inferred_from_outcome(tmp_path, monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# Witness-hash verification (both dispatch modes)
+# ----------------------------------------------------------------------
+
+
+def test_witness_hash_mismatch_refused(tmp_path):
+    """Supplied witness bytes don't match the bundle's recorded hash →
+    refuse (we'd be reproducing a different witness). Mirrors the
+    binary-hash check on the replay path."""
+    bundle, _data = _bundle(
+        tmp_path, source=WitnessSource.LLM_EMIT_RUN,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// poc",
+    )
+    result = reproduce_witness(bundle, b"// tampered", n=3)
+    assert result.attempted is False
+    assert "witness hash mismatch" in result.reason
+
+
+def test_witness_hash_checked_before_dispatch(tmp_path):
+    """The witness-hash check fires before source dispatch — a FUZZ
+    bundle with tampered bytes reports the mismatch, not the missing
+    binary."""
+    bundle, data = _bundle(
+        tmp_path, source=WitnessSource.FUZZ,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"crashbytes",
+    )
+    result = reproduce_witness(bundle, data + b"x", n=3)  # no binary_path
+    assert result.attempted is False
+    assert "witness hash mismatch" in result.reason
+
+
+# ----------------------------------------------------------------------
 # FUZZ / input-replay dispatch
 # ----------------------------------------------------------------------
 
@@ -187,6 +221,150 @@ def test_fuzz_binary_hash_mismatch_refused(tmp_path):
     result = reproduce_witness(bundle, data, binary_path=fake_bin, n=3)
     assert result.attempted is False
     assert "hash mismatch" in result.reason
+
+
+# ----------------------------------------------------------------------
+# FUZZ replay sandbox hardening — the untrusted target binary must run
+# through run_untrusted so restrict_reads + fake_home engage (no
+# credential-read gap).
+# ----------------------------------------------------------------------
+
+
+def _replay_fixture(tmp_path):
+    """A FUZZ bundle whose recorded binary hash matches a real file,
+    so the replay path reaches the sandbox call."""
+    fake_bin = tmp_path / "target"
+    fake_bin.write_bytes(b"\x7fELF not really")
+    bundle, data = _bundle(
+        tmp_path, source=WitnessSource.FUZZ,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"crashbytes",
+        target_binary_hash=sha256_file(fake_bin),
+    )
+    return bundle, data, fake_bin
+
+
+def test_replay_uses_run_untrusted_with_hardened_defaults(
+        tmp_path, monkeypatch):
+    """The replay path must go through ``run_untrusted`` and must NOT
+    weaken its restrict_reads / fake_home / block_network defaults —
+    that would reopen the credential-read gap."""
+    bundle, data, fake_bin = _replay_fixture(tmp_path)
+    calls = []
+
+    def fake_run_untrusted(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return types.SimpleNamespace(sandbox_info=None, returncode=0)
+
+    monkeypatch.setattr(core.sandbox, "run_untrusted", fake_run_untrusted)
+    result = reproduce_witness(bundle, data, binary_path=fake_bin, n=2)
+
+    assert result.attempted is True
+    assert len(calls) == 2
+    for cmd, kwargs in calls:
+        assert cmd == [str(fake_bin)]
+        # The helper's hardened defaults (restrict_reads=True,
+        # fake_home=True, forced block_network / strict_env) must not
+        # be overridden by the caller.
+        assert "restrict_reads" not in kwargs
+        assert "fake_home" not in kwargs
+        assert "block_network" not in kwargs
+        assert "strict_env" not in kwargs
+        assert kwargs["target"] == str(fake_bin.parent)
+        assert kwargs["output"] == str(fake_bin.parent)
+        assert kwargs["input"] == data
+    # Only outcome values are persisted — never stdout.
+    assert result.observed_outcomes == ["no_obvious_effect"] * 2
+
+
+def test_replay_kwargs_accepted_by_real_run_untrusted_contract(
+        tmp_path, monkeypatch):
+    """``run_untrusted`` TypeErrors on kwargs outside its allowlist —
+    pin that the replay call passes only accepted ones by routing the
+    fake through the real helper's kwarg validation."""
+    bundle, data, fake_bin = _replay_fixture(tmp_path)
+    real_run_untrusted = core.sandbox.run_untrusted
+
+    def gated(cmd, **kwargs):
+        # Re-run the real helper's front-door validation without
+        # executing anything: monkeypatch the inner run() to a no-op.
+        monkeypatch.setattr(
+            core.sandbox.context, "run",
+            lambda *a, **k: types.SimpleNamespace(
+                sandbox_info=None, returncode=0),
+        )
+        return real_run_untrusted(cmd, **kwargs)
+
+    monkeypatch.setattr(core.sandbox, "run_untrusted", gated)
+    result = reproduce_witness(bundle, data, binary_path=fake_bin, n=1)
+    # A TypeError from the allowlist would surface as observed "error";
+    # a clean pass classifies the (no-op) run instead.
+    assert result.observed_outcomes == ["no_obvious_effect"]
+
+
+def test_replay_sandbox_setup_error_still_fails_loud(
+        tmp_path, monkeypatch):
+    """The fail-loud contract survives the hardening: an isolation
+    layer that cannot engage raises instead of masking as benign."""
+    bundle, data, fake_bin = _replay_fixture(tmp_path)
+
+    def boom(cmd, **kwargs):
+        raise SandboxSetupError("isolation could not engage")
+
+    monkeypatch.setattr(core.sandbox, "run_untrusted", boom)
+    with pytest.raises(SandboxSetupError):
+        reproduce_witness(bundle, data, binary_path=fake_bin, n=1)
+
+
+def test_replay_per_run_errors_stay_best_effort(tmp_path, monkeypatch):
+    """Non-setup exceptions remain best-effort per run — recorded as
+    'error' outcomes, not raised."""
+    bundle, data, fake_bin = _replay_fixture(tmp_path)
+
+    def flaky(cmd, **kwargs):
+        raise OSError("transient")
+
+    monkeypatch.setattr(core.sandbox, "run_untrusted", flaky)
+    result = reproduce_witness(bundle, data, binary_path=fake_bin, n=2)
+    assert result.attempted is True
+    assert result.observed_outcomes == ["error", "error"]
+    assert result.reproduced is False
+
+
+# ----------------------------------------------------------------------
+# n < 1 guard — refuses instead of misreporting "non-deterministic"
+# over an empty outcome list
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n", [0, -1])
+def test_replay_rejects_non_positive_n(tmp_path, monkeypatch, n):
+    bundle, data, fake_bin = _replay_fixture(tmp_path)
+
+    def must_not_run(cmd, **kwargs):
+        raise AssertionError("sandbox must not be invoked for n < 1")
+
+    monkeypatch.setattr(core.sandbox, "run_untrusted", must_not_run)
+    result = reproduce_witness(bundle, data, binary_path=fake_bin, n=n)
+    assert result.attempted is False
+    assert result.runs == 0
+    assert result.reproduced is False
+    assert "n must be >= 1" in result.reason
+
+
+def test_source_dispatch_rejects_non_positive_n(tmp_path, monkeypatch):
+    bundle, data = _bundle(
+        tmp_path, source=WitnessSource.LLM_EMIT_RUN,
+        outcome=WitnessOutcome.EXIT_SIGNAL, data=b"// poc",
+    )
+    import packages.llm_analysis.exploit_verify as ev
+
+    def must_not_compile(*a, **k):
+        raise AssertionError("compile must not be invoked for n < 1")
+
+    monkeypatch.setattr(ev, "compile_and_execute", must_not_compile)
+    result = reproduce_witness(bundle, data, n=0)
+    assert result.attempted is False
+    assert "n must be >= 1" in result.reason
 
 
 # ----------------------------------------------------------------------
@@ -240,6 +418,7 @@ def _has_libasan() -> bool:
              "-o", "/dev/null"],
             input="int main(){return 0;}",
             text=True, capture_output=True, timeout=10,
+            check=False,
         )
         return r.returncode == 0
     except Exception:  # noqa: BLE001
@@ -309,7 +488,6 @@ def test_real_fuzz_replay_reproduces(tmp_path):
         check=True, timeout=30,
     )
 
-    from core.hash import sha256_file
     crash_input = b"B" + b"\x00" * 8
     bundle, data = _bundle(
         tmp_path, source=WitnessSource.FUZZ,

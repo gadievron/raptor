@@ -2,8 +2,8 @@
 
 import fnmatch
 import os
+import re
 from pathlib import Path
-from typing import List
 
 # Default exclude patterns — comprehensive list for clean inventory
 DEFAULT_EXCLUDES = [
@@ -58,6 +58,17 @@ DEFAULT_EXCLUDES = [
 ROOT_ANCHORED_EXCLUDE_DIRS = frozenset({
     'examples', 'example', 'samples', 'sample', 'demo',
     'docs', 'doc', 'documentation',
+    # Build-output NAMES that also occur as first-party package
+    # segments deep in real trees: a first-party ``env/`` config
+    # package, tool trees with ``bin/`` source dirs, ``out/`` and
+    # ``obj/`` in generators. At the scan root these are
+    # overwhelmingly artifacts; pruning them at ANY depth silently
+    # dropped first-party source. NOT anchored: ``build/``,
+    # ``target/``, ``dist/`` — nested occurrences are the NORM for
+    # Gradle/Maven/Rust/JS build outputs, and admitting them buys
+    # noise, not recall. venv/node_modules and friends also stay
+    # any-depth (unambiguous).
+    'env', 'bin', 'out', 'output', 'obj',
 })
 
 # Markers that indicate a file is auto-generated (check first few lines)
@@ -82,10 +93,10 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
     tree-sitter spent CPU on garbage before erroring.
 
     Sample BOTH ends: the original head sample plus a tail sample
-    of the same size when the file is larger than 2 * sample_size.
-    Files smaller than 2 * sample_size are fully covered by the
-    head sample alone (the tail would overlap, no extra coverage).
-    Single seek + read for the tail keeps wallclock minimal.
+    of the same size when the file is larger than sample_size.
+    Files smaller than sample_size are fully covered by the
+    head sample alone.  Single seek + read for the tail keeps
+    wallclock minimal.
     """
     try:
         with open(filepath, 'rb') as f:
@@ -99,13 +110,13 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
                 size = f.tell()
             except OSError:
                 return False
-            if size > 2 * sample_size:
+            if size > sample_size:
                 f.seek(size - sample_size)
                 tail = f.read(sample_size)
                 if b'\x00' in tail:
                     return True
             return False
-    except (IOError, OSError):
+    except OSError:
         return True  # Treat unreadable as binary
 
 
@@ -159,7 +170,39 @@ def is_generated_file(content: str, check_lines: int = 10) -> bool:
     return False
 
 
-def should_exclude(filepath: str, exclude_patterns: List[str]) -> bool:
+# Path/name shapes that independently support a generated-file claim.
+# The in-file marker is TARGET-CONTROLLED text: honouring it alone let
+# one comment line self-exclude any file from every analysis tier — a
+# self-service evasion channel. A generator's output almost always
+# ALSO lands in a generated-shaped location or carries a
+# generated-shaped name; requiring that corroboration keeps the
+# noise-reduction for real generated code while a hand-planted marker
+# on a normal source file no longer buys invisibility.
+_GENERATED_PATH_HINTS = (
+    "generated", "gen", "autogen", "codegen", "build", "dist",
+    "target", "out", "output", "node_modules", "vendor", "third_party",
+)
+_GENERATED_NAME_RE = re.compile(
+    r"(\.generated\.|_generated\.|\.auto\.|_pb2(_grpc)?\.py$"
+    r"|\.pb\.(go|cc|h)$|\.min\.(js|css)$|\.bundle\.(js|css)$"
+    r"|(^|/)(lex\.yy\.c|y\.tab\.[ch])$|\.tab\.[ch]$"
+    r"|_string(er)?\.go$|\.g\.(dart|cs)$|_gen\.(go|py|rs|c|h)$"
+    r"|\.pyi$|\.d\.ts$)",
+    re.IGNORECASE,
+)
+
+
+def generated_marker_corroborated(filepath: str) -> bool:
+    """True when the file's PATH independently supports its
+    generated-file marker (see the rationale above)."""
+    norm = filepath.replace("\\", "/").lower()
+    if _GENERATED_NAME_RE.search(norm):
+        return True
+    parts = norm.split("/")[:-1]
+    return any(part in _GENERATED_PATH_HINTS for part in parts)
+
+
+def should_exclude(filepath: str, exclude_patterns: list[str]) -> bool:
     """Check if file should be excluded based on patterns.
 
     Returns True if the file matches any exclusion pattern.
@@ -202,7 +245,7 @@ def should_exclude(filepath: str, exclude_patterns: List[str]) -> bool:
     return False
 
 
-def match_exclusion_reason(filepath: str, exclude_patterns: List[str]) -> tuple:
+def match_exclusion_reason(filepath: str, exclude_patterns: list[str]) -> tuple:
     """Like should_exclude but returns (excluded: bool, reason, pattern_matched).
 
     Used for exclusion recording in the inventory.

@@ -39,8 +39,10 @@ Project-wide pins (``resolutions``, ``overrides``):
 - ``overrides`` (npm 7+) — same mechanism, npm's name for it.
 
 Both fields are read and emitted as Dependency rows with
-``source_kind="override"``, ``direct=True``, and a high parser
-confidence — operators care about these because they're explicit
+``source_kind="override"`` and ``direct=True``; parser confidence
+follows the spec shape like any other row (high for a structured
+version, medium for git/path/wildcard specs, low for unrecognised
+ones). Operators care about these because they're explicit
 security pins. CVE matching against the pinned version means
 operators see whether their pin actually clears the advisory.
 
@@ -89,23 +91,8 @@ _BARE_VERSION = re.compile(r"^v?\d+(?:\.\d+){0,2}(?:[-+].+)?$")
 
 
 def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.package_json: read failed for %s: %s", path, e)
-        return []
-
-    try:
-        data = _json.loads(text)
-    except _json.JSONDecodeError as e:
-        logger.warning(
-            "sca.parsers.package_json: JSON parse failed for %s: %s", path, e
-        )
-        return []
-    if not isinstance(data, dict):
-        logger.warning(
-            "sca.parsers.package_json: top-level not an object in %s", path
-        )
+    data = _load(path)
+    if data is None:
         return []
 
     deps: List[Dependency] = []
@@ -191,6 +178,43 @@ def parse(path: Path) -> List[Dependency]:
                 d.workspace_root = ws_root
 
     return deps
+
+
+def extract_project_license(path: Path) -> Optional[str]:
+    """License the manifest declares for the PROJECT ITSELF.
+
+    A manifest-level license describes the project, not its deps —
+    it feeds the SBOM metadata/root component, never ``Dependency.
+    declared_license`` (dep licenses come from registry enrichment,
+    or stay None for the policy's ``on_unknown`` path).
+    """
+    data = _load(path)
+    if data is None:
+        return None
+    return _extract_license(data)
+
+
+def _load(path: Path) -> Optional[Dict[str, object]]:
+    """Read + JSON-parse a package.json; None on any failure."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.warning("sca.parsers.package_json: read failed for %s: %s", path, e)
+        return None
+
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError as e:
+        logger.warning(
+            "sca.parsers.package_json: JSON parse failed for %s: %s", path, e
+        )
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            "sca.parsers.package_json: top-level not an object in %s", path
+        )
+        return None
+    return data
 
 
 def _flatten_overrides(

@@ -207,17 +207,21 @@ def write_bytes_atomically(
 
     fd = os.open(tmp, flags, effective_mode)
     try:
+        # The close lives in a finally that starts IMMEDIATELY after
+        # the open succeeds, so every exception path — including a
+        # BaseException raised inside the fchmod window — closes the
+        # fd before the outer handler unlinks the tempfile.
         try:
-            # O_CREAT + mode gets umask-adjusted. Explicit fchmod
-            # bypasses umask so the caller's requested mode WINS
-            # regardless of the process's umask. On the preserve-
-            # existing path this is a no-op.
-            os.fchmod(fd, effective_mode)
-        except (OSError, AttributeError):
-            # Windows + some mounts don't honour fchmod — the
-            # O_CREAT mode argument was already best-effort.
-            pass
-        try:
+            try:
+                # O_CREAT + mode gets umask-adjusted. Explicit fchmod
+                # bypasses umask so the caller's requested mode WINS
+                # regardless of the process's umask. On the preserve-
+                # existing path this is a no-op.
+                os.fchmod(fd, effective_mode)
+            except (OSError, AttributeError):
+                # Windows + some mounts don't honour fchmod — the
+                # O_CREAT mode argument was already best-effort.
+                pass
             os.write(fd, content)
             os.fsync(fd)
         finally:
@@ -242,10 +246,10 @@ def write_bytes_atomically(
         # Catch BaseException (which includes KeyboardInterrupt)
         # explicitly — that's the exact scenario a torn write would
         # otherwise happen in. Best-effort clean up of the tempfile.
-        # The fd was already closed inside the inner try/finally on
-        # success paths; on the O_EXCL failure path the fd never
-        # existed. On mid-write failure the finally block above
-        # closed the fd before we got here.
+        # The fd is always closed before we get here: the inner
+        # try/finally spans everything from the successful os.open
+        # (fchmod included) through the fsync, and on the O_EXCL
+        # failure path the fd never existed.
         try:
             tmp.unlink()
         except FileNotFoundError:

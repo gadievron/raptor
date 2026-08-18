@@ -159,7 +159,10 @@ def execute_clean(plan: Dict[str, Any]) -> None:
                     f"execute_clean refusing to rmtree {d!r}: resolved "
                     f"path {real!r} escapes containment root {common!r}"
                 ) from None
-        shutil.rmtree(d)
+        try:
+            shutil.rmtree(d)
+        except FileNotFoundError:
+            pass
 
 
 def clean_project(project, keep=1, dry_run=False) -> Dict[str, Any]:

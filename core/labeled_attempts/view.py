@@ -31,6 +31,7 @@ field regardless of which evidence shape produced the record.
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -51,17 +52,20 @@ if TYPE_CHECKING:  # type-only — keep this module import-cheap
 
 
 __all__ = [
+    "ExemplarSlot",
     "Oracle",
     "OutcomeStatus",
     "ScoredOutcome",
     "VerifiedOutcome",
     "collect_outcomes",
     "exemplar_block_for_finding",
+    "exemplar_slot_for_finding",
     "from_barrier_synthesis",
     "from_labeled_attempt",
     "from_witness",
     "rank_outcomes_for_finding",
     "render_outcome_summary",
+    "render_retrieved_exemplars",
     "render_verified_exemplars",
 ]
 
@@ -199,9 +203,10 @@ def from_labeled_attempt(la: LabeledAttempt) -> Optional[VerifiedOutcome]:
 
       * ``sandbox_evidence`` + ``outcome="success"`` + triggering
         observed_outcome → VERIFIED. Reproducible.
-      * ``codeql_evidence`` + ``is_sound=True`` → REFUTED (a sound
-        barrier proves the flagged finding a false positive).
-        Reproducible.
+      * ``codeql_evidence`` + ``is_sound=True`` + ``outcome="success"``
+        → REFUTED (a sound barrier proves the flagged finding a false
+        positive; an ``uncertain`` outcome stays INCONCLUSIVE even
+        when ``is_sound=True``). Reproducible.
       * ``web_evidence`` + ``outcome="success"`` → VERIFIED. NOT
         reproducible (live-HTTP point-in-time).
       * Anything else → INCONCLUSIVE.
@@ -389,11 +394,20 @@ _SINK_CLASS_CWE = {
 def from_barrier_synthesis(
     proposal: "BarrierProposal",
     result: "SynthResult",
+    *,
+    produced_by: Optional[str] = None,
+    timestamp: Optional[datetime] = None,
 ) -> VerifiedOutcome:
     """Project a CodeQL ``isBarrier`` adjudication onto a VerifiedOutcome.
 
     Where the sandbox oracle emits VERIFIED (the bug fires), the CodeQL
     oracle emits REFUTED on success (sound barrier proves false positive).
+
+    ``BarrierProposal`` / ``SynthResult`` carry no provenance fields, so
+    the call site supplies ``produced_by`` / ``timestamp`` explicitly.
+    An absent timestamp lands at ``datetime.min`` (the same no-freshening
+    rule as :func:`_parse_ts`): unknown-age records sort to the back of
+    recency rankings instead of cutting in front of dated ones.
     """
     sound = bool(result.is_sound)
     return VerifiedOutcome(
@@ -411,6 +425,8 @@ def from_barrier_synthesis(
         },
         cwe_id=_SINK_CLASS_CWE.get(proposal.sink_class),
         file=None,
+        produced_by=produced_by,
+        timestamp=timestamp if timestamp is not None else _parse_ts(""),
     )
 
 
@@ -461,10 +477,12 @@ def collect_outcomes(
             try:
                 pool = resolve()
             except Exception:
+                _log.debug("pool resolve failed", exc_info=True)
                 return
             try:
                 yield from _iter_records_in_dir(pool)
             except Exception:
+                _log.debug("pool iteration failed for %s", pool, exc_info=True)
                 return
 
         for la in _safe_records(bundled_corpus_path):
@@ -686,6 +704,188 @@ def exemplar_block_for_finding(
         )
     except Exception:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Retrieved-exemplar slot — L3 retrieval rendered for the few-shot slot,
+# with the legacy VerifiedOutcome block as fallback.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExemplarSlot:
+    """One consumer's few-shot exemplar slot: the rendered block plus the
+    ids of the L3-retrieved exemplars that populated it.
+
+    ``exemplar_ids`` is empty when the legacy :class:`VerifiedOutcome`
+    fallback served the block (or the block is empty) — consumers record
+    the ids in their run evidence so A/B feedback can attribute exemplar
+    contribution (the write side is ``LabeledAttempt.exemplars_used``).
+    """
+
+    block: str = ""
+    exemplar_ids: tuple[str, ...] = ()
+
+
+# Exemplar exploit code rides a fenced block inside the prompt; cap it so
+# one oversized candidate can't crowd out the finding's own context.
+_MAX_EXEMPLAR_CODE_CHARS = 2000
+# Four-backtick fence so a three-backtick run inside the code cannot
+# close it; runs of >= 4 backticks in the code are collapsed below.
+_CODE_FENCE = "````"
+_BACKTICK_RUN_RE = re.compile(r"`{4,}")
+
+_RETRIEVED_INTRO = (
+    "Past attempts on this bug class that RAPTOR *confirmed by "
+    "execution*. Each names the bug, shows the code that produced the "
+    "decisive outcome, and notes the evidence and environment. "
+    "Reproducer-tier entries show how to REACH the bug, not how to "
+    "weaponize it — treat those as starting points, not finished work. "
+    "Use these to calibrate; do not pattern-match."
+)
+
+
+def _safe_code(code: str, *, cap: int = _MAX_EXEMPLAR_CODE_CHARS) -> str:
+    """Defang exemplar code for a fenced prompt block: tag forgery
+    neutralised, non-printables escaped (newlines kept — it's code),
+    fence-breakout backtick runs collapsed, length capped."""
+    text = escape_nonprintable(
+        neutralize_tag_forgery(str(code)), preserve_newlines=True,
+    )
+    if len(text) > cap:
+        text = text[:cap] + "\n… (truncated)"
+    return _BACKTICK_RUN_RE.sub("```", text)
+
+
+def _render_retrieved_one(exemplar: Any) -> str:
+    tier_note = (
+        "verified exploit" if exemplar.tier == "exploit"
+        else "reproducer — reaches the bug; weaponization not shown"
+    )
+    header = (
+        f"**{_safe_prompt(exemplar.exemplar_id)} — "
+        f"{_safe_prompt(exemplar.finding_summary)}** ({tier_note})"
+    )
+    detail = f"Evidence: {_safe_prompt(exemplar.evidence, cap=200)}."
+    if exemplar.environment:
+        detail += f" Environment: {_safe_prompt(exemplar.environment, cap=200)}."
+    lines = [header, detail]
+    if exemplar.distilled_summary:
+        lines.append(
+            "Approach: " + _safe_prompt(exemplar.distilled_summary, cap=400)
+        )
+    if exemplar.exploit_code:
+        lines.append(
+            _CODE_FENCE + "\n" + _safe_code(exemplar.exploit_code)
+            + "\n" + _CODE_FENCE
+        )
+    return "\n".join(lines)
+
+
+def render_retrieved_exemplars(
+    exemplars: Iterable[Any],
+    *,
+    max_bytes: int = 4096,
+) -> str:
+    """Render L3-retrieved exemplars (``retrieval.RetrievedExemplar``)
+    as the few-shot prompt block.
+
+    Same block contract as :func:`render_verified_exemplars`: the
+    ``## RAPTOR-verified exemplars`` heading, ``""`` when there is
+    nothing to render (callers concatenate unconditionally), and a
+    ``max_bytes`` cap enforced by dropping trailing entries.
+    """
+    items = list(exemplars)
+    if not items:
+        return ""
+
+    header = [_HEADER, "", _RETRIEVED_INTRO, ""]
+    entries = [_render_retrieved_one(e) for e in items]
+
+    while True:
+        block = "\n\n".join(
+            ["\n".join(header).rstrip()] + entries
+        ).rstrip() + "\n"
+        if len(block.encode("utf-8")) <= max_bytes or len(entries) == 1:
+            return block
+        entries.pop()
+
+
+def exemplar_slot_for_finding(
+    finding: Dict[str, Any],
+    *,
+    outcomes: Optional[Iterable[VerifiedOutcome]] = None,
+    output_dir: Any = None,
+    use_active_project: bool = True,
+    top_k: int = 3,
+    statuses: Tuple[OutcomeStatus, ...] = (OutcomeStatus.VERIFIED,),
+    max_bytes: int = 4096,
+) -> ExemplarSlot:
+    """Serve one finding's few-shot exemplar slot, best-effort.
+
+    L3 retrieval first (:func:`~core.labeled_attempts.retrieval.
+    retrieve_exemplars` — recency decay, code-hash dedup, per-finding
+    diversity), rendered via :func:`render_retrieved_exemplars`. When
+    retrieval yields nothing (no CWE on the finding, empty pool,
+    substrate failure), falls back to the legacy
+    :func:`exemplar_block_for_finding` path so behaviour with an empty
+    pool is unchanged. Never raises; returns an empty slot on failure.
+
+    ``exemplar_ids`` is populated only on the retrieval path — the
+    fallback's :class:`VerifiedOutcome` records have no exemplar ids.
+    """
+    cwe = None
+    try:
+        cwe = finding.get("cwe_id") or finding.get("cwe")
+    except Exception:
+        cwe = None
+    if cwe:
+        try:
+            from .retrieval import retrieve_exemplars
+            project_root = None
+            if use_active_project:
+                try:
+                    from core.run.output import _resolve_active_project
+                    active = _resolve_active_project()
+                    if active:
+                        project_root = Path(active[0])
+                except Exception:
+                    project_root = None
+            exemplars = retrieve_exemplars(
+                cwe=str(cwe), project_dir=project_root, k=top_k,
+            )
+            if exemplars:
+                block = render_retrieved_exemplars(
+                    exemplars, max_bytes=max_bytes,
+                )
+                if block:
+                    ids = tuple(e.exemplar_id for e in exemplars)
+                    # exemplar_id is signature-hex + ISO timestamp
+                    # (both validated at record construction) — safe
+                    # to log verbatim. The log line is the feedback
+                    # record for consumers with no persisted evidence
+                    # of their own (hunt / trace dispatch).
+                    _log.info(
+                        "exemplar slot served by L3 retrieval "
+                        "(cwe=%s): %s",
+                        _safe_terminal(cwe), ", ".join(ids),
+                    )
+                    return ExemplarSlot(block=block, exemplar_ids=ids)
+        except Exception:
+            _log.debug(
+                "L3 exemplar retrieval failed; using legacy fallback",
+                exc_info=True,
+            )
+    block = exemplar_block_for_finding(
+        finding,
+        outcomes=outcomes,
+        output_dir=output_dir,
+        use_active_project=use_active_project,
+        top_k=top_k,
+        statuses=statuses,
+        max_bytes=max_bytes,
+    )
+    return ExemplarSlot(block=block, exemplar_ids=())
 
 
 # ---------------------------------------------------------------------------

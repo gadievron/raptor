@@ -12,34 +12,98 @@ import os
 import re
 import shutil
 import subprocess
-
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 # packages/codeql/database_manager.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
-from core.json import load_json, save_json
+from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
-from core.hash import sha256_string
-from core.logging import get_logger
+from core.git import get_safe_git_env
+
 # Per-invocation git overrides for target-repo invocations.
 # See `core.git.clone.safe_git_command` for the threat model
 # (CVE-2024-32002 family: hostile per-repo .git/config).
 from core.git.clone import safe_git_command
-from core.git import get_safe_git_env
+from core.hash import sha256_string
+from core.json import load_json, save_json
+from core.logging import get_logger
 from core.sandbox import SandboxSetupError
-from packages.codeql.build_detector import BuildSystem
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
+
+# Languages whose databases are created with ``--build-mode=none``
+# (buildless extraction) BY DEFAULT.  For C/C++ a traced build runs the
+# target repo's build system — attacker-controlled code — so untrusted
+# repos must never trigger it implicitly.  Buildless extraction parses
+# the source without executing anything from the repo, removing the
+# repo-code-execution vector entirely.  Operators opt back into traced
+# builds explicitly (``--traced-build`` on the CLI, an explicit
+# ``--build-command``, or ``create_database(traced_build=True)``).
+BUILDLESS_DEFAULT_LANGUAGES = frozenset({"cpp"})
+
+# ``codeql database create --build-mode=none`` for C/C++ requires
+# CodeQL CLI >= 2.16.  Older CLIs degrade to a clear skip, never a
+# crash and never a silent fallback to a traced build.
+BUILDLESS_CPP_MIN_VERSION = (2, 16)
+
+# Diagnostic messages the extractor emits when an #include could not
+# be resolved.  Matched loosely across CLI versions.
+_UNRESOLVED_INCLUDE_RE = re.compile(
+    r"(could not find|cannot open|could not open|missing|not found)"
+    r".{0,60}include"
+    r"|include.{0,60}"
+    r"(could not find|cannot open|could not open|missing|not found)",
+    re.IGNORECASE,
+)
+
+
+def buildless_degradation_summary(db_path: Path) -> tuple:
+    """(hit_count, one-line summary) for a buildless C/C++ database.
+
+    Buildless extraction never sees build-generated headers
+    (config.h, yacc/protobuf output), so TUs that include them parse
+    partially and dataflow through those regions is silently lost —
+    which reads as "covered" unless surfaced.  Count the extractor
+    diagnostics in the created database that mention unresolved
+    includes.  Fail-safe: any parse trouble degrades to the generic
+    notice (count 0), never an exception.
+    """
+    hits = 0
+    try:
+        diag_root = db_path / "diagnostic"
+        if diag_root.is_dir():
+            for f in sorted(diag_root.rglob("*")):
+                if not f.is_file() or f.suffix.lower() not in (".json", ".jsonl"):
+                    continue
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                hits += sum(
+                    1 for line in text.splitlines()
+                    if _UNRESOLVED_INCLUDE_RE.search(line)
+                )
+    except OSError:
+        hits = 0
+    if hits:
+        return hits, (
+            f"buildless mode: {hits} extractor diagnostic(s) mention "
+            f"unresolved includes — build-generated headers are invisible "
+            f"without a traced build (opt in via --traced-build)"
+        )
+    return 0, (
+        "buildless mode: database created without executing the build; "
+        "TUs needing build-generated headers may be partially analysed"
+    )
 
 
 @dataclass
@@ -55,7 +119,7 @@ class DatabaseMetadata:
     file_count: int
     success: bool
     duration_seconds: float
-    errors: List[str]
+    errors: list[str]
     database_path: str
 
     def to_dict(self):
@@ -63,7 +127,8 @@ class DatabaseMetadata:
 
     @staticmethod
     def from_dict(data: dict):
-        return DatabaseMetadata(**data)
+        fields = {f.name for f in __import__('dataclasses').fields(DatabaseMetadata)}
+        return DatabaseMetadata(**{k: v for k, v in data.items() if k in fields})
 
 
 @dataclass
@@ -71,9 +136,9 @@ class DatabaseResult:
     """Result of database creation."""
     success: bool
     language: str
-    database_path: Optional[Path]
-    metadata: Optional[DatabaseMetadata]
-    errors: List[str]
+    database_path: Path | None
+    metadata: DatabaseMetadata | None
+    errors: list[str]
     duration_seconds: float
     cached: bool = False  # Was this from cache?
 
@@ -90,7 +155,11 @@ class DatabaseManager:
     - Automatic cleanup of old databases
     """
 
-    def __init__(self, db_root: Optional[Path] = None, codeql_cli: Optional[str] = None):
+    # Auto-cleanup runs at most once per process (the tree walk is
+    # pointless to repeat for every manager a run constructs).
+    _auto_cleanup_done = False
+
+    def __init__(self, db_root: Path | None = None, codeql_cli: str | None = None):
         """
         Initialize database manager.
 
@@ -102,12 +171,37 @@ class DatabaseManager:
         self.db_root.mkdir(parents=True, exist_ok=True)
 
         # Detect CodeQL CLI
-        self.codeql_cli = codeql_cli or self._detect_codeql_cli()
+        _cli = codeql_cli or self._detect_codeql_cli()
+        # Resolve symlinks (pip/user installs land a ~/.local/bin
+        # symlink pointing at the real distribution). The sandbox
+        # bind-mounts the RESOLVED parent dir (_sandbox_tool_paths),
+        # so invoking via the symlink path would fail the mount-ns
+        # visibility check and silently degrade the whole DB build
+        # to the Landlock-only fallback.
+        self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
         if not self.codeql_cli:
             raise RuntimeError("CodeQL CLI not found. Set CODEQL_CLI environment variable or install CodeQL.")
 
-        logger.info(f"Database manager initialized: {self.db_root}")
-        logger.info(f"CodeQL CLI: {self.codeql_cli}")
+        logger.info("Database manager initialized: %s", self.db_root)
+        logger.info("CodeQL CLI: %s", self.codeql_cli)
+
+        # CODEQL_DB_AUTO_CLEANUP: the read side (get_cached_database)
+        # already refuses databases older than CODEQL_DB_CACHE_DAYS, so
+        # everything past the threshold is disk the cache will never
+        # serve again — reclaim it here. Only for the DEFAULT root: a
+        # caller-supplied db_root (tests, ad-hoc tooling) manages its
+        # own lifecycle. Best-effort — a cleanup failure must never
+        # block the run.
+        if (db_root is None
+                and getattr(RaptorConfig, "CODEQL_DB_AUTO_CLEANUP", False)
+                and not DatabaseManager._auto_cleanup_done):
+            DatabaseManager._auto_cleanup_done = True
+            try:
+                self.cleanup_old_databases(
+                    days=getattr(RaptorConfig, "CODEQL_DB_CACHE_DAYS", 7),
+                )
+            except Exception as exc:  # noqa: BLE001 — reclaim is optional
+                logger.debug("auto-cleanup of old databases failed: %s", exc)
 
     def _sandbox_tool_paths(self) -> list:
         """Mount-ns bind dirs needed for codeql to run. See QueryRunner
@@ -115,22 +209,31 @@ class DatabaseManager:
         in /usr/bin)."""
         return [str(Path(self.codeql_cli).resolve().parent)]
 
-    def _detect_codeql_cli(self) -> Optional[str]:
+    def _detect_codeql_cli(self) -> str | None:
         """Detect CodeQL CLI path.
 
-        `os.access(path, X_OK)` instead of bare `Path.exists()`. Pre-fix
-        the env-var path was accepted as long as the file existed —
-        `CODEQL_CLI=/etc/passwd` would have us shell out to a non-
-        executable file, which then raised OSError at subprocess.run
-        with a confusing stderr instead of failing the detection
-        cleanly.
+        `os.path.isfile` + `os.access(path, X_OK)` — the same validation
+        as the sibling `packages/codeql._resolve_cli`. Pre-fix the
+        env-var path was accepted on `X_OK` alone: `CODEQL_CLI=/etc/passwd`
+        would have us shell out to a non-executable file (OSError at
+        subprocess.run with a confusing stderr), and `CODEQL_CLI=/usr/bin`
+        — a directory, which carries the x bit — slipped straight through
+        to the same fate. An invalid explicit setting warns loudly rather
+        than being silently ignored: the operator set it on purpose, so a
+        quiet fall-through to a different PATH binary masks the typo.
         """
         import os
 
         # Check environment variable
         env_cli = os.environ.get("CODEQL_CLI")
-        if env_cli and os.access(env_cli, os.X_OK):
-            return env_cli
+        if env_cli:
+            if os.path.isfile(env_cli) and os.access(env_cli, os.X_OK):
+                return env_cli
+            logger.warning(
+                "CODEQL_CLI=%r is not an executable file; "
+                "falling back to PATH lookup for 'codeql'",
+                env_cli,
+            )
 
         # Check PATH (shutil.which already requires X_OK)
         cli_path = shutil.which("codeql")
@@ -139,7 +242,7 @@ class DatabaseManager:
 
         return None
 
-    def get_codeql_version(self) -> Optional[str]:
+    def get_codeql_version(self) -> str | None:
         """Get CodeQL version.
 
         Returns the dotted-version number (e.g. ``"2.16.4"``) extracted
@@ -168,6 +271,7 @@ class DatabaseManager:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
                 env=RaptorConfig.get_safe_env(),
             )
             if result.returncode == 0:
@@ -182,9 +286,45 @@ class DatabaseManager:
                 # operators still see SOMETHING in logs/banners.
                 return result.stdout.strip().split('\n')[0] or None
             return None
-        except Exception as e:
-            logger.warning(f"Failed to get CodeQL version: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            logger.warning("Failed to get CodeQL version: %s", e)
             return None
+
+    def supports_buildless_cpp(self) -> tuple:
+        """Probe whether the CLI supports C/C++ ``--build-mode=none``.
+
+        Returns ``(supported, detail)`` — ``detail`` is the version on
+        success, a human-readable reason on failure.  Requires CodeQL
+        CLI >= 2.16 (:data:`BUILDLESS_CPP_MIN_VERSION`).  Never raises;
+        an absent/unparseable CLI reads as unsupported so callers can
+        degrade with a clear skip instead of a crash.  Cached per
+        manager instance (the CLI doesn't change mid-run).
+        """
+        cached = getattr(self, "_buildless_probe", None)
+        if cached is not None:
+            return cached
+        version = self.get_codeql_version()
+        if not version:
+            result = (False, "CodeQL CLI version could not be determined")
+        else:
+            try:
+                parts = tuple(int(p) for p in version.split(".")[:3])
+            except ValueError:
+                result = (False, f"unparseable CodeQL version {version!r}")
+            else:
+                if parts < BUILDLESS_CPP_MIN_VERSION:
+                    result = (
+                        False,
+                        (
+                            f"CodeQL {version} < "
+                            f"{'.'.join(map(str, BUILDLESS_CPP_MIN_VERSION))} "
+                            "— C/C++ --build-mode=none unsupported"
+                        ),
+                    )
+                else:
+                    result = (True, version)
+        self._buildless_probe = result
+        return result
 
     def compute_repo_hash(self, repo_path: Path) -> str:
         """
@@ -213,6 +353,7 @@ class DatabaseManager:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                check=False,
                 env=get_safe_git_env(),
             )
             if result.returncode == 0:
@@ -266,7 +407,7 @@ class DatabaseManager:
         hasher.update(str(repo_path).encode("utf-8", errors="surrogateescape"))
 
         try:
-            collected: List[Path] = []
+            collected: list[Path] = []
             for dirpath, dirnames, filenames in os.walk(
                 repo_path, followlinks=False,
             ):
@@ -290,8 +431,8 @@ class DatabaseManager:
                         hasher.update(str(file_path.stat().st_size).encode())
                     except OSError:
                         pass
-        except Exception as e:
-            logger.debug(f"Error hashing repository: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            logger.debug("Error hashing repository: %s", e)
 
         return hasher.hexdigest()[:16]
 
@@ -303,7 +444,7 @@ class DatabaseManager:
         """Get metadata file path."""
         return self.db_root / repo_hash / f"{language}-metadata.json"
 
-    def load_metadata(self, repo_hash: str, language: str) -> Optional[DatabaseMetadata]:
+    def load_metadata(self, repo_hash: str, language: str) -> DatabaseMetadata | None:
         """Load database metadata from disk."""
         metadata_path = self.get_metadata_path(repo_hash, language)
         if not metadata_path.exists():
@@ -314,8 +455,8 @@ class DatabaseManager:
             return None
         try:
             return DatabaseMetadata.from_dict(data)
-        except Exception as e:
-            logger.warning(f"Failed to load metadata: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            logger.warning("Failed to load metadata: %s", e)
             return None
 
     def save_metadata(self, metadata: DatabaseMetadata):
@@ -325,15 +466,15 @@ class DatabaseManager:
 
         try:
             save_json(metadata_path, metadata.to_dict())
-        except Exception as e:
-            logger.error(f"Failed to save metadata: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            logger.error("Failed to save metadata: %s", e)
 
     def get_cached_database(
         self,
         repo_path: Path,
         language: str,
         max_age_days: int = 7
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """
         Check if valid cached database exists.
 
@@ -354,7 +495,7 @@ class DatabaseManager:
 
         # Check if database is valid
         if not metadata.success:
-            logger.debug(f"Cached database marked as failed: {language}")
+            logger.debug("Cached database marked as failed: %s", language)
             return None
 
         # Check age
@@ -366,18 +507,18 @@ class DatabaseManager:
                 created_at = created_at.replace(tzinfo=timezone.utc)
             age = datetime.now(timezone.utc) - created_at
             if age > timedelta(days=max_age_days):
-                logger.debug(f"Cached database too old: {age.days} days")
+                logger.debug("Cached database too old: %s days", age.days)
                 return None
-        except Exception as e:
-            logger.debug(f"Failed to parse database age: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            logger.debug("Failed to parse database age: %s", e)
             return None
 
         # Validate database integrity
         if not self.validate_database(db_path):
-            logger.warning(f"Cached database failed validation: {language}")
+            logger.warning("Cached database failed validation: %s", language)
             return None
 
-        logger.info(f"✓ Using cached database for {language}: {db_path}")
+        logger.info("✓ Using cached database for %s: %s", language, db_path)
         return db_path
 
     # Concurrent-write safety: build-in-staging + atomic-promote pattern.
@@ -434,6 +575,24 @@ class DatabaseManager:
         intentional — both serve uniqueness, not timezone consistency.
         """
         return f"{canonical.name}.stale.{time.time_ns()}.{os.getpid()}"
+
+    @staticmethod
+    def _salvage_creation_log(staging_path: Path, tail_bytes: int = 8192) -> str:
+        """Return the tail of the newest CodeQL creation log, or "".
+
+        ``codeql database create`` writes ``log/database-create-*.log``
+        inside the (staging) database dir; on failure that file holds
+        the extractor's real error while the CLI stderr only names the
+        failing build step.
+        """
+        try:
+            logs = sorted((staging_path / "log").glob("database-create-*.log"))
+            if not logs:
+                return ""
+            data = logs[-1].read_bytes()
+            return data[-tail_bytes:].decode("utf-8", errors="replace")
+        except OSError:
+            return ""
 
     def _gc_stale_markers(self, repo_dir: Path, max_age_seconds: int = 3600) -> None:
         """Best-effort cleanup of `.stale.*` and `.staging-*` markers older
@@ -511,7 +670,7 @@ class DatabaseManager:
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) - created_at > timedelta(days=max_age_days):
                     evict = True
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 # Malformed metadata can't come from an in-flight writer
                 # because save_metadata uses atomic temp-rename — readers
                 # see either the old or the new metadata, never partial.
@@ -554,9 +713,11 @@ class DatabaseManager:
         self,
         repo_path: Path,
         language: str,
-        build_system: Optional[BuildSystem] = None,
+        build_system: BuildSystem | None = None,
         force: bool = False,
-        audit_run_dir: Optional[Path] = None,
+        audit_run_dir: Path | None = None,
+        traced_build: bool = False,
+        concurrent_workers: int = 1,
     ) -> DatabaseResult:
         """
         Create CodeQL database.
@@ -565,6 +726,17 @@ class DatabaseManager:
             repo_path: Path to source code
             language: Programming language
             build_system: Build system info (None for no-build mode)
+            traced_build: Opt into traced-build extraction for
+                languages in :data:`BUILDLESS_DEFAULT_LANGUAGES`.
+                Default False: C/C++ databases are created with
+                ``--build-mode=none`` so an untrusted repo's build
+                scripts NEVER execute (any ``build_system`` command is
+                ignored with a log line).  Buildless C/C++ requires
+                CodeQL CLI >= 2.16 — older CLIs return a clear failed
+                DatabaseResult (graceful skip, no crash, no silent
+                traced fallback).  ``traced_build=True`` restores the
+                pre-existing traced path, which runs the repo build
+                under the sandbox — the operator asserts trust.
             audit_run_dir: When --audit is engaged, where the tracer
                 should drop the audit JSONL. Decoupled from output= so
                 Landlock writable_paths isn't restricted (codeql
@@ -586,9 +758,9 @@ class DatabaseManager:
         repo_path = Path(repo_path).resolve()
         errors = []
 
-        logger.info(f"{'=' * 70}")
-        logger.info(f"Creating CodeQL database for {language}")
-        logger.info(f"{'=' * 70}")
+        logger.info("%s", '=' * 70)
+        logger.info("Creating CodeQL database for %s", language)
+        logger.info("%s", '=' * 70)
 
         # Trust check: target-repo codeql-pack.yml / qlpack.yml /
         # codeql-config.yml can declare custom extractors, build hooks
@@ -604,10 +776,10 @@ class DatabaseManager:
                 database_path=None,
                 metadata=None,
                 errors=[
-                    "target repo has unsafe CodeQL pack config — refusing "
-                    "to invoke `codeql database create`. Re-run with "
-                    "--trust-repo to override after auditing the printed "
-                    "findings."
+                    ("target repo has unsafe CodeQL pack config — refusing "
+                     "to invoke `codeql database create`. Re-run with "
+                     "--trust-repo to override after auditing the printed "
+                     "findings.")
                 ],
                 duration_seconds=time.time() - start_time,
                 cached=False,
@@ -651,7 +823,7 @@ class DatabaseManager:
         # reader keeps its inode references intact (see _evict_stale_canonical
         # docstring for the POSIX semantics).
         if force and canonical_path.exists():
-            logger.info(f"Force rebuild: evicting cached database for {language}")
+            logger.info("Force rebuild: evicting cached database for %s", language)
             try:
                 marker = canonical_path.with_name(self._stale_marker_name(canonical_path))
                 os.rename(canonical_path, marker)
@@ -676,10 +848,43 @@ class DatabaseManager:
         # canonical exists but is older than the TTL.
         self._evict_stale_canonical(repo_hash, language, max_age_days=7)
 
+        # Buildless default for C/C++: never execute an untrusted
+        # repo's build system unless the operator explicitly opted in.
+        # Gate AFTER the cache checks (a cached DB is safe to serve
+        # regardless of how the CLI was probed) and BEFORE command
+        # construction.
+        buildless = (
+            language in BUILDLESS_DEFAULT_LANGUAGES and not traced_build
+        )
+        if buildless:
+            supported, detail = self.supports_buildless_cpp()
+            if not supported:
+                logger.error(
+                    "✗ Buildless %s extraction unavailable: %s", language, detail,
+                )
+                return DatabaseResult(
+                    success=False,
+                    language=language,
+                    database_path=None,
+                    metadata=None,
+                    errors=[
+                        (
+                            f"buildless {language} extraction unavailable: "
+                            f"{detail}. Upgrade the CodeQL CLI (>= "
+                            f"{'.'.join(map(str, BUILDLESS_CPP_MIN_VERSION))}) "
+                            "or explicitly opt into traced-build mode "
+                            "(--traced-build / --build-command) if the repo "
+                            "is trusted — traced builds EXECUTE the repo's "
+                            "build scripts."
+                        )
+                    ],
+                    duration_seconds=time.time() - start_time,
+                    cached=False,
+                )
+
         # Cleanup any prior leftover staging from this same process (e.g.,
         # from a previous crashed run with the same PID after PID reuse).
-        if staging_path.exists():
-            shutil.rmtree(staging_path, ignore_errors=True)
+        shutil.rmtree(staging_path, ignore_errors=True)
 
         # Build the codeql command — point at staging, not canonical, so
         # readers of canonical never see a partial DB.
@@ -691,11 +896,19 @@ class DatabaseManager:
             f"--language={language}",
             f"--source-root={repo_path}",
         ]
+        if buildless:
+            # Buildless extraction: codeql parses the source without
+            # invoking any build system, so no repo-controlled code
+            # runs during `database create`.  (The sandbox below is
+            # kept anyway — the extractor still parses hostile input.)
+            cmd.append("--build-mode=none")
         # Central CodeQL resource tunables (-j / -M / --max-disk-cache,
         # tuning.json-backed).  ``include_disk_cache=True`` because
         # ``database create`` accepts the flag; ``database analyze``
         # would reject it.
-        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=True)
+        CodeQLTunables.from_tuning(
+            concurrent_workers=concurrent_workers,
+        ).append_to(cmd, include_disk_cache=True)
 
         # Set working directory and environment.
         #
@@ -721,10 +934,10 @@ class DatabaseManager:
                 database_path=None,
                 metadata=None,
                 errors=[
-                    f"working_dir {working_dir!r} lacks execute permission "
-                    f"(POSIX dir-exec). Common cause: noexec mount on the "
-                    f"build area. Re-mount with exec, or move the build "
-                    f"into a directory that has it (e.g. $HOME)."
+                    (f"working_dir {working_dir!r} lacks execute permission "
+                     f"(POSIX dir-exec). Common cause: noexec mount on the "
+                     f"build area. Re-mount with exec, or move the build "
+                     f"into a directory that has it (e.g. $HOME).")
                 ],
                 duration_seconds=time.time() - start_time,
                 cached=False,
@@ -750,7 +963,13 @@ class DatabaseManager:
         # so shell operators (&&, ||, ;, |) break. Wrap in a script unless
         # the command is already a path to an executable (e.g. synthesised builds).
         build_script = None
-        if build_system and build_system.command:
+        if buildless and build_system and build_system.command:
+            logger.info(
+                "Buildless mode (--build-mode=none): ignoring detected "
+                "build command %r — pass traced_build=True to use it",
+                build_system.command,
+            )
+        elif build_system and build_system.command:
             build_cmd = build_system.command
             if Path(build_cmd).is_file() or re.fullmatch(r'[a-zA-Z0-9._-]+', build_cmd):
                 cmd.extend(["--command", build_cmd])
@@ -793,13 +1012,13 @@ class DatabaseManager:
                     build_script = None
                     raise
                 cmd.extend(["--command", str(build_script)])
-            logger.info(f"Build command: {build_system.command}")
-            logger.info(f"Working directory: {working_dir}")
+            logger.info("Build command: %s", build_system.command)
+            logger.info("Working directory: %s", working_dir)
         else:
             logger.info("No build command (interpreted language or no-build mode)")
 
-        logger.info(f"Executing: {' '.join(cmd)}")
-        logger.info(f"Timeout: {RaptorConfig.CODEQL_TIMEOUT}s")
+        logger.info("Executing: %s", ' '.join(cmd))
+        logger.info("Timeout: %ss", RaptorConfig.CODEQL_TIMEOUT)
 
         # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
@@ -810,6 +1029,17 @@ class DatabaseManager:
                 block_network=True,
                 cwd=working_dir,
                 env=env,
+                env_caller_filtered=True,
+                # target/output engage the mount namespace: without them
+                # sanitise_host_fingerprint silently no-ops (identity
+                # surfaces stay host-real) and the seccomp filter keeps
+                # AF_UNIX blocked, which kills Python >= 3.14 extractors
+                # (multiprocessing forkserver needs a unix socket).
+                # target = source tree (read), output = staging DB (rw);
+                # the DB parent dir rides along so codeql's lock files
+                # next to the staging dir stay writable.
+                target=str(repo_path),
+                output=str(staging_path.parent),
                 tool_paths=self._sandbox_tool_paths(),
                 # Audit JSONL home (only used when --audit is engaged).
                 # Decoupled from output= because the build subprocess
@@ -837,18 +1067,44 @@ class DatabaseManager:
 
             success = result.returncode == 0
 
+            if success and buildless:
+                # Degradation visibility: silently reduced coverage
+                # must not read as full coverage in the run log.
+                _hits, _summary = buildless_degradation_summary(staging_path)
+                (logger.warning if _hits else logger.info)("%s", _summary)
+
             if not success:
                 errors.append(f"Database creation failed with exit code {result.returncode}")
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
-                logger.error(f"✗ Database creation failed for {language}")
+                logger.error("✗ Database creation failed for %s", language)
                 logger.error((result.stderr or "")[:500])
-                # Cleanup partial staging on build failure — no point keeping
-                # broken DBs around to confuse future cache lookups (they
-                # never reach canonical anyway since promote is gated on
-                # success, but the staging dir would otherwise linger
-                # until _gc_stale_markers picks it up).
-                shutil.rmtree(staging_path, ignore_errors=True)
+                # Surface the extractor's own log before cleanup: the
+                # CLI's stderr carries only "autobuild failed" while the
+                # actual traceback (missing interpreter, denied syscall,
+                # build-tool error) lands in the staging DB's log dir.
+                # Losing it turned every creation failure into a manual
+                # re-run under a debugger.
+                _diag = self._salvage_creation_log(staging_path)
+                if _diag:
+                    errors.append(_diag[:2000])
+                    logger.error("extractor log tail:\n%s", _diag[:2000])
+                # Preserve the full staging dir for inspection under a
+                # name the stale-marker GC already reaps (1h TTL), so
+                # diagnostics survive without accumulating: keep only
+                # the newest failed dir per cache slot.
+                _failed = staging_path.parent / (
+                    f".staging-failed-{language}"
+                )
+                shutil.rmtree(_failed, ignore_errors=True)
+                try:
+                    staging_path.rename(_failed)
+                    logger.error(
+                        "failed staging preserved for inspection at %s "
+                        "(auto-cleaned after 1h)", _failed,
+                    )
+                except OSError:
+                    shutil.rmtree(staging_path, ignore_errors=True)
                 final_path = None
                 did_promote = False
                 used_cached = False
@@ -895,7 +1151,7 @@ class DatabaseManager:
                             str(canonical_path),
                         )
                     os.rename(staging_path, canonical_path)
-                    logger.info(f"✓ Database promoted to canonical: {canonical_path}")
+                    logger.info("✓ Database promoted to canonical: %s", canonical_path)
                     did_promote = True
                 except OSError as e:
                     if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
@@ -905,8 +1161,7 @@ class DatabaseManager:
                         # to us as success=True pointing at garbage.
                         if self.validate_database(canonical_path):
                             logger.info(
-                                f"✓ Database promoted by sibling; using cached "
-                                f"{canonical_path}"
+                                "✓ Database promoted by sibling; using cached %s", canonical_path
                             )
                             shutil.rmtree(staging_path, ignore_errors=True)
                             used_cached = True
@@ -924,8 +1179,8 @@ class DatabaseManager:
                             # gets evicted (this run's lost-race branch on
                             # the next attempt, or _gc_stale_markers).
                             logger.warning(
-                                f"Canonical {canonical_path} exists but failed "
-                                f"validation; evicting and retrying promote"
+                                "Canonical %s exists but failed validation; evicting and retrying promote",
+                                canonical_path
                             )
                             try:
                                 marker = canonical_path.with_name(
@@ -937,9 +1192,8 @@ class DatabaseManager:
                             try:
                                 os.rename(staging_path, canonical_path)
                                 logger.info(
-                                    f"✓ Database promoted to canonical "
-                                    f"(after evicting broken sibling copy): "
-                                    f"{canonical_path}"
+                                    "✓ Database promoted to canonical (after evicting broken sibling copy): %s",
+                                    canonical_path
                                 )
                                 did_promote = True
                             except OSError:
@@ -952,8 +1206,7 @@ class DatabaseManager:
                         # to using staging directly so the caller's analysis
                         # can still proceed. Future runs will rebuild.
                         logger.warning(
-                            f"Could not promote staging to canonical "
-                            f"({e}); using staging path"
+                            "Could not promote staging to canonical (%s); using staging path", e
                         )
                         final_path = staging_path
 
@@ -980,8 +1233,14 @@ class DatabaseManager:
                 # produced silently-wrong age calculations.
                 created_at=datetime.now(timezone.utc).isoformat(),
                 codeql_version=self.get_codeql_version() or "unknown",
-                build_command=build_system.command if build_system else "",
-                build_system=build_system.type if build_system else "no-build",
+                build_command=(
+                    "" if buildless
+                    else build_system.command if build_system else ""
+                ),
+                build_system=(
+                    "buildless" if buildless
+                    else build_system.type if build_system else "no-build"
+                ),
                 file_count=file_count,
                 success=success,
                 duration_seconds=time.time() - start_time,
@@ -1010,7 +1269,7 @@ class DatabaseManager:
 
         except subprocess.TimeoutExpired:
             errors.append(f"Database creation timed out after {RaptorConfig.CODEQL_TIMEOUT}s")
-            logger.error(f"✗ Database creation timed out for {language}")
+            logger.error("✗ Database creation timed out for %s", language)
 
             return DatabaseResult(
                 success=False,
@@ -1025,9 +1284,9 @@ class DatabaseManager:
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
 
-        except Exception as e:
-            errors.append(f"Unexpected error: {str(e)}")
-            logger.error(f"✗ Database creation failed with exception: {e}")
+        except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+            errors.append(f"Unexpected error: {e!s}")
+            logger.error("✗ Database creation failed with exception: %s", e)
 
             return DatabaseResult(
                 success=False,
@@ -1055,7 +1314,7 @@ class DatabaseManager:
                 try:
                     build_script.unlink(missing_ok=True)
                 except OSError as _bs_err:
-                    logger.debug(f"build_script unlink failed: {_bs_err}")
+                    logger.debug("build_script unlink failed: %s", _bs_err)
             # Belt-and-braces staging cleanup for timeout / unhandled exception
             # paths that bypass the success/failure cleanup branches above.
             # Skip if we ended up using staging as final_path (the fallback
@@ -1070,11 +1329,12 @@ class DatabaseManager:
     def create_databases_parallel(
         self,
         repo_path: Path,
-        language_build_map: Dict[str, Optional[BuildSystem]],
+        language_build_map: dict[str, BuildSystem | None],
         force: bool = False,
-        max_workers: Optional[int] = None,
-        audit_run_dir: Optional[Path] = None,
-    ) -> Dict[str, DatabaseResult]:
+        max_workers: int | None = None,
+        audit_run_dir: Path | None = None,
+        traced_languages: "set | None" = None,
+    ) -> dict[str, DatabaseResult]:
         """
         Create multiple databases in parallel.
 
@@ -1085,6 +1345,10 @@ class DatabaseManager:
             max_workers: Max parallel workers (default: RaptorConfig.MAX_CODEQL_WORKERS)
             audit_run_dir: Forwarded to per-language create_database for
                 audit JSONL targeting (no Landlock impact).
+            traced_languages: Languages the operator explicitly opted
+                into traced-build extraction for (see
+                ``create_database(traced_build=...)``).  Languages not
+                in the set keep the buildless default for C/C++.
 
         Returns:
             Dict mapping language -> DatabaseResult
@@ -1092,8 +1356,16 @@ class DatabaseManager:
         max_workers = max_workers or RaptorConfig.MAX_CODEQL_WORKERS
         results = {}
 
-        logger.info(f"Creating {len(language_build_map)} databases in parallel (max workers: {max_workers})")
+        logger.info(
+            "Creating %d databases in parallel (max workers: %s)",
+            len(language_build_map),
+            max_workers
+        )
 
+        # Core-share per child build: N concurrent -j0 extractions
+        # would each claim every core; divide instead (an explicit
+        # numeric codeql_threads is respected inside from_tuning).
+        _share = min(max_workers, len(language_build_map)) or 1
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_lang = {
@@ -1104,6 +1376,8 @@ class DatabaseManager:
                     build_system,
                     force,
                     audit_run_dir,
+                    lang in (traced_languages or ()),
+                    _share,
                 ): lang
                 for lang, build_system in language_build_map.items()
             }
@@ -1115,11 +1389,11 @@ class DatabaseManager:
                     result = future.result()
                     results[lang] = result
                     if result.success:
-                        logger.info(f"✓ {lang} database completed")
+                        logger.info("✓ %s database completed", lang)
                     else:
-                        logger.error(f"✗ {lang} database failed")
-                except Exception as e:
-                    logger.error(f"✗ {lang} database raised exception: {e}")
+                        logger.error("✗ %s database failed", lang)
+                except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+                    logger.error("✗ %s database raised exception: %s", lang, e)
                     results[lang] = DatabaseResult(
                         success=False,
                         language=lang,
@@ -1149,7 +1423,7 @@ class DatabaseManager:
         essential_files = ["codeql-database.yml"]
         for file_name in essential_files:
             if not (db_path / file_name).exists():
-                logger.debug(f"Missing essential file: {file_name}")
+                logger.debug("Missing essential file: %s", file_name)
                 return False
 
         # Pre-fix `codeql-database.yml` existence was the only
@@ -1167,7 +1441,7 @@ class DatabaseManager:
             db_subdirs = [d for d in db_path.iterdir()
                           if d.is_dir() and d.name.startswith("db-")]
             if not db_subdirs:
-                logger.debug(f"No db-* subdir in {db_path}")
+                logger.debug("No db-* subdir in %s", db_path)
                 return False
             # At least one db-* subdir must hold > 100KB of data
             # (the smallest realistic codeql DB observed in
@@ -1179,12 +1453,11 @@ class DatabaseManager:
                 if total_size > 100 * 1024:
                     return True
             logger.debug(
-                f"db-* subdirs present but trivially small in {db_path} "
-                f"(likely aborted build)",
+                "db-* subdirs present but trivially small in %s (likely aborted build)", db_path
             )
             return False
         except OSError as e:
-            logger.debug(f"validate_database couldn't stat {db_path}: {e}")
+            logger.debug("validate_database couldn't stat %s: %s", db_path, e)
             return False
 
     def _count_database_files(self, db_path: Path) -> int:
@@ -1201,10 +1474,10 @@ class DatabaseManager:
                 count = peek_total_entries(src_zip)
                 return count if count is not None else 0
             return 0
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort; never fail the run
             return 0
 
-    def cleanup_old_databases(self, days: int = 7, dry_run: bool = False) -> List[str]:
+    def cleanup_old_databases(self, days: int = 7, dry_run: bool = False) -> list[str]:
         """
         Clean up databases older than specified days.
 
@@ -1215,7 +1488,10 @@ class DatabaseManager:
         Returns:
             List of deleted database paths
         """
-        logger.info(f"Cleaning up databases older than {days} days...")
+        # Debug, not info: the auto-cleanup path runs this on every
+        # process start and it's usually a no-op — the per-deletion
+        # lines below surface actual reclaims at INFO.
+        logger.debug("Cleaning up databases older than %s days...", days)
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         deleted = []
 
@@ -1262,14 +1538,17 @@ class DatabaseManager:
                             if not dry_run:
                                 shutil.rmtree(db_path)
                                 metadata_file.unlink()
-                                logger.info(f"Deleted old database: {db_path}")
+                                logger.info("Deleted old database: %s", db_path)
                             else:
-                                logger.info(f"Would delete: {db_path}")
+                                logger.info("Would delete: %s", db_path)
                             deleted.append(str(db_path))
-                except Exception as e:
-                    logger.warning(f"Error processing {metadata_file}: {e}")
+                except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
+                    logger.warning("Error processing %s: %s", metadata_file, e)
 
-        logger.info(f"Cleaned up {len(deleted)} databases")
+        if deleted:
+            logger.info("Cleaned up %d databases", len(deleted))
+        else:
+            logger.debug("Cleaned up 0 databases")
         return deleted
 
 
@@ -1281,6 +1560,13 @@ def main():
     parser.add_argument("--repo", required=True, help="Repository path")
     parser.add_argument("--language", required=True, help="Programming language")
     parser.add_argument("--build-command", help="Build command")
+    parser.add_argument(
+        "--traced-build", action="store_true",
+        help="Opt into traced-build extraction for C/C++ (default is "
+             "--build-mode=none, which never executes the repo's build "
+             "scripts). Traced builds run repo-controlled code — only "
+             "use on trusted repos. Implied by --build-command.",
+    )
     parser.add_argument("--force", action="store_true", help="Force recreation")
     parser.add_argument("--cleanup", type=int, help="Cleanup databases older than N days")
     args = parser.parse_args()
@@ -1295,7 +1581,7 @@ def main():
     # Create build system object if command provided
     build_system = None
     if args.build_command:
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         build_system = BuildSystem(
             type="custom",
             command=args.build_command,
@@ -1305,12 +1591,14 @@ def main():
             detected_files=[],
         )
 
-    # Create database
+    # Create database.  An explicit --build-command is an operator
+    # assertion of trust — it implies traced-build mode.
     result = manager.create_database(
         Path(args.repo),
         args.language,
         build_system,
-        force=args.force
+        force=args.force,
+        traced_build=args.traced_build or bool(args.build_command),
     )
 
     if result.success:

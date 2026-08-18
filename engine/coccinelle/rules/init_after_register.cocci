@@ -12,6 +12,7 @@
 //
 // Common in Linux kernel drivers: cdev_add, register_netdev,
 // register_chrdev, platform_device_register, misc_register, etc.
+// @role: detection
 
 // cdev_add then field assignment
 @cdev_late_init@

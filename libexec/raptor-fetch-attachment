@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Deterministic attachment download step for the crash-analysis pipeline.
+
+Usage: raptor-fetch-attachment <bug-report.json> <url> <dest-file>
+
+Downloads one attachment recorded in a schema-validated
+``bug-report.json`` so the builder/analyzer agents never need a
+network tool of their own. Constraints, all fail-closed:
+
+  - the URL must appear verbatim in the report's ``attachments[].url``
+    list — the only fetchable URLs are the ones the gated artifact
+    records;
+  - https only;
+  - the transfer goes through ``core.http.EgressClient`` (in-process
+    egress proxy: hostname allowlist pinned to the attachment's own
+    host, private-IP / loopback resolution refused, size-capped body).
+
+The downloaded file is an untrusted crash input: callers feed it to
+the instrumented target program, nothing else.
+
+Exit codes: 0 success, 1 download/validation failure, 2 usage error.
+"""
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import load_json  # noqa: E402
+
+
+def _attachment_urls(report: object) -> set:
+    if not isinstance(report, dict):
+        return set()
+    urls = set()
+    attachments = report.get("attachments")
+    if isinstance(attachments, list):
+        for item in attachments:
+            if isinstance(item, dict) and isinstance(item.get("url"), str):
+                urls.add(item["url"])
+    return urls
+
+
+def main() -> int:
+    if len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <bug-report.json> <url> <dest-file>",
+              file=sys.stderr)
+        return 2
+
+    report_path, url, dest = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+
+    report = load_json(report_path)
+    if report is None:
+        print(f"cannot parse bug report: {report_path}", file=sys.stderr)
+        return 1
+
+    if url not in _attachment_urls(report):
+        print(
+            f"refusing download: {url} is not recorded in "
+            f"{report_path.name}'s attachments list",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        parts = urlsplit(url)
+    except ValueError as e:
+        print(f"malformed url: {e}", file=sys.stderr)
+        return 1
+    if parts.scheme.lower() != "https" or not parts.hostname:
+        print("refusing download: attachment URLs must be https with a "
+              "hostname", file=sys.stderr)
+        return 1
+    if parts.username is not None or parts.password is not None:
+        print("refusing download: attachment URL carries credentials",
+              file=sys.stderr)
+        return 1
+
+    from core.http import HttpError
+    from core.http.egress_backend import EgressClient
+    client = EgressClient(allowed_hosts=[parts.hostname])
+    try:
+        body = client.get_bytes(url)
+    except HttpError as e:
+        print(f"download failed: {e}", file=sys.stderr)
+        return 1
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(body)
+    print(f"OK: {url} -> {dest} ({len(body)} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

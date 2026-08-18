@@ -168,7 +168,10 @@ _SECCOMP_BLOCK_ALWAYS = (
 # across fork/clone so seccomp can't be dropped; (3) Landlock rules
 # inherit across nested namespaces. Documented in the threat model.
 
-# Syscalls blocked in full, allowed in debug profile
+# Syscalls blocked in full, allowed in the debug AND frida profiles
+# (both are opt-in instrumentation profiles; the constant's name
+# predates the frida exemption — see the profile check in
+# _make_seccomp_preexec).
 _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "ptrace",
     # gdb's read/write of the inferior's memory. Without these gdb
@@ -218,8 +221,22 @@ _TIOCCONS = 0x541D
 # controlling session — so not exploitable by a sandboxed child that's
 # not a session leader. Blocked by Docker's default profile.
 _TIOCSCTTY = 0x540E
+# TIOCLINUX — Linux virtual-console multiplexer ioctl. Subcommand 2
+# ("set selection" + paste) injects bytes into the console input
+# buffer on a real VT — the TIOCSTI-adjacent console-injection
+# escape. Harmless on ptys (ENOTTY) so blocking costs nothing on the
+# common path.
+_TIOCLINUX = 0x541C
 
-_BLOCKED_IOCTL_CMDS = (_TIOCSTI, _TIOCCONS, _TIOCSCTTY)
+_BLOCKED_IOCTL_CMDS = (_TIOCSTI, _TIOCCONS, _TIOCSCTTY, _TIOCLINUX)
+
+# 32-bit argument mask for MASKED_EQ deny rules. The kernel truncates
+# socket()'s family and ioctl()'s cmd to int/unsigned int, but seccomp
+# compares the RAW 64-bit register — an exact-equality rule misses
+# ``AF_UNIX | 1<<32``, which the kernel then treats as plain AF_UNIX
+# (default-allow => blocklist bypass). Masking the compare to the low
+# 32 bits makes the rule see exactly what the kernel will use.
+_ARG32_MASK = 0xFFFFFFFF
 
 
 def _seccomp_functional_selftest(lib) -> bool:
@@ -276,7 +293,7 @@ def _seccomp_functional_selftest(lib) -> bool:
             rc = lib.seccomp_load(ctx)
             lib.seccomp_release(ctx)
             os._exit(0 if rc == 0 else 1)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 — post-fork: must never unwind into parent state
             os._exit(1)
     # ===== PARENT =====
     try:
@@ -299,14 +316,19 @@ def check_seccomp_available() -> bool:
             return False
         try:
             lib = ctypes.CDLL(libname, use_errno=True)
-            # Sanity: the functions we need must exist
+            # Sanity: the functions we need must exist — including
+            # seccomp_attr_set, which _make_seccomp_preexec calls
+            # unconditionally (bad-arch action). Omitting it would
+            # pass the probe on a build lacking it and then die with
+            # AttributeError inside the spawn child.
             _ = lib.seccomp_init
             _ = lib.seccomp_rule_add_array
             _ = lib.seccomp_load
             _ = lib.seccomp_release
             _ = lib.seccomp_syscall_resolve_name
+            _ = lib.seccomp_attr_set
         except (OSError, AttributeError) as e:
-            logger.debug(f"Sandbox: libseccomp load failed: {e}")
+            logger.debug("Sandbox: libseccomp load failed: %s", e)
             state._libseccomp_cache = 0
             return False
         # Functional self-test (see _seccomp_functional_selftest): loadable
@@ -325,7 +347,8 @@ def check_seccomp_available() -> bool:
 
 def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                           audit_mode: bool = False,
-                          observe_mode: bool = False):
+                          observe_mode: bool = False,
+                          allow_unix_sockets: bool = False):
     """Create a preexec_fn that installs the seccomp filter for `profile`.
 
     Runs POST-fork in the child. Same fork-safety rules as Landlock: capture
@@ -349,6 +372,20 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     kernel default action for unhandled TRACE is SIGSYS-kill the
     process. The caller (_spawn.py) is responsible for ensuring tracer
     is attached before any traced syscall fires.
+
+    `allow_unix_sockets=True` drops AF_UNIX from the socket-family
+    blocklist. Only pass this when BOTH isolation layers that make
+    AF_UNIX harmless are engaged for this child: the mount namespace
+    (fresh tmpfs over /run masks pathname sockets like docker.sock;
+    pivot_root leaves the rest of the host read-only, and connect(2)
+    to a pathname socket on a read-only mount fails the MAY_WRITE
+    inode check) and a fresh/coordinator network namespace (abstract-
+    namespace AF_UNIX sockets are netns-scoped, so the host's are
+    unreachable). Blanket-blocking socket(AF_UNIX) breaks Python >=
+    3.14 inside the sandbox: multiprocessing's default start method
+    changed to forkserver, whose listener needs socket(AF_UNIX) —
+    observed as the CodeQL python extractor dying with EPERM. The
+    preexec-only path (no mount-ns) must keep the block.
 
     `observe_mode=True` extends the trace set with stat-family syscalls
     (stat/lstat/newfstatat/access/faccessat/faccessat2) on top of the
@@ -443,7 +480,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # "frida" profile: allow AF_UNIX (frida-helper uses Unix sockets for
     # its internal IPC with the target process) but keep NETLINK/PACKET
     # and SOCK_RAW blocked.
-    if profile == "frida":
+    if profile == "frida" or allow_unix_sockets:
         socket_family_blocks = [_AF_NETLINK, _AF_PACKET]
     else:
         socket_family_blocks = [_AF_UNIX, _AF_NETLINK, _AF_PACKET]
@@ -497,8 +534,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # robust against supply-chain drift (int 0x80 / x32 / AArch32
                 # syscalls arrive with arch != native and get killed rather
                 # than falling through to the native filter rules).
-                lib.seccomp_attr_set(ctx, _SCMP_FLTATR_ACT_BADARCH,
-                                     _SCMP_ACT_KILL_PROCESS)
+                ret = lib.seccomp_attr_set(ctx, _SCMP_FLTATR_ACT_BADARCH,
+                                          _SCMP_ACT_KILL_PROCESS)
+                if ret < 0:
+                    _os_write(2, b"RAPTOR: seccomp BADARCH attr_set failed -- "
+                                 b"refusing to exec without filter\n")
+                    os._exit(126)
 
                 errno_eperm = 1  # EPERM
                 # Audit mode: swap the deny action from ERRNO to TRACE.
@@ -544,11 +585,14 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                          b"refusing to exec without filter\n")
                             os._exit(126)
 
-                # socket() with blocked family — one rule per family
+                # socket() with blocked family — one rule per family.
+                # MASKED_EQ on the low 32 bits, not EQ: the kernel
+                # truncates the family to int, so EQ misses
+                # `fam | 1<<32` while the kernel still sees `fam`.
                 if socket_num >= 0:
                     for fam in socket_family_blocks:
-                        arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_EQ,
-                                          datum_a=fam, datum_b=0)
+                        arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_ARG32_MASK, datum_b=fam)
                         arg_arr = (_ScmpArgCmp * 1)(arg)
                         ret = lib.seccomp_rule_add_array(
                             ctx, deny, socket_num, 1, arg_arr,
@@ -606,8 +650,11 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                         # `SOCK_DGRAM | SOCK_NONBLOCK` (2050) both match the
                         # block — exact equality misses both common variants.
                         args = (_ScmpArgCmp * 2)(
-                            _ScmpArgCmp(arg=0, op=_SCMP_CMP_EQ,
-                                        datum_a=fam, datum_b=0),
+                            # MASKED_EQ low-32 on the family — see the
+                            # blocked-family rules above for why EQ is
+                            # bypassable via high-bit-set values.
+                            _ScmpArgCmp(arg=0, op=_SCMP_CMP_MASKED_EQ,
+                                        datum_a=_ARG32_MASK, datum_b=fam),
                             _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
                                         datum_a=_SOCK_TYPE_MASK,
                                         datum_b=_SOCK_DGRAM),
@@ -642,8 +689,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # known-dangerous list, one rule per cmd value.
                 if ioctl_num >= 0:
                     for cmd_val in _BLOCKED_IOCTL_CMDS:
-                        arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_EQ,
-                                          datum_a=cmd_val, datum_b=0)
+                        # MASKED_EQ low-32 on cmd — the kernel reads
+                        # an unsigned int, so EQ misses
+                        # `TIOCSTI | 1<<32` (see _ARG32_MASK).
+                        arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_ARG32_MASK,
+                                          datum_b=cmd_val)
                         arg_arr = (_ScmpArgCmp * 1)(arg)
                         ret = lib.seccomp_rule_add_array(
                             ctx, deny, ioctl_num, 1, arg_arr,
@@ -666,7 +717,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     os._exit(126)
             finally:
                 lib.seccomp_release(ctx)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 — fail-closed: abort child on ANY install error
             # Fail-closed on any unexpected exception -- same reason.
             # BaseException so SystemExit / KeyboardInterrupt also
             # route through the safe-exit path rather than letting

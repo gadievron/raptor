@@ -4,22 +4,22 @@ import copy
 import json
 import os
 import time
+import typing
 import unittest.mock
 from pathlib import Path
 
 import pytest
 
 from core.orchestration.understand_bridge import (
-    find_understand_output,
-    load_understand_context,
-    enrich_checklist,
-    normalize_context_map,
     TRACE_SOURCE_LABEL,
     _extract_hashes,
     _find_stale_files,
     _rank_candidates,
+    enrich_checklist,
+    find_understand_output,
+    load_understand_context,
+    normalize_context_map,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -187,7 +187,7 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(project_dir)
 
-        result_dir, stale = find_understand_output(validate_dir)
+        result_dir, _stale = find_understand_output(validate_dir)
         assert result_dir == project_dir / "understand-20260401-120000"
 
     def test_tier2_picks_newest_sibling(self, tmp_path):
@@ -199,7 +199,7 @@ class TestFindUnderstandOutput:
         time.sleep(0.01)
         new = _make_understand_dir(project_dir, "understand-20260402-120000")
 
-        result_dir, stale = find_understand_output(validate_dir)
+        result_dir, _stale = find_understand_output(validate_dir)
         assert result_dir == new
 
     def test_tier3_global_out_by_target_path(self, tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
+        result_dir, _stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir == out_root / "understand_20260401_120000"
 
     def test_tier3_no_match_for_wrong_target(self, tmp_path, monkeypatch):
@@ -238,7 +238,7 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="./other")
+        result_dir, _stale = find_understand_output(validate_dir, target_path="./other")
         assert result_dir is None
 
     def test_returns_none_when_no_candidates(self, tmp_path, monkeypatch):
@@ -250,7 +250,7 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
+        result_dir, _stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir is None
 
     def test_ignores_dirs_without_context_map(self, tmp_path):
@@ -263,7 +263,7 @@ class TestFindUnderstandOutput:
         empty.mkdir()
         _write_json(empty / ".raptor-run.json", {"version": 1, "command": "understand"})
 
-        result_dir, stale = find_understand_output(validate_dir)
+        result_dir, _stale = find_understand_output(validate_dir)
         assert result_dir is None
 
     def test_ignores_non_understand_dirs(self, tmp_path):
@@ -276,7 +276,7 @@ class TestFindUnderstandOutput:
         _write_json(scan / "context-map.json", {"sources": []})
         _write_json(scan / ".raptor-run.json", {"version": 1, "command": "scan"})
 
-        result_dir, stale = find_understand_output(validate_dir)
+        result_dir, _stale = find_understand_output(validate_dir)
         assert result_dir is None
 
 
@@ -1172,7 +1172,7 @@ class TestAugmentLibrarySurface:
             "files": [{"path": "lib.py", "language": "python", "items": items}],
         }
 
-    _ITEMS = [
+    _ITEMS: typing.ClassVar[list] = [
         {"name": "public_api", "kind": "function", "line_start": 1, "line_end": 3},
         {"name": "another_pub", "kind": "function", "line_start": 5, "line_end": 7},
         {"name": "_private", "kind": "function", "line_start": 9, "line_end": 11},
@@ -1775,7 +1775,7 @@ class TestEdgeCases:
         monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
                             staticmethod(lambda: project_dir))
 
-        result_dir, stale = find_understand_output(
+        result_dir, _stale = find_understand_output(
             validate_dir, target_path=str(target_dir),
         )
         assert result_dir == understand
@@ -1837,7 +1837,7 @@ class TestEdgeCases:
         })
 
         # d_no_checklist is newer by mtime but has no checklist → stale_count=1
-        best_dir, stale = _rank_candidates(
+        best_dir, _stale = _rank_candidates(
             [d_no_checklist, d_with_checklist], str(target),
         )
         assert best_dir == d_with_checklist
@@ -1863,8 +1863,56 @@ class TestBuildChecklistScript:
         repo_root = Path(__file__).parents[3]  # core/orchestration/tests -> repo root
         result = subprocess.run(
             ["libexec/raptor-build-checklist", str(target), str(out_dir)],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, check=False,
         )
         assert result.returncode == 0, result.stderr
         assert "Checklist:" in result.stdout
         assert (out_dir / "checklist.json").exists()
+
+
+class TestStaleFileContainment:
+    """Checklist entry paths are external input — hashing must be
+    confined to the target tree."""
+
+    def test_relative_escape_treated_stale(self, tmp_path):
+        """``..`` paths must not be hashed — even when the outside
+        file's content matches the checklist hash (which would have
+        made the pre-fix code hash it and report it fresh)."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("aaa")
+        secret = tmp_path / "secret.txt"
+        secret.write_text("SECRET")
+        h1 = {
+            "a.py": hashlib.sha256(b"aaa").hexdigest(),
+            "../secret.txt": hashlib.sha256(b"SECRET").hexdigest(),
+        }
+        assert _find_stale_files(h1, str(target)) == {"../secret.txt"}
+
+    def test_absolute_escape_treated_stale(self, tmp_path):
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("OUT")
+        h1 = {str(outside): hashlib.sha256(b"OUT").hexdigest()}
+        assert _find_stale_files(h1, str(target)) == {str(outside)}
+
+    def test_symlink_escape_treated_stale(self, tmp_path):
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("OUT")
+        (target / "link.txt").symlink_to(outside)
+        h1 = {"link.txt": hashlib.sha256(b"OUT").hexdigest()}
+        assert _find_stale_files(h1, str(target)) == {"link.txt"}
+
+    def test_contained_paths_unaffected(self, tmp_path):
+        import hashlib
+        target = tmp_path / "target"
+        (target / "sub").mkdir(parents=True)
+        (target / "sub" / "a.py").write_text("aaa")
+        h1 = {"sub/a.py": hashlib.sha256(b"aaa").hexdigest()}
+        assert _find_stale_files(h1, str(target)) == set()

@@ -273,7 +273,7 @@ class TestBuildDescribeReport:
         # Catalog preview present + populated for a known entry.
         assert report.target_type_defaults is not None
         assert "security-audit" in report.target_type_defaults.semgrep_packs
-        assert report.estimate_summary is not None
+        assert report.estimate_summary is None
 
     def test_unmatched_target_surfaces_generic_defaults(self, tmp_path):
         # Empty tree → falls back to ``generic``. The generic

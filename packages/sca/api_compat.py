@@ -265,7 +265,7 @@ def _fetch_pypi_requires_dist(
             return list(cached) if cached else []
     try:
         url = f"https://pypi.org/pypi/{name}/{version}/json"
-        data = http.get_json(url)
+        data = http.get_json(url, timeout=5, total_timeout=10, retries=1)
     except Exception:                                   # noqa: BLE001
         return None
     if not isinstance(data, dict):

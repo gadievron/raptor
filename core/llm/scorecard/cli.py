@@ -948,11 +948,30 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
 
+    if not isinstance(analysis, dict):
+        print(
+            f"✗ Analysis report is not a JSON object: "
+            f"{type(analysis).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(validation, dict):
+        print(
+            f"✗ Validation report is not a JSON object: "
+            f"{type(validation).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+
     # Build {finding_id: validation_verdict} from the validation report.
     # Tolerate multiple possible shapes — both a flat ``findings`` list
     # and a nested ``results`` array.
     val_by_id: dict = {}
-    val_findings = validation.get("findings") or validation.get("results") or []
+    val_findings = (
+        validation.get("findings")
+        or validation.get("results")
+        or []
+    )
     for vf in val_findings:
         fid = vf.get("finding_id")
         if not fid:

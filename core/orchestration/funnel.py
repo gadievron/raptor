@@ -53,7 +53,7 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
     ``is_true_positive`` key at all are not counted (pre-existing
     "not analysed" semantics preserved).
 
-    Self-contradictory findings (where ``check_self_consistency`` in
+    Self-contradictory findings (where ``check_self_contradiction`` in
     ``packages/llm_analysis/validation.py`` flagged the LLM's structured
     fields or reasoning text as internally inconsistent post-retry) are
     EXCLUDED from ``exploitable`` and counted in ``inconsistent``

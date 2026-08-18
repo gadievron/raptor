@@ -1,8 +1,11 @@
 """Module-level reachability for Go module deps.
 
-Walks ``*.go`` files outside ``*_test.go`` and ``vendor/`` trees,
-extracts ``import "<module-path>"`` statements (single + parenthesised
-block forms), and matches each module path against the dep's name.
+Walks ``*.go`` files outside ``vendor/`` trees — ``*_test.go`` files
+included, each hit tagged ``is_test`` — extracts ``import
+"<module-path>"`` statements (single + parenthesised block forms), and
+matches each module path against the dep's name. ``resolve_dep``
+discounts test-only hits: a module imported only from ``*_test.go``
+files resolves ``not_reachable``.
 
 Match semantics: a dep ``github.com/foo/bar`` is "imported" when any
 import path is exactly that, OR is a sub-package of it

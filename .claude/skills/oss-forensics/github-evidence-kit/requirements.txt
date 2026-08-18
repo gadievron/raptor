@@ -1,18 +1,18 @@
 # GitHub Forensics Schema Dependencies
+# Exact pins per the project's "no loose deps" policy.
 
-# Core
-pydantic==2.4.0
-
-# HTTP requests for GitHub API, Wayback, etc.
-requests==2.33.0
+# Core (inherits from top-level requirements.txt; pinned here for
+# standalone installs of the evidence kit)
+pydantic==2.13.4
+requests==2.34.2
 
 # BigQuery for GH Archive (optional - only needed for GH Archive verification)
-google-cloud-bigquery>=3.0.0
-google-auth>=2.0.0
+google-cloud-bigquery==3.42.2
+google-auth==2.53.0
 
 # Wayback Machine API (github-wayback-recovery skill)
-waybackpy>=3.0.0
+waybackpy==3.0.6
 
 # Testing
-pytest>=7.0.0
-pytest-cov>=4.0.0
+pytest==9.1.1
+pytest-cov==7.1.0

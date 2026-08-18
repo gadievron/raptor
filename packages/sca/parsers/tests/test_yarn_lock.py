@@ -125,3 +125,35 @@ def test_classic_scoped_with_complex_range(tmp_path: Path) -> None:
     deps = parse(_write(tmp_path, body))
     assert deps[0].name == "@babel/core"
     assert deps[0].version == "7.23.0"
+
+
+def test_sniff_value_error_falls_back_to_classic(tmp_path: Path) -> None:
+    """yaml.safe_load raises ValueError on out-of-range date scalars —
+    the Berry sniff must treat that as "not Berry" and the classic
+    parser must still extract the deps (a raise here used to escape to
+    the dispatch catch-all: whole lockfile read as zero deps)."""
+    body = """\
+"lodash@^4.17.21":
+  version "4.17.21"
+release: 2023-99-99
+"""
+    deps = parse(_write(tmp_path, body))
+    assert [d.name for d in deps if d.name == "lodash"] == ["lodash"]
+    assert deps[0].version == "4.17.21"
+
+
+def test_berry_value_error_returns_empty_with_no_raise(
+    tmp_path: Path,
+) -> None:
+    """A genuinely Berry file (__metadata) with a ValueError-raising
+    scalar reports a parse failure ([]), it must not raise."""
+    body = """\
+__metadata:
+  version: 8
+
+"left-pad@npm:^1.0.0":
+  version: 1.3.0
+  released: 2023-99-99
+"""
+    deps = parse(_write(tmp_path, body))
+    assert deps == []

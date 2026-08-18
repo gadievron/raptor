@@ -63,8 +63,7 @@ Architectural correspondence:
 from __future__ import annotations
 
 import os
-from typing import Iterable, Optional
-
+from collections.abc import Iterable
 
 # Sandbox kernel extension path — matches the senderImagePath of audit
 # log entries. Defined here so seatbelt_audit can import the same
@@ -73,8 +72,37 @@ SANDBOX_KEXT_SENDER = (
     "/System/Library/Extensions/Sandbox.kext/Contents/MacOS/Sandbox"
 )
 
+# mach services the strict profile still permits. Curated from Apple's
+# open-source profile base; the 2026-08-15 probe battery (clang, make,
+# git, python, venv, tar) passed even under a BLANKET mach-lookup deny
+# — the only services those tools requested (analyticsd, logd,
+# diagnosticd, notification_center, opendirectoryd, dirhelper) are
+# telemetry/directory lookups they tolerate losing. The allowlist is
+# retained as headroom for richer tools (Security.framework consumers,
+# codesign-adjacent flows) rather than because the battery needed it;
+# grow it from `log stream` census evidence, never speculatively.
+MACOS_STRICT_MACH_SERVICES = (
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.logd",
+    "com.apple.diagnosticd",
+    "com.apple.SecurityServer",
+    "com.apple.securityd.xpc",
+    "com.apple.trustd",
+    "com.apple.cfprefsd.daemon",
+    "com.apple.cfprefsd.agent",
+    "com.apple.FSEvents",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.bsd.dirhelper",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.dyld.closured",
+)
 
-def _realpath_or_none(path: Optional[str]) -> Optional[str]:
+
+def _realpath_or_none(path: str | None) -> str | None:
     """Canonicalize ``path`` via os.path.realpath, or None if path is
     falsy. SBPL's (subpath ...) matches the canonical resolved path
     only — feeding it /var/folders/... when the actual filesystem
@@ -112,19 +140,22 @@ def _quote_sbpl(s: str) -> str:
 
 
 def build_profile(*,
-                  target: Optional[str] = None,
-                  output: Optional[str] = None,
+                  target: str | None = None,
+                  output: str | None = None,
                   block_network: bool = False,
-                  allowed_tcp_ports: Optional[Iterable[int]] = None,
+                  allowed_tcp_ports: Iterable[int] | None = None,
                   use_egress_proxy: bool = False,
-                  proxy_port: Optional[int] = None,
+                  proxy_port: int | None = None,
                   restrict_reads: bool = False,
-                  readable_paths: Optional[Iterable[str]] = None,
-                  writable_paths: Optional[Iterable[str]] = None,
-                  fake_home: bool = False,  # noqa: ARG001 — env-side, profile is unaffected
+                  readable_paths: Iterable[str] | None = None,
+                  writable_paths: Iterable[str] | None = None,
+                  fake_home: bool = False,
+                  exclude_tmp_baseline: bool = False,
                   audit_mode: bool = False,
                   audit_verbose: bool = False,
-                  seccomp_profile: Optional[str] = None,
+                  seccomp_profile: str | None = None,
+                  audit_evidence_dir: str | None = None,
+                  profile_name: str | None = None,
                   ) -> str:
     """Generate an SBPL profile string from logical sandbox kwargs.
 
@@ -176,6 +207,16 @@ def build_profile(*,
         and an `audit_summary` record at stop-time. SBPL is
         coarser than seccomp: records are action-category +
         path/target rather than per-syscall + argv.
+      audit_evidence_dir: the run's sandbox-evidence directory
+        (``<run_dir>/.audit`` — see core/sandbox/evidence.py). When
+        set, an unconditional ``(deny file-write* (subpath ...))``
+        clause is emitted for it. SBPL evaluation makes an explicit
+        deny outrank allows regardless of clause order (module
+        docstring point 3), so the target cannot append to /
+        truncate / replace the denial/observe JSONL even in audit
+        mode where writes are otherwise allow-with-report. This is
+        the macOS expression of the same exclusion the Linux
+        backends implement via the mount-ns shadow tmpfs.
       seccomp_profile: name of the requested Linux seccomp profile
         ("full"/"debug"/"network-only"/"none"/None). macOS has no
         direct seccomp equivalent, but we approximate the closest
@@ -199,10 +240,19 @@ def build_profile(*,
 
     # --- Filesystem write restriction ---
     # Build the exception clause (paths the sandbox CAN write to).
-    # Always include /private/tmp (the realpath of /tmp) so tools that
-    # write temp files keep working — matches the Linux Landlock
-    # default of /tmp in writable_paths.
-    write_exceptions: list = ["/private/tmp"]
+    # Include /private/tmp (the realpath of /tmp) so tools that write
+    # temp files keep working — matches the Linux Landlock default of
+    # /tmp in writable_paths. ``exclude_tmp_baseline=True`` drops the
+    # seed (mirroring Linux's writable_paths=[] semantics for the
+    # exploit-engine wrapper-script defence); the spawn layer then
+    # redirects the child's TMPDIR into {output}/.tmp — a writable
+    # exception — because tempfile/compilers otherwise fail or fall
+    # through to other tmp spellings (validated live on an arm64
+    # macOS host: enforcement holds across /tmp spellings, and
+    # compilers work again once TMPDIR points at writable scratch).
+    write_exceptions: list = (
+        [] if exclude_tmp_baseline else ["/private/tmp"]
+    )
     # Device nodes that must always be writable — sh, python, and
     # most Unix tools redirect to /dev/null; /dev/tty is needed for
     # interactive prompts. Use (literal ...) not (subpath ...) so
@@ -263,6 +313,18 @@ def build_profile(*,
                 f"{subpath_clauses} {literal_clauses})))"
             )
 
+    # --- Sandbox-evidence directory protection ---
+    # Emitted unconditionally when the caller declared an evidence
+    # dir: the deny must hold in enforcement mode (where the
+    # require-not exception for output would otherwise cover the
+    # subpath) AND in audit mode (where writes are allow-with-report).
+    # Explicit deny outranks both — see module docstring point 3.
+    ev_real = _realpath_or_none(audit_evidence_dir)
+    if ev_real:
+        parts.append(
+            f"(deny file-write* (subpath {_quote_sbpl(ev_real)}))"
+        )
+
     # --- Filesystem read restriction (only when explicitly requested) ---
     if restrict_reads:
         # Mirror the Linux restrict_reads=True allowlist: system dirs
@@ -274,6 +336,19 @@ def build_profile(*,
         SYSTEM_READ_DIRS = (
             "/usr", "/System", "/Library/Frameworks",
             "/private/etc", "/private/var/db/timezone",
+            # Homebrew prefixes (ARM and Intel). These are the de-facto
+            # /usr/local of macOS: interpreters and their dylibs live
+            # here, and dyld resolves framework paths through them.
+            # Without these, restrict_reads=True kills ANY
+            # Homebrew-installed tool at dyld stage — observed
+            # empirically (2026-08-15 probe: Homebrew python3 dies
+            # "Library not loaded ... file system sandbox blocked
+            # open()"; Homebrew bash likewise via libreadline). The
+            # macOS twin of the Linux finding that user-local
+            # interpreter runtimes need read grants; software-install
+            # trees, not credential stores, so the grant matches the
+            # /usr philosophy.
+            "/opt/homebrew", "/usr/local",
             # /bin and /sbin host real binaries on macOS — they are
             # NOT symlinks to /usr/bin / /usr/sbin (unlike most modern
             # Linux distros). PATH lookups commonly resolve to
@@ -352,10 +427,15 @@ def build_profile(*,
         #
         # Earlier code lumped both under (deny file-read*), which
         # required a hack — `(literal "/")` allow so dyld didn't
-        # SIGABRT. That hack also allowed readdir("/") which leaks
-        # the top-level directory listing (/Users, /Volumes, etc).
-        # The split below keeps metadata permissive (no SIGABRT)
-        # while denying readdir-of-/ as a data read.
+        # SIGABRT.
+        #
+        # Known residual (empirically confirmed 2026-08-15): with
+        # file-read-metadata allowed universally, `ls /` SUCCEEDS —
+        # the kernel serves readdir under the metadata class, so the
+        # top-level directory listing (/Users, /Volumes, ...) is
+        # visible under restrict_reads. Directory NAMES leak;
+        # file CONTENT outside the allowlist stays denied. Accepted:
+        # denying metadata breaks dyld path-walks outright.
         if not audit_mode:
             parts.append("(allow file-read-metadata)")
             data_allow_clauses = " ".join(
@@ -402,9 +482,40 @@ def build_profile(*,
         # via libproc still work).
         if audit_mode:
             parts.append("(allow process-info* (with report))")
+            parts.append("(allow iokit-open (with report))")
         else:
             parts.append("(deny process-info-pidinfo (target others))")
             parts.append("(deny process-info-pidfdinfo (target others))")
+            # iokit-open: userland driver/device access — the macOS
+            # analogue of Linux's blocked device-capability escapes.
+            # Empirically free (2026-08-15 probe battery: clang, make,
+            # git, python, venv, tar all pass under the deny; the
+            # sibling candidate `(deny sysctl-write)` was REJECTED —
+            # it breaks Apple's linker and ensurepip).
+            parts.append("(deny iokit-open)")
+
+    # --- macos-strict extras (profile_name == "strict") ---
+    # The operator chose fail-closed semantics; layer the probe-
+    # validated denies the full profile deliberately leaves out. All
+    # three passed the 2026-08-15 toolchain battery with zero
+    # breakage (signal/nvram individually, mach-lookup even as a
+    # blanket deny — the curated allowlist is deliberate headroom).
+    if profile_name == "strict" and seccomp_profile not in (None, "none"):
+        if audit_mode:
+            parts.append("(allow signal (with report))")
+            parts.append("(allow nvram* (with report))")
+            parts.append("(allow mach-lookup (with report))")
+        else:
+            parts.append("(deny signal (target others))")
+            parts.append("(deny nvram*)")
+            _mach_names = " ".join(
+                f"(global-name {_quote_sbpl(s)})"
+                for s in MACOS_STRICT_MACH_SERVICES
+            )
+            parts.append(
+                f"(deny mach-lookup (require-not (require-any "
+                f"{_mach_names})))"
+            )
 
     # --- Verbose audit (Phase 2c — closest macOS analogue to Linux's
     # SCMP_ACT_TRACE-everywhere strace-style audit). When audit_verbose
@@ -412,13 +523,14 @@ def build_profile(*,
     # for additional SBPL action categories so seatbelt_audit's
     # LogStreamer captures activity beyond just file writes.
     #
-    # Category set is conservative — file-read-data captures
-    # interesting reads (file content) without the firehose of
-    # file-read-metadata (every stat/readdir). process-info-* is
-    # deliberately omitted for the same reason — too noisy under any
-    # real workload, no skip-budget on the macOS side yet. Operators
-    # who want everything can extend this list in seatbelt.py and
-    # accept the volume.
+    # Category set has two tiers: a low-volume base (file-read-data
+    # captures interesting reads — file content — plus mach-lookup,
+    # process-exec*, process-fork, signal), and the high-volume
+    # categories (file-read-metadata, process-info*, iokit-open,
+    # sysctl-read) which are included now that AuditBudget enforces
+    # per-category caps on the macOS side — see the comment on the
+    # second emission block below. Operators who want more can
+    # extend this list in seatbelt.py and accept the volume.
     #
     # Only emitted when audit_mode is also set — verbose without
     # audit_mode is operator confusion (the Linux kwarg surface
@@ -454,6 +566,32 @@ def build_profile(*,
     # reachable). Caller is responsible for setting HTTPS_PROXY in the
     # child env; we just open the kernel-level network policy enough
     # for the loopback proxy connection to work.
+    #
+    # Semantics of `(deny network*)`, empirically verified on macOS
+    # (2026-08-15 probe batteries): it denies loopback connect, TCP
+    # bind/listen, UDP send AND unix-domain-socket connects — all
+    # EPERM. That is STRICTER than the Linux full profile, whose netns
+    # provides a working isolated loopback: loopback-IPC and
+    # UDP-at-startup tools that run fine inside a Linux netns break
+    # here. Known casualties, root-caused and closed as incompatible:
+    #   * gradle (daemon AND no-daemon) — needs a UDP socket and a
+    #     usable local address before any build; a loopback-scoped
+    #     carve (bind/inbound/outbound on localhost, TCP+UDP) was
+    #     probed and still fails (the daemon registers "address:
+    #     null" — its address detection gets EPERM where a Linux netns
+    #     returns ENETUNREACH, and only the latter is handled). JVM
+    #     builds under seatbelt network-deny are unsupported; run them
+    #     outside block_network or on a Linux host.
+    #   * Apple's /usr/bin/java STUB fails outright under the deny
+    #     ("Unable to locate a Java Runtime") while a real JVM
+    #     (JAVA_HOME/Homebrew path) starts fine — JVM callers must
+    #     invoke the real binary, not the stub.
+    # Upside of the same strictness: the docker.sock-class unix-socket
+    # surface is closed by default under block_network, and SBPL can
+    # express address-scoped exceptions (`(remote ip "localhost:P")`,
+    # unix-socket path literals) that Linux Landlock cannot — used
+    # below for the proxy port, available for future per-socket
+    # allowlists.
     block = block_network or use_egress_proxy
     if block:
         parts.append("(deny network*)")
@@ -467,6 +605,20 @@ def build_profile(*,
                 f"(remote tcp6 \"localhost:{int(proxy_port)}\"))"
             )
         for port in (allowed_tcp_ports or ()):
+            parts.append(
+                f"(allow network-outbound (remote tcp \"*:{int(port)}\"))"
+            )
+    elif allowed_tcp_ports:
+        # Standalone port allowlist (no block_network, no proxy): the
+        # old `block_network or use_egress_proxy` gate emitted NO
+        # network section here, silently allow-defaulting the whole
+        # network on macOS while Linux Landlock enforced the same
+        # kwargs — a parity gap the caller had no signal for. Scope
+        # the deny to outbound TCP only: Landlock's port pin also
+        # covers TCP connect only, leaving UDP/DNS and bind/listen
+        # untouched (listening is unrestricted by design).
+        parts.append("(deny network-outbound (remote tcp \"*:*\"))")
+        for port in allowed_tcp_ports:
             parts.append(
                 f"(allow network-outbound (remote tcp \"*:{int(port)}\"))"
             )

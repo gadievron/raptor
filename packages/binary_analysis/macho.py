@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from core.sandbox import run_trusted
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 _FAT_MAGICS = {
     b"\xca\xfe\xba\xbe": (">", False),
@@ -152,7 +152,7 @@ def _slice_sha256(path: Path, offset: int, size: int) -> str:
     return digest.hexdigest() if remaining == 0 else ""
 
 
-def inspect_macho_slices(path: Path, binary_sha256: str) -> tuple[list[MachOSlice], list[EvidenceRecord]]:
+def inspect_macho_slices(path: Path, binary_sha256: str) -> tuple[list[MachOSlice], list[BinaryEvidenceRecord]]:
     """Read thin/fat Mach-O slice headers without calling an external tool."""
     path = Path(path)
     try:
@@ -268,7 +268,7 @@ def _extract_code_signing(binary: Path) -> dict[str, Any]:
     return fields
 
 
-def inspect_app_bundle(path: Path, binary_sha256: str) -> tuple[Optional[AppBundleMetadata], list[EvidenceRecord]]:
+def inspect_app_bundle(path: Path, binary_sha256: str) -> tuple[Optional[AppBundleMetadata], list[BinaryEvidenceRecord]]:
     bundle = _find_app_bundle(Path(path))
     if bundle is None:
         return None, []

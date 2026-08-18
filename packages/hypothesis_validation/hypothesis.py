@@ -12,6 +12,18 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def _coerce_line(value) -> int:
+    """Best-effort int coercion for LLM-supplied line numbers.
+
+    LLM JSON routinely carries null, "", or non-numeric strings where an
+    int belongs — from_dict must degrade to 0 rather than raise.
+    """
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 @dataclass
 class Location:
     """A point in the program — used for both sources and sinks.
@@ -44,7 +56,7 @@ class Location:
             kind=(d.get("kind") or ""),
             file=(d.get("file") or ""),
             function=(d.get("function") or ""),
-            line=int(d.get("line") or 0),
+            line=_coerce_line(d.get("line")),
         )
 
 
@@ -79,7 +91,7 @@ class FlowStep:
         return cls(
             file=(d.get("file") or ""),
             function=(d.get("function") or ""),
-            line=int(d.get("line") or 0),
+            line=_coerce_line(d.get("line")),
             description=(d.get("description") or ""),
         )
 

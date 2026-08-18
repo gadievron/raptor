@@ -23,7 +23,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 from packages.source_intel.analyze import SCHEMA_VERSION, SourceIntelResult
 
@@ -38,13 +37,13 @@ class SourceIntelCache:
     to disk is deferred per ``project_source_intel_kickoff.md``.
     """
 
-    _entries: Dict[Tuple[str, str], SourceIntelResult] = field(default_factory=dict)
+    _entries: dict[tuple[str, str], SourceIntelResult] = field(default_factory=dict)
 
     def get(
         self,
         target: Path,
-        rules_dir: Optional[Path] = None,
-    ) -> Optional[SourceIntelResult]:
+        rules_dir: Path | None = None,
+    ) -> SourceIntelResult | None:
         """Lookup. Returns None on miss."""
         key = self._key_for(target, rules_dir)
         return self._entries.get(key)
@@ -52,7 +51,7 @@ class SourceIntelCache:
     def put(
         self,
         target: Path,
-        rules_dir: Optional[Path],
+        rules_dir: Path | None,
         result: SourceIntelResult,
     ) -> None:
         """Store result under (target, rules_hash)."""
@@ -70,8 +69,8 @@ class SourceIntelCache:
     @staticmethod
     def _key_for(
         target: Path,
-        rules_dir: Optional[Path],
-    ) -> Tuple[str, str]:
+        rules_dir: Path | None,
+    ) -> tuple[str, str]:
         target_hash = _hash_target_tree(Path(target))
         rules_hash = _hash_rules_dir(
             Path(rules_dir) if rules_dir else None
@@ -89,7 +88,7 @@ class SourceIntelCache:
 # =====================================================================
 
 
-_C_CPP_EXTS: Tuple[str, ...] = (
+_C_CPP_EXTS: tuple[str, ...] = (
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
 )
 
@@ -219,8 +218,14 @@ def _hash_target_tree(target: Path) -> str:
     return h.hexdigest()
 
 
-def _hash_rules_dir(rules_dir: Optional[Path]) -> str:
-    """SHA-256 of every .cocci file under rules_dir, sorted by name.
+def _hash_rules_dir(rules_dir: Path | None) -> str:
+    """SHA-256 of every .cocci + pack .json file under rules_dir,
+    sorted by name.
+
+    API packs (``packs/*.json``, rendered into slotted rules at analyze
+    time) are part of the effective rule set, so they participate in
+    the key — a pack edit must invalidate cached results exactly like a
+    rule edit.
 
     Returns ``"default"`` when rules_dir is None — the caller will use
     the shipped rules directory, which is hashed via this function on
@@ -232,7 +237,10 @@ def _hash_rules_dir(rules_dir: Optional[Path]) -> str:
         return "missing-rules"
 
     h = hashlib.sha256()
-    files = sorted(rules_dir.rglob("*.cocci"), key=lambda p: str(p))
+    files = sorted(
+        [*rules_dir.rglob("*.cocci"), *rules_dir.rglob("*.json")],
+        key=lambda p: str(p),
+    )
     for path in files:
         h.update(str(path.relative_to(rules_dir)).encode("utf-8"))
         h.update(b"\x00")

@@ -832,10 +832,10 @@ def test_tool_timeout_terminate_on_handler_error_raises() -> None:
     with pytest.raises(ToolHandlerTimeout, match="exceeded"):
         loop.run("go")
 
-    # LoopTerminated event was emitted with reason="tool_error" before
+    # LoopTerminated event was emitted with reason="tool_timeout" before
     # the exception propagated.
     final = next(e for e in seen if isinstance(e, LoopTerminated))
-    assert final.reason == "tool_error"
+    assert final.reason == "tool_timeout"
 
 
 def test_parallel_tool_calls_in_one_turn() -> None:

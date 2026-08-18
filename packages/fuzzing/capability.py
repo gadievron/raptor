@@ -188,7 +188,11 @@ def probe() -> CapabilityReport:
     if is_macos:
         for hb in _homebrew_llvm_paths:
             if hb.endswith("clang") and Path(hb).exists():
-                # Only override if Apple clang doesn't have libFuzzer
+                # Only override when no clang was found or the PATH
+                # clang is Apple's /usr/bin/clang (which doesn't ship
+                # libFuzzer). Path match, not a capability probe — the
+                # actual libFuzzer probe runs further down against
+                # whichever clang wins here.
                 if not report.clang or "/usr/bin/clang" in (report.clang or ""):
                     report.clang = hb
                     break
@@ -258,7 +262,7 @@ def probe() -> CapabilityReport:
             )
 
     # MemorySanitizer is Linux/x86_64 only in practice
-    if report.has_memory_sanitizer and (is_macos or arch not in ("x86_64", "amd64")):
+    if report.has_memory_sanitizer and (not is_linux or arch not in ("x86_64", "amd64")):
         report.has_memory_sanitizer = False
         report.issues.append(
             "MemorySanitizer is supported only on Linux x86_64 in practice; "
@@ -293,7 +297,7 @@ def probe() -> CapabilityReport:
             "On Linux: 'sudo apt install rr' (Intel CPUs only)."
         )
 
-    logger.info(f"Capability probe: {report.summary().splitlines()[0]}")
+    logger.info("Capability probe: %s", report.summary().splitlines()[0])
     return report
 
 

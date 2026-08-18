@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,13 +20,14 @@ from unittest.mock import patch
 
 import pytest
 
+from core.sandbox import state
 from core.sandbox.observe_cli import (
+    _build_parser,
     _cli_main,
     _format_summary,
     _profile_to_json,
 )
 from core.sandbox.observe_profile import ConnectTarget, ObserveProfile
-
 
 # ---------------------------------------------------------------------------
 # Argparse
@@ -235,6 +237,61 @@ class TestCliDispatch:
         assert rc == 70
         assert "observe log not produced" in err
 
+    def test_timeout_returns_124_with_diagnostic_not_traceback(self):
+        """``--timeout`` expiry must produce a one-line diagnostic and
+        exit 124 (timeout(1) convention). Pre-fix the TimeoutExpired
+        escaped _cli_main as an unhandled traceback."""
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=list(cmd), timeout=kwargs.get("timeout"),
+            )
+
+        with patch("core.sandbox.run", side_effect=fake_run), \
+             patch(
+                 "core.sandbox.parse_observe_log",
+                 return_value=_sample_profile(),
+             ):
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            with patch("sys.stdout", buf_out), \
+                 patch("sys.stderr", buf_err):
+                rc = _cli_main(
+                    ["--timeout", "1", "--", "/usr/bin/sleep", "5"],
+                )
+        assert rc == 124
+        assert "did not finish" in buf_err.getvalue()
+        assert "Traceback" not in buf_err.getvalue()
+
+    def test_timeout_renders_partial_observe_log(self):
+        """Records captured before the kill are still rendered —
+        a partial profile beats none — with return_code null."""
+
+        def fake_run(cmd, **kwargs):
+            run_dir = Path(kwargs["output"])
+            (run_dir / ".sandbox-observe.jsonl").write_text("{}\n")
+            raise subprocess.TimeoutExpired(
+                cmd=list(cmd), timeout=kwargs.get("timeout"),
+            )
+
+        with patch("core.sandbox.run", side_effect=fake_run), \
+             patch(
+                 "core.sandbox.parse_observe_log",
+                 return_value=_sample_profile(),
+             ):
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            with patch("sys.stdout", buf_out), \
+                 patch("sys.stderr", buf_err):
+                rc = _cli_main(
+                    ["--json", "--timeout", "1",
+                     "--", "/usr/bin/sleep", "5"],
+                )
+        assert rc == 124
+        loaded = json.loads(buf_out.getvalue())
+        assert loaded["return_code"] is None
+        assert "paths_read" in loaded
+
     def test_keep_flag_preserves_run_dir(self, tmp_path):
         # --keep: even with no --out, the run_dir should survive
         # _cli_main exit. We can't easily inspect tempdir survival
@@ -246,6 +303,12 @@ class TestCliDispatch:
         )
         loaded = json.loads(out)
         assert loaded["run_dir"] is not None
+        # The kept dir is a real mkdtemp under the system temp dir —
+        # verify it survived _cli_main, then clean it up ourselves so
+        # every test run doesn't strand one in /tmp.
+        kept = Path(loaded["run_dir"])
+        assert kept.is_dir()
+        shutil.rmtree(kept)
 
     def test_explicit_out_dir_used(self, tmp_path):
         # --out implies kept=True.
@@ -314,6 +377,96 @@ class TestCliDispatch:
         assert seen.get("capture_output") is False
 
 
+class TestAuditBudgetFlag:
+    """The budget-truncation summary tells the operator to re-run with
+    ``--audit-budget``; the CLI's parser must actually define that
+    flag, validate it like the main sandbox CLI, and plumb it into the
+    budget state slot the tracer reads.
+
+    The conftest state guard snapshots and restores
+    ``state._cli_sandbox_audit_budget`` around every test.
+    """
+
+    def test_parser_accepts_flag(self):
+        args = _build_parser().parse_args(
+            ["--audit-budget", "5000", "--", "/usr/bin/true"],
+        )
+        assert args.audit_budget == 5000
+
+    def test_hint_flag_matches_parser(self):
+        # The truncation summary suggests `--audit-budget`; keep the
+        # suggestion and the parser surface in lock-step.
+        assert any(
+            "--audit-budget" in a.option_strings
+            for a in _build_parser()._actions
+            if a.option_strings
+        )
+
+    def test_zero_rejected(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            _cli_main(["--audit-budget", "0", "--", "/usr/bin/true"])
+        assert exc.value.code == 2
+        assert "positive integer" in capsys.readouterr().err
+
+    def test_typo_scale_rejected(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            _cli_main(
+                ["--audit-budget", "100000000", "--", "/usr/bin/true"],
+            )
+        assert exc.value.code == 2
+        assert "upper clamp" in capsys.readouterr().err
+
+    def test_flag_propagates_to_state_slot(self):
+        state._cli_sandbox_audit_budget = None
+
+        class _Result:
+            returncode = 0
+            sandbox_info: dict = {}
+
+        seen_at_spawn = []
+
+        def fake_run(cmd, **kwargs):
+            # The slot must be populated BEFORE the sandbox spawn —
+            # the spawn serialises it into the tracer filter config.
+            seen_at_spawn.append(state._cli_sandbox_audit_budget)
+            Path(kwargs["output"], ".sandbox-observe.jsonl").write_text(
+                "{}\n",
+            )
+            return _Result()
+
+        with patch("core.sandbox.run", side_effect=fake_run), \
+             patch("core.sandbox.parse_observe_log",
+                   return_value=ObserveProfile()), \
+             patch("sys.stdout", io.StringIO()), \
+             patch("sys.stderr", io.StringIO()):
+            rc = _cli_main(
+                ["--audit-budget", "42", "--", "/usr/bin/true"],
+            )
+        assert rc == 0
+        assert seen_at_spawn == [42]
+
+    def test_no_flag_leaves_state_untouched(self):
+        state._cli_sandbox_audit_budget = None
+
+        class _Result:
+            returncode = 0
+            sandbox_info: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            Path(kwargs["output"], ".sandbox-observe.jsonl").write_text(
+                "{}\n",
+            )
+            return _Result()
+
+        with patch("core.sandbox.run", side_effect=fake_run), \
+             patch("core.sandbox.parse_observe_log",
+                   return_value=ObserveProfile()), \
+             patch("sys.stdout", io.StringIO()), \
+             patch("sys.stderr", io.StringIO()):
+            _cli_main(["--", "/usr/bin/true"])
+        assert state._cli_sandbox_audit_budget is None
+
+
 # ---------------------------------------------------------------------------
 # End-to-end via shim — Linux only
 # ---------------------------------------------------------------------------
@@ -338,10 +491,9 @@ class TestE2EShim:
         #   * mount-ns spawn (when available)
         #   * Landlock-only audit fallback (Ubuntu 24.04+ default
         #     where unprivileged user-ns is blocked by AppArmor)
-        # The Landlock-only path was added in PR-θ; mount-ns is no
-        # longer a hard prereq for observe.
-        from core.sandbox.seccomp import check_seccomp_available
+        # mount-ns is not a hard prereq for observe.
         from core.sandbox.ptrace_probe import check_ptrace_available
+        from core.sandbox.seccomp import check_seccomp_available
         if not check_seccomp_available():
             pytest.skip("libseccomp unavailable")
         if not check_ptrace_available():
@@ -351,7 +503,7 @@ class TestE2EShim:
         result = subprocess.run(
             [str(shim), "--out", str(tmp_path), "--",
              "/usr/bin/true"],
-            env=env, capture_output=True, text=True, timeout=30,
+            env=env, capture_output=True, text=True, timeout=30, check=False,
         )
         assert result.returncode == 0, (
             f"shim exited {result.returncode}; "
@@ -365,8 +517,8 @@ class TestE2EShim:
         if not shim.exists():
             pytest.skip(f"shim not present at {shim}")
 
-        from core.sandbox.seccomp import check_seccomp_available
         from core.sandbox.ptrace_probe import check_ptrace_available
+        from core.sandbox.seccomp import check_seccomp_available
         if not (check_seccomp_available()
                 and check_ptrace_available()):
             pytest.skip("observe-mode prerequisites unavailable (libseccomp / ptrace)")
@@ -375,7 +527,7 @@ class TestE2EShim:
         result = subprocess.run(
             [str(shim), "--out", str(tmp_path), "--json", "--",
              "/usr/bin/true"],
-            env=env, capture_output=True, text=True, timeout=30,
+            env=env, capture_output=True, text=True, timeout=30, check=False,
         )
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
@@ -403,7 +555,7 @@ class TestTrustMarker:
                if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
         result = subprocess.run(
             [str(shim), "--", "/usr/bin/true"],
-            env=env, capture_output=True, text=True, timeout=10,
+            env=env, capture_output=True, text=True, timeout=10, check=False,
         )
         assert result.returncode == 2, (
             f"shim must refuse without trust marker; got "

@@ -12,17 +12,23 @@ Design:
   and cleared at run end.
 - ``record_denial(...)`` is called by ``core/sandbox/observe.py:_check_blocked``
   for each detected denial. Appends one JSONL line to
-  ``<run_dir>/.sandbox-denials.jsonl``.
+  ``<run_dir>/.audit/.sandbox-denials.jsonl`` — the evidence directory
+  the sandboxed child cannot write to (see core/sandbox/evidence.py).
+  Appends go through a per-run held fd opened O_EXCL at first denial;
+  the inode is verified at finalisation so a swapped file is detected.
 - ``summarize_and_write(run_dir)`` is called by ``core/run/metadata.py``
-  ``complete_run`` / ``fail_run`` / ``cancel_run``. Reads the JSONL, writes
+  ``complete_run`` / ``fail_run`` / ``cancel_run``. Reads the JSONL
+  (new ``.audit/`` location first, legacy ``<run_dir>/`` spot as a
+  back-compat fallback for one release), writes
   ``sandbox-summary.json``, removes the intermediate JSONL.
 
 JSONL append is atomic on POSIX up to PIPE_BUF (~4KB) so concurrent writers
 within the same run (multi-threaded callers) don't corrupt each other. Each
 record is well under PIPE_BUF in practice — `cmd_display` is bounded by
 ``_CMD_DISPLAY_MAX_ARGS`` (3 args) and escape_nonprintable'd before reaching
-us. Pathologically long cmd args could exceed PIPE_BUF; defer that defense
-until it surfaces.
+us. Pathologically long single args are defended against too:
+``record_denial`` truncates ``cmd_display`` to ``MAX_CMD_LEN`` (2 KiB)
+before persisting.
 
 Concurrency assumption: the design assumes a single-process, single-active-run
 model. Concurrent threads within a process can record_denial safely (POSIX
@@ -56,10 +62,13 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.atomic_fs import write_text_atomically
+from core.logging import log_security_event as _log_security_event
 from core.security.redaction import redact_secrets
+
+from . import evidence as _evidence
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +77,17 @@ logger = logging.getLogger(__name__)
 # either the old or new pointer, never a torn read). Writes are serialised
 # via _lock so concurrent set/clear can't interleave (matters for
 # tests that exercise the lifecycle from multiple threads).
-_active_run_dir: Optional[Path] = None
+_active_run_dir: Path | None = None
 _lock = threading.Lock()
+
+# Per-run held evidence fd (core/sandbox/evidence.EvidenceFile) for
+# record_denial appends. Opened lazily on the first denial so runs
+# without denials leave no file behind; closed (with inode
+# verification) at summarize_and_write / set_active_run_dir. Guarded
+# by _lock. _evidence_open_failed suppresses repeat warnings when the
+# evidence dir cannot be created for a run.
+_evidence_handle: _evidence.EvidenceFile | None = None
+_evidence_open_failed = False
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
@@ -92,20 +110,47 @@ MAX_CMD_LEN = 2048
 _denial_count: int = 0  # reset by set_active_run_dir per run
 
 
-def set_active_run_dir(run_dir: Optional[Path]) -> None:
+def set_active_run_dir(run_dir: Path | None) -> None:
     """Mark a run as active (or clear it). Subsequent record_denial() calls
     write to ``<run_dir>/.sandbox-denials.jsonl`` until cleared.
 
     Resets the per-run denial counter so each run starts with a fresh
-    cap (see MAX_DENIALS_PER_RUN).
+    cap (see MAX_DENIALS_PER_RUN). Any held evidence fd from the
+    previous run is finalised (inode-verified, then closed).
     """
-    global _active_run_dir, _denial_count
+    global _active_run_dir, _denial_count, _evidence_handle
+    global _evidence_open_failed
     with _lock:
+        if _evidence_handle is not None:
+            _evidence_handle.close()
+            _evidence_handle = None
+        _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
         _denial_count = 0
 
 
-def get_active_run_dir() -> Optional[Path]:
+def _get_evidence_handle_locked(run_dir: Path):
+    """Return the held evidence fd for the active run, opening it on
+    first use. Caller holds _lock. Returns None when the evidence file
+    cannot be opened (warned once per run)."""
+    global _evidence_handle, _evidence_open_failed
+    if _evidence_handle is not None:
+        return _evidence_handle
+    if _evidence_open_failed:
+        return None
+    try:
+        _evidence_handle = _evidence.EvidenceFile.open(run_dir, DENIALS_FILE)
+    except OSError:
+        _evidence_open_failed = True
+        logger.warning(
+            "record_denial: cannot open evidence file under %s",
+            run_dir, exc_info=True,
+        )
+        return None
+    return _evidence_handle
+
+
+def get_active_run_dir() -> Path | None:
     """Return current active run dir, or None if no run is being recorded."""
     return _active_run_dir
 
@@ -117,7 +162,7 @@ def record_denial(cmd_display: str, returncode: int,
     No-op if no active run is set (sandbox call from outside any tracked
     run, e.g., probes during test setup or sandbox CLI invocations).
 
-    denial_type is one of: ``network``, ``write``, ``seccomp``.
+    denial_type is one of: ``network``, ``write``, ``seccomp``, ``udp``.
     details vary by type — `path` for write, `profile` for seccomp, etc.
     """
     global _denial_count
@@ -192,9 +237,38 @@ def record_denial(cmd_display: str, returncode: int,
         "type": denial_type,
         "suggested_fix": _suggested_fix(denial_type, **details),
     }
-    # JSONL append: open-write-close per line so each record is atomic.
-    # POSIX guarantees writes < PIPE_BUF (~4KB) are atomic when the file
-    # is opened O_APPEND. Each line is well under that threshold.
+    # Security-event stream: mirror the denial into the framework
+    # audit trail. record_denial is the chokepoint every observed
+    # sandbox denial (network / write / seccomp / udp) flows through,
+    # so one emission here covers them all — placed after the per-run
+    # cap so an adversarial target cannot flood the stream, and
+    # independent of the evidence-file append below so a broken
+    # evidence fd doesn't also lose the audit-trail record.
+    # Observability only: never raises (guarded in core.logging),
+    # never changes what record_denial persists. Payload carries the
+    # denial type + already-redacted cmd + context identifiers only
+    # ("type"/"cmd" detail duplicates are skipped so the explicit
+    # fields always win, mirroring `record` above; denial_type /
+    # returncode are named params so **details cannot collide with
+    # them).
+    _log_security_event(
+        "sandbox_denial",
+        f"sandbox denied {denial_type}: {cmd_safe}",
+        denial_type=denial_type,
+        returncode=returncode,
+        **{
+            k: v for k, v in details.items()
+            if k not in ("type", "cmd")
+        },
+    )
+    # JSONL append through the per-run held evidence fd — each line is
+    # a single O_APPEND write, atomic under PIPE_BUF (~4KB); each line
+    # is well under that threshold. The fd is opened O_EXCL in
+    # <run_dir>/.audit/ (a directory excluded from the sandboxed
+    # child's writable view) on the first denial of the run; appending
+    # through the held fd means a path-level swap of the JSONL cannot
+    # redirect later records (and IS detected at finalisation via the
+    # inode check).
     #
     # `default=str` defends against future callers passing non-serializable
     # detail values (Path, datetime, etc.) — without it, json.dumps would
@@ -204,21 +278,17 @@ def record_denial(cmd_display: str, returncode: int,
     # change introduces a different exception path.
     try:
         line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
-        path = run_dir / DENIALS_FILE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW refuses if path is a symlink — defends against
-        # symlink planted by an attacker who got write access to the
-        # run dir (rare but possible on shared filesystems). Plain
-        # open(path, "a") would have followed and written to the
-        # symlink target. Mode 0o600 keeps the JSONL operator-only.
-        fd = os.open(
-            str(path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:  # noqa: BLE001 — best-effort; never fail the sandbox call
+        with _lock:
+            handle = _get_evidence_handle_locked(run_dir)
+            if handle is None:
+                raise OSError(
+                    f"evidence file unavailable under {run_dir}"
+                )
+            if not handle.write_line(line):
+                raise OSError(
+                    f"evidence append failed under {run_dir}"
+                )
+    except Exception:
         # WARNING (F071 W21 promote): operators rarely run with DEBUG
         # enabled, so pre-fix this swallow meant every dropped sandbox-
         # denial record was invisible — operator sees "no denials" with
@@ -235,12 +305,13 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
 
     Suggestions reference only the actual operator-facing CLI flags
     exposed by ``core/sandbox/cli.py:add_cli_args`` —
-    ``--sandbox {full,debug,network-only,none}`` and ``--no-sandbox``.
-    Per-host / per-path overrides exist in the sandbox API as kwargs
-    (``proxy_hosts``, ``writable_paths``, ``readable_paths``) but are
-    NOT exposed as CLI flags, so suggesting them would mislead the
-    operator into looking for non-existent flags. The detail value
-    (host, path) appears in the message for context only.
+    ``--sandbox {full,debug,network-only,none}``, ``--no-sandbox``,
+    ``--sandbox-readable-path``, and ``--sandbox-tool-path``.
+    Per-host overrides exist in the sandbox API as kwargs
+    (``proxy_hosts``, ``writable_paths``) but are NOT exposed as CLI
+    flags, so suggesting them would mislead the operator into looking
+    for non-existent flags. The detail value (host, path) appears in
+    the message for context only.
     """
     if denial_type == "network":
         host = details.get("host")
@@ -260,9 +331,22 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
     if denial_type == "write":
         path = details.get("path")
         ctx = f" to `{path}`" if path else ""
-        return (f"write outside allowed paths blocked{ctx}; use "
-                f"`--sandbox network-only` or `--sandbox none` to drop "
-                f"Landlock (or move write into target dir)")
+        return (f"filesystem access outside allowed paths blocked{ctx}; "
+                f"if it was a READ under a read-restricting run, "
+                f"`--sandbox-readable-path <path>` (or "
+                f"`--sandbox-tool-path <dir>` for an operator-installed "
+                f"toolchain) extends the allowlist without dropping "
+                f"Landlock; for writes, move the write into the target "
+                f"dir, or use `--sandbox network-only`/`--sandbox none` "
+                f"to drop Landlock entirely")
+    if denial_type == "udp":
+        return ("UDP/loopback socket use blocked by the sandbox "
+                "network policy (Linux: proxy fallback tier's seccomp "
+                "SOCK_DGRAM deny on netns-incapable hosts; macOS: "
+                "seatbelt network deny); JVM build tools (gradle) need "
+                "a loopback UDP socket at startup — run on a Linux "
+                "netns-capable host where the default proxy tier "
+                "contains UDP topologically, or outside block_network")
     if denial_type == "seccomp":
         profile = details.get("profile")
         if profile == "full":
@@ -322,19 +406,35 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         pass
 
 
-def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
+def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
 
     Returns the summary dict (also written to disk), or None if no denials
-    were recorded for this run. The intermediate JSONL is removed after
-    successful summary write — operators read the summary, not the JSONL.
+    were recorded for this run. The intermediate JSONL is renamed away
+    up-front and unlinked as soon as its contents are in memory —
+    BEFORE the summary write, and even when the write fails or there
+    are no denials (rename-then-read race hardening; see the inline
+    comments). Operators read the summary, not the JSONL.
 
     Idempotent: if called again with the same run_dir and no JSONL is
     present, returns None without writing.
     """
+    global _evidence_handle
     run_dir = Path(run_dir)
-    jsonl = run_dir / DENIALS_FILE
+    # Finalise the held evidence fd for this run BEFORE the rename:
+    # the inode verification fires here (loud warning on a swapped
+    # file), and closing stops any later record_denial from appending
+    # to the renamed inode. Only when the active handle belongs to
+    # this run_dir — sweep-mode calls for other dirs leave it alone.
+    with _lock:
+        if (_evidence_handle is not None
+                and _evidence_handle.path.parent.parent == run_dir):
+            _evidence_handle.close()
+            _evidence_handle = None
+    # New (.audit/) location preferred; legacy <run_dir>/ location
+    # kept as a read fallback for runs produced by older versions.
+    jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
     if not jsonl.exists():
         return None
 
@@ -354,16 +454,15 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     # renamed inode (which we then unlink — those entries are lost,
     # but they're a strictly small race window vs the bigger
     # multi-second post-summary race the prior code had).
-    import os as _os
     import threading as _threading
     # pid+tid suffix — two threads in the same summariser process can
     # race on the same pid; tid disambiguates. Mirrors core/json/utils.py
     # and core/json/cache.py.
     tmp = jsonl.with_name(
-        f"{jsonl.name}.summarising.{_os.getpid()}.{_threading.get_ident()}"
+        f"{jsonl.name}.summarising.{os.getpid()}.{_threading.get_ident()}"
     )
     try:
-        _os.replace(str(jsonl), str(tmp))
+        os.replace(str(jsonl), str(tmp))
     except OSError:
         # KEEP-SILENT (F071 per-site triage W21): the realistic
         # branch here is "sibling summariser won the rename race and
@@ -381,9 +480,12 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    denials.append(json.loads(line))
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # skip malformed lines, keep going
+                if not isinstance(record, dict):
+                    continue
+                denials.append(record)
     except OSError:
         # WARNING (F071 W21 promote): we successfully renamed the
         # JSONL into our private tmp, then failed to read it. This
@@ -433,7 +535,7 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 d.get("type", "unknown"), **details,
             )
 
-    by_type: Dict[str, int] = {}
+    by_type: dict[str, int] = {}
     for d in denials:
         t = d.get("type", "unknown")
         by_type[t] = by_type.get(t, 0) + 1
@@ -477,7 +579,7 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     return summary
 
 
-def _cli_main(argv: Optional[list] = None) -> int:
+def _cli_main(argv: list | None = None) -> int:
     """Retroactive summarize CLI.
 
     Rarely needed in normal operation: ``core.run.metadata._cleanup_abandoned``
@@ -561,7 +663,7 @@ def _cli_main(argv: Optional[list] = None) -> int:
         try:
             if not child.is_dir() or child.name.startswith((".", "_")):
                 continue
-            if not (child / DENIALS_FILE).exists():
+            if not _evidence.resolve_read_path(child, DENIALS_FILE).exists():
                 continue
         except OSError:
             continue

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ from core.analysis.binary_oracle import (
     enrich_inventory_with_binary_oracle,
     read_build_id,
 )
+
+_GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "binary_oracle"
 EXPECTED_VERDICTS = {
@@ -68,6 +71,7 @@ def built_demo(tmp_path_factory):
     yield demo
 
 
+@pytest.mark.slow
 def test_build_id_is_readable(built_demo: Path) -> None:
     bid = read_build_id(built_demo)
     assert bid is not None and len(bid) >= 8 and all(c in "0123456789abcdef" for c in bid), \
@@ -86,6 +90,7 @@ def _verdicts_for_built_demo(built_demo: Path):
 
 
 @pytest.mark.parametrize("name,expected", sorted(EXPECTED_VERDICTS.items()))
+@pytest.mark.slow
 def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
                                             name: str, expected: str) -> None:
     """Each ground-truth function classifies to its predicted verdict."""
@@ -98,6 +103,7 @@ def test_classify_matches_expected_verdict(_verdicts_for_built_demo,
     )
 
 
+@pytest.mark.slow
 def test_classify_carries_build_id_and_path(built_demo: Path) -> None:
     """Every witness records its provenance so multi-binary results can be
     attributed correctly and stale-build mismatch can be spotted."""
@@ -107,6 +113,7 @@ def test_classify_carries_build_id_and_path(built_demo: Path) -> None:
     assert w.binary_path == str(built_demo)
 
 
+@pytest.mark.slow
 def test_unknown_source_name_is_absent(built_demo: Path) -> None:
     """A name not present in the binary at all classifies as ``absent`` —
     the DCE end of the spectrum, no special-case needed for missing names."""
@@ -115,6 +122,7 @@ def test_unknown_source_name_is_absent(built_demo: Path) -> None:
     assert verdicts["a_function_that_does_not_exist"].classification == "absent"
 
 
+@pytest.mark.slow
 def test_folded_pair_is_consistent(built_demo: Path) -> None:
     """``folded_a`` and ``folded_b`` have identical bodies. With an
     ICF-capable linker they're ``folded``; without one they're both
@@ -136,6 +144,7 @@ def test_classify_on_nonexistent_binary_is_empty(tmp_path: Path) -> None:
     assert verdicts == {}
 
 
+@pytest.mark.slow
 def test_classify_on_stripped_binary_uses_symbol_only_fallback(
     built_demo: Path, tmp_path: Path,
 ) -> None:
@@ -186,6 +195,7 @@ def _synthetic_inventory_for_fixture() -> dict:
     }
 
 
+@pytest.mark.slow
 def test_enrich_annotates_each_native_item(built_demo: Path) -> None:
     """Every native function in the inventory gets a binary_oracle metadata
     entry whose classification matches the standalone classifier."""
@@ -200,6 +210,7 @@ def test_enrich_annotates_each_native_item(built_demo: Path) -> None:
             f"{name}: expected {expected}, got {meta['classification']}")
 
 
+@pytest.mark.slow
 def test_enrich_skips_non_native_items(built_demo: Path) -> None:
     """Python/JS/Java/etc. items are not touched."""
     inv = _synthetic_inventory_for_fixture()
@@ -208,6 +219,7 @@ def test_enrich_skips_non_native_items(built_demo: Path) -> None:
     assert "binary_oracle" not in py_item.get("metadata", {})
 
 
+@pytest.mark.slow
 def test_enrich_writes_inventory_summary(built_demo: Path) -> None:
     """Top-level summary with ``earns_suppression: True`` — earned by the
     Inc 3 precision corpus (841/841 absent verdicts correct across 5
@@ -239,6 +251,7 @@ def test_enrich_with_missing_binary_is_a_noop(tmp_path: Path) -> None:
         assert "binary_oracle" not in it.get("metadata", {})
 
 
+@pytest.mark.slow
 def test_enrich_is_idempotent(built_demo: Path) -> None:
     """Running enrich twice produces the same result."""
     inv = _synthetic_inventory_for_fixture()
@@ -255,6 +268,7 @@ def test_enrich_is_idempotent(built_demo: Path) -> None:
 # Adversarial-review regression tests (2026-05-30)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_enrich_does_not_crash_on_metadata_none(built_demo: Path) -> None:
     """Inventory item with ``metadata: None`` (vs missing) — ``setdefault``
     would return None and the next assignment crash. Initialise explicitly."""
@@ -292,6 +306,7 @@ def _clang_built_demo(tmp_path_factory):
     return work / "demo"
 
 
+@pytest.mark.slow
 def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> None:
     """clang emits ``(indexed string: 0xN): name`` where gcc emits
     ``(indirect string, offset: 0xN): name``. Parser must read both —
@@ -305,6 +320,7 @@ def test_classifier_handles_clang_indexed_string_dwarf(_clang_built_demo) -> Non
     assert v["live_called"].classification == "symbol_present"
 
 
+@pytest.mark.slow
 def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     """nm emits mangled C++ symbols; the source side has unmangled names.
     Without ``nm --demangle`` every C++ method would classify ``absent``.
@@ -325,7 +341,7 @@ def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     )
     bin_ = tmp_path / "d"
     rc = subprocess.run(["g++", "-O2", "-g", "-ffunction-sections",
-                         "-Wl,--gc-sections", "-o", str(bin_), str(src)],
+                         _GC_SECTIONS, "-o", str(bin_), str(src)],
                         capture_output=True, text=True, timeout=60)
     if rc.returncode != 0:
         pytest.skip(f"g++ build failed: {rc.stderr[:200]}")
@@ -362,6 +378,7 @@ def test_classifier_does_not_crash_on_stripped_real_binary() -> None:
 # E1 — stripped-binary fallback (symbol-only tier)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_classifier_falls_back_to_symbol_only_on_stripped_binary(
     tmp_path: Path,
 ) -> None:
@@ -395,6 +412,7 @@ def test_classifier_falls_back_to_symbol_only_on_stripped_binary(
     assert verdicts["nonexistent"].classification == "absent"
 
 
+@pytest.mark.slow
 def test_inventory_earns_suppression_downgrades_for_stripped(
     tmp_path: Path, built_demo: Path,
 ) -> None:
@@ -474,6 +492,7 @@ def test_reach_witness_does_not_fire_sound_witness_on_symbol_only(
     assert binary_oracle_absent(inv_mixed, "x.c", "foo") is False
 
 
+@pytest.mark.slow
 def test_classifier_resolves_symlinked_binary(tmp_path: Path,
                                                 built_demo: Path) -> None:
     """A symlink to the binary should classify the same as the binary
@@ -526,7 +545,7 @@ def test_classifier_treats_internal_linkage_with_low_pc_as_present(
         "int main(void){ return helper(0); }\n")
     binary = tmp_path / "x"
     _sp.run(["g++", "-O2", "-g", "-ffunction-sections",
-             "-Wl,--gc-sections", "-o", str(binary), str(src)], check=True)
+             _GC_SECTIONS, "-o", str(binary), str(src)], check=True)
     verdicts = classify_binary_evidence(["(anonymous namespace)::helper",
                                           "helper"], binary)
     classifications = {n: v.classification for n, v in verdicts.items()}
@@ -537,6 +556,7 @@ def test_classifier_treats_internal_linkage_with_low_pc_as_present(
         f"internal-linkage helper misclassified — {classifications}")
 
 
+@pytest.mark.slow
 def test_classifier_qualifies_cpp_methods_with_namespace(
     tmp_path: Path,
 ) -> None:
@@ -583,6 +603,7 @@ def _nm_qualified_cpp_binary(tmp_path_factory):
     return binary
 
 
+@pytest.mark.slow
 def test_nm_index_stores_qualified_no_args_form_for_cpp(
     _nm_qualified_cpp_binary,
 ) -> None:
@@ -601,6 +622,7 @@ def test_nm_index_stores_qualified_no_args_form_for_cpp(
     assert "baz" in syms, "bare-name index missing"
 
 
+@pytest.mark.slow
 def test_classifier_recognises_always_inline_empty_body(
     tmp_path: Path,
 ) -> None:
@@ -679,6 +701,7 @@ def test_build_inventory_swallows_enrichment_errors(
         assert bo["counts"].get("classified", 0) == 0
 
 
+@pytest.mark.slow
 def test_enrich_combines_multi_binary_verdicts_with_alive_in_any_wins(
     tmp_path: Path,
 ) -> None:
@@ -822,6 +845,7 @@ def _planted_unrelated_binary(tmp_path_factory):
     return binary
 
 
+@pytest.mark.slow
 def test_enrich_drops_unrelated_binary_below_source_coverage_floor(
     _planted_unrelated_binary,
 ) -> None:
@@ -885,3 +909,151 @@ def test_codeql_cli_wires_binary_flag_to_raptor_config() -> None:
         "binary_oracle_cli should declare --binary argparse arg")
     assert "BINARY_ORACLE_PATHS" in helper_src, (
         "binary_oracle_cli should mutate RaptorConfig.BINARY_ORACLE_PATHS")
+
+
+def test_extract_verdicts_from_enriched_inventory():
+    from core.analysis.binary_oracle import extract_verdicts
+
+    inventory = {
+        "files": [
+            {
+                "path": "src/main.c",
+                "language": "c",
+                "items": [
+                    {
+                        "name": "parse_input",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "absent",
+                                "binaries": [{"tier": "full", "verdict": "absent"}],
+                            },
+                        },
+                    },
+                    {
+                        "name": "process",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {"classification": "symbol_present"},
+                        },
+                    },
+                    {
+                        "name": "BUFSIZE",
+                        "kind": "macro",
+                        "metadata": {},
+                    },
+                ],
+            },
+            {
+                "path": "src/util.py",
+                "language": "python",
+                "items": [
+                    {"name": "helper", "kind": "function", "metadata": {}},
+                ],
+            },
+        ],
+    }
+
+    verdicts = extract_verdicts(inventory)
+    assert verdicts == {"parse_input": "absent", "process": "symbol_present"}
+
+
+def test_extract_verdicts_empty_inventory():
+    from core.analysis.binary_oracle import extract_verdicts
+
+    assert extract_verdicts({}) == {}
+    assert extract_verdicts({"files": []}) == {}
+
+
+def test_extract_verdicts_excludes_symbol_only_absent():
+    """Symbol-only tier absent verdicts are not suppression-grade."""
+    from core.analysis.binary_oracle import extract_verdicts
+
+    inventory = {
+        "files": [
+            {
+                "path": "src/lib.c",
+                "language": "c",
+                "items": [
+                    {
+                        "name": "dead_fn",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "absent",
+                                "binaries": [
+                                    {"tier": "symbol_only", "verdict": "absent"},
+                                ],
+                            },
+                        },
+                    },
+                    {
+                        "name": "also_dead",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "absent",
+                                "binaries": [
+                                    {"tier": "full", "verdict": "absent"},
+                                ],
+                            },
+                        },
+                    },
+                    {
+                        "name": "mixed_tier",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "absent",
+                                "binaries": [
+                                    {"tier": "symbol_only", "verdict": "absent"},
+                                    {"tier": "full", "verdict": "absent"},
+                                ],
+                            },
+                        },
+                    },
+                    {
+                        "name": "no_binaries_key",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {"classification": "absent"},
+                        },
+                    },
+                    {
+                        "name": "alive",
+                        "kind": "function",
+                        "metadata": {
+                            "binary_oracle": {
+                                "classification": "symbol_present",
+                                "binaries": [
+                                    {"tier": "symbol_only", "verdict": "present"},
+                                ],
+                            },
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+    verdicts = extract_verdicts(inventory)
+    # dead_fn: symbol_only only -> excluded
+    assert "dead_fn" not in verdicts
+    # also_dead: full tier -> included
+    assert verdicts["also_dead"] == "absent"
+    # mixed_tier: has at least one full -> included
+    assert verdicts["mixed_tier"] == "absent"
+    # no_binaries_key: no binaries at all -> excluded (no full evidence)
+    assert "no_binaries_key" not in verdicts
+    # alive: non-absent classification -> always included
+    assert verdicts["alive"] == "symbol_present"
+
+
+def test_raptor_audit_wires_binary_args():
+    """raptor-audit ``run`` subparser must include binary oracle flags."""
+    repo_root = Path(__file__).resolve().parents[3]
+    audit_src = (repo_root / "libexec" / "raptor-audit").read_text()
+    assert "add_binary_args" in audit_src, (
+        "raptor-audit should wire binary oracle CLI flags via add_binary_args")
+    assert "binary_verdicts" in audit_src, (
+        "raptor-audit should pass binary_verdicts to OrchestratorConfig")

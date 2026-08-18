@@ -9,8 +9,8 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
-      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding")
-      - pattern: Cipher.getInstance("RSA")
+      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding", ...)
+      - pattern: Cipher.getInstance("RSA", ...)
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]
@@ -24,7 +24,14 @@ rules:
     severity: HIGH
     pattern-either:
       - pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
-      - pattern: PKCS1_v1_5.new(...)
+      - patterns:
+        - pattern: PKCS1_v1_5.new(...)
+        - pattern-not-inside: |
+            from Crypto.Signature import PKCS1_v1_5
+            ...
+        - pattern-not-inside: |
+            import Crypto.Signature.PKCS1_v1_5
+            ...
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]

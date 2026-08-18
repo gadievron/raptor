@@ -11,7 +11,6 @@ from packages.hypothesis_validation.adapters import (
     SemgrepAdapter,
 )
 
-
 # Coccinelle ------------------------------------------------------------------
 
 class TestCoccinelleAdapter:
@@ -176,7 +175,8 @@ class TestSemgrepAdapter:
         from packages.semgrep.models import SemgrepResult
         captured = {}
 
-        def fake_run_rule(*, target, config, timeout, env, subprocess_runner=None):
+        def fake_run_rule(*, target, config, timeout, env,
+                          subprocess_runner=None, unsandboxed=False):
             captured["config"] = config
             captured["rule_text"] = Path(config).read_text()
             return SemgrepResult(name="r", returncode=0)

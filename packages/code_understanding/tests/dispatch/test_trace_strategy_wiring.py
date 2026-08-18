@@ -15,12 +15,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-
 from packages.code_understanding.dispatch.trace_dispatch import (
     _build_strategy_block,
     _format_user_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # CWE-id pin via various trace fields
@@ -266,14 +264,93 @@ class TestStrategyBlockDirect:
 
 
 class TestLifecycleDriftReaches:
-    def test_get_dumpable_step_pins_lifecycle_drift(self):
+    def test_get_dumpable_step_pins_lifecycle_drift(self, tmp_path):
         # A trace step calling get_dumpable() surfaces the ``dumpable``
-        # token in the serialised trace, pinning lifecycle_drift.
+        # token in the serialised trace, pinning lifecycle_drift. Its
+        # signal set is kernel vocabulary, so the pin needs the
+        # kernel-marked repo (linux_kernel profile).
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         traces = [{
             "trace_id": "T1",
             "entry": "__ptrace_may_access",
             "steps": [{"function": "get_dumpable"}],
         }]
-        block = _build_strategy_block(traces)
+        block = _build_strategy_block(traces, tmp_path)
         assert "## Strategy: lifecycle_drift" in block
         assert "CVE-2026-46333" in block  # lifecycle_drift exemplar
+
+
+# ---------------------------------------------------------------------------
+# Exemplar slot wiring — L3 retrieval first, legacy fallback
+# ---------------------------------------------------------------------------
+
+
+def _retrieved_exemplar(exemplar_id="abcd1234-2026-06-03T14:05:32+00:00"):
+    from core.labeled_attempts import RetrievedExemplar
+    return RetrievedExemplar(
+        exemplar_id=exemplar_id,
+        cwe="CWE-22",
+        finding_summary="CWE-22 · finding=FND-1",
+        exploit_code="open('../../etc/passwd')",
+        evidence="observed=sanitizer_report",
+        environment="x86_64",
+        timestamp="2026-06-03T14:05:32+00:00",
+    )
+
+
+class TestExemplarSlotWiring:
+    _TRACES = [{"trace_id": "T1", "cwe_id": "CWE-22"}]
+
+    def test_retrieval_serves_slot_when_pool_has_entries(self, monkeypatch):
+        """When L3 retrieval has records for the traces' CWE, the
+        retrieved exemplars ride the untrusted envelope in the user
+        message (the legacy VerifiedOutcome rollup is not consulted)."""
+        ex = _retrieved_exemplar()
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [ex],
+        )
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project", lambda: None,
+        )
+        out = _format_user_message(self._TRACES)
+        assert "<untrusted_verified_outcomes>" in out
+        assert "## RAPTOR-verified exemplars" in out
+        assert ex.exemplar_id in out
+
+    def test_fallback_to_legacy_block_when_retrieval_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_block_for_finding",
+            lambda finding, **kw: "## RAPTOR-verified exemplars\n\nlegacy entry F-9",
+        )
+        out = _format_user_message(self._TRACES)
+        assert "<untrusted_verified_outcomes>" in out
+        assert "legacy entry F-9" in out
+
+    def test_empty_store_leaves_message_unchanged(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_block_for_finding",
+            lambda finding, **kw: "",
+        )
+        out = _format_user_message(self._TRACES)
+        assert "<untrusted_verified_outcomes>" not in out
+        assert "RAPTOR-verified exemplars" not in out
+
+    def test_slot_failure_does_not_break_trace_pass(self, monkeypatch):
+        def boom(finding, **kw):
+            raise RuntimeError("simulated slot failure")
+
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_slot_for_finding", boom,
+        )
+        out = _format_user_message(self._TRACES)
+        assert "<traces>" in out
+        assert "<untrusted_verified_outcomes>" not in out

@@ -26,23 +26,28 @@ Two modes:
 
 Exit codes:
   - the spawned command's exit code on success
-  - 64 (EX_USAGE) for arg-parse failures
+  - 2 for arg-parse failures (argparse's parser.error default)
+  - 64 (EX_USAGE) when the command to spawn cannot be found
   - 70 (EX_SOFTWARE) when observe-mode fails to engage (e.g. ptrace
     blocked) — operator can re-run on a host where it works.
+  - 124 when the command exceeded ``--timeout`` and was killed
+    (same convention as timeout(1)); any observe records captured
+    before the kill are still rendered.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
-
 
 _USAGE_EX = 64       # EX_USAGE — bad argv
 _SOFTWARE_EX = 70    # EX_SOFTWARE — observe didn't engage
+_TIMEOUT_EX = 124    # command exceeded --timeout (timeout(1) convention)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -91,6 +96,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--audit-budget", type=int, default=None, metavar="N",
+        dest="audit_budget",
+        help=(
+            "Override the global audit-record cap (default 10000) for "
+            "this run. Per-category and per-PID sub-caps scale "
+            "proportionally. Raise it when the budget-truncation "
+            "warning fires and the profile must capture every event."
+        ),
+    )
+    p.add_argument(
         "cmd", nargs=argparse.REMAINDER,
         help="Command to run under observe-mode (use ``--`` to separate).",
     )
@@ -123,7 +138,7 @@ def _resolve_run_dir(args: argparse.Namespace,
 
 
 def _format_summary(profile, *, run_dir: Path, kept: bool,
-                    return_code: int) -> str:
+                    return_code: int | None) -> str:
     """Pretty multi-line summary for the default (non-JSON) mode.
 
     Counts + first-N path samples per category. Avoids dumping every
@@ -187,7 +202,7 @@ def _connect_target_to_dict(target) -> dict:
 
 
 def _profile_to_json(profile, *, run_dir: Path, kept: bool,
-                     return_code: int) -> str:
+                     return_code: int | None) -> str:
     """JSON output mode — full profile + meta. Stable schema for tooling."""
     payload = {
         "return_code": return_code,
@@ -204,7 +219,7 @@ def _profile_to_json(profile, *, run_dir: Path, kept: bool,
     return json.dumps(payload, indent=2)
 
 
-def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
+def _cli_main(argv: Sequence[str] | None = None) -> int:
     """Argparse → spawn → parse → render. Lives in this module so the
     libexec shim is a thin trust-marker + sys.exit wrapper.
 
@@ -223,14 +238,40 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("no command supplied — use ``-- <cmd> [args...]``")
         return _USAGE_EX  # parser.error exits, but for clarity
 
+    # Same bounds the main sandbox CLI applies (core/sandbox/cli.py).
+    # No "--audit-budget requires --audit" check here — observe mode
+    # forces audit mode, so the precondition holds by construction.
+    if args.audit_budget is not None:
+        if args.audit_budget <= 0:
+            parser.error(
+                f"--audit-budget must be a positive integer; got "
+                f"{args.audit_budget!r}"
+            )
+        _AUDIT_BUDGET_MAX = 10_000_000
+        if args.audit_budget > _AUDIT_BUDGET_MAX:
+            parser.error(
+                f"--audit-budget={args.audit_budget} exceeds the upper "
+                f"clamp ({_AUDIT_BUDGET_MAX}). At ~200 bytes per record "
+                f"that's ~2GB of JSONL — almost certainly a typo."
+            )
+
     # Lazy-import the sandbox layer — argparse setup + --help should
     # not require libseccomp / ctypes probing.
+    import contextlib
+
     from core.sandbox import (
-        run as sandbox_run,
         parse_observe_log,
     )
+    from core.sandbox import (
+        run as sandbox_run,
+    )
 
-    import contextlib
+    if args.audit_budget is not None:
+        # Same propagation path the main CLI's apply_cli_args uses:
+        # the tracer builds its AuditBudget from this state slot.
+        from core.sandbox import state as _sbx_state
+        _sbx_state._cli_sandbox_audit_budget = int(args.audit_budget)
+
     with contextlib.ExitStack() as stack:
         run_dir, kept = _resolve_run_dir(args, stack)
         target_dir = Path(args.target).resolve() if args.target else run_dir
@@ -242,6 +283,11 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
         # human-readable mode let the binary's output pass through —
         # operators reading the summary like seeing what the probe
         # actually produced.
+        timed_out = False
+        # Pre-bind: the TimeoutExpired path continues with no completed
+        # process, and the nonce-trust check reads getattr(result, ...).
+        result = None
+        return_code: int | None = None
         try:
             result = sandbox_run(
                 cmd,
@@ -252,16 +298,35 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
                 text=False,
                 timeout=args.timeout,
             )
+            return_code = result.returncode
         except FileNotFoundError as exc:
             sys.stderr.write(f"raptor-sandbox-observe: {exc}\n")
             return _USAGE_EX
+        except subprocess.TimeoutExpired:
+            # A first-class CLI flag must produce a diagnostic, not a
+            # Python traceback. Render whatever observe records landed
+            # before the kill — a partial profile is still useful.
+            timed_out = True
+            sys.stderr.write(
+                f"raptor-sandbox-observe: command did not finish "
+                f"within --timeout {args.timeout}s and was killed; "
+                f"rendering observe records captured before the "
+                f"kill.\n"
+            )
 
         # When the operator did not pass --out / --keep AND no observe
         # records landed, surface a clear error rather than silently
         # printing an empty profile. Most likely cause: ptrace blocked
         # (Yama scope 3, container cap-drop) so audit-mode degraded.
-        observe_log = run_dir / ".sandbox-observe.jsonl"
+        from .evidence import resolve_read_path as _resolve_evidence_path
+        observe_log = _resolve_evidence_path(
+            run_dir, ".sandbox-observe.jsonl",
+        )
         if not observe_log.exists():
+            if timed_out:
+                # The kill explains the missing log — don't pile the
+                # (misleading) degraded-audit diagnostic on top.
+                return _TIMEOUT_EX
             sys.stderr.write(
                 "raptor-sandbox-observe: observe log not produced — "
                 "audit-mode likely degraded silently. Check that "
@@ -271,22 +336,33 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
             )
             return _SOFTWARE_EX
 
-        profile = parse_observe_log(run_dir)
+        # Spoof-resistant parse: pin records to the per-run nonce when
+        # the sandbox stamped one, and hand over sandbox_info so the
+        # parser can refuse nonce trust on runs where the nonce was
+        # not delivered through a protected channel.
+        _sbx_info = getattr(result, "sandbox_info", None) or {}
+        profile = parse_observe_log(
+            run_dir,
+            expected_nonce=_sbx_info.get("observe_nonce"),
+            sandbox_info=_sbx_info,
+        )
 
         if args.json_output:
             sys.stdout.write(_profile_to_json(
                 profile, run_dir=run_dir, kept=kept,
-                return_code=result.returncode,
+                return_code=return_code,
             ) + "\n")
         else:
             sys.stdout.write(_format_summary(
                 profile, run_dir=run_dir, kept=kept,
-                return_code=result.returncode,
+                return_code=return_code,
             ) + "\n")
 
+        if timed_out:
+            return _TIMEOUT_EX
         # Forward the spawned command's exit code as our own — caller
         # composes naturally with shell pipelines that check $?.
-        return result.returncode
+        return return_code
 
 
 if __name__ == "__main__":

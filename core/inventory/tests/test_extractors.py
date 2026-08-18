@@ -5,7 +5,7 @@ import pytest
 from core.inventory.extractors import (
     FunctionInfo, FunctionMetadata,
     PythonExtractor, JavaExtractor, CExtractor, GoExtractor,
-    JavaScriptExtractor, LuaExtractor,
+    JavaScriptExtractor, LuaExtractor, TreeSitterExtractor,
     extract_functions, extract_items, _TS_AVAILABLE, _get_ts_languages,
 )
 
@@ -164,6 +164,22 @@ class TestJavaRegexExtractor:
         code = "public class T {\n    public void set(String k, int v) {\n    }\n}"
         funcs = JavaExtractor().extract("T.java", code)
         assert funcs[0].metadata.parameters == [("k", "String"), ("v", "int")]
+
+    def test_braces_inside_string_literal_ignored(self):
+        code = (
+            "public class T {\n"
+            '    public void log() {\n'
+            '        System.out.println("value={" + x + "}");\n'
+            '    }\n'
+            '    public void other() {\n'
+            '    }\n'
+            '}\n'
+        )
+        funcs = JavaExtractor().extract("T.java", code)
+        names = [f.name for f in funcs]
+        assert "log" in names
+        assert "other" in names
+        assert funcs[1].metadata.class_name == "T"
 
 
 class TestCRegexExtractor:
@@ -686,3 +702,116 @@ class TestLuaExtractor:
         funcs = extract_functions("controller.lua", "lua", code)
         assert len(funcs) == 1
         assert funcs[0].name == "dispatch"
+
+
+# ---------------------------------------------------------------------------
+# Scala (tree-sitter). Regression guard for the regex-fallback gap: .scala had
+# no loader branch, so it silently degraded to regex — fewer functions and no
+# line_end, which disables every span-based consumer.
+# ---------------------------------------------------------------------------
+
+_SCALA_SRC = '''package kafka.server
+
+import scala.collection.Map
+
+object ConfigHelper {
+  def normalize(name: String): String = {
+    name.trim.toLowerCase
+  }
+}
+
+class ConfigAdminManager(nodeId: Int) {
+
+  def preprocess(request: AlterConfigsRequest): Map[String, String] = {
+    val out = Map.empty[String, String]
+    out
+  }
+
+  private def validateBrokerConfigChange(props: Properties): Unit = {
+    if (props.isEmpty) {
+      throw new InvalidRequestException("empty")
+    }
+  }
+}
+
+trait Reconfigurable {
+  def reconfigure(configs: Map[String, _]): Unit
+}
+'''
+
+
+def _has_tree_sitter_scala() -> bool:
+    try:
+        import tree_sitter_scala  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(
+    not _has_tree_sitter_scala(),
+    reason="tree_sitter_scala grammar not installed",
+)
+class TestScalaExtraction:
+    def _extract(self):
+        return extract_functions("ConfigAdminManager.scala", "scala", _SCALA_SRC)
+
+    def test_finds_defs_in_class_object_and_trait(self):
+        names = {f.name for f in self._extract()}
+        assert {"normalize", "preprocess", "validateBrokerConfigChange"} <= names
+
+    def test_every_function_has_a_line_span(self):
+        """The whole point: the regex fallback returned line_end=None, which
+        silently disables source-slicing consumers."""
+        fns = self._extract()
+        assert fns
+        for f in fns:
+            assert f.line_start, f.name
+            assert f.line_end, f.name
+            assert f.line_end >= f.line_start, f.name
+
+    def test_span_covers_the_body(self):
+        fn = next(f for f in self._extract() if f.name == "validateBrokerConfigChange")
+        body = "\n".join(_SCALA_SRC.splitlines()[fn.line_start - 1:fn.line_end])
+        assert "InvalidRequestException" in body
+
+    def test_scala_uses_function_definition_not_java_node_names(self):
+        """Scala `def` is function_definition; reusing Java's
+        method_declaration extracts zero from a cleanly-parsed file."""
+        assert TreeSitterExtractor._FUNC_TYPES["scala"] == ("function_definition",)
+        assert "method_declaration" not in TreeSitterExtractor._FUNC_TYPES["scala"]
+
+    def test_abstract_trait_def_is_excluded(self):
+        """An abstract `def` with no body is `function_declaration`, not
+        `function_definition` — no code to review. Same rule as Rust's
+        `function_signature_item`. The regex fallback wrongly includes it."""
+        assert "reconfigure" not in {f.name for f in self._extract()}
+
+    def test_regex_fallback_has_no_line_end(self):
+        """Pins the defect this branch fixes. Deliberately does NOT compare
+        counts: on a tiny fixture the regex can over-match (it picks up the
+        abstract def), while on real files tree-sitter finds substantially
+        more. The invariant that always holds, and the one span-based
+        consumers depend on, is that the fallback yields no line_end."""
+        import core.inventory.extractors as _E
+        saved = _E._TS_AVAILABLE
+        _E._TS_AVAILABLE = False
+        try:
+            rx = extract_functions("ConfigAdminManager.scala", "scala", _SCALA_SRC)
+        finally:
+            _E._TS_AVAILABLE = saved
+        assert rx, "fallback should still find something"
+        assert not any(f.line_end for f in rx)
+        assert all(f.line_end for f in self._extract())
+
+
+class TestTsProbeMatchesLoader:
+    def test_probe_list_covers_every_loader_branch(self):
+        """The banner list drifted behind the loader — cpp/typescript/rust/
+        csharp/ruby/php had working branches but were never probed, so the
+        doctor under-reported what the inventory could parse."""
+        from core.inventory.extractors import _TS_PROBE_LANGUAGES
+        for lang in TreeSitterExtractor._FUNC_TYPES:
+            assert lang in _TS_PROBE_LANGUAGES, (
+                f"{lang} has node types but is not probed for the banner"
+            )

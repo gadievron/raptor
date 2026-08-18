@@ -30,6 +30,7 @@ triaging false-positive findings.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -312,9 +313,9 @@ def _manifest_role(path: Path) -> str:
     ``[tool.poetry.group.dev.dependencies]``). Both are partitioned
     so cross-role + cross-scope divergence is allowed."""
     name = path.name.lower()
-    if "dev" in name:
+    if re.search(r"\bdev\b", name):
         return "dev"
-    if "test" in name:
+    if re.search(r"\btest\b", name):
         return "test"
     if any(tok in name for tok in ("optional", "extras", "all-")):
         return "optional"

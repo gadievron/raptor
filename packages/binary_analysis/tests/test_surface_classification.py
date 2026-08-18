@@ -78,3 +78,28 @@ def test_to_dict_round_trips():
     assert d["role"] == "sink"
     assert d["is_sink"] is True
     assert isinstance(d["rationale"], str)
+
+
+def test_macos_categories_come_from_taxonomy_groups():
+    """The macOS branches classify from the taxonomy's grouped sets."""
+    assert classify_security_api("NSTask").category == "process_execution"
+    assert classify_security_api(
+        "Foundation.Process.run",
+    ).category == "process_execution"
+    assert classify_security_api(
+        "Foundation.JSONDecoder.decode",
+    ).category == "parser"
+    # CF plist/XML parse surfaces were in the taxonomy set but missing
+    # from the consumer's re-listed copy before consolidation.
+    assert classify_security_api(
+        "CFPropertyListCreateWithData",
+    ).category == "parser"
+    assert classify_security_api(
+        "CFXMLParserCreate",
+    ).category == "parser"
+    assert classify_security_api(
+        "CFURLCreateWithBytes",
+    ).category == "filesystem_or_url"
+    assert classify_security_api(
+        "SecTrustEvaluateWithError",
+    ).category == "security_boundary"

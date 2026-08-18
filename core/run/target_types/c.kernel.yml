@@ -1,0 +1,56 @@
+name: c.kernel
+description: |
+  Linux kernel tree (or subsystem thereof). Characterised by Kconfig,
+  Kbuild, and include/linux/ headers. Memory-safety bugs in kernel
+  code have direct privilege-escalation impact.
+
+detection:
+  file_globs:
+    - "Kconfig"
+    - "Kbuild"
+    - "include/linux/**"
+    - "kernel/**"
+    - "drivers/**"
+  file_extensions:
+    - .c
+    - .h
+    - .S
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+  optional: []
+
+attack_surface:
+  high_priority_dirs:
+    - crypto
+    - mm
+    - net
+    - fs
+    - kernel
+    - security
+    - drivers/gpu
+    - drivers/net
+    - drivers/usb
+    - ipc
+  low_priority_dirs:
+    - Documentation
+    - tools
+    - samples
+    - scripts
+    - arch/alpha
+    - arch/parisc
+    - arch/m68k
+    - arch/sh
+
+pipeline:
+  recommended:
+    - understand-map
+    - audit
+
+budget_defaults:
+  typical_findings_count: 30
+  typical_cost_per_run_usd: 35
+
+version: 1

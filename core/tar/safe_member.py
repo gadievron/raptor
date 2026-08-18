@@ -23,6 +23,15 @@ The hardening rules (per PEP 706's ``data`` filter):
   * **uid/gid bits** — setuid / setgid / sticky bits stripped.
     A tarball can't usefully grant SUID 0 to its own files; the
     presence is suspicious.
+  * **Backslash separator** — Windows-shaped paths (``..\\..\\etc``)
+    rejected so an on-disk resolver that treats ``\\`` as a
+    separator can't be fooled. Mirrors :mod:`core.zip.safe_member`.
+  * **NFKC-normalised traversal** — fullwidth/decomposed Unicode
+    forms (``．．``) that filesystems like HFS+ fold back to ASCII
+    on write are normalised before the traversal / absolute-path
+    checks run. Mirrors :mod:`core.zip.safe_member`.
+  * **Empty / whitespace-only names** — degenerate member names
+    are rejected; nothing legitimate produces them.
 
 In addition to the PEP 706 rules, this helper enforces a per-member
 size cap. PEP 706 doesn't address compression bombs (the size cap
@@ -42,6 +51,7 @@ from __future__ import annotations
 import logging
 import sys
 import tarfile
+import unicodedata
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -74,6 +84,7 @@ class UnsafeMemberReason(str, Enum):
     SAFE = "safe"
     PATH_TRAVERSAL = "path_traversal"
     ABSOLUTE_PATH = "absolute_path"
+    BACKSLASH_PATH = "backslash_path"
     SPECIAL_FILE = "special_file"           # block/char dev, fifo, socket
     SYMLINK_UNSAFE = "symlink_unsafe"
     HARD_LINK = "hard_link"
@@ -150,6 +161,14 @@ def safe_member_reason(
     if member.islnk():
         return UnsafeMemberReason.HARD_LINK
 
+    # Empty / whitespace-only names. Nothing legitimate produces
+    # them, and the split-based checks below treat them as vacuously
+    # safe — reject explicitly (fail-closed). Mirrors the zip guard's
+    # degenerate-name rejection (core.zip.safe_member).
+    name = member.name
+    if not name.strip():
+        return UnsafeMemberReason.UNRECOGNISED_TYPE
+
     # Absolute-path check before delegating to data_filter. PEP 706's
     # data_filter SILENTLY STRIPS a leading ``/`` rather than
     # rejecting — that's the right behaviour for plain extraction
@@ -163,6 +182,49 @@ def safe_member_reason(
             return UnsafeMemberReason.ABSOLUTE_PATH
         if member.issym() and member.linkname.startswith("/"):
             return UnsafeMemberReason.SYMLINK_UNSAFE
+
+    # Backslash check. Tar names use forward slash; any backslash is
+    # either a malformed producer or an intentional Windows path
+    # attack (``..\\..\\etc\\passwd``) on a host/filesystem whose
+    # resolver treats ``\\`` as a separator — data_filter's POSIX
+    # resolution would wave it through as a single odd-named segment.
+    # Reject explicitly, same predicate as core.zip.safe_member. Tar
+    # additionally carries symlink targets, so the link TARGET gets
+    # the same treatment (surfaced as the existing symlink reason).
+    if "\\" in name:
+        return UnsafeMemberReason.BACKSLASH_PATH
+    if member.issym() and "\\" in member.linkname:
+        return UnsafeMemberReason.SYMLINK_UNSAFE
+
+    # NFKC normalisation: HFS+ (macOS) and some case-insensitive
+    # filesystems map fullwidth/decomposed Unicode forms back to
+    # their ASCII equivalents during write. ``safe/．．/x``
+    # (FULLWIDTH FULL STOP) extracts as ``safe/../x`` on those
+    # filesystems → real path escape that the raw-name checks (and
+    # data_filter below) never see. Run the traversal / absolute
+    # checks on both the raw and the normalised form — same
+    # segment-equals-``..`` predicate as core.zip.safe_member; the
+    # original name is left intact for callers that want to surface
+    # the raw value. Symlink targets get the same treatment.
+    normalised = unicodedata.normalize("NFKC", name)
+    for to_check in {name, normalised}:
+        parts = [p for p in to_check.split("/") if p]
+        if ".." in parts:
+            return UnsafeMemberReason.PATH_TRAVERSAL
+        # Re-run the absolute-path check on the normalised form too.
+        # Some Unicode forms (FULLWIDTH SOLIDUS) resolve to a leading
+        # "/" only after NFKC.
+        if not allow_absolute_paths and to_check.startswith("/"):
+            return UnsafeMemberReason.ABSOLUTE_PATH
+    if member.issym():
+        linkname = member.linkname
+        for to_check in {linkname,
+                         unicodedata.normalize("NFKC", linkname)}:
+            link_parts = [p for p in to_check.split("/") if p]
+            if ".." in link_parts:
+                return UnsafeMemberReason.SYMLINK_UNSAFE
+            if not allow_absolute_paths and to_check.startswith("/"):
+                return UnsafeMemberReason.SYMLINK_UNSAFE
 
     # Use Python 3.12+ tarfile.data_filter for the canonical
     # path-traversal / symlink-target / abspath checks. Wrapped in

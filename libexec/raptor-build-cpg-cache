@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Pre-build a Joern CPG into the project cache during /understand --map.
+
+Usage: raptor-build-cpg-cache <understand_dir>
+
+Reads checklist.json for target_path, resolves the project cache
+directory (understand_dir's parent), and builds the CPG via
+build_cpg_cached. Subsequent /audit and /agentic runs against the
+same project get a cache hit instead of a cold build.
+
+Skip-silent: exits 0 with a message when Joern is unavailable, no
+project is active, or no target_path exists.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-build-cpg-cache",
+        description="Pre-build Joern CPG into the project cache.",
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(
+            f"raptor-build-cpg-cache: {understand_dir} is not a directory",
+            file=sys.stderr,
+        )
+        return 1
+
+    from packages.joern.prereqs import is_available
+    if not is_available():
+        print("raptor-build-cpg-cache: Joern not installed; skipping")
+        return 0
+
+    from core.json import load_json
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    if not target_path:
+        print(
+            "raptor-build-cpg-cache: checklist missing target_path; skipping"
+        )
+        return 0
+
+    project_dir = understand_dir.parent
+    if project_dir == understand_dir:
+        print(
+            "raptor-build-cpg-cache: no project active (no parent dir); "
+            "skipping"
+        )
+        return 0
+
+    from packages.joern.runner import build_cpg_cached, load_cached_cpg
+    target = Path(target_path)
+
+    cached = load_cached_cpg(target, project_dir)
+    if cached is not None:
+        print(
+            f"raptor-build-cpg-cache: CPG already cached at "
+            f"{project_dir / 'joern-cpg' / 'cpg.bin'}"
+        )
+        return 0
+
+    print(f"raptor-build-cpg-cache: building CPG for {target} ...")
+    cpg = build_cpg_cached(target, project_dir)
+    if cpg.exists():
+        print(
+            f"raptor-build-cpg-cache: CPG cached at {cpg.path} "
+            f"({cpg.build_time_ms}ms)"
+        )
+    else:
+        print(
+            "raptor-build-cpg-cache: CPG build failed (joern-parse error); "
+            "downstream tools will build on demand",
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

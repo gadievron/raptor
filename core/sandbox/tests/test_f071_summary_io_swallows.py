@@ -56,16 +56,23 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
     # Set the module-level active run dir so record_denial doesn't
     # no-op early.
     monkeypatch.setattr(summary_mod, "_active_run_dir", tmp_path)
-    # Force os.open inside record_denial to raise OSError.
+    # Force the evidence-file open inside record_denial to raise
+    # OSError (record_denial appends via a held evidence fd under
+    # <run_dir>/.audit/ since the evidence relocation).
+    from core.sandbox import evidence as evidence_mod
     real_open = os.open
-    target_path = str(tmp_path / ".sandbox-denials.jsonl")
+    target_path = str(
+        evidence_mod.evidence_write_path(
+            tmp_path, ".sandbox-denials.jsonl",
+        )
+    )
 
     def fake_open(path, flags, mode=0o666):
         if str(path) == target_path:
             raise OSError("EACCES")
         return real_open(path, flags, mode)
 
-    monkeypatch.setattr(summary_mod.os, "open", fake_open)
+    monkeypatch.setattr(evidence_mod.os, "open", fake_open)
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         summary_mod.record_denial(
             "test-cmd", 1, "network",

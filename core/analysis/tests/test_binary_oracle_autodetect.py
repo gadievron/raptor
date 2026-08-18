@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,11 +15,19 @@ from core.analysis.binary_oracle_autodetect import (
     _has_dwarf,
 )
 
+_GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
+
+_needs_gcc = pytest.mark.skipif(
+    not shutil.which("gcc"), reason="gcc not available",
+)
+
 
 @pytest.fixture
 def build_tree(tmp_path: Path) -> Path:
     """A target tree shaped like a real autotools / CMake build.
     Synthesises ELF binaries with DWARF via a tiny compile."""
+    if not shutil.which("gcc"):
+        pytest.skip("gcc not available")
     import subprocess as _sp
 
     # Source file shared by all binaries.
@@ -141,6 +151,8 @@ def test_classify_candidate_rejects_split_debug_and_templates(
             f"(got kind={result.kind if result else None})")
 
 
+@_needs_gcc
+@pytest.mark.slow
 def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
     import subprocess as _sp
     src = tmp_path / "x.c"
@@ -151,3 +163,73 @@ def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:
     _sp.run(["gcc", str(src), "-s", "-o", str(stripped)], check=True)
     assert _has_dwarf(debug) is True
     assert _has_dwarf(stripped) is False
+
+
+@_needs_gcc
+@pytest.mark.slow
+@pytest.mark.skipif(not shutil.which("make"), reason="make not available")
+def test_detect_finds_makefile_built_binary(tmp_path: Path) -> None:
+    """A target with a Makefile that builds into build/ — autodetect
+    must find the resulting debug binary after ``make`` runs. This is
+    the scenario that makes post-CodeQL autodetect valuable: CodeQL
+    compiles the target via the real build system, leaving artefacts
+    that the binary oracle can consume."""
+    import subprocess as _sp
+
+    src = tmp_path / "vuln.c"
+    src.write_text(
+        '#include <string.h>\n'
+        '#include <stdio.h>\n'
+        'void dead_function(void) { printf("never called\\n"); }\n'
+        'int main(int argc, char **argv) {\n'
+        '    char buf[64];\n'
+        '    if (argc > 1) strcpy(buf, argv[1]);\n'
+        '    return 0;\n'
+        '}\n'
+    )
+    makefile = tmp_path / "Makefile"
+    makefile.write_text(
+        "CC ?= gcc\n"
+        "CFLAGS ?= -g -O2 -ffunction-sections -fdata-sections\n"
+        f"LDFLAGS ?= {_GC_SECTIONS}\n"
+        "\n"
+        "all: build/vuln\n"
+        "\n"
+        "build/vuln: vuln.c\n"
+        "\tmkdir -p build\n"
+        "\t$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<\n"
+        "\n"
+        "clean:\n"
+        "\trm -rf build\n"
+    )
+
+    # Before build: no binaries to find.
+    pre = detect_binaries(tmp_path, "auto")
+    assert pre == [], f"expected no binaries before build, got {pre}"
+
+    # Build the target (simulates what CodeQL does with a real build system).
+    result = _sp.run(
+        ["make", "-C", str(tmp_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"make failed: {result.stderr}"
+
+    # After build: autodetect must find the debug binary in build/.
+    post = detect_binaries(tmp_path, "auto")
+    names = [p.name for p in post]
+    assert "vuln" in names, (
+        f"autodetect should find build/vuln after make; got {names}"
+    )
+    assert _has_dwarf(post[0]), "built binary should have DWARF info"
+
+    # The binary was built with -ffunction-sections + --gc-sections,
+    # so dead_function (never called) should be absent from the symbol
+    # table — exactly the case the binary oracle suppresses.
+    import subprocess as _sp2
+    nm = _sp2.run(
+        ["nm", str(post[0])], capture_output=True, text=True,
+    )
+    assert "dead_function" not in nm.stdout, (
+        "dead_function should be DCE'd by --gc-sections"
+    )
+    assert "main" in nm.stdout, "main should survive in the binary"

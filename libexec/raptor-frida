@@ -21,14 +21,14 @@
 
 set -euo pipefail
 
-# ─── trust-marker check (inline by design - do not source from a shared file) ───
+# ─── trust-marker check (do not source; inline by design) ───
 if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
     echo "$0: internal dispatch script." >&2
     echo "  Run via 'bin/raptor frida' instead." >&2
     echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
     exit 2
 fi
-# ─── end trust-marker check ─────────────────────────────────────────
+# ─── end trust-marker check ─────────────────────────────────
 
 # ─── resolve RAPTOR_DIR through symlinks (matches raptor-agentic) ───
 SCRIPT="$0"

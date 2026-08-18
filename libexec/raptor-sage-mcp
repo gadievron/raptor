@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# raptor-sage-mcp — stdio MCP transport wrapper for the SAGE sidecar.
+#
+# Claude Code invokes this as the command in .mcp.json. It execs into
+# the SAGE container's `sage-gui mcp` process with stdin/stdout wired
+# directly (no pipes, no buffering layers).
+#
+# Not a user-facing script — invoked by Claude Code via .mcp.json only.
+# Claude Code sets CLAUDECODE=1 when spawning MCP server processes,
+# satisfying the trust-marker check below.
+
+set -euo pipefail
+
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
+# Resolve RAPTOR_DIR via symlink chain (same pattern as raptor-sage-setup).
+SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-sage-mcp: symlink hop limit exceeded resolving $0" >&2
+        exit 3
+    fi
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+# Users who access docker via group membership (sg docker) rather than
+# direct socket permissions need the sg wrapper. Re-exec under sg if
+# docker is not directly accessible; the re-exec inherits the
+# environment (CLAUDECODE, SAGE_*) and stdin/stdout for MCP.
+# Guard: only re-exec when sg docker actually fixes the problem,
+# otherwise exit — without this, a genuinely-down docker daemon
+# causes an infinite exec loop.
+if ! docker info >/dev/null 2>&1; then
+    if command -v sg >/dev/null 2>&1 && sg docker -c "docker info" >/dev/null 2>&1; then
+        exec sg docker -c "\"$0\""
+    fi
+    echo "raptor-sage-mcp: Docker daemon is not running or not accessible." >&2
+    exit 3
+fi
+
+exec docker compose \
+    -f "$RAPTOR_DIR/core/sage/docker-compose.yml" \
+    exec -T \
+    -e "SAGE_HOME=/root/.sage" \
+    -e "SAGE_API_URL=http://localhost:8080" \
+    -e "SAGE_PROVIDER=${SAGE_PROVIDER:-claude-code}" \
+    -e "SAGE_PROJECT=${SAGE_PROJECT:-raptor}" \
+    -e "SAGE_IDENTITY_PATH=${SAGE_IDENTITY_PATH:-/root/.sage/agents/raptor-claude-code/agent.key}" \
+    sage \
+    /usr/local/bin/sage-gui mcp

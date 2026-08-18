@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from core.dataflow import cvefix_bridge, cvefix_walk
 from core.dataflow.barrier_synth import SynthResult
 from core.dataflow.cvefix_loader import CveFixPair
@@ -15,10 +17,108 @@ def _pair(cwe="CWE-89", lang="Python", fix="f1"):
     return CveFixPair("CVE-X", cwe, "https://github.com/o/a", lang, fix, "p1")
 
 
+def _sarif_for(uri: str, line: int = 1) -> dict:
+    return {
+        "runs": [{
+            "results": [{
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": uri},
+                        "region": {"startLine": line},
+                    },
+                }],
+            }],
+        }],
+    }
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "app.py").write_text("name = input()\nopen(name)\n")
+    return root
+
+
 def test_norm_uri_strips_scheme_and_leading_slash():
     assert cvefix_bridge._norm_uri("src/a.py") == "src/a.py"
     assert cvefix_bridge._norm_uri("file:///abs/a.py") == "abs/a.py"
     assert cvefix_bridge._norm_uri("file:src/a.py") == "src/a.py"
+
+
+def test_norm_uri_is_textual_only():
+    # _norm_uri deliberately does not neutralize '..'; containment
+    # is _resolve_in_repo's job.
+    assert cvefix_bridge._norm_uri("file:///a/b.py") == "a/b.py"
+    assert cvefix_bridge._norm_uri("../x") == "../x"
+
+
+# ---------------------------------------------------------------------------
+# SARIF artifact-URI containment — URIs from an untrusted corpus repo
+# must not read host files outside the clone
+# ---------------------------------------------------------------------------
+
+def test_resolve_in_repo_plain_relative_uri(repo):
+    resolved = cvefix_bridge._resolve_in_repo(repo, "app.py")
+    assert resolved == (repo / "app.py").resolve()
+
+
+def test_resolve_in_repo_strips_file_scheme(repo):
+    assert cvefix_bridge._resolve_in_repo(repo, "file:app.py") is not None
+
+
+def test_resolve_in_repo_rejects_dotdot_traversal(repo, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("host-only")
+    assert cvefix_bridge._resolve_in_repo(repo, "../secret.txt") is None
+    assert cvefix_bridge._resolve_in_repo(repo, "a/../../secret.txt") is None
+
+
+def test_resolve_in_repo_absolute_style_uri_stays_in_repo(repo, tmp_path):
+    # Leading slashes are stripped (SARIF file:///abs form), so the
+    # remainder is joined under the repo — the resolved path stays
+    # inside the clone and never names the real host file.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("host-only")
+    resolved = cvefix_bridge._resolve_in_repo(repo, f"file://{secret}")
+    assert resolved is None or (
+        resolved.is_relative_to(repo.resolve()) and not resolved.is_file()
+    )
+
+
+def test_resolve_in_repo_rejects_symlink_escape(repo, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("host-only")
+    (repo / "link.txt").symlink_to(outside)
+    assert cvefix_bridge._resolve_in_repo(repo, "link.txt") is None
+
+
+def test_extract_proposal_traversal_uri_yields_none(repo, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("HOSTSECRET")
+    sarif = tmp_path / "res.sarif"
+    sarif.write_text(json.dumps(_sarif_for("../secret.txt")))
+    assert cvefix_bridge._extract_proposal(sarif, repo, _pair(cwe="CWE-22")) is None
+
+
+def test_extract_proposal_in_repo_uri_still_extracts(repo, tmp_path):
+    sarif = tmp_path / "res.sarif"
+    sarif.write_text(json.dumps(_sarif_for("app.py", line=2)))
+    extracted = cvefix_bridge._extract_proposal(sarif, repo, _pair(cwe="CWE-22"))
+    assert extracted is not None
+    proposal, target_uri, target_line = extracted
+    assert target_uri == "app.py"
+    assert target_line == 2
+    assert "open(name)" in proposal.source_context
+
+
+def test_extract_proposal_traversal_content_never_reaches_prompt(repo, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("HOSTSECRET")
+    sarif = tmp_path / "res.sarif"
+    sarif.write_text(json.dumps(_sarif_for("file:../secret.txt")))
+    extracted = cvefix_bridge._extract_proposal(sarif, repo, _pair(cwe="CWE-22"))
+    assert extracted is None
 
 
 def test_extract_proposal_reads_source_and_returns_target_uri(monkeypatch, tmp_path: Path):
@@ -176,6 +276,72 @@ def test_git_diff_other_files_empty_when_only_sink_touched(monkeypatch, tmp_path
     assert out == ""
 
 
+def test_git_diff_argv_carries_safety_pins(monkeypatch, tmp_path: Path):
+    """The diff runs against a cloned CVE repo — hostile .git/config
+    must be neutralised by the strict read-only pins, and the diff
+    must disable external drivers explicitly."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+
+        class R:
+            returncode = 0
+            stdout = "+ guarded\n"
+        return R()
+
+    monkeypatch.setattr(cvefix_bridge.subprocess, "run", fake_run)
+    cvefix_bridge._git_diff(tmp_path, "p", "f", "src/a.py")
+    cvefix_bridge._git_touched_files(tmp_path, "p", "f")
+
+    assert len(calls) == 2
+    for argv in calls:
+        assert argv[0] == "git"
+        assert "core.hooksPath=/dev/null" in argv
+        assert "core.fsmonitor=" in argv
+        assert "protocol.allow=never" in argv
+        assert "core.sshCommand=false" in argv
+        assert "diff.external=" in argv
+        # diff.external= fails loudly on diffs that forgot to disable
+        # external drivers — every diff here must opt out explicitly.
+        assert "--no-ext-diff" in argv
+
+
+def test_git_diff_still_works_under_pins(tmp_path: Path):
+    """Functional: the strict pins + --no-ext-diff must not break a
+    plain commit..commit diff on a real repository."""
+    import subprocess as sp
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+
+    def git(*args):
+        sp.run(["git", "-C", str(repo), "-c", "user.name=t",
+                "-c", "user.email=t@t", *args],
+               check=True, capture_output=True, env=env)
+
+    git("init", "-q")
+    (repo / "a.py").write_text("x = 1\n")
+    git("add", "a.py")
+    git("commit", "-qm", "one")
+    parent = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                    capture_output=True, text=True, env=env,
+                    check=True).stdout.strip()
+    (repo / "a.py").write_text("if ok:\n    x = 1\n")
+    git("add", "a.py")
+    git("commit", "-qm", "two")
+    fix = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                 capture_output=True, text=True, env=env,
+                 check=True).stdout.strip()
+
+    diff = cvefix_bridge._git_diff(repo, parent, fix, "a.py")
+    assert "if ok" in diff
+    touched = cvefix_bridge._git_touched_files(repo, parent, fix)
+    assert touched == ["a.py"]
+
+
 def test_git_touched_files_returns_empty_on_subprocess_fail(monkeypatch, tmp_path: Path):
     """Failure isolation: if `git diff --name-only` errors, callers
     silently fall back to sink-file-only context (the original behaviour),
@@ -241,7 +407,7 @@ def test_synthesize_one_happy_path_returns_sound_query(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(cvefix_bridge, "_extract_proposal", lambda *a, **k: (prop, "a.py", 3))
     monkeypatch.setattr(cvefix_bridge, "run_synthesis_loop",
                         lambda *a, **k: SynthResult(query_ql="SOUND_QL", after_count=0, before_count=1))
-    status, fid, backend, sq, detail = cvefix_bridge.synthesize_one(
+    status, fid, backend, sq, _detail = cvefix_bridge.synthesize_one(
         _pair(), work_dir=tmp_path / "w", proposer=lambda *a: "")
     assert status == "sound" and fid == "CVE-X:CWE-89:a.py:3"
     assert backend == "codeql" and sq == "SOUND_QL"
@@ -366,8 +532,7 @@ def _tier0_setup(monkeypatch, *, tier0_result):
 def test_synthesize_one_tier0_short_circuits_sound(monkeypatch, tmp_path: Path):
     """Tier 0 SOUND -> backend=smt, artifact in barrier_query, no before-DB
     build (the whole point of the free first-pass)."""
-    from core.dataflow.smt_barrier import (Tier0Result, Tier0Status,
-                                            ValidatorSpec)
+    from core.dataflow.smt_barrier import Tier0Result, Tier0Status, ValidatorSpec
     spec = ValidatorSpec("charset", "x", "A-Za-z0-9", "if not re.match(...)", 0)
     t0 = Tier0Result(
         Tier0Status.SOUND, "UNSAT: no string in [A-Za-z0-9]+ can contain '/'",
@@ -375,7 +540,7 @@ def test_synthesize_one_tier0_short_circuits_sound(monkeypatch, tmp_path: Path):
         extras={"validator_line": 3, "var_name": "x"})
     builds, _ = _tier0_setup(monkeypatch, tier0_result=t0)
     pair = _pair(cwe="CWE-22")
-    status, fid, backend, bq, detail = cvefix_bridge.synthesize_one(
+    status, _fid, backend, bq, detail = cvefix_bridge.synthesize_one(
         pair, work_dir=tmp_path / "w", proposer=lambda *a: "RAISES_IF_CALLED")
     assert status == "sound"
     assert backend == "smt"
@@ -390,7 +555,7 @@ def test_synthesize_one_tier0_not_applicable_falls_through(monkeypatch, tmp_path
                      "no recognised charset/regex validator in fix diff")
     builds, _ = _tier0_setup(monkeypatch, tier0_result=t0)
     pair = _pair(cwe="CWE-22")
-    status, fid, backend, bq, detail = cvefix_bridge.synthesize_one(
+    status, _fid, backend, bq, _detail = cvefix_bridge.synthesize_one(
         pair, work_dir=tmp_path / "w", proposer=lambda *a: "")
     assert status == "sound" and backend == "codeql" and bq == "TIER2_QL"
     # Tier 0 fell through -> before-DB WAS built
@@ -398,8 +563,7 @@ def test_synthesize_one_tier0_not_applicable_falls_through(monkeypatch, tmp_path
 
 
 def test_synthesize_one_tier0_declined_falls_through(monkeypatch, tmp_path: Path):
-    from core.dataflow.smt_barrier import (Tier0Result, Tier0Status,
-                                            ValidatorSpec)
+    from core.dataflow.smt_barrier import Tier0Result, Tier0Status, ValidatorSpec
     spec = ValidatorSpec("charset", "x", "A-Za-z0-9_./", "if not...", 0)
     t0 = Tier0Result(
         Tier0Status.DECLINED,

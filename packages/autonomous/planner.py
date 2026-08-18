@@ -6,12 +6,12 @@ This module transforms RAPTOR from a fixed pipeline into an intelligent agent
 that makes decisions based on fuzzing state and learned knowledge.
 """
 
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.config import env_flag
 from core.logging import get_logger
 
 logger = get_logger()
@@ -71,12 +71,10 @@ class FuzzingState:
 
     # Strategy metrics
     current_strategy: str = "default"
-    strategies_tried: List[str] = field(default_factory=list)
     successful_strategies: Dict[str, int] = field(default_factory=dict)
 
     # Goal state
     target_goal: Optional[str] = None
-    goal_progress: float = 0.0
 
     # Binary characteristics
     binary_path: Optional[Path] = None
@@ -110,7 +108,6 @@ class FuzzingPlanner:
     def __init__(
         self,
         memory=None,
-        sage_planning_notes: Optional[str] = None,
         sage_strategy_rows: Optional[List[Dict[str, Any]]] = None,
     ):
         """
@@ -118,13 +115,10 @@ class FuzzingPlanner:
 
         Args:
             memory: FuzzingMemory instance for learning (optional)
-            sage_planning_notes: Optional SAGE recall text (cross-run priors)
             sage_strategy_rows: Raw SAGE recall rows for confidence-weighted defaults
         """
         self.memory = memory
-        self.sage_planning_notes = (sage_planning_notes or "").strip()
         self.sage_strategy_rows: List[Dict[str, Any]] = list(sage_strategy_rows or [])
-        self._sage_notes_logged = False
         self.decision_history = []
         logger.info("Autonomous Fuzzing Planner initialised")
 
@@ -144,17 +138,11 @@ class FuzzingPlanner:
         logger.info("=" * 70)
         logger.info("AUTONOMOUS DECISION MAKING")
         logger.info("=" * 70)
-        if self.sage_planning_notes and not self._sage_notes_logged:
-            logger.info(
-                "SAGE cross-run strategy recall (planner bias):\n"
-                f"{self.sage_planning_notes[:4000]}",
-            )
-            self._sage_notes_logged = True
-        logger.info(f"Elapsed time: {state.elapsed_time():.1f}s")
-        logger.info(f"Total crashes: {state.total_crashes}")
-        logger.info(f"Unique crashes: {state.unique_crashes}")
-        logger.info(f"Coverage: {state.total_coverage}")
-        logger.info(f"Execs/sec: {state.execs_per_sec:.1f}")
+        logger.info("Elapsed time: %.1fs", state.elapsed_time())
+        logger.info("Total crashes: %s", state.total_crashes)
+        logger.info("Unique crashes: %s", state.unique_crashes)
+        logger.info("Coverage: %s", state.total_coverage)
+        logger.info("Execs/sec: %.1f", state.execs_per_sec)
 
         # Decision tree - prioritise by urgency and impact
         action = None
@@ -186,13 +174,13 @@ class FuzzingPlanner:
             reasoning = "Default strategy: continue fuzzing"
 
         # Log the decision
-        logger.info(f"Decision: {action.value}")
-        logger.info(f"Reasoning: {reasoning}")
+        logger.info("Decision: %s", action.value)
+        logger.info("Reasoning: %s", reasoning)
 
         # Record decision in history
         self.decision_history.append({
             "time": state.current_time,
-            "action": action,
+            "action": action.value,
             "reasoning": reasoning,
             "state_snapshot": {
                 "crashes": state.total_crashes,
@@ -231,7 +219,7 @@ class FuzzingPlanner:
         if target_duration and state.elapsed_time() >= target_duration:
             # But if we're finding crashes, keep going!
             if state.crashes_last_minute > 0:
-                logger.info(f"Target duration reached, but found {state.crashes_last_minute} crashes recently")
+                logger.info("Target duration reached, but found %s crashes recently", state.crashes_last_minute)
                 logger.info("Autonomous decision: CONTINUE fuzzing (overriding duration)")
                 return True
             else:
@@ -299,7 +287,7 @@ class FuzzingPlanner:
         # Log prioritisation
         logger.info("Crash prioritisation (top 5):")
         for i, (crash, score, factors) in enumerate(crash_scores[:5], 1):
-            logger.info(f"  {i}. {crash.crash_id} - Score: {score:.1f} - Factors: {', '.join(factors)}")
+            logger.info("  %s. %s - Score: %.1f - Factors: %s", i, crash.crash_id, score, ', '.join(factors))
 
         # Return prioritised list
         return [c for c, s, f in crash_scores]
@@ -342,18 +330,16 @@ class FuzzingPlanner:
             from core.tuning import get_tuning
             ceiling = get_tuning().max_fuzz_parallel
             strategy["parallel"] = min(4, ceiling)
-            logger.info(f"No AFL instrumentation - parallelisation set to {strategy['parallel']}")
+            logger.info("No AFL instrumentation - parallelisation set to %s", strategy['parallel'])
 
         # Learn from history
         if self.memory and state.current_strategy in state.successful_strategies:
             success_count = state.successful_strategies[state.current_strategy]
-            logger.info(f"Current strategy has {success_count} past successes - continuing")
+            logger.info("Current strategy has %s past successes - continuing", success_count)
 
         # High-confidence SAGE cross-run priors → mechanical AFL flag hints (reviewer value loop).
-        if (
-            self.sage_strategy_rows
-            and os.environ.get("RAPTOR_SAGE_AFL_PRIOR", "1").strip().lower()
-            not in ("0", "false", "no")
+        if self.sage_strategy_rows and env_flag(
+            "RAPTOR_SAGE_AFL_PRIOR", default=True
         ):
             try:
                 from core.sage.hooks import (
@@ -372,13 +358,13 @@ class FuzzingPlanner:
                         if tok not in strategy["extra_flags"]:
                             strategy["extra_flags"].append(tok)
                     logger.info(
-                        "SAGE mechanical prior (>=85%% confidence): appended AFL flags "
-                        f"{sage_flags}",
+                        "SAGE mechanical prior (>=85%% confidence): appended AFL flags %s",
+                        sage_flags,
                     )
             except Exception as e:
-                logger.debug(f"SAGE AFL prior merge skipped: {e}")
+                logger.debug("SAGE AFL prior merge skipped: %s", e)
 
-        logger.info(f"Selected strategy: {strategy['name']}")
+        logger.info("Selected strategy: %s", strategy['name'])
         return strategy
 
     def get_decision_summary(self) -> Dict:

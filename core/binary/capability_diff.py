@@ -67,7 +67,7 @@ class CapabilityDelta:
 
     def added_buckets(self) -> List[str]:
         """Sorted list of bucket names with new entries."""
-        return sorted(self.new_dangerous_imports.keys())
+        return sorted(self.new_dangerous_imports)
 
 
 def diff_binary_capabilities(

@@ -44,13 +44,22 @@ def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
     """
     if preserve_newlines:
         return "".join(
-            c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else f"\\x{ord(c):02x}"
+            c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else _escape_char(c)
             for c in s
         )
     return "".join(
-        c if c.isprintable() else f"\\x{ord(c):02x}"
+        c if c.isprintable() else _escape_char(c)
         for c in s
     )
+
+
+def _escape_char(c: str) -> str:
+    o = ord(c)
+    if o <= 0xFF:
+        return f"\\x{o:02x}"
+    if o <= 0xFFFF:
+        return f"\\u{o:04x}"
+    return f"\\U{o:08x}"
 
 
 def has_nonprintable(s: str) -> bool:

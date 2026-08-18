@@ -1,0 +1,163 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → MongoDB query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.nosql.taint.javascript
+    message: >-
+      Untrusted data flows directly into a MongoDB query filter. An attacker
+      can inject query operators (e.g. $gt, $ne, $regex) to bypass
+      authentication or extract data. Validate and sanitise query objects
+      before passing them to MongoDB.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.body
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          - pattern: $CTX.request.body
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      # MongoDB native driver — collection methods with filter as first arg
+      - patterns:
+          - pattern: $COLL.find($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.findOne($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.updateOne($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.updateMany($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.deleteOne($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.deleteMany($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.countDocuments($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.distinct($FIELD, $FILTER, ...)
+          - focus-metavariable: $FILTER
+      # MongoDB $where — always dangerous with user input
+      - patterns:
+          - pattern: "$COLL.find({$where: $EXPR, ...})"
+          - focus-metavariable: $EXPR
+      # Mongoose model methods
+      - patterns:
+          - pattern: $MODEL.find($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $MODEL.findOne($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $MODEL.findOneAndUpdate($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $MODEL.findOneAndDelete($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $MODEL.findOneAndReplace($FILTER, ...)
+          - focus-metavariable: $FILTER
+    pattern-sanitizers:
+      # mongo-sanitize strips $ keys from objects
+      - pattern: mongoSanitize($X)
+      - pattern: sanitize($X)
+    metadata:
+      cwe: ["CWE-943"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "nosql", "mongodb", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → PyMongo query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.nosql.taint.python
+    message: >-
+      Untrusted data flows directly into a PyMongo query filter. An attacker
+      can inject query operators (e.g. $gt, $ne, $regex) to bypass
+      authentication or extract data. Validate and sanitise query objects
+      before passing them to MongoDB.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.json
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      # PyMongo collection methods — filter as first arg
+      - patterns:
+          - pattern: $COLL.find($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.find_one($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.update_one($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.update_many($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.delete_one($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.delete_many($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.count_documents($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.find_one_and_update($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.find_one_and_delete($FILTER, ...)
+          - focus-metavariable: $FILTER
+      - patterns:
+          - pattern: $COLL.find_one_and_replace($FILTER, ...)
+          - focus-metavariable: $FILTER
+    metadata:
+      cwe: ["CWE-943"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "nosql", "mongodb", "taint"]

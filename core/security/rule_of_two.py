@@ -50,6 +50,11 @@ logger = logging.getLogger("raptor.security")
 # vendor-specific names that tooling sometimes sets without `CI`
 # (notably Jenkins, TeamCity, Bamboo, Azure Pipelines).
 _CI_ENV_VARS: tuple[str, ...] = (
+    # RAPTOR's own verdict marker: get_safe_env() sets RAPTOR_CI=1 in
+    # child envs whenever the PARENT judged itself in CI, so the gate
+    # keeps working in children whose scrubbed env lost the vendor
+    # markers. Listed first — it is authoritative when present.
+    "RAPTOR_CI",
     "CI",
     "CONTINUOUS_INTEGRATION",
     "GITHUB_ACTIONS",
@@ -67,6 +72,20 @@ _CI_ENV_VARS: tuple[str, ...] = (
     "CIRRUS_CI",
     "WOODPECKER",
 )
+
+
+# Public aliases for consumers outside this module (core.config's
+# env scrubbing keeps the markers allowlisted and re-stamps the
+# parent's verdict; keeping one source of truth here prevents the
+# lists drifting apart).
+def is_ci() -> bool:
+    """Public wrapper — see _is_ci."""
+    return _is_ci()
+
+
+def ci_env_vars() -> tuple[str, ...]:
+    """The CI marker names, for env-allowlist composition."""
+    return _CI_ENV_VARS
 
 
 def _is_ci() -> bool:
@@ -237,6 +256,65 @@ def _sandbox_will_contain() -> bool:
         return bool(check_landlock_available())
     except Exception:  # noqa: BLE001
         return False
+
+
+# Agents whose Rule-of-Two score is 3 (untrusted input + sensitive
+# access + external state) with no severable leg — the job itself spans
+# all three axes, so containment cannot bring the score under the
+# threshold the way it does for the understand/validate sub-agent
+# (which has no external-state leg to begin with). Dispatching one of
+# these headlessly is therefore never allowed: a human-attended session
+# is the only satisfying condition, and the sandbox does NOT substitute.
+#
+# There is currently no in-repo programmatic dispatcher for these
+# agents (they are .claude/agents definitions launched via the Task
+# tool from an interactive session, where Claude Code's permission
+# prompt is the HITL). This registry + require_human_for_agent_dispatch
+# exist so that any FUTURE headless dispatcher must route through the
+# gate — an inventory test walks libexec/, core/, and packages/ and
+# fails on any reference to these agent names outside the files
+# allowlisted as non-dispatch (see
+# core/security/tests/test_hitl_dispatch_inventory.py).
+HITL_REQUIRED_AGENTS: frozenset[str] = frozenset({
+    "offsec-specialist",
+})
+
+
+def require_human_for_agent_dispatch(agent_name: str) -> None:
+    """Refuse headless dispatch of a HITL-required agent (Rule of Two).
+
+    Agents in :data:`HITL_REQUIRED_AGENTS` carry all three Rule-of-Two
+    legs by construction (A=untrusted input, B=sensitive access,
+    C=external state), so unlike the understand/validate agentic pass
+    there is no "effective sandbox" escape hatch: filesystem
+    containment severs at most the write/exec leg, leaving untrusted
+    input + external reach — still over the threshold. The ONLY
+    allowed condition is a human-attended session, where the operator
+    (and Claude Code's permission prompt) is the loop.
+
+    No-op for agents not in the registry — callers may gate every
+    dispatch unconditionally and let the registry decide.
+
+    Args:
+        agent_name: the .claude/agents definition name being dispatched.
+
+    Raises:
+        NonInteractiveError: HITL-required agent + no human terminal
+            anywhere in the session's process ancestry.
+    """
+    if agent_name not in HITL_REQUIRED_AGENTS:
+        return
+    if _session_has_human_terminal():
+        return
+    raise NonInteractiveError(
+        f"Agent '{agent_name}' spans all three Rule-of-Two legs "
+        f"(untrusted input + sensitive access + external state) and "
+        f"requires a human-attended session — this run is non-interactive "
+        f"(CI/cron/SDK), and a sandbox does not substitute because the "
+        f"agent's job inherently keeps at least two legs even when "
+        f"contained (Rule of Two: needs-HITL). Dispatch '{agent_name}' "
+        f"from an interactive session."
+    )
 
 
 def require_human_or_sandbox_for_agentic_pass(pass_name: str) -> None:

@@ -74,10 +74,11 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from .project_samples import PROJECT_SAMPLES, ProjectSample
 
@@ -106,8 +107,8 @@ class StressResult:
     elapsed_seconds: float
     deps_analysed: int
     vuln_findings: int
-    eco_breakdown: Dict[str, int]
-    error: Optional[str] = None  # populated when the scan itself failed
+    eco_breakdown: dict[str, int]
+    error: str | None = None  # populated when the scan itself failed
 
 
 @dataclass(frozen=True)
@@ -117,19 +118,19 @@ class StressDiff:
     project: str
     ecosystem: str
     severity: str           # "ok" / "warn" / "fail" / "new" / "orphan"
-    issues: List[str] = field(default_factory=list)
-    current: Optional[StressResult] = None
+    issues: list[str] = field(default_factory=list)
+    current: StressResult | None = None
 
 
 def run_stress_sweep(
     *,
-    samples: Optional[Sequence[ProjectSample]] = None,
-    out_root: Optional[Path] = None,
+    samples: Sequence[ProjectSample] | None = None,
+    out_root: Path | None = None,
     git_clone_timeout: int = 300,
     sca_timeout: int = 600,
     max_workers: int = 4,
     use_existing_clones: bool = False,
-) -> List[StressResult]:
+) -> list[StressResult]:
     """Walk samples, scan each, return per-sample diagnostics.
 
     Scans run in parallel (``max_workers`` threads). Each scan is
@@ -162,7 +163,7 @@ def run_stress_sweep(
     if samples is None:
         samples = PROJECT_SAMPLES
 
-    cleanup_dir: Optional[Path] = None
+    cleanup_dir: Path | None = None
     if out_root is None:
         if os.environ.get("RAPTOR_SCA_STRESS_EPHEMERAL"):
             cleanup_dir = Path(tempfile.mkdtemp(prefix="raptor-sca-stress-"))
@@ -173,7 +174,7 @@ def run_stress_sweep(
     out_root.mkdir(parents=True, exist_ok=True)
 
     per_scan_budget = sca_timeout + git_clone_timeout
-    results: List[StressResult] = []
+    results: list[StressResult] = []
     try:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers,
@@ -250,10 +251,8 @@ def _scan_one(
     # ``git clone`` refuses to write into an existing directory.
     # The previous run's ``sca_out`` is also cleaned so a stale
     # findings.json from a different ref doesn't get mixed in.
-    if clone_root.exists():
-        _rmtree(clone_root)
-    if sca_out.exists():
-        _rmtree(sca_out)
+    _rmtree(clone_root)
+    _rmtree(sca_out)
 
     try:
         from core.config import RaptorConfig
@@ -267,7 +266,8 @@ def _scan_one(
             ),
             check=True, capture_output=True, text=True,
             timeout=git_clone_timeout,
-            env=RaptorConfig.get_safe_env(),
+            # preserve_proxy: remote clone — git honours proxy env.
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
             preexec_fn=set_pdeathsig(),
         )
     except (subprocess.TimeoutExpired,
@@ -285,7 +285,7 @@ def _scan_one(
 
     t0 = time.monotonic()
     try:
-        from packages.sca.pipeline import run_sca, RunOptions
+        from packages.sca.pipeline import RunOptions, run_sca
         run_result = run_sca(
             target=clone_root, output_dir=sca_out,
             options=RunOptions(
@@ -317,13 +317,13 @@ def _scan_one(
     )
 
 
-def _read_eco_breakdown(findings_path: Path) -> Dict[str, int]:
+def _read_eco_breakdown(findings_path: Path) -> dict[str, int]:
     """Extract per-finding-ecosystem distribution of vuln findings.
 
     Returns ``{}`` on missing / unreadable file — the scan layer
     above already captures that as the ``error`` string.
     """
-    breakdown: Dict[str, int] = {}
+    breakdown: dict[str, int] = {}
     try:
         data = json.loads(findings_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -353,17 +353,17 @@ def compare_to_baseline(
     deps_fail_pct: float = DEFAULT_DEPS_FAIL_PCT,
     elapsed_warn_x: float = DEFAULT_ELAPSED_WARN_X,
     elapsed_fail_x: float = DEFAULT_ELAPSED_FAIL_X,
-) -> List[StressDiff]:
+) -> list[StressDiff]:
     """Compare current sweep results against the baseline file.
 
     Missing baseline ⇒ every project reported ``new`` (informational).
     Missing project in current ⇒ ``orphan`` in the diff list.
     """
     baseline = _load_baseline(baseline_path)
-    baseline_projects: Dict[str, Dict[str, Any]] = (
+    baseline_projects: dict[str, dict[str, Any]] = (
         baseline.get("projects") or {}
     )
-    diffs: List[StressDiff] = []
+    diffs: list[StressDiff] = []
     seen_in_current: set = set()
 
     for result in results:
@@ -385,9 +385,9 @@ def compare_to_baseline(
                 ecosystem=result.ecosystem,
                 severity="new",
                 issues=[
-                    f"new project (vuln_findings={result.vuln_findings}, "
+                    (f"new project (vuln_findings={result.vuln_findings}, "
                     f"deps={result.deps_analysed}); update baseline "
-                    f"to commit"
+                    f"to commit")
                 ],
                 current=result,
             ))
@@ -416,8 +416,8 @@ def compare_to_baseline(
             ecosystem=entry.get("ecosystem", "?"),
             severity="orphan",
             issues=[
-                "in baseline but not in current sweep — sample "
-                "was removed?"
+                ("in baseline but not in current sweep — sample "
+                "was removed?")
             ],
             current=None,
         ))
@@ -425,14 +425,14 @@ def compare_to_baseline(
 
 
 def _diff_one(
-    baseline: Dict[str, Any],
+    baseline: dict[str, Any],
     current: StressResult,
     *,
     vuln_warn_pct: float, vuln_fail_pct: float,
     deps_warn_pct: float, deps_fail_pct: float,
     elapsed_warn_x: float, elapsed_fail_x: float,
-) -> Tuple[List[str], str]:
-    issues: List[str] = []
+) -> tuple[list[str], str]:
+    issues: list[str] = []
     severity = "ok"
 
     # Vuln-finding count drift.
@@ -486,9 +486,9 @@ def _diff_one(
 
     # Eco-breakdown drift — flag NEW eco categories appearing
     # (interesting but not failure-worthy unless huge).
-    base_ecos = set((baseline.get("eco_breakdown") or {}).keys())
-    new_ecos = set(current.eco_breakdown.keys()) - base_ecos
-    missing_ecos = base_ecos - set(current.eco_breakdown.keys())
+    base_ecos = set(baseline.get("eco_breakdown") or {})
+    new_ecos = set(current.eco_breakdown) - base_ecos
+    missing_ecos = base_ecos - set(current.eco_breakdown)
     if new_ecos:
         if severity == "ok":
             severity = "warn"
@@ -522,10 +522,10 @@ def write_baseline(
     results: Sequence[StressResult],
     baseline_path: Path,
     *,
-    captured_with_commit: Optional[str] = None,
+    captured_with_commit: str | None = None,
 ) -> None:
     """Capture current sweep results as the new baseline file."""
-    projects: Dict[str, Dict[str, Any]] = {}
+    projects: dict[str, dict[str, Any]] = {}
     for r in results:
         if r.error:
             # Don't bake error states into the baseline — that would
@@ -577,7 +577,7 @@ def write_baseline(
     )
 
 
-def _load_baseline(path: Path) -> Dict[str, Any]:
+def _load_baseline(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
@@ -600,7 +600,7 @@ def _rmtree(path: Path) -> None:
 
 def render_diffs(diffs: Sequence[StressDiff]) -> str:
     """Render diff results as a human-readable text block."""
-    lines: List[str] = []
+    lines: list[str] = []
     counts = {"ok": 0, "warn": 0, "fail": 0, "new": 0, "orphan": 0}
     for d in diffs:
         counts[d.severity] = counts.get(d.severity, 0) + 1

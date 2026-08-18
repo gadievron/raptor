@@ -13,11 +13,10 @@ from pathlib import Path
 
 from core.git import get_safe_git_env
 from core.git.clone import safe_git_command
-
+from core.url_patterns import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
-from core.url_patterns import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
 
@@ -67,7 +66,13 @@ def extract_diff(
     completed = subprocess.run(
         safe_git_command(
             "-C", str(repo_path),
-            "diff", "--no-color", "--binary",
+            # --no-ext-diff: _SAFE_GIT_OVERRIDES pins ``diff.external=``
+            # (empty) to neutralise a hostile repo's external-diff
+            # driver, but git treats the empty value as a command to
+            # run and dies ("cannot run : No such file or directory").
+            # Per the overrides' own doc, diff invocations against
+            # target repos must disable external drivers explicitly.
+            "diff", "--no-ext-diff", "--no-color", "--binary",
             f"{commit_before}..{commit_after}",
         ),
         capture_output=True,
@@ -213,7 +218,8 @@ def _list_files(
     completed = subprocess.run(
         safe_git_command(
             "-C", str(repo_path),
-            "diff", "--name-only", f"{before}..{after}",
+            # --no-ext-diff for the same reason as extract_diff above.
+            "diff", "--no-ext-diff", "--name-only", f"{before}..{after}",
         ),
         capture_output=True,
         timeout=timeout_s,

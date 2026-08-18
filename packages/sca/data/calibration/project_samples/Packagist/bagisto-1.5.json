@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-07-01T09:54:41Z",
+    "fetched_at": "2026-08-01T08:27:26Z",
     "git_ref": "v1.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bagisto-1.5",
@@ -81,6 +81,398 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-55555"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-7x2p-4jvh-6384",
+        "modified": "2026-07-22T21:15:32.588967+00:00",
+        "published": "2026-07-22T21:07:07+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-7x2p-4jvh-6384",
+          "https://github.com/dompdf/dompdf/commit/75c39a083bf7298044fb27399b4cc183054438b4",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: File existence oracle via font-face stylesheet declaration"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00504,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-7x2p-4jvh-6384",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 9.903939912026889,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401871912,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.903939912026889,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59941"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-8hg6-c449-896m",
+        "modified": "2026-07-22T23:01:08.018686+00:00",
+        "published": "2026-07-22T22:50:34+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-8hg6-c449-896m",
+          "https://github.com/dompdf/dompdf/commit/7c65e7bbeccf146b2409740405af73949ad129d0",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: Uncontrolled resource consumption based on declared BMP dimensions"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00507,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-8hg6-c449-896m",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 9.90431719496602,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40188722099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.90431719496602,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-56722"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-cx96-42px-69fm",
+        "modified": "2026-07-22T21:46:10.915817+00:00",
+        "published": "2026-07-22T21:30:01+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-cx96-42px-69fm",
+          "https://github.com/dompdf/dompdf/commit/6a58996865db05d8fede748507e50ac4b8c5bfd0",
+          "https://github.com/dompdf/dompdf/commit/bf7b02f642e26007dedc5a22b3d6e15f9931120a",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: Local file read due to improper file path validation in SVG images encoded as data-URI"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00558,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-cx96-42px-69fm",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 13.19118296756347,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.402147474,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.19118296756347,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59942"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-f5gf-2cj8-52g2",
+        "modified": "2026-07-22T23:01:08.018673+00:00",
+        "published": "2026-07-22T22:51:40+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-f5gf-2cj8-52g2",
+          "https://github.com/dompdf/dompdf/commit/7c65e7bbeccf146b2409740405af73949ad129d0",
+          "https://github.com/dompdf/dompdf/commit/89164eaabe0bb50c462f0b24f740044ba5fb0f99",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: Denial of Service (DoS) via Resource Exhaustion using Oversized Image Bitmaps"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00395,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-f5gf-2cj8-52g2",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 13.163898745732434,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401315685,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.163898745732434,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59943"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-j8qw-6jw8-r297",
+        "modified": "2026-07-22T23:01:08.029185+00:00",
+        "published": "2026-07-22T22:52:44+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-j8qw-6jw8-r297",
+          "https://github.com/dompdf/dompdf/commit/6a58996865db05d8fede748507e50ac4b8c5bfd0",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: Embedded SVG images can leak existence of files and directories within the filesystem"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00308,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-j8qw-6jw8-r297",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 9.879290760003718,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400871724,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.879290760003718,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-55554"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-wvh6-f5jh-8gw4",
+        "modified": "2026-07-22T21:15:32.571530+00:00",
+        "published": "2026-07-22T21:06:48+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-wvh6-f5jh-8gw4",
+          "https://github.com/dompdf/dompdf/commit/1b3b61ec4f6962678e56ee8a42920b4f835ab006",
+          "https://github.com/dompdf/dompdf",
+          "https://github.com/dompdf/dompdf/releases/tag/v3.1.6"
+        ],
+        "severity": null,
+        "summary": "Dompdf: Chroot Validation Bypass"
+      },
+      "cvss_score": null,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00278,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-wvh6-f5jh-8gw4",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 9.875517930612416,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40071863399999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.875517930612416,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-55166"
         ],
         "fixed_versions": [
@@ -103,7 +495,7 @@
       "dep_name": "enshrined/svg-sanitize",
       "dep_version": "0.16.0",
       "ecosystem": "Packagist",
-      "epss": 0.00423,
+      "epss": 0.0045,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -114,7 +506,7 @@
       "finding_id": "sca:vuln:Packagist:enshrined/svg-sanitize:0.16.0:GHSA-22wq-q86m-83fh",
       "in_kev": false,
       "purl": "pkg:composer/enshrined/svg-sanitize@0.16.0",
-      "raptor_risk_estimate": 14.133933246671965,
+      "raptor_risk_estimate": 14.138784027317925,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -129,15 +521,84 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401458569,
+        "epss_multiplier": 0.40159635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.133933246671965,
+        "final": 14.138784027317925,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.14.2"
+        ],
+        "id": "GHSA-94pj-82f3-465w",
+        "modified": "2026-07-21T20:59:33.278385+00:00",
+        "published": "2026-07-20T21:46:02+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-94pj-82f3-465w",
+          "https://github.com/guzzle/guzzle/pull/3876",
+          "https://github.com/guzzle/guzzle/commit/9e4580d4b9981e903dc6323fe37f50a96e85b05e",
+          "https://github.com/guzzle/guzzle",
+          "https://github.com/guzzle/guzzle/releases/tag/7.14.2"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Guzzle: Proxy-Authorization headers can be sent to origin servers"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.5.1",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.5.1:GHSA-94pj-82f3-465w",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.5.1",
+      "raptor_risk_estimate": 15.651989812499998,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.651989812499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -202,6 +663,284 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 10.465504217692496,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.15.1"
+        ],
+        "id": "GHSA-f283-ghqc-fg79",
+        "modified": "2026-07-21T20:59:35.273136+00:00",
+        "published": "2026-07-20T23:27:02+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f283-ghqc-fg79",
+          "https://github.com/guzzle/guzzle/pull/3901",
+          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
+          "https://github.com/guzzle/guzzle",
+          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Guzzle: Unbounded response cookies risk denial of service"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.5.1",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.5.1:GHSA-f283-ghqc-fg79",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.5.1",
+      "raptor_risk_estimate": 15.651989812499998,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.651989812499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59883"
+        ],
+        "fixed_versions": [
+          "7.12.3"
+        ],
+        "id": "GHSA-g446-98w2-8p5w",
+        "modified": "2026-07-22T20:59:38.335955+00:00",
+        "published": "2026-07-20T22:00:09+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-g446-98w2-8p5w",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59883",
+          "https://github.com/guzzle/guzzle/pull/3694",
+          "https://github.com/guzzle/guzzle/commit/b9944c161b12d9ee9c9334cfc5b9659ecd7451f8",
+          "https://github.com/guzzle/guzzle"
+        ],
+        "severity": {
+          "score": 4.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Guzzle: Cookie Disclosure and Injection via IP-Address Domains"
+      },
+      "cvss_score": 4.7,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.5.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00118,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.5.1:GHSA-g446-98w2-8p5w",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.5.1",
+      "raptor_risk_estimate": 8.4814248086475,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 47.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399902154,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.4814248086475,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.15.1"
+        ],
+        "id": "GHSA-h95v-h523-3mw8",
+        "modified": "2026-07-21T20:59:33.382070+00:00",
+        "published": "2026-07-20T23:28:36+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-h95v-h523-3mw8",
+          "https://github.com/guzzle/guzzle/pull/3901",
+          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
+          "https://github.com/guzzle/guzzle",
+          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Guzzle: URI fragments disclosed in redirect Referer headers"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.5.1",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.5.1:GHSA-h95v-h523-3mw8",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.5.1",
+      "raptor_risk_estimate": 17.423913187500002,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 17.423913187500002,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "7.15.1"
+        ],
+        "id": "GHSA-wm3w-8rrp-j577",
+        "modified": "2026-07-21T20:59:35.466735+00:00",
+        "published": "2026-07-20T23:27:49+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-wm3w-8rrp-j577",
+          "https://github.com/guzzle/guzzle/pull/3901",
+          "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
+          "https://github.com/guzzle/guzzle",
+          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Guzzle: Host-only cookie scope is not preserved"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.5.1",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.5.1:GHSA-wm3w-8rrp-j577",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.5.1",
+      "raptor_risk_estimate": 17.423913187500002,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 17.423913187500002,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -289,11 +1028,12 @@
           "2.10.2"
         ],
         "id": "GHSA-34xg-wgjx-8xph",
-        "modified": "2026-06-18T18:29:24.348822+00:00",
+        "modified": "2026-07-15T22:00:51.200600+00:00",
         "published": "2026-06-11T13:04:53+00:00",
         "references": [
           "https://github.com/guzzle/psr7/security/advisories/GHSA-34xg-wgjx-8xph",
           "https://nvd.nist.gov/vuln/detail/CVE-2026-48998",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2026-48998.yaml",
           "https://github.com/guzzle/psr7"
         ],
         "severity": {
@@ -352,17 +1092,89 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59882"
+        ],
+        "fixed_versions": [
+          "2.12.3"
+        ],
+        "id": "GHSA-c2w2-prh8-qm98",
+        "modified": "2026-07-21T18:46:10.537345+00:00",
+        "published": "2026-07-21T18:35:25+00:00",
+        "references": [
+          "https://github.com/guzzle/psr7/security/advisories/GHSA-c2w2-prh8-qm98",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59882",
+          "https://github.com/guzzle/psr7/pull/811",
+          "https://github.com/guzzle/psr7/commit/ddd64f17d4cc1f7e5ffe6fd2c989ec7221712580",
+          "https://github.com/guzzle/psr7"
+        ],
+        "severity": {
+          "score": 4.2,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
+        },
+        "summary": "guzzlehttp/psr7: Host Confusion via Weak URI Host Validation"
+      },
+      "cvss_score": 4.2,
+      "dep_name": "guzzlehttp/psr7",
+      "dep_version": "2.5.0",
+      "ecosystem": "Packagist",
+      "epss": 0.00186,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.0:GHSA-c2w2-prh8-qm98",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/psr7@2.5.0",
+      "raptor_risk_estimate": 5.310005516896499,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "config/sitemap.php:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 42.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400249158,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.310005516896499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-49214"
         ],
         "fixed_versions": [
           "2.10.2"
         ],
         "id": "GHSA-hq7v-mx3g-29hw",
-        "modified": "2026-06-19T18:29:27.412514+00:00",
+        "modified": "2026-07-15T22:00:52.614570+00:00",
         "published": "2026-06-11T13:04:47+00:00",
         "references": [
           "https://github.com/guzzle/psr7/security/advisories/GHSA-hq7v-mx3g-29hw",
           "https://nvd.nist.gov/vuln/detail/CVE-2026-49214",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2026-49214.yaml",
           "https://github.com/guzzle/psr7"
         ],
         "severity": {
@@ -376,7 +1188,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.0",
       "ecosystem": "Packagist",
-      "epss": 0.00189,
+      "epss": 0.0019,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -387,7 +1199,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.0:GHSA-hq7v-mx3g-29hw",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.0",
-      "raptor_risk_estimate": 6.700977541222123,
+      "raptor_risk_estimate": 6.701062972458748,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -404,10 +1216,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400264467,
+        "epss_multiplier": 0.40026956999999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.700977541222123,
+        "final": 6.701062972458748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -582,7 +1394,7 @@
       "dep_name": "laravel/framework",
       "dep_version": "v10.8.0",
       "ecosystem": "Packagist",
-      "epss": 0.00685,
+      "epss": 0.00691,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -593,7 +1405,7 @@
       "finding_id": "sca:vuln:Packagist:laravel/framework:v10.8.0:GHSA-78fx-h6xr-vch4",
       "in_kev": false,
       "purl": "pkg:composer/laravel/framework@v10.8.0",
-      "raptor_risk_estimate": 7.270459767749999,
+      "raptor_risk_estimate": 7.27101242265,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -611,10 +1423,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40279555499999997,
+        "epss_multiplier": 0.402826173,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.270459767749999,
+        "final": 7.27101242265,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -802,7 +1614,7 @@
       "dep_name": "league/commonmark",
       "dep_version": "2.4.0",
       "ecosystem": "Packagist",
-      "epss": 0.00287,
+      "epss": 0.00305,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -813,7 +1625,7 @@
       "finding_id": "sca:vuln:Packagist:league/commonmark:2.4.0:GHSA-3527-qv2q-pfvx",
       "in_kev": false,
       "purl": "pkg:composer/league/commonmark@2.4.0",
-      "raptor_risk_estimate": 8.101856365175998,
+      "raptor_risk_estimate": 8.103713285639998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -830,10 +1642,10 @@
         "cvss_base": 64.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40076456099999996,
+        "epss_multiplier": 0.40085641499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.101856365175998,
+        "final": 8.103713285639998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1050,7 +1862,9 @@
       "advisory": {
         "aliases": [
           "CVE-2019-11358",
-          "DRUPAL-CORE-2019-006"
+          "DRUPAL-CORE-2019-006",
+          "PYSEC-2026-628",
+          "SNYK-JS-JQUERY-174006"
         ],
         "fixed_versions": [
           "3.4.0",
@@ -1060,7 +1874,7 @@
           "1.19.0"
         ],
         "id": "GHSA-6c3j-c64m-qhgq",
-        "modified": "2026-03-13T21:56:20.301637+00:00",
+        "modified": "2026-07-08T05:56:09.047237+00:00",
         "published": "2019-04-26T16:29:11+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
@@ -1131,10 +1945,11 @@
         "fixed_versions": [
           "3.5.0",
           "4.4.0",
-          "1.19.0"
+          "1.19.0",
+          "4.0.1"
         ],
         "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-06-24T12:14:33.324474+00:00",
+        "modified": "2026-07-09T19:30:07.927607+00:00",
         "published": "2020-04-29T22:18:55+00:00",
         "references": [
           "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
@@ -1222,7 +2037,7 @@
       "dep_name": "nesbot/carbon",
       "dep_version": "2.66.0",
       "ecosystem": "Packagist",
-      "epss": 0.00696,
+      "epss": 0.00708,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1233,7 +2048,7 @@
       "finding_id": "sca:vuln:Packagist:nesbot/carbon:2.66.0:GHSA-j3f9-p6hm-5w6q",
       "in_kev": false,
       "purl": "pkg:composer/nesbot/carbon@2.66.0",
-      "raptor_risk_estimate": 3.4535351860308,
+      "raptor_risk_estimate": 3.4540601451831416,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1248,10 +2063,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402851688,
+        "epss_multiplier": 0.402912924,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4535351860308,
+        "final": 3.4540601451831416,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1265,7 +2080,9 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-69277"
+          "CVE-2025-69277",
+          "PYSEC-2026-1448",
+          "PYSEC-2026-3002"
         ],
         "fixed_versions": [
           "2.5.0",
@@ -1274,7 +2091,7 @@
           "3.6.1"
         ],
         "id": "GHSA-mrfv-m5wm-5w6w",
-        "modified": "2026-02-04T03:32:31.988659+00:00",
+        "modified": "2026-07-13T16:43:23.604670+00:00",
         "published": "2025-12-31T06:30:18+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-69277",
@@ -1294,7 +2111,7 @@
       "dep_name": "paragonie/sodium_compat",
       "dep_version": "v1.19.0",
       "ecosystem": "Packagist",
-      "epss": 0.00166,
+      "epss": 0.00169,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1305,7 +2122,7 @@
       "finding_id": "sca:vuln:Packagist:paragonie/sodium_compat:v1.19.0:GHSA-mrfv-m5wm-5w6w",
       "in_kev": false,
       "purl": "pkg:composer/paragonie/sodium_compat@v1.19.0",
-      "raptor_risk_estimate": 3.8591431764026867,
+      "raptor_risk_estimate": 3.859290821164284,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1320,10 +2137,10 @@
         "cvss_base": 45.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400147098,
+        "epss_multiplier": 0.400162407,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.8591431764026867,
+        "final": 3.859290821164284,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1542,6 +2359,80 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-59932"
+        ],
+        "fixed_versions": [
+          "5.8.1",
+          "3.10.7",
+          "2.4.7",
+          "2.1.18",
+          "1.30.6"
+        ],
+        "id": "GHSA-2mrg-gjxq-2gvr",
+        "modified": "2026-07-23T15:15:21.286763+00:00",
+        "published": "2026-07-23T15:00:17+00:00",
+        "references": [
+          "https://github.com/PHPOffice/PhpSpreadsheet/security/advisories/GHSA-2mrg-gjxq-2gvr",
+          "https://github.com/PHPOffice/PhpSpreadsheet/commit/85f2556b0bf5269061bf45932ecda8a128d81750",
+          "https://github.com/PHPOffice/PhpSpreadsheet",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/1.30.6",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/2.1.18"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "PHPSpreadsheet: Gnumeric reader unbounded gzip expansion causes memory exhaustion"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "phpoffice/phpspreadsheet",
+      "dep_version": "1.28.0",
+      "ecosystem": "Packagist",
+      "epss": 0.00691,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-2mrg-gjxq-2gvr",
+      "in_kev": false,
+      "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
+      "raptor_risk_estimate": 13.213445553474681,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Phpoffice\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.402826173,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.213445553474681,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2024-45290"
         ],
         "fixed_versions": [
@@ -1570,7 +2461,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00579,
+      "epss": 0.00588,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1581,7 +2472,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-5gpr-w2p5-6m37",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.913371985505144,
+      "raptor_risk_estimate": 9.914503834322533,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1596,10 +2487,84 @@
         "cvss_base": 77.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40225463699999997,
+        "epss_multiplier": 0.40230056399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.913371985505144,
+        "final": 9.914503834322533,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59931"
+        ],
+        "fixed_versions": [
+          "5.8.1",
+          "3.10.7",
+          "2.4.7",
+          "2.1.18",
+          "1.30.6"
+        ],
+        "id": "GHSA-6hq5-7373-42rg",
+        "modified": "2026-07-23T15:00:27.158891+00:00",
+        "published": "2026-07-23T14:55:48+00:00",
+        "references": [
+          "https://github.com/PHPOffice/PhpSpreadsheet/security/advisories/GHSA-6hq5-7373-42rg",
+          "https://github.com/PHPOffice/PhpSpreadsheet/commit/7ef7b25e8548a6ded79dac74e2e2c7acdac38d8d",
+          "https://github.com/PHPOffice/PhpSpreadsheet",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/1.30.6",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/2.1.18"
+        ],
+        "severity": {
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "PHPSpreadsheet: SSRF bypass via HTTP redirect in WEBSERVICE() domain whitelist"
+      },
+      "cvss_score": 7.7,
+      "dep_name": "phpoffice/phpspreadsheet",
+      "dep_version": "1.28.0",
+      "ecosystem": "Packagist",
+      "epss": 0.00531,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-6hq5-7373-42rg",
+      "in_kev": false,
+      "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
+      "raptor_risk_estimate": 9.90733545847906,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Phpoffice\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 77.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.402009693,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.90733545847906,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1642,7 +2607,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.02859,
+      "epss": 0.02799,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1653,7 +2618,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-6hwr-6v2f-3m88",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.576342442613857,
+      "raptor_risk_estimate": 13.566299170774212,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1668,10 +2633,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.413889477,
+        "epss_multiplier": 0.41358329699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.576342442613857,
+        "final": 13.566299170774212,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1782,7 +2747,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00371,
+      "epss": 0.00375,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1793,7 +2758,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-79xx-vf93-p7cx",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.88721370172545,
+      "raptor_risk_estimate": 9.887716745644292,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1808,10 +2773,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401193213,
+        "epss_multiplier": 0.40121362499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.88721370172545,
+        "final": 9.887716745644292,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2134,7 +3099,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00319,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2145,7 +3110,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-c6fv-7vh8-2rhr",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.151177268068885,
+      "raptor_risk_estimate": 13.15318592243681,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2160,10 +3125,10 @@
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400927857,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.151177268068885,
+        "final": 13.15318592243681,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2349,7 +3314,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00346,
+      "epss": 0.00359,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2360,7 +3325,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-hwcp-2h35-p66w",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.884069677232702,
+      "raptor_risk_estimate": 9.885704569968931,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2375,10 +3340,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401065638,
+        "epss_multiplier": 0.401131977,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.884069677232702,
+        "final": 9.885704569968931,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2421,7 +3386,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00319,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2432,7 +3397,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-j2xg-cjcx-4677",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.151177268068885,
+      "raptor_risk_estimate": 13.15318592243681,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2447,10 +3412,10 @@
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400927857,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.151177268068885,
+        "final": 13.15318592243681,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2493,7 +3458,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00312,
+      "epss": 0.00323,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2504,7 +3469,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-jmpx-686v-c3wx",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.150005553020925,
+      "raptor_risk_estimate": 13.151846819524858,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2519,10 +3484,10 @@
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400892136,
+        "epss_multiplier": 0.40094826899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.150005553020925,
+        "final": 13.151846819524858,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2707,7 +3672,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00366,
+      "epss": 0.0038,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2718,7 +3683,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-q9jv-mm3r-j47r",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.886584896826902,
+      "raptor_risk_estimate": 9.88834555054284,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2733,10 +3698,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40116769799999996,
+        "epss_multiplier": 0.40123914,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.886584896826902,
+        "final": 9.88834555054284,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2779,7 +3744,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00387,
+      "epss": 0.004,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2790,7 +3755,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-r57h-547h-w24f",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 4.644023608608313,
+      "raptor_risk_estimate": 4.644791361368613,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2805,10 +3770,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401274861,
+        "epss_multiplier": 0.4013412,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.644023608608313,
+        "final": 4.644791361368613,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2850,7 +3815,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00316,
+      "epss": 0.00324,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2861,7 +3826,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-r8w8-74ww-j4wh",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.880296847841398,
+      "raptor_risk_estimate": 9.881302935679079,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2876,10 +3841,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400912548,
+        "epss_multiplier": 0.400953372,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.880296847841398,
+        "final": 9.881302935679079,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2920,7 +3885,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00741,
+      "epss": 0.00694,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2931,7 +3896,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-rx7m-68vc-ppxh",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.221814946674389,
+      "raptor_risk_estimate": 13.213947717066665,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2946,10 +3911,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403081323,
+        "epss_multiplier": 0.402841482,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.221814946674389,
+        "final": 13.213947717066665,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2992,7 +3957,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00466,
+      "epss": 0.00478,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3003,7 +3968,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-v66g-p9x6-v98p",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.899160994797906,
+      "raptor_risk_estimate": 9.900670126554429,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3018,10 +3983,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401677998,
+        "epss_multiplier": 0.401739234,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.899160994797906,
+        "final": 9.900670126554429,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3064,7 +4029,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00792,
+      "epss": 0.00804,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3075,7 +4040,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-w9xv-qf98-ccq4",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.940159074183386,
+      "raptor_risk_estimate": 9.941668205939905,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3090,10 +4055,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403341576,
+        "epss_multiplier": 0.403402812,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.940159074183386,
+        "final": 9.941668205939905,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3207,7 +4172,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00316,
+      "epss": 0.00328,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3218,7 +4183,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-wv23-996v-q229",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 9.880296847841398,
+      "raptor_risk_estimate": 9.881805979597921,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3233,10 +4198,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400912548,
+        "epss_multiplier": 0.400973784,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.880296847841398,
+        "final": 9.881805979597921,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3280,7 +4245,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00388,
+      "epss": 0.00403,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3291,7 +4256,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-x88g-h956-m5xg",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.162727030684474,
+      "raptor_risk_estimate": 13.165237848644384,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3306,10 +4271,84 @@
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401279964,
+        "epss_multiplier": 0.401356509,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.162727030684474,
+        "final": 13.165237848644384,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-59933"
+        ],
+        "fixed_versions": [
+          "5.8.1",
+          "3.10.7",
+          "2.4.7",
+          "2.1.18",
+          "1.30.6"
+        ],
+        "id": "GHSA-xh5m-36r6-47m3",
+        "modified": "2026-07-23T15:15:21.010518+00:00",
+        "published": "2026-07-23T15:01:50+00:00",
+        "references": [
+          "https://github.com/PHPOffice/PhpSpreadsheet/security/advisories/GHSA-xh5m-36r6-47m3",
+          "https://github.com/PHPOffice/PhpSpreadsheet/commit/85f2556b0bf5269061bf45932ecda8a128d81750",
+          "https://github.com/PHPOffice/PhpSpreadsheet",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/1.30.6",
+          "https://github.com/PHPOffice/PhpSpreadsheet/releases/tag/2.1.18"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "PHPSpreadsheet: XLS/OLE sector-chain self-loop causes memory exhaustion"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "phpoffice/phpspreadsheet",
+      "dep_version": "1.28.0",
+      "ecosystem": "Packagist",
+      "epss": 0.00691,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-xh5m-36r6-47m3",
+      "in_kev": false,
+      "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
+      "raptor_risk_estimate": 13.213445553474681,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Phpoffice\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.402826173,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.213445553474681,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3494,7 +4533,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00601,
+      "epss": 0.00613,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3505,7 +4544,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-c9f5-29f6-c35w",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 20.948182250955643,
+      "raptor_risk_estimate": 20.95137034341244,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3515,9 +4554,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3527,10 +4566,10 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402366903,
+        "epss_multiplier": 0.40242813899999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.948182250955643,
+        "final": 20.95137034341244,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3571,7 +4610,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00506,
+      "epss": 0.00528,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3582,7 +4621,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-f2q5-6mx7-q9qq",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 20.92294318567266,
+      "raptor_risk_estimate": 20.928788021843452,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3592,9 +4631,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3604,10 +4643,10 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401882118,
+        "epss_multiplier": 0.401994384,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.92294318567266,
+        "final": 20.928788021843452,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3648,7 +4687,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00573,
+      "epss": 0.00584,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3659,7 +4698,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-g2r4-phv7-5fgv",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 10.926516032139746,
+      "raptor_risk_estimate": 10.928040899117999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3669,9 +4708,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3681,10 +4720,10 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402224019,
+        "epss_multiplier": 0.402280152,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.926516032139746,
+        "final": 10.928040899117999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3724,7 +4763,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00419,
+      "epss": 0.00443,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3735,7 +4774,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-j2gw-r24m-j2qw",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 19.927744421623157,
+      "raptor_risk_estimate": 19.933824039796587,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3745,9 +4784,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3757,10 +4796,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40143815699999996,
+        "epss_multiplier": 0.401560629,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.927744421623157,
+        "final": 19.933824039796587,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3798,7 +4837,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00302,
+      "epss": 0.00324,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3809,7 +4848,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-qw64-6vcc-8ghx",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 19.898106283027694,
+      "raptor_risk_estimate": 19.903679266353333,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3819,9 +4858,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3831,10 +4870,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400841106,
+        "epss_multiplier": 0.400953372,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.898106283027694,
+        "final": 19.903679266353333,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3875,7 +4914,7 @@
       "dep_name": "spatie/browsershot",
       "dep_version": "3.57.6",
       "ecosystem": "Packagist",
-      "epss": 0.00905,
+      "epss": 0.00924,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3886,7 +4925,7 @@
       "finding_id": "sca:vuln:Packagist:spatie/browsershot:3.57.6:GHSA-v528-6rq9-h6gw",
       "in_kev": false,
       "purl": "pkg:composer/spatie/browsershot@3.57.6",
-      "raptor_risk_estimate": 19.527578234564128,
+      "raptor_risk_estimate": 19.532265657246686,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3896,9 +4935,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3908,10 +4947,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40391821499999997,
+        "epss_multiplier": 0.404015172,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.527578234564128,
+        "final": 19.532265657246686,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3973,9 +5012,9 @@
         "evidence": [
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
           "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
           "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -4028,7 +5067,7 @@
       "dep_name": "symfony/dom-crawler",
       "dep_version": "v6.2.9",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00462,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4039,7 +5078,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/dom-crawler:v6.2.9:GHSA-x6g4-fwcc-jj8w",
       "in_kev": false,
       "purl": "pkg:composer/symfony/dom-crawler@v6.2.9",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.074943599109999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4061,10 +5100,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.401657586,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.074943599109999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4106,7 +5145,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": 0.01297,
+      "epss": 0.01344,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4117,7 +5156,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.2.8:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v6.2.8",
-      "raptor_risk_estimate": 9.360026050045123,
+      "raptor_risk_estimate": 9.365556513683998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4139,10 +5178,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.405918591,
+        "epss_multiplier": 0.406158432,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.360026050045123,
+        "final": 9.365556513683998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4259,7 +5298,7 @@
       "dep_name": "symfony/mailer",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00407,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4270,7 +5309,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/mailer:v6.2.8:GHSA-xx3c-qf5g-hc39",
       "in_kev": false,
       "purl": "pkg:composer/symfony/mailer@v6.2.8",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.071397396834998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4292,10 +5331,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.401376921,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.071397396834998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4334,7 +5373,7 @@
       "dep_name": "symfony/mime",
       "dep_version": "v6.2.7",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00619,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4345,7 +5384,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.2.7:GHSA-qpmx-3rfj-7rhv",
       "in_kev": false,
       "purl": "pkg:composer/symfony/mime@v6.2.7",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.085066394694998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4367,10 +5406,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.402458757,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.085066394694998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4409,7 +5448,7 @@
       "dep_name": "symfony/mime",
       "dep_version": "v6.2.7",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00292,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4420,7 +5459,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.2.7:GHSA-vqc8-7275-q272",
       "in_kev": false,
       "purl": "pkg:composer/symfony/mime@v6.2.7",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.063982610259999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4442,10 +5481,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400790076,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.063982610259999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4481,7 +5520,7 @@
       "dep_name": "symfony/polyfill-intl-idn",
       "dep_version": "v1.27.0",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00394,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4492,7 +5531,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/polyfill-intl-idn:v1.27.0:GHSA-2xf4-cg6j-vhgq",
       "in_kev": false,
       "purl": "pkg:composer/symfony/polyfill-intl-idn@v1.27.0",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.0705592035699985,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4514,10 +5553,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40131058199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.0705592035699985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4559,7 +5598,7 @@
       "dep_name": "symfony/process",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": 0.0043,
+      "epss": 0.00426,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4570,7 +5609,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/process:v6.2.8:GHSA-qq5c-677p-737q",
       "in_kev": false,
       "purl": "pkg:composer/symfony/process@v6.2.8",
-      "raptor_risk_estimate": 10.653048743714999,
+      "raptor_risk_estimate": 10.652507141913,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4592,10 +5631,10 @@
         "cvss_base": 84.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40149429,
+        "epss_multiplier": 0.401473878,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.653048743714999,
+        "final": 10.652507141913,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4634,7 +5673,7 @@
       "dep_name": "symfony/routing",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00261,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4645,7 +5684,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.2.8:GHSA-72xp-p242-47p9",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v6.2.8",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.061983841704999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4667,10 +5706,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40063188299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.061983841704999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4709,7 +5748,7 @@
       "dep_name": "symfony/routing",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00267,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4720,7 +5759,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.2.8:GHSA-h5x3-xfc9-m39h",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v6.2.8",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.062370700135,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4742,10 +5781,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400662501,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.062370700135,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4784,7 +5823,7 @@
       "dep_name": "symfony/yaml",
       "dep_version": "v6.2.7",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00804,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4795,7 +5834,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-4qpc-3hr4-r2p4",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.2.7",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.09699452962,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4817,10 +5856,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.403402812,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.09699452962,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4859,7 +5898,7 @@
       "dep_name": "symfony/yaml",
       "dep_version": "v6.2.7",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00804,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4870,7 +5909,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-9frc-8383-795m",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.2.7",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.09699452962,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4892,10 +5931,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.403402812,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.09699452962,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4934,7 +5973,7 @@
       "dep_name": "symfony/yaml",
       "dep_version": "v6.2.7",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.0074,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4945,7 +5984,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-c2p3-7m5p-cv8x",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.2.7",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.0928680397,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4967,10 +6006,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40307622,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.0928680397,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5028,11 +6067,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5103,11 +6142,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5161,7 +6200,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.01186,
+      "epss": 0.01161,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5172,7 +6211,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-3p68-rc4w-qgx5",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.99557535567795,
+      "raptor_risk_estimate": 27.98676441078593,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5180,11 +6219,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5193,10 +6232,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40535215799999996,
+        "epss_multiplier": 0.40522458299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.99557535567795,
+        "final": 27.98676441078593,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5254,11 +6293,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5276,6 +6315,76 @@
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.33.0",
+          "1.18.0"
+        ],
+        "id": "GHSA-42h9-826w-cgv3",
+        "modified": "2026-07-22T02:59:41.082666+00:00",
+        "published": "2026-07-20T17:58:59+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-42h9-826w-cgv3",
+          "https://github.com/axios/axios/pull/11000",
+          "https://github.com/axios/axios/pull/11001",
+          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
+          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2"
+        ],
+        "severity": null,
+        "summary": "Axios: Excessive recursion in formDataToJSON can cause denial of service"
+      },
+      "cvss_score": null,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-42h9-826w-cgv3",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 11.812822499999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.812822499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -5312,7 +6421,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.01564,
+      "epss": 0.025,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5323,7 +6432,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-43fc-jf86-j433",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 13.783919457375,
+      "raptor_risk_estimate": 13.945571015624997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5331,11 +6440,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5344,10 +6453,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407281092,
+        "epss_multiplier": 0.41205749999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.783919457375,
+        "final": 13.945571015624997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5385,7 +6494,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.0024,
+      "epss": 0.00294,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5396,7 +6505,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-445q-vr5w-6q77",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 20.782997145727876,
+      "raptor_risk_estimate": 20.797295899271656,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5404,11 +6513,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5417,10 +6526,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40052472,
+        "epss_multiplier": 0.400800282,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.782997145727876,
+        "final": 20.797295899271656,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5462,7 +6571,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.01099,
+      "epss": 0.0106,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5473,7 +6582,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-4hjh-wcwx-xvwj",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.964913267453714,
+      "raptor_risk_estimate": 27.951168193422156,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5481,11 +6590,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5494,10 +6603,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40490819699999997,
+        "epss_multiplier": 0.40470918,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.964913267453714,
+        "final": 27.951168193422156,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5556,11 +6665,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5614,7 +6723,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00744,
+      "epss": 0.00717,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5625,7 +6734,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-62hf-57xw-28j9",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.839797849986986,
+      "raptor_risk_estimate": 27.830282029503604,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5633,11 +6742,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5646,10 +6755,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403096632,
+        "epss_multiplier": 0.402958851,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.839797849986986,
+        "final": 27.830282029503604,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5689,7 +6798,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00394,
+      "epss": 0.00403,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5700,7 +6809,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-6chq-wfr3-2hj9",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 20.823775072500876,
+      "raptor_risk_estimate": 20.826158198091505,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5708,11 +6817,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5721,10 +6830,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40131058199999997,
+        "epss_multiplier": 0.401356509,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.823775072500876,
+        "final": 20.826158198091505,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5733,6 +6842,76 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.33.0",
+          "1.18.0"
+        ],
+        "id": "GHSA-7q8q-rj6j-mhjq",
+        "modified": "2026-07-22T02:59:41.210137+00:00",
+        "published": "2026-07-20T22:37:31+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-7q8q-rj6j-mhjq",
+          "https://github.com/axios/axios/pull/11000",
+          "https://github.com/axios/axios/pull/11001",
+          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
+          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2"
+        ],
+        "severity": null,
+        "summary": "Axios: Nested axios option objects can consume polluted prototype values"
+      },
+      "cvss_score": null,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-7q8q-rj6j-mhjq",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 11.812822499999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.812822499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -5784,11 +6963,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5842,7 +7021,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.01815,
+      "epss": 0.01882,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5853,7 +7032,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-fvcv-3m26-pcqx",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 21.200044124088095,
+      "raptor_risk_estimate": 21.21778517015167,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5861,11 +7040,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5874,10 +7053,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408561945,
+        "epss_multiplier": 0.40890384599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 21.200044124088095,
+        "final": 21.21778517015167,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5918,7 +7097,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00645,
+      "epss": 0.00622,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5929,7 +7108,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-hfxv-24rg-xrqf",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.804906508214575,
+      "raptor_risk_estimate": 27.796800438913913,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5937,11 +7116,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5950,10 +7129,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402591435,
+        "epss_multiplier": 0.40247406599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.804906508214575,
+        "final": 27.796800438913913,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5995,7 +7174,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00532,
+      "epss": 0.0066,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6006,7 +7185,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-j5f8-grm9-p9fc",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.765081037302632,
+      "raptor_risk_estimate": 27.810193075149787,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6014,11 +7193,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6027,10 +7206,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402014796,
+        "epss_multiplier": 0.40266798,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.765081037302632,
+        "final": 27.810193075149787,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6087,11 +7266,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6162,11 +7341,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6184,6 +7363,76 @@
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.18.0",
+          "0.33.0"
+        ],
+        "id": "GHSA-mmx7-hfxf-jppx",
+        "modified": "2026-07-22T02:59:41.870042+00:00",
+        "published": "2026-07-20T22:25:07+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-mmx7-hfxf-jppx",
+          "https://github.com/axios/axios/pull/11000",
+          "https://github.com/axios/axios/pull/11001",
+          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
+          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2"
+        ],
+        "severity": null,
+        "summary": "Axios: Prototype pollution gadgets can alter axios request construction"
+      },
+      "cvss_score": null,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-mmx7-hfxf-jppx",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 11.812822499999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.812822499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -6235,11 +7484,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6291,7 +7540,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00838,
+      "epss": 0.00808,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6302,7 +7551,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-pf86-5x62-jrwf",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 20.941342601638613,
+      "raptor_risk_estimate": 20.933398849669846,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6310,11 +7559,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6323,10 +7572,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403576314,
+        "epss_multiplier": 0.40342322399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.941342601638613,
+        "final": 20.933398849669846,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6340,33 +7589,29 @@
     },
     {
       "advisory": {
-        "aliases": [
-          "CVE-2026-44492"
-        ],
+        "aliases": [],
         "fixed_versions": [
-          "1.16.0",
-          "0.32.0"
+          "0.33.0",
+          "1.18.0"
         ],
-        "id": "GHSA-pjwm-pj3p-43mv",
-        "modified": "2026-06-01T20:14:14.288658+00:00",
-        "published": "2026-05-29T15:59:30+00:00",
+        "id": "GHSA-pmv8-rq9r-6j72",
+        "modified": "2026-07-22T02:59:40.127873+00:00",
+        "published": "2026-07-20T17:48:18+00:00",
         "references": [
-          "https://github.com/axios/axios/security/advisories/GHSA-pjwm-pj3p-43mv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
-          "https://github.com/axios/axios"
+          "https://github.com/axios/axios/security/advisories/GHSA-pmv8-rq9r-6j72",
+          "https://github.com/axios/axios/pull/11000",
+          "https://github.com/axios/axios/pull/11001",
+          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
+          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2"
         ],
-        "severity": {
-          "score": 8.6,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
-        },
-        "summary": "axios's shouldBypassProxy does not recognize IPv4-mapped IPv6 addresses, allowing NO_PROXY bypass (incomplete fix for CVE-2025-62718)"
+        "severity": null,
+        "summary": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service"
       },
-      "cvss_score": 8.6,
+      "cvss_score": null,
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00889,
+      "epss": null,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6374,10 +7619,10 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-pjwm-pj3p-43mv",
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-pmv8-rq9r-6j72",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 30.035280671312574,
+      "raptor_risk_estimate": 11.812822499999998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6385,31 +7630,30 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 86.0,
-        "cvss_source": "numeric",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403836567,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 30.035280671312574,
+        "final": 11.812822499999998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -6460,11 +7704,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6517,7 +7761,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00466,
+      "epss": 0.00715,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6528,7 +7772,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-q8qp-cvcw-x6jj",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 20.84284007722591,
+      "raptor_risk_estimate": 20.908773218566672,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6536,11 +7780,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6549,10 +7793,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401677998,
+        "epss_multiplier": 0.402948645,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.84284007722591,
+        "final": 20.908773218566672,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6611,11 +7855,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6686,11 +7930,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6763,11 +8007,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6838,11 +8082,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6913,11 +8157,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6950,10 +8194,11 @@
         "fixed_versions": [
           "3.5.0",
           "4.4.0",
-          "1.19.0"
+          "1.19.0",
+          "4.0.1"
         ],
         "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-06-24T12:14:33.324474+00:00",
+        "modified": "2026-07-09T19:30:07.927607+00:00",
         "published": "2020-04-29T22:18:55+00:00",
         "references": [
           "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
@@ -6994,11 +8239,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -7033,7 +8278,7 @@
           "4.4.0"
         ],
         "id": "GHSA-jpcq-cgw6-v4j6",
-        "modified": "2026-06-24T12:14:33.400781+00:00",
+        "modified": "2026-07-08T05:59:24.710812+00:00",
         "published": "2020-04-29T22:19:14+00:00",
         "references": [
           "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
@@ -7074,11 +8319,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -7111,7 +8356,7 @@
           "2.29.2"
         ],
         "id": "GHSA-8hfj-j24r-96c4",
-        "modified": "2025-11-04T17:01:47.910754+00:00",
+        "modified": "2026-07-14T02:29:30.206771+00:00",
         "published": "2022-04-04T21:25:48+00:00",
         "references": [
           "https://github.com/moment/moment/security/advisories/GHSA-8hfj-j24r-96c4",
@@ -7131,7 +8376,7 @@
       "dep_name": "moment",
       "dep_version": "2.29.1",
       "ecosystem": "npm",
-      "epss": 0.05664,
+      "epss": 0.0552,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7142,7 +8387,7 @@
       "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-8hfj-j24r-96c4",
       "in_kev": false,
       "purl": "pkg:npm/moment@2.29.1",
-      "raptor_risk_estimate": 14.492008547999998,
+      "raptor_risk_estimate": 14.467139077499997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7159,10 +8404,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.428203392,
+        "epss_multiplier": 0.42746856,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.492008547999998,
+        "final": 14.467139077499997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7182,7 +8427,7 @@
           "2.29.4"
         ],
         "id": "GHSA-wc69-rhjr-hc9g",
-        "modified": "2026-02-04T04:36:14.077349+00:00",
+        "modified": "2026-07-14T02:29:30.062096+00:00",
         "published": "2022-07-06T18:38:49+00:00",
         "references": [
           "https://github.com/moment/moment/security/advisories/GHSA-wc69-rhjr-hc9g",
@@ -7202,7 +8447,7 @@
       "dep_name": "moment",
       "dep_version": "2.29.1",
       "ecosystem": "npm",
-      "epss": 0.03949,
+      "epss": 0.04923,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7213,7 +8458,7 @@
       "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-wc69-rhjr-hc9g",
       "in_kev": false,
       "purl": "pkg:npm/moment@2.29.1",
-      "raptor_risk_estimate": 28.969360985144334,
+      "raptor_risk_estimate": 29.312635398137555,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7230,10 +8475,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.419451747,
+        "epss_multiplier": 0.424422069,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 28.969360985144334,
+        "final": 29.312635398137555,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7350,7 +8595,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.01699,
+      "epss": 0.01725,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7361,7 +8606,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-356w-63v5-8wf4",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 21.1693282831422,
+      "raptor_risk_estimate": 21.176212868181796,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7378,10 +8623,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407969997,
+        "epss_multiplier": 0.40810267499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 21.1693282831422,
+        "final": 21.176212868181796,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7426,7 +8671,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.621,
+      "epss": 0.58801,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7437,7 +8682,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-4r4m-qw57-chr8",
       "in_kev": true,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 54.963159292529056,
+      "raptor_risk_estimate": 53.671203959656786,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7454,10 +8699,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.7161963,
+        "epss_multiplier": 0.699361503,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 54.963159292529056,
+        "final": 53.671203959656786,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7643,7 +8888,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.01077,
+      "epss": 0.01143,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7654,7 +8899,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-859w-5945-r5v3",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 21.00462782565645,
+      "raptor_risk_estimate": 21.022104079987738,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7671,10 +8916,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404795931,
+        "epss_multiplier": 0.40513272899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 21.00462782565645,
+        "final": 21.022104079987738,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7789,7 +9034,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.01031,
+      "epss": 0.01016,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7800,7 +9045,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-93m4-6634-74q7",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 20.992447405971006,
+      "raptor_risk_estimate": 20.988475529986626,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7817,10 +9062,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404561193,
+        "epss_multiplier": 0.404484648,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.992447405971006,
+        "final": 20.988475529986626,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8010,7 +9255,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.00496,
+      "epss": 0.00514,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8021,7 +9266,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-c27g-q93r-2cwf",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 7.253051138399998,
+      "raptor_risk_estimate": 7.2547091031,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8038,10 +9283,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401831088,
+        "epss_multiplier": 0.401922942,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.253051138399998,
+        "final": 7.2547091031,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8064,20 +9309,25 @@
           "0.1.24"
         ],
         "id": "GHSA-fx2h-pf6j-xcff",
-        "modified": "2026-06-15T17:30:09.453314+00:00",
+        "modified": "2026-07-15T22:30:44.486843+00:00",
         "published": "2026-06-15T17:17:45+00:00",
         "references": [
           "https://github.com/vitejs/vite/security/advisories/GHSA-fx2h-pf6j-xcff",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-53571",
           "https://github.com/vitejs/vite"
         ],
-        "severity": null,
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
         "summary": "vite: `server.fs.deny` bypass on Windows alternate paths"
       },
-      "cvss_score": null,
+      "cvss_score": 7.5,
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.00393,
+      "epss": 0.00587,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8088,7 +9338,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-fx2h-pf6j-xcff",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 20.82351028076858,
+      "raptor_risk_estimate": 20.87487987683327,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8102,13 +9352,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40130547899999996,
+        "epss_multiplier": 0.40229546099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.82351028076858,
+        "final": 20.87487987683327,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8116,7 +9366,7 @@
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -8275,7 +9525,7 @@
           "0.1.24"
         ],
         "id": "GHSA-v6wh-96g9-6wx3",
-        "modified": "2026-06-15T17:30:10.905477+00:00",
+        "modified": "2026-07-02T19:59:25.649988+00:00",
         "published": "2026-06-15T17:18:31+00:00",
         "references": [
           "https://github.com/vitejs/launch-editor/security/advisories/GHSA-v6wh-96g9-6wx3",
@@ -8288,7 +9538,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.00322,
+      "epss": 0.00349,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8299,7 +9549,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-v6wh-96g9-6wx3",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 20.804710067775837,
+      "raptor_risk_estimate": 20.81185944454773,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8316,10 +9566,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40094316599999996,
+        "epss_multiplier": 0.40108094699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.804710067775837,
+        "final": 20.81185944454773,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8360,7 +9610,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.00283,
+      "epss": 0.00287,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8371,7 +9621,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-vg6x-rcgg-rjx6",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 20.794383190216443,
+      "raptor_risk_estimate": 20.79544235714561,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8388,10 +9638,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400744149,
+        "epss_multiplier": 0.40076456099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.794383190216443,
+        "final": 20.79544235714561,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8436,7 +9686,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.76736,
+      "epss": 0.74998,
       "exploit_evidence": {
         "edb_ids": [
           52111
@@ -8449,7 +9699,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-x574-m823-4x7w",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 45.14264105848127,
+      "raptor_risk_estimate": 44.63640902857397,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8466,10 +9716,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.790883808,
+        "epss_multiplier": 0.782014794,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 45.14264105848127,
+        "final": 44.63640902857397,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8513,7 +9763,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.35194,
+      "epss": 0.38685,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8524,7 +9774,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-xcj6-pq6g-qj4x",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 30.038527356269523,
+      "raptor_risk_estimate": 30.9629152937016,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8541,10 +9791,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.578894982,
+        "epss_multiplier": 0.596709555,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 30.038527356269523,
+        "final": 30.9629152937016,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8649,7 +9899,7 @@
       "dep_name": "vue",
       "dep_version": "2.6.14",
       "ecosystem": "npm",
-      "epss": 0.00507,
+      "epss": 0.00528,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8660,7 +9910,7 @@
       "finding_id": "sca:vuln:npm:vue:2.6.14:GHSA-5j4c-8p2g-v4jx",
       "in_kev": false,
       "purl": "pkg:npm/vue@2.6.14",
-      "raptor_risk_estimate": 6.710009513621248,
+      "raptor_risk_estimate": 6.711798733859999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8668,9 +9918,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
           "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2",
           "packages/Webkul/Admin/src/Resources/assets/js/app.js:4"
         ],
         "verdict": "imported"
@@ -8680,10 +9930,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40188722099999996,
+        "epss_multiplier": 0.401994384,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.710009513621248,
+        "final": 6.711798733859999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

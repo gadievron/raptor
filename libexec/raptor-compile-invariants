@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Compile semantic invariants into mechanical Semgrep/Coccinelle rules.
+
+Usage:
+    raptor-compile-invariants <output_dir> [--model MODEL] [--target PATH]
+
+Reads domain-model.json from output_dir, compiles qualified invariants
+into checker rules via LLM + dual control, writes rules to
+output_dir/checkers/ and a manifest to compiled-invariants.json.
+
+Optionally sweeps a target codebase for violations when --target is set.
+"""
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+logger = logging.getLogger("raptor-compile-invariants")
+
+
+def _progress(message: str) -> None:
+    print(f"compile-invariants: {message}", file=sys.stderr, flush=True)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-compile-invariants",
+        description="Compile invariants from domain-model.json into rules.",
+    )
+    ap.add_argument("output_dir",
+                    help="Directory containing domain-model.json.")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override.")
+    ap.add_argument("--target", default=None,
+                    help="Target codebase to sweep for violations.")
+    ap.add_argument("--engine", default=None, choices=["semgrep", "coccinelle"],
+                    help="Force engine (default: infer from evidence).")
+    ap.add_argument("--min-confidence", default="traced",
+                    help="Minimum confidence grade (default: traced).")
+    ap.add_argument("--max", type=int, default=10,
+                    help="Maximum invariants to compile (default: 10).")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if parsed.verbose else logging.INFO,
+        format="%(name)s: %(message)s",
+    )
+    for _noisy in ("httpx", "httpcore", "urllib3"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+    output_dir = Path(parsed.output_dir).resolve()
+    dm_path = output_dir / "domain-model.json"
+    if not dm_path.is_file():
+        _progress(f"{dm_path} not found")
+        return 1
+
+    from core.concepts.model import DomainModel
+    model = DomainModel.load(dm_path)
+
+    qualified = [
+        inv for inv in model.invariants
+        if inv.statement and inv.negation and not inv.mechanical_rule
+    ]
+    if not qualified:
+        _progress("no uncompiled invariants with statement + negation")
+        return 0
+
+    _progress(f"{len(qualified)} invariant(s) eligible for compilation")
+
+    from core.llm.client import LLMClient
+    from core.llm.task_types import TaskType
+
+    if parsed.model:
+        from core.llm.config import LLMConfig
+        cfg = LLMConfig()
+        mc = cfg.config_for_model(parsed.model)
+        if not mc.api_key:
+            _progress(f"no API key for --model {parsed.model}")
+            return 1
+        client = LLMClient(pinned_model=parsed.model)
+    else:
+        client = LLMClient()
+
+    def llm_callable(prompt, schema, system_prompt):
+        try:
+            data, _full = client.generate_structured(
+                prompt=prompt,
+                schema=schema,
+                system_prompt=system_prompt,
+                task_type=TaskType.AUDIT,
+            )
+            return data
+        except Exception as exc:
+            logger.debug("LLM call failed: %s", exc)
+            return None
+
+    repo_root = Path(parsed.target).resolve() if parsed.target else None
+    if repo_root and not repo_root.is_dir():
+        _progress(f"--target {repo_root} is not a directory")
+        return 1
+
+    from core.concepts.compiler import compile_model
+
+    results = compile_model(
+        model,
+        output_dir,
+        llm_callable,
+        repo_root=repo_root,
+        engine=parsed.engine,
+        min_confidence=parsed.min_confidence,
+        max_compilations=parsed.max,
+    )
+
+    succeeded = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
+
+    if succeeded:
+        model.save(dm_path)
+        _progress(f"updated domain-model.json with {len(succeeded)} rule(s)")
+
+    for r in succeeded:
+        match_info = f", {len(r.matches)} sweep match(es)" if r.matches else ""
+        _progress(f"  compiled {r.invariant_id} -> {r.rule_id}{match_info}")
+
+    for r in failed:
+        errs = "; ".join(r.errors[:2]) if r.errors else "unknown"
+        _progress(f"  failed {r.invariant_id}: {errs}")
+
+    _progress(
+        f"done: {len(succeeded)} compiled, {len(failed)} failed "
+        f"(manifest: compiled-invariants.json)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

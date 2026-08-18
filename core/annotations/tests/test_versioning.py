@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 
-
 from core.annotations import (
     Annotation,
     annotation_path,

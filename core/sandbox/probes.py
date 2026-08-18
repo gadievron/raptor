@@ -253,71 +253,84 @@ def check_net_available() -> bool:
 
     Tests: unshare command exists, unprivileged user namespaces enabled,
     and a functional test passes. Result is cached for the session.
+
+    Lock discipline (same as ``check_unshare_engages``): the cache is
+    read and written under BRIEF ``_cache_lock`` holds; the slow probe
+    (an up-to-5s subprocess) runs OUTSIDE the lock so it never stalls
+    every other thread's cache op under concurrent first-use. Racing
+    threads may probe redundantly — benign; the second lock acquisition
+    re-checks the cache and the first published verdict wins.
     """
     with state._cache_lock:
         if state._net_available_cache is not None:
             return state._net_available_cache
 
+    available = _probe_net_available()
+
+    with state._cache_lock:
+        if state._net_available_cache is None:
+            state._net_available_cache = available
+        return state._net_available_cache
+
+
+def _probe_net_available() -> bool:
+    """Run the actual (slow) network-isolation probe. Never touches the
+    cache — ``check_net_available`` owns caching and locking."""
+    try:
+        unshare_path = _resolve_sandbox_binary("unshare")
+    except FileNotFoundError as e:
+        # util-linux not installed in a standard location — record
+        # the reason at debug so startup diagnostics surface it,
+        # then treat as "no network isolation available". Fail-
+        # closed: caller sees a disabled sandbox, not a PATH-
+        # hijacked one.
+        logger.debug("Sandbox: %s", e)
+        return False
+
+    try:
+        # Pre-fix this was `if sysctl.exists() and
+        # sysctl.read_text() == "0": ...`. The exists() call
+        # creates a TOCTOU window between the existence
+        # check and the read — between them the kernel
+        # module exporting the sysctl could be unloaded
+        # (rare, but `rmmod user_namespaces` during a probe
+        # is possible on test / CI hosts), or the path could
+        # be intercepted by an attacker via /proc remount.
+        #
+        # Single-step it: just attempt the read and treat
+        # FileNotFoundError as "no sysctl, assume kernel
+        # default (enabled)". OSError covers the broader
+        # "/proc not mounted" case (containers without
+        # /proc, exotic init systems).
+        sysctl = Path("/proc/sys/kernel/unprivileged_userns_clone")
         try:
-            unshare_path = _resolve_sandbox_binary("unshare")
-        except FileNotFoundError as e:
-            # util-linux not installed in a standard location — record
-            # the reason at debug so startup diagnostics surface it,
-            # then treat as "no network isolation available". Fail-
-            # closed: caller sees a disabled sandbox, not a PATH-
-            # hijacked one.
-            logger.debug(f"Sandbox: {e}")
-            state._net_available_cache = False
+            value = sysctl.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            value = ""  # No sysctl on this kernel — defaults to enabled.
+        if value == "0":
+            logger.debug("Sandbox: unprivileged user namespaces disabled (sysctl)")
             return False
+    except OSError:
+        pass
 
-        try:
-            # Pre-fix this was `if sysctl.exists() and
-            # sysctl.read_text() == "0": ...`. The exists() call
-            # creates a TOCTOU window between the existence
-            # check and the read — between them the kernel
-            # module exporting the sysctl could be unloaded
-            # (rare, but `rmmod user_namespaces` during a probe
-            # is possible on test / CI hosts), or the path could
-            # be intercepted by an attacker via /proc remount.
-            #
-            # Single-step it: just attempt the read and treat
-            # FileNotFoundError as "no sysctl, assume kernel
-            # default (enabled)". OSError covers the broader
-            # "/proc not mounted" case (containers without
-            # /proc, exotic init systems).
-            sysctl = Path("/proc/sys/kernel/unprivileged_userns_clone")
-            try:
-                value = sysctl.read_text(encoding="utf-8").strip()
-            except FileNotFoundError:
-                value = ""  # No sysctl on this kernel — defaults to enabled.
-            if value == "0":
-                logger.debug("Sandbox: unprivileged user namespaces disabled (sysctl)")
-                state._net_available_cache = False
-                return False
-        except OSError:
-            pass
-
-        try:
-            # Pass safe env to our own probe — consistent with the module's
-            # philosophy of never letting inherited env shell-eval tools
-            # (TERMINAL, EDITOR, etc.). Absolute path for unshare so a
-            # polluted PATH can't shadow it at probe time either.
-            from core.config import RaptorConfig
-            result = subprocess.run(
-                [unshare_path, "--user", "--net", "true"],
-                capture_output=True, timeout=5,
-                env=RaptorConfig.get_safe_env(),
-            )
-            if result.returncode != 0:
-                logger.debug(f"Sandbox: network test failed: {result.stderr.strip()}")
-                state._net_available_cache = False
-                return False
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            state._net_available_cache = False
+    try:
+        # Pass safe env to our own probe — consistent with the module's
+        # philosophy of never letting inherited env shell-eval tools
+        # (TERMINAL, EDITOR, etc.). Absolute path for unshare so a
+        # polluted PATH can't shadow it at probe time either.
+        from core.config import RaptorConfig
+        result = subprocess.run(
+            [unshare_path, "--user", "--net", "true"],
+            capture_output=True, timeout=5,
+            env=RaptorConfig.get_safe_env(),
+        )
+        if result.returncode != 0:
+            logger.debug(f"Sandbox: network test failed: {result.stderr.strip()}")
             return False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
 
-        state._net_available_cache = True
-        return True
+    return True
 
 
 def _mount_ns_functional_selftest() -> bool:
@@ -420,8 +433,10 @@ def check_mount_available() -> bool:
         # The legacy probe (`unshare --map-root-user` + mkdir at /)
         # falsely reported unavailable on modern Ubuntu even with the
         # sysctl flipped to 0. The newuidmap-driven path works there.
-        # Probe for the tools and trust the ns-probe already done via
-        # the AppArmor check — no need to re-fork a functional test.
+        # Probe for the tools first; the forked functional self-test
+        # below then confirms the kernel actually permits
+        # unshare(CLONE_NEWNS) — binary presence + the AppArmor
+        # sysctl check alone proved necessary but not sufficient.
         have_newuidmap = shutil.which("newuidmap") is not None
         have_newgidmap = shutil.which("newgidmap") is not None
         if not (have_newuidmap and have_newgidmap):
@@ -497,7 +512,7 @@ def mount_unavailable_reason() -> tuple[str, str]:
         if v == "1":
             return (
                 "mount-ns blocked by host "
-                "(apparmor_restrict_unprivileged_userns=1)",
+                "(kernel.apparmor_restrict_unprivileged_userns=1)",
                 "set kernel.apparmor_restrict_unprivileged_userns=0 "
                 "(Ubuntu 24.04+) and install the uidmap package; or "
                 "rerun on a host where mount-ns is available.",

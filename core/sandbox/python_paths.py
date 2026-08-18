@@ -3,7 +3,8 @@
 When a sandbox call spawns a Python interpreter, the sandbox's Landlock
 read allowlist (and mount-ns bind tree) must include the interpreter's
 runtime directories.  The mount-ns baseline covers ``/usr``, ``/lib``,
-``/lib64`` — but framework installs (Homebrew, Xcode), pyenv, Nix,
+``/lib64``, ``/etc``, ``/bin``, ``/sbin`` (see ``_SYSTEM_PREFIXES``) —
+but framework installs (Homebrew, Xcode), pyenv, Nix,
 conda, and virtualenvs place the interpreter and its shared libraries
 outside those prefixes.
 

@@ -1,0 +1,130 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → regex pattern position
+  # CWE-1333: Regular Expression Denial of Service (ReDoS).
+  # Only fires when the PATTERN comes from user input — using a constant
+  # regex against user-supplied input strings is safe.
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.regex-dos.taint.python
+    message: >-
+      Untrusted data flows into a regular expression pattern. An attacker
+      can craft a malicious regex causing catastrophic backtracking (ReDoS).
+      Use re2 or validate/restrict the pattern before compilation.
+    languages: [python]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: re.compile($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.match($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.search($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.findall($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.finditer($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.sub($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.split($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: re.fullmatch($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+    pattern-sanitizers:
+      - pattern: re.escape(...)
+    metadata:
+      cwe: ["CWE-1333"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "redos", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → RegExp pattern
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.regex-dos.taint.javascript
+    message: >-
+      Untrusted data flows into a regular expression pattern. An attacker
+      can craft a malicious regex causing catastrophic backtracking (ReDoS).
+      Use a safe regex library (re2) or validate/restrict the pattern.
+    languages: [javascript, typescript]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: new RegExp($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: $STR.match($PATTERN)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: $STR.search($PATTERN)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: $STR.replace($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: $STR.replaceAll($PATTERN, ...)
+          - focus-metavariable: $PATTERN
+      - patterns:
+          - pattern: $STR.split($PATTERN)
+          - focus-metavariable: $PATTERN
+    pattern-sanitizers:
+      # lodash/underscore escape function
+      - pattern: _.escapeRegExp(...)
+      - pattern: escapeRegExp(...)
+      - pattern: escapeStringRegexp(...)
+    metadata:
+      cwe: ["CWE-1333"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "redos", "taint"]

@@ -12,6 +12,7 @@ in isolation. These prove the layers compose correctly.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,8 @@ from core.analysis.reach_witness import (
     verdict_from_classification,
 )
 from core.analysis.reachability import binary_oracle_absent
+
+_GC_SECTIONS = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +99,7 @@ def _build_synthetic_target(tmp_path: Path) -> tuple[Path, Path, dict]:
     subprocess.run([
         "gcc", "-O2", "-g",
         "-ffunction-sections", "-fdata-sections",
-        "-Wl,--gc-sections",
+        _GC_SECTIONS,
         str(src), "-o", str(binary),
     ], check=True)
     items = []

@@ -1,14 +1,14 @@
-"""Iteration progress guard — standalone, not yet wired in.
+"""Iteration progress guard for the hypothesis validation loop.
 
-A future iteration loop wants a precondition: each refinement step must
-strictly reduce uncertainty before another LLM call is permitted. The
-IEEE-ISTAS 2025 result PR #309 cites — 37.6% more critical findings
-after five rounds of pure self-critique — is exactly the failure mode
-this guard prevents. A "refine" that does not strictly progress is
-rejected before any tool runs; a loop that cannot progress terminates
-by construction.
+Each refinement step must strictly reduce uncertainty before another LLM
+call is permitted.  The IEEE-ISTAS 2025 result PR #309 cites — 37.6%
+more critical findings after five rounds of pure self-critique — is
+exactly the failure mode this guard prevents.  A "refine" that does not
+strictly progress is rejected before any tool runs; a loop that cannot
+progress terminates by construction.
 
-Two pieces, both standalone (no runner wiring yet):
+Wired into ``runner.validate()`` — called between consecutive
+LLM-tool round-trips.
 
     IterationStep                      one round of (hypothesis, evidence)
     must_progress(prev, curr)          raise IterationStalled if not strict

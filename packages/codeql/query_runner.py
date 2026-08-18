@@ -6,13 +6,15 @@ Executes CodeQL queries and suites against databases,
 producing SARIF output for vulnerability analysis.
 """
 
+import os
+import re
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import ClassVar
 
 # Add parent directory to path for imports
 # packages/codeql/query_runner.py -> repo root
@@ -25,8 +27,6 @@ from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
 
-
-import re  # noqa: E402
 
 # Tightened from `[\w/.-]+\S*` which accepted any path-like
 # blob (path-traversal `../../etc/passwd`, multi-segment
@@ -72,7 +72,7 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
         return False
     try:
         data = yaml.safe_load(lock.read_text(encoding="utf-8")) or {}
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
     deps = (data.get("dependencies") or {})
     if not deps:
@@ -130,10 +130,10 @@ class QueryResult:
     success: bool
     language: str
     database_path: Path
-    sarif_path: Optional[Path]
+    sarif_path: Path | None
     findings_count: int
     duration_seconds: float
-    errors: List[str]
+    errors: list[str]
     suite_name: str
     queries_executed: int = 0
 
@@ -150,7 +150,7 @@ class QueryRunner:
     """
 
     # Official CodeQL security suites (from GitHub)
-    SECURITY_SUITES = {
+    SECURITY_SUITES: ClassVar[dict] = {
         "java": "codeql/java-queries:codeql-suites/java-security-and-quality.qls",
         "python": "codeql/python-queries:codeql-suites/python-security-and-quality.qls",
         "javascript": "codeql/javascript-queries:codeql-suites/javascript-security-and-quality.qls",
@@ -165,7 +165,7 @@ class QueryRunner:
     }
 
     # Alternative: security-extended suites (more comprehensive)
-    SECURITY_EXTENDED_SUITES = {
+    SECURITY_EXTENDED_SUITES: ClassVar[dict] = {
         "java": "codeql/java-queries:codeql-suites/java-security-extended.qls",
         "python": "codeql/python-queries:codeql-suites/python-security-extended.qls",
         "javascript": "codeql/javascript-queries:codeql-suites/javascript-security-extended.qls",
@@ -174,10 +174,12 @@ class QueryRunner:
         "cpp": "codeql/cpp-queries:codeql-suites/cpp-security-extended.qls",
         "csharp": "codeql/csharp-queries:codeql-suites/csharp-security-extended.qls",
         "ruby": "codeql/ruby-queries:codeql-suites/ruby-security-extended.qls",
+        "swift": "codeql/swift-queries:codeql-suites/swift-security-extended.qls",
+        "kotlin": "codeql/java-queries:codeql-suites/java-security-extended.qls",
         "rust": "codeql/rust-queries:codeql-suites/rust-security-extended.qls",
     }
 
-    def __init__(self, codeql_cli: Optional[str] = None):
+    def __init__(self, codeql_cli: str | None = None):
         """
         Initialize query runner.
 
@@ -185,11 +187,16 @@ class QueryRunner:
             codeql_cli: Path to CodeQL CLI (auto-detected if None)
         """
         import shutil
-        self.codeql_cli = codeql_cli or shutil.which("codeql")
+        _cli = codeql_cli or shutil.which("codeql")
+        # Realpath for the same reason as DatabaseManager: the sandbox
+        # binds the resolved install root; a ~/.local/bin symlink as
+        # cmd[0] would push every query run onto the Landlock-only
+        # fallback path.
+        self.codeql_cli = os.path.realpath(_cli) if _cli else _cli
         if not self.codeql_cli:
             raise RuntimeError("CodeQL CLI not found")
 
-        logger.info(f"Query runner initialized with CodeQL: {self.codeql_cli}")
+        logger.info("Query runner initialized with CodeQL: %s", self.codeql_cli)
 
     def _sandbox_tool_paths(self) -> list:
         """Mount-ns bind dirs needed for codeql to run.
@@ -210,8 +217,9 @@ class QueryRunner:
         database_path: Path,
         language: str,
         out_dir: Path,
-        suite: Optional[str] = None,
-        use_extended: bool = False
+        suite: str | None = None,
+        use_extended: bool = False,
+        concurrent_workers: int = 1,
     ) -> QueryResult:
         """
         Execute CodeQL suite against database.
@@ -229,14 +237,14 @@ class QueryRunner:
         start_time = time.time()
         errors = []
 
-        logger.info(f"{'=' * 70}")
-        logger.info(f"Running CodeQL analysis for {language}")
-        logger.info(f"{'=' * 70}")
+        logger.info("%s", '=' * 70)
+        logger.info("Running CodeQL analysis for %s", language)
+        logger.info("%s", '=' * 70)
 
         # Determine suite to use
         if suite:
             suite_name = suite
-            logger.info(f"Using custom suite: {suite}")
+            logger.info("Using custom suite: %s", suite)
         else:
             # Use standard or extended suite
             suites = self.SECURITY_EXTENDED_SUITES if use_extended else self.SECURITY_SUITES
@@ -257,7 +265,7 @@ class QueryRunner:
                 )
 
             suite_type = "security-extended" if use_extended else "security-and-quality"
-            logger.info(f"Using {suite_type} suite: {suite_name}")
+            logger.info("Using %s suite: %s", suite_type, suite_name)
 
         # Prepare output path
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -295,15 +303,17 @@ class QueryRunner:
                     if potential_path.exists():
                         actual_suite_path = str(potential_path)
                         resolved_to_absolute = True
-                        logger.info(f"✓ Resolved suite to absolute path: {actual_suite_path}")
+                        logger.info("✓ Resolved suite to absolute path: %s", actual_suite_path)
                     else:
-                        logger.warning(f"Could not find suite at {potential_path}")
+                        logger.warning("Could not find suite at %s", potential_path)
                         # Try without the "ql/src" part (for different CodeQL repo structures)
                         alt_path = Path(codeql_queries) / lang_dir / suite_path
                         if alt_path.exists():
                             actual_suite_path = str(alt_path)
                             resolved_to_absolute = True
-                            logger.info(f"✓ Resolved suite to absolute path (alt): {actual_suite_path}")
+                            logger.info(
+                                "✓ Resolved suite to absolute path (alt): %s", actual_suite_path
+                            )
                         else:
                             logger.error("✗ Cannot resolve suite path - will attempt pack reference (may cause conflicts)")
             else:
@@ -326,17 +336,19 @@ class QueryRunner:
         # Central CodeQL resource tunables (-j / -M, tuning.json-backed).
         # ``include_disk_cache=False`` because ``database analyze``
         # rejects ``--max-disk-cache`` as an unknown flag.
-        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
+        CodeQLTunables.from_tuning(
+            concurrent_workers=concurrent_workers,
+        ).append_to(cmd, include_disk_cache=False)
 
         # DO NOT add search-path - it causes pack conflicts when multiple copies exist
         # Instead, we always use absolute paths (resolved above) to avoid ambiguity
         if not resolved_to_absolute and codeql_queries:
             logger.warning("⚠️  Using pack reference without resolved absolute path")
             logger.warning("   This may cause conflicts if multiple pack copies exist")
-            logger.warning(f"   Pack: {actual_suite_path}")
+            logger.warning("   Pack: %s", actual_suite_path)
 
-        logger.info(f"Executing: {' '.join(cmd)}")
-        logger.info(f"Timeout: {RaptorConfig.CODEQL_ANALYZE_TIMEOUT}s")
+        logger.info("Executing: %s", ' '.join(cmd))
+        logger.info("Timeout: %ss", RaptorConfig.CODEQL_ANALYZE_TIMEOUT)
 
         # Execute analysis in sandbox (network blocked — packs pre-fetched)
         try:
@@ -362,7 +374,7 @@ class QueryRunner:
             if not success and "cannot be found" in (result.stderr or "").lower():
                 pack_name = _extract_missing_pack(result.stderr)
                 if pack_name:
-                    logger.info(f"Query pack '{pack_name}' not found — downloading...")
+                    logger.info("Query pack '%s' not found — downloading...", pack_name)
                     # Route codeql through the RAPTOR egress proxy.
                     # CodeQL's Java stack respects the lowercase
                     # `https_proxy` env var (set automatically by
@@ -374,20 +386,21 @@ class QueryRunner:
                     codeql_cache = Path.home() / ".codeql"
                     codeql_cache.mkdir(parents=True, exist_ok=True)
                     # Retry the download up to 3x with exponential
-                    # backoff. Pre-fix a single attempt — if the
-                    # registry was momentarily slow / a transient
-                    # 503 from ghcr.io / network blip, the whole
-                    # analysis dispatch failed and the operator
-                    # had to re-run the entire scan. Retries are
-                    # cheap (at most 3 sub-2-minute calls) and
-                    # cover the common transient failure modes.
-                    import time as _time
-                    dl = None
+                    # backoff (1s, 2s) via core.run.retry. Pre-fix a
+                    # single attempt — if the registry was
+                    # momentarily slow / a transient 503 from
+                    # ghcr.io / network blip, the whole analysis
+                    # dispatch failed and the operator had to re-run
+                    # the entire scan. Retries are cheap (at most 3
+                    # sub-2-minute calls) and cover the common
+                    # transient failure modes.
+                    from core.run.retry import RetryPolicy, retry_call
                     from packages.codeql.codeql_proxy_hosts import (
                         proxy_hosts_for_codeql,
                     )
-                    for attempt in range(3):
-                        dl = sandbox_run(
+
+                    def _download():
+                        return sandbox_run(
                             [self.codeql_cli, "pack", "download", pack_name],
                             use_egress_proxy=True,
                             # Hostname allowlist auto-discovered from
@@ -408,17 +421,26 @@ class QueryRunner:
                             tool_paths=self._sandbox_tool_paths(),
                             capture_output=True, text=True, timeout=120,
                         )
-                        if dl.returncode == 0:
-                            break
-                        if attempt < 2:
-                            backoff = 2 ** attempt  # 1s, 2s
-                            logger.info(
-                                "Pack download attempt %d failed (rc=%d); "
-                                "retrying in %ds", attempt + 1, dl.returncode, backoff,
-                            )
-                            _time.sleep(backoff)
+
+                    dl = retry_call(
+                        _download,
+                        policy=RetryPolicy(
+                            attempts=3,
+                            # Result-based retry only: sandbox_run
+                            # returns a CompletedProcess; a raised
+                            # exception is a hard failure, not a
+                            # registry blip.
+                            retryable=lambda exc: False,
+                            base_delay=1.0, multiplier=2.0,
+                        ),
+                        retry_result=lambda r: r.returncode != 0,
+                        on_retry=lambda i, exc, delay: logger.info(
+                            "Pack download attempt %d failed; "
+                            "retrying in %ds", i + 1, int(delay),
+                        ),
+                    )
                     if dl.returncode == 0:
-                        logger.info(f"✓ Downloaded {pack_name} — retrying analysis")
+                        logger.info("✓ Downloaded %s — retrying analysis", pack_name)
                         result = sandbox_run(
                             cmd, block_network=True,
                             tool_paths=self._sandbox_tool_paths(),
@@ -436,13 +458,13 @@ class QueryRunner:
                         # an unrelated traceback.
                         dl_stderr = (dl.stderr or "")[:200]
                         errors.append(f"Pack download failed: {dl_stderr}")
-                        logger.error(f"✗ Failed to download {pack_name}: {dl_stderr}")
+                        logger.error("✗ Failed to download %s: %s", pack_name, dl_stderr)
 
             if not success:
                 errors.append(f"Analysis failed with exit code {result.returncode}")
                 if result.stderr:
                     errors.append(result.stderr[:1000])
-                logger.error(f"✗ Analysis failed for {language}")
+                logger.error("✗ Analysis failed for %s", language)
                 # `or ""` for the same reason as above — `result.stderr`
                 # may be None on some sandbox failure modes (timeout
                 # mid-stream, killed before write).
@@ -465,16 +487,37 @@ class QueryRunner:
 
             from core.sarif.parser import load_sarif
             sarif_data = load_sarif(sarif_path) if sarif_path.exists() else None
-            if sarif_data:
-                for run in sarif_data.get("runs", []):
-                    findings_count += len(run.get("results", []))
-                    queries_executed += len(run.get("tool", {}).get("driver", {}).get("rules", []))
+            if sarif_data is None:
+                # rc==0 but no readable SARIF: a missing / oversized /
+                # unparseable output is an analysis failure, never a
+                # successful zero-finding run — success=True here reads
+                # downstream as a clean scan.
+                reason = (
+                    "SARIF output missing after successful analyze"
+                    if not sarif_path.exists()
+                    else "SARIF output unreadable (parse/size failure)"
+                )
+                errors.append(f"{reason}: {sarif_path}")
+                logger.error("✗ %s: %s", reason, sarif_path)
+                return QueryResult(
+                    success=False,
+                    language=language,
+                    database_path=database_path,
+                    sarif_path=None,
+                    findings_count=0,
+                    duration_seconds=time.time() - start_time,
+                    errors=errors,
+                    suite_name=suite_name,
+                )
+            for run in sarif_data.get("runs", []):
+                findings_count += len(run.get("results", []))
+                queries_executed += len(run.get("tool", {}).get("driver", {}).get("rules", []))
 
-            logger.info(f"✓ Analysis completed for {language}")
-            logger.info(f"  Findings: {findings_count}")
-            logger.info(f"  Queries executed: {queries_executed}")
-            logger.info(f"  Duration: {time.time() - start_time:.1f}s")
-            logger.info(f"  SARIF: {sarif_path}")
+            logger.info("✓ Analysis completed for %s", language)
+            logger.info("  Findings: %s", findings_count)
+            logger.info("  Queries executed: %s", queries_executed)
+            logger.info("  Duration: %.1fs", time.time() - start_time)
+            logger.info("  SARIF: %s", sarif_path)
 
             return QueryResult(
                 success=True,
@@ -491,7 +534,7 @@ class QueryRunner:
         except subprocess.TimeoutExpired:
             error = f"Analysis timed out after {RaptorConfig.CODEQL_ANALYZE_TIMEOUT}s"
             errors.append(error)
-            logger.error(f"✗ {error}")
+            logger.error("✗ %s", error)
 
             return QueryResult(
                 success=False,
@@ -507,10 +550,10 @@ class QueryRunner:
         except SandboxSetupError:
             raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
 
-        except Exception as e:
-            error = f"Unexpected error: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            error = f"Unexpected error: {e!s}"
             errors.append(error)
-            logger.error(f"✗ Analysis failed with exception: {e}")
+            logger.error("✗ Analysis failed with exception: %s", e)
 
             return QueryResult(
                 success=False,
@@ -544,7 +587,7 @@ class QueryRunner:
         """
         start_time = time.time()
 
-        logger.info(f"Running custom queries from: {query_path}")
+        logger.info("Running custom queries from: %s", query_path)
 
         out_dir.mkdir(parents=True, exist_ok=True)
         sarif_path = out_dir / f"codeql_{language}_custom.sarif"
@@ -576,7 +619,7 @@ class QueryRunner:
 
             if success and sarif_path.exists():
                 findings_count = self._count_sarif_findings(sarif_path)
-                logger.info(f"✓ Custom queries completed: {findings_count} findings")
+                logger.info("✓ Custom queries completed: %s findings", findings_count)
 
                 return QueryResult(
                     success=True,
@@ -600,8 +643,11 @@ class QueryRunner:
                     suite_name="custom",
                 )
 
-        except Exception as e:
-            logger.error(f"✗ Custom query execution failed: {e}")
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
+
+        except Exception as e:  # noqa: BLE001
+            logger.error("✗ Custom query execution failed: %s", e)
             return QueryResult(
                 success=False,
                 language=language,
@@ -615,11 +661,11 @@ class QueryRunner:
 
     def analyze_all_databases(
         self,
-        databases: Dict[str, Path],
+        databases: dict[str, Path],
         out_dir: Path,
         use_extended: bool = False,
-        max_workers: Optional[int] = None
-    ) -> Dict[str, QueryResult]:
+        max_workers: int | None = None
+    ) -> dict[str, QueryResult]:
         """
         Analyze multiple databases in parallel.
 
@@ -635,8 +681,14 @@ class QueryRunner:
         max_workers = max_workers or RaptorConfig.MAX_CODEQL_WORKERS
         results = {}
 
-        logger.info(f"Analyzing {len(databases)} databases in parallel (max workers: {max_workers})")
+        logger.info(
+            "Analyzing %d databases in parallel (max workers: %s)", len(databases), max_workers
+        )
 
+        # Core-share for each child: N concurrent -j0 analyses would
+        # each claim every core; divide instead (explicit numeric
+        # codeql_threads is respected inside from_tuning).
+        _share = min(max_workers, len(databases)) or 1
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_lang = {
@@ -646,7 +698,8 @@ class QueryRunner:
                     lang,
                     out_dir,
                     None,
-                    use_extended
+                    use_extended,
+                    _share,
                 ): lang
                 for lang, db_path in databases.items()
             }
@@ -658,11 +711,13 @@ class QueryRunner:
                     result = future.result()
                     results[lang] = result
                     if result.success:
-                        logger.info(f"✓ {lang} analysis completed: {result.findings_count} findings")
+                        logger.info(
+                            "✓ %s analysis completed: %s findings", lang, result.findings_count
+                        )
                     else:
-                        logger.error(f"✗ {lang} analysis failed")
-                except Exception as e:
-                    logger.error(f"✗ {lang} analysis raised exception: {e}")
+                        logger.error("✗ %s analysis failed", lang)
+                except Exception as e:  # noqa: BLE001
+                    logger.error("✗ %s analysis raised exception: %s", lang, e)
                     results[lang] = QueryResult(
                         success=False,
                         language=lang,
@@ -678,10 +733,10 @@ class QueryRunner:
 
     def analyze_iris_packs(
         self,
-        databases: Dict[str, Path],
+        databases: dict[str, Path],
         out_dir: Path,
-        max_workers: Optional[int] = None,
-    ) -> Dict[str, "QueryResult"]:
+        max_workers: int | None = None,
+    ) -> dict[str, "QueryResult"]:
         """Run RAPTOR's in-repo IRIS LocalFlowSource packs against each
         database. Same DBs the standard suite uses; complementary
         queries that catch CLI / env / stdin source flows the stdlib
@@ -710,9 +765,10 @@ class QueryRunner:
         """
         from core.config import RaptorConfig
 
-        # Master kill-switch — operators can disable IRIS Tier 1
-        # globally via `RaptorConfig.IRIS_TIER1_ENABLED = False`. /codeql
-        # CLI's `--no-iris-tier1` flag flips this for a single invocation.
+        if not RaptorConfig.CODEQL_ENABLED:
+            logger.info("IRIS pack analysis skipped: CODEQL_ENABLED is False")
+            return {}
+
         if not RaptorConfig.IRIS_TIER1_ENABLED:
             logger.info("IRIS pack analysis skipped: IRIS_TIER1_ENABLED is False")
             return {}
@@ -726,7 +782,7 @@ class QueryRunner:
             return {}
 
         # Filter to languages that actually have an in-repo pack.
-        analyzable: Dict[str, Tuple[Path, Path]] = {}
+        analyzable: dict[str, tuple[Path, Path]] = {}
         for lang, db in databases.items():
             pack_dir = pack_root / f"{lang}-queries"
             if pack_dir.is_dir():
@@ -735,7 +791,7 @@ class QueryRunner:
             return {}
 
         max_workers = max_workers or RaptorConfig.MAX_CODEQL_WORKERS
-        results: Dict[str, "QueryResult"] = {}
+        results: dict[str, QueryResult] = {}
 
         def _run_one(lang: str, db: Path, pack_dir: Path) -> "QueryResult":
             return self._run_iris_pack(lang, db, pack_dir, out_dir)
@@ -749,8 +805,8 @@ class QueryRunner:
                 lang = future_to_lang[future]
                 try:
                     results[lang] = future.result()
-                except Exception as e:
-                    logger.warning(f"IRIS LocalFlowSource ({lang}) raised: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("IRIS LocalFlowSource (%s) raised: %s", lang, e)
                     db, _ = analyzable[lang]
                     results[lang] = QueryResult(
                         success=False, language=lang,
@@ -778,18 +834,30 @@ class QueryRunner:
         # round-trip. Sandboxed CI environments without a populated
         # pack cache fall through to the install attempt as before.
         if _iris_pack_deps_already_resolved(pack_dir):
-            logger.debug(
-                f"IRIS pack ({lang}): deps satisfied from pack cache, skipping install"
-            )
+            logger.debug("IRIS pack (%s): deps satisfied from pack cache, skipping install", lang)
         else:
             # Lazy `codeql pack install` — populates dependency cache
             # from the committed lockfile. Idempotent and fast on
             # subsequent runs; needed once on fresh checkouts before
             # the in-repo queries can resolve their imports.
             try:
+                # Route the first-run dep fetch through the egress
+                # proxy, mirroring the `pack download` site above.
+                # Pre-fix this passed only block_network=False: the
+                # child ran with a proxy-stripped safe env and dialed
+                # ghcr.io directly, which mandatory-egress-proxy
+                # hosts block — the IRIS pack install failed on every
+                # fresh checkout there. use_egress_proxy sets the
+                # lowercase https_proxy CodeQL's Java stack honours,
+                # and the proxy chains to the operator's upstream.
+                from packages.codeql.codeql_proxy_hosts import (
+                    proxy_hosts_for_codeql,
+                )
                 install_proc = sandbox_run(
                     [self.codeql_cli, "pack", "install", str(pack_dir)],
-                    block_network=False,  # may need to fetch dep packs first time
+                    use_egress_proxy=True,
+                    proxy_hosts=proxy_hosts_for_codeql(self.codeql_cli),
+                    caller_label="codeql-pack-install",
                     tool_paths=self._sandbox_tool_paths(),
                     audit_run_dir=str(out_dir),
                     capture_output=True, text=True,
@@ -806,11 +874,13 @@ class QueryRunner:
                         install_proc.stderr or install_proc.stdout or ""
                     ).strip()[:300]
                     logger.warning(
-                        f"IRIS pack install ({lang}) returned "
-                        f"{install_proc.returncode}: {install_err}"
+                        "IRIS pack install (%s) returned %s: %s",
+                        lang,
+                        install_proc.returncode,
+                        install_err
                     )
-            except Exception as e:
-                logger.warning(f"IRIS pack install ({lang}) raised: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("IRIS pack install (%s) raised: %s", lang, e)
 
         sarif_path = out_dir / f"codeql_{lang}_iris.sarif"
         cmd = [
@@ -829,8 +899,11 @@ class QueryRunner:
                 capture_output=True, text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
             )
-        except Exception as e:
-            logger.warning(f"IRIS LocalFlowSource ({lang}) analyze raised: {e}")
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
+
+        except Exception as e:  # noqa: BLE001
+            logger.warning("IRIS LocalFlowSource (%s) analyze raised: %s", lang, e)
             return QueryResult(
                 success=False, language=lang,
                 database_path=db, sarif_path=None, findings_count=0,
@@ -840,7 +913,7 @@ class QueryRunner:
 
         if proc.returncode == 0 and sarif_path.exists():
             n = self._count_sarif_findings(sarif_path)
-            logger.info(f"✓ IRIS LocalFlowSource ({lang}): {n} findings")
+            logger.info("✓ IRIS LocalFlowSource (%s): %s findings", lang, n)
             return QueryResult(
                 success=True, language=lang,
                 database_path=db, sarif_path=sarif_path,
@@ -850,7 +923,7 @@ class QueryRunner:
             )
 
         err = (proc.stderr or proc.stdout or "").strip()[:300]
-        logger.warning(f"IRIS LocalFlowSource ({lang}) failed: {err}")
+        logger.warning("IRIS LocalFlowSource (%s) failed: %s", lang, err)
         return QueryResult(
             success=False, language=lang,
             database_path=db, sarif_path=None, findings_count=0,
@@ -868,7 +941,7 @@ class QueryRunner:
         return sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
 
     def get_sarif_summary(self, sarif_path: Path,
-                          *, sarif_data: Optional[Dict] = None) -> Dict:
+                          *, sarif_data: dict | None = None) -> dict:
         """
         Extract summary information from SARIF file.
 
@@ -947,8 +1020,8 @@ class QueryRunner:
 
             return summary
 
-        except Exception as e:
-            logger.warning(f"Failed to generate SARIF summary: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to generate SARIF summary: %s", e)
             return {}
 
 

@@ -87,7 +87,7 @@ class TestEscapeNonprintable(unittest.TestCase):
     def test_escape_unicode_line_separator(self):
         # U+2028 is a Unicode line separator — some JSON parsers and
         # terminals honour it as a newline. Not printable.
-        self.assertEqual(escape_nonprintable("a\u2028b"), "a\\x2028b")
+        self.assertEqual(escape_nonprintable("a\u2028b"), "a\\u2028b")
 
     def test_unicode_printable_passes_through(self):
         # Legitimate non-ASCII content (accented filenames, non-Latin

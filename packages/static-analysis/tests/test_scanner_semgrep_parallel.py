@@ -15,10 +15,22 @@ hard-codes the registry id would otherwise fail post-#196.
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+
+from core.config import RaptorConfig
+
+# The dispatchers under test resolve baseline registry packs via
+# ``RaptorConfig.get_semgrep_config`` and then drop unresolved
+# (``p/...``) packs when semgrep.dev is unreachable — so on hosts
+# without registry access (CI: no cache, no network, no proxy) every
+# baseline-pack assertion below would fail. Pin the cached path with
+# the stub registry cache so pack resolution is local and
+# deterministic on every host (see conftest.py).
+pytestmark = pytest.mark.usefixtures("stub_semgrep_registry_cache")
 
 
 # packages/static-analysis has a hyphen — load via importlib.
@@ -33,17 +45,10 @@ _spec.loader.exec_module(_scanner_mod)
 semgrep_scan_parallel = _scanner_mod.semgrep_scan_parallel
 semgrep_scan_sequential = _scanner_mod.semgrep_scan_sequential
 
-from core.config import RaptorConfig  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_sarif_response(findings=None):
-    """Return a (rc, stdout, stderr) tuple with valid minimal SARIF."""
-    runs = [{"results": findings}] if findings else []
-    return (0 if not findings else 1, json.dumps({"runs": runs}), "")
 
 
 def _stub_run_single(name, config, repo_path, out_dir, timeout,
@@ -205,7 +210,7 @@ class TestSemgrepScanParallelSilentDropDetection:
             # Return success + sarif path — but never write the file.
             return str(sarif), True
         mock_single.side_effect = lying_stub
-        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        _paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
         # Every submitted pack name appears in failed (since none
         # produced an on-disk SARIF). Worker returned success so
         # `failure_count` from the future loop alone would have
@@ -232,7 +237,7 @@ class TestSemgrepScanParallelSilentDropDetection:
             return str(sarif), True
 
         mock_single.side_effect = mixed_stub
-        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        _paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
         # First pack landed → not in failed. Remaining baselines → in failed.
         # (The exact count is len(BASELINE_SEMGREP_PACKS) - 1; threading
         # makes the call-order non-deterministic so we don't assert which
@@ -267,7 +272,7 @@ class TestSemgrepScanSequential:
             sarif = out_dir / f"semgrep_{suffix}.sarif"
             return str(sarif), True  # claim success, never write
         mock_single.side_effect = lying_stub
-        paths, failed = semgrep_scan_sequential(tmp_path, [], tmp_path, timeout=10)
+        _paths, failed = semgrep_scan_sequential(tmp_path, [], tmp_path, timeout=10)
         baseline_names = {n for n, _ in RaptorConfig.BASELINE_SEMGREP_PACKS}
         assert baseline_names.issubset(set(failed))
 
@@ -478,3 +483,74 @@ class TestCleanEnvironment:
         assert env_arg is not None
         assert "PATH" in env_arg
         assert venv_path not in env_arg["PATH"]
+
+
+class TestJobsPerWorker:
+    """Per-process --jobs so concurrent packs share the host instead of
+    each defaulting to every core."""
+
+    def test_divides_cores_by_active_workers(self):
+        f = _scanner_mod._semgrep_jobs_per_worker
+        assert f(n_configs=8, max_workers=4, cpu_count=64) == 16
+        assert f(n_configs=2, max_workers=4, cpu_count=64) == 32  # only 2 run
+        assert f(n_configs=1, max_workers=32, cpu_count=64) == 64  # solo pack
+
+    def test_floors_at_one(self):
+        f = _scanner_mod._semgrep_jobs_per_worker
+        assert f(n_configs=128, max_workers=128, cpu_count=4) == 1
+        assert f(n_configs=0, max_workers=4, cpu_count=8) == 8  # degenerate
+
+    def test_jobs_flag_reaches_argv(self, tmp_path):
+        from packages import semgrep as semgrep_pkg
+        cmd = semgrep_pkg.build_cmd(
+            tmp_path, "p/default", extra_args=["--jobs", "16"],
+        )
+        i = cmd.index("--jobs")
+        assert cmd[i + 1] == "16"
+
+
+class TestMaxMemoryPerWorker:
+    def test_divides_ram_share(self):
+        f = _scanner_mod._semgrep_max_memory_mb
+        # 64 GiB host, 4 active packs → 12 GiB each (75% / 4).
+        assert f(n_configs=8, max_workers=4, total_ram_mb=64 * 1024) == 12 * 1024
+
+    def test_floor_4g(self):
+        f = _scanner_mod._semgrep_max_memory_mb
+        assert f(n_configs=32, max_workers=32, total_ram_mb=16 * 1024) == 4096
+
+    def test_solo_pack_gets_most_of_ram(self):
+        f = _scanner_mod._semgrep_max_memory_mb
+        assert f(n_configs=1, max_workers=32, total_ram_mb=64 * 1024) == 48 * 1024
+
+
+class TestSemgrepDroppedFiles:
+    """Timeout/OOM file drops are silent coverage loss — the sweep
+    must find them across every pack's JSON and only those types."""
+
+    def _write(self, tmp_path, name, errors):
+        import json as _json
+        p = tmp_path / name
+        p.write_text(_json.dumps({"paths": {"scanned": ["a.c"]},
+                                  "errors": errors}))
+        return p
+
+    def test_collects_across_packs_and_filters_types(self, tmp_path):
+        j1 = self._write(tmp_path, "p1.json", [
+            {"type": "Timeout", "path": "src/huge.c", "message": "t"},
+            {"type": "SemgrepError", "path": "src/other.c", "message": "x"},
+        ])
+        j2 = self._write(tmp_path, "p2.json", [
+            {"type": "OutOfMemory", "path": "src/huge.c", "message": "m"},
+            {"type": "Timeout", "path": "src/gen.c", "message": "t"},
+        ])
+        d = _scanner_mod._semgrep_dropped_files([j1, j2])
+        assert d == {
+            "src/gen.c": ["Timeout"],
+            "src/huge.c": ["OutOfMemory", "Timeout"],
+        }
+
+    def test_unreadable_json_skipped(self, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        assert _scanner_mod._semgrep_dropped_files([bad]) == {}

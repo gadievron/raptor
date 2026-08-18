@@ -119,3 +119,99 @@ class TestRunLifecycle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestJournalIndexMerge(unittest.TestCase):
+    """`complete`/`interrupt` must fold the run's review journal into
+    the project-level index. Pre-fix `_merge_journal_index` resolved
+    the `.active` symlink and required `is_dir()` — but `.active`
+    points at the project's `<name>.json` FILE, so the merge was dead
+    code and the project index never updated."""
+
+    @staticmethod
+    def _journal_entry(run_dir, file="a.c", function="f"):
+        from core.coverage.journal import (
+            ReviewJournalEntry,
+            append_entry,
+            now_iso,
+        )
+        append_entry(Path(run_dir), ReviewJournalEntry(
+            ts=now_iso(),
+            run_id=Path(run_dir).name,
+            file=file,
+            function=function,
+            verdict="clean",
+            source_hash="deadbeef",
+            line_start=1,
+        ))
+
+    def test_complete_merges_journal_into_project_index(self):
+        from core.coverage.journal import INDEX_FILENAME
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            _setup_project_symlink(home, d)
+            result = _run("start", "audit", tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out_dir = _extract_out_dir(result)
+            self._journal_entry(out_dir, file="src/x.c", function="parse")
+
+            result = _run("complete", str(out_dir), tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("merged into project index", result.stderr)
+
+            index_path = Path(d) / INDEX_FILENAME
+            self.assertTrue(index_path.is_file(), result.stderr)
+            index = json.loads(index_path.read_text())
+            entries = index.get("entries", index)
+            joined = json.dumps(entries)
+            self.assertIn("src/x.c", joined)
+            self.assertIn("parse", joined)
+
+    def test_interrupt_merges_journal_into_project_index(self):
+        from core.coverage.journal import INDEX_FILENAME
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            _setup_project_symlink(home, d)
+            result = _run("start", "audit", tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out_dir = _extract_out_dir(result)
+            self._journal_entry(out_dir)
+
+            result = _run("interrupt", str(out_dir), "supervisor stop",
+                          tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((Path(d) / INDEX_FILENAME).is_file(),
+                            result.stderr)
+
+    def test_foreign_run_does_not_pollute_active_project(self):
+        """A run completed OUTSIDE the active project's dir must not
+        merge into that project's index."""
+        from core.coverage.journal import INDEX_FILENAME
+        with TemporaryDirectory() as d, TemporaryDirectory() as home, \
+                TemporaryDirectory() as elsewhere:
+            _setup_project_symlink(home, d)
+            out_dir = Path(elsewhere) / "audit-foreign"
+            result = _run("start", "audit", "--out", str(out_dir),
+                          tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self._journal_entry(out_dir)
+
+            result = _run("complete", str(out_dir), tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((Path(d) / INDEX_FILENAME).exists())
+            self.assertFalse(
+                (Path(elsewhere) / INDEX_FILENAME).exists())
+
+    def test_no_active_project_is_silent_noop(self):
+        from core.coverage.journal import INDEX_FILENAME
+        with TemporaryDirectory() as home:
+            # No .active symlink at all; run lands in the default out/
+            # location under a scratch cwd-independent --out.
+            with TemporaryDirectory() as scratch:
+                out_dir = Path(scratch) / "audit-standalone"
+                result = _run("start", "audit", "--out", str(out_dir),
+                              tmp_home=home)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self._journal_entry(out_dir)
+                result = _run("complete", str(out_dir), tmp_home=home)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(
+                    (Path(scratch) / INDEX_FILENAME).exists())

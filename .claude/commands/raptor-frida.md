@@ -39,6 +39,8 @@ libexec/raptor-frida --target ... --template ...
 |------|---------|
 | `api-trace` | libc/syscall surface: `open`, `read`, `write`, `connect`, `fork`, `execve`, etc. |
 | `ssl-unpin` | iOS/macOS Security.framework, OpenSSL `SSL_get_verify_result`, Android `X509TrustManager`. |
+| `bb-coverage` | Basic-block coverage collection. |
+| `binary-flow-trace` | Flow tracing used by `/binary runtime`. |
 
 List dynamically: `raptor frida --list-templates`.
 
@@ -80,7 +82,7 @@ Artefacts:
   - Add the module with: `python3 -m pip install --user --break-system-packages frida`.
 - **Target:** for remote / mobile targets, run the matching `frida-server`. Bind to `0.0.0.0:27042` (default builds bind to localhost only - `raptor doctor` won't tell you this, but `metadata.json` will record the connect failure).
 
-See `docs/frida/QUICKSTART.md`, `docs/frida/SETUP_MACOS.md`, `docs/frida/SETUP_LINUX.md`.
+See `docs/frida.md`.
 
 ## Failure Modes
 
@@ -95,7 +97,7 @@ Read `metadata.json` first. Common patterns:
 
 ## Status
 
-Alpha. Two templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
+Alpha. Four templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
 
 The runner currently does **not** wrap frida in `core/sandbox/`; the `--unsafe-attach` flag is forward-looking and logged into `metadata.json` for when the sandbox envelope lands.
 

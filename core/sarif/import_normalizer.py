@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
 from core.logging import get_logger
+from core.sarif.parser import _coerce_line
 
 logger = get_logger()
 
@@ -227,7 +228,11 @@ def _synthesize_snippet(
     source_root: Path, rel_path: str,
     start_line: int, end_line: Optional[int],
 ) -> str:
-    """Read source lines around the finding location."""
+    """Read the finding's source lines plus trailing context.
+
+    The snippet starts at ``start_line`` (no leading context) and
+    extends ``_SNIPPET_CONTEXT_LINES`` lines past the finding's end.
+    """
     try:
         full = source_root / rel_path
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -294,14 +299,25 @@ def normalize_imported_findings(
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
-        start_line = finding.get("startLine")
-        if not uri or not start_line:
+        if not isinstance(uri, str):
+            uri = ""
+        # Untrusted numeric fields: findings may arrive from external
+        # SARIF where startLine is a JSON string or Infinity/NaN —
+        # values that pass a truthiness gate but raise TypeError in
+        # the snippet arithmetic below. Coerce to int-or-None and
+        # require a positive line so only usable locations proceed.
+        start_line = _coerce_line(finding.get("startLine"))
+        if start_line is not None and start_line < 1:
+            start_line = None
+        if not uri or start_line is None:
             result.warnings.append(ImportWarning(
                 idx, "file/startLine",
-                f"Skipped: missing file or startLine (rule_id={finding.get('rule_id')})",
+                f"Skipped: missing or invalid file/startLine "
+                f"(rule_id={finding.get('rule_id')})",
             ))
             result.stats.findings_skipped += 1
             continue
+        finding["startLine"] = start_line
 
         # --- URI rebasing ---
         resolved = _resolve_uri(uri, source_root, file_index, depth_cache)
@@ -320,8 +336,12 @@ def normalize_imported_findings(
         finding["file"] = resolved
 
         # --- endLine default ---
-        if not finding.get("endLine"):
-            finding["endLine"] = start_line
+        # Same coercion as startLine; a missing, non-integer, or
+        # before-start endLine falls back to startLine.
+        end_line = _coerce_line(finding.get("endLine"))
+        if not end_line or end_line < start_line:
+            end_line = start_line
+        finding["endLine"] = end_line
 
         # --- snippet synthesis ---
         if not finding.get("snippet"):
@@ -382,6 +402,11 @@ def format_import_summary(result: ImportResult, sarif_files: List[str]) -> str:
             lines.append(f"  → {s.findings_skipped} findings skipped ({examples})")
         else:
             lines.append(f"  → {s.findings_skipped} findings skipped")
+        if s.uri_unresolved:
+            lines.append(
+                f"  → {s.uri_unresolved} skipped because their URIs "
+                f"could not be mapped to the source tree"
+            )
     if s.cwe_inferred:
         lines.append(f"  → {s.cwe_inferred} CWEs inferred from rule_id/message")
     if s.snippet_synthesized:
@@ -494,6 +519,7 @@ def import_provenance_block(
             "snippet_synthesized": s.snippet_synthesized,
             "uri_rebased": s.uri_rebased,
             "findings_skipped": s.findings_skipped,
+            "uri_unresolved": s.uri_unresolved,
         },
         "source": source_type,
     }

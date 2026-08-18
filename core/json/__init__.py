@@ -35,7 +35,9 @@ _LAZY_EXPORTS = {
     # reset doesn't replace the singleton — see core/sentinels/.
     "MISSING":                ("core.sentinels", "MISSING"),
     "TTL_FOREVER":            ("core.json.cache", "TTL_FOREVER"),
+    "append_jsonl":           ("core.json.jsonl", "append_jsonl"),
     "load_json":              ("core.json.utils", "load_json"),
+    "load_jsonl":             ("core.json.jsonl", "load_jsonl"),
     "save_json":              ("core.json.utils", "save_json"),
     "load_json_with_comments": ("core.json.utils", "load_json_with_comments"),
 }
@@ -71,11 +73,13 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "CacheEnvelope",
-    "JsonCache",
     "MISSING",
     "TTL_FOREVER",
+    "CacheEnvelope",
+    "JsonCache",
+    "append_jsonl",
     "load_json",
-    "save_json",
     "load_json_with_comments",
+    "load_jsonl",
+    "save_json",
 ]

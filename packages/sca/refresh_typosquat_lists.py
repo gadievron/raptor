@@ -49,9 +49,9 @@ import argparse
 import json
 import logging
 import sys
-import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from core.http import (
     DEFAULT_MAX_BYTES,
@@ -60,6 +60,7 @@ from core.http import (
     SizeLimitExceeded,
 )
 from core.http.urllib_backend import UrllibClient
+from core.run.retry import RetryPolicy, retry_call
 
 logger = logging.getLogger(__name__)
 
@@ -122,27 +123,26 @@ def _get_json(
     :class:`SizeLimitExceeded` is re-raised immediately (a too-large response
     won't shrink on retry — the caller must raise ``max_bytes`` instead).
     """
-    last: Optional[HttpError] = None
-    for i in range(attempts):
-        try:
-            return http.get_json(url, retries=2, max_bytes=max_bytes)
-        except SizeLimitExceeded:
-            raise
-        except HttpError as e:
-            last = e
-            if i + 1 < attempts:
-                time.sleep(0.5 * (i + 1))
-    assert last is not None
-    raise last
+    policy = RetryPolicy(
+        attempts=max(attempts, 1),
+        retryable=lambda e: isinstance(e, HttpError)
+        and not isinstance(e, SizeLimitExceeded),
+        # Linear backoff: 0.5s, 1.0s, 1.5s, ... (delay i = 0.5 * (i+1)).
+        delays=tuple(0.5 * (i + 1) for i in range(max(attempts - 1, 1))),
+    )
+    return retry_call(
+        lambda: http.get_json(url, retries=2, max_bytes=max_bytes),
+        policy=policy,
+    )
 
 
-def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> List[str]:
+def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> list[str]:
     """Rank-ordered (most-popular-first) PyPI names — the order the typosquat
     curation audit needs (rank is the signal it reasons about). May contain
     duplicates; callers that want the canonical bundle ``sorted(set(...))`` it."""
     data = _get_json(http, _HUGOVK_TOP_PYPI)
     rows = data.get("rows") or data.get("packages") or []
-    names: List[str] = []
+    names: list[str] = []
     for r in rows[:top_n]:
         # hugovk format: ``{"project": "requests", "download_count": ...}``
         # in older snapshots; ``{"name": ...}`` in newer.
@@ -152,11 +152,11 @@ def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> List[str]:
     return names
 
 
-def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
+def fetch_pypi(http: HttpClient, top_n: int) -> list[str]:
     return sorted(set(_fetch_pypi_ranked(http, top_n)))
 
 
-def _fetch_npm_ranked(http: HttpClient, top_n: int) -> List[str]:
+def _fetch_npm_ranked(http: HttpClient, top_n: int) -> list[str]:
     """Rank-ordered (most-depended-upon-first) npm names. See _fetch_pypi_ranked."""
     data = _get_json(http, _ANVAKA_NPM_RANK, max_bytes=_NPM_MAX_BYTES)
     # The anvaka npmrank format is ``{"tags": {...}, "rank": {name: score}}``
@@ -167,7 +167,7 @@ def _fetch_npm_ranked(http: HttpClient, top_n: int) -> List[str]:
     rank = data.get("rank") if isinstance(data, dict) else None
     if not isinstance(rank, dict):
         return []
-    scored: List[Tuple[str, float]] = []
+    scored: list[tuple[str, float]] = []
     for name, score in rank.items():
         if not (isinstance(name, str) and name):
             continue
@@ -179,27 +179,27 @@ def _fetch_npm_ranked(http: HttpClient, top_n: int) -> List[str]:
     return [n for n, _ in scored[:top_n]]
 
 
-def fetch_npm(http: HttpClient, top_n: int) -> List[str]:
+def fetch_npm(http: HttpClient, top_n: int) -> list[str]:
     return sorted(set(_fetch_npm_ranked(http, top_n)))
 
 
 def _fetch_crates_ranked(
     http: HttpClient, top_n: int, *, per_page: int = 100,
-) -> List[str]:
+) -> list[str]:
     """crates.io paginates ``per_page`` (max 100) per request. Fetch
     enough pages to fill ``top_n``. The API is unauthenticated but
     rate-limited; honour rate limits via ``retries=`` (the proxy +
     backoff path handles 429 transparently). ``per_page`` is a
     parameter so tests can exercise pagination with small fixtures.
     Returns names in download-rank order (see _fetch_pypi_ranked)."""
-    names: List[str] = []
+    names: list[str] = []
     pages = (top_n + per_page - 1) // per_page
     for page in range(1, pages + 1):
         url = (f"{_CRATES_API}?sort=downloads"
                f"&per_page={per_page}&page={page}")
         try:
             data = http.get_json(url, retries=2)
-        except Exception as e:                  # noqa: BLE001
+        except Exception as e:
             logger.warning("crates.io page %d failed: %s", page, e)
             raise
         crates = data.get("crates") or []
@@ -216,20 +216,20 @@ def _fetch_crates_ranked(
 
 def fetch_crates(
     http: HttpClient, top_n: int, *, per_page: int = 100,
-) -> List[str]:
+) -> list[str]:
     return sorted(set(_fetch_crates_ranked(http, top_n, per_page=per_page)))
 
 
-def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
+def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> list[str]:
     """Packagist's popular endpoint is paginated; ``page=N`` query param.
     Returns names in popularity-rank order (see _fetch_pypi_ranked)."""
-    names: List[str] = []
+    names: list[str] = []
     page = 1
     while len(names) < top_n:
         url = f"{_PACKAGIST_POPULAR}?page={page}"
         try:
             data = http.get_json(url, retries=2)
-        except Exception as e:                  # noqa: BLE001
+        except Exception as e:
             logger.warning("packagist page %d failed: %s", page, e)
             raise
         packages = data.get("packages") or []
@@ -248,7 +248,7 @@ def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
     return names
 
 
-def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
+def fetch_packagist(http: HttpClient, top_n: int) -> list[str]:
     return sorted(set(_fetch_packagist_ranked(http, top_n)))
 
 
@@ -258,7 +258,7 @@ def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
 
 # Maps the bundled-file name to its fetcher. The file name matches what
 # typosquat.py loads via ``packages/sca/data/popular/<eco>.json``.
-_FETCHERS: Dict[str, Tuple[str, Callable[[HttpClient, int], List[str]]]] = {
+_FETCHERS: dict[str, tuple[str, Callable[[HttpClient, int], list[str]]]] = {
     # bundle filename → (display name, fetcher)
     # Filenames must match the ecosystem strings in parsers/ so the
     # typosquat detector's ``_load_popular(ecosystem)`` finds them.
@@ -273,9 +273,9 @@ def refresh_all(
     http: HttpClient,
     *,
     top_n: int = _DEFAULT_TOP_N,
-    only: Optional[List[str]] = None,
+    only: list[str] | None = None,
     data_dir: Path = _DATA_DIR,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Fetch every supported ecosystem and write the result to
     ``data_dir/popular/<file>``. Returns ``{file: status}`` per
     fetcher: ``"updated"`` / ``"unchanged"`` / ``"skipped"`` /
@@ -283,7 +283,7 @@ def refresh_all(
     """
     popular_dir = data_dir / "popular"
     popular_dir.mkdir(parents=True, exist_ok=True)
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for fname, (display, fetch) in _FETCHERS.items():
         if only is not None and display.lower() not in {o.lower() for o in only}:
             out[fname] = "skipped"
@@ -324,7 +324,7 @@ def refresh_all(
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="refresh_typosquat_lists",
         description=(

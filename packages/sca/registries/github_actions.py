@@ -31,16 +31,25 @@ just delays a freshness alert by a day, never produces a wrong one.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import urllib.parse
 
 from core.http import HttpClient
-from core.json import JsonCache, MISSING
+from core.json import MISSING, JsonCache
 
 logger = logging.getLogger(__name__)
 
 
 _DEFAULT_TTL = 24 * 3600
 _CACHE_KEY_PREFIX = "ghactions-latest"
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — ``owner/repo`` slugs contain ``/``, and a raw slug
+    with ``..`` segments could otherwise alias another repo's cache
+    file after JsonCache path sanitisation. Old raw-slug entries
+    re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 
 class GitHubActionsClient:
@@ -51,7 +60,7 @@ class GitHubActionsClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -61,7 +70,7 @@ class GitHubActionsClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def get_latest_tag(self, owner_repo: str) -> Optional[str]:
+    def get_latest_tag(self, owner_repo: str) -> str | None:
         """Return the ``tag_name`` of the latest non-prerelease
         release for ``<owner>/<repo>``, or None on any failure.
 
@@ -72,7 +81,7 @@ class GitHubActionsClient:
         repo = self._parent_repo(owner_repo)
         if not repo:
             return None
-        cache_key = f"{_CACHE_KEY_PREFIX}:{repo}"
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(repo)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -109,7 +118,7 @@ class GitHubActionsClient:
         return tag if isinstance(tag, str) else None
 
     @staticmethod
-    def _parent_repo(name: str) -> Optional[str]:
+    def _parent_repo(name: str) -> str | None:
         """``actions/cache/restore`` → ``actions/cache``;
         ``actions/checkout`` → ``actions/checkout``. Returns None
         for malformed names without an ``owner/repo`` prefix."""
@@ -120,7 +129,7 @@ class GitHubActionsClient:
             return None
         return f"{parts[0]}/{parts[1]}"
 
-    def get_repo_info(self, owner_repo: str) -> Optional[dict]:
+    def get_repo_info(self, owner_repo: str) -> dict | None:
         """Return the ``GET /repos/{owner}/{repo}`` response, or None.
 
         Used by the branch-protection detector to discover the
@@ -132,7 +141,7 @@ class GitHubActionsClient:
         """
         if "/" not in owner_repo:
             return None
-        cache_key = f"ghactions-repo:{owner_repo}"
+        cache_key = f"ghactions-repo:{_key_component(owner_repo)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -159,7 +168,7 @@ class GitHubActionsClient:
 
     def get_branch_protection(
         self, owner_repo: str, branch: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Return the ``GET /repos/{owner}/{repo}/branches/{branch}/
         protection`` response, or None on any failure.
 
@@ -187,7 +196,8 @@ class GitHubActionsClient:
         """
         if "/" not in owner_repo or not branch:
             return None
-        cache_key = f"ghactions-branch-prot:{owner_repo}:{branch}"
+        cache_key = (f"ghactions-branch-prot:{_key_component(owner_repo)}:"
+                     f"{_key_component(branch)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:

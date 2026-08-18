@@ -28,17 +28,14 @@ from __future__ import annotations
 from pathlib import Path
 from unittest import mock
 
-
 from core.analysis.cfg_builder import (
     ENTRY_LINENO,
     EXIT_LINENO,
-    PyCFGNode,
     PythonCFG,
     build_cpp_callgraph,
     build_python_cfg,
 )
 from core.analysis.dominators import build_dom_tree
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,14 +46,6 @@ def _cfg(source: str, func: str = "f") -> PythonCFG:
     cfg = build_python_cfg(source, func)
     assert cfg is not None, f"function {func!r} not found in source"
     return cfg
-
-
-def _by_label(cfg: PythonCFG) -> dict:
-    return {n.label: n for n in cfg.nodes()}
-
-
-def _successors(cfg: PythonCFG, node: PyCFGNode):
-    return list(cfg.successors(node))
 
 
 # ---------------------------------------------------------------------------
@@ -196,15 +185,13 @@ def test_break_targets_loop_successor():
         "    return 0\n"
     )
     cfg = _cfg(src)
-    nodes = {n.lineno: n for n in cfg.nodes() if n.kind == "stmt"}
-    # The break statement's successor should be the loop's after-loop
-    # target (header in our model, since there's no orelse).
     break_node = next(
         n for n in cfg.nodes() if "break" in n.label
     )
-    header = nodes[2]
-    # break links to header (the after-loop pseudo-target)
-    assert header in cfg.successors(break_node)
+    exit_node = next(
+        n for n in cfg.nodes() if "while-exit" in n.label
+    )
+    assert exit_node in cfg.successors(break_node)
 
 
 def test_continue_targets_loop_header():
@@ -394,7 +381,8 @@ def test_build_from_path(tmp_path: Path):
 
 def _stub_edge_index(binary_path, edges):
     from core.analysis.binary_oracle_edges import (
-        BinaryCallEdge, BinaryEdgeIndex,
+        BinaryCallEdge,
+        BinaryEdgeIndex,
     )
     return BinaryEdgeIndex(
         binary_path=str(binary_path),

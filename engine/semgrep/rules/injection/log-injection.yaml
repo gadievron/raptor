@@ -1,0 +1,270 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → logging format-string position
+  # CWE-117: Log Injection / Log Forging via CRLF in log messages.
+  # Only fires when user input IS the format string / message, NOT when it
+  # is a format argument (logging.info("User: %s", user_input) is safe).
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.log-injection.taint.python
+    message: >-
+      Untrusted data flows into the log message string. An attacker can
+      inject CRLF sequences to forge log entries or corrupt log parsers.
+      Sanitise newlines before logging, or pass user data as format
+      arguments (logging.info("User: %s", user_input)).
+    languages: [python]
+    severity: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      # Module-level logging functions — focus on the message/format-string
+      - patterns:
+          - pattern: logging.info($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: logging.warning($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: logging.error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: logging.debug($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: logging.critical($MSG, ...)
+          - focus-metavariable: $MSG
+      # Logger instance methods
+      - patterns:
+          - pattern: $LOGGER.info($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.warning($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.debug($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.critical($MSG, ...)
+          - focus-metavariable: $MSG
+    pattern-sanitizers:
+      - pattern: $X.replace("\n", ...)
+      - pattern: $X.replace("\r", ...)
+      - pattern: $X.replace("\r\n", ...)
+    metadata:
+      cwe: ["CWE-117"]
+      owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
+      tags: ["security", "injection", "log-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → log format-string position
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.log-injection.taint.go
+    message: >-
+      Untrusted data flows into the log format string. An attacker can
+      inject newlines to forge log entries. Sanitise newlines before
+      logging, or use structured logging (slog) with typed fields.
+    languages: [go]
+    severity: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin
+          - pattern: $CTX.Query(...)
+          - pattern: $CTX.Param(...)
+          - pattern: $CTX.PostForm(...)
+          # echo
+          - pattern: $CTX.QueryParam(...)
+          - pattern: $CTX.FormValue(...)
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      # log.Printf — focus on format string
+      - patterns:
+          - pattern: log.Printf($FMT, ...)
+          - focus-metavariable: $FMT
+      - patterns:
+          - pattern: log.Fatalf($FMT, ...)
+          - focus-metavariable: $FMT
+      - patterns:
+          - pattern: log.Panicf($FMT, ...)
+          - focus-metavariable: $FMT
+      # log.Print/Println — message is the content
+      - patterns:
+          - pattern: log.Println($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: log.Print($MSG, ...)
+          - focus-metavariable: $MSG
+      # slog — structured logger message string
+      - patterns:
+          - pattern: slog.Info($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: slog.Warn($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: slog.Error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: slog.Debug($MSG, ...)
+          - focus-metavariable: $MSG
+      # Logger instance
+      - patterns:
+          - pattern: $LOGGER.Printf($FMT, ...)
+          - focus-metavariable: $FMT
+      - patterns:
+          - pattern: $LOGGER.Println($MSG, ...)
+          - focus-metavariable: $MSG
+    pattern-sanitizers:
+      - pattern: strings.ReplaceAll($X, "\n", ...)
+      - pattern: strings.ReplaceAll($X, "\r", ...)
+    metadata:
+      cwe: ["CWE-117"]
+      owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
+      tags: ["security", "injection", "log-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → Logger message position
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.log-injection.taint.java
+    message: >-
+      Untrusted data flows into the log message string. An attacker can
+      inject CRLF sequences to forge log entries. Sanitise newlines or
+      use structured logging with parameterised messages
+      (logger.info("User: {}", userInput)).
+    languages: [java]
+    severity: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-sinks:
+      # SLF4J / Log4j2 Logger — focus on message position
+      - patterns:
+          - pattern: (Logger $LOG).info($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: (Logger $LOG).warn($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: (Logger $LOG).error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: (Logger $LOG).debug($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: (Logger $LOG).trace($MSG, ...)
+          - focus-metavariable: $MSG
+    pattern-sanitizers:
+      - pattern: $X.replace("\n", ...)
+      - pattern: $X.replace("\r", ...)
+      - pattern: $X.replaceAll("[\n\r]", ...)
+    metadata:
+      cwe: ["CWE-117"]
+      owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
+      tags: ["security", "injection", "log-injection", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → console/logger sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.log-injection.taint.javascript
+    message: >-
+      Untrusted data flows into a log message. An attacker can inject
+      newlines to forge log entries or corrupt log parsers. Sanitise
+      newlines before logging.
+    languages: [javascript, typescript]
+    severity: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.headers[...]
+          # Koa
+          - pattern: $CTX.query[...]
+          - pattern: $CTX.query.$PROP
+          - pattern: $CTX.params[...]
+          - pattern: $CTX.params.$PROP
+          - pattern: $CTX.request.body[...]
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: console.log($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: console.error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: console.warn($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: console.info($MSG, ...)
+          - focus-metavariable: $MSG
+      # winston / bunyan / pino logger instances
+      - patterns:
+          - pattern: $LOGGER.info($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.warn($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.error($MSG, ...)
+          - focus-metavariable: $MSG
+      - patterns:
+          - pattern: $LOGGER.debug($MSG, ...)
+          - focus-metavariable: $MSG
+    pattern-sanitizers:
+      - pattern: $X.replace(/[\r\n]/g, ...)
+      - pattern: $X.replace(/\n/g, ...)
+      - pattern: $X.replace(/\r/g, ...)
+    metadata:
+      cwe: ["CWE-117"]
+      owasp_top_10: ["A9:2021-Security Logging and Monitoring Failures"]
+      tags: ["security", "injection", "log-injection", "taint"]

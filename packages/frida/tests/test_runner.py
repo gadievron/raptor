@@ -186,6 +186,51 @@ def test_load_script_from_file(tmp_path: Path):
     assert "hello" in src
 
 
+def test_binary_flow_trace_parser_hooks_render_from_taxonomy():
+    """Drift guard: the parser hook list is generated, not hand-copied.
+
+    The template used to carry a hand-written subset of the taxonomy's
+    PARSER_FUNCS that silently drifted; the rendered source must now
+    contain every taxonomy parser name and the template file none.
+    """
+    from core.function_taxonomy import PARSER_FUNCS
+
+    template_body = runner.resolve_template("binary-flow-trace").read_text(
+        encoding="utf-8",
+    )
+    assert runner._PARSER_HOOKS_SLOT in template_body
+
+    src, origin = runner.load_script_source("binary-flow-trace", None)
+    assert origin == "template:binary-flow-trace"
+    assert runner._PARSER_HOOKS_SLOT not in src
+    for name in PARSER_FUNCS:
+        assert f'"{name}"' in src, name
+    # Arg readers remain for the historically-instrumented entries.
+    assert "'ZSTD_decompress': a => ({ size: a[3].toInt32() })" in src
+
+
+def test_binary_flow_trace_hooks_include_pack_derived_names():
+    """The hook list is regenerated from the seeds|pack union (WP6):
+    names that live only in the parser_apis data pack — never in the
+    seed literal — must reach the rendered JS."""
+    from core.function_taxonomy import PARSER_FUNCS, PARSER_SEED_FUNCS
+
+    pack_only = PARSER_FUNCS - PARSER_SEED_FUNCS
+    assert pack_only, "pack contributed nothing to PARSER_FUNCS"
+    src, _ = runner.load_script_source("binary-flow-trace", None)
+    # TIFFOpen is a stable legacy-catalog pack entry; also spot-check
+    # an arbitrary pack-only name so the assertion tracks the pack.
+    assert '"TIFFOpen"' in src
+    assert f'"{min(pack_only)}"' in src
+
+
+def test_non_template_scripts_are_not_rendered(tmp_path: Path):
+    js = tmp_path / "h.js"
+    js.write_text("const x = /*__PARSER_HOOKS__*/ [];\n")
+    src, _ = runner.load_script_source(None, str(js))
+    assert runner._PARSER_HOOKS_SLOT in src
+
+
 # --- run() with attach-by-PID ----------------------------------------
 
 def test_run_attach_pid_writes_outputs(tmp_path: Path):

@@ -40,3 +40,21 @@ def test_non_claude_and_unparseable_keep_temperature():
     assert supports_temperature("gpt-5.2") is True
     assert supports_temperature("") is True
     assert supports_temperature("llama3:70b") is True
+
+
+def test_single_number_5_family_omits_temperature():
+    """The 5 family carries single-number versions (no minor); absent
+    minor gates as 0, so (5, 0) >= (4, 7) omits.  Verified live: a
+    5-family model on Bedrock Mantle rejects ``temperature`` with the
+    same 400 as opus-4-7."""
+    assert supports_temperature("claude-sonnet-5") is False
+    assert supports_temperature("claude-opus-5") is False
+    assert supports_temperature("anthropic.claude-sonnet-5") is False
+    assert supports_temperature("global.anthropic.claude-opus-5") is False
+
+
+def test_single_number_below_cutoff_keeps_temperature():
+    """Optional-minor parsing must not over-omit old single-number
+    versions: (4, 0) and lower still accept temperature."""
+    assert supports_temperature("claude-opus-4") is True
+    assert supports_temperature("claude-instant-1") is True

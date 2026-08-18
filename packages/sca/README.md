@@ -48,13 +48,16 @@ with a `--no-*` flag:
 | Parsing | on | — | Parse each manifest to a deduplicated dep list |
 | Inline-installs | on | `--no-inline-installs` | Extract pip/apt/yum/dnf/apk install commands from Dockerfiles + devcontainer + shell + GHA workflows |
 | Image-source scanning | on | `--no-image-scanning` | Fetch base-image SBOMs from OCI registries (Dockerfile FROM, compose `image:`, k8s `spec.containers[*].image`, GitLab CI `image:`) |
-| Transitive resolution | on | `--no-resolve-transitive` | Run native resolvers (`pip-compile`, `npm install --dry-run`, `cargo metadata`, etc.) for manifests without lockfiles |
+| Transitive resolution | on | `--no-resolve-transitive` | Run native resolvers (`pip-compile`, `npm install --dry-run`, `cargo update` in a temp copy, etc.) for manifests without lockfiles |
 | OSV + KEV + EPSS | on | `--no-kev` / `--no-epss` | Query OSV.dev for advisories, CISA KEV for in-the-wild exploitation, FIRST.org for EPSS scores |
 | Reachability | on | `--no-reachability` | Module-level + function-level: is the vulnerable code path imported / called? |
 | Supply-chain heuristics | on | `--no-supply-chain` | Typosquat similarity, slopsquat (LLM-hallucinated-name shape), install-hook content review, low-bus-factor, recent-publish, maintainer-change, orphan-commit dep refs, payload-size spikes, workflow-signing posture, branch-protection posture, sentinel-package match |
 
-LLM-driven stages are off by default unless explicitly enabled. The
-umbrella switch is `--no-llm` (forces all off).
+LLM behavioural review and LLM triage are on by default (disable with
+`--skip-review` / `--skip-triage`); the other LLM-driven stages
+(maintainer review, slopsquat auditing, inline-install review, impact
+analysis) are off unless explicitly enabled. The umbrella switch is
+`--no-llm` (forces all off).
 
 ---
 
@@ -190,10 +193,15 @@ smallest fix version above the installed one. Default is plan-only;
 raptor-sca fix /path                  # Show the plan
 raptor-sca fix /path --apply          # Apply rewrites
 raptor-sca fix /path --apply --allow-major  # Allow major-version bumps
-raptor-sca fix /path --fix=GHSA-xxx-yyy --apply  # Restrict to one advisory
-raptor-sca fix /path --pin-only       # Skip wildcards / caret / range entries
-raptor-sca fix /path --validate-against=their-pr-manifest.txt  # Check Dependabot's plan
+raptor-sca fix /path --cve-only --fix=GHSA-xxx-yyy --apply  # Restrict to one advisory
+raptor-sca fix /path --cve-only --pin-only  # Skip wildcards / caret / range entries
+raptor-sca fix /path --cve-only --validate-against=their-pr-manifest.txt  # Check Dependabot's plan
 ```
+
+`--fix`, `--pin-only`, `--validate-against`, and `--format` belong to
+the CVE-remediation backend, selected with `--cve-only` (or
+`--findings`); without it, `fix` runs the dependency optimiser, whose
+parser does not accept them.
 
 Manifests the rewriter can't safely modify (Maven properties,
 computed npm specifiers, etc.) get logged + skipped rather than
@@ -229,7 +237,7 @@ raptor-sca <target> --fail-on-severity high --fail-on-kev
 Exit codes: `0` = below threshold, `1` = above threshold (build
 fail), `2` = invalid args, `3` = internal error.
 
-For pre-commit / PR-comment workflows see `raptor-sca fix --format=pr-comment`.
+For pre-commit / PR-comment workflows see `raptor-sca fix --cve-only --format=pr-comment`.
 
 ---
 
@@ -271,7 +279,7 @@ override config.
 | CLI dispatch | `cli.py` |
 | Pipeline orchestrator | `pipeline.py` |
 | Discovery + parser dispatch | `discovery.py`, `parsers/` |
-| OSV / KEV / EPSS clients | `osv.py`, `kev.py`, `epss.py` |
+| OSV / KEV / EPSS clients | `osv.py` (KEV/EPSS live in `core/cve/`) |
 | Native resolver wrappers | `resolvers/` |
 | Reachability tiers | `reachability/` |
 | Hygiene / supply-chain / license heuristics | `hygiene.py`, `supply_chain/`, `license.py` |

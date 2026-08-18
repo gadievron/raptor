@@ -64,6 +64,7 @@ from .types import (
     LoopTerminated,
     Message,
     StopReason,
+    StreamDelta,
     TextBlock,
     ToolCall,
     ToolCallBlocked,
@@ -75,6 +76,7 @@ from .types import (
     ToolResult,
     ToolResultPreflight,
     TurnCompleted,
+    TurnResponse,
     TurnStarted,
 )
 
@@ -207,6 +209,7 @@ class ToolUseLoop:
         submission_warning: Callable[["SubmissionState"], str | None] | None = None,
         in_fire_mutator: Callable[["InFireMutatorContext"], str | None] | None = None,
         nudge_on_no_tool_call: str | None = None,
+        stream: bool = False,
         **provider_specific: Any,
     ) -> None:
         """``refuse_on_indicators``: prompt-injection corpus names
@@ -319,6 +322,7 @@ class ToolUseLoop:
         # None → no injection, byte-identical to pre-hook behaviour.
         self._in_fire_mutator = in_fire_mutator
         self._nudge_on_no_tool_call = nudge_on_no_tool_call
+        self._stream = stream and self._provider.supports_streaming()
         self._provider_specific = provider_specific
 
     # ------------------------------------------------------------------
@@ -521,19 +525,31 @@ class ToolUseLoop:
 
             # ---- the turn -----------------------------------------------
             try:
-                response = self._provider.turn(
-                    messages,
-                    self._tools,
-                    system=self._system,
-                    max_tokens=self._max_tokens_per_turn,
-                    cache_control=self._cache_control,
-                    **self._provider_specific,
+                if self._stream:
+                    response = self._consume_stream(
+                        iteration, messages,
+                    )
+                else:
+                    response = self._provider.turn(
+                        messages,
+                        self._tools,
+                        system=self._system,
+                        max_tokens=self._max_tokens_per_turn,
+                        cache_control=self._cache_control,
+                        **self._provider_specific,
+                    )
+            except Exception as exc:
+                from core.llm.providers import is_credit_exhausted
+                reason = (
+                    "credit_exhausted"
+                    if is_credit_exhausted(exc)
+                    else "provider_error"
                 )
-            except Exception:
                 self._emit(LoopTerminated(
-                    reason="provider_error",
+                    reason=reason,
                     iterations=iteration,
                     total_cost_usd=total_cost_usd,
+                    error_message=str(exc),
                 ))
                 raise
 
@@ -689,7 +705,7 @@ class ToolUseLoop:
                     except ToolHandlerTimeout as exc:
                         if self._terminate_on_handler_error:
                             self._emit(LoopTerminated(
-                                reason="tool_error",
+                                reason="tool_timeout",
                                 iterations=iteration + 1,
                                 total_cost_usd=total_cost_usd,
                             ))
@@ -932,6 +948,101 @@ class ToolUseLoop:
     def _emit(self, event: LoopEvent) -> None:
         if self._events is not None:
             self._events(event)
+
+    def _consume_stream(
+        self,
+        iteration: int,
+        messages: list[Message],
+    ) -> "TurnResponse":
+        """Call ``turn_stream()`` and accumulate chunks into a
+        :class:`TurnResponse`, emitting :class:`StreamDelta` events
+        as they arrive."""
+        content_blocks: list[TextBlock | ToolCall] = []
+        text_parts: list[str] = []
+        tool_calls: dict[str, dict] = {}
+        tool_call_order: list[str] = []
+        in_text = False
+        input_tokens = output_tokens = cache_read = cache_write = 0
+        stop = StopReason.ERROR
+
+        for chunk in self._provider.turn_stream(
+            messages,
+            self._tools,
+            system=self._system,
+            max_tokens=self._max_tokens_per_turn,
+            cache_control=self._cache_control,
+            **self._provider_specific,
+        ):
+            self._emit(StreamDelta(iteration=iteration, chunk=chunk))
+
+            if chunk.type == "text_delta":
+                if not in_text and tool_calls:
+                    self._flush_text(text_parts, content_blocks)
+                    text_parts = []
+                in_text = True
+                text_parts.append(chunk.text)
+
+            elif chunk.type == "tool_call_start":
+                if in_text:
+                    self._flush_text(text_parts, content_blocks)
+                    text_parts = []
+                    in_text = False
+                tool_calls[chunk.tool_call_id] = {
+                    "name": chunk.tool_call_name,
+                    "input_parts": [],
+                }
+                tool_call_order.append(chunk.tool_call_id)
+
+            elif chunk.type == "tool_call_delta":
+                tc = tool_calls.get(chunk.tool_call_id)
+                if tc:
+                    tc["input_parts"].append(chunk.tool_call_input_delta)
+
+            elif chunk.type == "tool_call_end":
+                tc = tool_calls.get(chunk.tool_call_id)
+                if tc:
+                    raw = "".join(tc["input_parts"])
+                    try:
+                        args = json.loads(raw) if raw else {}
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "stream: unparseable tool-call JSON for "
+                            "%r: %r", tc["name"], raw[:400],
+                        )
+                        args = {}
+                    content_blocks.append(ToolCall(
+                        id=chunk.tool_call_id,
+                        name=tc["name"],
+                        input=args,
+                    ))
+
+            elif chunk.type == "usage":
+                input_tokens = chunk.input_tokens
+                output_tokens = chunk.output_tokens
+                cache_read = chunk.cache_read_tokens
+                cache_write = chunk.cache_write_tokens
+
+            elif chunk.type == "done":
+                stop = chunk.stop_reason or StopReason.ERROR
+
+        self._flush_text(text_parts, content_blocks)
+
+        return TurnResponse(
+            content=content_blocks,
+            stop_reason=stop,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+        )
+
+    @staticmethod
+    def _flush_text(
+        parts: list[str],
+        blocks: list,
+    ) -> None:
+        if parts:
+            blocks.append(TextBlock(text="".join(parts)))
 
     def _dispatch_one(self, call: ToolCall) -> ToolResult:
         """Invoke the handler for ``call.name`` with optional timeout

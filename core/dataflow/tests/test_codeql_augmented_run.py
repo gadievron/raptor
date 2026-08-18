@@ -33,7 +33,7 @@ def _make_runner(returncode: int = 0, stderr: str = "", raise_timeout: bool = Fa
     """Build a fake subprocess runner. Records each call's args."""
     calls: List[List[str]] = []
 
-    def _runner(args, *, capture_output=True, text=True, timeout=None, check=False):
+    def _runner(args, *, capture_output=True, text=True, timeout=None, check=False, env=None):
         calls.append(list(args))
         if raise_timeout:
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
@@ -84,6 +84,7 @@ def test_analyze_omits_additional_packs_when_no_extension(tmp_path: Path):
 def test_analyze_adds_additional_packs_when_extension_supplied(tmp_path: Path):
     runner, calls = _make_runner()
     pack = tmp_path / "pack"
+    pack.mkdir()
     analyze(
         tmp_path / "db",
         ["q.ql"],
@@ -111,6 +112,7 @@ def test_analyze_returns_analysis_result(tmp_path: Path):
     runner, _ = _make_runner()
     out = tmp_path / "out.sarif"
     pack = tmp_path / "pack"
+    pack.mkdir()
     result = analyze(
         tmp_path / "db",
         ["a.ql", "b.ql"],
@@ -228,6 +230,7 @@ def test_analyze_rejects_empty_queries(tmp_path: Path):
 def test_baseline_and_augmented_runs_twice(tmp_path: Path):
     runner, calls = _make_runner()
     pack = tmp_path / "pack"
+    pack.mkdir()
     out_dir = tmp_path / "results"
     run_baseline_and_augmented(
         tmp_path / "db",
@@ -242,6 +245,7 @@ def test_baseline_and_augmented_runs_twice(tmp_path: Path):
 def test_baseline_first_call_has_no_extension_pack(tmp_path: Path):
     runner, calls = _make_runner()
     pack = tmp_path / "pack"
+    pack.mkdir()
     run_baseline_and_augmented(
         tmp_path / "db",
         ["q.ql"],
@@ -255,6 +259,7 @@ def test_baseline_first_call_has_no_extension_pack(tmp_path: Path):
 def test_augmented_second_call_has_extension_pack(tmp_path: Path):
     runner, calls = _make_runner()
     pack = tmp_path / "pack"
+    pack.mkdir()
     run_baseline_and_augmented(
         tmp_path / "db",
         ["q.ql"],
@@ -269,6 +274,7 @@ def test_augmented_second_call_has_extension_pack(tmp_path: Path):
 def test_baseline_and_augmented_writes_to_distinct_paths(tmp_path: Path):
     runner, _ = _make_runner()
     out_dir = tmp_path / "results"
+    (tmp_path / "pack").mkdir()
     baseline, augmented = run_baseline_and_augmented(
         tmp_path / "db",
         ["q.ql"],
@@ -285,6 +291,7 @@ def test_baseline_and_augmented_propagates_runner_failure(tmp_path: Path):
     """If baseline fails, augmented isn't run — fail loudly so the
     operator sees the first error rather than two."""
     runner, calls = _make_runner(returncode=1, stderr="boom")
+    (tmp_path / "pack").mkdir()
     with pytest.raises(CodeQLRunError):
         run_baseline_and_augmented(
             tmp_path / "db",
@@ -294,3 +301,53 @@ def test_baseline_and_augmented_propagates_runner_failure(tmp_path: Path):
             runner=runner,
         )
     assert len(calls) == 1  # augmented never reached
+
+
+class TestDataOnlyPackGate:
+    """The extension pack is loaded with pack-trust disabled, so it
+    must be declarative data only — query content is refused."""
+
+    def test_pack_with_ql_refused(self, tmp_path: Path):
+        runner, calls = _make_runner()
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "evil.ql").write_text("select 1")
+        with pytest.raises(ValueError, match="data extensions only"):
+            analyze(
+                tmp_path / "db", ["q.ql"], tmp_path / "out.sarif",
+                extension_pack=pack, runner=runner,
+            )
+        assert calls == []  # refused before any subprocess ran
+
+    def test_pack_with_qll_in_subdir_refused(self, tmp_path: Path):
+        runner, calls = _make_runner()
+        pack = tmp_path / "pack"
+        (pack / "lib").mkdir(parents=True)
+        (pack / "lib" / "helper.qll").write_text("")
+        with pytest.raises(ValueError, match="data extensions only"):
+            analyze(
+                tmp_path / "db", ["q.ql"], tmp_path / "out.sarif",
+                extension_pack=pack, runner=runner,
+            )
+        assert calls == []
+
+    def test_missing_pack_dir_refused(self, tmp_path: Path):
+        runner, calls = _make_runner()
+        with pytest.raises(ValueError, match="not a directory"):
+            analyze(
+                tmp_path / "db", ["q.ql"], tmp_path / "out.sarif",
+                extension_pack=tmp_path / "absent", runner=runner,
+            )
+        assert calls == []
+
+    def test_data_only_pack_accepted(self, tmp_path: Path):
+        runner, calls = _make_runner()
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "codeql-pack.yml").write_text("name: x/y\n")
+        (pack / "models.yml").write_text("extensions: []\n")
+        analyze(
+            tmp_path / "db", ["q.ql"], tmp_path / "out.sarif",
+            extension_pack=pack, runner=runner,
+        )
+        assert len(calls) == 1

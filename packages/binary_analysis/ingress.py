@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,9 @@ def _platform(manifest: Any) -> str:
 def recover_external_ingress(
     manifest: Any,
     context_map: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
     """Recover externally drivable interfaces without claiming reachability."""
-    records: list[EvidenceRecord] = []
+    records: list[BinaryEvidenceRecord] = []
     candidates: list[ExternalIngressCandidate] = []
     seen: set[tuple[str, str, str]] = set()
     platform = _platform(manifest)
@@ -368,9 +368,9 @@ def recover_external_ingress(
                     address=address,
                 )
         if getattr(manifest, "target_kind", "") == "pe-dll":
-            if len(exports) > 200:
-                logger.warning("PE DLL has %d exports, truncating to 200", len(exports))
-            for name in exports[:200]:
+            if len(exports) > 2000:
+                logger.info("PE DLL has %d exports", len(exports))
+            for name in exports:
                 if name.split(".")[-1] in _PE_EXPORT_SKIP:
                     continue
                 function_id, function_name, address = bind_function(name)
@@ -411,9 +411,9 @@ def recover_external_ingress(
                     address=address,
                 )
     elif getattr(manifest, "target_kind", "") == "elf-linux":
-        if len(exports) > 200:
-            logger.warning("ELF shared object has %d exports, truncating to 200", len(exports))
-        for name in exports[:200]:
+        if len(exports) > 2000:
+            logger.info("ELF binary has %d exports", len(exports))
+        for name in exports:
             if name.split(".")[-1] in {"main", "_start"}:
                 continue
             function_id, function_name, address = bind_function(name)

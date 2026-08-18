@@ -115,6 +115,25 @@ class TestBuildIndex:
         idx = build_header_function_index(tmp_path)
         assert "if" not in idx
 
+    def test_braces_inside_string_literal(self, tmp_path):
+        (tmp_path / "fmt.h").write_text(
+            'static inline void fmt(int x) {\n'
+            '    printf("value={%d}", x);\n'
+            '}\n'
+        )
+        idx = build_header_function_index(tmp_path)
+        assert "fmt" in idx
+        assert "printf" in idx["fmt"][1]
+
+    def test_braces_inside_char_literal(self, tmp_path):
+        (tmp_path / "tok.h").write_text(
+            "static inline int is_open(char c) {\n"
+            "    return c == '{';\n"
+            "}\n"
+        )
+        idx = build_header_function_index(tmp_path)
+        assert "is_open" in idx
+
 
 class TestLookup:
     def test_found(self, tmp_path):

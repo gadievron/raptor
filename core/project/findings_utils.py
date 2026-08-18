@@ -60,7 +60,7 @@ def load_findings_from_dir(run_dir: Path) -> List[Dict[str, Any]]:
     """Load findings list from a run directory's findings.json."""
     data = load_json(run_dir / "findings.json")
     if data is None:
-        logger.debug(f"No findings.json in {run_dir}")
+        logger.debug("No findings.json in %s", run_dir)
         return []
     if isinstance(data, list):
         return data

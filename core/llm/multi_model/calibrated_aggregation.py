@@ -65,6 +65,12 @@ class CalibratedVerdict:
     # when method == METHOD_VOTE. Useful for explainability surfaces and
     # for Phase 4's posterior-weighted scorecard updates.
     model_reliabilities: List[Dict[str, float]] = field(default_factory=list)
+    # The Beta prior the EM ran under ({alpha, beta, mean}). The biggest
+    # interpretive caveat on the posterior is whether it was computed
+    # under the default uniform prior or an audit-derived per-class
+    # prior — emit it so the JSON is self-describing. None when method
+    # == METHOD_VOTE (no prior involved).
+    class_prior: Optional[Dict[str, float]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +206,13 @@ def calibrate_results(
         ds_index: Dict[str, FindingPosterior] = {}
         ds_convergence: Dict[str, bool] = {}
         ds_reliabilities: Dict[str, List[Dict[str, float]]] = {}
+        ds_class_prior: Dict[str, Dict[str, float]] = {}
         for ds_result in ds_results:
+            prior_payload = {
+                "alpha": ds_result.class_prior.alpha,
+                "beta": ds_result.class_prior.beta,
+                "mean": ds_result.class_prior.mean,
+            }
             for fp in ds_result.findings:
                 ds_index[fp.finding_id] = fp
                 ds_convergence[fp.finding_id] = ds_result.converged
@@ -208,6 +220,7 @@ def calibrate_results(
                     {"model": r.model, "alpha": r.alpha, "beta": r.beta}
                     for r in ds_result.model_reliabilities
                 ]
+                ds_class_prior[fp.finding_id] = prior_payload
         for fid in eligible_finding_ids:
             fp = ds_index.get(fid)
             if fp is None:
@@ -217,19 +230,19 @@ def calibrate_results(
                 fallback_reasons[fid] = "ds_missing_in_result"
                 continue
             converged = ds_convergence[fid]
-            method = METHOD_DAWID_SKENE if converged else METHOD_VOTE
-            reason: Optional[str] = (
-                None if converged else "ds_did_not_converge"
-            )
+            if not converged:
+                fallback_reasons[fid] = "ds_did_not_converge"
+                continue
             out[fid] = CalibratedVerdict(
                 posterior_true_positive=fp.posterior,
                 credible_interval=fp.credible_interval,
                 n_models=fp.n_models,
                 decision_class=fp.decision_class,
-                aggregation_method=method,
-                aggregation_fallback_reason=reason,
-                converged=converged,
-                model_reliabilities=ds_reliabilities[fid] if converged else [],
+                aggregation_method=METHOD_DAWID_SKENE,
+                aggregation_fallback_reason=None,
+                converged=True,
+                model_reliabilities=ds_reliabilities[fid],
+                class_prior=ds_class_prior.get(fid),
             )
 
     # Step 3: vote fallback for everything else.

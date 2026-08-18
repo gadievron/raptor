@@ -150,7 +150,7 @@ class WebCrawler:
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {self._crawl_log_label(start_url)}")
+        logger.info("Starting crawl from %s", self._crawl_log_label(start_url))
 
         self.discovered_urls.add(start_url)
 
@@ -179,7 +179,7 @@ class WebCrawler:
         queue: "deque[tuple[str, int]]" = deque([(start_url, 0)])
         while queue:
             if len(self.visited_urls) >= self.max_pages:
-                logger.info(f"Max pages limit reached ({self.max_pages})")
+                logger.info("Max pages limit reached (%d)", self.max_pages)
                 break
             url, depth = queue.popleft()
             self._crawl_recursive(url, depth, _queue=queue)
@@ -199,11 +199,11 @@ class WebCrawler:
         does the per-page work but doesn't expand further.
         """
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {self._crawl_log_label(url)}")
+            logger.debug("Max depth reached for %s", self._crawl_log_label(url))
             return
 
         if len(self.visited_urls) >= self.max_pages:
-            logger.info(f"Max pages limit reached ({self.max_pages})")
+            logger.info("Max pages limit reached (%d)", self.max_pages)
             return
 
         if url in self.visited_urls:
@@ -258,11 +258,11 @@ class WebCrawler:
             elif "text/html" in content_type:
                 self._process_html_response(url, response, depth, _queue=_queue)
             else:
-                logger.debug(f"Skipping non-HTML/JSON content: {content_type}")
+                logger.debug("Skipping non-HTML/JSON content: %s", content_type)
 
         except Exception as e:
             logger.warning(
-                f"Error crawling {self._crawl_log_label(url)}: {type(e).__name__}"
+                "Error crawling %s: %s", self._crawl_log_label(url), type(e).__name__
             )
 
     def _process_html_response(self, url: str, response, depth: int, _queue=None) -> None:
@@ -347,7 +347,9 @@ class WebCrawler:
             # Discover API endpoints from JavaScript
             for script in soup.find_all("script"):
                 if script.string:
-                    self._extract_api_endpoints_from_js(script.string)
+                    self._extract_api_endpoints_from_js(
+                        script.string, depth=depth, _queue=_queue,
+                    )
 
         except Exception as e:
             logger.warning(
@@ -368,11 +370,11 @@ class WebCrawler:
                     else [],
                 }
             )
-            logger.info(f"Discovered API endpoint: {self._crawl_log_label(url)}")
+            logger.info("Discovered API endpoint: %s", self._crawl_log_label(url))
         except Exception as e:
             logger.debug(
-                f"Error parsing JSON from {self._crawl_log_label(url)}: "
-                f"{type(e).__name__}"
+                "Error parsing JSON from %s: %s",
+                self._crawl_log_label(url), type(e).__name__
             )
 
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
@@ -399,11 +401,21 @@ class WebCrawler:
             }
 
         except Exception as e:
-            logger.debug(f"Error parsing form: {type(e).__name__}")
+            logger.debug("Error parsing form: %s", type(e).__name__)
             return None
 
-    def _extract_api_endpoints_from_js(self, js_code: str) -> None:
-        """Extract API endpoints from JavaScript code."""
+    def _extract_api_endpoints_from_js(self, js_code: str, *,
+                                       depth: int = 0,
+                                       _queue=None) -> None:
+        """Extract API endpoints from JavaScript code.
+
+        Discovered endpoints are recorded as API candidates AND
+        enqueued for the crawl — they used to land only in
+        ``discovered_urls``, so a JS-only endpoint was never fetched,
+        never classified as an API, and never contributed parameters:
+        a coverage gap for exactly the URLs reachable only through
+        script analysis.
+        """
         # Cap the JS-code size before per-pattern findall. Pre-fix
         # `re.findall` ran 4 times over the FULL js_code body; for
         # a multi-MB minified bundle (modern frontend SPAs ship
@@ -447,6 +459,21 @@ class WebCrawler:
                     # (scheme, hostname, port) triple.
                     if self.client._is_in_scope(absolute_url):
                         self.discovered_urls.add(absolute_url)
+                        # Classify as an API candidate now (static
+                        # discovery — no response shape yet; crawling
+                        # the URL refines it via
+                        # _process_json_response).
+                        if not any(a.get("url") == absolute_url
+                                   for a in self.discovered_apis):
+                            self.discovered_apis.append({
+                                "url": absolute_url,
+                                "method": "GET",
+                                "response_keys": [],
+                                "source": "js-static",
+                            })
+                        if (_queue is not None
+                                and absolute_url not in self.visited_urls):
+                            _queue.append((absolute_url, depth + 1))
                         logger.debug(
                             f"Found API endpoint in JS: {self._crawl_log_label(absolute_url)}"
                         )

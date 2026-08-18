@@ -1,4 +1,4 @@
-"""Tests for packages.codeql.smt_path_validator."""
+"""Tests for core.smt_solver.path_feasibility."""
 
 import sys
 from pathlib import Path
@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.smt_solver import RejectionKind, z3_available
-from packages.codeql.smt_path_validator import (
+from core.smt_solver.path_feasibility import (
     PathCondition,
     check_path_feasibility,
 )
@@ -29,7 +29,7 @@ class TestNoZ3:
     """Behaviour when Z3 is unavailable — must degrade gracefully."""
 
     def test_returns_none_feasible(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.feasible is None
         assert r.smt_available is False
@@ -39,12 +39,12 @@ class TestNoZ3:
             PathCondition("size > 0", step_index=0),
             PathCondition("offset < 1024", step_index=1),
         ]
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility(conditions)
         assert set(r.unknown) == {"size > 0", "offset < 1024"}
 
     def test_empty_conditions_still_returns_none(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([])
         assert r.feasible is None
         assert r.smt_available is False
@@ -614,7 +614,7 @@ class TestStructuredRejection:
         """When Z3 is unavailable everything goes to unknown but we
         don't synthesise per-condition rejection reasons — there's no
         parser/solver to assign blame to."""
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.unknown == ["size > 0"]
         assert r.unknown_reasons == []
@@ -1515,7 +1515,7 @@ class TestParensGrouping:
     def test_parens_exceeding_depth_limit_rejected(self):
         """Nesting beyond _MAX_PAREN_DEPTH (64) is rejected to prevent
         unbounded recursion from untrusted input."""
-        from packages.codeql.smt_path_validator import _MAX_PAREN_DEPTH
+        from core.smt_solver.path_feasibility import _MAX_PAREN_DEPTH
         inner = "x"
         for _ in range(_MAX_PAREN_DEPTH + 1):
             inner = f"({inner})"
@@ -1544,7 +1544,7 @@ class TestInputLimits:
     @_requires_z3
     def test_condition_length_within_cap_accepted(self):
         """A condition just under ``_MAX_CONDITION_CHARS`` parses normally."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         # Build a condition of length _MAX_CONDITION_CHARS that the parser
         # accepts: ``x + x + x + ... > 0``.  Each ``x + `` token is 4 chars.
         prefix = "x + " * ((_MAX_CONDITION_CHARS - len("x > 0")) // 4)
@@ -1560,7 +1560,7 @@ class TestInputLimits:
     def test_condition_length_over_cap_rejected(self):
         """A condition exceeding ``_MAX_CONDITION_CHARS`` is rejected with
         ``INPUT_TOO_LONG`` before any parser work runs."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         huge = "x" + ("=" * _MAX_CONDITION_CHARS) + "y"
         assert len(huge) > _MAX_CONDITION_CHARS
         r = check_path_feasibility([PathCondition(huge, step_index=0)])
@@ -1576,7 +1576,7 @@ class TestInputLimits:
     @_requires_z3
     def test_condition_count_within_cap_accepted(self):
         """A call with ``_MAX_CONDITIONS_PER_CALL`` items runs normally."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        from core.smt_solver.path_feasibility import _MAX_CONDITIONS_PER_CALL
         # Use distinct variable names per condition so they trivially
         # satisfy together — focus the test on the count check, not on
         # condition semantics.
@@ -1595,7 +1595,7 @@ class TestInputLimits:
         """A call with more than ``_MAX_CONDITIONS_PER_CALL`` items refuses
         the whole call with ``feasible=None`` and a single
         ``TOO_MANY_CONDITIONS`` rejection."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        from core.smt_solver.path_feasibility import _MAX_CONDITIONS_PER_CALL
         n = _MAX_CONDITIONS_PER_CALL + 1
         conds = [
             PathCondition(f"x{i} > 0", step_index=i) for i in range(n)
@@ -1630,7 +1630,7 @@ class TestInputLimits:
         whole input.  An adversarial input that's both very long AND has
         deep nesting must short-circuit on length so the balance scan
         never executes."""
-        from packages.codeql.smt_path_validator import (
+        from core.smt_solver.path_feasibility import (
             _MAX_CONDITION_CHARS, _MAX_PAREN_DEPTH,
         )
         # Build a string that's BOTH over the char cap AND has deeper
@@ -1652,7 +1652,7 @@ class TestInputLimits:
         """One oversize condition is rejected without poisoning the rest
         of the call — the other conditions still parse and contribute to
         the joint feasibility verdict."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         huge = "y" + ("=" * _MAX_CONDITION_CHARS) + "0"
         r = check_path_feasibility([
             PathCondition("x > 0", step_index=0),
@@ -1831,7 +1831,7 @@ class TestWeakestPrecondition:
         assert r.wp_conjuncts == []
 
     def test_no_z3_has_no_wp(self):
-        with patch("packages.codeql.smt_path_validator._z3_available",
+        with patch("core.smt_solver.path_feasibility._z3_available",
                    return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.wp_predicate is None
@@ -1877,7 +1877,7 @@ class TestWeakestPrecondition:
 
     @_requires_z3
     def test_cap_marks_incomplete(self):
-        from packages.codeql.smt_path_validator import WP_MAX_SOLVER_CALLS
+        from core.smt_solver.path_feasibility import WP_MAX_SOLVER_CALLS
         # More independent conjuncts than the deletion-pass cap: the pass
         # can't test them all, so it must report wp_complete=False.
         n = WP_MAX_SOLVER_CALLS + 5
@@ -1893,7 +1893,7 @@ class TestWeakestPrecondition:
         deletion pass drops all but one.  If the input is crafted so that
         even the last survivor is a tautology, ``_extract_wp`` returns
         the ``"true"`` degenerate form."""
-        from packages.codeql.smt_path_validator import _extract_wp
+        from core.smt_solver.path_feasibility import _extract_wp
         import z3
 
         x = z3.BitVec("x", 32)
@@ -1910,7 +1910,7 @@ class TestWeakestPrecondition:
     def test_solver_timeout_keeps_conjunct(self):
         """When a redundancy check returns ``unknown`` (e.g. solver
         timeout), the conjunct is conservatively kept."""
-        from packages.codeql.smt_path_validator import _extract_wp
+        from core.smt_solver.path_feasibility import _extract_wp
         import z3
 
         x = z3.BitVec("x", 32)
@@ -1921,7 +1921,7 @@ class TestWeakestPrecondition:
         # Patch solver.check to return unknown for the first call,
         # forcing the conjunct to be kept even though it's redundant.
         real_extract = _extract_wp
-        with patch("packages.codeql.smt_path_validator._new_solver") as mock_ns:
+        with patch("core.smt_solver.path_feasibility._new_solver") as mock_ns:
             mock_solver = mock_ns.return_value
             mock_solver.check.return_value = z3.unknown
             mock_solver.__enter__ = lambda s: s

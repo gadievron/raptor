@@ -11,7 +11,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from core.labeled_attempts import (  # noqa: E402
+from core.labeled_attempts import (
     LabeledAttempt,
     SandboxEvidence,
     bundled_corpus_path,
@@ -22,11 +22,10 @@ from core.labeled_attempts import (  # noqa: E402
     read_all,
     write,
 )
-from core.labeled_attempts.store import (  # noqa: E402
+from core.labeled_attempts.store import (
     find_by_failure_mode,
 )
-from core.labeled_attempts.types import FailureMode  # noqa: E402
-
+from core.labeled_attempts.types import FailureMode
 
 # --------------------------------------------------------------------------
 # Fixtures
@@ -39,7 +38,7 @@ def _make_attempt(
     cwe: str = "CWE-787",
     outcome: str = "success",
     timestamp: str = "2026-06-03T14:05:32+00:00",
-    failure_mode: "FailureMode | None" = None,
+    failure_mode: FailureMode | None = None,
 ) -> LabeledAttempt:
     return LabeledAttempt(
         finding_id=finding_id,
@@ -566,6 +565,7 @@ def test_write_does_not_follow_planted_symlink(project_dir, tmp_path):
     still succeeds — under a different filename — because the retry
     loop re-rolls the random suffix on EEXIST."""
     import os
+
     from core.labeled_attempts.store import _record_filename
 
     pool = project_pool_path(project_dir)
@@ -613,6 +613,7 @@ def test_write_atomic_with_existing_symlink_refuses_open(tmp_path):
     the symlink exists) or ELOOP (because O_NOFOLLOW catches it).
     Either way: the victim is not modified."""
     import os
+
     from core.labeled_attempts.store import _write_atomic
 
     victim = tmp_path / "victim.txt"
@@ -653,3 +654,46 @@ def test_missing_oracle_record_is_skipped(project_dir):
     # Read should silently skip the bad record
     records = list(read_all(project_dir=project_dir, include_bundled=False))
     assert records == []
+
+
+# --------------------------------------------------------------------------
+# Permissions — records and pool directories are owner-only
+# --------------------------------------------------------------------------
+
+
+def test_write_creates_owner_only_record(project_dir):
+    import stat
+
+    [p] = write(_make_attempt(), project_dir=project_dir)
+    mode = stat.S_IMODE(p.stat().st_mode)
+    assert mode == 0o600, f"record mode {oct(mode)}, expected 0o600"
+
+
+def test_write_creates_owner_only_directories(project_dir, isolated_global):
+    import os
+    import stat
+
+    old_umask = os.umask(0o022)  # a permissive umask must not widen dirs
+    try:
+        paths = write(_make_attempt(), project_dir=project_dir, also_global=True)
+    finally:
+        os.umask(old_umask)
+    for p in paths:
+        # The finding-signature dir and the pool root above it were
+        # both created by this write — both must be 0o700.
+        for d in (p.parent, p.parent.parent):
+            mode = stat.S_IMODE(d.stat().st_mode)
+            assert mode == 0o700, f"{d} mode {oct(mode)}, expected 0o700"
+
+
+def test_write_leaves_existing_directory_modes_alone(project_dir):
+    import stat
+
+    from core.labeled_attempts.store import project_pool_path
+
+    root = project_pool_path(project_dir)
+    root.mkdir(parents=True)
+    root.chmod(0o755)
+    write(_make_attempt(), project_dir=project_dir)
+    mode = stat.S_IMODE(root.stat().st_mode)
+    assert mode == 0o755, "pre-existing dir was migrated; only new creations change"

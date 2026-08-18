@@ -18,6 +18,17 @@
 #   - allow self proc_security_t : file write : for /proc/self/uid_map,
 #     setgroups, gid_map writes
 #
+# Labeling note: unlike AppArmor (which attaches by PATH MATCH at exec
+# time and therefore must never use path wildcards — any local user
+# could stage a matching path), SELinux privileges bind to the TYPE
+# label, and only root can apply raptor_coord_launcher_exec_t to a
+# file. Label the ONE launcher binary explicitly; for a label that
+# survives relabels, prefer a persistent fcontext rule with the exact
+# absolute path (never a wildcard):
+#   sudo semanage fcontext -a -t raptor_coord_launcher_exec_t \
+#       '/absolute/path/to/core/sandbox/helpers/raptor-coord-launcher'
+#   sudo restorecon -v /absolute/path/to/.../raptor-coord-launcher
+#
 # Build + install (one-time, operator-explicit, requires policycoreutils):
 #   sudo dnf install -y policycoreutils-devel
 #   # Customise this .te file for your local policy first

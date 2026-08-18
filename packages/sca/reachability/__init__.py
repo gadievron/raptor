@@ -5,8 +5,8 @@ Reachability]`` where ``dep_key`` is ``Dependency.key()``. The pipeline
 threads this map into ``findings.build_vuln_findings`` so each
 ``VulnFinding`` carries a verdict + evidence lines.
 
-Python (AST-based), npm (regex sweep), Cargo, Go, RubyGems, NuGet,
-Composer all covered. Ecosystems without a handler return
+Python (AST-based), npm (regex sweep), Cargo, Go, Maven, RubyGems,
+NuGet, Composer all covered. Ecosystems without a handler return
 ``not_evaluated`` so the reporter can be honest about the gap.
 
 **Tier-3 escalation (PyPI only):** when the caller passes ``http``
@@ -25,7 +25,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any
+from collections.abc import Callable, Iterable
 
 from ..models import Confidence, Dependency, Reachability
 from . import cargo as _cargo
@@ -43,15 +44,15 @@ logger = logging.getLogger(__name__)
 # Per-ecosystem scanner: returns the raw module → evidence map.
 _Scanner = Callable[
     [Path],
-    Dict[str, List[Tuple[Path, int, bool]]],
+    dict[str, list[tuple[Path, int, bool]]],
 ]
 # Per-ecosystem resolver: dep name + scan → Reachability.
 _Resolver = Callable[
-    [str, Dict[str, List[Tuple[Path, int, bool]]], Optional[Path]],
+    [str, dict[str, list[tuple[Path, int, bool]]], Path | None],
     Reachability,
 ]
 
-_HANDLERS: Dict[str, Tuple[_Scanner, _Resolver]] = {
+_HANDLERS: dict[str, tuple[_Scanner, _Resolver]] = {
     "PyPI": (_python.scan_imports,
              lambda name, scan, target=None:
                  _python.resolve_dep(name, scan, target=target)),
@@ -82,11 +83,11 @@ _HANDLERS: Dict[str, Tuple[_Scanner, _Resolver]] = {
 def scan(
     target: Path, deps: Iterable[Dependency],
     *,
-    http: Optional[Any] = None,
-    cache: Optional[Any] = None,
-    cve_dep_keys: Optional[Set[str]] = None,
-    osv_results: Optional[List[Any]] = None,
-) -> Dict[str, Reachability]:
+    http: Any | None = None,
+    cache: Any | None = None,
+    cve_dep_keys: set[str] | None = None,
+    osv_results: list[Any] | None = None,
+) -> dict[str, Reachability]:
     """Build per-dep ``Reachability`` for every dep we can analyse.
 
     When ``http`` and ``cve_dep_keys`` are both provided, PyPI deps
@@ -98,15 +99,15 @@ def scan(
     are unchanged — their resolvers don't know about wheel fetch.
     """
     deps_list = list(deps)
-    out: Dict[str, Reachability] = {}
+    out: dict[str, Reachability] = {}
 
-    by_eco: Dict[str, List[Dependency]] = defaultdict(list)
+    by_eco: dict[str, list[Dependency]] = defaultdict(list)
     for d in deps_list:
         by_eco[d.ecosystem].append(d)
 
     # Cache the per-ecosystem ``scan_imports`` result so the Tier-3
     # escalation pass (below) doesn't re-walk the source tree.
-    eco_scans: Dict[str, Dict[str, List[Tuple[Path, int, bool]]]] = {}
+    eco_scans: dict[str, dict[str, list[tuple[Path, int, bool]]]] = {}
 
     for eco, eco_deps in by_eco.items():
         handler = _HANDLERS.get(eco)
@@ -147,8 +148,10 @@ def scan(
             continue
         eco_scans[eco] = scan_result
         # Dedup by dep name within ecosystem so multiple version rows
-        # for the same dep share one resolve call.
-        seen: Dict[str, Reachability] = {}
+        # for the same dep share one resolve call — except the
+        # Go-with-advisory-symbols branch below, which keys by
+        # ``d.key()`` because ``advisory_symbols`` is per-version.
+        seen: dict[str, Reachability] = {}
         # Pre-build advisory symbol map for Go function-level reachability.
         go_symbols = _build_go_symbol_map(osv_results) if eco == "Go" else {}
         for d in eco_deps:
@@ -199,6 +202,8 @@ def scan(
     # Inventory is built ONCE per run when at least one ecosystem
     # tier has work to do; subsequent tiers reuse it via the
     # ``inventory`` kwarg.
+    _inventory_build_failed.discard(str(target))
+
     if osv_results:
         shared_inventory = None
 
@@ -317,11 +322,10 @@ def scan(
     return out
 
 
-_inventory_build_failures: int = 0
-_INVENTORY_MAX_RETRIES: int = 3
+_inventory_build_failed: set[str] = set()
 
 
-def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
+def _shared_inventory(target: Path, current: Any | None) -> Any:
     """Build the inventory once and share across function-level
     tiers. ``current`` is the value cached so far (None on first
     call). Returns the cached or freshly-built inventory.
@@ -341,8 +345,8 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
     inventory subdir; ``checklist.json`` regenerates from scratch
     on a missing file).
     """
-    global _inventory_build_failures
-    if _inventory_build_failures >= _INVENTORY_MAX_RETRIES:
+    target_key = str(target)
+    if target_key in _inventory_build_failed:
         return None
     if current is not None:
         return current
@@ -350,17 +354,14 @@ def _shared_inventory(target: Path, current: Optional[Any]) -> Any:
         from core.inventory.builder import build_inventory
         cache_dir = _inventory_cache_dir(target)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        result = build_inventory(str(target), str(cache_dir))
-        _inventory_build_failures = 0
-        return result
+        return build_inventory(str(target), str(cache_dir))
     except Exception:                                # noqa: BLE001
-        _inventory_build_failures += 1
         logger.warning(
-            "sca.reachability: inventory build failed (%d/%d); "
+            "sca.reachability: inventory build failed; "
             "function-level tiers will skip",
-            _inventory_build_failures, _INVENTORY_MAX_RETRIES,
             exc_info=True,
         )
+        _inventory_build_failed.add(target_key)
         return None
 
 
@@ -379,8 +380,8 @@ def _inventory_cache_dir(target: Path) -> Path:
 
 
 def _build_go_symbol_map(
-    osv_results: Optional[List[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: list[Any] | None,
+) -> dict[str, list[str]]:
     """Extract advisory symbols for Go deps from OSV results.
 
     Returns ``{dep_key: [symbol_name, ...]}`` from
@@ -388,16 +389,20 @@ def _build_go_symbol_map(
     """
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
         for adv in r.advisories:
             es = adv.ecosystem_specific
-            if not es:
+            if not isinstance(es, dict):
                 continue
             imports = es.get("imports", [])
+            if not isinstance(imports, list):
+                continue
             for imp in imports:
+                if not isinstance(imp, dict):
+                    continue
                 syms = imp.get("symbols", [])
                 if syms:
                     out.setdefault(r.dep_key, []).extend(syms)
@@ -407,14 +412,14 @@ def _build_go_symbol_map(
 
 
 def _escalate_pypi_not_reachable(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
-    py_scan: Dict[str, List[Tuple[Path, int, bool]]],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
+    py_scan: dict[str, list[tuple[Path, int, bool]]],
     target: Path,
     *,
-    cve_dep_keys: Set[str],
+    cve_dep_keys: set[str],
     http: Any,
-    cache: Optional[Any],
+    cache: Any | None,
 ) -> None:
     """Re-resolve PyPI ``not_reachable`` deps via on-demand wheel
     metadata when they have CVEs. Mutates ``out`` in place.
@@ -433,7 +438,7 @@ def _escalate_pypi_not_reachable(
     difference (``not_reachable high → 0.335×`` vs ``not_evaluated
     → 0.85×``) makes the verdict materially affect ranking.
     """
-    seen: Dict[str, Reachability] = {}
+    seen: dict[tuple, Reachability] = {}
     for d in deps:
         if d.ecosystem != "PyPI":
             continue
@@ -444,8 +449,8 @@ def _escalate_pypi_not_reachable(
         current = out.get(d.key())
         if current is None or current.verdict != "not_reachable":
             continue
-        if d.name in seen:
-            out[d.key()] = seen[d.name]
+        if (d.name, d.version) in seen:
+            out[d.key()] = seen[(d.name, d.version)]
             continue
         logger.info(
             "sca.reachability: tier-3 escalation for %s==%s "
@@ -469,7 +474,7 @@ def _escalate_pypi_not_reachable(
                 # find a module mapping that matches the scan.
                 # Downgrade verdict honestly.
                 new_verdict = _not_evaluated_after_tier3(d)
-        seen[d.name] = new_verdict
+        seen[(d.name, d.version)] = new_verdict
         out[d.key()] = new_verdict
 
 
@@ -488,4 +493,6 @@ def _not_evaluated_after_tier3(d: Dependency) -> Reachability:
     )
 
 
-__all__ = ["scan"]
+from .guard_quality import analyze_call_site_guards  # noqa: F401,E402
+
+__all__ = ["scan", "analyze_call_site_guards"]

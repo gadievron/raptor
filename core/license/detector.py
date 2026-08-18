@@ -586,11 +586,17 @@ def _read_license_full(path: Path, byte_cap: int) -> str:
     except OSError:
         return ""
     try:
-        with os.fdopen(fd, "rb") as f:
-            buf = f.read(byte_cap)
+        fobj = os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        return ""
+    try:
+        buf = fobj.read(byte_cap)
         return buf.decode("utf-8", errors="replace")
     except OSError:
         return ""
+    finally:
+        fobj.close()
 
 
 def _follow_license_indirection(

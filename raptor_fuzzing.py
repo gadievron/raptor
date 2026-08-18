@@ -24,28 +24,75 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.hash import sha256_file
 from core.json import save_json
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sage.hooks import (
-    format_sage_memories_for_prompt,
     infer_afl_fuzz_flags_from_sage_recall_row,
     pick_strongest_recall_row,
-    recall_context_for_crash_analysis,
     recall_context_for_fuzzing_strategy,
-    store_crash_analysis_pattern,
     store_fuzzing_strategy_outcome,
 )
-from packages.fuzzing import AFLRunner, CrashCollector
-from packages.binary_analysis import CrashAnalyser
-from packages.llm_analysis.crash_agent import CrashAnalysisAgent
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from packages.autonomous import (
-    FuzzingPlanner, FuzzingState, FuzzingMemory,
-    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator
+    CorpusGenerator,
+    ExploitValidator,
+    FuzzingMemory,
+    FuzzingPlanner,
+    FuzzingState,
+    GoalPlanner,
+    MultiTurnAnalyser,
 )
+from packages.binary_analysis import CrashAnalyser
+from packages.fuzzing import AFLRunner, CrashCollector
+from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 
 logger = get_logger()
+
+
+def _clamp_parallel(requested: int) -> int:
+    """Apply the tuning.json ceiling that the --parallel help promises.
+
+    Clamps the operator's value to get_tuning().max_fuzz_parallel with a
+    loud warning; falls back to the requested value when tuning is
+    unavailable so fuzzing never fails just because the ceiling could
+    not be read.
+    """
+    try:
+        from core.tuning import get_tuning
+        ceiling = get_tuning().max_fuzz_parallel
+    except Exception as e:  # noqa: BLE001 — ceiling is advisory, never fatal
+        logger.debug("tuning ceiling unavailable: %s", e)
+        return requested
+    if requested > ceiling:
+        print(
+            f"⚠️  --parallel {requested} exceeds the tuning.json ceiling "
+            f"(max_fuzz_parallel={ceiling}); clamping to {ceiling}",
+            file=sys.stderr,
+        )
+        logger.warning(
+            "--parallel %d clamped to tuning ceiling %d", requested, ceiling
+        )
+        return ceiling
+    return requested
+
+
+def _resolve_dict_path(args, out_dir):
+    """Resolve the AFL/libFuzzer dictionary for this run.
+
+    An operator-supplied ``--dict`` always wins. Otherwise, auto-
+    discover an audit-generated ``fuzz.dict`` (own run dir first, then
+    the newest sibling run — see ``packages.fuzzing.audit_dict``).
+    Returns None when neither exists, exactly as before.
+    """
+    if args.dict:
+        return Path(args.dict)
+    try:
+        from packages.fuzzing.audit_dict import discover_audit_dict
+
+        return discover_audit_dict(out_dir)
+    except Exception as e:  # noqa: BLE001 — discovery is best-effort
+        logger.debug("audit dictionary discovery failed: %s", e)
+        return None
 
 
 def main() -> None:
@@ -114,7 +161,7 @@ Examples:
     ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
     ap.add_argument("--timeout", type=int, default=1000, help="Timeout per execution in ms (default: 1000)")
-    ap.add_argument("--out", help="Output directory (default: out/fuzz_<binary_name>)")
+    ap.add_argument("--out", help="Output directory (default: fuzz_<binary>_<timestamp>_pid<N>_<tail> under the configured output root)")
     ap.add_argument("--dict", help="Path to AFL dictionary file for structured input fuzzing")
     ap.add_argument("--input-mode", choices=["stdin", "file"], default="stdin", help="Input mode: stdin (default) or file (uses @@)")
     ap.add_argument("--check-sanitizers", action="store_true", help="Check if binary is compiled with sanitizers (ASAN, etc.)")
@@ -223,8 +270,8 @@ Examples:
         seed_out = Path(args.export_seed_corpus)
         try:
             manifest = prepare_builtin_seed_corpus(seed_out, profile=args.seed_profile)
-        except Exception as e:
-            logger.error(f"Failed to export built-in seed corpus: {e}")
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+            logger.error("Failed to export built-in seed corpus: %s", e)
             sys.exit(1)
 
         print("Built-in seed corpus exported")
@@ -252,8 +299,8 @@ Examples:
                     include_lockfiles=args.seed_include_lockfiles,
                 )
             )
-        except Exception as e:
-            logger.error(f"Failed to prepare seed corpus: {e}")
+        except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+            logger.error("Failed to prepare seed corpus: %s", e)
             sys.exit(1)
 
         print("Seed corpus prepared")
@@ -272,7 +319,7 @@ Examples:
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
-        logger.error(f"Binary not found: {binary_path}")
+        logger.error("Binary not found: %s", binary_path)
         sys.exit(1)
 
     corpus_dir = Path(args.corpus) if args.corpus else None
@@ -318,17 +365,17 @@ Examples:
                     "Auto-selected orchestrator path: AFL++ unavailable, "
                     "libFuzzer/radare2 present."
                 )
-        except Exception as e:
-            logger.debug(f"Capability probe failed, falling back to legacy: {e}")
+        except Exception as e:  # noqa: BLE001 — probe is advisory
+            logger.debug("Capability probe failed, falling back to legacy: %s", e)
 
     if use_orchestrator:
+        from core.llm.factory import get_client
         from packages.fuzzing import FuzzingOrchestrator
-        from packages.llm_analysis import get_client
 
         llm = None
         try:
             llm = get_client()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — no-LLM mode is supported
             # Fall through to llm=None (orchestrator handles
             # no-LLM mode) but surface why so operators can see
             # whether a config issue is silently downgrading
@@ -357,15 +404,15 @@ Examples:
                 out_dir=out_dir,
                 duration_seconds=args.duration,
                 corpus_dir=corpus_dir,
-                dict_path=Path(args.dict) if args.dict else None,
+                dict_path=_resolve_dict_path(args, out_dir),
                 source_context_dir=binary_path.parent,
                 seed_profile=args.seed_profile,
             )
         except KeyboardInterrupt:
             print("\nCampaign interrupted by user.")
             sys.exit(130)
-        except Exception as e:
-            logger.error(f"Campaign failed: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Campaign failed")
             sys.exit(1)
 
         print()
@@ -387,17 +434,17 @@ Examples:
     logger.info("=" * 70)
     logger.info("RAPTOR FUZZING WORKFLOW STARTED")
     logger.info("=" * 70)
-    logger.info(f"Binary: {binary_path.name}")
-    logger.info(f"Full path: {binary_path}")
-    logger.info(f"Output: {out_dir}")
-    logger.info(f"Duration: {args.duration}s ({args.duration/60:.1f} minutes)")
-    logger.info(f"Max crashes to analyse: {args.max_crashes}")
-    logger.info(f"Input mode: {args.input_mode}")
+    logger.info("Binary: %s", binary_path.name)
+    logger.info("Full path: %s", binary_path)
+    logger.info("Output: %s", out_dir)
+    logger.info("Duration: %ds (%.1f minutes)", args.duration, args.duration / 60)
+    logger.info("Max crashes to analyse: %d", args.max_crashes)
+    logger.info("Input mode: %s", args.input_mode)
     if args.dict:
-        logger.info(f"Dictionary: {args.dict}")
-    logger.info(f"Sanitizer check: {'enabled' if args.check_sanitizers else 'disabled'}")
-    logger.info(f"Recompile guide: {'will be shown' if args.recompile_guide else 'disabled'}")
-    logger.info(f"Coverage analysis: {'enabled' if args.use_showmap else 'disabled'}")
+        logger.info("Dictionary: %s", args.dict)
+    logger.info("Sanitizer check: %s", "enabled" if args.check_sanitizers else "disabled")
+    logger.info("Recompile guide: %s", "will be shown" if args.recompile_guide else "disabled")
+    logger.info("Coverage analysis: %s", "enabled" if args.use_showmap else "disabled")
     # Pre-fix this block had DUPLICATE log lines for input_mode,
     # dict, check_sanitizers, recompile_guide, use_showmap (5
     # lines repeated immediately after the first set). Operators
@@ -424,7 +471,7 @@ Examples:
             binary_fingerprint=binary_hash,
             strategy_id="default",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — SAGE recall is best-effort
         logger.debug("SAGE fuzzing strategy recall skipped: %s", e)
 
     sage_afl_flags: list = []
@@ -459,7 +506,7 @@ Examples:
         except (OSError, RuntimeError):
             resolved_memory_path = memory_file
         if resolved_memory_path is not None:
-            logger.info(f"Fuzzing memory path: {resolved_memory_path}")
+            logger.info("Fuzzing memory path: %s", resolved_memory_path)
 
         # Initialize exploit validator
         exploit_validator = ExploitValidator(work_dir=out_dir / "validation")
@@ -469,17 +516,16 @@ Examples:
             goal_planner = GoalPlanner()
             goal = goal_planner.create_goal_from_user_input(args.goal)
             goal_planner.set_goal(goal)
-            logger.info(f"Goal-directed fuzzing enabled: {goal.description}")
+            logger.info("Goal-directed fuzzing enabled: %s", goal.description)
 
         # Log memory statistics
         stats = memory.get_statistics()
-        logger.info(f"Loaded fuzzing memory: {stats['total_knowledge']} knowledge entries")
-        logger.info(f"Past campaigns: {stats['total_campaigns']}")
+        logger.info("Loaded fuzzing memory: %d knowledge entries", stats['total_knowledge'])
+        logger.info("Past campaigns: %d", stats['total_campaigns'])
         if stats['total_knowledge'] > 0:
-            logger.info(f"Average confidence: {stats['average_confidence']:.2f}")
+            logger.info("Average confidence: %.2f", stats['average_confidence'])
 
         # Check for past strategies for this binary + SAGE cross-run priors
-        sage_strategy_text = format_sage_memories_for_prompt(sage_strategy_rows)
         if sage_strategy_rows:
             top = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.0)
             top_c = float(top.get("confidence") or 0) if top else 0.0
@@ -491,15 +537,10 @@ Examples:
                 )
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
-            logger.info(f"✨ Found best strategy from memory: {best_strategy}")
-        elif sage_strategy_text:
-            logger.info(
-                "No local FuzzingMemory strategy entry; using SAGE recall as planning context."
-            )
+            logger.info("Found best strategy from memory: %s", best_strategy)
 
         planner = FuzzingPlanner(
             memory=memory,
-            sage_planning_notes=sage_strategy_text or None,
             sage_strategy_rows=sage_strategy_rows,
         )
 
@@ -520,7 +561,7 @@ Examples:
             )
 
             corpus_dir = autonomous_corpus_dir
-            logger.info(f"✨ Autonomous corpus generated: {num_seeds} intelligent seeds")
+            logger.info("Autonomous corpus generated: %d intelligent seeds", num_seeds)
 
     # ========================================================================
     # PHASE 1: FUZZING WITH AFL++
@@ -534,7 +575,7 @@ Examples:
             binary_path=binary_path,
             corpus_dir=corpus_dir,
             output_dir=out_dir / "afl_output",
-            dict_path=Path(args.dict) if args.dict else None,
+            dict_path=_resolve_dict_path(args, out_dir),
             input_mode=args.input_mode,
             check_sanitizers=args.check_sanitizers,
             recompile_guide=args.recompile_guide,
@@ -545,7 +586,7 @@ Examples:
 
         num_crashes, crashes_dir = afl_runner.run_fuzzing(
             duration=args.duration,
-            parallel_jobs=args.parallel,
+            parallel_jobs=_clamp_parallel(args.parallel),
             timeout_ms=args.timeout,
             max_crashes=args.max_crashes,
         )
@@ -582,14 +623,21 @@ Examples:
             try:
                 from core.json import save_json as _save_json
                 _save_json(out_dir / "fuzzing_report.json", zero_report)
-            except Exception:
-                # Best effort — don't mask the operator's
-                # already-printed advice with a save error.
+            except OSError:
+                # Best effort: don't mask the operator's already-printed
+                # advice with a write error. zero_report is a literal
+                # dict, so only the atomic write itself can
+                # legitimately fail.
                 pass
             sys.exit(0)
 
-    except Exception as e:
-        logger.error(f"Fuzzing failed: {e}")
+    except SandboxSetupError as e:
+        logger.error("Sandbox setup failed: %s", e)
+        print(f"\n✗ Sandbox setup failed: {e}", file=sys.stderr)
+        print("  Re-run without sandboxing or fix the sandbox configuration.", file=sys.stderr)
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
+    except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+        logger.error("Fuzzing failed: %s", e)
         print(f"\n✗ Fuzzing failed: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -701,17 +749,9 @@ Examples:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
-            sage_crash_rows = recall_context_for_crash_analysis(
-                repo_path=str(binary_path.parent),
-                binary_fingerprint=binary_hash,
-                signal=crash_context.signal,
-                function_name=crash_context.function_name,
-            )
-            sage_crash_text = format_sage_memories_for_prompt(sage_crash_rows)
-
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
-                logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
+                logger.info("Skipping duplicate crash (stack hash: %s)", crash_context.stack_hash)
                 print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
@@ -721,18 +761,7 @@ Examples:
 
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
-            logger.info(f"Crash type (heuristic): {crash_context.crash_type}")
-            # Persist coarse crash pattern outcome into SAGE for cross-run recall.
-            store_crash_analysis_pattern(
-                repo_path=str(binary_path.parent),
-                binary_path=str(binary_path),
-                signal=crash_context.signal,
-                function_name=crash_context.function_name or "unknown",
-                crash_type=crash_context.crash_type,
-                source_location=crash_context.source_location,
-                stack_hash=crash_context.stack_hash,
-                exploitability_hint=crash_context.exploitability,
-            )
+            logger.info("Crash type (heuristic): %s", crash_context.crash_type)
 
             # LLM analysis - use multi-turn if autonomous mode
             if args.autonomous and multi_turn:
@@ -740,9 +769,8 @@ Examples:
                 deep_analysis = multi_turn.analyse_crash_deeply(
                     crash_context,
                     max_turns=3,
-                    sage_prior_recall=sage_crash_text or None,
                 )
-                logger.info(f"Multi-turn analysis confidence: {deep_analysis['confidence']:.2f}")
+                logger.info("Multi-turn analysis confidence: %.2f", deep_analysis['confidence'])
 
                 # Update crash context with deep analysis
                 crash_context.vulnerability_type = deep_analysis.get('vulnerability_type', crash_context.crash_type)
@@ -766,7 +794,6 @@ Examples:
                 # Standard single-shot analysis
                 if llm_agent.analyse_crash(
                     crash_context,
-                    sage_prior_recall=sage_crash_text or None,
                 ):
                     analysed += 1
 
@@ -780,7 +807,7 @@ Examples:
                                 getattr(crash_context, 'crash_type', None)
                     viable, reason = exploit_validator.check_mitigations(binary_path, vuln_type)
                     if not viable:
-                        logger.warning(f"Mitigation check: {reason}")
+                        logger.warning("Mitigation check: %s", reason)
                         logger.warning("Exploit generation may fail - proceeding anyway")
 
                 # Generate exploit
@@ -809,7 +836,7 @@ Examples:
                             if success and refined_code:
                                 refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_validated.c"
                                 refined_file.write_text(refined_code, encoding="utf-8")
-                                logger.info(f"✓ Validated exploit saved: {refined_file}")
+                                logger.info("Validated exploit saved: %s", refined_file)
 
                                 # Update memory with success
                                 if memory:
@@ -823,7 +850,7 @@ Examples:
                                 # Refinement attempted but failed - save best attempt
                                 refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_best_attempt.c"
                                 refined_file.write_text(refined_code, encoding="utf-8")
-                                logger.warning(f"⚠ Best attempt exploit saved: {refined_file}")
+                                logger.warning("Best attempt exploit saved: %s", refined_file)
 
                                 # Update memory with failure
                                 if memory:
@@ -852,8 +879,8 @@ Examples:
         print(f"  - Exploitable: {exploitable}")
         print(f"  - Exploits generated: {exploits_generated}")
 
-    except Exception as e:
-        logger.error(f"Crash analysis failed: {e}")
+    except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+        logger.error("Crash analysis failed: %s", e)
         print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
@@ -887,7 +914,7 @@ Examples:
     fuzz_summary = render_witness_summary(out_dir / "witnesses")
     llm_summary = render_witness_summary(out_dir / "analysis" / "witnesses")
     if fuzz_summary or llm_summary:
-        print("")
+        print()
         if fuzz_summary:
             print(f" Fuzz witnesses ({out_dir / 'witnesses'}):")
             print(fuzz_summary)
@@ -906,7 +933,7 @@ Examples:
     from packages.zkpox import render_run_eligibility
     elig = render_run_eligibility(out_dir)
     if elig:
-        print("")
+        print()
         print(elig)
 
     # Save summary report
@@ -955,7 +982,10 @@ Examples:
     # Store end-of-run strategy outcome through the canonical SAGE path.
     store_fuzzing_strategy_outcome(
         repo_path=str(binary_path.parent),
-        binary_fingerprint=sha256_file(binary_path)[:16],
+        # Reuse the fingerprint computed at campaign start — the binary
+        # has not changed, and re-hashing a large binary at end-of-run
+        # is pure overhead.
+        binary_fingerprint=binary_hash,
         strategy_id="default",
         duration_s=args.duration,
         execs=0,

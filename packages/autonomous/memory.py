@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Fuzzing Memory - Learning and Knowledge Persistence
 
@@ -8,12 +7,11 @@ improve over time through persistent knowledge storage.
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 from core.json import load_json, save_json
-
 from core.logging import get_logger
 
 logger = get_logger()
@@ -42,8 +40,8 @@ class FuzzingKnowledge:
     last_updated: float = field(default_factory=time.time)
 
     # Context
-    binary_hash: Optional[str] = None  # Which binary did we learn this from?
-    campaign_id: Optional[str] = None  # Which fuzzing campaign?
+    binary_hash: str | None = None  # Which binary did we learn this from?
+    campaign_id: str | None = None  # Which fuzzing campaign?
 
     def update_success(self):
         """Record a successful application of this knowledge."""
@@ -80,7 +78,7 @@ class FuzzingMemory:
     - Share knowledge between fuzzing sessions
     """
 
-    def __init__(self, memory_file: Optional[Path] = None):
+    def __init__(self, memory_file: Path | None = None):
         """
         Initialise fuzzing memory.
         Right now we use json and ideally we should be using sqlite or similar for scalability.
@@ -95,26 +93,35 @@ class FuzzingMemory:
         self.memory_file.parent.mkdir(parents=True, exist_ok=True)
 
         # In-memory knowledge store
-        self.knowledge: Dict[str, FuzzingKnowledge] = {}
+        self.knowledge: dict[str, FuzzingKnowledge] = {}
 
         # Campaign history
-        self.campaigns: List[Dict] = []
+        self.campaigns: list[dict] = []
+
+        # Batched save: avoid writing to disk on every remember() call
+        self._dirty_count: int = 0
+        self._save_batch_size: int = 50
+        self._last_save_time: float = 0.0
+        self._save_interval: float = 30.0  # seconds
 
         # Load existing memory
         self.load()
 
-        logger.info(f"Fuzzing memory initialised: {len(self.knowledge)} knowledge entries loaded")
+        # Debug: constructor detail — fires once per process and every
+        # RAPTOR subprocess constructs one, so at INFO it was among the
+        # top repeated lines in the audit trail.
+        logger.debug("Fuzzing memory initialised: %d knowledge entries loaded", len(self.knowledge))
 
     def load(self):
         """Load memory from persistent storage."""
         if not self.memory_file.exists():
-            logger.info(f"No existing memory file at {self.memory_file}")
+            logger.debug("No existing memory file at %s", self.memory_file)
             return
 
         try:
             data = load_json(self.memory_file)
             if not isinstance(data, dict):
-                logger.warning(f"Failed to parse memory file: {self.memory_file}")
+                logger.warning("Failed to parse memory file: %s", self.memory_file)
                 return
 
             # Load knowledge entries
@@ -134,10 +141,17 @@ class FuzzingMemory:
             # Load campaign history
             self.campaigns = data.get("campaigns", [])
 
-            logger.info(f"Loaded {len(self.knowledge)} knowledge entries, {len(self.campaigns)} past campaigns")
+            logger.debug("Loaded %d knowledge entries, %d past campaigns", len(self.knowledge), len(self.campaigns))
 
-        except Exception as e:
-            logger.error(f"Failed to load memory: {e}")
+        except Exception as e:  # noqa: BLE001 — memory is additive; never crash the campaign
+            logger.error("Failed to load memory: %s", e)
+
+    def flush(self):
+        """Flush any pending dirty state to disk."""
+        if self._dirty_count > 0:
+            self.save()
+            self._dirty_count = 0
+            self._last_save_time = time.time()
 
     def save(self):
         """Save memory to persistent storage."""
@@ -163,10 +177,10 @@ class FuzzingMemory:
 
             save_json(self.memory_file, data)
 
-            logger.debug(f"Memory saved to {self.memory_file}")
+            logger.debug("Memory saved to %s", self.memory_file)
 
-        except Exception as e:
-            logger.error(f"Failed to save memory: {e}")
+        except Exception as e:  # noqa: BLE001 — memory is additive; never crash the campaign
+            logger.error("Failed to save memory: %s", e)
 
     def remember(self, knowledge: FuzzingKnowledge):
         """
@@ -182,15 +196,24 @@ class FuzzingMemory:
             existing = self.knowledge[key]
             existing.value = knowledge.value
             existing.last_updated = time.time()
-            logger.debug(f"Updated knowledge: {key}")
+            logger.debug("Updated knowledge: %s", key)
         else:
             # Store new knowledge
             self.knowledge[key] = knowledge
-            logger.info(f"Learned new knowledge: {key}")
+            logger.info("Learned new knowledge: %s", key)
 
-        self.save()
+        self._dirty_count += 1
+        now = time.time()
+        elapsed = now - self._last_save_time
+        if (
+            self._dirty_count >= self._save_batch_size
+            or elapsed >= self._save_interval
+        ):
+            self.save()
+            self._dirty_count = 0
+            self._last_save_time = now
 
-    def recall(self, knowledge_type: str, key: str) -> Optional[FuzzingKnowledge]:
+    def recall(self, knowledge_type: str, key: str) -> FuzzingKnowledge | None:
         """
         Retrieve a piece of knowledge.
 
@@ -205,7 +228,7 @@ class FuzzingMemory:
         return self.knowledge.get(lookup_key)
 
     def find_similar(self, knowledge_type: str,
-                     min_confidence: float = 0.5) -> List[FuzzingKnowledge]:
+                     min_confidence: float = 0.5) -> list[FuzzingKnowledge]:
         """
         Find all knowledge of a certain type with sufficient confidence.
 
@@ -229,6 +252,13 @@ class FuzzingMemory:
                                 crashes_found: int, exploitable_crashes: int):
         """
         Record that a fuzzing strategy was successful.
+
+        The stored ``value`` dict is a snapshot of the most recent run —
+        each call overwrites the previous crash counts rather than
+        accumulating them. Cumulative history lives in the entry's
+        success/failure counters (``update_success`` / ``update_failure``),
+        unlike ``record_crash_pattern`` which accumulates counts inside
+        ``value`` itself.
 
         Args:
             strategy_name: Name of the strategy
@@ -265,12 +295,16 @@ class FuzzingMemory:
         }
 
         self.remember(knowledge)
-        logger.info(f"Recorded strategy result: {strategy_name} - {crashes_found} crashes")
+        logger.info("Recorded strategy result: %s - %s crashes", strategy_name, crashes_found)
 
     def record_crash_pattern(self, signal: str, function: str,
                             binary_hash: str, exploitable: bool):
         """
         Record a crash pattern for learning.
+
+        Unlike ``record_strategy_success`` (latest-run snapshot), the
+        stored ``value`` dict accumulates: each call increments
+        ``total_count`` and, when exploitable, ``exploitable_count``.
 
         Args:
             signal: Crash signal (e.g., "SIGSEGV")
@@ -307,7 +341,7 @@ class FuzzingMemory:
         self.remember(knowledge)
 
     def record_exploit_technique(self, technique: str, crash_type: str,
-                                binary_characteristics: Dict, success: bool):
+                                binary_characteristics: dict, success: bool):
         """
         Record whether an exploit technique worked.
 
@@ -337,9 +371,9 @@ class FuzzingMemory:
             knowledge.update_failure()
 
         self.remember(knowledge)
-        logger.info(f"Recorded exploit technique: {technique} - {'success' if success else 'failure'}")
+        logger.info("Recorded exploit technique: %s - %s", technique, 'success' if success else 'failure')
 
-    def get_best_strategy(self, binary_hash: str) -> Optional[str]:
+    def get_best_strategy(self, binary_hash: str) -> str | None:
         """
         Get the best fuzzing strategy for a binary based on past experience.
 
@@ -362,8 +396,10 @@ class FuzzingMemory:
         strategies.sort(key=lambda k: (k.confidence, k.success_rate()), reverse=True)
 
         best = strategies[0]
-        logger.info(f"Best strategy for binary: {best.value['name']} "
-                   f"(confidence: {best.confidence:.2f}, success rate: {best.success_rate():.2f})")
+        logger.info(
+            "Best strategy for binary: %s (confidence: %.2f, success rate: %.2f)",
+            best.value['name'], best.confidence, best.success_rate(),
+        )
 
         return best.value["name"]
 
@@ -389,7 +425,14 @@ class FuzzingMemory:
                 "SIGILL": 0.4, 4: 0.4,
                 "SIGFPE": 0.2, 8: 0.2,
             }
-            return signal_probs.get(signal, 0.3)
+            # Callers may pass signal as a string-encoded int ("11")
+            # which misses the int key (11).  Normalise first.
+            lookup_key: Any = signal
+            try:
+                lookup_key = int(signal)
+            except (TypeError, ValueError):
+                pass
+            return signal_probs.get(lookup_key, 0.3)
 
         # Use historical data
         value = knowledge.value
@@ -401,7 +444,7 @@ class FuzzingMemory:
         # Combine with confidence
         return exploitable_rate * knowledge.confidence
 
-    def record_campaign(self, campaign_data: Dict):
+    def record_campaign(self, campaign_data: dict):
         """
         Record a complete fuzzing campaign for future reference.
 
@@ -409,14 +452,20 @@ class FuzzingMemory:
             campaign_data: Dictionary with campaign information
         """
         campaign_data["timestamp"] = time.time()
-        campaign_data["date"] = datetime.now().isoformat()
+        campaign_data["date"] = datetime.now(timezone.utc).isoformat()
 
         self.campaigns.append(campaign_data)
+        # save() serialises the entire knowledge dict too, so any pending
+        # dirty entries are persisted here — reset the batch counters like
+        # flush() does, or the next remember()/flush() rewrites the same
+        # data redundantly.
         self.save()
+        self._dirty_count = 0
+        self._last_save_time = time.time()
 
-        logger.info(f"Recorded campaign: {campaign_data.get('binary_name', 'unknown')}")
+        logger.info("Recorded campaign: %s", campaign_data.get('binary_name', 'unknown'))
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """Get memory statistics."""
         stats = {
             "total_knowledge": len(self.knowledge),
@@ -456,5 +505,8 @@ class FuzzingMemory:
 
         pruned = before_count - len(self.knowledge)
         if pruned > 0:
-            logger.info(f"Pruned {pruned} low-confidence knowledge entries")
+            logger.info("Pruned %s low-confidence knowledge entries", pruned)
+            # Full-state save — reset the batch counters (see record_campaign).
             self.save()
+            self._dirty_count = 0
+            self._last_save_time = time.time()

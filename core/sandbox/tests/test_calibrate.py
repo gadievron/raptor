@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -305,6 +307,70 @@ class TestLoadOrCalibrate:
     def test_missing_binary_raises(self, cache_dir, tmp_path):
         with pytest.raises(FileNotFoundError):
             cal.load_or_calibrate(tmp_path / "no-such-bin")
+
+
+# ---------------------------------------------------------------------------
+# _spawn_probe normalisation
+# ---------------------------------------------------------------------------
+
+
+class _FakeObserved:
+    def __init__(self, connects):
+        self.paths_read = ["/b", "/a", "/a"]
+        self.paths_written = []
+        self.paths_stat = []
+        self.connect_targets = connects
+
+
+class _FakeResult:
+    returncode = 0
+    sandbox_info = {"observe_nonce": "n0", "proxy_events": []}
+
+
+def _spawn_with_connects(connects):
+    with patch("core.sandbox.run", return_value=_FakeResult()), \
+         patch("core.sandbox.observe_profile.parse_observe_log",
+               return_value=_FakeObserved(connects)):
+        profile, rc = cal._spawn_probe(
+            "/usr/bin/true", [], timeout=1.0,
+        )
+    return profile
+
+
+def _ct(ip, port, family="AF_INET"):
+    return SimpleNamespace(ip=ip, port=port, family=family)
+
+
+class TestConnectTargetsNormalised:
+    """``_spawn_probe`` must set-normalise ``connect_targets`` like
+    every other observational list, so repeat probes of the same
+    binary serialise to identical JSON (modulo timestamp) as
+    ``to_json`` documents."""
+
+    def test_duplicates_collapsed(self):
+        profile = _spawn_with_connects(
+            [_ct("1.2.3.4", 443), _ct("1.2.3.4", 443)],
+        )
+        assert profile.connect_targets == [
+            cal.ConnectTarget(ip="1.2.3.4", port=443, family="AF_INET"),
+        ]
+
+    def test_order_independent_json(self):
+        a = _spawn_with_connects(
+            [_ct("9.9.9.9", 53), _ct("1.2.3.4", 443)],
+        )
+        b = _spawn_with_connects(
+            [_ct("1.2.3.4", 443), _ct("9.9.9.9", 53)],
+        )
+        # Same reach observed in different tracer-record order must
+        # produce identical JSON modulo the timestamp field.
+        ja = cal.SandboxProfile.from_json(a.to_json())
+        jb = cal.SandboxProfile.from_json(b.to_json())
+        assert ja.connect_targets == jb.connect_targets
+
+    def test_sibling_lists_still_normalised(self):
+        profile = _spawn_with_connects([])
+        assert profile.paths_read == ["/a", "/b"]
 
 
 # ---------------------------------------------------------------------------

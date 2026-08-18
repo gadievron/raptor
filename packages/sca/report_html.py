@@ -14,10 +14,13 @@ emits both formats when ``--html`` is passed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
-from typing import Optional, Sequence
+from urllib.parse import urlparse
+
+from core.security.log_sanitisation import escape_nonprintable
 
 from .findings import severity_rank
 from .models import (
@@ -25,7 +28,6 @@ from .models import (
     SupplyChainFinding,
     VulnFinding,
 )
-
 
 _SEV_LABEL = {
     "critical": "Critical", "high": "High", "medium": "Medium",
@@ -36,13 +38,25 @@ _SEV_LABEL = {
     "none": "None (CVSS 0.0)",
 }
 
-# Severity-keyed colours. Permissive palette — readable on light
-# AND dark backgrounds via OS preference (the embedded CSS uses
-# ``prefers-color-scheme`` to adapt).
-_SEV_BG = {
-    "critical": "#7f1d1d", "high": "#9a3412", "medium": "#854d0e",
-    "low": "#1e40af", "info": "#374151",
-}
+# Schemes allowed to render as clickable anchors. Anything else
+# (javascript:, data:, file:, vbscript:) renders as inert code text —
+# html.escape neutralises markup but does nothing about a hostile
+# scheme inside a legitimate-looking href.
+_LINK_SCHEME_ALLOWLIST = frozenset({"http", "https"})
+
+
+def _untrusted_link(url: str) -> str:
+    """Render an untrusted URL: anchor for http/https, inert text
+    otherwise. Non-printables (ANSI/BIDI smuggling) are escaped
+    before the HTML escaping every field gets."""
+    text = escape(escape_nonprintable(url))
+    try:
+        scheme = (urlparse(url).scheme or "").lower()
+    except ValueError:
+        scheme = ""
+    if scheme in _LINK_SCHEME_ALLOWLIST:
+        return f"<a href=\"{text}\">{text}</a>"
+    return f"<code>{text}</code>"
 
 
 def render_html_report(
@@ -53,10 +67,10 @@ def render_html_report(
     hygiene_findings: Sequence[HygieneFinding],
     supply_chain_findings: Sequence[SupplyChainFinding] = (),
     license_findings: Sequence = (),
-    cache_hits: Optional[int] = None,
-    cache_misses: Optional[int] = None,
-    cache_evictions: Optional[int] = None,
-    generated_at: Optional[datetime] = None,
+    cache_hits: int | None = None,
+    cache_misses: int | None = None,
+    cache_evictions: int | None = None,
+    generated_at: datetime | None = None,
     parse_failures: Sequence = (),
 ) -> str:
     """Return the full report as a single HTML string."""
@@ -180,9 +194,9 @@ def _summary_section(
     hygiene_findings: Sequence[HygieneFinding],
     supply_chain_findings: Sequence[SupplyChainFinding],
     license_findings: Sequence,
-    cache_hits: Optional[int],
-    cache_misses: Optional[int],
-    cache_evictions: Optional[int] = None,
+    cache_hits: int | None,
+    cache_misses: int | None,
+    cache_evictions: int | None = None,
 ) -> str:
     from collections import Counter
     severity_counts: Counter = Counter()
@@ -204,7 +218,8 @@ def _summary_section(
             severity_counts[f.severity] += 1
 
     rows = []
-    for sev in ("critical", "high", "medium", "low", "info"):
+    # ``none`` last — it ranks below info (see _FILTER_SCRIPT ranks).
+    for sev in ("critical", "high", "medium", "low", "info", "none"):
         if severity_counts.get(sev):
             rows.append(
                 f"<tr><td><span class=\"sev sev-{sev}\">"
@@ -287,15 +302,15 @@ def _vuln_card(f: VulnFinding) -> str:
         search_bits.extend(primary.aliases)
     haystack = " ".join(s for s in search_bits if s).lower()
     parts = [
-        f"<article class=\"finding sev-{f.severity}\""
-        f" data-severity=\"{f.severity}\""
-        f" data-kev=\"{'1' if f.in_kev else '0'}\""
-        f" data-suppressed=\"{'1' if f.suppressed else '0'}\""
-        f" data-ecosystem=\"{escape(dep.ecosystem)}\""
-        f" data-search=\"{escape(haystack)}\">"
-        f"<h3><span class=\"sev sev-{f.severity}\">"
-        f"{escape(_SEV_LABEL.get(f.severity, f.severity.title()))}"
-        f"</span> {escape(dep.name)} {escape(dep.version or '*')}"
+        (f"<article class=\"finding sev-{f.severity}\""
+         f" data-severity=\"{f.severity}\""
+         f" data-kev=\"{'1' if f.in_kev else '0'}\""
+         f" data-suppressed=\"{'1' if f.suppressed else '0'}\""
+         f" data-ecosystem=\"{escape(dep.ecosystem)}\""
+         f" data-search=\"{escape(haystack)}\">"
+         f"<h3><span class=\"sev sev-{f.severity}\">"
+         f"{escape(_SEV_LABEL.get(f.severity, f.severity.title()))}"
+         f"</span> {escape(dep.name)} {escape(dep.version or '*')}"),
     ]
     if f.fixed_version:
         parts.append(
@@ -321,7 +336,7 @@ def _vuln_card(f: VulnFinding) -> str:
     badges: list = []
     if f.in_kev:
         badges.append("<span class=\"badge kev\">KEV</span>")
-    if f.epss is not None and f.epss > 0:
+    if f.epss is not None and f.epss >= 0.01:
         badges.append(
             f"<span class=\"badge epss\">EPSS {f.epss:.2f}</span>"
         )
@@ -335,7 +350,7 @@ def _vuln_card(f: VulnFinding) -> str:
     if ev is not None and ev.has_any:
         if ev.edb_ids:
             edb_links = ", ".join(
-                f"<a href=\"https://www.exploit-db.com/exploits/{i}\">{i}</a>"
+                f"<a href=\"https://www.exploit-db.com/exploits/{escape(str(i))}\">{escape(str(i))}</a>"
                 for i in ev.edb_ids[:3]
             )
             extra = (f" (+{len(ev.edb_ids) - 3} more)"
@@ -344,8 +359,11 @@ def _vuln_card(f: VulnFinding) -> str:
                 f"<li><strong>Exploit-DB:</strong> {edb_links}{extra}</li>"
             )
         if ev.msf_modules:
+            # Corpus-sourced module names — escape non-printables in
+            # addition to the HTML escaping the other fields get.
             mods = ", ".join(
-                f"<code>{escape(m)}</code>" for m in ev.msf_modules[:2]
+                f"<code>{escape(escape_nonprintable(m))}</code>"
+                for m in ev.msf_modules[:2]
             )
             extra = (f" (+{len(ev.msf_modules) - 2} more)"
                       if len(ev.msf_modules) > 2 else "")
@@ -353,9 +371,10 @@ def _vuln_card(f: VulnFinding) -> str:
                 f"<li><strong>Metasploit:</strong> {mods}{extra}</li>"
             )
         if ev.github_poc_urls:
+            # PoC hrefs only become anchors for http/https; other
+            # schemes render as inert text (see _untrusted_link).
             poc_links = ", ".join(
-                f"<a href=\"{escape(u)}\">{escape(u)}</a>"
-                for u in ev.github_poc_urls[:2]
+                _untrusted_link(u) for u in ev.github_poc_urls[:2]
             )
             extra = (f" (+{len(ev.github_poc_urls) - 2} more)"
                       if len(ev.github_poc_urls) > 2 else "")

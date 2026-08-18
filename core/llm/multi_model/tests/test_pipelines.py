@@ -17,7 +17,6 @@ when multiple components compose:
 - multi_model_analyses survives reviewers and reaches aggregator
 """
 
-from dataclasses import dataclass
 
 from core.llm.multi_model import (
     BaseSetAdapter,
@@ -26,15 +25,11 @@ from core.llm.multi_model import (
     wrap_model_output,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures: minimal but realistic shapes
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeModel:
-    model_name: str
+# FakeModel (ModelHandle stand-in) comes from core.testing.
+from core.testing import FakeModel
 
 
 class FindingAdapter(BaseVerdictAdapter):

@@ -11,7 +11,6 @@ from core.json import JsonCache
 from packages.sca.osv import OSV_QUERY_BATCH_URL, OSV_VULN_URL_TEMPLATE
 from packages.sca.pipeline import RunOptions, run_sca
 
-
 _VULN_RECORD = {
     "id": "GHSA-fake",
     "modified": "2024-01-01T00:00:00Z",
@@ -76,7 +75,11 @@ suppressions:
 """)
     out = tmp_path / "out"
     cache = JsonCache(root=tmp_path / "cache")
-    result = run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False),
+    # The overlay ships in the scanned tree — only honoured on
+    # repo-trusted runs.
+    result = run_sca(target, out,
+                     RunOptions(enable_llm_review=False,
+                                enable_triage=False, trust_repo=True),
                      http=StubHttp(), cache=cache)
     assert result.suppressed_findings >= 1
 
@@ -128,7 +131,110 @@ suppressions:
 """)
     out = tmp_path / "out"
     cache = JsonCache(root=tmp_path / "cache")
-    run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False), http=StubHttp(), cache=cache)
+    run_sca(target, out,
+            RunOptions(enable_llm_review=False, enable_triage=False,
+                       trust_repo=True),
+            http=StubHttp(), cache=cache)
     md = (out / "report.md").read_text()
     assert "Suppressed" in md
     assert "(suppressed: ack)" in md
+
+
+def test_untrusted_run_ignores_target_suppression_file(
+    tmp_path: Path, caplog,
+) -> None:
+    """Default (untrusted) run: the target-tree overlay is loaded but
+    NOT applied — the finding survives — and a prominent notice with
+    the entry count is logged."""
+    target = _build_target(tmp_path, suppress_yaml="""
+version: 1
+suppressions:
+  - advisory_id: CVE-2099-FAKE
+    reason: hostile target trying to hide its own CVE
+""")
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    with caplog.at_level("WARNING", logger="packages.sca.pipeline"):
+        result = run_sca(target, out,
+                         RunOptions(enable_llm_review=False,
+                                    enable_triage=False),
+                         http=StubHttp(), cache=cache)
+    assert result.suppressed_findings == 0
+    rows = json.loads(result.findings_path.read_text())
+    sca_rows = [r for r in rows
+                if r["vuln_type"] == "sca:vulnerable_dependency"]
+    assert sca_rows
+    assert all(not r["suppressed"] for r in sca_rows)
+    notices = [r for r in caplog.records
+               if "suppression overlay present but not trusted"
+               in r.getMessage()]
+    assert len(notices) == 1
+    assert "1 entries ignored" in notices[0].getMessage()
+    assert "--trust-repo" in notices[0].getMessage()
+
+
+def test_trusted_run_logs_per_entry_suppression_counts(
+    tmp_path: Path, caplog,
+) -> None:
+    """Trusted run: each overlay entry's hit count is logged."""
+    target = _build_target(tmp_path, suppress_yaml="""
+version: 1
+suppressions:
+  - advisory_id: CVE-2099-FAKE
+    reason: accepted risk
+  - ecosystem: npm
+    name: never-matches
+    reason: entry with zero hits
+""")
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    with caplog.at_level("INFO", logger="packages.sca.pipeline"):
+        result = run_sca(target, out,
+                         RunOptions(enable_llm_review=False,
+                                    enable_triage=False,
+                                    trust_repo=True),
+                         http=StubHttp(), cache=cache)
+    assert result.suppressed_findings >= 1
+    per_entry = [r.getMessage() for r in caplog.records
+                 if "suppression entry" in r.getMessage()]
+    assert any("CVE-2099-FAKE" in m for m in per_entry)
+    assert any("npm:never-matches@*" in m and "0 finding(s)" in m
+               for m in per_entry)
+
+
+def test_untrusted_run_ignores_target_license_policy(
+    tmp_path: Path, caplog,
+) -> None:
+    """A license policy file shipped in the scanned tree is ignored
+    (default policy used) on untrusted runs, with a notice."""
+    target = _build_target(tmp_path)
+    (target / ".raptor-sca-license-policy.yml").write_text(
+        "allow: [MIT]\ndefault: deny\n", encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    with caplog.at_level("WARNING", logger="packages.sca.pipeline"):
+        run_sca(target, out,
+                RunOptions(enable_llm_review=False,
+                           enable_triage=False),
+                http=StubHttp(), cache=cache)
+    assert any("license policy file present but not trusted"
+               in r.getMessage() for r in caplog.records)
+
+
+def test_trusted_run_loads_target_license_policy(
+    tmp_path: Path, caplog,
+) -> None:
+    target = _build_target(tmp_path)
+    (target / ".raptor-sca-license-policy.yml").write_text(
+        "allow: [MIT]\ndefault: deny\n", encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    with caplog.at_level("WARNING", logger="packages.sca.pipeline"):
+        run_sca(target, out,
+                RunOptions(enable_llm_review=False,
+                           enable_triage=False, trust_repo=True),
+                http=StubHttp(), cache=cache)
+    assert not any("license policy file present but not trusted"
+                   in r.getMessage() for r in caplog.records)

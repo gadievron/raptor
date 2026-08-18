@@ -101,7 +101,7 @@ def _fallback_compare(a: str, b: str) -> int:
         # pre similar.
         # Convention: assign small integers to release/pre/post categories.
         # cat: 0 = .devN, 1 = preN.devN, 2 = preN, 3 = release, 4 = postN
-        if post is not None and dev is not None:
+        if post is not None and dev is not None and pre is None:
             cat = 4  # post+dev: between post(N-1) and postN
         elif dev is not None and pre is None:
             cat = 0

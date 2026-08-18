@@ -42,10 +42,11 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Protocol, Sequence
+from typing import Any, Literal, Protocol
 
 from .binary_oracle import Classification, classify_binary_evidence
 
@@ -61,9 +62,9 @@ class FunctionMeasurement:
     the function — typically a stripped binary). ``expected_verdict``
     populates in synthetic mode; ``is_live`` populates in gcov mode."""
     name: str
-    classifier_verdict: Optional[Classification]
-    expected_verdict: Optional[Classification] = None
-    is_live: Optional[bool] = None
+    classifier_verdict: Classification | None
+    expected_verdict: Classification | None = None
+    is_live: bool | None = None
 
 
 @dataclass
@@ -73,18 +74,18 @@ class CorpusReport:
     corpus_name: str
     corpus_mode: Mode
     n_functions: int
-    measurements: List[FunctionMeasurement] = field(default_factory=list)
-    verdict_counts: Dict[str, int] = field(default_factory=dict)
+    measurements: list[FunctionMeasurement] = field(default_factory=list)
+    verdict_counts: dict[str, int] = field(default_factory=dict)
 
     # synthetic mode
-    exact_match: Optional[float] = None
-    mismatches: List[Dict[str, str]] = field(default_factory=list)
+    exact_match: float | None = None
+    mismatches: list[dict[str, str]] = field(default_factory=list)
 
     # gcov mode
-    absent_precision: Optional[float] = None
+    absent_precision: float | None = None
     absent_n: int = 0
     absent_correct: int = 0
-    absent_fps: List[str] = field(default_factory=list)
+    absent_fps: list[str] = field(default_factory=list)
     # Full classifier × ground-truth cross-tab (adversarial review
     # E P1-1). The headline metric ``absent_precision`` measures one
     # direction only — what % of ``absent`` verdicts were actually
@@ -102,15 +103,15 @@ class CorpusReport:
     #
     # Schema: ``cross_tab[classifier_verdict][gt_label] = count`` where
     # gt_label is "live" (gcov saw execution) or "dead" (no .gcda).
-    cross_tab: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    cross_tab: dict[str, dict[str, int]] = field(default_factory=dict)
 
     # ``{tool_label: version_string}`` from the driver's context —
     # recorded so a precision number is reproducible without guessing
     # which compiler / coverage tool produced it (adversarial review
     # E P2-2).
-    toolchain: Dict[str, str] = field(default_factory=dict)
+    toolchain: dict[str, str] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "corpus": self.corpus_name,
             "mode": self.corpus_mode,
@@ -135,7 +136,7 @@ class CorpusDriver(Protocol):
     description: str
     mode: Mode
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         """Build whatever's needed and return a context dict with:
 
           * ``o2_binary`` (Path) — release-config binary the classifier runs against
@@ -152,13 +153,13 @@ class CorpusDriver(Protocol):
 # ---------------------------------------------------------------------------
 
 def _cross_tab_synthetic(
-    name: str, ctx: Dict[str, Any], verdicts: Dict[str, Any],
+    name: str, ctx: dict[str, Any], verdicts: dict[str, Any],
 ) -> CorpusReport:
-    expected: Dict[str, Classification] = ctx["expected"]
-    fns: List[str] = list(ctx["candidate_functions"])
-    measurements: List[FunctionMeasurement] = []
-    mismatches: List[Dict[str, str]] = []
-    counts: Dict[str, int] = {}
+    expected: dict[str, Classification] = ctx["expected"]
+    fns: list[str] = list(ctx["candidate_functions"])
+    measurements: list[FunctionMeasurement] = []
+    mismatches: list[dict[str, str]] = []
+    counts: dict[str, int] = {}
     correct = 0
     for fn in fns:
         cv = verdicts.get(fn)
@@ -184,19 +185,19 @@ def _cross_tab_synthetic(
 
 
 def _cross_tab_gcov(
-    name: str, ctx: Dict[str, Any], verdicts: Dict[str, Any],
+    name: str, ctx: dict[str, Any], verdicts: dict[str, Any],
 ) -> CorpusReport:
     live_set = set(ctx["live_set"])
-    fns: List[str] = list(ctx["candidate_functions"])
-    measurements: List[FunctionMeasurement] = []
-    counts: Dict[str, int] = {}
+    fns: list[str] = list(ctx["candidate_functions"])
+    measurements: list[FunctionMeasurement] = []
+    counts: dict[str, int] = {}
     absent_n = 0
     absent_correct = 0
-    absent_fps: List[str] = []
+    absent_fps: list[str] = []
     # Full 4×2 (classifier × gt) cross-tab. Keys covered:
     # classifier: symbol_present | inlined | absent | folded | (none)
     # gt: live | dead
-    cross_tab: Dict[str, Dict[str, int]] = {}
+    cross_tab: dict[str, dict[str, int]] = {}
     for fn in fns:
         cv = verdicts.get(fn)
         cv_label = cv.classification if cv else None
@@ -244,7 +245,7 @@ def _cross_tab_gcov(
     )
 
 
-def run_corpus(driver: "CorpusDriver", work_dir: Path) -> CorpusReport:
+def run_corpus(driver: CorpusDriver, work_dir: Path) -> CorpusReport:
     """Drive a single corpus end-to-end: prepare → classify → cross-tab."""
     work_dir.mkdir(parents=True, exist_ok=True)
     ctx = driver.prepare(work_dir)
@@ -267,7 +268,7 @@ def run_corpus(driver: "CorpusDriver", work_dir: Path) -> CorpusReport:
 _N_CONCENTRATION_WARN_THRESHOLD = 0.5
 
 
-def _aggregate(reports: Sequence[CorpusReport]) -> Dict[str, object]:
+def _aggregate(reports: Sequence[CorpusReport]) -> dict[str, object]:
     """Compute the cross-corpus aggregate the markdown headline depends
     on. Without this in the harness output, the ``1952/1952`` headline
     was hand-computed by a human reading per-corpus JSON — error-prone
@@ -302,7 +303,13 @@ def _aggregate(reports: Sequence[CorpusReport]) -> Dict[str, object]:
             "absent_precision": (a_c / a_n if a_n else None),
         })
         n_total += r.n_functions
-    rule_of_three_ub = (3.0 / abs_n) if abs_n else None
+    # Rule-of-three is only a valid 95% upper bound when ZERO misses
+    # were observed (that is the rule's whole premise). With misses
+    # present, 3/n understates the plausible miss rate — report None
+    # so nobody quotes an invalid over-optimistic bound.
+    rule_of_three_ub = (
+        (3.0 / abs_n) if abs_n and abs_correct == abs_n else None
+    )
     aggregate_precision = (abs_correct / abs_n) if abs_n else None
     # n-concentration warning: the aggregate is a meaningful estimate
     # of generalization ONLY if no single corpus dominates. If one
@@ -332,7 +339,8 @@ def _aggregate(reports: Sequence[CorpusReport]) -> Dict[str, object]:
         "absent_n_total": abs_n,
         "absent_correct_total": abs_correct,
         "aggregate_absent_precision": aggregate_precision,
-        # 95% Wilson upper bound on miss rate when 0 misses observed.
+        # Rule-of-three 95% upper bound (3/n) on miss rate when 0
+        # misses observed.
         "rule_of_three_95_upper_bound_miss_rate": rule_of_three_ub,
         "n_concentration_dominator": dominator,
         "per_corpus": per_corpus,
@@ -442,7 +450,7 @@ def write_report(reports: Sequence[CorpusReport], out_dir: Path) -> Path:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="raptor-binary-oracle-precision",
         description=(
@@ -458,7 +466,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--out", type=Path, default=None,
                    help=("output dir (default: "
                          "out/binary-oracle-precision/runs/<ts>)"))
+    from core.sandbox import PROFILES as _SANDBOX_PROFILES
+    p.add_argument("--sandbox", default="strict",
+                   choices=sorted(_SANDBOX_PROFILES),
+                   help=("sandbox profile for the oracle's tool "
+                         "invocations (default: strict — a measurement "
+                         "run under silently-degraded isolation would "
+                         "report a precision number the deployed posture "
+                         "didn't earn, so the harness aborts instead; "
+                         "pass --sandbox full to measure on a host "
+                         "without namespace support)"))
     args = p.parse_args(argv)
+
+    # CLI-parsed value only — same prompt-injection-safety contract as
+    # every other set_cli_profile() caller.
+    from core.sandbox.cli import set_cli_profile
+    set_cli_profile(args.sandbox)
 
     # Late import: the registry is the only thing the harness depends on
     # for driver lookup; pulling it lazily lets the harness module stay
@@ -483,7 +506,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.out = Path("out/binary-oracle-precision/runs") / ts
 
     cache_root = Path("out/binary-oracle-precision/cache")
-    reports: List[CorpusReport] = []
+    reports: list[CorpusReport] = []
     for name in names:
         logger.info("measuring corpus %s ...", name)
         rep = run_corpus(registry[name], cache_root / name)
@@ -495,8 +518,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 __all__ = [
-    "CorpusDriver", "CorpusReport", "FunctionMeasurement", "Mode",
-    "run_corpus", "write_report", "main",
+    "CorpusDriver",
+    "CorpusReport",
+    "FunctionMeasurement",
+    "Mode",
+    "main",
+    "run_corpus",
+    "write_report",
 ]
 
 

@@ -22,17 +22,14 @@ Workers don't need a custom SDK shim — the LLM SDKs sit on top of
 from __future__ import annotations
 
 import os
-from typing import Optional
-
 import threading
 
 import httpx
 
-
 _TOKEN_HEADER = "X-Raptor-Token"
 
 
-def read_token(fd: Optional[int] = None) -> str:
+def read_token(fd: int | None = None) -> str:
     """Read the worker's capability token from the inherited FD.
 
     Pass ``fd`` explicitly for tests; production code reads
@@ -87,7 +84,7 @@ def read_token(fd: Optional[int] = None) -> str:
 # would fail because the FD is already closed. Cache the value at
 # process scope so all Provider constructors in the same worker share
 # one resolved token.
-_cached_token: Optional[str] = None
+_cached_token: str | None = None
 _cache_lock = threading.Lock()
 
 
@@ -105,7 +102,7 @@ def _get_or_read_token() -> str:
 
 
 def _make_httpx_client(
-    socket_path: str, token: str, *, timeout: Optional[float] = None,
+    socket_path: str, token: str, *, timeout: float | None = None,
 ) -> httpx.Client:
     """Build the underlying ``httpx`` client.
 
@@ -128,7 +125,7 @@ def _make_httpx_client(
 
 
 def _resolve_socket_and_token(
-    socket_path: Optional[str], token: Optional[str],
+    socket_path: str | None, token: str | None,
 ) -> tuple[str, str]:
     """Shared default-resolution for the per-provider client factories.
 
@@ -151,9 +148,9 @@ def _resolve_socket_and_token(
 
 def make_anthropic_client(
     *,
-    socket_path: Optional[str] = None,
-    token: Optional[str] = None,
-    timeout: Optional[float] = None,
+    socket_path: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
 ):
     """Return a stock ``anthropic.Anthropic`` client routed through
     the dispatcher.
@@ -171,7 +168,7 @@ def make_anthropic_client(
     receive responses (including streamed ones). The credential
     isolation is invisible at the call site.
     """
-    import anthropic   # imported lazily so the module loads without the SDK
+    import anthropic  # imported lazily so the module loads without the SDK
 
     socket_path, token = _resolve_socket_and_token(socket_path, token)
     http = _make_httpx_client(socket_path, token, timeout=timeout)
@@ -192,9 +189,9 @@ def make_anthropic_client(
 def make_bedrock_client(
     *,
     api: str = "mantle",
-    socket_path: Optional[str] = None,
-    token: Optional[str] = None,
-    timeout: Optional[float] = None,
+    socket_path: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
 ):
     """Return a stock ``anthropic.Anthropic`` client whose requests are
     AWS-auth-attached for a Bedrock surface by the dispatcher.
@@ -237,9 +234,9 @@ def make_bedrock_client(
 
 def make_openai_client(
     *,
-    socket_path: Optional[str] = None,
-    token: Optional[str] = None,
-    timeout: Optional[float] = None,
+    socket_path: str | None = None,
+    token: str | None = None,
+    timeout: float | None = None,
 ):
     """Return a stock ``openai.OpenAI`` client routed through the
     dispatcher. Same shape as :func:`make_anthropic_client`."""
@@ -300,16 +297,142 @@ def relay_for_grandchild() -> tuple[str, int]:
     return socket_path, read_fd
 
 
-def make_gemini_base_url(*, socket_path: Optional[str] = None,
-                          token: Optional[str] = None) -> tuple[str, httpx.Client]:
+def _child_admin_request(
+    op: str,
+    payload: dict,
+    *,
+    socket_path: str | None = None,
+    token: str | None = None,
+    timeout: float = 10.0,
+) -> dict:
+    """POST one /_child/<op> management request over the dispatcher UDS.
+
+    The worker's own capability token authenticates the call — child-
+    token management is delegation/attenuation of authority the worker
+    already holds (it can spend the budget itself; minting a scoped
+    child token only narrows it). Raises ``RuntimeError`` with a clear
+    message when the dispatcher is unreachable or refuses, so callers
+    fail fast instead of hanging or silently downgrading.
+    """
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
+    http = _make_httpx_client(socket_path, token, timeout=timeout)
+    try:
+        resp = http.post(f"http://_/_child/{op}", json=payload)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"LLM dispatcher unreachable for child-token {op} "
+            f"({type(exc).__name__}) — is the dispatcher running?"
+        ) from exc
+    finally:
+        http.close()
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"child-token {op} refused ({resp.status_code}): "
+            f"{data.get('error', 'unknown error')}"
+        )
+    if not isinstance(data, dict):
+        raise RuntimeError(f"child-token {op}: malformed response")
+    return data
+
+
+def mint_child_token(
+    *,
+    budget_usd: float,
+    models: list | None = None,
+    ttl_s: int | None = None,
+    label: str = "cc-child",
+    socket_path: str | None = None,
+    token: str | None = None,
+) -> dict:
+    """Mint a scoped child token via the dispatcher's UDS plane.
+
+    Returns ``{"token", "token_id", "expires_at", "budget_usd",
+    "request_budget"}``. The ``token`` value is the child's bearer
+    credential — hand it ONLY to the spawned child's env, never log it
+    (``token_id`` is the loggable correlation id).
+    """
+    payload: dict = {"budget_usd": budget_usd, "label": label}
+    if models:
+        payload["models"] = list(models)
+    if ttl_s:
+        payload["ttl_s"] = int(ttl_s)
+    return _child_admin_request(
+        "mint", payload, socket_path=socket_path, token=token,
+    )
+
+
+def revoke_child_token(
+    token_id: str,
+    *,
+    socket_path: str | None = None,
+    token: str | None = None,
+) -> dict:
+    """Revoke a child token by its public id."""
+    return _child_admin_request(
+        "revoke", {"token_id": token_id},
+        socket_path=socket_path, token=token,
+    )
+
+
+def child_token_spend(
+    token_id: str,
+    *,
+    socket_path: str | None = None,
+    token: str | None = None,
+) -> dict:
+    """Read a child token's spend/limits snapshot by its public id."""
+    return _child_admin_request(
+        "spend", {"token_id": token_id},
+        socket_path=socket_path, token=token,
+    )
+
+
+def reconcile_child_spend(
+    dispatcher_spent_usd: float,
+    child_reported_usd: float = 0.0,
+) -> float:
+    """Reconcile the two ledgers for one CC child: the dispatcher's
+    booked token spend and the child's own exit-report cost.
+
+    Max-of-ledgers, never sum: the two ledgers measure the SAME calls
+    from opposite ends of the wire, so adding them double-books; the
+    max guarantees nothing vanishes when either side under-reports
+    (a killed child reports nothing; an unpriced model books $0 on
+    the dispatcher). Matches the failed-call booking contract on the
+    provider ledger (``max(total_cost, provider_spend)``).
+    """
+    try:
+        a = max(float(dispatcher_spent_usd), 0.0)
+    except (TypeError, ValueError):
+        a = 0.0
+    try:
+        b = max(float(child_reported_usd), 0.0)
+    except (TypeError, ValueError):
+        b = 0.0
+    return max(a, b)
+
+
+def make_gemini_base_url(*, socket_path: str | None = None,
+                          token: str | None = None,
+                          timeout: float | None = None,
+                          ) -> tuple[str, httpx.Client]:
     """Gemini's Python SDK (``google-genai``) doesn't take a custom
     httpx client through its top-level ``Client`` constructor in all
     versions, so callers wire the base URL + httpx client themselves.
 
     Returns a tuple ``(base_url, http_client)`` the caller passes to
     whichever Gemini client wrapper they use. Same socket/token
-    resolution as the other factories.
+    resolution as the other factories, and ``timeout`` (seconds)
+    flows through to the underlying httpx exactly like the
+    Anthropic/OpenAI/Bedrock factories — without it, dispatcher-routed
+    Gemini calls were pinned to the 60s httpx default regardless of
+    the model's configured timeout (thinking calls routinely exceed
+    60s).
     """
     socket_path, token = _resolve_socket_and_token(socket_path, token)
-    http = _make_httpx_client(socket_path, token)
+    http = _make_httpx_client(socket_path, token, timeout=timeout)
     return "http://_/gemini", http

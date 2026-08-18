@@ -35,7 +35,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from packages.source_intel.aliases import ALL_WUR_ALIASES
 
 
 #: Per-family substring markers — the expansion of a discovered macro
@@ -323,14 +322,3 @@ def _count_usage(target: Path, names: Set[str]) -> Dict[str, int]:
                 counts[token] += 1
     return counts
 
-
-# =====================================================================
-# Curated-alias coverage check (sanity)
-# =====================================================================
-
-def alias_is_curated(spelling: str) -> bool:
-    """Return True iff ``spelling`` already appears in the curated
-    alias table (``packages.source_intel.aliases.ALL_WUR_ALIASES``).
-    Used by the analyzer to tag discovered aliases that aren't
-    redundant with the curated set."""
-    return spelling in ALL_WUR_ALIASES

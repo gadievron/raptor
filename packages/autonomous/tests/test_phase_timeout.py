@@ -31,7 +31,7 @@ class PhaseTimeoutArgparseTests(unittest.TestCase):
     def _run_help(self) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(RAPTOR_AGENTIC), "--help"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
             env={**os.environ, "RAPTOR_DIR": str(REPO_ROOT)},
         )
 
@@ -68,7 +68,7 @@ class RaptorCodeqlPhaseTimeoutTests(unittest.TestCase):
     def _run_help(self) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(self.RAPTOR_CODEQL), "--help"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
             env={**os.environ, "RAPTOR_DIR": str(REPO_ROOT)},
         )
 
@@ -178,3 +178,20 @@ class RunCommandStreamingTimeoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimeoutMessageAccuracyTests(unittest.TestCase):
+    """Timeout messages and the timeout marker must reflect the
+    operator's --phase-timeout, not a hardcoded 30m/1800.
+
+    Regression: an operator running --phase-timeout 7200 who hit the 2h
+    limit was told the scan "timed out (30m)" and the .semgrep_timeout
+    marker recorded timed_out_at_seconds=1800.
+    """
+
+    def test_messages_and_marker_use_configured_timeout(self):
+        src = RAPTOR_AGENTIC.read_text(encoding="utf-8")
+        self.assertNotIn("timed out (30m)", src)
+        self.assertNotIn('"timed_out_at_seconds": 1800', src)
+        self.assertIn('"timed_out_at_seconds": args.phase_timeout', src)
+        self.assertIn("timed out ({args.phase_timeout}s)", src)

@@ -11,12 +11,12 @@ folded into it (run-scoped diagnostics, not durable coverage). Also home to
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .record import load_records
 
 
-def execution_detail(run_dirs, checklist: Dict[str, Any]) -> Dict[str, Any]:
+def execution_detail(run_dirs, checklist: dict[str, Any]) -> dict[str, Any]:
     """Per-run tool EXECUTION detail — NOT coverage state (that's the store's).
 
     Reads the per-run ``coverage-<tool>.json`` records across ``run_dirs``:
@@ -30,7 +30,8 @@ def execution_detail(run_dirs, checklist: Dict[str, Any]) -> Dict[str, Any]:
     files_total = len(files)
     inv_paths = {fe.get("path") for fe in files if fe.get("path")}
 
-    tools: Dict[str, Any] = {}
+    inv_index = _inventory_name_index(inv_paths)
+    tools: dict[str, Any] = {}
     for rd in run_dirs:
         for rec in load_records(Path(rd)):
             tool = rec.get("tool")
@@ -41,14 +42,14 @@ def execution_detail(run_dirs, checklist: Dict[str, Any]) -> Dict[str, Any]:
                 "files_failed": [], "version": None,
             })
             for p in rec.get("files_examined", []) or []:
-                t["examined"].add(_match_to_inventory(p, inv_paths) or p)
+                t["examined"].add(_match_to_inventory(p, inv_paths, inv_index) or p)
             t["rules_applied"].update(rec.get("rules_applied", []) or [])
             t["packs"].update(rec.get("packs", []) or [])
             t["files_failed"].extend(rec.get("files_failed", []) or [])
             if rec.get("version"):
                 t["version"] = rec["version"]
 
-    out_tools: Dict[str, Any] = {}
+    out_tools: dict[str, Any] = {}
     for tool, t in sorted(tools.items()):
         examined = len(t["examined"] & inv_paths) if inv_paths else len(t["examined"])
         out_tools[tool] = {
@@ -62,7 +63,7 @@ def execution_detail(run_dirs, checklist: Dict[str, Any]) -> Dict[str, Any]:
     return {"tools": out_tools, "missing_groups": _missing_semgrep_groups(out_tools)}
 
 
-def _missing_semgrep_groups(tools: Dict[str, Any]) -> list:
+def _missing_semgrep_groups(tools: dict[str, Any]) -> list:
     """Configured Semgrep policy groups that the run did NOT use, or []."""
     semgrep = tools.get("semgrep")
     if not semgrep:
@@ -81,7 +82,7 @@ def _missing_semgrep_groups(tools: Dict[str, Any]) -> list:
         return []
 
 
-def format_execution_detail(detail: Dict[str, Any]) -> str:
+def format_execution_detail(detail: dict[str, Any]) -> str:
     """Render :func:`execution_detail` as an operator-facing section ('' if none)."""
     tools = detail.get("tools") or {}
     if not tools:
@@ -112,8 +113,35 @@ def format_execution_detail(detail: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
-    """Try to match a tool-reported path to an inventory path."""
+def _inventory_name_index(inventory_paths: set) -> dict[str, list]:
+    """``{basename: [inventory paths]}`` — build ONCE per import batch.
+
+    Every non-exact strategy in :func:`_match_to_inventory` (basename
+    and component-aligned suffix) only ever matches paths whose final
+    component equals the reported path's — so this index is the
+    complete candidate space. Without it each lookup rescanned the
+    whole inventory (O(reported × inventory) Path constructions when
+    tools report absolute/build-relative paths, the norm for
+    gcov/semgrep on large targets).
+    """
+    idx: dict[str, list] = {}
+    for p in inventory_paths:
+        idx.setdefault(Path(p).name, []).append(p)
+    return idx
+
+
+def _match_to_inventory(
+    path: str,
+    inventory_paths: set,
+    name_index: dict[str, list] | None = None,
+) -> str | None:
+    """Try to match a tool-reported path to an inventory path.
+
+    ``name_index`` (from :func:`_inventory_name_index`) makes the
+    non-exact strategies O(candidates) instead of O(inventory); callers
+    looping many reported paths over one inventory should build it once
+    and pass it through.
+    """
     if path in inventory_paths:
         return path
 
@@ -129,7 +157,10 @@ def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
 
     # Try matching by filename
     name = Path(path).name
-    matches = [p for p in inventory_paths if Path(p).name == name]
+    if name_index is not None:
+        matches = name_index.get(name, [])
+    else:
+        matches = [p for p in inventory_paths if Path(p).name == name]
     if len(matches) == 1:
         return matches[0]
 
@@ -152,7 +183,10 @@ def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
         # so the boundary aligns on a path component.
         return longer[len(longer) - len(shorter) - 1] == "/"
 
-    for inv_path in inventory_paths:
+    # A '/'-aligned suffix relation in either direction implies the two
+    # final path components are identical, so the same-basename
+    # candidate list is the complete search space for this strategy too.
+    for inv_path in matches:
         if _path_suffix_match(inv_path, path) or _path_suffix_match(path, inv_path):
             return inv_path
 

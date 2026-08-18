@@ -59,15 +59,46 @@ def set_cli_profile(profile: str) -> None:
     or target repo content — to keep the sandbox unescapable by prompt
     injection.
     """
-    logger.warning(f"Sandbox profile forced to {profile!r} by CLI --sandbox flag")
+    logger.warning("Sandbox profile forced to %r by CLI --sandbox flag", profile)
     _set_cli_state(profile)
+
+
+def set_cli_readable_paths(paths: list) -> None:
+    """Called by entry points when `--sandbox-readable-path` is passed.
+
+    Extends `readable_paths` on every subsequent `sandbox()` / `run()`
+    in the process. Loosens isolation, so the set_cli_profile() rule
+    applies with extra force: called only from CLI-parsed argparse
+    values — never from env, config, or target repo content.
+    """
+    logger.warning(
+        "Sandbox read allowlist extended via --sandbox-readable-path: %s",
+        ", ".join(paths),
+    )
+    state._cli_sandbox_readable_paths = list(paths)
+
+
+def set_cli_tool_paths(paths: list) -> None:
+    """Called by entry points when `--sandbox-tool-path` is passed.
+
+    Extends `tool_paths` (read allowlist + mount-ns read-only bind) on
+    every subsequent `sandbox()` / `run()` in the process. Same
+    CLI-parsed-values-only contract as set_cli_readable_paths().
+    """
+    logger.warning(
+        "Sandbox tool paths extended via --sandbox-tool-path: %s",
+        ", ".join(paths),
+    )
+    state._cli_sandbox_tool_paths = list(paths)
 
 
 def add_cli_args(parser: argparse.ArgumentParser) -> None:
     """Attach `--sandbox {full,debug,network-only,none}`, `--no-sandbox`,
-    `--audit`, and `--audit-verbose` to an argparse parser. Every RAPTOR
-    entry point should call this so users get a consistent sandbox-
-    control surface regardless of which command they launched.
+    `--audit`, `--audit-verbose`, `--audit-budget`,
+    `--sandbox-readable-path`, and `--sandbox-tool-path` to an argparse
+    parser. Every RAPTOR entry point should call this so users get a
+    consistent sandbox-control surface regardless of which command they
+    launched.
 
     Profile (`--sandbox` or `--no-sandbox`) sets ENFORCEMENT strictness.
     `--audit` is ORTHOGONAL — it engages audit mode on the active
@@ -92,8 +123,13 @@ def add_cli_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--sandbox", choices=sorted(PROFILES.keys()), default=None,
         help="Force sandbox profile "
-             "(debug | full | network-only | none). "
+             "(full | strict | debug | target_run | frida | "
+             "network-only | none). "
              "Overrides any profile chosen in code. "
+             "'strict' = full that FAILS rather than degrades when a "
+             "backend is missing, plus read restriction ($HOME denied) "
+             "by default — use for hostile code when silent downgrade "
+             "is unacceptable. "
              "'debug' for gdb/rr work (allows ptrace). "
              "'network-only' if Landlock or seccomp is breaking your "
              "build, 'none' only as last resort. "
@@ -120,6 +156,28 @@ def add_cli_args(parser: argparse.ArgumentParser) -> None:
              "volume — expect thousands of records per run. Requires "
              "--audit. Distinct from any entry-point's own --verbose "
              "flag (which controls log level, not audit output).",
+    )
+    parser.add_argument(
+        "--sandbox-readable-path", action="append", default=None,
+        dest="sandbox_readable_paths", metavar="PATH",
+        help="Extend the sandbox read allowlist with PATH (repeatable; "
+             "file or directory). Only meaningful under read-restricting "
+             "runs ('strict', or call sites setting restrict_reads) — "
+             "the self-service fix when a tool inside the sandbox is "
+             "denied a read it legitimately needs (diagnose with "
+             "--audit; sandbox-summary.json names the path). This "
+             "LOOSENS isolation: prefer the narrowest path that fixes "
+             "the denial, never $HOME itself.",
+    )
+    parser.add_argument(
+        "--sandbox-tool-path", action="append", default=None,
+        dest="sandbox_tool_paths", metavar="DIR",
+        help="Make an operator-installed tool directory visible inside "
+             "the sandbox (repeatable): added to the read allowlist and "
+             "bind-mounted read-only in mount-namespace mode. For "
+             "toolchains outside the system dirs — pip --user, pyenv, "
+             "~/.cargo/bin, /usr/local installs. This LOOSENS "
+             "isolation: pass the tool's bin/prefix dir, not $HOME.",
     )
     parser.add_argument(
         "--audit-budget", type=int, dest="audit_budget", default=None,
@@ -167,6 +225,8 @@ def apply_cli_args(
     budget = getattr(args, "audit_budget", None)
     no_sandbox = bool(getattr(args, "no_sandbox", False))
     profile = getattr(args, "sandbox", None)
+    readable = getattr(args, "sandbox_readable_paths", None)
+    tool_dirs = getattr(args, "sandbox_tool_paths", None)
 
     def _fail(msg: str) -> None:
         if parser is not None:
@@ -215,6 +275,39 @@ def apply_cli_args(
             "compare against. Use --sandbox full --audit (default) "
             "to engage audit mode."
         )
+    # Allowlist extensions: validate existence up-front (a typo'd path
+    # would otherwise surface later as the very read-denial the flag
+    # was meant to fix), and reject the incoherent no-sandbox combo.
+    _validated_readable: list | None = None
+    _validated_tools: list | None = None
+    if readable or tool_dirs:
+        if no_sandbox or profile == "none":
+            _fail(
+                "--sandbox-readable-path / --sandbox-tool-path are "
+                "incoherent with --sandbox none / --no-sandbox: with "
+                "no sandbox there is no allowlist to extend."
+            )
+        from pathlib import Path as _Path
+        if readable:
+            _validated_readable = []
+            for p in readable:
+                rp = _Path(p).expanduser().resolve()
+                if not rp.exists():
+                    _fail(
+                        f"--sandbox-readable-path does not exist: {p} "
+                        f"(resolved to {rp})"
+                    )
+                _validated_readable.append(str(rp))
+        if tool_dirs:
+            _validated_tools = []
+            for p in tool_dirs:
+                rp = _Path(p).expanduser().resolve()
+                if not rp.is_dir():
+                    _fail(
+                        f"--sandbox-tool-path is not a directory: {p} "
+                        f"(resolved to {rp})"
+                    )
+                _validated_tools.append(str(rp))
 
     if no_sandbox:
         disable_from_cli()
@@ -230,3 +323,7 @@ def apply_cli_args(
         state._cli_sandbox_audit_verbose = True
     if budget is not None:
         state._cli_sandbox_audit_budget = int(budget)
+    if _validated_readable:
+        set_cli_readable_paths(_validated_readable)
+    if _validated_tools:
+        set_cli_tool_paths(_validated_tools)

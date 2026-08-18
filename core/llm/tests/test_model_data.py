@@ -12,6 +12,8 @@ import pytest
 from core.llm.model_data import (
     ANTHROPIC_CACHE_READ_MULTIPLIER,
     ANTHROPIC_CACHE_WRITE_MULTIPLIER,
+    ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER,
+    ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER,
     MODEL_COSTS,
     MODEL_LIMITS,
     context_window_for,
@@ -79,11 +81,15 @@ def test_price_for_unknown_honours_explicit_default() -> None:
 # --- Anthropic cache multipliers ---------------------------------------
 
 def test_anthropic_cache_multipliers_match_anthropic_docs() -> None:
-    """Cache writes are 1.25x input rate; cache reads are 0.1x.
-    Documented at https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+    """5-min cache writes are 1.25x input; 1-hour writes are 2x;
+    cache reads/refreshes are 0.1x.
+    Ref: platform.claude.com/docs/en/about-claude/pricing#prompt-caching
     """
-    assert ANTHROPIC_CACHE_WRITE_MULTIPLIER == 1.25
+    assert ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER == 1.25
+    assert ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER == 2.0
     assert ANTHROPIC_CACHE_READ_MULTIPLIER == 0.1
+    # Backward-compat alias defaults to 5-minute tier
+    assert ANTHROPIC_CACHE_WRITE_MULTIPLIER == ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER
 
 
 # --- table consistency --------------------------------------------------

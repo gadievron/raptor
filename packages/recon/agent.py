@@ -8,9 +8,7 @@
 import argparse
 import json
 import os
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -24,9 +22,10 @@ from pathlib import Path
 # unset — surfacing the configuration problem at startup
 # rather than at first import-of-core.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
-from core.json import save_json
 from core.git import clone_repository
 from core.hash import sha256_tree
+from core.json import save_json
+from core.run.scratch import scratch_dir
 
 
 def get_out_dir() -> Path:
@@ -95,9 +94,9 @@ def main():
     ap.add_argument('--keep', action='store_true', help='Keep temp repo if cloned')
     args = ap.parse_args()
 
-    tmp = Path(tempfile.mkdtemp(prefix='raptor_recon_'))
-    repo_path = None
-    try:
+    # keep=--keep: operator takes ownership of the clone dir.
+    with scratch_dir('raptor_recon_', keep=args.keep) as tmp:
+        repo_path = None
         if args.repo.startswith('http://') or args.repo.startswith('https://') or args.repo.startswith('git@'):
             repo_path = tmp / 'repo'
             clone_repository(args.repo, repo_path, depth=1)
@@ -138,12 +137,6 @@ def main():
         save_json(out_dir / 'recon.json', {'manifest': manifest, 'inventory': inv})
 
         print(json.dumps({'status':'ok','manifest':manifest,'inventory':inv}, indent=2))
-    finally:
-        if not args.keep:
-            try:
-                shutil.rmtree(tmp)
-            except Exception:
-                pass
 
 if __name__ == '__main__':
     main()

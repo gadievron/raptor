@@ -16,7 +16,6 @@ import pytest
 from core.dataflow import ghsa_harvester as gh
 from core.dataflow.cvefix_loader import load_pairs
 
-
 # ---------------------------------------------------------------------------
 # Advisory JSON fixtures
 # ---------------------------------------------------------------------------
@@ -253,8 +252,132 @@ def test_metadata_db_has_all_columns_load_pairs_reads(tmp_path: Path, fake_resol
     finally:
         con.close()
     assert len(rows) == 1
-    cve_id, cwe, repo_url, lang, fix_hash, parents = rows[0]
+    cve_id, cwe, _repo_url, lang, _fix_hash, parents = rows[0]
     assert cve_id == "CVE-2024-x"
     assert cwe == "CWE-22"
     assert lang == "Python"
     assert parents.startswith("[") and parents.endswith("]")
+
+
+# ---------------------------------------------------------------------------
+# Hardened git substrate (core.git shared helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_parent_argv_is_hardened(monkeypatch):
+    """Every git invocation in _resolve_parent carries the shared
+    per-invocation hardening: init / remote add / rev-list get the
+    STRICT read-only posture (protocol.allow=never), the fetch keeps
+    the network-capable posture (it needs the https transport).
+    Asserted via the shared helpers, not duplicated literals."""
+    from types import SimpleNamespace
+
+    from core.git.clone import safe_git_command, safe_git_readonly_command
+
+    fix = "a" * 40
+    parent = "b" * 40
+    calls: list[dict] = []
+
+    def fake_run(cmd, **kw):
+        calls.append({"cmd": list(cmd), **kw})
+        stdout = f"{fix} {parent}\n" if "rev-list" in cmd else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(gh.subprocess, "run", fake_run)
+    assert gh._resolve_parent("https://github.com/o/r", fix) == parent
+
+    assert len(calls) == 4
+    ro_prefix = safe_git_readonly_command()
+    net_prefix = safe_git_command()
+    init_cmd, remote_cmd, fetch_cmd, revlist_cmd = (c["cmd"] for c in calls)
+    for cmd in (init_cmd, remote_cmd, revlist_cmd):
+        assert cmd[:len(ro_prefix)] == ro_prefix
+        assert "protocol.allow=never" in cmd
+    assert fetch_cmd[:len(net_prefix)] == net_prefix
+    assert "protocol.allow=never" not in fetch_cmd  # fetch needs a transport
+    assert fetch_cmd[-4:] == ["--depth", "2", "origin", fix]
+    for c in calls:
+        # List argv only — never a shell string; sanitised env attached.
+        assert isinstance(c["cmd"], list)
+        assert all(isinstance(a, str) for a in c["cmd"])
+        assert not c.get("shell")
+        assert c.get("env") is not None
+
+
+def test_resolve_parent_env_from_safe_git_env(monkeypatch):
+    """The env for every invocation comes from the shared sanitised git
+    env with proxy vars preserved (the fetch dials the remote)."""
+    from types import SimpleNamespace
+
+    import core.git.clone as clone_mod
+
+    sentinel = {"SENT": "1"}
+    seen: dict = {}
+
+    def fake_env(**kw):
+        seen["kw"] = kw
+        return sentinel
+
+    monkeypatch.setattr(clone_mod, "get_safe_git_env", fake_env)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        gh.subprocess, "run",
+        lambda cmd, **kw: calls.append(kw)
+        or SimpleNamespace(returncode=1, stdout="", stderr=""),
+    )
+    assert gh._resolve_parent("https://github.com/o/r", "a" * 40) is None
+    assert seen["kw"] == {"preserve_proxy": True}
+    assert calls and all(c["env"] is sentinel for c in calls)
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("git") is None, reason="git not installed",
+)
+def test_resolve_parent_functional_local_repo(monkeypatch, tmp_path):
+    """Hermetic end-to-end pin: outputs unchanged on a real (local,
+    fixture-built) repo — the hardened substrate resolves the same
+    parent SHA the bare-argv version did."""
+    import os
+    import subprocess
+
+    import core.git.clone as clone_mod
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    src = tmp_path / "src"
+    src.mkdir()
+
+    def g(*args):
+        subprocess.run(
+            ["git", "-C", str(src), "-c", "user.name=t",
+             "-c", "user.email=t@example.invalid",
+             "-c", "commit.gpgsign=false", *args],
+            check=True, capture_output=True, env=env,
+        )
+
+    subprocess.run(["git", "init", "-q", str(src)],
+                   check=True, capture_output=True, env=env)
+    (src / "f.txt").write_text("one\n")
+    g("add", ".")
+    g("commit", "-q", "-m", "parent commit")
+    (src / "f.txt").write_text("two\n")
+    g("add", ".")
+    g("commit", "-q", "-m", "fix commit")
+    # By-SHA fetch needs the source side to advertise arbitrary SHAs
+    # (GitHub enables the equivalent server-side).
+    g("config", "uploadpack.allowAnySHA1InWant", "true")
+    r = subprocess.run(
+        ["git", "-C", str(src), "rev-parse", "HEAD", "HEAD~1"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    fix, parent = r.stdout.split()
+
+    monkeypatch.setattr(clone_mod, "get_safe_git_env", lambda **kw: env)
+    assert gh._resolve_parent(str(src), fix, timeout=60) == parent
+    # Root commit (zero parents) is deliberately declined.
+    assert gh._resolve_parent(str(src), parent, timeout=60) is None

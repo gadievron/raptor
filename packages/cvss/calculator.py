@@ -211,7 +211,7 @@ def score_for_label(label: Optional[str]) -> Optional[float]:
     # ``info`` is operator-convenience: not part of CVSS proper but
     # used by SCA for commented-out deps and hand-tagged low-risk
     # findings. Map to a sub-Low value.
-    inverse.setdefault("info", 1.0)
+    inverse.setdefault("info", 0.0)
     return inverse.get(norm)
 
 

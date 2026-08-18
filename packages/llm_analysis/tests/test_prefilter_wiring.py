@@ -9,7 +9,7 @@ so the two consumers stay in lock-step on substrate semantics.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -20,8 +20,8 @@ from packages.llm_analysis.prefilter import (
     FP_PREFILTER_SCHEMA,
     agentic_fp_analysis,
     prefilter_for_finding,
+    record_prefilter_outcomes,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub LLM and fixture (parallels test_scorecard_wiring.py:_build_llm)
@@ -115,7 +115,7 @@ def _build_llm(tmp_path):
     return client, prov
 
 
-def _finding(rule_id: str = "py/sql-injection") -> Dict[str, Any]:
+def _finding(rule_id: str = "py/sql-injection") -> dict[str, Any]:
     """A minimal /agentic-shaped finding dict."""
     return {
         "finding_id": "f1",
@@ -332,3 +332,100 @@ def test_fp_prefilter_schema_matches_codeql():
         FP_PREFILTER_SCHEMA as codeql_schema,
     )
     assert FP_PREFILTER_SCHEMA == codeql_schema
+
+
+# ---------------------------------------------------------------------------
+# Calibration-loop closure: fall-through claims are adjudicated and
+# recorded, so agentic:<rule_id> cells can leave learning mode.
+# ---------------------------------------------------------------------------
+
+
+def test_fall_through_claim_is_stashed(llm):
+    client, prov = llm
+    prov.responder = lambda p, s_, sp: (
+        {"verdict": "clear_fp", "reasoning": "no taint"}, "raw")
+    pending: dict = {}
+    result = prefilter_for_finding(client, _finding(),
+                                   pending_claims=pending)
+    assert result is None
+    assert "f1" in pending
+    assert pending["f1"]["decision_class"] == "agentic:py/sql-injection"
+    assert pending["f1"]["model"] == "haiku-stub"
+
+
+def test_needs_analysis_is_not_stashed(llm):
+    client, prov = llm
+    prov.responder = lambda p, s_, sp: (
+        {"verdict": "needs_analysis", "reasoning": "unsure"}, "raw")
+    pending: dict = {}
+    assert prefilter_for_finding(client, _finding(),
+                                 pending_claims=pending) is None
+    assert pending == {}
+
+
+def test_outcomes_recorded_against_full_verdicts(llm):
+    """The calibration loop must CLOSE: a fall-through clear_fp claim
+    plus the full ANALYSE verdict becomes one CHEAP_SHORT_CIRCUIT
+    event in the scorecard. Before this recording existed the
+    agentic:* cells accumulated nothing and should_short_circuit
+    stayed in learning mode forever."""
+    client, prov = llm
+    prov.responder = lambda p, s_, sp: (
+        {"verdict": "clear_fp", "reasoning": "no taint"}, "raw")
+    pending: dict = {}
+    prefilter_for_finding(client, _finding(), pending_claims=pending)
+    assert pending
+
+    # Full analysis agreed (not a true positive) → correct event.
+    n = record_prefilter_outcomes(client, pending, [
+        {"finding_id": "f1", "is_true_positive": False,
+         "reasoning": "confirmed constant"},
+    ])
+    assert n == 1
+    stats = client.scorecard.get_stat(
+        "agentic:py/sql-injection", "haiku-stub")
+    assert stats is not None
+    ev = (stats.events or {}).get(EventType.CHEAP_SHORT_CIRCUIT)
+    assert ev is not None
+    assert getattr(ev, "correct", 0) == 1
+
+
+def test_disagreement_records_incorrect(llm):
+    client, prov = llm
+    prov.responder = lambda p, s_, sp: (
+        {"verdict": "clear_fp", "reasoning": "no taint"}, "raw")
+    pending: dict = {}
+    prefilter_for_finding(client, _finding(), pending_claims=pending)
+
+    n = record_prefilter_outcomes(client, pending, [
+        {"finding_id": "f1", "is_true_positive": True,
+         "reasoning": "actually exploitable"},
+    ])
+    assert n == 1
+    stats = client.scorecard.get_stat(
+        "agentic:py/sql-injection", "haiku-stub")
+    ev = (stats.events or {}).get(EventType.CHEAP_SHORT_CIRCUIT)
+    assert getattr(ev, "incorrect", 0) == 1
+
+
+def test_error_results_not_adjudicated(llm):
+    client, prov = llm
+    prov.responder = lambda p, s_, sp: (
+        {"verdict": "clear_fp", "reasoning": "no taint"}, "raw")
+    pending: dict = {}
+    prefilter_for_finding(client, _finding(), pending_claims=pending)
+
+    n = record_prefilter_outcomes(client, pending, [
+        {"finding_id": "f1", "error": "timeout"},
+    ])
+    assert n == 0
+
+
+def test_record_outcomes_never_raises_without_scorecard(llm):
+    client, _prov = llm
+    client.config.scorecard_enabled = False
+    assert record_prefilter_outcomes(
+        client, {"f1": {"decision_class": "agentic:x", "model": "m",
+                        "cheap_reasoning": ""}},
+        [{"finding_id": "f1", "is_true_positive": False}],
+    ) == 0

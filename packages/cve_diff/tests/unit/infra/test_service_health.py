@@ -97,9 +97,9 @@ def test_probes_tuple_lists_dns_first() -> None:
 # never touch the network from these tests.
 # ---------------------------------------------------------------------------
 
-import json as _json  # noqa: E402
+import json as _json
 
-from core.http import HttpError, Response  # noqa: E402
+from core.http import HttpError, Response
 
 
 def _stub_client(monkeypatch, *, request_fn=None):
@@ -121,10 +121,6 @@ def _ok_response(status=200, body=b"", json_body=None, headers=None):
     return Response(status=status, headers=headers or {}, body=body, url="")
 
 
-def _error_response(status, retry_after=None):
-    raise HttpError(f"http {status}", status=status, retry_after=retry_after)
-
-
 # --- _timed_get ---
 
 def test_timed_get_success_returns_body_and_no_error(monkeypatch) -> None:
@@ -140,7 +136,7 @@ def test_timed_get_network_failure_returns_error_and_no_body(monkeypatch) -> Non
     def boom(m, u, **kw):
         raise HttpError("connection refused")
     _stub_client(monkeypatch, request_fn=boom)
-    latency, body, status, err = service_health._timed_get("https://example.com")
+    latency, body, _status, err = service_health._timed_get("https://example.com")
     assert body is None
     assert "connection refused" in err
     assert latency >= 0
@@ -350,7 +346,7 @@ def test_probe_github_handles_gh_cli_timeout(monkeypatch) -> None:
 
 # --- probe_debian / probe_ubuntu / probe_redhat (parametrized — same shape) ---
 
-import pytest  # noqa: E402
+import pytest
 
 
 @pytest.mark.parametrize("probe", [

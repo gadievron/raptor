@@ -23,7 +23,8 @@ Public API:
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+
+from core.paths import strip_file_uri
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,9 @@ class _FileCache:
     __slots__ = ("_store",)
 
     def __init__(self) -> None:
-        self._store: Dict[str, Optional[List[str]]] = {}
+        self._store: dict[str, list[str] | None] = {}
 
-    def lines(self, path: str) -> Optional[List[str]]:
+    def lines(self, path: str) -> list[str] | None:
         if path in self._store:
             return self._store[path]
         if len(self._store) >= _MAX_CACHE_FILES:
@@ -77,8 +78,8 @@ def extract_nosemgrep(
     file_path: Path,
     line: int,
     *,
-    _lines: Optional[List[str]] = None,
-) -> Optional[dict]:
+    _lines: list[str] | None = None,
+) -> dict | None:
     """Check whether *line* (1-indexed) in *file_path* has a nosemgrep comment.
 
     Checks the flagged line itself and the line immediately above it (both
@@ -163,8 +164,9 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
                 continue
 
             # Resolve the file path against repo root.
-            if uri.startswith("file://"):
-                abs_path = uri[7:]
+            stripped = strip_file_uri(uri)
+            if stripped != uri:
+                abs_path = stripped
             else:
                 abs_path = str(root / uri)
 

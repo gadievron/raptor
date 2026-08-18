@@ -1,7 +1,7 @@
 """Enrich ``context-map.json`` sinks with target-mitigation context.
 
 Reads ``exploit_feasibility.analyze_binary`` output and enriches each
-sink under ``context-map.json``'s ``sinks[]`` with a
+sink under ``context-map.json``'s ``sink_details[]`` with a
 ``mitigation_context`` blob describing which classical exploitation
 primitives (arbitrary write, `%n` write, GOT overwrite, `.fini_array`,
 hook overwrite, stack smash) the target's build actually permits.
@@ -382,7 +382,7 @@ def enrich_context_map(
     if build_flags is not None:
         build_flags_source = getattr(build_flags, "source", None)
 
-    sinks = context_map.get("sinks") or []
+    sinks = context_map.get("sink_details") or []
     if not isinstance(sinks, list):
         return context_map
 
@@ -427,6 +427,9 @@ def enrich_context_map_file(
     except (OSError, json.JSONDecodeError) as e:
         _LOG.warning("mitigation_enricher: reading %s failed: %s", path, e)
         return
+    if not isinstance(cm, dict):
+        _LOG.warning("mitigation_enricher: %s is not a JSON object", path)
+        return
 
     enrich_context_map(
         cm,
@@ -435,8 +438,8 @@ def enrich_context_map_file(
         generated_at=generated_at,
     )
 
-    from core.atomic_fs import atomic_write_text
-    atomic_write_text(path, json.dumps(cm, indent=2, sort_keys=True) + "\n")
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(path, json.dumps(cm, indent=2, sort_keys=True) + "\n")
 
 
 __all__ = [

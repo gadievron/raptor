@@ -34,6 +34,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 _ON_WORDS = frozenset({"on", "true", "yes", "1", "enable", "enabled"})
 _OFF_WORDS = frozenset({"off", "false", "no", "0", "disable", "disabled"})
 
+_RE_PYPROJECT_PROJECT = re.compile(r"(?m)^\s*\[project\]")
+_RE_PYPROJECT_POETRY = re.compile(r"(?m)^\s*\[tool\.poetry\]")
+_RE_PYPROJECT_SCRIPTS = re.compile(r"(?m)^\s*\[project\.(gui-)?scripts\]")
+_RE_PYPROJECT_POETRY_SCRIPTS = re.compile(r"(?m)^\s*\[tool\.poetry\.scripts\]")
+_RE_SETUP_PACKAGES = re.compile(r"\b(packages|py_modules)\s*=")
+_RE_SETUP_PACKAGES_TOML = re.compile(r"(?m)^\s*packages\s*=")
+_RE_CSPROJ_OUTPUT_TYPE = re.compile(
+    r"<OutputType>\s*([A-Za-z]+)\s*</OutputType>", re.I,
+)
+_RE_CSPROJ_SDK_LIB = re.compile(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk"', re.I)
+_RE_CSPROJ_SDK_APP = re.compile(
+    r'Sdk\s*=\s*"Microsoft\.NET\.Sdk\.(Web|Worker)"', re.I,
+)
+
 # Directories never worth descending for manifests. Mirrors the dir entries of
 # exclusions.DEFAULT_EXCLUDES (kept as a local exact-match frozenset for speed).
 # Critically includes test/fixture/example dirs: a target's OWN test fixtures
@@ -174,16 +188,16 @@ def _check_python(manifests, root):
         app = f"{_rel(manifests['pymain'][0], root)}"
     for p in manifests["pyproject"]:
         text = _read_text(p) or ""
-        if (re.search(r"(?m)^\s*\[project\]", text)
-                or re.search(r"(?m)^\s*\[tool\.poetry\]", text)):
+        if (_RE_PYPROJECT_PROJECT.search(text)
+                or _RE_PYPROJECT_POETRY.search(text)):
             package = package or f"{_rel(p, root)} ([project]/[tool.poetry])"
-        if (re.search(r"(?m)^\s*\[project\.(gui-)?scripts\]", text)
-                or re.search(r"(?m)^\s*\[tool\.poetry\.scripts\]", text)):
+        if (_RE_PYPROJECT_SCRIPTS.search(text)
+                or _RE_PYPROJECT_POETRY_SCRIPTS.search(text)):
             app = app or f"{_rel(p, root)} ([project.scripts])"
     for p in manifests["setup"]:
         text = _read_text(p) or ""
-        if (re.search(r"\b(packages|py_modules)\s*=", text)
-                or re.search(r"(?m)^\s*packages\s*=", text)):
+        if (_RE_SETUP_PACKAGES.search(text)
+                or _RE_SETUP_PACKAGES_TOML.search(text)):
             package = package or f"{_rel(p, root)} (packages=)"
         if "console_scripts" in text or "gui_scripts" in text:
             app = app or f"{_rel(p, root)} (console_scripts)"
@@ -207,7 +221,7 @@ def _check_csharp(manifests, root):
         if text is None:
             continue
         rel = _rel(p, root)
-        m = re.search(r"<OutputType>\s*([A-Za-z]+)\s*</OutputType>", text, re.I)
+        m = _RE_CSPROJ_OUTPUT_TYPE.search(text)
         if m:
             if m.group(1).lower() == "library":
                 lib = lib or f"{rel} (OutputType=Library)"
@@ -216,9 +230,9 @@ def _check_csharp(manifests, root):
             continue
         # No OutputType: bare Microsoft.NET.Sdk defaults to Library; the
         # trailing quote keeps Sdk.Web / Sdk.Worker (apps) from matching.
-        if re.search(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk"', text, re.I):
+        if _RE_CSPROJ_SDK_LIB.search(text):
             lib = lib or f"{rel} (SDK class library)"
-        elif re.search(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk\.(Web|Worker)"', text, re.I):
+        elif _RE_CSPROJ_SDK_APP.search(text):
             app = app or f"{rel} (Web/Worker SDK)"
     if lib and app:
         return ("hybrid", f"C# library {lib} + app {app}")

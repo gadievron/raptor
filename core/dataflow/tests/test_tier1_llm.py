@@ -127,6 +127,55 @@ def test_decline_when_mechanical_recheck_disagrees_on_charset(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Whitespace symmetry: the mechanical recheck sees the same
+# whitespace-normalized rendering of the LLM's claimed line as the
+# anti-fabrication diff check
+# ---------------------------------------------------------------------------
+
+_RECHECK_LINE = "if not re.match(r'^[A-Za-z0-9_.+-]+$', name):"
+
+
+def _charset_spec(line: str) -> t1._LLMSpec:
+    return t1._LLMSpec(
+        kind="charset",
+        validator_source_line=line,
+        variable_name="name",
+        charset="A-Za-z0-9_.+-",
+        forbidden="",
+        library_call="",
+    )
+
+
+def test_recheck_accepts_indented_claim():
+    mech = t1._mechanical_recheck_charset_kind(
+        _charset_spec("    " + _RECHECK_LINE), "python")
+    assert mech is not None
+    assert mech.charset == "A-Za-z0-9_.+-"
+
+
+def test_recheck_matches_diff_check_normalization():
+    # The diff carries the line indented; the LLM echoes it without
+    # indentation. The anti-fabrication check accepts it, and the
+    # recheck must reach the same verdict for both renderings.
+    fix_diff = "+    " + _RECHECK_LINE + "\n"
+    for claimed in (_RECHECK_LINE, "  " + _RECHECK_LINE, "\t" + _RECHECK_LINE + "  "):
+        assert t1._validator_line_in_diff(fix_diff, claimed)
+        mech = t1._mechanical_recheck_charset_kind(
+            _charset_spec(claimed), "python")
+        assert mech is not None
+        assert mech.kind == "charset"
+        assert mech.charset == "A-Za-z0-9_.+-"
+        # source_line stored from the normalized rendering.
+        assert mech.source_line == _RECHECK_LINE
+
+
+def test_whitespace_only_claim_rejected_everywhere():
+    assert not t1._validator_line_in_diff("+   \n", "   ")
+    assert t1._mechanical_recheck_charset_kind(
+        _charset_spec("   "), "python") is None
+
+
+# ---------------------------------------------------------------------------
 # Curated-table dispatch (known_safe_call)
 # ---------------------------------------------------------------------------
 

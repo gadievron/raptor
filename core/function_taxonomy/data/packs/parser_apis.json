@@ -1,0 +1,1698 @@
+{
+ "entries": [
+  {
+   "cves": [],
+   "library": "brotli",
+   "name": "BrotliDecoderDecompress",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "brotli",
+   "name": "BrotliDecoderDecompressStream",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "bzip2",
+   "name": "BZ2_bzDecompress",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-12900"
+   ],
+   "library": "bzip2",
+   "name": "BZ2_decompress",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2023-50471",
+    "CVE-2023-50472"
+   ],
+   "library": "cJSON",
+   "name": "cJSON_InsertItemInArray",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "cJSON",
+   "name": "cJSON_Parse",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2023-50471",
+    "CVE-2023-50472"
+   ],
+   "library": "cJSON",
+   "name": "cJSON_SetValuestring",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2020-10735"
+   ],
+   "library": "cpython",
+   "name": "PyDoc_STRVAR",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2020-10735"
+   ],
+   "library": "cpython",
+   "name": "PyLong_FromString",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2020-10735"
+   ],
+   "library": "cpython",
+   "name": "PyLong_GetInfo",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "cpython",
+   "name": "PyRun_File",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "cpython",
+   "name": "PyRun_String",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-5983"
+   ],
+   "library": "cpython",
+   "name": "PySys_GetObject",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-5983"
+   ],
+   "library": "cpython",
+   "name": "PySys_SetArgv",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2012-2135"
+   ],
+   "library": "cpython",
+   "name": "PyUnicode_DecodeUTF16Stateful",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "cpython",
+   "name": "Py_CompileString",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2020-10735",
+    "CVE-2023-52425"
+   ],
+   "library": "cpython",
+   "name": "Py_UNUSED",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1283",
+    "CVE-2022-23852"
+   ],
+   "library": "expat",
+   "name": "XML_GetBuffer",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-9063"
+   ],
+   "library": "expat",
+   "name": "XML_Parse",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1283"
+   ],
+   "library": "expat",
+   "name": "XML_ParseBuffer",
+   "provenance": [
+    "cve-fix-diff",
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-6401"
+   ],
+   "library": "jansson",
+   "name": "json_init",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "jansson",
+   "name": "json_load_file",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "jansson",
+   "name": "json_loadb",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "json-c",
+   "name": "json_object_from_file",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-6370",
+    "CVE-2013-6371"
+   ],
+   "library": "json-c",
+   "name": "json_object_object_add",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-6370",
+    "CVE-2013-6371"
+   ],
+   "library": "json-c",
+   "name": "json_tokener_parse_ex",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-6370",
+    "CVE-2013-6371"
+   ],
+   "library": "json-c",
+   "name": "json_tokener_set_flags",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libjpeg-turbo",
+   "name": "jpeg_read_scanlines",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2004-0421"
+   ],
+   "library": "libpng",
+   "name": "png_format_buffer",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-7317"
+   ],
+   "library": "libpng",
+   "name": "png_image_free",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-66293"
+   ],
+   "library": "libpng",
+   "name": "png_image_read_composite",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-65018"
+   ],
+   "library": "libpng",
+   "name": "png_image_read_direct_scaled",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libpng",
+   "name": "png_read_image",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-4244"
+   ],
+   "library": "libtiff",
+   "name": "TIFFAdvanceDirectory",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-4243",
+    "CVE-2016-9297"
+   ],
+   "library": "libtiff",
+   "name": "TIFFFetchNormalTag",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2018-7456"
+   ],
+   "library": "libtiff",
+   "name": "TIFFFetchStripThing",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFFillStrip",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFFillTile",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-8128",
+    "CVE-2015-7554",
+    "CVE-2016-10095",
+    "CVE-2016-5318"
+   ],
+   "library": "libtiff",
+   "name": "TIFFMergeFieldInfo",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-9273"
+   ],
+   "library": "libtiff",
+   "name": "TIFFNumberOfStrips",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libtiff",
+   "name": "TIFFOpen",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2018-7456"
+   ],
+   "library": "libtiff",
+   "name": "TIFFPrintDirectory",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-8665",
+    "CVE-2015-8683"
+   ],
+   "library": "libtiff",
+   "name": "TIFFRGBAImageBegin",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-8665",
+    "CVE-2015-8683",
+    "CVE-2016-3622"
+   ],
+   "library": "libtiff",
+   "name": "TIFFRGBAImageOK",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFRasterScanlineSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2013-4243"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadBufferSetup",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2018-7456"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadDirEntryOutputErr",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-8128",
+    "CVE-2015-7554",
+    "CVE-2016-10095",
+    "CVE-2016-5318",
+    "CVE-2018-7456"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadDirectory",
+   "provenance": [
+    "cve-fix-diff",
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadRawStrip",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadRawTile",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFReadRawTile1",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFScanlineSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2018-10779"
+   ],
+   "library": "libtiff",
+   "name": "TIFFSetupStrips",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFStripSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFTileRowSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFTileSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFVStripSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-14973"
+   ],
+   "library": "libtiff",
+   "name": "TIFFVTileSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-8127",
+    "CVE-2016-3658",
+    "CVE-2018-10963"
+   ],
+   "library": "libtiff",
+   "name": "TIFFWriteDirectorySec",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libwebp",
+   "name": "WebPDecode",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libwebp",
+   "name": "WebPDecodeBGRA",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libwebp",
+   "name": "WebPDecodeRGBA",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-8242"
+   ],
+   "library": "libxml2",
+   "name": "htmlParseTryOrFinish",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlAddID",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlAddRef",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819",
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufAdd",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufAddHead",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufCat",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufCreateSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819",
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufGrowInternal",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufIsEmpty",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819",
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufResize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufSetAllocationScheme",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferAdd",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferCat",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferCreateSize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferCreateStatic",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-4225",
+    "CVE-2008-4226",
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferResize",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-29824"
+   ],
+   "library": "libxml2",
+   "name": "xmlBufferShrink",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-40304"
+   ],
+   "library": "libxml2",
+   "name": "xmlCreateEntity",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlCtxtReset",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-7497"
+   ],
+   "library": "libxml2",
+   "name": "xmlDictComputeFastQKey",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2017-5969"
+   ],
+   "library": "libxml2",
+   "name": "xmlDumpElementContent",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlDumpNotationTable",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-40304"
+   ],
+   "library": "libxml2",
+   "name": "xmlFreeEntity",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-7425"
+   ],
+   "library": "libxml2",
+   "name": "xmlFreeProp",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2017-9049",
+    "CVE-2017-9050"
+   ],
+   "library": "libxml2",
+   "name": "xmlGROW",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2024-34459"
+   ],
+   "library": "libxml2",
+   "name": "xmlHTMLPrintFileContext",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-0191"
+   ],
+   "library": "libxml2",
+   "name": "xmlIOParseDTD",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlInitParserCtxt",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819"
+   ],
+   "library": "libxml2",
+   "name": "xmlNewTextReader",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-7425"
+   ],
+   "library": "libxml2",
+   "name": "xmlNodeSetDoc",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281",
+    "CVE-2016-3705"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseAttValueComplex",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseBalancedChunkMemoryInternal",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-4225",
+    "CVE-2008-4226"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseCharDataComplex",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseCtxtExternalEntity",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libxml2",
+   "name": "xmlParseDoc",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2009-2414",
+    "CVE-2009-2416"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseElementChildrenContentDecl",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2009-2414",
+    "CVE-2009-2416"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseElementContentDecl",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2009-2414",
+    "CVE-2009-2416"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseElementMixedContentDecl",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseEntityDecl",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-3660"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseEntityRef",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-3705"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseEntityValue",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2009-2414",
+    "CVE-2009-2416"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseEnumerationType",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseExternalEntityPrivate",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2017-9049",
+    "CVE-2017-9050"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseNameComplex",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2009-2414",
+    "CVE-2009-2416"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseNotationType",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-3660",
+    "CVE-2021-3541"
+   ],
+   "library": "libxml2",
+   "name": "xmlParsePEReference",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281",
+    "CVE-2014-3660",
+    "CVE-2024-40896"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseReference",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-7500"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseStartTag2",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-3660"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseStringEntityRef",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-3660"
+   ],
+   "library": "libxml2",
+   "name": "xmlParseStringPEReference",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-3660",
+    "CVE-2016-3705",
+    "CVE-2021-3541"
+   ],
+   "library": "libxml2",
+   "name": "xmlParserEntityCheck",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-0191",
+    "CVE-2014-3660"
+   ],
+   "library": "libxml2",
+   "name": "xmlParserHandlePEReference",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-32414"
+   ],
+   "library": "libxml2",
+   "name": "xmlPythonFileRead",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-32414"
+   ],
+   "library": "libxml2",
+   "name": "xmlPythonFileReadRaw",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libxml2",
+   "name": "xmlReadDoc",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libxml2",
+   "name": "xmlReadFile",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libxml2",
+   "name": "xmlReadMemory",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlRemoveID",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-4225",
+    "CVE-2008-4226"
+   ],
+   "library": "libxml2",
+   "name": "xmlSAX2Characters",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2014-0191"
+   ],
+   "library": "libxml2",
+   "name": "xmlSAXParseDTD",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "libxml2",
+   "name": "xmlSAXUserParseMemory",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2024-56171"
+   ],
+   "library": "libxml2",
+   "name": "xmlSchemaBubbleIDCNodeTables",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2023-28484"
+   ],
+   "library": "libxml2",
+   "name": "xmlSchemaFixupComplexType",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2024-56171",
+    "CVE-2025-32415"
+   ],
+   "library": "libxml2",
+   "name": "xmlSchemaIDCFillNodeTables",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-49794",
+    "CVE-2025-49795",
+    "CVE-2025-49796"
+   ],
+   "library": "libxml2",
+   "name": "xmlSchematronFormatReport",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-7425"
+   ],
+   "library": "libxml2",
+   "name": "xmlSetNsProp",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2017-9047",
+    "CVE-2017-9048"
+   ],
+   "library": "libxml2",
+   "name": "xmlSnprintfElementContent",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-24928"
+   ],
+   "library": "libxml2",
+   "name": "xmlSnprintfElements",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2008-3281",
+    "CVE-2014-3660",
+    "CVE-2015-5312"
+   ],
+   "library": "libxml2",
+   "name": "xmlStringLenDecodeEntities",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819"
+   ],
+   "library": "libxml2",
+   "name": "xmlTextReaderConstValue",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-1819"
+   ],
+   "library": "libxml2",
+   "name": "xmlTextReaderSetup",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlValidCtxtNormalizeAttributeValue",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlValidNormalizeAttributeValue",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-23308"
+   ],
+   "library": "libxml2",
+   "name": "xmlValidateAttributeValue2",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-7425"
+   ],
+   "library": "libxml2",
+   "name": "xmlValidateOneAttribute",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2018-14404"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPathCompOpEval",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-5131"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPathCompPathExpr",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewCollapsedRange",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-5131"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewContext",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRange",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRangeNodeObject",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRangeNodePoint",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRangeNodes",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRangePointNode",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrNewRangePoints",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-5131"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrRangeInsideFunction",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2016-4658"
+   ],
+   "library": "libxml2",
+   "name": "xmlXPtrRangesEqual",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-6170"
+   ],
+   "library": "libxml2",
+   "name": "xmllintShell",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-6170"
+   ],
+   "library": "libxml2",
+   "name": "xmllintShellPwd",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2025-6170"
+   ],
+   "library": "libxml2",
+   "name": "xmllintShellReadline",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lua",
+   "name": "luaL_dofile",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lua",
+   "name": "luaL_dostring",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lua",
+   "name": "lua_load",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lua",
+   "name": "lua_loadbuffer",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lz4",
+   "name": "LZ4_decompress_fast",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "lz4",
+   "name": "LZ4_decompress_safe",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "PEM_read_PrivateKey",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "PEM_read_X509",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "PEM_read_bio_PrivateKey",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "PEM_read_bio_X509",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2022-4450"
+   ],
+   "library": "openssl",
+   "name": "PEM_read_bio_ex",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2019-1547"
+   ],
+   "library": "openssl",
+   "name": "d2i_ECPKParameters",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-0209"
+   ],
+   "library": "openssl",
+   "name": "d2i_ECParameters",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-0209",
+    "CVE-2019-1547"
+   ],
+   "library": "openssl",
+   "name": "d2i_ECPrivateKey",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "d2i_PrivateKey",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [
+    "CVE-2015-0209"
+   ],
+   "library": "openssl",
+   "name": "d2i_X509_AUX",
+   "provenance": [
+    "cve-fix-diff"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "openssl",
+   "name": "d2i_X509_bio",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "xz",
+   "name": "lzma_code",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  },
+  {
+   "cves": [],
+   "library": "zstd",
+   "name": "ZSTD_decompressStream",
+   "provenance": [
+    "legacy-catalog"
+   ]
+  }
+ ],
+ "generated_at": "2026-08-16",
+ "generated_by": "libexec/raptor-parser-pack-harvest",
+ "pack": "parser_apis",
+ "schema": 1
+}

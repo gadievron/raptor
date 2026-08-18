@@ -28,42 +28,37 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
-import subprocess
-from typing import Dict, Optional, Tuple
+
+from core.run.toolprobe import probe
 
 logger = logging.getLogger(__name__)
 
 
-def _probe(cmd: list) -> Optional[str]:
+def _probe(cmd: list) -> str | None:
     """Run ``cmd`` and return its first-line stdout/stderr (most tools
     print version on either stream). Returns ``None`` if the tool is
-    absent or errors out — the corpus driver decides whether to fail."""
-    if not shutil.which(cmd[0]):
+    absent or errors out — the corpus driver decides whether to fail.
+
+    Delegates to core.run.toolprobe (sanitised env, resolved-path
+    exec); ``ToolInfo.first_line`` is exactly the stdout-else-stderr
+    convention this helper hand-rolled."""
+    info = probe(cmd[0], args=tuple(cmd[1:]), timeout=10)
+    if info is None:
         return None
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            check=False, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    text = (proc.stdout or proc.stderr or "").strip()
-    if not text:
-        return None
-    return text.splitlines()[0].strip()
+    line = info.first_line
+    return line.strip() if line else None
 
 
 def record_toolchain(
     *,
-    cc: Optional[str] = None,
-    cxx: Optional[str] = None,
-    rustc: Optional[str] = None,
-    cargo: Optional[str] = None,
-    gcov: Optional[str] = None,
-    llvm_cov: Optional[str] = None,
-    llvm_profdata: Optional[str] = None,
-) -> Dict[str, str]:
+    cc: str | None = None,
+    cxx: str | None = None,
+    rustc: str | None = None,
+    cargo: str | None = None,
+    gcov: str | None = None,
+    llvm_cov: str | None = None,
+    llvm_profdata: str | None = None,
+) -> dict[str, str]:
     """Probe the toolchain components named (skip None). Returns a
     ``{tool: version_string}`` dict for inclusion in the report.
 
@@ -74,7 +69,7 @@ def record_toolchain(
             cc='gcc', gcov='gcov',
         )
     """
-    probes: Dict[str, list] = {}
+    probes: dict[str, list] = {}
     if cc:
         probes[f"cc({cc})"] = [cc, "--version"]
     if cxx:
@@ -90,7 +85,7 @@ def record_toolchain(
     if llvm_profdata:
         probes[f"llvm-profdata({llvm_profdata})"] = [
             llvm_profdata, "--version"]
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for label, cmd in probes.items():
         v = _probe(cmd)
         out[label] = v or "(not found)"
@@ -100,7 +95,7 @@ def record_toolchain(
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
 
-def _major_minor(version_text: str) -> Optional[Tuple[int, int]]:
+def _major_minor(version_text: str) -> tuple[int, int] | None:
     """Extract the first ``MAJOR.MINOR`` pair from a version string."""
     m = _VERSION_RE.search(version_text)
     if not m:
@@ -109,7 +104,7 @@ def _major_minor(version_text: str) -> Optional[Tuple[int, int]]:
 
 
 def check_compatible(
-    label: str, version_text: Optional[str], minimum: Tuple[int, int],
+    label: str, version_text: str | None, minimum: tuple[int, int],
     *, fail: bool = False,
 ) -> bool:
     """Verify ``version_text`` parses to ``>= minimum`` MAJOR.MINOR.
@@ -136,4 +131,4 @@ def check_compatible(
     return True
 
 
-__all__ = ["record_toolchain", "check_compatible"]
+__all__ = ["check_compatible", "record_toolchain"]

@@ -1,10 +1,12 @@
-"""Track file reads for coverage — Python implementation.
+"""Track file reads for coverage — test-only Python reimplementation.
 
-The production hook is libexec/raptor-hook-read (bash+jq, runs async).
-This module provides the same logic in Python for:
-- Testing (test_record.py)
-- Fallback when jq is unavailable
-- Direct invocation: python3 -m core.coverage.track_read
+The production hook is plugins/coverage/libexec/raptor-hook-read (bash,
+runs async via PostToolUse plugin). This module reimplements the same
+logic in Python so test_record.py can exercise coverage tracking
+in-process without shelling out to the bash hook.
+
+Not used in production. Extension list must stay in sync with the
+bash hook's case statement (line 185 of raptor-hook-read).
 """
 
 import json
@@ -21,6 +23,12 @@ _SOURCE_EXTENSIONS = frozenset({
     ".py", ".js", ".ts", ".jsx", ".tsx", ".c", ".h", ".cpp", ".hpp",
     ".cc", ".cxx", ".java", ".go", ".rs", ".rb", ".php", ".cs",
     ".swift", ".kt", ".scala", ".sh", ".bash", ".zsh",
+    ".zig", ".nim", ".cr", ".sol", ".dart", ".m", ".mm", ".lua",
+    ".pl", ".pm", ".jl", ".ex", ".exs", ".erl", ".hrl",
+    ".fs", ".fsi", ".fsx", ".ml", ".mli",
+    ".clj", ".cljs", ".cljc", ".groovy", ".gradle",
+    ".r", ".hs", ".elm", ".vue", ".svelte", ".astro",
+    ".tf", ".tofu", ".nix",
 })
 
 
@@ -35,7 +43,9 @@ def _find_active_run():
 
     try:
         link_target = os.readlink(active_link)
-        if not link_target.endswith(".json"):
+        if not link_target or "/" in link_target or ".." in link_target:
+            return None, None
+        if link_target.startswith("."):
             return None, None
         project_file = active_link.parent / link_target
         if not project_file.exists():
@@ -166,7 +176,8 @@ def main():
             # Resolve symlinks and check proper path containment
             resolved = os.path.realpath(file_path)
             resolved_target = os.path.realpath(target)
-            if not resolved.startswith(resolved_target + os.sep) and resolved != resolved_target:
+            prefix = resolved_target + os.sep
+            if not resolved.startswith(prefix) and resolved != resolved_target:
                 return
             file_path = resolved
         except (OSError, ValueError):

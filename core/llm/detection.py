@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 LLM availability detection.
 
@@ -13,9 +12,6 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
-
-import requests
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -53,11 +49,16 @@ except ImportError as _e:
     GENAI_SDK_AVAILABLE = False
 
 try:
-    import boto3 as _boto3_module  # noqa: F401 — availability probe
-    BOTO3_SDK_AVAILABLE = True
+    # Probe botocore, not boto3: everything RAPTOR needs for Bedrock
+    # SigV4 (the dispatcher's signer in core/llm/dispatcher/auth.py)
+    # imports botocore only, and requirements.txt ships botocore
+    # without boto3. Probing boto3 here made a botocore-only install
+    # fail detection while the actual signing path worked.
+    import botocore as _botocore_module  # noqa: F401 — availability probe
+    BOTOCORE_SDK_AVAILABLE = True
 except ImportError as _e:
-    logger.debug("boto3 SDK probe failed: %s", _e)
-    BOTO3_SDK_AVAILABLE = False
+    logger.debug("botocore SDK probe failed: %s", _e)
+    BOTOCORE_SDK_AVAILABLE = False
 
 
 @dataclass
@@ -119,11 +120,30 @@ def _host_is_local(raw: str) -> bool:
     return False
 
 
-_cached_ollama_models: Optional[List[str]] = None
+def _redact_remote_host(text: str, url: str) -> str:
+    """Strip *url*'s host (and ``host:port``) from *text* before logging.
+
+    Connection errors from requests/urllib3 embed the target host in
+    their message (``HTTPConnectionPool(host='...', port=...)``), so
+    redacting the display name alone still leaked a remote OLLAMA
+    host through the interpolated exception text.
+    """
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url if "://" in url else f"//{url}")
+    except ValueError:
+        return text
+    for token in (parts.netloc, parts.hostname):
+        if token:
+            text = text.replace(token, "[REMOTE-OLLAMA]")
+    return text
+
+
+_cached_ollama_models: list[str] | None = None
 _ollama_checked: bool = False
 
 
-def _get_available_ollama_models() -> List[str]:
+def _get_available_ollama_models() -> list[str]:
     """Get list of available Ollama models. Cached per-process to avoid repeated HTTP checks."""
     global _cached_ollama_models, _ollama_checked
     if _ollama_checked:
@@ -141,27 +161,56 @@ def _get_available_ollama_models() -> List[str]:
     try:
         # ``ollama_url`` is validated via ``_validate_ollama_url``
         # (line 82); operator-config-supplied + scheme-locked.
-        response = requests.get(f"{ollama_url}/api/tags", timeout=2)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+        # loopback_safe_get: bypasses proxy env for loopback URLs —
+        # on mandatory-proxy hosts a plain requests.get routed
+        # localhost:11434 through the corporate proxy and Ollama was
+        # misdetected as absent.
+        from core.llm.egress import loopback_safe_get
+        response = loopback_safe_get(f"{ollama_url}/api/tags", timeout=2)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
         if response.status_code == 200:
             data = response.json()
-            _cached_ollama_models = [model['name'] for model in data.get('models', [])]
+            _cached_ollama_models = [
+                model.get('name') for model in data.get('models', [])
+                if isinstance(model, dict) and model.get('name')
+            ]
             _ollama_checked = True
             return _cached_ollama_models
-    except Exception as e:
-        ollama_display = RaptorConfig.OLLAMA_HOST if _host_is_local(RaptorConfig.OLLAMA_HOST) else '[REMOTE-OLLAMA]'
-        logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
-    _cached_ollama_models = []
-    _ollama_checked = True
+        # Non-200: Ollama-shaped endpoint that isn't serving models.
+        # Cache the negative result — without this, every LLMConfig()
+        # construction on a key-less install re-paid the probe (up to
+        # the 2s connect timeout on filtered/proxied hosts), defeating
+        # the per-process cache this function promises.
+        _cached_ollama_models = []
+        _ollama_checked = True
+    except Exception as e:  # noqa: BLE001
+        if _host_is_local(RaptorConfig.OLLAMA_HOST):
+            ollama_display = RaptorConfig.OLLAMA_HOST
+            err_display = str(e)
+        else:
+            # Redact the exception text too, not just the display
+            # name — requests/urllib3 connection errors embed the
+            # target host verbatim in their message.
+            ollama_display = '[REMOTE-OLLAMA]'
+            err_display = _redact_remote_host(str(e), ollama_url)
+        logger.debug("Could not connect to Ollama at %s: %s", ollama_display, err_display)
+        # Cache the unreachable result too (see the non-200 branch) —
+        # an absent Ollama is the common case on cloud-key installs.
+        _cached_ollama_models = []
+        _ollama_checked = True
     return []
 
 
 def _check_litellm_installed() -> bool:
     """Check for litellm: auto-migrate config if present, stop if compromised.
 
-    Returns True if litellm was found (migration handled here), False otherwise.
+    Returns True if litellm was found, False otherwise. The migration
+    attempt here is best-effort (failures are swallowed) — callers must
+    still run :func:`_check_litellm_migration` to surface manual
+    guidance when auto-migration failed.
     """
     try:
-        from importlib.metadata import version as pkg_version, PackageNotFoundError
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as pkg_version
         try:
             installed = pkg_version("litellm")
 
@@ -173,7 +222,9 @@ def _check_litellm_installed() -> bool:
             #   * RuntimeError — Path.home() raises this when no HOME
             #     is set (some daemon/systemd-unit environments).
             #   * OSError — exists() / migration file ops.
-            #   * yaml.YAMLError — malformed source config from migrate.
+            # (yaml.YAMLError — malformed source config — never
+            # reaches here: _try_auto_migrate swallows it internally
+            # and returns False.)
             # Bare `except Exception` would also swallow programming
             # bugs (AttributeError, NameError) introduced by future
             # edits — losing valuable signal during development.
@@ -235,7 +286,7 @@ def _check_litellm_installed() -> bool:
                     f"Ref: https://github.com/BerriAI/litellm/issues/24518"
                 )
 
-            return True  # litellm found, migration handled
+            return True  # litellm found (migration attempt was best-effort)
         except PackageNotFoundError:
             return False  # litellm not installed
     except ImportError:
@@ -257,13 +308,18 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
 
 
     # Allowlist of providers RAPTOR's downstream code can handle.
-    # LiteLLM supports a much wider set (vertex_ai, bedrock, sagemaker,
+    # LiteLLM supports a much wider set (vertex_ai, sagemaker,
     # cohere, replicate, etc.) — migrating those produces JSON
     # entries that our config loader silently ignores at best, or
     # crashes on at worst. Skip with a debug log so the operator can
     # see what was dropped and add a manual entry if needed.
+    # ``bedrock`` is first-class downstream (config.py registers
+    # _build_bedrock_config; _config_has_keyed_models recognises the
+    # provider and its auth signals), so Bedrock entries migrate too —
+    # pre-fix they were silently dropped to skipped_unknown.
     _SUPPORTED_PROVIDERS = frozenset({
         "anthropic", "openai", "gemini", "mistral", "ollama", "claudecode",
+        "bedrock",
     })
 
     try:
@@ -354,8 +410,8 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
         )
         return True
 
-    except Exception as e:
-        logger.debug(f"Auto-migration failed: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Auto-migration failed: %s", e)
         return False
 
 
@@ -405,8 +461,9 @@ def generate_sample_config() -> str:
     the actual defaults. Includes a commented example showing the
     api_key field format. Called by migration guidance and CLI help.
     """
-    from .model_data import PROVIDER_DEFAULT_MODELS
     import json
+
+    from .model_data import PROVIDER_DEFAULT_MODELS
 
     models = []
     for provider, model in PROVIDER_DEFAULT_MODELS.items():
@@ -429,11 +486,65 @@ def generate_sample_config() -> str:
     return raw
 
 
+# ``RAPTOR_CONFIG`` is core.llm's models.json path.
+# packages/exploit_feasibility historically overloaded the same
+# variable for its analysis-settings JSON before cutting over to
+# ``RAPTOR_EF_CONFIG`` (docs/environment.md), so stale environments
+# may still point RAPTOR_CONFIG at an AnalysisConfig file. These
+# field names are AnalysisConfig's signature (a seed
+# subset of its distinctive fields — any one suffices, so the set
+# doesn't need to be exhaustive) — a dict with no "models" key but
+# any of these was almost certainly written for the OTHER reader, so
+# say so instead of silently seeing zero models.
+_ANALYSIS_SETTINGS_KEYS = frozenset({
+    "checksec_path", "ropgadget_path", "one_gadget_path",
+    "timeout_fast", "enable_caching", "cache_dir",
+    "max_gadgets_to_analyze", "verify_format_n_empirically",
+    "sample_address_space",
+})
+
+_schema_mismatch_warned: set = set()
+
+
+def looks_like_analysis_settings(data: object) -> bool:
+    """True when *data* is shaped like ``packages/exploit_feasibility``'s
+    AnalysisConfig JSON rather than a models config."""
+    return (
+        isinstance(data, dict)
+        and "models" not in data
+        and bool(_ANALYSIS_SETTINGS_KEYS.intersection(data))
+    )
+
+
+def _warn_analysis_settings_mismatch(config_path: Path) -> None:
+    """Once per path per process — actionable, names the other reader."""
+    key = str(config_path)
+    if key in _schema_mismatch_warned:
+        return
+    _schema_mismatch_warned.add(key)
+    logger.error(
+        "RAPTOR_CONFIG points at %s, which looks like a "
+        "packages/exploit_feasibility analysis-settings file "
+        "(AnalysisConfig JSON), not a models config. core.llm expects "
+        "{\"models\": [...]} or a bare list here — no models will be "
+        "loaded. Point RAPTOR_CONFIG at models.json; "
+        "exploit-feasibility settings moved to RAPTOR_EF_CONFIG "
+        "(see docs/environment.md).",
+        config_path,
+    )
+
+
 def _read_config_models() -> list:
     """Read model entries from RAPTOR config file.
 
     Shared config file parsing — used by both detection and config modules.
     Returns a list of model dicts, or empty list on any error.
+
+    Schema guard: ``RAPTOR_CONFIG`` is also read by
+    ``packages/exploit_feasibility`` as its analysis-settings path (one
+    name, two schemas). A file shaped like AnalysisConfig JSON logs an
+    actionable error (once per path) naming that other use instead of
+    silently yielding zero models.
 
     Anthropic model names are resolved through the live ``/v1/models``
     inventory before return: operators usually configure unversioned
@@ -457,6 +568,9 @@ def _read_config_models() -> list:
 
         # Accept both {"models": [...]} and bare [...]
         if isinstance(data, dict):
+            if looks_like_analysis_settings(data):
+                _warn_analysis_settings_mismatch(config_path)
+                return []
             model_list = data.get("models", [])
             if not isinstance(model_list, list):
                 return []
@@ -466,8 +580,8 @@ def _read_config_models() -> list:
             return []
 
         return _apply_anthropic_resolution(model_list)
-    except Exception as e:
-        logger.debug(f"detection: model list parse failed, returning []: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("detection: model list parse failed, returning []: %s", e)
         return []
 
 
@@ -509,14 +623,40 @@ def _apply_anthropic_resolution(entries: list) -> list:
     return out
 
 
+def bedrock_sigv4_intent() -> bool:
+    """True when the environment carries a SigV4 credential signal for
+    Bedrock: a RAPTOR-pinned profile, an ambient AWS profile, env
+    access keys, or a shared credentials file.
+
+    This is the selection-side twin of the predicate inside
+    ``CredentialStore.bedrock_session_warnings`` — both must agree on
+    what counts as "the operator configured SigV4", so detection never
+    reports a Bedrock model the signer can't authenticate (or the
+    reverse).  It gates only *explicitly configured* Bedrock routes
+    (a config-file entry or a ``RAPTOR_BEDROCK_*`` env var); it is
+    never a selection signal by itself.  ``AWS_REGION`` alone is
+    deliberately NOT signal — it's set for unrelated reasons on any
+    AWS user's machine.
+    """
+    return bool(
+        os.getenv("RAPTOR_BEDROCK_PROFILE")
+        or os.getenv("AWS_PROFILE")
+        or (os.getenv("AWS_ACCESS_KEY_ID")
+            and os.getenv("AWS_SECRET_ACCESS_KEY"))
+        or os.getenv("AWS_SHARED_CREDENTIALS_FILE")
+        or (Path.home() / ".aws" / "credentials").is_file()
+    )
+
+
 def _config_has_keyed_models() -> bool:
     """Check if the RAPTOR config file has any usable model.
 
     A model is usable if it has an API key (inline or via env var)
     AND the required SDK is installed to talk to its provider.
     """
-    from .model_data import PROVIDER_ENV_KEYS
     from core.security.llm_family import provider_of
+
+    from .model_data import PROVIDER_ENV_KEYS
 
     for entry in _read_config_models():
         if not isinstance(entry, dict):
@@ -546,13 +686,13 @@ def _config_has_keyed_models() -> bool:
                 continue
         elif provider == "bedrock":
             # Bedrock entries are usable via the dispatcher (no SDK
-            # in this process) OR via direct SigV4 (boto3 in this
+            # in this process) OR via direct SigV4 (botocore in this
             # process).  Either path counts.  Without this branch,
             # an operator with AWS credentials + a config-file Bedrock
-            # model + no dispatcher route + boto3 installed would
+            # model + no dispatcher route + botocore installed would
             # fail detection (the May 28 review's "direct-SigV4 gap").
             if not (bool(os.getenv("RAPTOR_LLM_SOCKET"))
-                    or BOTO3_SDK_AVAILABLE):
+                    or BOTOCORE_SDK_AVAILABLE):
                 continue
         else:
             if not OPENAI_SDK_AVAILABLE:
@@ -564,20 +704,24 @@ def _config_has_keyed_models() -> bool:
         env_key = PROVIDER_ENV_KEYS.get(provider)
         if env_key and os.getenv(env_key):
             return True
-        # Bedrock auth signals: bearer token OR AWS access keys.
-        # AWS_REGION alone is NOT signal — it's set for unrelated
-        # reasons on any AWS user's machine.
+        # Bedrock auth signals: bearer token OR any SigV4 credential
+        # source (env access keys, pinned/ambient profile, shared
+        # credentials file).  The operator opted in by writing the
+        # Bedrock entry; profile-backed SigV4 must count the same as
+        # static keys or detection contradicts the dispatcher's signer,
+        # which resolves profiles fine.  AWS_REGION alone is NOT
+        # signal — it's set for unrelated reasons on any AWS user's
+        # machine.
         if provider == "bedrock" and (
             os.getenv("AWS_BEARER_TOKEN_BEDROCK")
-            or (os.getenv("AWS_ACCESS_KEY_ID")
-                and os.getenv("AWS_SECRET_ACCESS_KEY"))
+            or bedrock_sigv4_intent()
         ):
             return True
 
     return False
 
 
-_cached_llm_availability: Optional[LLMAvailability] = None
+_cached_llm_availability: LLMAvailability | None = None
 
 
 def detect_llm_availability() -> LLMAvailability:
@@ -595,11 +739,19 @@ def detect_llm_availability() -> LLMAvailability:
     if _cached_llm_availability is not None:
         return _cached_llm_availability
 
-    litellm_found = _check_litellm_installed()
-    if not litellm_found:
-        # Only check for old config if litellm isn't installed
-        # (if it is, _check_litellm_installed already handled migration)
-        _check_litellm_migration()
+    _check_litellm_installed()
+    # Always run the migration check, whether or not litellm is
+    # installed. _check_litellm_installed attempts auto-migration as a
+    # best-effort side effect but swallows failures and returns True
+    # whenever litellm is present — pre-fix the guidance below was
+    # gated on `not litellm_found`, so an operator with litellm
+    # installed and a stale LiteLLM config whose auto-migration failed
+    # never saw the step-by-step manual migration instructions.
+    # When the earlier attempt succeeded (or no old config exists)
+    # this is a cheap no-op (two Path.exists checks); when it failed,
+    # this retries once and, on a second failure, prints the manual
+    # guidance.
+    _check_litellm_migration()
 
     # Check cloud API keys, gated on SDK availability
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY")) and (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
@@ -621,10 +773,21 @@ def detect_llm_availability() -> LLMAvailability:
     # the env signal here.  Without dispatcher AND without botocore
     # there's no usable Bedrock path even if the env signal is present,
     # so we additionally require either ``has_dispatcher_route`` (set
-    # below) OR ``BOTO3_SDK_AVAILABLE`` for ``has_bedrock`` to count.
+    # below) OR ``BOTOCORE_SDK_AVAILABLE`` for ``has_bedrock`` to count.
     # ``has_dispatcher_route`` is computed a few lines down; we wire
     # the join after both are known.
-    has_bedrock_signal = bool(os.getenv("AWS_BEARER_TOKEN_BEDROCK"))
+    #
+    # Signals, all explicit statements of intent: the bearer token,
+    # or a RAPTOR-specific Bedrock env var (``RAPTOR_BEDROCK_MODEL``
+    # pins a model, ``RAPTOR_BEDROCK_PROFILE`` pins a SigV4 profile).
+    # Ambient AWS credentials (AWS_PROFILE, ~/.aws/credentials) are
+    # NOT signal here — they gate only explicitly-configured Bedrock
+    # entries (see ``_config_has_keyed_models``), never selection.
+    has_bedrock_signal = bool(
+        os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+        or os.getenv("RAPTOR_BEDROCK_MODEL")
+        or os.getenv("RAPTOR_BEDROCK_PROFILE")
+    )
 
     has_cloud_keys = (
         has_anthropic or has_openai or has_gemini or has_mistral
@@ -649,7 +812,7 @@ def detect_llm_availability() -> LLMAvailability:
     # process (which the dispatcher checks separately) — both modes
     # only need ``has_dispatcher_route`` here.
     has_bedrock = has_bedrock_signal and (
-        has_dispatcher_route or BOTO3_SDK_AVAILABLE
+        has_dispatcher_route or BOTOCORE_SDK_AVAILABLE
     )
     has_cloud_keys = has_cloud_keys or has_bedrock
 
@@ -711,18 +874,21 @@ def _warn_unusable_keys():
                     f"Install with: pip install {sdk_name.split(' or ')[0]}"
                 )
 
-    # Bedrock: warn ONLY when the operator has set the explicit
-    # AWS_BEARER_TOKEN_BEDROCK opt-in signal AND no usable path is
-    # available (no dispatcher route, no boto3).  Gating on bare
-    # AWS_REGION here would FP-warn every AWS user who happens to
-    # have the env var set for unrelated reasons; that's what we're
-    # avoiding by keying off the bearer-token signal.
-    if os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
+    # Bedrock: warn ONLY when the operator has set an explicit opt-in
+    # signal (bearer token or a RAPTOR_BEDROCK_* env var) AND no
+    # usable path is available (no dispatcher route, no botocore).
+    # Gating on bare AWS_REGION here would FP-warn every AWS user who
+    # happens to have the env var set for unrelated reasons; that's
+    # what we're avoiding by keying off the explicit signals.
+    if (os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+            or os.getenv("RAPTOR_BEDROCK_MODEL")
+            or os.getenv("RAPTOR_BEDROCK_PROFILE")):
         has_dispatcher_route = bool(os.getenv("RAPTOR_LLM_SOCKET"))
-        if not has_dispatcher_route and not BOTO3_SDK_AVAILABLE:
+        if not has_dispatcher_route and not BOTOCORE_SDK_AVAILABLE:
             logger.warning(
-                "AWS_BEARER_TOKEN_BEDROCK is set but neither the dispatcher "
-                "(RAPTOR_LLM_SOCKET) nor boto3 is available for Bedrock "
-                "calls.  Install boto3 (pip install boto3) or run via the "
-                "RAPTOR dispatcher."
+                "A Bedrock opt-in signal (AWS_BEARER_TOKEN_BEDROCK or a "
+                "RAPTOR_BEDROCK_* env var) is set but neither the dispatcher "
+                "(RAPTOR_LLM_SOCKET) nor botocore is available for Bedrock "
+                "calls.  Install botocore (pip install botocore; boto3 "
+                "also includes it) or run via the RAPTOR dispatcher."
             )

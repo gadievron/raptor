@@ -6,9 +6,7 @@ public shape so :func:`core.dataflow.sanitizer_catalog.match_sanitizers_in_cfg`,
 Phase 11) :func:`core.analysis.sanitizer_cut.evaluate_finding` can
 consume the C/C++ CFG with the same interface as the Python one.
 
-Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`). The
-Phase 8 decision doc at ``docs/phase-8-substrate-spike/DECISION.md``
-explains why.
+Substrate: tree-sitter (`tree-sitter-c`, `tree-sitter-cpp`).
 
 Scope — control-flow constructs handled:
 
@@ -1028,28 +1026,18 @@ class _CPPCFGBuilder:
         # the loop "header" for continue.
         self._loop_stack.append((tail, tail))
         self._break_stack.append(tail)
+        # Tail loops back to body entry.  _build_stmts links incoming →
+        # first body node(s), so we snapshot incoming's successors before
+        # and diff after to recover the body entry set.
+        pre_succs = {n: set(self._adjacency.get(n, ())) for n in incoming}
         body_out = self._build_stmts(body, incoming) if body is not None else list(incoming)
-        # Body falls through to tail (the cond test)
+        # Body falls through to tail (the condition test)
         self._link_many(body_out, tail)
-        # Tail loops back to body entry. We don't have a direct
-        # handle on body entry; the first stmt in body had `incoming`
-        # as predecessor. Link tail → all predecessor-successors of
-        # body — i.e. re-walk the body starting from tail. To keep
-        # this finite, we explicitly add the edge tail → first body
-        # node by linking tail to whatever incoming was used for body.
-        # Simplest correct model: tail → header == body's first node.
-        # We approximate by linking tail to every node whose only
-        # predecessor was in incoming. For straight-line bodies that
-        # is one node; for complex bodies (e.g. nested if) the
-        # over-approximation is permissive and the vertex-cut still
-        # works correctly.
-        body_entry_candidates = [
-            n for n, _ in self._adjacency.items()
-            if any(succ for succ in self._adjacency.get(n, ())
-                   if succ in body_out)
-        ]
-        for cand in body_entry_candidates:
-            self._link(tail, cand)
+        body_entry = set()
+        for n in incoming:
+            body_entry |= set(self._adjacency.get(n, ())) - pre_succs.get(n, set())
+        for entry in body_entry:
+            self._link(tail, entry)
         self._break_stack.pop()
         self._loop_stack.pop()
         return [tail]
@@ -1090,7 +1078,12 @@ class _CPPCFGBuilder:
                     if current_group or current_labels:
                         case_groups.append(current_group)
                         case_entries.append(current_labels)
-                    current_group = []
+                    # tree-sitter nests body stmts inside case_statement
+                    value_node = child.child_by_field_name("value")
+                    current_group = [
+                        c for c in child.children
+                        if c.is_named and c != value_node
+                    ]
                     current_labels = [child]
                 else:
                     current_group.append(child)

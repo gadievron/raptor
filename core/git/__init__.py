@@ -27,6 +27,19 @@ Public entry points:
     block enforced by ``core.sandbox.proxy`` regardless of allowlist
     breadth.
 
+  - ``get_safe_git_env(preserve_proxy=False)``: sanitised env for git
+    subprocesses (safe-env allowlist plus the GIT_ENV_VARS
+    prompt/askpass pins). ``preserve_proxy=True`` keeps the operator's
+    proxy vars for fetches that dial a remote outside the sandbox
+    egress proxy.
+
+  - ``safe_git_command(*args)`` / ``safe_git_readonly_command(*args)``:
+    build git argv lists with per-invocation ``-c`` safety overrides
+    for commands operating on a target repository (cloned from an
+    untrusted source). The readonly variant additionally refuses every
+    transport (``protocol.allow=never``) — use it for local-only reads;
+    never for network operations.
+
 The sandbox routing is the security-load-bearing piece. Pre-#210 this
 module would have been a plain subprocess wrapper; post-#210 every
 clone, fetch, or ls-remote of an untrusted URL passes through
@@ -39,8 +52,12 @@ contained.
 from __future__ import annotations
 
 from core.git.clone import (
-    clone_repository, fetch_commit, get_safe_git_env, ls_remote,
+    clone_repository,
+    fetch_commit,
+    get_safe_git_env,
+    ls_remote,
     safe_git_command,
+    safe_git_readonly_command,
 )
 from core.git.validate import validate_repo_url
 
@@ -50,5 +67,6 @@ __all__ = [
     "get_safe_git_env",
     "ls_remote",
     "safe_git_command",
+    "safe_git_readonly_command",
     "validate_repo_url",
 ]

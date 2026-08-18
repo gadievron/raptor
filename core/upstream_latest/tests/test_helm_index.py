@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -13,14 +13,13 @@ from core.upstream_latest.github_releases import (
 )
 from core.upstream_latest.helm_index import latest_chart_version
 
-
 # Skip everything if PyYAML isn't available — same fallback as
 # the production code.
 yaml = pytest.importorskip("yaml")
 
 
 class _StubHttp:
-    def __init__(self, payloads: Dict[str, bytes]):
+    def __init__(self, payloads: dict[str, bytes]):
         self._payloads = payloads
 
     def get_bytes(self, url: str, **kw):
@@ -29,7 +28,7 @@ class _StubHttp:
         raise HttpError(f"stub: no payload for {url}")
 
 
-def _idx(*, entries: Dict[str, List[Dict[str, Any]]]) -> bytes:
+def _idx(*, entries: dict[str, list[dict[str, Any]]]) -> bytes:
     return yaml.safe_dump(
         {"apiVersion": "v1", "entries": entries}
     ).encode("utf-8")
@@ -164,3 +163,50 @@ def test_chart_entry_without_version_field_raises() -> None:
     with pytest.raises(UpstreamLookupError) as exc_info:
         latest_chart_version("https://example.com", "x", http=http)
     assert "version" in str(exc_info.value)
+
+
+def test_http_scheme_refused() -> None:
+    # The docstring has always promised non-HTTPS refusal; pin it.
+    with pytest.raises(UpstreamLookupError, match="non-https"):
+        latest_chart_version(
+            "http://charts.example.com", "grafana",
+            http=_StubHttp({}), cache=None,
+        )
+
+
+def test_yaml_aliases_refused() -> None:
+    # SafeLoader expands anchors/aliases (small doc, large object) —
+    # the index loader refuses them; helm's own `repo index` never
+    # emits anchors.
+    bomb = (
+        b"apiVersion: v1\n"
+        b"entries:\n"
+        b"  a: &x [1, 2, 3]\n"
+        b"  b: *x\n"
+    )
+    http = _StubHttp({"https://charts.example.com/index.yaml": bomb})
+    with pytest.raises(UpstreamLookupError, match="aliases"):
+        latest_chart_version(
+            "https://charts.example.com", "a",
+            http=http, cache=None,
+        )
+
+
+def test_fetch_passes_byte_cap() -> None:
+    seen = {}
+
+    class _CapSpy(_StubHttp):
+        def get_bytes(self, url, **kw):
+            seen.update(kw)
+            return super().get_bytes(url, **kw)
+
+    http = _CapSpy({
+        "https://charts.example.com/index.yaml": _idx(entries={
+            "app": [{"version": "1.0.0"}],
+        }),
+    })
+    latest_chart_version(
+        "https://charts.example.com", "app",
+        http=http, cache=None,
+    )
+    assert seen.get("max_bytes") == 8 * 1024 * 1024

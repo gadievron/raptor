@@ -65,11 +65,10 @@ import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
 
 from core.dataflow import sanitizer_cut_config as _sc_config
-from core.smt_solver import z3, z3_available as _z3_available
-
+from core.smt_solver import z3
+from core.smt_solver import z3_available as _z3_available
 
 # --------------------------------------------------------------------------
 # Sink danger model.  Each sink_class maps to the set of characters whose
@@ -119,7 +118,6 @@ class ValidatorSpec:
     var_name: str                   # the variable the validator constrains
     charset: str = ""               # kind=="charset": whole-string allowed chars
     source_line: str = ""           # the literal diff `+` line for diagnostics
-    diff_line_offset: int = 0       # position within the diff hunk (for tests)
     forbidden: str = ""             # kind=="charset_sub": stripped-out chars
 
 
@@ -137,13 +135,13 @@ class Tier0Status(str, Enum):
 class Tier0Result:
     status: Tier0Status
     reasoning: str
-    spec: Optional[ValidatorSpec] = None
-    counterexample: Optional[str] = None
+    spec: ValidatorSpec | None = None
+    counterexample: str | None = None
     # Pre-formatted spec string suitable to persist in the synth_results
     # ``barrier_query`` column.  Populated only on SOUND; lets the bridge
     # store a self-describing artifact (`smt:charset:[A-Za-z0-9_.+-]@app.py:429`)
     # without callers re-formatting.
-    artifact: Optional[str] = None
+    artifact: str | None = None
     extras: dict = field(default_factory=dict)
 
 
@@ -285,8 +283,7 @@ _RUBY_GUARD_IF_NOT_MATCH = _re.compile(
 def _strip_string_literal(raw: str) -> str:
     """Strip Python string-literal quoting (and the `r` prefix) from a
     token captured by ``_RE_MATCH_CALL``.  Returns the inner regex body."""
-    if raw.startswith("r"):
-        raw = raw[1:]
+    raw = raw.removeprefix("r")
     if len(raw) >= 2 and raw[0] in ("'", '"') and raw[-1] == raw[0]:
         return raw[1:-1]
     return raw
@@ -347,7 +344,7 @@ def _unescape_charclass(chars: str) -> str:
     return _re.sub(r"\\([^-])", r"\1", chars)
 
 
-def _try_charset_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_charset_validator(line: str) -> ValidatorSpec | None:
     """Match the whole-string `re.match`/`re.fullmatch` over `^[chars]+$`
     pattern.  Returns ``None`` on no match so the caller can try other
     extractors."""
@@ -364,11 +361,11 @@ def _try_charset_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
         return None
     return ValidatorSpec(
         kind="charset", var_name=var_name, charset=cs.group(1),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_charset_sub_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
     """Match the ``x = re.sub('[forbidden]+', '', x)`` rebind pattern.
     Returns ``None`` on no match."""
     m = _RE_SUB_REBIND.search(line)
@@ -382,11 +379,10 @@ def _try_charset_sub_validator(line: str, offset: int) -> Optional[ValidatorSpec
     return ValidatorSpec(
         kind="charset_sub", var_name=m.group("var"),
         forbidden=forbidden, source_line=line.strip(),
-        diff_line_offset=offset,
     )
 
 
-def _try_jsts_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_jsts_validator(line: str) -> ValidatorSpec | None:
     """JS / TS guard-and-exit shapes.  Single regex match implies both
     the validator and its exit-on-fail are on the line — dominance is
     established by the diff itself."""
@@ -395,29 +391,29 @@ def _try_jsts_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_java_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_java_validator(line: str) -> ValidatorSpec | None:
     """Java ``String.matches`` guard-and-exit shape."""
     m = _JAVA_GUARD.search(line)
     if m is None or not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_ruby_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_ruby_validator(line: str) -> ValidatorSpec | None:
     """Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes."""
     m = _RUBY_GUARD_UNLESS.search(line) or _RUBY_GUARD_IF_NOT_MATCH.search(line)
     if m is None or not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
@@ -435,7 +431,7 @@ _LANG_EXTRACTORS = {
 }
 
 
-def extract_validator(fix_diff: str, language: str = "python") -> Optional[ValidatorSpec]:
+def extract_validator(fix_diff: str, language: str = "python") -> ValidatorSpec | None:
     """Scan the fix diff for a recognised mechanical validator pattern.
 
     Iterates every line starting with ``+`` (excluding the ``+++`` file
@@ -455,12 +451,12 @@ def extract_validator(fix_diff: str, language: str = "python") -> Optional[Valid
     extractors = _LANG_EXTRACTORS.get(language)
     if not extractors:
         return None
-    for offset, raw in enumerate(fix_diff.splitlines()):
+    for raw in fix_diff.splitlines():
         if not raw.startswith("+") or raw.startswith("+++"):
             continue
         line = raw[1:]
         for try_fn in extractors:
-            spec = try_fn(line, offset)
+            spec = try_fn(line)
             if spec is not None:
                 return spec
     return None
@@ -537,12 +533,12 @@ def _block_always_exits(body: list) -> bool:
     return False
 
 
-def _function_containing(tree: ast.AST, line: int) -> Optional[ast.AST]:
+def _function_containing(tree: ast.AST, line: int) -> ast.AST | None:
     """Smallest-range FunctionDef / AsyncFunctionDef containing ``line``,
     or None.  "Smallest range" so nested functions resolve to the inner
     one, matching the semantics of "same function" we want for dominance."""
-    best: Optional[ast.AST] = None
-    best_size: Optional[int] = None
+    best: ast.AST | None = None
+    best_size: int | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             start = node.lineno
@@ -636,15 +632,15 @@ def _validator_block_exits_on_failure(
                 return False
             # If the exit is `raise` and we're inside a catching try,
             # the raise gets caught — decline.
-            if (_block_uses_raise(failure_body)
-                    and _line_in_try_body_with_catching_handler(
-                        tree, validator_line)):
-                return False
-            return True
+            return not (
+                _block_uses_raise(failure_body)
+                and _line_in_try_body_with_catching_handler(
+                    tree, validator_line)
+            )
     return False
 
 
-def find_validator_line(source_text: str, spec: ValidatorSpec) -> Optional[int]:
+def find_validator_line(source_text: str, spec: ValidatorSpec) -> int | None:
     """Locate the validator's 1-based line number in the post-fix source
     text.  Matches by the stripped line-text the extractor saved on the
     spec; first occurrence wins (multiple matches are unusual and any of
@@ -707,9 +703,10 @@ def _variable_reassigned_between(
         targets: list = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
-            targets = [node.target]
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
+        elif isinstance(
+            node,
+            (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor),
+        ):
             targets = [node.target]
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
@@ -793,18 +790,17 @@ def lexical_fallback_status() -> dict:
             "data."
         ),
         "mode": _sc_config.current().mode,
-        "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
     }
 
 
 def _maybe_record_parity(
     *,
     kind: str,
-    file_path: Optional[str],
+    file_path: str | None,
     validator_line: int,
     sink_line: int,
-    cwe: Optional[str],
-    language: Optional[str],
+    cwe: str | None,
+    language: str | None,
     lexical_suppressed: bool,
 ) -> None:
     """Phase 15 shadow telemetry. When a parity-log path is configured
@@ -844,18 +840,21 @@ def _maybe_record_parity(
             value_bound_verdict=verdict,
         )
         append_parity_record(log_path, record)
-    except Exception:                                       # noqa: BLE001
-        # Telemetry is best-effort; swallow everything.
+    except OSError:
+        # Telemetry is best-effort; append_parity_record already
+        # swallows write failures, so only residual filesystem errors
+        # remain legitimate. A TypeError from a drifted record-builder
+        # signature must propagate, not vanish.
         pass
 
 
 def _value_bound_dominates(
     *,
-    file_path: Optional[str],
+    file_path: str | None,
     validator_line: int,
     sink_line: int,
-    cwe: Optional[str],
-    language: Optional[str],
+    cwe: str | None,
+    language: str | None,
 ):
     """Phase 7 of the value-binding arc — wire ``validator_dominates_sink``
     and ``substitution_dominates_sink`` through the value-bound gate.
@@ -921,6 +920,12 @@ def _value_bound_dominates(
             language=resolved.language,
             source_symbols=resolved.source_symbols,
             sink_arg=resolved.sink_arg,
+            # Phase 14 resolver contract: inter-procedural synthetic
+            # sanitizer bindings must reach the gate, and the parity
+            # shadow path already passes them — omitting them here made
+            # the production gate evaluate DIFFERENT bindings than the
+            # telemetry used for the strict-promotion decision.
+            extra_bindings=resolved.inter_proc_bindings,
         )
     except Exception:                                       # noqa: BLE001
         return None
@@ -940,9 +945,9 @@ def validator_dominates_sink(
     validator_line: int,
     sink_line: int,
     *,
-    file_path: Optional[str] = None,
-    cwe: Optional[str] = None,
-    language: Optional[str] = None,
+    file_path: str | None = None,
+    cwe: str | None = None,
+    language: str | None = None,
 ) -> bool:
     """Sound dominance for the ``kind="charset"`` form — whole-string
     allowlist guarded by an ``if``-statement.
@@ -1188,9 +1193,9 @@ def substitution_dominates_sink(
     sink_line: int,
     var_name: str,
     *,
-    file_path: Optional[str] = None,
-    cwe: Optional[str] = None,
-    language: Optional[str] = None,
+    file_path: str | None = None,
+    cwe: str | None = None,
+    language: str | None = None,
 ) -> bool:
     """Sound dominance for ``kind="charset_sub"`` — assignment-form
     sanitizer (``x = re.sub('[forbidden]+', '', x)``).
@@ -1272,10 +1277,12 @@ def _charclass_to_re(chars: str):
         else:
             alts.append(z3.Re(z3.StringVal(chars[i])))
             i += 1
+    if not alts:
+        return None
     return z3.Union(*alts) if len(alts) > 1 else alts[0]
 
 
-def _danger_re(danger: List[str]):
+def _danger_re(danger: list[str]):
     """Regex for strings containing any danger char: ``.*[danger].*``."""
     rs = z3.ReSort(z3.StringSort())
     anystr = z3.Star(z3.AllChar(rs))
@@ -1289,18 +1296,29 @@ def _danger_re(danger: List[str]):
 @dataclass
 class _ProofVerdict:
     sound: bool
-    counterexample: Optional[str]
+    counterexample: str | None
     reasoning: str
+
+
+# Widest code-point span a single ``X-Y`` range may expand to.  Real
+# sanitizer charsets are ASCII-sized; without a cap, one attacker-shaped
+# range in a fix diff (space to U+10FFFF) materializes a ~1.1M-element
+# set.  Over-cap ranges are treated as three literals — that UNDER-
+# approximates the forbidden set, which can only push the charset_sub
+# verdict toward DECLINED (sound direction; Tier 2 takes the case).
+_RANGE_EXPANSION_CAP = 1024
 
 
 def _expand_charset_body(body: str) -> set:
     """Expand a regex char-class body like ``A-Za-z0-9_.+-`` into the
     finite set of characters it matches.
 
-    Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` and literal chars;
+    Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` (spanning at most
+    :data:`_RANGE_EXPANSION_CAP` code points) and literal chars;
     everything else (including ``X-Y`` where ``X`` and ``Y`` aren't in
     range-ascending order — would silently drop chars under a naive
-    ``range(ord(X), ord(Y)+1)``) is treated as three separate literals.
+    ``range(ord(X), ord(Y)+1)`` — and over-cap ranges) is treated as
+    three separate literals.
     """
     out: set = set()
     i, n = 0, len(body)
@@ -1310,7 +1328,8 @@ def _expand_charset_body(body: str) -> set:
             i += 2
         elif (i + 2 < n and body[i + 1] == "-"
                 and body[i + 2] != "\\"
-                and ord(body[i]) <= ord(body[i + 2])):
+                and ord(body[i]) <= ord(body[i + 2])
+                and ord(body[i + 2]) - ord(body[i]) <= _RANGE_EXPANSION_CAP):
             for cp in range(ord(body[i]), ord(body[i + 2]) + 1):
                 out.add(chr(cp))
             i += 3
@@ -1320,10 +1339,15 @@ def _expand_charset_body(body: str) -> set:
     return out
 
 
-def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _ProofVerdict:
+def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: list[str]) -> _ProofVerdict:
     """Z3 regex-intersection emptiness for whole-string anchored allowlists."""
     name = z3.String("name")
     char_re = _charclass_to_re(spec.charset)
+    if char_re is None:
+        return _ProofVerdict(
+            True, None,
+            "empty charset — validator rejects all input",
+        )
     validator_re = z3.Plus(char_re)
     s = z3.Solver()
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
@@ -1337,7 +1361,10 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _
     if r == z3.sat:
         try:
             ce = s.model()[name].as_string()
-        except Exception:
+        except (AttributeError, z3.Z3Exception):
+            # Unconstrained var: model()[name] is None (no .as_string),
+            # or Z3 refuses the conversion — verdict stands without a
+            # printable counterexample.
             ce = None
         return _ProofVerdict(
             False, ce,
@@ -1349,7 +1376,7 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _
 
 
 def _prove_charset_sub(
-    spec: ValidatorSpec, sink_class: str, danger: List[str],
+    spec: ValidatorSpec, sink_class: str, danger: list[str],
 ) -> _ProofVerdict:
     """Finite-set inclusion for ``x = re.sub('[forbidden]+', '', x)``.
 
@@ -1378,9 +1405,9 @@ def _prove_charset_sub(
             f"{sink_class} danger char {danger!r} -> validator provably "
             f"neutralises {sink_class}",
         )
-    # Stable counterexample pick — sort so the message is deterministic
-    # across runs (sets have no order).
-    ce = sorted(missing)[0]
+    # Stable counterexample pick — deterministic across runs (sets
+    # have no order).
+    ce = min(missing)
     return _ProofVerdict(
         False, ce,
         f"set inclusion fails: re.sub strips [{spec.forbidden}]+ but "

@@ -11,13 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Self
 
 GRAPH_FILENAME = "binary-graph.sqlite"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _json(value: Any) -> str:
@@ -45,12 +46,16 @@ def open_graph(path: Path) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    _migrate(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _migrate(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -133,14 +138,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 snapshot_id TEXT NOT NULL,
                 node_id TEXT NOT NULL,
                 evidence_id TEXT NOT NULL,
-                PRIMARY KEY(snapshot_id, node_id, evidence_id)
+                PRIMARY KEY(snapshot_id, node_id, evidence_id),
+                FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS edge_evidence (
                 snapshot_id TEXT NOT NULL,
                 edge_id TEXT NOT NULL,
                 evidence_id TEXT NOT NULL,
-                PRIMARY KEY(snapshot_id, edge_id, evidence_id)
+                PRIMARY KEY(snapshot_id, edge_id, evidence_id),
+                FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS artifacts (
@@ -148,7 +155,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 kind TEXT NOT NULL,
                 path TEXT NOT NULL,
                 sha256 TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY(snapshot_id, kind, path)
+                PRIMARY KEY(snapshot_id, kind, path),
+                FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_binary_nodes_kind ON nodes(snapshot_id, kind);
@@ -156,6 +164,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_binary_evidence_tier ON evidence(snapshot_id, tier);
             """
         )
+    elif current == 1:
+        _upgrade_v1_to_v2(conn)
     conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -163,10 +173,62 @@ def _migrate(conn: sqlite3.Connection) -> None:
     )
 
 
+def _upgrade_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 omitted the snapshot FK on node_evidence/edge_evidence/artifacts,
+    so a snapshot REPLACE cascaded nodes/edges/evidence but orphaned these
+    rows. SQLite cannot add a FK in place; rebuild each table and drop rows
+    already orphaned."""
+    conn.executescript(
+        """
+        BEGIN;
+        ALTER TABLE node_evidence RENAME TO node_evidence_v1;
+        CREATE TABLE node_evidence (
+            snapshot_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            evidence_id TEXT NOT NULL,
+            PRIMARY KEY(snapshot_id, node_id, evidence_id),
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+        INSERT INTO node_evidence(snapshot_id, node_id, evidence_id)
+            SELECT snapshot_id, node_id, evidence_id FROM node_evidence_v1
+            WHERE snapshot_id IN (SELECT id FROM snapshots);
+        DROP TABLE node_evidence_v1;
+
+        ALTER TABLE edge_evidence RENAME TO edge_evidence_v1;
+        CREATE TABLE edge_evidence (
+            snapshot_id TEXT NOT NULL,
+            edge_id TEXT NOT NULL,
+            evidence_id TEXT NOT NULL,
+            PRIMARY KEY(snapshot_id, edge_id, evidence_id),
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+        INSERT INTO edge_evidence(snapshot_id, edge_id, evidence_id)
+            SELECT snapshot_id, edge_id, evidence_id FROM edge_evidence_v1
+            WHERE snapshot_id IN (SELECT id FROM snapshots);
+        DROP TABLE edge_evidence_v1;
+
+        ALTER TABLE artifacts RENAME TO artifacts_v1;
+        CREATE TABLE artifacts (
+            snapshot_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            path TEXT NOT NULL,
+            sha256 TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(snapshot_id, kind, path),
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        );
+        INSERT INTO artifacts(snapshot_id, kind, path, sha256)
+            SELECT snapshot_id, kind, path, sha256 FROM artifacts_v1
+            WHERE snapshot_id IN (SELECT id FROM snapshots);
+        DROP TABLE artifacts_v1;
+        COMMIT;
+        """
+    )
+
+
 class BinaryGraphStore:
     def __init__(self, path: Path):
         self.path = Path(path)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._batch_depth: int = 0
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -188,7 +250,7 @@ class BinaryGraphStore:
             raise
 
     @contextmanager
-    def batch(self) -> Iterator["BinaryGraphStore"]:
+    def batch(self) -> Iterator[BinaryGraphStore]:
         """Batch multiple operations into a single transaction.
 
         Defers per-operation commits until the batch exits, reducing
@@ -211,19 +273,19 @@ class BinaryGraphStore:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self) -> "BinaryGraphStore":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
     def __del__(self) -> None:
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 — broad by design: __del__ may run during interpreter teardown, where object state and module globals are unreliable; a raise here only spams stderr
             pass
 
-    def begin_snapshot(self, binary_sha256: str, binary_path: str, run_dir: Path, props: Optional[dict[str, Any]] = None) -> str:
+    def begin_snapshot(self, binary_sha256: str, binary_path: str, run_dir: Path, props: dict[str, Any] | None = None) -> str:
         snapshot_id = f"snap:{_hash(binary_sha256, str(Path(run_dir).resolve()))}"
         with self._connection() as conn:
             conn.execute(
@@ -243,7 +305,7 @@ class BinaryGraphStore:
             )
         return snapshot_id
 
-    def latest_snapshot_id(self) -> Optional[str]:
+    def latest_snapshot_id(self) -> str | None:
         if not self.path.exists():
             return None
         with self._connection() as conn:
@@ -282,8 +344,8 @@ class BinaryGraphStore:
         *,
         name: str = "",
         address: str = "",
-        props: Optional[dict[str, Any]] = None,
-        evidence_ids: Optional[list[str]] = None,
+        props: dict[str, Any] | None = None,
+        evidence_ids: list[str] | None = None,
     ) -> str:
         node_id = stable_node_id(binary_sha256, kind, key)
         with self._connection() as conn:
@@ -311,8 +373,8 @@ class BinaryGraphStore:
         dst_id: str,
         *,
         confidence: str = "",
-        props: Optional[dict[str, Any]] = None,
-        evidence_ids: Optional[list[str]] = None,
+        props: dict[str, Any] | None = None,
+        evidence_ids: list[str] | None = None,
     ) -> str:
         edge_id = stable_edge_id(binary_sha256, kind, src_id, dst_id)
         with self._connection() as conn:
@@ -382,7 +444,7 @@ def graph_summary(path: Path) -> dict[str, Any]:
         }
 
 
-def query_edges(path: Path, *, kind: Optional[str] = None) -> list[dict[str, Any]]:
+def query_edges(path: Path, *, kind: str | None = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
     with graph_connection(path) as conn:
@@ -419,7 +481,7 @@ def query_edges(path: Path, *, kind: Optional[str] = None) -> list[dict[str, Any
         ]
 
 
-def query_evidence(path: Path, *, tier: Optional[str] = None) -> list[dict[str, Any]]:
+def query_evidence(path: Path, *, tier: str | None = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
     with graph_connection(path) as conn:
@@ -457,8 +519,8 @@ def query_evidence(path: Path, *, tier: Optional[str] = None) -> list[dict[str, 
 
 
 __all__ = [
-    "BinaryGraphStore",
     "GRAPH_FILENAME",
+    "BinaryGraphStore",
     "graph_path_for_run",
     "graph_summary",
     "open_graph",

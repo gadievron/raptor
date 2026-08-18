@@ -10,14 +10,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.semgrep.runner import (
+    _config_to_name,
     build_cmd,
     is_available,
     run_rule,
     run_rules,
     version,
-    _config_to_name,
 )
-
 
 # Helpers ----------------------------------------------------------------------
 
@@ -92,6 +91,13 @@ class TestBuildCmd:
         assert "--sarif" in cmd
         assert "--quiet" in cmd
         assert cmd[-1] == "/src"
+
+    def test_includes_disable_version_check(self):
+        """The post-scan version-check HTTP GET must never fire: its
+        cache lives in the throwaway fake HOME, so it would re-pay a
+        network round-trip (or a blocked connect) per pack."""
+        cmd = build_cmd(Path("/target"), "rules/")
+        assert "--disable-version-check" in cmd
 
     def test_includes_metrics_off(self):
         cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
@@ -170,7 +176,7 @@ class TestRunRuleMocked:
                     Path(cmd[idx + 1]).write_text(json_output)
                 return MagicMock(stdout=sarif, stderr="", returncode=1)
             mock_run.side_effect = side_effect
-            result = run_rule(target, "p/security-audit")
+            result = run_rule(target, "p/security-audit", unsandboxed=True)
 
         assert result.returncode == 1
         assert result.ok  # 1 is fine for semgrep --error
@@ -185,7 +191,7 @@ class TestRunRuleMocked:
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("semgrep", 5)):
-            result = run_rule(target, "p/x", timeout=5)
+            result = run_rule(target, "p/x", timeout=5, unsandboxed=True)
         assert result.returncode == -1
         assert any("Timeout" in e for e in result.errors)
 
@@ -194,7 +200,7 @@ class TestRunRuleMocked:
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run", side_effect=OSError("permission denied")):
-            result = run_rule(target, "p/x")
+            result = run_rule(target, "p/x", unsandboxed=True)
         assert result.returncode == -1
         assert "permission denied" in result.errors[0]
 
@@ -204,7 +210,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "p/x")
+            result = run_rule(target, "p/x", unsandboxed=True)
         assert result.findings == []
         assert result.returncode == 0
         # No json file written → empty parse
@@ -221,7 +227,8 @@ class TestRunRuleMocked:
                 Path(cmd[idx + 1]).write_text(_make_json_output(scanned=["a.py"]))
                 return MagicMock(stdout=_make_sarif(), stderr="", returncode=0)
             mock_run.side_effect = side_effect
-            result = run_rule(target, "p/x", json_output_path=json_path)
+            result = run_rule(target, "p/x", json_output_path=json_path,
+                              unsandboxed=True)
         # Provided path should NOT be deleted by the runner
         assert json_path.exists()
         assert result.files_examined == ["a.py"]
@@ -233,7 +240,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            run_rule(target, "p/x", env=custom_env)
+            run_rule(target, "p/x", env=custom_env, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
         assert kwargs["env"] == custom_env
 
@@ -243,7 +250,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            run_rule(target, "p/x", timeout=42)
+            run_rule(target, "p/x", timeout=42, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
         assert kwargs["timeout"] == 42
 
@@ -253,7 +260,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "p/security-audit")
+            result = run_rule(target, "p/security-audit", unsandboxed=True)
         assert result.name == "p/security-audit"
 
     def test_run_friendly_name_from_dir(self, tmp_path):
@@ -262,7 +269,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "/abs/path/to/crypto")
+            result = run_rule(target, "/abs/path/to/crypto", unsandboxed=True)
         assert result.name == "crypto"
 
     def test_run_explicit_name(self, tmp_path):
@@ -271,8 +278,87 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "/abs/path", name="my_run")
+            result = run_rule(target, "/abs/path", name="my_run", unsandboxed=True)
         assert result.name == "my_run"
+
+
+# sandbox-by-default policy -----------------------------------------------------
+
+class TestSandboxDefaultPolicy:
+    """No injected runner + no opt-out ⇒ sandboxed or refused."""
+
+    def test_default_engages_sandbox_runner(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        calls = {}
+
+        def fake_sandbox_runner(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner",
+                   return_value=fake_sandbox_runner) as mk, \
+             patch("subprocess.run") as mock_run:
+            result = run_rule(target, "p/x")
+        mk.assert_called_once()
+        assert "cmd" in calls, "default sandbox runner was not used"
+        mock_run.assert_not_called()
+        assert result.returncode == 0
+
+    def test_refuses_when_sandbox_unavailable(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner",
+                   return_value=None), \
+             patch("subprocess.run") as mock_run:
+            result = run_rule(target, "p/x")
+        mock_run.assert_not_called()
+        assert result.returncode == -1
+        assert "refusing" in result.errors[0]
+
+    def test_explicit_optout_uses_subprocess_run(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="", returncode=0)
+            run_rule(target, "p/x", unsandboxed=True)
+        mock_run.assert_called_once()
+
+    def test_injected_runner_bypasses_default(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        calls = {}
+
+        def injected(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner") as mk:
+            run_rule(target, "p/x", subprocess_runner=injected)
+        mk.assert_not_called()
+        assert "cmd" in calls
+
+    def test_registry_config_keeps_network_local_blocks(self, tmp_path):
+        from packages.semgrep.runner import _default_sandbox_runner
+        captured = {}
+
+        def fake_sandbox_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("core.sandbox.context.run", side_effect=fake_sandbox_run):
+            runner = _default_sandbox_runner(tmp_path, "p/security-audit")
+            runner(["semgrep"], capture_output=True)
+            assert captured["block_network"] is False
+            runner = _default_sandbox_runner(tmp_path, "/local/rules.yaml")
+            runner(["semgrep"], capture_output=True)
+            assert captured["block_network"] is True
+            assert captured["target"] == str(tmp_path)
 
 
 # run_rules --------------------------------------------------------------------
@@ -285,7 +371,7 @@ class TestRunRules:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            results = run_rules(target, configs)
+            results = run_rules(target, configs, unsandboxed=True)
         assert len(results) == 3
         assert [r.name for r in results] == ["a", "b", "c"]
         assert mock_run.call_count == 3
@@ -296,7 +382,8 @@ class TestRunRules:
 
     def test_not_installed_returns_error_per_config(self, tmp_path):
         with patch("packages.semgrep.runner.is_available", return_value=False):
-            results = run_rules(tmp_path, [("a", "p/a"), ("b", "p/b")])
+            results = run_rules(tmp_path, [("a", "p/a"), ("b", "p/b")],
+                                unsandboxed=True)
         assert len(results) == 2
         assert all(r.returncode == -1 for r in results)
         assert all("not installed" in r.errors[0] for r in results)

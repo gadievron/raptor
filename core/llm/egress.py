@@ -81,7 +81,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -100,8 +100,24 @@ _KNOWN_DEFAULTS = {
 
 # Local-loop hosts that must NOT route through the chokepoint — Ollama
 # / vLLM / LiteLLM-on-localhost loop back through the proxy and break
-# its allowlist semantics for non-loopback callers.
-_LOCAL_BYPASS = ("localhost", "127.0.0.1")
+# its allowlist semantics for non-loopback callers. ::1 and 0.0.0.0
+# included: operators point clients at "0.0.0.0:11434" surprisingly
+# often (copy-pasted from the server's bind address), and it
+# genuinely resolves to loopback on connect (kernel routes 0.0.0.0 to
+# the local host), so it carries no extra reach.
+#
+# 169.254.169.254 (EC2 IMDS) is deliberately NOT here: it is a
+# credential-bearing metadata service, not a local service. Listing
+# it made every _LOCAL_BYPASS consumer treat IMDS as loopback-safe —
+# url_is_loopback()/loopback_safe_get() would fetch it DIRECT and the
+# NO_PROXY augmentation exempted it from the chokepoint, so hostile
+# in-process code could read role credentials without ever meeting
+# the allowlist. IMDS is plain HTTP; the chokepoint only rewrites
+# HTTPS_PROXY, so botocore's role-credential fetch is unaffected by
+# its removal.
+_LOCAL_BYPASS = (
+    "localhost", "127.0.0.1", "::1", "0.0.0.0",
+)
 
 
 # Idempotency: once enabled in this process, repeated calls are no-ops
@@ -110,8 +126,36 @@ _LOCAL_BYPASS = ("localhost", "127.0.0.1")
 # operator-supplied value.
 _enabled = False
 
+# The proxy env exactly as the operator had it before enable_llm_egress
+# mutated os.environ (None = never mutated). Consumers that spawn
+# trusted egress-needing subprocesses (the claude CLI transport) must
+# hand children the OPERATOR's route, not our in-process loopback
+# pointer — the in-process proxy's allowlist is derived from the
+# SDK-model config and doesn't cover whatever backend the child CLI
+# resolves for itself (e.g. Bedrock).
+_PROXY_VAR_NAMES = (
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+)
+_original_proxy_env: dict[str, str] | None = None
 
-def derive_allowlist(config: "LLMConfig") -> Set[str]:
+
+def operator_proxy_env() -> dict[str, str]:
+    """Proxy vars as the operator set them at launch.
+
+    Returns the pre-``enable_llm_egress`` snapshot when this process
+    has mutated proxy env, else the live values. Hosts with no proxy
+    configured get an empty dict.
+    """
+    if _original_proxy_env is not None:
+        return dict(_original_proxy_env)
+    return {
+        k: v for k in _PROXY_VAR_NAMES
+        if (v := os.environ.get(k)) is not None
+    }
+
+
+def derive_allowlist(config: LLMConfig) -> set[str]:
     """Walk ``config`` and extract the set of hostnames the in-process
     proxy must allow.
 
@@ -134,9 +178,17 @@ def derive_allowlist(config: "LLMConfig") -> Set[str]:
     if config.specialized_models:
         candidates.extend(config.specialized_models.values())
 
-    hosts: Set[str] = set()
+    hosts: set[str] = set()
     for model in candidates:
         if model is None:
+            continue
+        if getattr(model, "provider", None) == "bedrock":
+            # Bedrock has no static endpoint — the host is
+            # region-derived per surface, and credential refresh
+            # (assume-role / SSO) additionally needs STS.  Without
+            # these the dispatcher's outbound would be denied by the
+            # very proxy this module installs.
+            hosts.update(_bedrock_hosts_for(model))
             continue
         # Per-model api_base wins; otherwise fall back to provider
         # default. PROVIDER_ENDPOINTS first (what the SDK actually
@@ -155,6 +207,73 @@ def derive_allowlist(config: "LLMConfig") -> Set[str]:
     return hosts
 
 
+def _bedrock_hosts_for(model) -> set[str]:
+    """Hosts one Bedrock ModelConfig needs through the egress proxy:
+    the surface endpoint for its resolved region, plus the STS hosts
+    botocore's credential refresh uses (global + regional endpoints —
+    botocore defaults to regional STS).
+
+    Region ladder mirrors the signer: the entry's pin → env → the
+    profile's configured region via the botocore chain (no-network
+    lookup).  When no region resolves, only the endpoint-override host
+    (if any) is returned — the dispatcher will 503 the request with
+    its own no-region diagnostic; a guessed host here would just mask
+    that with a proxy denial for the wrong hostname.
+    """
+    endpoint_override = os.environ.get("AWS_ENDPOINT_URL_BEDROCK")
+    if endpoint_override:
+        # The override replaces the SURFACE endpoint only — botocore
+        # still refreshes profile/role credentials through STS, so
+        # the STS hosts must ride the allowlist too or every
+        # credential refresh 503s at the chokepoint. Global STS
+        # always; regional STS when a region resolves (botocore
+        # defaults to regional endpoints).
+        host = _hostname_of(endpoint_override)
+        hosts = {host} if host else set()
+        if hosts:
+            hosts.add("sts.amazonaws.com")
+            region = _bedrock_region_for(model)
+            if region:
+                hosts.add(f"sts.{region}.amazonaws.com")
+        return hosts
+    region = _bedrock_region_for(model)
+    if not region:
+        return set()
+    surface = getattr(model, "bedrock_api", "mantle") or "mantle"
+    if surface == "runtime":
+        endpoint_host = f"bedrock-runtime.{region}.amazonaws.com"
+    else:
+        endpoint_host = f"bedrock-mantle.{region}.api.aws"
+    return {
+        endpoint_host,
+        "sts.amazonaws.com",
+        f"sts.{region}.amazonaws.com",
+    }
+
+
+def _bedrock_region_for(model) -> str | None:
+    """Resolved AWS region for *model*: entry pin → env → the
+    profile's configured region via the botocore chain (no-network
+    lookup). ``None`` when nothing resolves."""
+    region = (
+        getattr(model, "aws_region", None)
+        or os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+    )
+    if not region:
+        try:
+            import botocore.session
+            session = botocore.session.Session(
+                profile=getattr(model, "aws_profile", None)
+                or os.environ.get("RAPTOR_BEDROCK_PROFILE")
+                or os.environ.get("AWS_PROFILE"),
+            )
+            region = session.get_config_variable("region")
+        except Exception:  # noqa: BLE001 — botocore optional here
+            region = None
+    return region or None
+
+
 def _hostname_of(url: str) -> str:
     """Extract the bare hostname (no port, no scheme, no path) from
     a URL. Returns empty string on parse failure."""
@@ -168,10 +287,38 @@ def _hostname_of(url: str) -> str:
 
 
 def _is_loopback(host: str) -> bool:
-    return host.lower() in _LOCAL_BYPASS
+    h = host.lower()
+    return h in _LOCAL_BYPASS or h.startswith("127.")
 
 
-def _max_model_timeout(config: "LLMConfig") -> float:
+def url_is_loopback(url: str) -> bool:
+    """True when ``url``'s host is a loopback / local-bind address."""
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return _is_loopback(host)
+
+
+def loopback_safe_get(url: str, timeout: float):
+    """``requests.get`` that bypasses proxy env for loopback targets.
+
+    On mandatory-proxy hosts whose NO_PROXY doesn't cover loopback
+    (common: only the cloud metadata IP is listed), a plain
+    ``requests.get("http://localhost:11434/...")`` routes through the
+    corporate proxy and fails — Ollama then looks "not running" even
+    though it's up. Non-loopback URLs keep full proxy-env behaviour.
+    """
+    import requests
+    if url_is_loopback(url):
+        with requests.Session() as s:
+            s.trust_env = False
+            return s.get(url, timeout=timeout)
+    return requests.get(url, timeout=timeout)
+
+
+def _max_model_timeout(config: LLMConfig) -> float:
     """Return the longest per-model timeout across all configured models."""
     candidates = []
     if config.primary_model is not None:
@@ -200,7 +347,7 @@ def _augment_no_proxy(existing: str) -> str:
     return ",".join(parts)
 
 
-def enable_llm_egress(config: "LLMConfig") -> None:
+def enable_llm_egress(config: LLMConfig) -> None:
     """Wire LLM SDK calls through the in-process proxy.
 
     Idempotent: safe to call once per ``LLMClient`` instantiation; the
@@ -216,7 +363,7 @@ def enable_llm_egress(config: "LLMConfig") -> None:
     models configured) — saves the proxy bring-up cost and avoids
     surprising env mutation in CC-only or autodetect-empty modes.
     """
-    global _enabled
+    global _enabled, _original_proxy_env
 
     allowlist = derive_allowlist(config)
     # Drop loopback hosts from the proxy allowlist — they bypass the
@@ -228,7 +375,41 @@ def enable_llm_egress(config: "LLMConfig") -> None:
 
     if not remote_hosts:
         # Nothing to chokepoint — Ollama-only, autodetect-empty, or
-        # CC-only setups. Skip silently.
+        # CC-only setups. No proxy bring-up, no HTTPS_PROXY mutation.
+        #
+        # But the Ollama-only case is exactly the one that breaks on
+        # mandatory-proxy hosts without NO_PROXY hygiene: the SDK's
+        # httpx (trust_env=True) routes localhost:11434 through the
+        # corporate proxy and every call fails. Pre-fix this early
+        # return skipped the augmentation below for precisely the
+        # config that needed it. Augment NO_PROXY (and ONLY NO_PROXY)
+        # when the config references a loopback host and the operator
+        # has a proxy set; truly-empty configs stay mutation-free.
+        if allowlist and any(_is_loopback(h) for h in allowlist) and any(
+            os.environ.get(v) for v in
+            ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
+        ):
+            # Snapshot the operator's proxy env BEFORE this mutation
+            # too — operator_proxy_env() must hand trusted
+            # subprocesses the operator's NO_PROXY, not our augmented
+            # one (pre-fix this path mutated without snapshotting, so
+            # the snapshot taken later — or never — reflected our own
+            # edit).
+            if _original_proxy_env is None:
+                _original_proxy_env = {
+                    k: v for k in _PROXY_VAR_NAMES
+                    if (v := os.environ.get(k)) is not None
+                }
+            existing = (os.environ.get("NO_PROXY")
+                        or os.environ.get("no_proxy") or "")
+            new_no_proxy = _augment_no_proxy(existing)
+            os.environ["NO_PROXY"] = new_no_proxy
+            os.environ["no_proxy"] = new_no_proxy
+            logger.debug(
+                "LLM egress: loopback-only config on proxied host — "
+                "NO_PROXY augmented to %r (no chokepoint brought up)",
+                new_no_proxy,
+            )
         return
 
     # Step 1: bring up / extend the in-process proxy. MUST happen
@@ -253,7 +434,14 @@ def enable_llm_egress(config: "LLMConfig") -> None:
     # Step 3: point HTTPS_PROXY at our in-process proxy so httpx-based
     # SDKs route through it. Honour http (not https) — the in-process
     # proxy is plain-HTTP-on-loopback (CONNECT to upstream is what
-    # carries the TLS).
+    # carries the TLS). Snapshot the operator's values first so
+    # operator_proxy_env() can hand trusted subprocesses the real
+    # route instead of our loopback pointer.
+    if _original_proxy_env is None:
+        _original_proxy_env = {
+            k: v for k in _PROXY_VAR_NAMES
+            if (v := os.environ.get(k)) is not None
+        }
     os.environ["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy.port}"
     os.environ["https_proxy"] = os.environ["HTTPS_PROXY"]
 
@@ -277,11 +465,15 @@ def _reset_for_tests() -> None:
     """Test-only helper: reset the module-level idempotency flag.
     Does NOT clear env vars or the singleton proxy — those are
     process-wide concerns the test fixture handles separately."""
-    global _enabled
+    global _enabled, _original_proxy_env
     _enabled = False
+    _original_proxy_env = None
 
 
 __all__ = [
     "derive_allowlist",
     "enable_llm_egress",
+    "loopback_safe_get",
+    "operator_proxy_env",
+    "url_is_loopback",
 ]

@@ -106,7 +106,8 @@ def render(r: TrustReport) -> str:
         f"Trust FP-suppressor measurement ({r.total} findings)",
         f"  coverage:          {r.coverage_n}/{r.trust_fp} trust-FPs suppressed ({pct(r.coverage)})",
         f"  false-suppression: {r.false_suppression_n}/{r.tp} TPs wrongly suppressed "
-        f"({pct(r.false_suppression_rate)}) {'OK' if r.is_sound else '*** NONZERO — UNSOUND ***'}",
+        f"({pct(r.false_suppression_rate)}) "
+        f"{'OK' if r.is_sound else '(no TPs — vacuous)' if r.tp == 0 else '*** NONZERO — UNSOUND ***'}",
         f"  suppression-prec:  {r.suppressed_on_fp}/{r.suppressed_total} suppressions hit real FPs "
         f"({pct(r.suppression_precision)})",
         f"  defer (uncertain): {r.defer_n}/{r.total}",

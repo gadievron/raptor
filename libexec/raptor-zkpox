@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """ZKPoX operator CLI — assemble bundles and reproduce witnesses.
 
 Two subcommands covering the dependency-free tiers:
@@ -18,10 +20,12 @@ these subcommands are the ON-REQUEST steps. The tier model lives in
 the package docstring (packages/zkpox/__init__.py).
 """
 import sys
+import tempfile
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -30,10 +34,11 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
-import argparse
-import json
+import argparse  # noqa: E402
+import json  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
@@ -112,6 +117,29 @@ def _cmd_reproduce(args) -> int:
         )
         return 2
 
+    # Verify witness.bin against the manifest before constructing the
+    # bundle — a swapped/truncated witness must not silently drive an
+    # N-run reproduction of the wrong bytes.
+    witness_bytes = witness_path.read_bytes()
+    from core.hash import sha256_bytes
+    actual_hash = sha256_bytes(witness_bytes)
+    if actual_hash != manifest["witness_hash"]:
+        sys.stderr.write(
+            f"witness.bin hash mismatch: file {actual_hash[:16]}... "
+            f"!= manifest witness_hash "
+            f"{str(manifest['witness_hash'])[:16]}...; "
+            f"refusing to reproduce a tampered/swapped witness\n"
+        )
+        return 2
+    if manifest.get("witness_len") is not None \
+            and len(witness_bytes) != manifest["witness_len"]:
+        sys.stderr.write(
+            f"witness.bin length mismatch: file is "
+            f"{len(witness_bytes)} bytes, manifest witness_len is "
+            f"{manifest['witness_len']}; refusing to reproduce\n"
+        )
+        return 2
+
     # Reconstruct the bundle dataclass from the manifest. The rest
     # round-trip for re-persistence.
     bundle = ZKPoXBundle(
@@ -129,7 +157,6 @@ def _cmd_reproduce(args) -> int:
         reproduction=manifest.get("reproduction"),
     )
 
-    witness_bytes = witness_path.read_bytes()
     binary_path = Path(args.binary) if args.binary else None
 
     result = reproduce_witness(
@@ -139,9 +166,22 @@ def _cmd_reproduce(args) -> int:
     attach_reproduction(bundle, result)
 
     # Re-persist the manifest with the reproduction block + tier bump.
-    manifest_path.write_text(
-        json.dumps(bundle.as_dict(), indent=2), encoding="utf-8",
-    )
+    # Atomic write via tempfile + rename to avoid partial writes.
+    fd, tmp = tempfile.mkstemp(
+        dir=str(manifest_path.parent), suffix=".tmp")
+    closed = False
+    try:
+        os.write(fd, json.dumps(
+            bundle.as_dict(), indent=2).encode("utf-8"))
+        os.close(fd)
+        closed = True
+        os.rename(tmp, str(manifest_path))
+    except BaseException:
+        if not closed:
+            os.close(fd)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
     print(render_bundle(bundle))
     print(f"  reproduced: {result.reproduced} "

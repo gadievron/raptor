@@ -149,7 +149,7 @@ class TestCanonicalisedFeedsParser:
         from core.smt_solver import z3_available
         if not z3_available():
             return  # parser exercised regardless, but feasibility undefined
-        from packages.codeql.smt_path_validator import (
+        from core.smt_solver.path_feasibility import (
             PathCondition, check_path_feasibility,
         )
         result = check_path_feasibility([

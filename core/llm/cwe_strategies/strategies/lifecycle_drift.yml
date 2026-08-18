@@ -24,19 +24,12 @@ signals:
   # (kernel/cred.c, fs/exec.c) and tokens (ptrace, commit_creds) were
   # dropped: they made the strategy a magnet for every function in the
   # cred/exec/ptrace neighbourhood and collided with auth_privilege.
-  paths:
-    - kernel/ptrace.c
-  includes:
-    - linux/ptrace.h
-    - linux/sched/mm.h
-  function_keywords:
-    - dumpable
-  function_calls:
-    - get_dumpable
-    - __get_dumpable
-    - set_dumpable
-    - ptrace_may_access
-    - __ptrace_may_access
+  #
+  # The signal set is kernel lifecycle vocabulary through and through
+  # (kernel/ptrace.c, get_dumpable, ptrace_may_access) and lives
+  # entirely in the linux_kernel profile pack
+  # (profiles/linux_kernel.yml) — this strategy fires only on kernel
+  # targets or an explicit CWE/operator pick.
   # No `cwes:` on purpose. CWE-863 (incorrect authorization) is the
   # consequence, but auth_privilege already claims it; sharing the tag
   # makes both strategies tie on the dominant signal and split the

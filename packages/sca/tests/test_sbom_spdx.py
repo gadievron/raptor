@@ -171,6 +171,58 @@ def test_spdx_license_value_accepts_with_clause():
 
 
 # ---------------------------------------------------------------------------
+# Project license — root package for the scanned project itself
+# ---------------------------------------------------------------------------
+
+
+def test_project_license_emits_root_package():
+    """The scanned project's own license belongs on a root
+    SPDXRef-Project package, never on any dep package."""
+    doc = render_sbom_spdx(
+        deps=[_dep(license=None)], target_name="repo",
+        project_license="MIT",
+    )
+    roots = [p for p in doc["packages"] if p["SPDXID"] == "SPDXRef-Project"]
+    assert len(roots) == 1
+    root = roots[0]
+    assert root["name"] == "repo"
+    assert root["licenseDeclared"] == "MIT"
+    assert root["licenseConcluded"] == "NOASSERTION"
+    # Dep package stays NOASSERTION — the project license does not
+    # describe the dep.
+    dep_pkgs = [p for p in doc["packages"] if p["SPDXID"] != "SPDXRef-Project"]
+    assert dep_pkgs[0]["licenseDeclared"] == "NOASSERTION"
+
+
+def test_root_package_described_by_document():
+    doc = render_sbom_spdx(
+        deps=[], target_name="repo", project_license="MIT",
+    )
+    describes = [
+        r for r in doc["relationships"]
+        if r["relationshipType"] == "DESCRIBES"
+        and r["relatedSpdxElement"] == "SPDXRef-Project"
+    ]
+    assert len(describes) == 1
+    assert describes[0]["spdxElementId"] == "SPDXRef-DOCUMENT"
+
+
+def test_no_root_package_without_project_license():
+    doc = render_sbom_spdx(deps=[_dep()], target_name="repo")
+    assert all(p["SPDXID"] != "SPDXRef-Project" for p in doc["packages"])
+
+
+def test_root_package_freetext_project_license_noassertion():
+    """The root package's licenseDeclared goes through the same SPDX
+    grammar gate as dep licenses."""
+    doc = render_sbom_spdx(
+        deps=[], target_name="repo",
+        project_license="See the LICENSE file for details",
+    )
+    assert doc["packages"][0]["licenseDeclared"] == "NOASSERTION"
+
+
+# ---------------------------------------------------------------------------
 # Relationships
 # ---------------------------------------------------------------------------
 

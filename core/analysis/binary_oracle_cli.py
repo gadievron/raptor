@@ -25,15 +25,16 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 def add_binary_args(parser, *, include_edges: bool = True) -> None:
-    """Attach the three binary-oracle flags to an argparse parser.
-    Both CLIs (raptor_codeql.py + raptor_agentic.py) declare them
-    identically; call this helper to keep them in sync."""
+    """Attach the binary-oracle flags to an argparse parser.
+    raptor_codeql.py takes the whole set from this helper;
+    raptor_agentic.py declares the same flag SET inline (its --binary
+    help additionally documents the agentic-only mitigation-analysis
+    use). When adding a flag here, mirror it in raptor_agentic.py."""
     parser.add_argument(
         "--binary", action="append", default=None,
         help=(
@@ -89,15 +90,15 @@ def add_binary_args(parser, *, include_edges: bool = True) -> None:
 
 
 def _validate_explicit_paths(
-    paths: Optional[List[str]], parser=None,
-) -> List[Path]:
+    paths: list[str] | None, parser=None,
+) -> list[Path]:
     """Resolve operator-supplied ``--binary`` paths AND verify each
     file exists. A typo'd path currently dies silently inside the
     enrichment pass (``Path.resolve()`` doesn't require existence);
     fail-fast here so the operator sees the typo immediately."""
     if not paths:
         return []
-    resolved: List[Path] = []
+    resolved: list[Path] = []
     for p in paths:
         rp = Path(p).expanduser().resolve()
         if not rp.is_file():
@@ -112,8 +113,8 @@ def _validate_explicit_paths(
 
 
 def _filter_locally_built(
-    repo: Path, candidates: List[Path],
-) -> Tuple[List[Path], List[Path]]:
+    repo: Path, candidates: list[Path],
+) -> tuple[list[Path], list[Path]]:
     """Split ``candidates`` into ``(locally_built, repo_committed)``
     using git's tracking-set as the provenance signal.
 
@@ -145,8 +146,8 @@ def _filter_locally_built(
         # ``git ls-files --error-unmatch <path>...`` returns non-zero
         # if ANY path is untracked. Run per-path so we can split.
         # Cheap: cap=8 means ≤8 git invocations.
-        locally_built: List[Path] = []
-        repo_committed: List[Path] = []
+        locally_built: list[Path] = []
+        repo_committed: list[Path] = []
         for c in candidates:
             try:
                 rel = c.resolve().relative_to(repo.resolve())
@@ -192,7 +193,7 @@ def _filter_locally_built(
 
 def _autodetect_binaries(
     repo: Path, target_kind: str, *, explicit: bool = False,
-) -> List[Path]:
+) -> list[Path]:
     """Walk the target tree for debug binaries, then filter to those
     the operator built locally (untracked by git). Repo-committed
     binaries are dropped — they could be attacker-planted or stale
@@ -207,7 +208,8 @@ def _autodetect_binaries(
     noise on every run.
     """
     from core.analysis.binary_oracle_autodetect import (
-        DEFAULT_MAX_RESULTS, detect_binaries,
+        DEFAULT_MAX_RESULTS,
+        detect_binaries,
     )
     detected = detect_binaries(repo, target_kind)
     locally_built, repo_committed = _filter_locally_built(repo, detected)
@@ -252,7 +254,7 @@ def _autodetect_binaries(
     return locally_built
 
 
-def _project_binaries() -> Tuple[List[Path], Optional[str]]:
+def _project_binaries() -> tuple[list[Path], str | None]:
     """Layer in any binaries persisted on the active project. Returns
     ``(paths, project_name)``. Best-effort — a missing project /
     schema mismatch returns ``([], None)`` rather than crashing the
@@ -272,7 +274,7 @@ def _project_binaries() -> Tuple[List[Path], Optional[str]]:
 
 
 def resolve_binary_paths(args, repo: Path, target_kind: str,
-                         parser=None) -> Tuple[str, ...]:
+                         parser=None) -> tuple[str, ...]:
     """Compose the final tuple of binary paths from three sources:
     ``--binary`` (explicit), auto-detect, and the active project's
     persisted ``binaries``. Deduplicated, order preserved (explicit
@@ -342,7 +344,7 @@ def resolve_target_kind(args) -> str:
             or getattr(args, "target_kind", "auto") or "auto")
 
 
-def apply_to_config(args, repo: Path, parser=None) -> Tuple[str, ...]:
+def apply_to_config(args, repo: Path, parser=None) -> tuple[str, ...]:
     """Resolve binary paths AND mutate ``RaptorConfig``. Single call
     site for both CLIs so they can't diverge."""
     from core.config import RaptorConfig

@@ -75,24 +75,20 @@ GitHub Archive analysis should be your **FIRST step** in any GitHub-related secu
 
 ## Quick Start
 
+All queries go through the typed wrapper `libexec/raptor-bq-query`:
+one read-only statement in (SELECT/WITH only — DML/DDL and
+multi-statement input are rejected), one JSON envelope out. Write the
+SQL to a file first, then invoke the wrapper.
+
 **Investigate if user opened PRs in June 2025:**
 
-```python
-from google.cloud import bigquery
-from google.oauth2 import service_account
+Write `query.sql`:
 
-# Initialize client (see Setup section for credentials)
-credentials = service_account.Credentials.from_service_account_file(
-    'path/to/credentials.json',
-    scopes=['https://www.googleapis.com/auth/bigquery']
-)
-client = bigquery.Client(credentials=credentials, project=credentials.project_id)
-
-# Query for PR events
-query = """
+```sql
 SELECT
     created_at,
-    repo.name,
+    repo.name AS repo_name,
+    actor.login AS actor_login,
     JSON_EXTRACT_SCALAR(payload, '$.pull_request.number') as pr_number,
     JSON_EXTRACT_SCALAR(payload, '$.pull_request.title') as pr_title,
     JSON_EXTRACT_SCALAR(payload, '$.action') as action
@@ -102,13 +98,18 @@ WHERE
     AND repo.name = 'target/repository'
     AND type = 'PullRequestEvent'
 ORDER BY created_at
-"""
-
-results = client.query(query)
-for row in results:
-    print(f"{row.created_at}: PR #{row.pr_number} - {row.action}")
-    print(f"  Title: {row.pr_title}")
 ```
+
+Then run it:
+
+```bash
+libexec/raptor-bq-query --query-file query.sql --output rows.json
+```
+
+`rows.json` holds the envelope: `{"rows": [...], "row_count": N,
+"job": {"job_id": ..., "total_bytes_processed": ...,
+"total_bytes_billed": ..., "cache_hit": ...}, "dry_run": false}`.
+Without `--output`, the envelope prints on stdout.
 
 **Expected Output (if PR exists)**:
 ```
@@ -132,27 +133,28 @@ for row in results:
    - Create a service account with `BigQuery User` role
    - Download JSON credentials file
 
-2. **Install BigQuery Client**:
+2. **Install BigQuery Client** (used by the wrapper under the hood):
 ```bash
 pip install google-cloud-bigquery google-auth
 ```
 
-### Initialize Client
+### Credentials
 
-```python
-from google.cloud import bigquery
-from google.oauth2 import service_account
+Set `GOOGLE_APPLICATION_CREDENTIALS` to the service-account key file
+path (or the inline JSON itself). Scope the service account to the
+read-only `BigQuery User` role — that credential boundary, not the
+wrapper's statement validation, is what makes this surface read-only.
 
-credentials = service_account.Credentials.from_service_account_file(
-    'path/to/credentials.json',
-    scopes=['https://www.googleapis.com/auth/bigquery']
-)
+### Egress posture
 
-client = bigquery.Client(
-    credentials=credentials,
-    project=credentials.project_id
-)
-```
+By default the wrapper runs the BigQuery client in a network-pinned
+sandbox: the only reachable hosts are
+`{bigquery.googleapis.com, oauth2.googleapis.com, www.googleapis.com}`
+plus the `token_uri` host declared in the key file. The operator can
+replace the allowlist via `~/.config/raptor/bq-proxy-hosts.json`
+(`{"hosts": [...]}`), and `--no-sandbox` falls back to the host's
+ambient network (needed for gcloud ADC / metadata-server credentials,
+which are unreachable inside the sandbox).
 
 **Free Tier**: Google provides 1 TB of data processed per month free.
 
@@ -168,41 +170,19 @@ BigQuery charges **$6.25 per TiB** of data scanned (after the 1 TiB free tier). 
 
 **CRITICAL RULE**: Run a dry run to estimate costs before executing any query against GitHub Archive production tables.
 
-```python
-from google.cloud import bigquery
-
-def estimate_gharchive_cost(query: str) -> dict:
-    """Estimate cost before running GitHub Archive query."""
-    client = bigquery.Client()
-
-    # Dry run - validates query and returns bytes to scan
-    dry_run_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
-    job = client.query(query, job_config=dry_run_config)
-
-    bytes_processed = job.total_bytes_processed
-    gb_processed = bytes_processed / (1024**3)
-    tib_processed = bytes_processed / (1024**4)
-    estimated_cost = tib_processed * 6.25
-
-    return {
-        'bytes': bytes_processed,
-        'gigabytes': round(gb_processed, 2),
-        'tib': round(tib_processed, 4),
-        'estimated_cost_usd': round(estimated_cost, 4)
-    }
-
-# Example: Always check cost before running
-estimate = estimate_gharchive_cost(your_query)
-print(f"Cost estimate: {estimate['gigabytes']} GB → ${estimate['estimated_cost_usd']}")
-
-if estimate['estimated_cost_usd'] > 1.0:
-    print("⚠️ HIGH COST QUERY - Review optimization before proceeding")
-```
-
-**Command-line dry run**:
 ```bash
-bq query --dry_run --use_legacy_sql=false 'YOUR_QUERY_HERE' 2>&1 | grep "bytes"
+libexec/raptor-bq-query --query-file query.sql --dry-run
 ```
+
+Output:
+
+```json
+{"dry_run": true, "total_bytes_processed": 128849018880, "gigabytes_processed": 120.0, "estimated_cost_usd": 0.7324}
+```
+
+If `estimated_cost_usd` exceeds $1.00, review the optimization
+techniques below before proceeding (and see the ask-the-user
+thresholds in the next section).
 
 ### When to Ask the User About Costs
 
@@ -318,46 +298,23 @@ LIMIT 100
 
 ### Safe Query Execution Template
 
-Use this template for all GitHub Archive queries in production:
+Use this sequence for all GitHub Archive queries in production:
 
-```python
-def safe_gharchive_query(query: str, max_cost_usd: float = 1.0):
-    """Execute GitHub Archive query with cost controls."""
-    client = bigquery.Client()
+```bash
+# Step 1: dry-run estimate (validates the query, scans nothing)
+libexec/raptor-bq-query --query-file query.sql --dry-run
 
-    # Step 1: Dry run estimate
-    dry_run_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
-    dry_job = client.query(query, job_config=dry_run_config)
+# Step 2: check the printed estimated_cost_usd against your budget
+#         (ask the user per the thresholds above if it's high)
 
-    bytes_processed = dry_job.total_bytes_processed
-    gb = bytes_processed / (1024**3)
-    estimated_cost = (bytes_processed / (1024**4)) * 6.25
-
-    print(f"📊 Estimate: {gb:.2f} GB → ${estimated_cost:.4f}")
-
-    # Step 2: Check budget
-    if estimated_cost > max_cost_usd:
-        raise ValueError(
-            f"Query exceeds ${max_cost_usd} budget (estimated ${estimated_cost:.2f}). "
-            f"Optimize query or increase max_cost_usd parameter."
-        )
-
-    # Step 3: Execute with safety limit
-    job_config = bigquery.QueryJobConfig(
-        maximum_bytes_billed=int(bytes_processed * 1.2)  # 20% buffer
-    )
-
-    print(f"✅ Executing query (max ${estimated_cost:.2f})...")
-    return client.query(query, job_config=job_config).result()
-
-# Usage
-results = safe_gharchive_query("""
-    SELECT created_at, repo.name, actor.login
-    FROM `githubarchive.day.20250615`
-    WHERE repo.name = 'aws/aws-toolkit-vscode'
-        AND type = 'PushEvent'
-""", max_cost_usd=0.50)
+# Step 3: execute with a bytes-billed safety cap — the job FAILS
+#         rather than bills more than this
+libexec/raptor-bq-query --query-file query.sql --max-bytes-billed 100000000000 --output rows.json
 ```
+
+The wrapper always applies a `maximum_bytes_billed` cap — the default
+is 200 GB (~$1.14); tighten it to the dry-run estimate plus ~20%
+headroom, or raise it explicitly for deliberately broad scans.
 
 ### Common Investigation Patterns: Cost Comparison
 
@@ -574,13 +531,14 @@ ORDER BY created_at
 
 **Scenario**: Media claims attacker submitted a PR in "late June" containing malicious code, but PR is now deleted and cannot be found on github.com.
 
-**Step 1: Query Archive**
-```python
-query = """
+**Step 1: Query Archive** — write the SQL, then run it through the
+wrapper:
+
+```sql
 SELECT
     type,
     created_at,
-    repo.name,
+    repo.name AS repo_name,
     JSON_EXTRACT_SCALAR(payload, '$.action') as action,
     JSON_EXTRACT_SCALAR(payload, '$.pull_request.number') as pr_number,
     JSON_EXTRACT_SCALAR(payload, '$.pull_request.title') as pr_title
@@ -590,22 +548,16 @@ WHERE
     AND repo.name = 'target/repository'
     AND type = 'PullRequestEvent'
 ORDER BY created_at
-"""
-
-results = client.query(query)
-pr_events = list(results)
 ```
 
-**Step 2: Analyze Results**
-```python
-if not pr_events:
-    print("❌ CLAIM DISPROVEN: No PR activity found in June 2025")
-else:
-    for event in pr_events:
-        print(f"✓ VERIFIED: PR #{event.pr_number} {event.action} on {event.created_at}")
-        print(f"  Title: {event.pr_title}")
-        print(f"  Repo: {event.repo_name}")
+```bash
+libexec/raptor-bq-query --query-file q-deleted-prs.sql --output rows.json
 ```
+
+**Step 2: Analyze Results** — read `rows.json`:
+- `"row_count": 0` → Claim disproven: no PR activity found in June 2025
+- rows present → Verified: each row's `pr_number` / `action` /
+  `created_at` / `pr_title` documents the PR lifecycle
 
 **Evidence Validation**:
 - **Claim TRUE**: Archive shows `PullRequestEvent` with `action='opened'`
@@ -619,13 +571,12 @@ else:
 **Scenario**: Threat actor creates staging repository, pushes malicious code, then deletes repo to cover tracks.
 
 **Step 1: Find Repository Activity**
-```python
-query = """
+```sql
 SELECT
     type,
     created_at,
     JSON_EXTRACT_SCALAR(payload, '$.ref') as ref,
-    JSON_EXTRACT_SCALAR(payload, '$.repository.name') as repo_name,
+    repo.name AS repo_name,
     payload
 FROM `githubarchive.day.2025*`
 WHERE
@@ -636,28 +587,27 @@ WHERE
         OR repo.name LIKE 'threat-actor/staging-repo'
     )
 ORDER BY created_at
-"""
-
-results = client.query(query)
 ```
 
-**Step 2: Extract Commit SHAs**
-```python
-import json
+```bash
+libexec/raptor-bq-query --query-file q-staging-repo.sql --output rows.json
+```
 
-commits = []
-for row in results:
-    if row.type == 'PushEvent':
-        payload_data = json.loads(row.payload)
-        for commit in payload_data.get('commits', []):
-            commits.append({
-                'sha': commit['sha'],
-                'message': commit['message'],
-                'timestamp': row.created_at
-            })
+**Step 2: Extract Commit SHAs** — unnest in SQL rather than
+post-processing, so the SHAs land directly in the output rows:
 
-for c in commits:
-    print(f"{c['timestamp']}: {c['sha'][:8]} - {c['message']}")
+```sql
+SELECT
+    created_at,
+    JSON_EXTRACT_SCALAR(commit, '$.sha') as commit_sha,
+    JSON_EXTRACT_SCALAR(commit, '$.message') as commit_message
+FROM `githubarchive.day.2025*`,
+UNNEST(JSON_EXTRACT_ARRAY(payload, '$.commits')) as commit
+WHERE
+    actor.login = 'threat-actor'
+    AND type = 'PushEvent'
+    AND repo.name LIKE 'threat-actor/staging-repo'
+ORDER BY created_at
 ```
 
 **Evidence Recovery**:
@@ -757,12 +707,11 @@ ORDER BY created_at
 **Scenario**: Suspicious commits appear under automation account name. Determine if they came from legitimate GitHub Actions workflow execution or direct API abuse with compromised token.
 
 **Step 1: Search for Workflow Events During Suspicious Window**
-```python
-query = """
+```sql
 SELECT
     type,
     created_at,
-    actor.login,
+    actor.login AS actor_login,
     JSON_EXTRACT_SCALAR(payload, '$.workflow_run.name') as workflow_name,
     JSON_EXTRACT_SCALAR(payload, '$.workflow_run.head_sha') as commit_sha,
     JSON_EXTRACT_SCALAR(payload, '$.workflow_run.conclusion') as conclusion
@@ -773,18 +722,18 @@ WHERE
     AND created_at >= '2025-07-13T20:25:00Z'
     AND created_at <= '2025-07-13T20:35:00Z'
 ORDER BY created_at
-"""
+```
 
-workflow_events = list(client.query(query))
+```bash
+libexec/raptor-bq-query --query-file q-workflow-window.sql --output workflow-window.json
 ```
 
 **Step 2: Establish Baseline Pattern**
-```python
-baseline_query = """
+```sql
 SELECT
     type,
     created_at,
-    actor.login,
+    actor.login AS actor_login,
     JSON_EXTRACT_SCALAR(payload, '$.workflow_run.name') as workflow_name
 FROM `githubarchive.day.20250713`
 WHERE
@@ -792,23 +741,19 @@ WHERE
     AND actor.login = 'automation-account'
     AND type = 'WorkflowRunEvent'
 ORDER BY created_at
-"""
+```
 
-baseline = list(client.query(baseline_query))
-print(f"Total workflows for day: {len(baseline)}")
+```bash
+libexec/raptor-bq-query --query-file q-workflow-baseline.sql --output workflow-baseline.json
 ```
 
 **Step 3: Analyze Results**
-```python
-if not workflow_events:
-    print("🚨 DIRECT API ATTACK DETECTED")
-    print("No WorkflowRunEvent during suspicious commit window")
-    print("Commit was NOT from legitimate workflow execution")
-else:
-    print("✓ Legitimate workflow execution detected")
-    for event in workflow_events:
-        print(f"{event.created_at}: {event.workflow_name} - {event.conclusion}")
-```
+- `workflow-window.json` has `"row_count": 0` → direct API attack:
+  no WorkflowRunEvent during the suspicious commit window, so the
+  commit was NOT from legitimate workflow execution
+- rows present → legitimate workflow execution; each row's
+  `workflow_name` / `conclusion` / `created_at` documents the run
+- compare against the baseline file's row count and timing cluster
 
 **Expected Results if Legitimate Workflow**:
 ```
@@ -828,6 +773,22 @@ else:
 **Real Example**: Amazon Q investigation needed to determine if malicious commit `678851bbe9776228f55e0460e66a6167ac2a1685` (pushed July 13, 2025 20:30:24 UTC by `aws-toolkit-automation`) came from compromised workflow or direct API abuse. GitHub Archive query showed ZERO `WorkflowRunEvent` or `WorkflowJobEvent` records during the 20:25-20:35 UTC window. Baseline analysis revealed the same automation account had 18 workflows that day, all clustered in 20:48-21:02 UTC. The temporal gap and complete workflow absence during the malicious commit proved direct API attack, not workflow compromise.
 
 ## Troubleshooting
+
+**Wrapper errors** (`raptor-bq-query` prints one structured JSON line
+on stderr: `{"error": "<kind>", "message": ..., "exit_code": N}`):
+- exit 3 `validation` — query rejected (not SELECT/WITH, or
+  multi-statement); the wrapper is read-only by design
+- exit 5 `dependency` — `pip install google-cloud-bigquery google-auth`
+- exit 6 `credentials` — set `GOOGLE_APPLICATION_CREDENTIALS`; in
+  sandboxed (default) mode gcloud ADC is unavailable, use a key file
+- exit 7 `query` — BigQuery API error, including the
+  `--max-bytes-billed` cap firing; dry-run and re-size the cap
+- exit 8 `timeout` — raise `--timeout` or narrow the query
+- exit 9 `sandbox` — sandbox could not launch; `--no-sandbox` runs
+  unpinned as a fallback
+- a `403 Forbidden` from inside the sandbox that names a host means
+  the egress allowlist denied it — check
+  `~/.config/raptor/bq-proxy-hosts.json`
 
 **Permission denied errors**:
 - Verify service account has `BigQuery User` role
@@ -900,12 +861,11 @@ ORDER BY created_at
 ```
 
 **Step 3: Bulk Recovery Query**
-```python
-query = """
+```sql
 SELECT
     created_at,
-    actor.login,
-    repo.name,
+    actor.login AS actor_login,
+    repo.name AS repo_name,
     JSON_EXTRACT_SCALAR(payload, '$.before') as deleted_sha,
     JSON_EXTRACT_SCALAR(payload, '$.ref') as branch
 FROM `githubarchive.year.2024`
@@ -913,21 +873,16 @@ WHERE
     type = 'PushEvent'
     AND JSON_EXTRACT_SCALAR(payload, '$.size') = '0'
     AND repo.name LIKE 'target-org/%'
-"""
-
-results = client.query(query)
-deleted_commits = []
-for row in results:
-    deleted_commits.append({
-        'timestamp': row.created_at,
-        'actor': row.actor_login,
-        'repo': row.repo_name,
-        'deleted_sha': row.deleted_sha,
-        'branch': row.branch
-    })
-
-print(f"Found {len(deleted_commits)} force-pushed commits to investigate")
 ```
+
+```bash
+libexec/raptor-bq-query --query-file q-force-pushes.sql --dry-run
+libexec/raptor-bq-query --query-file q-force-pushes.sql --output force-pushes.json
+```
+
+The envelope's `row_count` is the number of force-pushed commits to
+investigate; each row carries the recoverable `deleted_sha`. (Year
+tables are large — always dry-run first.)
 
 **Evidence Recovery**:
 - **`before` SHA**: The commit that was "deleted" by the force push

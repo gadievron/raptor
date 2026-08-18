@@ -220,8 +220,7 @@ class TestClosureTripwire:
         lexical bodies — not before."""
         summary = build_baseline_summary()
         assert parity_criterion_met(summary) is False, (
-            "Parity gate cleared on the baseline — re-read "
-            "docs/sanitizer-cut-parity/HORIZON.md before removing the "
-            "lexical fallback; the gate still requires two real "
-            "/agentic windows."
+            "Parity gate cleared on the baseline — the gate still "
+            "requires two real /agentic windows before removing the "
+            "lexical fallback."
         )

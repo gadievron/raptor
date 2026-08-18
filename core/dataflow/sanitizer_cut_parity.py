@@ -118,6 +118,7 @@ class ParityRecord:
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "ParityRecord":
+        verdict = d.get("value_bound_verdict", VERDICT_UNRESOLVED)
         return cls(
             finding_id=d["finding_id"],
             file=d.get("file", ""),
@@ -127,8 +128,13 @@ class ParityRecord:
             sink_line=_safe_int(d.get("sink_line", 0)),
             kind=d.get("kind", ""),
             lexical_suppressed=bool(d["lexical_suppressed"]),
-            value_bound_verdict=d.get("value_bound_verdict", VERDICT_UNRESOLVED),
-            value_bound_suppressed=bool(d["value_bound_suppressed"]),
+            value_bound_verdict=verdict,
+            # Re-derived from the verdict, never read from the stored
+            # field: ``value_bound_suppressed`` must not drift from
+            # ``value_bound_verdict`` (build_parity_record guarantees
+            # this at emission; an externally edited record must not
+            # smuggle a contradictory boolean past the invariant).
+            value_bound_suppressed=(verdict == VERDICT_SUPPRESS),
             label=d.get("label"),
             timestamp=d.get("timestamp"),
         )

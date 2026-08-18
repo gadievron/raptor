@@ -1,0 +1,238 @@
+{
+  "name": "linux_kernel",
+  "description": "Linux-kernel API vocabulary for the mechanical checkers (condition_smt, prefilter). Loaded ONLY when the target looks like a kernel tree / module (core/audit/vocab_packs.py gating) and merged with the study-learned DomainVocabulary. These names used to be hardcoded inside the checkers for every target; the hardcoded sets are now universal-libc seeds plus a few marked kernel exemplars, and this pack carries the kernel bulk. Project-specific names should come from the study loop's domain-model.json, not from growing this file.",
+  "allocators": [
+    "kcalloc",
+    "kvmalloc",
+    "kvzalloc",
+    "vzalloc",
+    "vmalloc",
+    "krealloc",
+    "devm_kzalloc",
+    "devm_kmalloc",
+    "alloc_skb",
+    "alloc_netdev",
+    "alloc_etherdev",
+    "kstrdup",
+    "kstrndup",
+    "kmemdup",
+    "kasprintf",
+    "create_workqueue",
+    "alloc_workqueue"
+  ],
+  "deallocators": [
+    "kvfree",
+    "vfree",
+    "kfree_skb",
+    "free_netdev",
+    "kfree_sensitive",
+    "devm_kfree",
+    "kfree_rcu",
+    "kvfree_rcu",
+    "destroy_workqueue"
+  ],
+  "lock_pairs": [
+    [
+      "down_read",
+      "up_read"
+    ],
+    [
+      "down_write",
+      "up_write"
+    ],
+    [
+      "read_lock",
+      "read_unlock"
+    ],
+    [
+      "read_lock_irq",
+      "read_unlock"
+    ],
+    [
+      "read_lock_irqsave",
+      "read_unlock"
+    ],
+    [
+      "read_lock_bh",
+      "read_unlock"
+    ],
+    [
+      "write_lock",
+      "write_unlock"
+    ],
+    [
+      "write_lock_irq",
+      "write_unlock"
+    ],
+    [
+      "write_lock_irqsave",
+      "write_unlock"
+    ],
+    [
+      "write_lock_bh",
+      "write_unlock"
+    ],
+    [
+      "raw_spin_lock",
+      "raw_spin_unlock"
+    ],
+    [
+      "raw_spin_lock_irq",
+      "raw_spin_unlock"
+    ],
+    [
+      "raw_spin_lock_irqsave",
+      "raw_spin_unlock"
+    ],
+    [
+      "lock_sock",
+      "release_sock"
+    ],
+    [
+      "lock_sock_nested",
+      "release_sock"
+    ],
+    [
+      "task_lock",
+      "task_unlock"
+    ],
+    [
+      "local_irq_save",
+      "local_irq_restore"
+    ],
+    [
+      "local_irq_disable",
+      "local_irq_enable"
+    ],
+    [
+      "preempt_disable",
+      "preempt_enable"
+    ]
+  ],
+  "callback_registers": [
+    "timer_setup",
+    "setup_timer",
+    "INIT_WORK",
+    "INIT_DELAYED_WORK",
+    "init_waitqueue_func_entry",
+    "tasklet_init",
+    "hrtimer_init",
+    "mod_timer",
+    "add_timer",
+    "schedule_work",
+    "schedule_delayed_work",
+    "queue_work"
+  ],
+  "callback_cancels": [
+    "del_timer_sync",
+    "del_timer",
+    "timer_delete_sync",
+    "cancel_work_sync",
+    "cancel_delayed_work_sync",
+    "flush_work",
+    "flush_delayed_work",
+    "tasklet_kill",
+    "hrtimer_cancel",
+    "cancel_work",
+    "remove_wait_queue"
+  ],
+  "nullable_returns": [
+    "kobj_to_dev",
+    "of_find_node_by_name",
+    "of_get_child_by_name",
+    "dev_get_drvdata",
+    "platform_get_resource",
+    "request_firmware",
+    "dma_alloc_coherent",
+    "get_zeroed_page",
+    "__get_free_pages"
+  ],
+  "auth_predicates": {
+    "ns_capable": "capability",
+    "file_ns_capable": "capability",
+    "ptrace_has_cap": "capability",
+    "has_ns_capability": "capability",
+    "inode_permission": "permission",
+    "generic_permission": "permission",
+    "may_open": "permission",
+    "uid_eq": "uid",
+    "gid_eq": "uid",
+    "current_uid": "uid",
+    "current_euid": "uid",
+    "from_kuid": "uid",
+    "from_kgid": "uid",
+    "ptrace_may_access": "ptrace",
+    "__ptrace_may_access": "ptrace"
+  },
+  "security_fields": [
+    "cred",
+    "suid",
+    "fsuid",
+    "sgid",
+    "fsgid",
+    "cap_effective",
+    "cap_permitted",
+    "cap_inheritable",
+    "mm",
+    "dumpable",
+    "security",
+    "seccomp",
+    "flags",
+    "personality",
+    "loginuid",
+    "sessionid"
+  ],
+  "boundary_transfers": [
+    "__copy_from_user",
+    "__copy_to_user",
+    "_copy_from_iter",
+    "_copy_to_iter"
+  ],
+  "collection_inserts": [
+    "list_add",
+    "list_add_tail",
+    "list_add_rcu",
+    "hlist_add_head",
+    "hlist_add_head_rcu",
+    "skb_queue_tail",
+    "skb_queue_head",
+    "sk_add_node",
+    "rb_insert_color",
+    "radix_tree_insert",
+    "xa_store",
+    "idr_alloc",
+    "kfifo_in"
+  ],
+  "collection_removes": [
+    "list_del",
+    "list_del_init",
+    "list_del_rcu",
+    "hlist_del",
+    "hlist_del_rcu",
+    "skb_dequeue",
+    "skb_unlink",
+    "sk_del_node_init",
+    "rb_erase",
+    "radix_tree_delete",
+    "xa_erase",
+    "idr_remove",
+    "kfifo_out"
+  ],
+  "cleanup_calls": [
+    "kfree_skb",
+    "consume_skb",
+    "dev_kfree_skb",
+    "kobject_put",
+    "fput",
+    "put_page",
+    "unlock_page",
+    "rcu_read_unlock",
+    "read_unlock",
+    "write_unlock",
+    "up_read",
+    "up_write",
+    "kvfree",
+    "vfree",
+    "kfree_sensitive"
+  ]
+}

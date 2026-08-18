@@ -12,6 +12,7 @@
 // engine/coccinelle/source_intel/allocation/double_free.cocci
 // which enumerates all free sites for context — this rule detects
 // the actual bug pattern.
+// @role: verification
 
 // Kernel: kfree/kvfree/vfree double-free
 @kfree_double@
@@ -19,10 +20,13 @@ expression E;
 position p1, p2;
 @@
 
+// @vocab: deallocators
 \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E@p1);
+// @vocab: allocators
 ... when != E = \(\(kmalloc\|kzalloc\|kcalloc\|kvmalloc\|vzalloc\|vmalloc\)(...)\|NULL\)
     when != kfree_rcu(E, ...)
     when != return ...;
+// @vocab: deallocators
 * \(kfree\|kvfree\|vfree\|kfree_sensitive\)(E@p2);
 
 @script:python@

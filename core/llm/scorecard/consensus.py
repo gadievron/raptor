@@ -83,9 +83,9 @@ def record_consensus_outcomes(
     and prefilter signals share the same cell.
 
     Failure path: any per-event ``record_event`` exception is logged
-    at debug level and swallowed; one bad event must not abort the
+    at WARNING level and swallowed; one bad event must not abort the
     whole batch and must never block the calling orchestrator's
-    flow. Operators who care will see the per-event log line.
+    flow. The per-event log line keeps a regressed producer visible.
     """
     if scorecard is None or not correlation:
         return 0

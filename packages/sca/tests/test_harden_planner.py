@@ -387,6 +387,38 @@ def test_promoted_skips_vulnerable_versions() -> None:
     assert cand.candidates_rejected_for_cve == 1
 
 
+def test_promoted_records_cleared_advisories() -> None:
+    """cve_cleared answers WHY this pin matters: the advisories on the
+    current version that the promotion clears."""
+    dep = _dep(version="1.0")
+    osv = _FakeOsv(advisories_by_version={
+        "1.0": [_adv("GHSA-old-1"), _adv("GHSA-old-2")],
+        "1.5": [],                      # clean target
+    })
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "promoted"
+    assert cand.cve_cleared == ["GHSA-old-1", "GHSA-old-2"]
+    assert cand.cve_remaining == []
+
+
+def test_degraded_excludes_residuals_from_cleared() -> None:
+    """An advisory still present on the degraded target is remaining,
+    not cleared."""
+    dep = _dep(version="1.0")
+    osv = _FakeOsv(advisories_by_version={
+        "1.0": [_adv("GHSA-shared", "medium"), _adv("GHSA-gone", "medium")],
+        "1.5": [_adv("GHSA-shared", "medium")],
+    })
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "degraded_safety"
+    assert cand.cve_remaining == ["GHSA-shared"]
+    assert cand.cve_cleared == ["GHSA-gone"]
+
+
 # ---------------------------------------------------------------------------
 # Status: review_required
 # ---------------------------------------------------------------------------
@@ -1197,6 +1229,24 @@ def test_report_lists_unsupported_section() -> None:
         text = out.read_text()
     assert "Library floor-raise unsupported" in text
     assert "**PyPI:pkg**" in text and "Dockerfile" in text
+
+
+def test_report_promoted_shows_cleared_advisories() -> None:
+    """The Promoted section must say WHY the pin matters — the
+    advisories it clears."""
+    import tempfile
+    from packages.sca.harden import _write_report
+    cand = HardenCandidate(
+        ecosystem="PyPI", name="pkg", manifest="requirements.txt",
+        pin_style="exact", from_version="1.0", to_version="1.5",
+        crosses_major=False, status="promoted",
+        cve_cleared=["GHSA-old-1", "GHSA-old-2"],
+    )
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "report.md"
+        _write_report(out, [cand], [], target_kind="application")
+        text = out.read_text()
+    assert "clears GHSA-old-1, GHSA-old-2" in text
 
 
 def test_target_kind_cli_flag_sets_env(monkeypatch) -> None:

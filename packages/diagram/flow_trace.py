@@ -7,11 +7,13 @@ with branches shown as splits and sink nodes styled distinctly.
 
 from __future__ import annotations
 
-from core.json import load_json
 from pathlib import Path
 from typing import Any
 
-from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+from core.json import load_json
+
+from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize_id as _sid
 
 
 def _step_label(step: dict[str, Any]) -> str:
@@ -118,7 +120,9 @@ def generate(data: dict[str, Any]) -> str:
 
 
     if not steps:
-        return f"flowchart TD\n    EMPTY[\"No steps in {trace_id}\"]"
+        # trace_id comes raw from the trace JSON; sanitize before it lands
+        # inside the quoted Mermaid label.
+        return f"flowchart TD\n    EMPTY[\"No steps in {_sanitize(trace_id)}\"]"
 
     lines = ["flowchart TD"]
     lines.append(f'    TITLE["{name}"]')

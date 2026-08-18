@@ -39,9 +39,9 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence
 from urllib.parse import urlparse
 
 from core.security.log_sanitisation import escape_nonprintable
@@ -49,10 +49,10 @@ from core.security.prompt_output_sanitise import sanitise_string
 
 from .findings import severity_rank
 from .models import (
-    Advisory,
-    HygieneFinding,
     REACHABILITY_LABELS,
     REACHABILITY_ORDER,
+    Advisory,
+    HygieneFinding,
     SupplyChainFinding,
     VulnFinding,
 )
@@ -73,6 +73,29 @@ logger = logging.getLogger(__name__)
 
 # Cap on the length of the truncated detail block (chars).
 _DETAIL_TRUNCATE = 600
+
+# Schemes allowed to render as clickable markdown autolinks. Anything
+# else (javascript:, data:, file:, vbscript:, custom handlers) renders
+# as inert code text so a hostile advisory/PoC URL can't smuggle an
+# executable link into the report.
+_LINK_SCHEME_ALLOWLIST = frozenset({"http", "https"})
+
+
+def _render_untrusted_url(url: str) -> str:
+    """Render an untrusted URL for markdown output.
+
+    http/https URLs become ``<url>`` autolinks (non-printables
+    escaped); every other scheme is demoted to inert code text —
+    visible for triage, never clickable.
+    """
+    try:
+        scheme = (urlparse(url).scheme or "").lower()
+    except ValueError:
+        scheme = ""
+    text = escape_nonprintable(url)
+    if scheme in _LINK_SCHEME_ALLOWLIST:
+        return f"<{text}>"
+    return "`" + text.replace("`", "'") + "`"
 
 # Severity → display label (Title Case per CLAUDE.md).
 _SEV_LABEL: dict[str, str] = {
@@ -103,11 +126,12 @@ def render_markdown_report(
     hygiene_findings: Sequence[HygieneFinding],
     supply_chain_findings: Sequence[SupplyChainFinding] = (),
     license_findings: Sequence = (),
-    cache_hits: Optional[int] = None,
-    cache_misses: Optional[int] = None,
-    cache_evictions: Optional[int] = None,
-    generated_at: Optional[datetime] = None,
+    cache_hits: int | None = None,
+    cache_misses: int | None = None,
+    cache_evictions: int | None = None,
+    generated_at: datetime | None = None,
     parse_failures: Sequence = (),
+    project_license: str | None = None,
 ) -> str:
     """Return the full report as a single markdown string."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -131,8 +155,9 @@ def render_markdown_report(
         key=lambda f: (-severity_rank(f.severity), f.kind, f.dependency.name),
     )
 
-    parts: List[str] = []
-    parts.append(_render_header(target, generated_at))
+    parts: list[str] = []
+    parts.append(_render_header(target, generated_at,
+                                project_license=project_license))
     parts.append(_render_summary(
         deps_analysed=deps_analysed,
         vuln_findings=sorted_vulns,
@@ -175,10 +200,10 @@ def _render_parse_failures_section(failures) -> str:
     """
     lines = [
         "## ⚠ Parser warnings\n",
-        f"_{len(failures)} manifest(s) could not be parsed —"
-        " the dependency set below DOES NOT include their"
-        " contents. Fix the underlying file or re-run for"
-        " complete coverage._\n",
+        (f"_{len(failures)} manifest(s) could not be parsed —"
+         " the dependency set below DOES NOT include their"
+         " contents. Fix the underlying file or re-run for"
+         " complete coverage._\n"),
     ]
     for f in failures:
         # ``sanitise_string`` defangs control bytes from the
@@ -231,11 +256,24 @@ def write_markdown_report(path: Path, content: str) -> None:
 # Sections
 # ---------------------------------------------------------------------------
 
-def _render_header(target: Path, generated_at: datetime) -> str:
-    return (
+def _render_header(
+    target: Path,
+    generated_at: datetime,
+    *,
+    project_license: str | None = None,
+) -> str:
+    header = (
         f"# SCA Report — {target}\n\n"
         f"_Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}_\n"
     )
+    if project_license:
+        # The scanned project's OWN manifest-declared license — a
+        # project-level fact, never attached to per-dep rows. The
+        # value comes from the scanned tree, so it's defanged like
+        # any other target-controlled string.
+        spdx = sanitise_string(project_license, max_chars=120)
+        header += f"_Project license: `{spdx}`_\n"
+    return header
 
 
 def _render_summary(
@@ -245,9 +283,9 @@ def _render_summary(
     hygiene_findings: Sequence[HygieneFinding],
     supply_chain_findings: Sequence[SupplyChainFinding],
     license_findings: Sequence = (),
-    cache_hits: Optional[int],
-    cache_misses: Optional[int],
-    cache_evictions: Optional[int] = None,
+    cache_hits: int | None,
+    cache_misses: int | None,
+    cache_evictions: int | None = None,
 ) -> str:
     # Aggregate severity across ALL finding types (vulns + supply-chain
     # + hygiene). Without this, the headline severity table only
@@ -433,7 +471,7 @@ def _render_vuln_section(findings: Sequence[VulnFinding]) -> str:
     The first advisory in each dep-group renders full; subsequent
     advisories pass ``omit_dep_shared=True`` to skip those lines.
     """
-    lines: List[str] = ["## Vulnerable dependencies\n"]
+    lines: list[str] = ["## Vulnerable dependencies\n"]
     groups = _group_vulns(findings)
     for group_title, grouped in _bucket_vuln_groups_by_reachability(groups):
         lines.append(f"### {group_title}\n")
@@ -456,16 +494,16 @@ def _render_vuln_section(findings: Sequence[VulnFinding]) -> str:
 
 def _bucket_vuln_groups_by_reachability(
     groups: Sequence[Sequence[VulnFinding]],
-) -> List[tuple[str, List[Sequence[VulnFinding]]]]:
+) -> list[tuple[str, list[Sequence[VulnFinding]]]]:
     """Partition vuln groups into operator-facing reachability buckets.
 
     Input ordering is already severity/KEV/EPSS sorted by the caller;
     preserve that order inside each bucket.
     """
-    buckets: List[tuple[str, List[Sequence[VulnFinding]]]] = [
+    buckets: list[tuple[str, list[Sequence[VulnFinding]]]] = [
         (title, []) for title, _ in _REACHABILITY_GROUPS
     ]
-    fallback: List[Sequence[VulnFinding]] = []
+    fallback: list[Sequence[VulnFinding]] = []
     for group in groups:
         verdict = getattr(group[0].reachability, "verdict", None)
         placed = False
@@ -483,15 +521,15 @@ def _bucket_vuln_groups_by_reachability(
 
 def _group_vulns(
     findings: Sequence[VulnFinding],
-) -> List[List[VulnFinding]]:
+) -> list[list[VulnFinding]]:
     """Bucket vuln findings by (name, version, primary advisory id).
 
     Ordering: groups are emitted in the order their first member
     appears in the input — preserves the caller's severity-sorted
     order without an extra sort pass.
     """
-    groups: dict[tuple, List[VulnFinding]] = {}
-    order: List[tuple] = []
+    groups: dict[tuple, list[VulnFinding]] = {}
+    order: list[tuple] = []
     for f in findings:
         primary_id = f.advisories[0].osv_id if f.advisories else ""
         key = (f.dependency.name, f.dependency.version or "", primary_id)
@@ -549,20 +587,23 @@ def _render_one_vuln(
     heading_level: int = 3,
 ) -> str:
     dep = f.dependency
-    primary: Optional[Advisory] = f.advisories[0] if f.advisories else None
+    primary: Advisory | None = f.advisories[0] if f.advisories else None
     label = _SEV_LABEL.get(f.severity, f.severity.title())
     # Dep name comes from the operator's manifest — sanitise defensively
     # against ANSI / BIDI / control-character smuggling in package names.
     heading = "#" * max(3, heading_level)
-    head = f"{heading} {label} — {escape_nonprintable(dep.name)} " \
-           f"{escape_nonprintable(dep.version or '*')}"
+    head_parts = [
+        (f"{heading} {label} — {escape_nonprintable(dep.name)} "
+         f"{escape_nonprintable(dep.version or '*')}"),
+    ]
     if f.fixed_version:
-        head += f" → fix: {escape_nonprintable(f.fixed_version)}"
+        head_parts.append(f" → fix: {escape_nonprintable(f.fixed_version)}")
     if f.suppressed:
         reason = escape_nonprintable(f.suppression_reason or 'no reason')
-        head += f" _(suppressed: {reason})_"
+        head_parts.append(f" _(suppressed: {reason})_")
+    head = "".join(head_parts)
 
-    bullets: List[str] = []
+    bullets: list[str] = []
     if primary is not None:
         aliases = ", ".join(escape_nonprintable(a) for a in primary.aliases[:3]) \
             if primary.aliases else "—"
@@ -595,13 +636,22 @@ def _render_one_vuln(
                 f"(<https://www.exploit-db.com/exploits/{ev.edb_ids[0]}>)"
             )
         if ev.msf_modules:
+            # Module names come from the exploit-evidence corpus —
+            # untrusted like every other advisory field. Escape
+            # non-printables and keep code-span rendering intact.
             msf_count = len(ev.msf_modules)
-            shown = ", ".join(f"`{m}`" for m in ev.msf_modules[:2])
+            shown = ", ".join(
+                "`" + escape_nonprintable(m).replace("`", "'") + "`"
+                for m in ev.msf_modules[:2]
+            )
             extra = f" (+{msf_count - 2} more)" if msf_count > 2 else ""
             bullets.append(f"- Metasploit: {shown}{extra}")
         if ev.github_poc_urls:
+            # PoC hrefs only autolink for http/https; other schemes
+            # render as inert text (see _render_untrusted_url).
             poc_count = len(ev.github_poc_urls)
-            shown = ", ".join(f"<{u}>" for u in ev.github_poc_urls[:2])
+            shown = ", ".join(_render_untrusted_url(u)
+                              for u in ev.github_poc_urls[:2])
             extra = f" (+{poc_count - 2} more)" if poc_count > 2 else ""
             bullets.append(f"- GitHub PoC: {shown}{extra}")
 
@@ -698,8 +748,8 @@ def _render_one_vuln(
                 return 5  # commits last — usually noise during triage
             return 4
         sorted_refs = sorted(primary.references, key=_ref_priority)
-        refs = ", ".join(f"<{escape_nonprintable(r)}>"
-                          for r in sorted_refs[:2])
+        refs = ", ".join(_render_untrusted_url(r)
+                         for r in sorted_refs[:2])
         bullets.append(f"- References: {refs}")
 
     detail = (primary.details if primary else "") or ""
@@ -718,8 +768,8 @@ def _render_one_vuln(
     return head + "\n" + "\n".join(bullets) + "\n"
 
 
-def _badges(f: VulnFinding) -> List[str]:
-    out: List[str] = []
+def _badges(f: VulnFinding) -> list[str]:
+    out: list[str] = []
     if f.cvss_score is not None and f.cvss_vector:
         out.append(f"CVSS {f.cvss_score:.1f}")
     if f.in_kev:
@@ -741,20 +791,20 @@ def _render_supply_chain_section(
     :func:`_render_vuln_section` for the rationale. Same dep at the
     same version flagged for the same kind across multiple manifests
     collapses to one section with a Sources list."""
-    lines: List[str] = ["## Supply-chain findings\n"]
+    lines: list[str] = ["## Supply-chain findings\n"]
     for group in _group_kinded(findings):
         lines.append(_render_one_kinded_group(group))
     return "\n".join(lines)
 
 
 def _render_hygiene_section(findings: Sequence[HygieneFinding]) -> str:
-    lines: List[str] = ["## Hygiene findings\n"]
+    lines: list[str] = ["## Hygiene findings\n"]
     for group in _group_kinded(findings):
         lines.append(_render_one_kinded_group(group))
     return "\n".join(lines)
 
 
-def _group_kinded(findings: Sequence) -> List[List]:
+def _group_kinded(findings: Sequence) -> list[list]:
     """Bucket hygiene/supply-chain findings by
     ``(kind, ecosystem, name, version, detail)``. Both shapes share
     the same fields we key on, so one helper covers both.
@@ -770,7 +820,7 @@ def _group_kinded(findings: Sequence) -> List[List]:
     actually want to remove. Ordering preserves first-seen so the
     caller's severity-sorted ordering survives."""
     groups: dict[tuple, list] = {}
-    order: List[tuple] = []
+    order: list[tuple] = []
     for f in findings:
         dep = f.dependency
         key = (
@@ -822,7 +872,7 @@ def _render_one_kinded_group(group: Sequence) -> str:
     # Surface it so the (possibly bumped) header severity is explained
     # rather than mysterious. Union across the group — escalation is keyed
     # on the same dep+kind, so members normally share reasons.
-    escalation_reasons: List[str] = []
+    escalation_reasons: list[str] = []
     for f in group:
         ev = getattr(f, "evidence", None)
         if isinstance(ev, dict):

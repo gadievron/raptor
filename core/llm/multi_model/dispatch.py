@@ -44,8 +44,9 @@ Cost-gate failure semantics (W36.B / F090):
 import logging
 import time
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any
 
 from core.llm.multi_model.types import (
     Aggregator,
@@ -68,9 +69,9 @@ def run_multi_model(
     models: Iterable[ModelHandle],
     adapter: ItemAdapter,
     *,
-    reviewers: Optional[Iterable[Reviewer]] = (),
-    aggregator: Optional[Aggregator] = None,
-    cost_gate: Optional[CostGate] = None,
+    reviewers: Iterable[Reviewer] | None = (),
+    aggregator: Aggregator | None = None,
+    cost_gate: CostGate | None = None,
     max_parallel: int = 3,
 ) -> MultiModelResult:
     """Run a task across N models in parallel and merge results.
@@ -116,8 +117,9 @@ def run_multi_model(
           no annotations but the run continues.
         - aggregator.aggregate() exceptions are caught, logged, and
           produce aggregation={} per the documented tri-state.
-        - cost_gate.budget_ratio() exceptions are caught once and gating
-          is disabled for the rest of the run.
+        - cost_gate.budget_ratio() exceptions are caught and suspend
+          gating for a cooldown (then re-probe automatically); a
+          non-numeric return permanently disables gating for the run.
     """
     # Materialize models to list once — defends against generators that
     # would be consumed by validation and leave dispatch with nothing.
@@ -160,7 +162,7 @@ def run_multi_model(
     _gate_permanent_off = [cost_gate is None]
     _gate_disabled_at: list = [None]  # None or monotonic timestamp of last transient fail
 
-    def over_budget(cutoff_ratio: float) -> tuple[bool, Optional[float]]:
+    def over_budget(cutoff_ratio: float) -> tuple[bool, float | None]:
         """Return (skip, current_ratio). ratio is None when gating is off."""
         if _gate_permanent_off[0]:
             return False, None
@@ -213,7 +215,7 @@ def run_multi_model(
     #   None  — aggregator not configured OR skipped for budget (see logs)
     #   {}    — aggregator ran but produced no usable output (errored or empty)
     #   {...} — aggregator succeeded
-    aggregation: Optional[Dict[str, Any]] = None
+    aggregation: dict[str, Any] | None = None
     if aggregator is not None:
         skip, spend = over_budget(aggregator.cutoff_ratio)
         if skip:
@@ -256,13 +258,48 @@ def run_multi_model(
 # ---------------------------------------------------------------------------
 
 
+def _warn_same_weights(names: Sequence[str]) -> None:
+    """Warn when two panel entries peel to the same underlying model.
+
+    Distinct model_name values can be the SAME weights reached over
+    two transports — a bare Bedrock id (``anthropic.claude-x``), its
+    regionally-prefixed form (``us.anthropic.claude-x``) and the
+    direct-API name (``claude-x``) all resolve to one model.  The
+    duplicate-name check above can't see that, and treating the pair
+    as independent opinions silently inflates consensus confidence.
+    Warning, not error: same-weights panels are legitimate for
+    transport A/B comparisons — the operator just shouldn't read the
+    agreement as diversity.
+    """
+    try:
+        from core.security.llm_family import bare_model_id
+    except Exception:  # noqa: BLE001 — advisory only
+        return
+    peeled: dict[str, list[str]] = {}
+    for name in names:
+        try:
+            bare = bare_model_id(name)
+        except Exception:  # noqa: BLE001 — advisory only
+            continue
+        if bare:
+            peeled.setdefault(bare, []).append(name)
+    for bare, group in sorted(peeled.items()):
+        if len(group) > 1:
+            logger.warning(
+                "multi-model panel: %s all resolve to the same "
+                "underlying model (%s) — their agreement is transport "
+                "consistency, not independent consensus",
+                group, bare,
+            )
+
+
 def _validate_inputs(
     task: TaskFn,
     models: Sequence[ModelHandle],
     adapter: ItemAdapter,
     reviewers: Sequence[Reviewer],
-    aggregator: Optional[Aggregator],
-    cost_gate: Optional[CostGate],
+    aggregator: Aggregator | None,
+    cost_gate: CostGate | None,
 ) -> None:
     if not callable(task):
         raise TypeError(f"task must be callable; got {type(task).__name__}")
@@ -286,6 +323,7 @@ def _validate_inputs(
     dupes = sorted(name for name, c in counts.items() if c > 1)
     if dupes:
         raise ValueError(f"duplicate model_name(s): {dupes}")
+    _warn_same_weights(names)
     for i, r in enumerate(reviewers):
         if not isinstance(r, Reviewer):
             raise TypeError(
@@ -319,7 +357,7 @@ def _check_cutoff_ratio(value: Any, label: str) -> None:
 
 
 def _check_unique_ids(
-    merged: List[Dict[str, Any]], adapter: ItemAdapter,
+    merged: list[dict[str, Any]], adapter: ItemAdapter,
 ) -> None:
     """Validate adapter.merge() output: ids must be unique non-empty strings.
 
@@ -328,7 +366,7 @@ def _check_unique_ids(
     by-id lookups. Raise to surface the adapter bug at the boundary
     instead of letting it propagate.
     """
-    ids: List[str] = []
+    ids: list[str] = []
     for idx, item in enumerate(merged):
         item_id = adapter.item_id(item)
         if not isinstance(item_id, str) or not item_id:
@@ -350,60 +388,83 @@ def _dispatch_parallel(
     task: TaskFn,
     models: Sequence[ModelHandle],
     max_parallel: int,
-) -> tuple[Dict[str, List[Dict[str, Any]]], List[str]]:
+    timeout: float = 600.0,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Run task in parallel across models. Returns (per_model_raw, failed).
 
     A model is "failed" if task() raised, OR if every entry in its result
     list is an error dict. Empty result lists are NOT failures (the model
     just had nothing to say).
     """
-    per_model_raw: Dict[str, List[Dict[str, Any]]] = {}
-    failed: List[str] = []
+    per_model_raw: dict[str, list[dict[str, Any]]] = {}
+    failed: list[str] = []
 
     workers = max(1, min(max_parallel, len(models)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(task, m): m for m in models}
-        for future in as_completed(futures):
-            model = futures[future]
-            name = model.model_name
-            try:
-                results = future.result()
-            except Exception as exc:
-                logger.warning(f"Model {name!r} task raised: {exc}", exc_info=True)
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+        try:
+            completed = as_completed(futures, timeout=timeout)
+            for future in completed:
+                model = futures[future]
+                name = model.model_name
+                try:
+                    results = future.result(timeout=timeout)
+                except Exception as exc:
+                    logger.warning(
+                        f"Model {name!r} task raised: {exc}",
+                        exc_info=True,
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            if not isinstance(results, list):
-                logger.warning(
-                    f"Model {name!r} task returned {type(results).__name__}, "
-                    f"expected list — treating as failure"
-                )
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+                if not isinstance(results, list):
+                    logger.warning(
+                        f"Model {name!r} task returned "
+                        f"{type(results).__name__}, "
+                        f"expected list — treating as failure"
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            non_dict = [type(r).__name__ for r in results if not isinstance(r, dict)]
-            if non_dict:
-                logger.warning(
-                    f"Model {name!r} task returned non-dict items "
-                    f"({non_dict[:3]}{'...' if len(non_dict) > 3 else ''}) — "
-                    f"treating as failure. Item contract is List[Dict[str, Any]]."
-                )
-                per_model_raw[name] = []
-                failed.append(name)
-                continue
+                non_dict = [
+                    type(r).__name__
+                    for r in results
+                    if not isinstance(r, dict)
+                ]
+                if non_dict:
+                    logger.warning(
+                        f"Model {name!r} task returned non-dict "
+                        f"items ({non_dict[:3]}"
+                        f"{'...' if len(non_dict) > 3 else ''}"
+                        f") — treating as failure. Item contract"
+                        f" is List[Dict[str, Any]]."
+                    )
+                    per_model_raw[name] = []
+                    failed.append(name)
+                    continue
 
-            per_model_raw[name] = results
-            if results and all(_is_error(r) for r in results):
-                failed.append(name)
+                per_model_raw[name] = results
+                if results and all(_is_error(r) for r in results):
+                    failed.append(name)
+        except TimeoutError:
+            # Mark models that didn't complete as failed.
+            for model in futures.values():
+                if model.model_name not in per_model_raw:
+                    logger.warning(
+                        "Model %r timed out after %.0fs",
+                        model.model_name, timeout,
+                    )
+                    per_model_raw[model.model_name] = []
+                    failed.append(model.model_name)
 
     return per_model_raw, failed
 
 
 def _filter_errors(
-    per_model_raw: Dict[str, List[Dict[str, Any]]],
-) -> Dict[str, List[Dict[str, Any]]]:
+    per_model_raw: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
     """Strip error entries before passing to adapter.merge / .correlate."""
     return {
         name: [r for r in results if not _is_error(r)]
@@ -417,10 +478,10 @@ def _is_error(item: Any) -> bool:
 
 
 def _apply_reviewer(
-    merged: List[Dict[str, Any]],
+    merged: list[dict[str, Any]],
     reviewer: Reviewer,
     adapter: ItemAdapter,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Run a reviewer and replace items by id.
 
     Items omitted from the reviewer's return keep their prior version.
@@ -433,7 +494,7 @@ def _apply_reviewer(
     # For ConditionalReviewer, the substrate restricts replacement to ids
     # that passed should_review. A buggy/malicious reviewer cannot sneak
     # changes onto items the condition rejected.
-    allowed_ids: Optional[set[str]] = None
+    allowed_ids: set[str] | None = None
     try:
         if isinstance(reviewer, ConditionalReviewer):
             applicable = [item for item in merged if reviewer.should_review(item)]
@@ -458,7 +519,7 @@ def _apply_reviewer(
         )
         return merged
 
-    by_id: Dict[str, Dict[str, Any]] = {
+    by_id: dict[str, dict[str, Any]] = {
         adapter.item_id(item): item for item in merged
     }
     for new_item in reviewed:
@@ -468,7 +529,19 @@ def _apply_reviewer(
                 f"({type(new_item).__name__}) — ignored"
             )
             continue
-        new_id = adapter.item_id(new_item)
+        try:
+            new_id = adapter.item_id(new_item)
+        except Exception as exc:  # noqa: BLE001 — reviewer output is untrusted
+            # Adapters implement item_id as plain dict-field access, so
+            # a reviewer item missing the id field raises KeyError.
+            # Per the docstring's contract, bad reviewer return shapes
+            # drop that item — they must not crash the run (matches
+            # the non-dict handling above).
+            logger.debug(
+                f"Reviewer {reviewer.name!r} returned item without a "
+                f"usable id ({type(exc).__name__}) — ignored"
+            )
+            continue
         if allowed_ids is not None and new_id not in allowed_ids:
             logger.debug(
                 f"ConditionalReviewer {reviewer.name!r} returned item "
@@ -488,5 +561,5 @@ def _apply_reviewer(
     return [by_id[adapter.item_id(orig)] for orig in merged]
 
 
-# _over_budget is now inlined inside run_multi_model() to capture
+# over_budget is now inlined inside run_multi_model() to capture
 # per-run gate state without mutating the external cost_gate object.

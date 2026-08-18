@@ -1,5 +1,12 @@
 """Tests for ``packages.sca.bump.policy`` — operator
-``.raptor-sca-bump.yml`` loading + behaviour."""
+``.raptor-sca-bump.yml`` loading + behaviour.
+
+The policy file ships inside the scanned repo and is honoured only on
+repo-trusted runs (its suppressions/thresholds can hide the repo's own
+outdated-pin findings — the scan-side suppression overlay's gate).
+Parsing/precedence tests therefore pass ``trust_repo=True``; the
+untrusted-run contract is pinned separately below.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +15,10 @@ from pathlib import Path
 import pytest
 
 from packages.sca.bump.policy import (
-    BumpPolicy, SkipRule, load_policy,
+    BumpPolicy,
+    SkipRule,
+    load_policy,
 )
-
 
 yaml = pytest.importorskip("yaml")
 
@@ -39,7 +47,7 @@ def test_load_from_github_subdir(tmp_path: Path) -> None:
     gh.mkdir(parents=True)
     (gh / "raptor-sca-bump-policy.yml").write_text(
         "thresholds:\n  block_on_major: true\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.block_on_major is True
 
 
@@ -50,7 +58,7 @@ def test_root_dotfile_wins_over_github_subdir(tmp_path: Path) -> None:
     gh.mkdir(parents=True)
     (gh / "raptor-sca-bump-policy.yml").write_text(
         "thresholds:\n  rapid_release_days: 99\n")
-    assert load_policy(tmp_path).thresholds.rapid_release_days == 7
+    assert load_policy(tmp_path, trust_repo=True).thresholds.rapid_release_days == 7
 
 
 def test_load_skip_by_locator(tmp_path: Path) -> None:
@@ -61,7 +69,7 @@ skip:
   - locator: actions/checkout
     reason: vendored fork
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert len(policy.skip) == 1
     rule = policy.skip[0]
     assert rule.locator == "actions/checkout"
@@ -76,7 +84,7 @@ skip:
   - kind: from_image
     reason: schema migration coordination required
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.skip[0].kind == "from_image"
 
 
@@ -101,7 +109,7 @@ skip:
   - locator: "actions/*"
     reason: pin all official actions manually
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     rule = policy.skip[0]
     assert rule.matches(candidate_kind="gha_uses",
                          candidate_locator="actions/checkout")
@@ -120,7 +128,7 @@ skip:
   - path: "test/data/**"
     reason: test fixtures are pinned deliberately
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     rule = policy.skip[0]
     assert rule.path == "test/data/**"
     assert rule.matches(
@@ -150,7 +158,7 @@ def test_path_only_rule_is_kept(tmp_path: Path) -> None:
 skip:
   - path: "test/data/**"
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert len(policy.skip) == 1
     assert policy.skip[0].path == "test/data/**"
     assert policy.skip[0].kind is None and policy.skip[0].locator is None
@@ -163,7 +171,7 @@ thresholds:
   rapid_release_days: 14
   block_on_major: true
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.rapid_release_days == 14
     assert policy.thresholds.block_on_major is True
 
@@ -177,7 +185,7 @@ def test_load_partial_thresholds_keep_defaults_for_missing(
 thresholds:
   rapid_release_days: 7
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.rapid_release_days == 7
     assert policy.thresholds.block_on_major is False
 
@@ -190,7 +198,7 @@ def test_malformed_yaml_returns_default(tmp_path: Path) -> None:
     """Malformed YAML → default policy + warning log. Bumper
     doesn't crash on a bad policy."""
     _write_policy(tmp_path, ":::: not valid yaml: : :\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.skip == []
     assert policy.thresholds.rapid_release_days == 30
 
@@ -198,7 +206,7 @@ def test_malformed_yaml_returns_default(tmp_path: Path) -> None:
 def test_non_mapping_top_level_returns_default(tmp_path: Path) -> None:
     """``[a, b, c]`` at top level → default (we expect a dict)."""
     _write_policy(tmp_path, "- just\n- a list\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.skip == []
 
 
@@ -211,7 +219,7 @@ skip:
   - {}
   - locator: foo
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert len(policy.skip) == 1
     assert policy.skip[0].locator == "foo"
 
@@ -224,7 +232,7 @@ def test_negative_rapid_release_days_ignored(tmp_path: Path) -> None:
 thresholds:
   rapid_release_days: -1
 """)
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.rapid_release_days == 30
 
 
@@ -273,10 +281,11 @@ skip:
     reason: pinned for compat with old config
 """)
     # Stub HTTP / pypi for both upstreams.
-    from packages.sca.bump.tests.test_pr_comment import (
-        _StubHttp, _StubPyPI,
-    )
     from packages.sca.bump.orchestrator import run_bump
+    from packages.sca.bump.tests.test_pr_comment import (
+        _StubHttp,
+        _StubPyPI,
+    )
     http = _StubHttp({
         "https://api.github.com/repos/semgrep/semgrep/releases/latest":
             {"tag_name": "v1.119.0"},
@@ -291,7 +300,8 @@ skip:
             "25.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
         }},
     })
-    report = run_bump(tmp_path, http=http, pypi_client=pypi)
+    report = run_bump(tmp_path, http=http, pypi_client=pypi,
+                      trust_repo=True)
     # SEMGREP_VERSION is skipped; BLACK_VERSION is a candidate.
     arg_cands = [c for c in report.candidates if c.kind == "arg"]
     assert [c.locator for c in arg_cands] == ["BLACK_VERSION"]
@@ -318,10 +328,11 @@ skip:
   - path: "test/data/**"
     reason: fixtures pinned deliberately
 """)
-    from packages.sca.bump.tests.test_pr_comment import (
-        _StubHttp, _StubPyPI,
-    )
     from packages.sca.bump.orchestrator import run_bump
+    from packages.sca.bump.tests.test_pr_comment import (
+        _StubHttp,
+        _StubPyPI,
+    )
     http = _StubHttp({
         "https://api.github.com/repos/semgrep/semgrep/releases/latest":
             {"tag_name": "v1.119.0"},
@@ -336,7 +347,8 @@ skip:
             "25.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
         }},
     })
-    report = run_bump(tmp_path, http=http, pypi_client=pypi)
+    report = run_bump(tmp_path, http=http, pypi_client=pypi,
+                      trust_repo=True)
     # Root Dockerfile's ARG is a candidate; the test/data one is skipped.
     assert [c.locator for c in report.candidates if c.kind == "arg"] == [
         "SEMGREP_VERSION"]
@@ -359,11 +371,13 @@ def test_orchestrator_block_on_major_forces_review_to_block(
 thresholds:
   block_on_major: true
 """)
-    from packages.sca.bump.tests.test_pr_comment import (
-        _StubHttp, _StubPyPI,
-    )
     from packages.sca.bump.orchestrator import (
-        _VERDICT_BLOCK, run_bump,
+        _VERDICT_BLOCK,
+        run_bump,
+    )
+    from packages.sca.bump.tests.test_pr_comment import (
+        _StubHttp,
+        _StubPyPI,
     )
     http = _StubHttp({
         # Major bump 1.x → 2.x.
@@ -375,7 +389,8 @@ thresholds:
             "2.0.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
         }},
     })
-    report = run_bump(tmp_path, http=http, pypi_client=pypi)
+    report = run_bump(tmp_path, http=http, pypi_client=pypi,
+                      trust_repo=True)
     assert report.results[0].verdict == _VERDICT_BLOCK
 
 
@@ -383,31 +398,97 @@ def test_load_binary_capability_delta_default_off(tmp_path: Path) -> None:
     """Missing key → ``binary_capability_delta_enabled = False``."""
     from packages.sca.bump.policy import load_policy
     (tmp_path / ".raptor-sca-bump.yml").write_text("skip: []\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.binary_capability_delta_enabled is False
 
 
 def test_load_binary_capability_delta_enabled(tmp_path: Path) -> None:
-    """``binary_capability_delta: true`` → flag set to True."""
+    """``binary_capability_delta: true`` → flag set to True on a
+    repo-trusted run (the toggle is operator-only)."""
     from packages.sca.bump.policy import load_policy
     (tmp_path / ".raptor-sca-bump.yml").write_text(
         "binary_capability_delta: true\n",
     )
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.binary_capability_delta_enabled is True
+
+
+def test_load_binary_capability_delta_untrusted_ignored_and_warned(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A repo file requesting ``binary_capability_delta: true`` on an
+    untrusted run is ignored, with a warning naming the opt-in so the
+    operator can enable it deliberately."""
+    from packages.sca.bump.policy import load_policy
+    (tmp_path / ".raptor-sca-bump.yml").write_text(
+        "binary_capability_delta: true\n"
+        "skip: []\n",
+    )
+    with caplog.at_level("WARNING", logger="packages.sca.bump.policy"):
+        policy = load_policy(tmp_path)          # trust_repo defaults off
+    assert policy.binary_capability_delta_enabled is False
+    warned = [r for r in caplog.records
+              if "not repo-trusted" in r.getMessage()
+              and "--trust-repo" in r.getMessage()]
+    assert warned, "expected the not-repo-trusted warning with opt-in"
+
+
+def test_load_policy_untrusted_ignores_whole_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """On untrusted runs the WHOLE repo policy file is ignored —
+    ``skip:`` rules and thresholds included. A scanned repo's own
+    suppressions can hide its outdated-pin findings, so the file is
+    honoured only with the ``config`` trust marker / ``--trust-repo``
+    (matching the scan-side suppression overlay's gate)."""
+    from packages.sca.bump.policy import load_policy
+    (tmp_path / ".raptor-sca-bump.yml").write_text(
+        "binary_capability_delta: true\n"
+        "skip:\n"
+        "  - locator: actions/checkout\n"
+        "    reason: vendored\n"
+        "thresholds:\n"
+        "  rapid_release_days: 7\n"
+        "  block_on_major: true\n",
+    )
+    with caplog.at_level("WARNING", logger="packages.sca.bump.policy"):
+        policy = load_policy(tmp_path)
+    assert policy == BumpPolicy()
+    assert policy.binary_capability_delta_enabled is False
+    assert policy.skip == []
+    assert policy.thresholds.rapid_release_days == 30
+    assert policy.thresholds.block_on_major is False
+    assert any("not repo-trusted" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_load_binary_capability_delta_trusted_no_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Trusted run honours the toggle without the operator-only
+    warning."""
+    from packages.sca.bump.policy import load_policy
+    (tmp_path / ".raptor-sca-bump.yml").write_text(
+        "binary_capability_delta: true\n",
+    )
+    with caplog.at_level("WARNING", logger="packages.sca.bump.policy"):
+        policy = load_policy(tmp_path, trust_repo=True)
+    assert policy.binary_capability_delta_enabled is True
+    assert not [r for r in caplog.records
+                if "not repo-trusted" in r.getMessage()]
 
 
 def test_load_binary_capability_delta_truthy_non_bool_stays_off(
     tmp_path: Path,
 ) -> None:
     """Non-bool truthy values (``"yes"``, ``1``) don't enable the
-    flag — explicit ``true`` required. Defends against accidental
-    enables from sloppy YAML."""
+    flag — explicit ``true`` required even on trusted runs. Defends
+    against accidental enables from sloppy YAML."""
     from packages.sca.bump.policy import load_policy
     (tmp_path / ".raptor-sca-bump.yml").write_text(
         "binary_capability_delta: \"yes\"\n",
     )
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.binary_capability_delta_enabled is False
 
 
@@ -420,7 +501,7 @@ def test_block_on_minor_skew_default_disabled() -> None:
 def test_block_on_minor_skew_loaded_from_yaml(tmp_path: Path) -> None:
     _write_policy(tmp_path,
                    "thresholds:\n  block_on_minor_skew: 5\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.block_on_minor_skew == 5
 
 
@@ -430,7 +511,7 @@ def test_block_on_minor_skew_zero_is_explicit_off(tmp_path: Path) -> None:
     back to off."""
     _write_policy(tmp_path,
                    "thresholds:\n  block_on_minor_skew: 0\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.block_on_minor_skew == 0
 
 
@@ -439,5 +520,5 @@ def test_block_on_minor_skew_negative_ignored(tmp_path: Path) -> None:
     nonsensical — ignore and keep the default."""
     _write_policy(tmp_path,
                    "thresholds:\n  block_on_minor_skew: -1\n")
-    policy = load_policy(tmp_path)
+    policy = load_policy(tmp_path, trust_repo=True)
     assert policy.thresholds.block_on_minor_skew == 0

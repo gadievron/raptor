@@ -64,8 +64,6 @@ pipeline:
     - understand-map
     - scan-with-codeql
     - agentic-with-validate
-  estimated_cost_usd: [25, 50]
-  estimated_time_min: [40, 75]
 
 budget_defaults:
   typical_findings_count: 25

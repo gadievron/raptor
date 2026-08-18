@@ -28,15 +28,16 @@ Discovery sources (in walk order):
    the release driver; the Dockerfile's own ``--platform=`` may
    declare narrower targets that don't reflect production.
 
-4. **GHA ``docker/build-push-action`` step inputs** — the dominant
+4. **GitHub Actions** — ``.github/workflows/*.yml`` ``runs-on:``
+   values. Standard runner labels map to known platforms. Matrix
+   strategies (``strategy.matrix.platform``) multiply the set.
+
+5. **GHA ``docker/build-push-action`` step inputs** — the dominant
    modern multi-arch release pipeline. ``with: platforms:
    linux/amd64,linux/arm64`` declares the OUTPUT image's arches
    independent of ``runs-on:`` (which is the runner arch — usually
-   x86_64 + QEMU emulation for arm64).
-
-5. **GitHub Actions** — ``.github/workflows/*.yml`` ``runs-on:``
-   values. Standard runner labels map to known platforms. Matrix
-   strategies (``strategy.matrix.platform``) multiply the set.
+   x86_64 + QEMU emulation for arm64). Scanned per workflow file
+   right after that file's ``runs-on`` values.
 
 If no signal is found, the matrix defaults to
 ``{(x86_64, glibc 2.17)}`` (the manylinux2014 baseline — what
@@ -192,9 +193,11 @@ def _walk_dockerfile(
             known_stages.add(as_m.group(1))
         if image_ref in known_stages:
             continue
-        # Strip variant suffixes like ``-slim``, ``-alpine`` keep
-        # the distro lookup focused: ``python:3.13-slim-bookworm``
-        # is bookworm-based.
+        # Reduce the ref to a ``name:tag`` lookup key (digest +
+        # registry/namespace stripped). Variant suffixes like
+        # ``-slim`` are NOT stripped here — ``lookup_distro_libc``
+        # tolerates them and still resolves
+        # ``python:3.13-slim-bookworm`` as bookworm-based.
         distro_key = _from_image_to_distro(image_ref)
         libc = lookup_distro_libc(distro_key or image_ref)
         if libc is None:
@@ -253,6 +256,14 @@ def _walk_devcontainer(
     if isinstance(image, str):
         distro_key = _from_image_to_distro(image)
         libc = lookup_distro_libc(distro_key or image)
+        if libc is None:
+            logger.debug(
+                "platform_matrix: unknown libc for image %r (from %s)",
+                image, path,
+            )
+            # Still register the platform pair — libc=None means
+            # "we couldn't determine the libc, don't gate on it".
+            # Mirrors the Dockerfile walker.
         for arch in ("x86_64", "aarch64"):
             matrix.add(PlatformPair(
                 arch=arch, libc=libc,
@@ -626,8 +637,6 @@ def _add_runner(
 # ---------------------------------------------------------------------------
 # Top-level discovery
 # ---------------------------------------------------------------------------
-
-_DOCKERFILE_NAMES_RE = re.compile(r"^(Dockerfile|.*\.dockerfile)$|^Containerfile$")
 
 
 def _is_dockerfile(path: Path) -> bool:

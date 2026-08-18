@@ -6,33 +6,23 @@ description: |
   appears to enforce a boundary actually misses an edge case.
 
 signals:
-  paths:
-    - security/
-    - kernel/cred.c
-    - kernel/capability.c
-    - kernel/user_namespace.c
-    - fs/namespace.c
-    - net/socket.c
-  includes:
-    - linux/capability.h
-    - linux/cred.h
-    - linux/security.h
+  # Kernel signal bulk (security/ paths, linux/cred.h includes, the
+  # capable/ns_capable/... callees) lives in the linux_kernel profile
+  # pack (profiles/linux_kernel.yml), applied only on kernel targets.
+  # Universal POSIX privilege-management calls stay here; learned
+  # auth predicates arrive via the picker's DomainVocabulary
+  # supplements.
   function_keywords:
     - capable
     - permission
     - authoriz
     - privilege
   function_calls:
-    - capable
-    - ns_capable
-    - capable_setid
-    - inode_permission
-    - file_permission
-    - generic_permission
-    - security_capable
-    - cred_alive
-    - override_creds
-    - revert_creds
+    - setuid
+    - seteuid
+    - setresuid
+    - setgid
+    - setgroups
   cwes:
     - CWE-20    # improper input validation (often gated by auth)
     - CWE-269   # improper privilege management

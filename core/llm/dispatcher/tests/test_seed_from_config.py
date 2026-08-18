@@ -28,6 +28,7 @@ def _make_empty_store() -> CredentialStore:
         "groq": None,
         "together": None,
         "openrouter": None,
+        "orcarouter": None,
         "fireworks": None,
         "deepinfra": None,
         "perplexity": None,

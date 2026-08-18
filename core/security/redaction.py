@@ -128,7 +128,7 @@ def _redact_url(match: re.Match[str]) -> str:
 
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     redacted_pairs = [
-        (key, "[REDACTED]" if key.lower() in _SECRET_QUERY_KEYS else value)
+        (key, "[REDACTED]" if is_secret_field_name(key) else value)
         for key, value in query_pairs
     ]
     query = "&".join(
@@ -147,7 +147,7 @@ def _redact_url(match: re.Match[str]) -> str:
         fragment_pairs = parse_qsl(fragment, keep_blank_values=True)
         if fragment_pairs:
             fragment_pairs = [
-                (key, "[REDACTED]" if key.lower() in _SECRET_QUERY_KEYS else value)
+                (key, "[REDACTED]" if is_secret_field_name(key) else value)
                 for key, value in fragment_pairs
             ]
             fragment = "&".join(

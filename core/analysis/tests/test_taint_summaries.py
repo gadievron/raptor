@@ -1,10 +1,14 @@
 """Phase 13 — per-function taint summary tests."""
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+
 from core.analysis.python_module_callgraph import (
     build_python_module_callgraph,
 )
 from core.analysis.taint_summaries import (
+    _compute_one_summary,
     build_taint_summaries,
 )
 
@@ -303,3 +307,46 @@ class TestCoverage:
         )
         assert "compute" in summaries
         assert summaries["compute"].summary_unknown
+
+
+# ---------------------------------------------------------------------------
+# The ``source`` argument is compatibility-only — never read
+# ---------------------------------------------------------------------------
+
+
+SANITIZER_HELPER_SRC = (
+    "def helper(v):\n"
+    "    return html.escape(v)\n"
+    "\n"
+    "def handle(x):\n"
+    "    y = helper(x)\n"
+    "    return y\n"
+)
+
+
+class TestDeadSourceTextRemoved:
+    """AST and file path both come from the call graph;
+    ``build_taint_summaries``'s ``source`` argument is
+    compatibility-only and never read."""
+
+    def test_compute_one_summary_has_no_source_text_param(self):
+        params = inspect.signature(_compute_one_summary).parameters
+        assert "source_text" not in params
+
+    def test_source_argument_not_read(self):
+        # A Path that does not exist proves the argument is never
+        # dereferenced (it used to be read_text'd and discarded).
+        cg = build_python_module_callgraph(SANITIZER_HELPER_SRC)
+        assert cg is not None
+        summaries = build_taint_summaries(
+            cg, Path("/nonexistent/taint-summaries.py"),
+        )
+        assert "handle" in summaries
+
+    def test_summaries_behaviour_unchanged(self):
+        _, summaries = _summaries(SANITIZER_HELPER_SRC)
+        helper = summaries["helper"]
+        assert helper.param_taints_return(0)
+        assert ("html.escape", 0) in helper.return_sanitizers_for_param(0)
+        handle = summaries["handle"]
+        assert handle.param_taints_return(0)

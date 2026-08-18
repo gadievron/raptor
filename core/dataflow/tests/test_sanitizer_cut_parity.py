@@ -51,6 +51,27 @@ class TestRecord:
         r2 = ParityRecord.from_json(d)
         assert r2 == r
 
+    def test_from_json_rederives_suppressed_from_verdict(self):
+        # An externally edited record whose boolean contradicts its
+        # verdict must not smuggle the drift past the invariant:
+        # from_json re-derives value_bound_suppressed from the verdict.
+        d = _rec(lexical=False, verdict=VERDICT_NO_SUPPRESS).to_json()
+        d["value_bound_suppressed"] = True  # hand-edited drift
+        assert ParityRecord.from_json(d).value_bound_suppressed is False
+
+        d2 = _rec(lexical=False, verdict=VERDICT_SUPPRESS).to_json()
+        d2["value_bound_suppressed"] = False  # drift the other way
+        assert ParityRecord.from_json(d2).value_bound_suppressed is True
+
+    def test_from_json_missing_verdict_means_not_suppressed(self):
+        # No verdict field (legacy line) → unresolved → not suppressed,
+        # regardless of any stored boolean.
+        d = _rec(lexical=True, verdict=VERDICT_SUPPRESS).to_json()
+        del d["value_bound_verdict"]
+        r = ParityRecord.from_json(d)
+        assert r.value_bound_verdict == "unresolved"
+        assert r.value_bound_suppressed is False
+
     def test_jsonl_append_and_read(self, tmp_path):
         log = tmp_path / "parity.jsonl"
         r1 = _rec(fid="a", lexical=True, verdict=VERDICT_SUPPRESS)

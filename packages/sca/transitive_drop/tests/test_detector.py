@@ -759,3 +759,24 @@ def test_nuget_dep_disappears_from_all_tfms() -> None:
     )
     assert len(findings) == 1
     assert findings[0].transitive_status_in_latest == "removed"
+
+
+class TestAdapterMavenPurl:
+    def test_maven_purl_uses_slash_not_colon(self):
+        from packages.sca.transitive_drop.adapter import _make_finding
+        from packages.sca.transitive_drop.detector import DropOnBumpFinding
+
+        f = DropOnBumpFinding(
+            ecosystem="Maven",
+            transitive_name="org.apache.commons:commons-text",
+            transitive_version="1.9",
+            transitive_finding_severity="high",
+            parent_name="parent",
+            parent_current_version="1.0.0",
+            parent_latest_version="2.0.0",
+            transitive_status_in_latest="removed",
+            extra_name=None,
+        )
+        result = _make_finding(f)
+        assert "org.apache.commons/commons-text" in result.dependency.purl
+        assert ":" not in result.dependency.purl.split("pkg:maven/", 1)[-1].split("@")[0]

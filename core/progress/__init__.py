@@ -5,15 +5,16 @@ For operations that take >15 seconds.
 
 import locale
 import sys
+import threading
 import time
 from datetime import datetime
 from typing import Optional
 
 
-# Module-level "last stage that ran" — readable by out-of-band
+# Thread-local "last stage that ran" — readable by out-of-band
 # exception handlers via :func:`last_stage_name`. See the
 # ``HackerProgressBar`` docstring for the design rationale.
-_LAST_STAGE_NAME: Optional[str] = None
+_stage_local = threading.local()
 
 
 def last_stage_name() -> Optional[str]:
@@ -30,7 +31,7 @@ def last_stage_name() -> Optional[str]:
     still show context for failures that occurred between stages
     (e.g. while writing an artefact between two ``stage()`` calls).
     """
-    return _LAST_STAGE_NAME
+    return getattr(_stage_local, "name", None)
 
 
 def _stderr_supports_unicode() -> bool:
@@ -269,8 +270,8 @@ class HackerProgressBar:
 
     Side-channel last-stage tracking
     -------------------------------
-    On every ``stage()`` call the bar updates a module-level
-    ``_LAST_STAGE_NAME`` so out-of-band exception handlers can
+    On every ``stage()`` call the bar updates the thread-local
+    ``_stage_local.name`` so out-of-band exception handlers can
     surface "which phase was running when this died" without
     threading the bar through every call site. The CLI's outer
     ``except`` reads it via :func:`last_stage_name` to print
@@ -360,10 +361,9 @@ class HackerProgressBar:
         self._stage_start = time.time()
         self._stage_detail = ""
         self._last_redraw = 0.0
-        # Update module-level side-channel for out-of-band exception
+        # Update thread-local side-channel for out-of-band exception
         # handlers (see ``last_stage_name``).
-        global _LAST_STAGE_NAME
-        _LAST_STAGE_NAME = name
+        _stage_local.name = name
         self._render()
 
     def tick(self, done: Optional[int] = None,

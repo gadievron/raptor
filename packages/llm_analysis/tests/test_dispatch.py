@@ -1,6 +1,7 @@
 """Tests for the generic dispatch framework (dispatch.py + tasks.py)."""
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +35,7 @@ def _make_finding(finding_id, rule_id="sqli", file_path="db.py", start_line=42):
     }
 
 
-def _make_dispatch_result(exploitable=True, score=0.85):
+def _make_dispatch_result(exploitable=True, score=0.85, model="test-model"):
     return DispatchResult(
         result={
             "is_true_positive": True,
@@ -42,7 +43,7 @@ def _make_dispatch_result(exploitable=True, score=0.85):
             "exploitability_score": score,
             "reasoning": "test reasoning",
         },
-        cost=0.10, tokens=500, model="test-model", duration=5.0,
+        cost=0.10, tokens=500, model=model, duration=5.0,
     )
 
 
@@ -648,6 +649,138 @@ class TestDispatchTaskIntegration:
         assert len(dispatch_calls) == 2
 
 
+class TestCircuitBreakerEnforcement:
+    """A dead model's pre-submitted futures must not keep dispatching."""
+
+    def test_dead_model_futures_short_circuit(self):
+        model_a = MagicMock(model_name="model-a")
+        model_b = MagicMock(model_name="model-b")
+        findings = [_make_finding(f"f-{i:03d}") for i in range(12)]
+        a_calls = []
+
+        def mock_fn(prompt, schema, system_prompt, temperature, model):
+            if model is model_a:
+                a_calls.append(1)
+                # Slow failure: keeps the worker busy long enough for
+                # the drain loop to process the previous failure and
+                # mark the model dead before the NEXT dead-check runs.
+                time.sleep(0.15)
+                raise RuntimeError("model-a keeps exploding")
+            return _make_dispatch_result(
+                exploitable=False, score=0.1, model="model-b",
+            )
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=mock_fn,
+            role_resolution={"analysis_models": [model_a, model_b]},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,  # sequential: model-a items drain first
+        )
+
+        # Without enforcement every one of the 12 model-a futures called
+        # dispatch_fn (12 wasted API calls). With it the circuit opens
+        # after 3 consecutive failures; at most one extra call can race
+        # in before the dead-set write lands.
+        assert 3 <= len(a_calls) <= 5
+
+        skipped = [r for r in results
+                   if r.get("error_type") == "circuit_breaker"]
+        assert len(skipped) >= 7
+        assert all(r["analysed_by"] == "model-a" for r in skipped)
+        assert all("circuit-broken" in r["error"] for r in skipped)
+
+        # The healthy model still analysed every item.
+        b_ok = [r for r in results
+                if r.get("analysed_by") == "model-b" and "error" not in r]
+        assert len(b_ok) == 12
+
+    def test_proven_model_survives_transient_failure_burst(self):
+        """A model with prior successes must NOT be circuit-broken by 3
+        consecutive transient failures — the breaker requires a model
+        that has NEVER succeeded (completed == consec). Losing that
+        guard truncated single-model batches on any timeout burst."""
+        findings = [_make_finding(f"f-{i:03d}") for i in range(8)]
+        call_count = [0]
+
+        def burst_fn(prompt, schema, system_prompt, temperature, model):
+            call_count[0] += 1
+            # 2 successes, then a 3-failure transient burst, then recover.
+            if call_count[0] in (3, 4, 5):
+                raise RuntimeError("upstream timeout")
+            return _make_dispatch_result()
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=burst_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,  # sequential: makes the burst consecutive
+        )
+
+        # Every item dispatched — no abort-fill, no circuit_breaker skips.
+        assert call_count[0] == 8
+        assert len(results) == 8
+        assert not [r for r in results
+                    if r.get("error", "").startswith("aborted")]
+        assert not [r for r in results
+                    if r.get("error_type") == "circuit_breaker"]
+        successes = [r for r in results if "error" not in r]
+        assert len(successes) == 5
+
+    def test_all_dead_abort_reason_not_mislabelled_as_auth(self):
+        """Abort-fill records from the all-models-circuit-broken branch
+        used to say "aborted (auth failure)"."""
+        model = MagicMock(model_name="only-model")
+        findings = [_make_finding(f"f-{i:03d}") for i in range(6)]
+
+        def failing_fn(prompt, schema, system_prompt, temperature, m):
+            raise RuntimeError("structured generation failed")
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=failing_fn,
+            role_resolution={"analysis_models": [model]},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+
+        assert len(results) == 6
+        assert all("error" in r for r in results)
+        aborted = [r for r in results if r["error"].startswith("aborted")]
+        assert aborted, "abort-fill records expected after all-dead"
+        for r in aborted:
+            assert "circuit-broken" in r["error"]
+            assert "auth" not in r["error"]
+
+    def test_auth_abort_reason_preserved(self):
+        """The auth-abort path still labels its abort-fill as auth."""
+        findings = [_make_finding(f"f-{i:03d}") for i in range(3)]
+
+        def auth_fail_fn(prompt, schema, system_prompt, temperature, m):
+            raise RuntimeError("Error 401 Unauthorized")
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=auth_fail_fn,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+
+        aborted = [r for r in results if r.get("error", "").startswith("aborted")]
+        for r in aborted:
+            assert "auth failure" in r["error"]
+
+
 class TestRetryTask:
     def test_selects_low_confidence(self):
         task = RetryTask()
@@ -662,7 +795,7 @@ class TestRetryTask:
         assert selected[0]["finding_id"] == "f-001"
 
     def test_selects_boundaries(self):
-        """Half-open `[LOW, HIGH)` band — cluster 861.
+        """Half-open `[LOW, HIGH)` band.
 
         Pre-fix both the select band and the decisive check used
         the closed form `LOW <= score <= HIGH`, which made

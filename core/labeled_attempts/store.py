@@ -34,24 +34,25 @@ by reading the latest record in the directory.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
 
 from .types import LabeledAttempt
 
 __all__ = [
-    "write",
-    "read_all",
+    "bundled_corpus_path",
     "find_by_cwe",
     "find_by_failure_mode",
     "find_by_finding_signature",
-    "bundled_corpus_path",
     "global_pool_path",
     "project_pool_path",
+    "read_all",
+    "write",
 ]
 
 
@@ -119,6 +120,31 @@ def _record_filename(attempt: LabeledAttempt) -> str:
     return f"{attempt.oracle}-{stamp}Z-{suffix}.json"
 
 
+def _mkdir_private(path: Path) -> None:
+    """Create *path* (and any missing parents) owner-only (0o700).
+
+    Records can carry target details and exploit payloads, so pool
+    directories should not be group/world-readable. ``mkdir(mode=...)``
+    is masked by the process umask, so each component this call
+    actually creates gets an explicit ``chmod`` for determinism.
+    Pre-existing directories keep their modes — only new creations
+    change.
+    """
+    missing: list[Path] = []
+    probe = Path(path)
+    while not probe.exists():
+        missing.append(probe)
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    Path(path).mkdir(mode=0o700, parents=True, exist_ok=True)
+    for created in missing:
+        # A concurrent writer may have created (or pruned) the same
+        # component; the chmod is best-effort on our own creations.
+        with contextlib.suppress(OSError):
+            os.chmod(created, 0o700)
+
+
 def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
     """Write ``payload`` to ``path`` with O_EXCL semantics so a
     racing writer can't silently clobber us. On collision (same
@@ -135,10 +161,12 @@ def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
     # somewhere outside the pool (e.g. /etc/passwd). With O_NOFOLLOW
     # the open fails with ELOOP rather than silently writing through.
     # O_CREAT | O_EXCL: create new; fail if exists.
+    # 0o600: records can carry target details and exploit payloads —
+    # keep new files owner-only. Existing records are not migrated.
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     for attempt_n in range(max_retries):
         try:
-            fd = os.open(path, flags, 0o644)
+            fd = os.open(path, flags, 0o600)
             try:
                 os.write(fd, payload.encode("utf-8"))
             finally:
@@ -176,7 +204,7 @@ def write(
     payload = json.dumps(attempt.to_dict(), indent=2)
 
     project_dir_root = project_pool_path(project_dir) / attempt.finding_signature
-    project_dir_root.mkdir(parents=True, exist_ok=True)
+    _mkdir_private(project_dir_root)
     project_file = _write_atomic(
         project_dir_root / _record_filename(attempt), payload,
     )
@@ -184,7 +212,7 @@ def write(
 
     if also_global:
         global_root = global_pool_path() / attempt.finding_signature
-        global_root.mkdir(parents=True, exist_ok=True)
+        _mkdir_private(global_root)
         global_file = _write_atomic(
             global_root / _record_filename(attempt), payload,
         )
@@ -219,7 +247,7 @@ def _iter_records_in_dir(root: Path) -> Iterable[LabeledAttempt]:
 
 def read_all(
     *,
-    project_dir: Optional[Path] = None,
+    project_dir: Path | None = None,
     include_bundled: bool = True,
     include_global: bool = False,
 ) -> Iterable[LabeledAttempt]:
@@ -264,7 +292,7 @@ def _canon_cwe(raw: str) -> str:
 def find_by_cwe(
     cwe: str,
     *,
-    project_dir: Optional[Path] = None,
+    project_dir: Path | None = None,
     include_bundled: bool = True,
     include_global: bool = False,
 ) -> Iterable[LabeledAttempt]:
@@ -288,10 +316,10 @@ def find_by_cwe(
 def find_by_failure_mode(
     failure_mode_value: str,
     *,
-    project_dir: Optional[Path] = None,
+    project_dir: Path | None = None,
     include_bundled: bool = True,
     include_global: bool = False,
-    exclude_cwe: Optional[str] = None,
+    exclude_cwe: str | None = None,
 ) -> Iterable[LabeledAttempt]:
     """Filter ``read_all`` to records with a specific failure_mode.
 
@@ -322,7 +350,7 @@ def find_by_failure_mode(
 def find_by_finding_signature(
     signature: str,
     *,
-    project_dir: Optional[Path] = None,
+    project_dir: Path | None = None,
     include_bundled: bool = True,
     include_global: bool = False,
 ) -> Iterable[LabeledAttempt]:

@@ -297,12 +297,21 @@ def load_persisted(
             payload = json.load(fh)
     except (OSError, ValueError):
         return None
-    return configure(
-        payload.get("mode", "off"),
-        parity_log=payload.get("parity_log_path"),
-        run_dir=run_dir,
-        export_env=export_env,
-    )
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return configure(
+            payload.get("mode", "off"),
+            parity_log=payload.get("parity_log_path"),
+            run_dir=run_dir,
+            export_env=export_env,
+        )
+    except (ValueError, TypeError, AttributeError):
+        # Version-skewed or hand-edited persist: an unknown mode string
+        # raises ValueError, a non-string mode / parity_log raises
+        # TypeError / AttributeError inside config_for_mode. Same
+        # degradation as an unreadable file — env fallback stays active.
+        return None
 
 
 def add_cli_arguments(parser) -> None:

@@ -116,40 +116,38 @@ def _calibrated_profile(codeql_bin: Optional[str] = None):
         codeql_bin = _resolve_codeql_bin()
     if codeql_bin is None:
         return None
+    # Hold the lock across the entire miss path to prevent a
+    # cache stampede where N threads all see a miss and each
+    # independently run the (expensive) calibration probe.
     with _CALIBRATED_CACHE_LOCK:
         if codeql_bin in _CALIBRATED_CACHE:
             return _CALIBRATED_CACHE[codeql_bin]
 
-    try:
-        from core.sandbox.calibrate import load_or_calibrate
-    except ImportError:
-        with _CALIBRATED_CACHE_LOCK:
+        try:
+            from core.sandbox.calibrate import load_or_calibrate
+        except ImportError:
             _CALIBRATED_CACHE[codeql_bin] = None
-        return None
+            return None
 
-    try:
-        profile = load_or_calibrate(
-            codeql_bin,
-            probe_args=("--version",),
-            env_keys=_CODEQL_ENV_KEYS,
-            timeout=20,
-        )
-    except (FileNotFoundError, RuntimeError, OSError,
-            subprocess.TimeoutExpired) as exc:
-        # TimeoutExpired: sandboxed `codeql --version` exceeding 20s
-        # shouldn't break the resolver — fall through to static default.
-        logger.debug(
-            "codeql_proxy_hosts: calibration of %s failed (%s); "
-            "falling back to static policy",
-            codeql_bin, exc,
-        )
-        with _CALIBRATED_CACHE_LOCK:
+        try:
+            profile = load_or_calibrate(
+                codeql_bin,
+                probe_args=("--version",),
+                env_keys=_CODEQL_ENV_KEYS,
+                timeout=20,
+            )
+        except (FileNotFoundError, RuntimeError, OSError,
+                subprocess.TimeoutExpired) as exc:
+            logger.debug(
+                "codeql_proxy_hosts: calibration of %s failed "
+                "(%s); falling back to static policy",
+                codeql_bin, exc,
+            )
             _CALIBRATED_CACHE[codeql_bin] = None
-        return None
+            return None
 
-    with _CALIBRATED_CACHE_LOCK:
         _CALIBRATED_CACHE[codeql_bin] = profile
-    return profile
+        return profile
 
 
 def _load_override_config() -> Optional[list[str]]:

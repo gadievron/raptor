@@ -68,6 +68,25 @@ LLM-driven sub-agents on hostile source must set it explicitly.
 `run_untrusted()` and `run_untrusted_networked()` set `restrict_reads=True`
 by default for this reason; ad-hoc `sandbox_run()` callers do not.
 
+**Accepted residual — inbound TCP in Landlock-only mode.** When
+`block_network=True` degrades to Landlock-only, outbound TCP is denied
+by the Landlock connect fallback (`degraded_net_deny`, ABI v4+), but a
+sandboxed child can still **bind and listen** on any port, and — with
+no network namespace to isolate it — that listener is reachable from
+the host (and from wherever the host's firewall admits). This is a
+deliberate design decision, not a gap in the fallback: Landlock's
+`BIND_TCP` right is intentionally unhandled everywhere because
+sandboxed tools and targets routinely bind sockets they never need
+reachable (JVM tooling, test harnesses, target binaries whose startup
+opens a listener), and on every non-degraded host the netns makes
+those binds harmless — restricting bind would buy nothing there and
+break workloads. The residual channel requires an external party to
+connect IN (a far weaker primitive than egress exfiltration, which
+stays closed), exists only on hosts where user namespaces are
+unavailable, and is bounded by the host firewall. Landlock ≤ ABI 8
+offers no inbound/accept right that could close it without
+restricting bind.
+
 #### I2-(b). Downstream consumers treat LLM-derived artefacts as adversarial.
 
 A prompt-injected LLM can produce a structurally-valid JSON output that
@@ -137,5 +156,19 @@ prompt injection is bounded by sandbox + output-handling per I2.
 
 Tracked separately, not blocking I1/I2/I3:
 - Per-call-site `restrict_reads=True` migration for ad-hoc `sandbox_run` consumers (per-toolchain audits required for build-tool callers).
-- Per-consumer output-handling hardening to satisfy I2-(b).
-- /validate Bash discipline (typed validation-helper enum instead of generic Bash).
+- /validate Bash discipline for the lifecycle/inventory stages (typed
+  validation-helper enum instead of generic Bash); the build/PoC stages
+  inherently need Bash and are bounded by the sandbox.
+- Promotion-alarm blocking mode: `promotion-alarms.jsonl` is currently
+  alarm-only by design; flip to demote-on-alarm only after an
+  observation period of provably-empty legitimate runs.
+
+Closed by the 2026-08 hardening batches (kept here so the list reflects
+reality):
+- Per-consumer output-handling hardening for I2-(b) — superseded by the
+  provenance chokepoint: LLM-derived artifacts carry a
+  `provenance.untrusted` stamp enforced at `raptor-validate-schema`
+  (presence, shape, free-text sanitiser-idempotence), and report
+  writers are lint-enforced sanitised (`report_writer_audit`). The
+  semantic residual (poisoned content in valid structure) remains and
+  is documented in docs/security.md.

@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
 from packages.sca import optimise
 from packages.sca.update import _PlanEntry, UpgradeChange
+from packages.sca.versions import VersionError
 
 
 # ---------------------------------------------------------------------------
@@ -915,6 +917,7 @@ class TestAnalyzeMajorBumps:
         assert verdicts == {}
         assert len(major_blocked) == 1
 
+    @pytest.mark.slow
     def test_safe_verdict_moves_to_vuln_plans(self):
         from pydantic import BaseModel
 
@@ -1111,3 +1114,26 @@ class TestAnalyzeMajorBumps:
         # The failing dep stays in major_blocked (treated as needs-review).
         assert key_err in major_blocked
         assert key_err not in approved
+
+
+class TestVersionErrorResilience:
+    def test_cross_manifest_propagation_survives_unparseable_version(self):
+        """VersionError from cross-ecosystem version strings must not crash."""
+        plan_a = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="4.17.19",
+            target="BOGUS_RUBY_VERSION",
+            manifest=Path("/a/package.json"), advisory_ids=["GHSA-1"],
+        )
+        plan_b = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="4.17.19",
+            target="4.17.21",
+            manifest=Path("/b/package.json"), advisory_ids=["GHSA-2"],
+        )
+        vuln_plans = {
+            ("npm", "lodash", Path("/a/package.json")): plan_a,
+            ("npm", "lodash", Path("/b/package.json")): plan_b,
+        }
+        with patch.object(optimise, "version_compare",
+                          side_effect=VersionError("unparseable")):
+            result = optimise._plan_hygiene_pins([], vuln_plans)
+        assert isinstance(result, dict)

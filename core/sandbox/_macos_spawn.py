@@ -45,7 +45,12 @@ Feature parity table (Linux ⇄ macOS):
                                         extended category set
                                         (file-read-data, mach-lookup,
                                         process-exec*, process-fork,
-                                        signal). Coarser than Linux's
+                                        signal, plus budget-tracked
+                                        file-read-metadata,
+                                        process-info*, iokit-open,
+                                        sysctl-read — full list in
+                                        run_sandboxed's docstring).
+                                        Coarser than Linux's
                                         per-syscall trace and no argv,
                                         but operationally similar
                                         signal-volume control. See
@@ -94,8 +99,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 from . import seatbelt
 from ._fork_safe_warn import warn_post_fork
@@ -130,15 +135,15 @@ def is_available() -> bool:
     return os.path.exists(SANDBOX_EXEC)
 
 
-def run_sandboxed(cmd: List[str], *,
-                  target: Optional[str] = None,
-                  output: Optional[str] = None,
+def run_sandboxed(cmd: list[str], *,
+                  target: str | None = None,
+                  output: str | None = None,
                   block_network: bool = False,
-                  nproc_limit: Optional[int] = None,
-                  limits: Optional[dict] = None,
-                  writable_paths: Optional[Iterable[str]] = None,
-                  readable_paths: Optional[Iterable[str]] = None,
-                  allowed_tcp_ports: Optional[Iterable[int]] = None,
+                  nproc_limit: int | None = None,
+                  limits: dict | None = None,
+                  writable_paths: Iterable[str] | None = None,
+                  readable_paths: Iterable[str] | None = None,
+                  allowed_tcp_ports: Iterable[int] | None = None,
                   # seccomp_profile: macOS has no direct equivalent
                   # to Linux's libseccomp filter, but we use the
                   # profile NAME as a coarse "harden" signal — when
@@ -149,17 +154,23 @@ def run_sandboxed(cmd: List[str], *,
                   # seccomp_block_udp: Linux-only (no UDP-specific
                   # SBPL primitive). Use block_network=True for the
                   # macOS equivalent of "no UDP egress".
-                  seccomp_profile: Optional[str] = None,
-                  seccomp_block_udp: bool = False,  # noqa: ARG001
+                  seccomp_profile: str | None = None,
+                  # sandbox_profile: the PROFILE NAME ("full"/"strict"/
+                  # "debug"/...). seccomp_profile alone cannot
+                  # distinguish strict from full (both map to "full");
+                  # seatbelt layers the probe-validated macos-strict
+                  # extras only for the strict name.
+                  sandbox_profile: str | None = None,
+                  seccomp_block_udp: bool = False,
                   # map_root: Linux-only (`unshare --map-root-user`
                   # remaps caller UID to 0 inside the user-ns). macOS
                   # sandbox-exec keeps caller UID; there's no
                   # unprivileged way to remap. Accepted for signature
                   # parity, ignored.
-                  map_root: bool = False,  # noqa: ARG001
-                  env: Optional[dict] = None,
-                  cwd: Optional[str] = None,
-                  timeout: Optional[float] = None,
+                  map_root: bool = False,
+                  env: dict | None = None,
+                  cwd: str | None = None,
+                  timeout: float | None = None,
                   # Defaults match core/sandbox/_spawn.run_sandboxed
                   # so callers reaching either entry point with the
                   # same arg list get the same result. (Earlier
@@ -170,16 +181,26 @@ def run_sandboxed(cmd: List[str], *,
                   capture_output: bool = True,
                   text: bool = True,
                   stdin=None,
+                  # Unlike Linux _spawn's os.fork() chain, this backend
+                  # wraps subprocess.run, which plumbs both of these
+                  # natively — the shim chain preserves inherited
+                  # non-CLOEXEC fds across its execs, and input= is
+                  # handled by subprocess's own communicate machinery.
+                  # Caller fds are unioned with the shim's status/death
+                  # pipe fds at the run call.
+                  pass_fds: "Iterable[int] | None" = None,
+                  input: "bytes | str | None" = None,  # noqa: A002 — subprocess parity
                   audit_mode: bool = False,
-                  audit_run_dir: Optional[str] = None,
+                  audit_run_dir: str | None = None,
                   audit_verbose: bool = False,
                   observe_mode: bool = False,
-                  observe_nonce: Optional[str] = None,
+                  observe_nonce: str | None = None,
                   restrict_reads: bool = False,
                   start_new_session: bool = True,
                   use_egress_proxy: bool = False,
-                  proxy_port: Optional[int] = None,
+                  proxy_port: int | None = None,
                   fake_home: bool = False,
+                  exclude_tmp_baseline: bool = False,
                   strict_env: bool = False,
                   # persona: host-fingerprint sanitisation is Linux-only
                   # (bind-mount + UTS-ns + sched_setaffinity primitives).
@@ -191,19 +212,19 @@ def run_sandboxed(cmd: List[str], *,
                   # fingerprint.is_supported() so the value reaches us
                   # only as None when sanitisation was requested but
                   # platform unsupported.
-                  persona=None,  # noqa: ARG001
+                  persona=None,
                   # inherit_netns: Linux-only — used by _spawn to skip
                   # CLONE_NEWNET when target/exploit are forked from the
                   # coordinator already inside the shared netns. macOS
                   # has no network namespaces; accepted + ignored for
                   # signature parity with _spawn.run_sandboxed.
-                  inherit_netns=False,  # noqa: ARG001
+                  inherit_netns=False,
                   # etc_overlay: Linux-only — uses mount-ns + bind-mounts
                   # to overlay per-Problem files at /etc/<...> inside
                   # the sandbox. macOS sandbox-exec has no equivalent
                   # mount primitive; accepted + ignored for signature
                   # parity with _spawn.run_sandboxed.
-                  etc_overlay=None,  # noqa: ARG001
+                  etc_overlay=None,
                   # skip_pid_ns: Linux-only — opts out of the nested
                   # CLONE_NEWPID so gdb's host-info probe can read
                   # /proc/1/* without the systemd-init permission gap
@@ -211,20 +232,37 @@ def run_sandboxed(cmd: List[str], *,
                   # exec has no pid-namespace concept (host PIDs are
                   # always visible inside the SBPL sandbox), so this
                   # kwarg is accepted + ignored for signature parity.
-                  skip_pid_ns=False,  # noqa: ARG001
+                  skip_pid_ns=False,
                   # skip_mount_ns: Linux-only — skips mount-ns pivot_root
                   # so the host filesystem stays visible (used by frida
                   # profile). macOS sandbox-exec doesn't use mount-ns;
                   # accepted + ignored for signature parity.
-                  skip_mount_ns=False,  # noqa: ARG001
+                  skip_mount_ns=False,
                   # proxy_unix_socket / proxy_forwarder_port: Linux-only
                   # — used by _spawn to fork a TCP-to-Unix relay inside
                   # the child's empty netns for proxy enforcement on
                   # kernels with Landlock ABI < 4. macOS uses sandbox-
                   # exec network rules instead; accepted + ignored for
                   # signature parity.
-                  proxy_unix_socket=None,  # noqa: ARG001
-                  proxy_forwarder_port=None,  # noqa: ARG001
+                  proxy_unix_socket=None,
+                  proxy_forwarder_port=None,
+                  # extra_unix_bridges: Linux-only — additional
+                  # (port, unix_path) relays inside the child's netns
+                  # (LLM-dispatcher bridge for credential-proxy CLI
+                  # children). No netns on macOS; accepted + ignored
+                  # for signature parity. context.py only passes it on
+                  # the netns tier, which never engages on darwin.
+                  extra_unix_bridges=None,
+                  # exec_pid_callback: Linux-only — the fork-based spawn
+                  # backend delivers the live grandchild pid to this
+                  # callable mid-run (used for /proc/<pid>/maps
+                  # sampling). The SBPL backend wraps a blocking
+                  # subprocess.run, so there is no live-pid window (and
+                  # no /proc on macOS anyway); accepted + ignored for
+                  # signature parity. Callers gate on
+                  # context.spawn_backend_available(), which is False
+                  # on darwin.
+                  exec_pid_callback=None,
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
@@ -280,6 +318,14 @@ def run_sandboxed(cmd: List[str], *,
             "(typically the run's output dir)."
         )
 
+    # 0b. Evidence directory (F11): pre-create <run_dir>/.audit 0700
+    # so the profile can deny the target all writes beneath it and the
+    # log streamer's evidence file lands in a target-unwritable spot.
+    _evidence_dir: str | None = None
+    if audit_mode and audit_run_dir:
+        from . import evidence as _evidence_mod
+        _evidence_dir = str(_evidence_mod.ensure_audit_dir(audit_run_dir))
+
     # 1. Build SBPL profile from the kwargs.
     profile = seatbelt.build_profile(
         target=target,
@@ -292,9 +338,12 @@ def run_sandboxed(cmd: List[str], *,
         readable_paths=list(readable_paths) if readable_paths else None,
         writable_paths=list(writable_paths) if writable_paths else None,
         fake_home=fake_home,
+        exclude_tmp_baseline=exclude_tmp_baseline,
         audit_mode=audit_mode,
         audit_verbose=audit_verbose,
         seccomp_profile=seccomp_profile,
+        audit_evidence_dir=_evidence_dir,
+        profile_name=sandbox_profile,
     )
 
     # 2. fake_home: redirect HOME + XDG_*_HOME into output/.home/
@@ -303,8 +352,7 @@ def run_sandboxed(cmd: List[str], *,
         child_env = dict(env)
         if strict_env:
             from core.config import RaptorConfig
-            _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
-            child_env = {k: v for k, v in child_env.items() if k not in _dangerous}
+            child_env = {k: v for k, v in child_env.items() if k not in RaptorConfig.DANGEROUS_ENV_VARS}
     else:
         from core.config import RaptorConfig
         child_env = RaptorConfig.get_safe_env()
@@ -340,6 +388,30 @@ def run_sandboxed(cmd: List[str], *,
                 # the env var still points to the right location and
                 # the child's first write will create it.
                 pass
+
+    # 2b. exclude_tmp_baseline: with /private/tmp stripped from the
+    #     profile's writable exceptions, the child's default TMPDIR
+    #     (/var/folders/...) is ALSO unwritable under write isolation
+    #     — tempfile falls through candidate dirs and compilers fail
+    #     on intermediates. Redirect TMPDIR into {output}/.tmp, which
+    #     rides the output writable exception. Without an output dir
+    #     there is nowhere writable to point it — warn, because
+    #     tmp-dependent tools will fail (that is the flag's contract:
+    #     only use it when the workload doesn't need tmp).
+    if exclude_tmp_baseline:
+        if output:
+            _scratch_tmp = os.path.join(output, ".tmp")
+            try:
+                os.makedirs(_scratch_tmp, mode=0o700, exist_ok=True)
+            except OSError:
+                pass
+            child_env["TMPDIR"] = _scratch_tmp
+        else:
+            logger.warning(
+                "exclude_tmp_baseline without output=: tmp writes are "
+                "denied and TMPDIR has no writable redirect target — "
+                "tmp-dependent tools in this sandbox will fail"
+            )
 
     # 3. rlimits via preexec_fn.
     #
@@ -448,7 +520,12 @@ def run_sandboxed(cmd: List[str], *,
     #     We hold death_w for the whole synchronous run, so EOF (=> teardown)
     #     fires only when this process actually dies — never on a healthy run.
     status_r, status_w = os.pipe()
-    death_r, death_w = os.pipe()
+    try:
+        death_r, death_w = os.pipe()
+    except OSError:
+        os.close(status_r)
+        os.close(status_w)
+        raise
     child_env["_RAPTOR_STATUS_FD"] = str(status_w)
     child_env["_RAPTOR_DEATH_FD"] = str(death_r)
     # The seatbelt shim is RAPTOR's own dispatch helper and refuses to run
@@ -469,15 +546,20 @@ def run_sandboxed(cmd: List[str], *,
     try:
         result = subprocess.run(
             sandbox_cmd,
+            check=False,
             env=child_env,
             cwd=cwd,
             timeout=timeout,
             capture_output=capture_output,
             text=text,
+            # stdin/input mutual exclusion is subprocess.run's own
+            # contract; forward both verbatim so a caller error
+            # raises the same ValueError it would unsandboxed.
             stdin=stdin,
+            input=input,
             preexec_fn=preexec,
             start_new_session=start_new_session,
-            pass_fds=(status_w, death_r),
+            pass_fds=(status_w, death_r, *tuple(pass_fds or ())),
         )
     finally:
         # Close our copies. status_w MUST be closed before reading status_r,
@@ -535,8 +617,8 @@ def run_sandboxed(cmd: List[str], *,
     else:
         result._setup_status = (
             "E",
-            "seatbelt profile did not apply: the in-sandbox readiness byte "
-            "was not received from raptor-seatbelt-shim",
+            ("seatbelt profile did not apply: the in-sandbox readiness "
+             "byte was not received from raptor-seatbelt-shim"),
         )
 
     # 7. Attach sandbox_info — caller (context.py) populates the rest;

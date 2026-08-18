@@ -1,0 +1,46 @@
+rules:
+  - id: decompiler-memcpy-variable-len
+    pattern: memcpy($DST, $SRC, $LEN)
+    message: "memcpy — verify length is bounded"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-122"
+      confidence: LOW
+      source: decompiler
+
+  - id: decompiler-memmove-variable-len
+    pattern: memmove($DST, $SRC, $LEN)
+    message: "memmove — verify length is bounded"
+    languages: [c]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-122"
+      confidence: LOW
+      source: decompiler
+
+  - id: decompiler-free-then-use
+    pattern: |
+      free($PTR);
+      ...
+      $PTR->$FIELD
+    message: "potential use-after-free"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-416"
+      confidence: LOW
+      source: decompiler
+
+  - id: decompiler-double-free
+    pattern: |
+      free($PTR);
+      ...
+      free($PTR);
+    message: "potential double free"
+    languages: [c]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-415"
+      confidence: LOW
+      source: decompiler

@@ -36,6 +36,7 @@ Verdict-line tiers (same as diff renderer):
 
 from __future__ import annotations
 
+import heapq
 from io import StringIO
 from typing import List, Optional
 
@@ -94,7 +95,7 @@ def render_pr_comment(
             verdict = groups[key][0].verdict
             return (-verdict, key)
 
-        rows_to_show = sorted(order, key=_group_sort_key)[:truncate_table_at]
+        rows_to_show = heapq.nsmallest(truncate_table_at, order, key=_group_sort_key)
         truncated = len(order) > truncate_table_at
 
         buf.write("<details open>\n")

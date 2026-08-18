@@ -7,23 +7,17 @@ Combines crawling, fuzzing, and LLM analysis for complete web app testing.
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Self
 
 # Add paths for cross-package imports
 # packages/web/scanner.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-
-from core.logging import get_logger
 from core.llm.providers import LLMProvider
+from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
-from core.sage.hooks import (
-    format_sage_memories_for_prompt,
-    recall_context_for_web_scan,
-    store_web_payload_effectiveness,
-)
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.ffuf import FfufConfig, FfufRunner
@@ -38,13 +32,14 @@ class WebScanner:
     def __init__(
         self,
         base_url: str,
-        llm: Optional[LLMProvider],
+        llm: LLMProvider | None,
         out_dir: Path,
         verify_ssl: bool = True,
         reveal_secrets: bool = False,
         max_depth: int = 3,
         max_pages: int = 100,
-        ffuf_config: Optional[FfufConfig] = None,
+        ffuf_config: FfufConfig | None = None,
+        block_private_ips: bool = True,
     ):
         self.base_url = base_url
         self.llm = llm
@@ -53,7 +48,10 @@ class WebScanner:
         self.ffuf_config = ffuf_config
 
         # Initialize components
-        self.client = WebClient(base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets)
+        self.client = WebClient(
+            base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets,
+            block_private_ips=block_private_ips,
+        )
         self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         self.fuzzer = WebFuzzer(self.client, llm) if llm else None
         self.ffuf = FfufRunner(base_url, out_dir, reveal_secrets=reveal_secrets) if ffuf_config else None
@@ -63,7 +61,7 @@ class WebScanner:
             f"(verify_ssl={verify_ssl}, max_depth={max_depth}, max_pages={max_pages})"
         )
 
-    def scan(self) -> Dict[str, Any]:
+    def scan(self) -> dict[str, Any]:
         """
         Run complete autonomous web security scan.
 
@@ -71,13 +69,6 @@ class WebScanner:
             Scan results with findings
         """
         logger.info("Starting autonomous web security scan")
-        sage_rows = recall_context_for_web_scan(
-            repo_path=self.base_url,
-            target_fingerprint=self.base_url,
-        )
-        sage_web_text = format_sage_memories_for_prompt(sage_rows)
-        if self.fuzzer:
-            self.fuzzer.set_sage_prior_recall(sage_web_text, sage_rows)
 
         # Phase 1: Discovery
         logger.info("Phase 1: Web Discovery and Crawling")
@@ -87,7 +78,7 @@ class WebScanner:
         crawl_file = self.out_dir / "crawl_results.json"
         save_json(crawl_file, crawl_results)
 
-        logger.info(f"Discovery complete: {crawl_results['stats']}")
+        logger.info("Discovery complete: %s", crawl_results['stats'])
 
         # Phase 2: Intelligent Fuzzing
         fuzzing_findings = []
@@ -117,6 +108,21 @@ class WebScanner:
                         vulnerability_types=['sqli', 'xss', 'command_injection']
                     )
                     fuzzing_findings.extend(findings)
+
+            for form in self.crawler.discovered_forms:
+                method = form.get("method", "GET").upper()
+                action = form.get("action", "")
+                if not action:
+                    continue
+                for param_name, param_info in form.get("inputs", {}).items():
+                    findings = self.fuzzer.fuzz_parameter(
+                        action,
+                        param_name,
+                        param_type=param_info.get("type", "text"),
+                        vulnerability_types=['sqli', 'xss', 'command_injection'],
+                        method=method,
+                    )
+                    fuzzing_findings.extend(findings)
         else:
             logger.warning("Phase 2: Skipping fuzzing (no LLM available)")
 
@@ -141,22 +147,20 @@ class WebScanner:
         report_file = self.out_dir / "web_scan_report.json"
         save_json(report_file, report)
 
-        logger.info(f"Web scan complete. Found {len(fuzzing_findings)} potential vulnerabilities")
-        logger.info(f"Report saved to {report_file}")
-        # Future-agent note: store a concise summary signal; avoid persisting
-        # raw payload bodies or sensitive URL params.
-        store_web_payload_effectiveness(
-            repo_path=self.base_url,
-            target_fingerprint=self.base_url,
-            payload_class="mixed",
-            evidence_class="response_delta",
-            effectiveness=1.0 if fuzzing_findings else 0.0,
-            attempts=max(1, len(crawl_results.get("discovered_parameters", []))),
-            signals=len(fuzzing_findings),
-            notes=f"vulnerability_types={sorted({f.get('type', 'unknown') for f in fuzzing_findings})}",
-        )
+        logger.info("Web scan complete. Found %d potential vulnerabilities", len(fuzzing_findings))
+        logger.info("Report saved to %s", report_file)
 
         return report
+
+    def close(self) -> None:
+        """Release the underlying HTTP client resources."""
+        self.client.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
 
 def build_arg_parser():
@@ -247,7 +251,7 @@ Examples:
     return parser
 
 
-def build_ffuf_config(args) -> Optional[FfufConfig]:
+def build_ffuf_config(args) -> FfufConfig | None:
     """Convert parsed CLI args into an optional ffuf configuration."""
     if not args.ffuf_wordlist:
         return None
@@ -272,6 +276,7 @@ def build_ffuf_config(args) -> Optional[FfufConfig]:
 def main():
     """CLI entry point for web scanner."""
     import time
+
     from core.config import RaptorConfig
 
     parser = build_arg_parser()
@@ -300,11 +305,11 @@ def main():
     logger.info("=" * 70)
     logger.info("RAPTOR WEB SCAN STARTED")
     logger.info("=" * 70)
-    logger.info(f"Target: {args.url}")
-    logger.info(f"Output: {out_dir}")
+    logger.info("Target: %s", args.url)
+    logger.info("Output: %s", out_dir)
 
     # Initialize LLM client with multi-model support, fallback, and retry
-    from packages.llm_analysis import get_client
+    from core.llm.factory import get_client
     llm = get_client()
     if llm:
         logger.info("LLM client initialized")
@@ -320,7 +325,7 @@ def main():
         llm,
         out_dir,
         verify_ssl=verify_ssl,
-        reveal_secrets=True if args.reveal_secrets else False,
+        reveal_secrets=bool(args.reveal_secrets),
         max_depth=args.max_depth,
         max_pages=args.max_pages,
         ffuf_config=ffuf_config,
@@ -343,9 +348,14 @@ def main():
         logger.info("=" * 70)
         logger.info("WEB SCAN COMPLETE")
         logger.info("=" * 70)
-        logger.info(f"Vulnerabilities found: {results['total_vulnerabilities']}")
+        logger.info("Vulnerabilities found: %s", results['total_vulnerabilities'])
 
-        return 0 if results['total_vulnerabilities'] == 0 else 1
+        # A completed scan is a success regardless of how many vulnerabilities
+        # it found — the findings live in web_scan_report.json. The raptor.py
+        # lifecycle wrapper treats any non-zero exit as a failed run, so
+        # exiting 1 on findings would record every successful vuln-finding
+        # scan as status=failed.
+        return 0
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Scan interrupted by user", file=sys.stderr)
@@ -353,8 +363,10 @@ def main():
         return 130
     except Exception as e:
         print(f"\n✗ Scan failed: {e}", file=sys.stderr)
-        logger.error(f"Scan failed: {e}", exc_info=True)
+        logger.exception("Scan failed")
         return 1
+    finally:
+        scanner.close()
 
 
 if __name__ == "__main__":

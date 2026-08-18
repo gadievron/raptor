@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register
@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 ECOSYSTEM = "npm"
 
 try:
-    import yaml as _yaml                  # type: ignore[import-untyped]
+    import yaml as _yaml  # type: ignore[import-untyped]
+
     from .._yaml_fast import safe_load as _safe_load
     _HAS_YAML = True
 except ImportError:                       # pragma: no cover — env-dependent
@@ -53,7 +54,7 @@ except ImportError:                       # pragma: no cover — env-dependent
     )
 
 
-def parse(path: Path) -> List[Dependency]:
+def parse(path: Path) -> list[Dependency]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -91,7 +92,14 @@ def _looks_like_berry(text: str) -> bool:
             data = _safe_load(text)       # type: ignore[misc]
             if isinstance(data, dict) and "__metadata" in data:
                 return True
-        except Exception:                 # noqa: BLE001 — best-effort sniff
+        except (_yaml.YAMLError, RecursionError, ValueError):  # type: ignore[union-attr]
+            # Best-effort sniff: malformed / pathologically nested
+            # YAML just means "not Berry". ValueError included:
+            # yaml.safe_load raises it on out-of-range date scalars
+            # (e.g. `a: 2023-99-99`) — escaping here reached the
+            # parser-dispatch catch-all and the whole lockfile read as
+            # zero dependencies ("clean"); the classic parser still
+            # extracts the deps.
             pass
     return False
 
@@ -100,10 +108,10 @@ def _looks_like_berry(text: str) -> bool:
 # Classic v1 parser (line-oriented)
 # ---------------------------------------------------------------------------
 
-def _parse_classic(text: str, path: Path) -> List[Dependency]:
-    deps: List[Dependency] = []
-    current_specs: List[str] = []
-    current_props: Dict[str, str] = {}
+def _parse_classic(text: str, path: Path) -> list[Dependency]:
+    deps: list[Dependency] = []
+    current_specs: list[str] = []
+    current_props: dict[str, str] = {}
 
     def _flush() -> None:
         if not current_specs:
@@ -137,7 +145,7 @@ def _parse_classic(text: str, path: Path) -> List[Dependency]:
 _CLASSIC_SPEC_QUOTED = re.compile(r'"([^"]*)"')
 
 
-def _split_classic_specs(line: str) -> List[str]:
+def _split_classic_specs(line: str) -> list[str]:
     """Split a comma-separated spec header into individual descriptors.
 
     Each spec may be quoted (when it contains commas/spaces/colons in the
@@ -153,7 +161,7 @@ def _split_classic_specs(line: str) -> List[str]:
 _PROP_RE = re.compile(r'^([A-Za-z_][\w-]*)\s+(?:"([^"]*)"|([^\s].*))$')
 
 
-def _parse_classic_prop(line: str) -> Tuple[Optional[str], str]:
+def _parse_classic_prop(line: str) -> tuple[str | None, str]:
     """Parse one ``key value`` property line; ``value`` may be quoted."""
     m = _PROP_RE.match(line)
     if not m:
@@ -164,8 +172,8 @@ def _parse_classic_prop(line: str) -> Tuple[Optional[str], str]:
 
 
 def _from_classic_block(
-    specs: List[str], props: Dict[str, str], path: Path,
-) -> Optional[Dependency]:
+    specs: list[str], props: dict[str, str], path: Path,
+) -> Dependency | None:
     name = _name_from_descriptor(specs[0]) if specs else None
     if not name:
         return None
@@ -190,10 +198,13 @@ def _from_classic_block(
 # Berry parser (YAML)
 # ---------------------------------------------------------------------------
 
-def _parse_berry(text: str, path: Path) -> List[Dependency]:
+def _parse_berry(text: str, path: Path) -> list[Dependency]:
     try:
         data = _safe_load(text)           # type: ignore[misc]
-    except _yaml.YAMLError as e:          # type: ignore[union-attr]
+    except (_yaml.YAMLError, ValueError) as e:  # type: ignore[union-attr]
+        # ValueError: yaml.safe_load raises it on out-of-range date
+        # scalars — report the parse failure instead of letting it
+        # escape to the dispatch catch-all as a silent zero-dep result.
         logger.warning(
             "sca.parsers.yarn_lock: Berry YAML parse failed for %s: %s",
             path, e,
@@ -202,7 +213,7 @@ def _parse_berry(text: str, path: Path) -> List[Dependency]:
     if not isinstance(data, dict):
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for descriptor, entry in data.items():
         if descriptor == "__metadata":
             continue
@@ -238,7 +249,7 @@ def _parse_berry(text: str, path: Path) -> List[Dependency]:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _name_from_descriptor(descriptor: str) -> Optional[str]:
+def _name_from_descriptor(descriptor: str) -> str | None:
     """Extract the package name from a yarn descriptor.
 
     Examples (input → output):
@@ -266,7 +277,7 @@ def _name_from_descriptor(descriptor: str) -> Optional[str]:
     return s[:sep]
 
 
-def _pin_from_resolved(resolved: str, version: Optional[str]) -> PinStyle:
+def _pin_from_resolved(resolved: str, version: str | None) -> PinStyle:
     """Classify pin style from a v1 ``resolved "..."`` URL."""
     if resolved.startswith(("git+", "git:", "git@")):
         return PinStyle.GIT
@@ -278,7 +289,7 @@ def _pin_from_resolved(resolved: str, version: Optional[str]) -> PinStyle:
 
 
 def _pin_from_berry_resolution(
-    resolution: Any, version: Optional[str],
+    resolution: Any, version: str | None,
 ) -> PinStyle:
     """Classify pin style from a Berry ``resolution: "..."`` field."""
     if isinstance(resolution, str):
@@ -295,14 +306,14 @@ def _pin_from_berry_resolution(
     return PinStyle.WILDCARD
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:npm/{name}"
     if version:
         return f"{base}@{version}"
     return base
 
 
-def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
+def _confidence(pin_style: PinStyle, version: str | None) -> Confidence:
     if pin_style is PinStyle.GIT:
         return Confidence("medium", reason="yarn.lock git source")
     if pin_style is PinStyle.PATH:

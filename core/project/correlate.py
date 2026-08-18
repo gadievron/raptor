@@ -52,9 +52,9 @@ def get_finding_status(finding: Dict) -> str:
     if "is_true_positive" in finding or "is_exploitable" in finding:
         if finding.get("is_true_positive") is False:
             return "false_positive"
-        if finding.get("is_exploitable"):
+        if finding.get("is_exploitable") is True:
             return "exploitable"
-        if finding.get("is_true_positive"):
+        if finding.get("is_true_positive") is True:
             return "confirmed"
     return finding.get("final_status") or finding.get("status") or ""
 
@@ -157,7 +157,7 @@ def _get_run_model(run_dir: Path) -> str:
         if m:
             return m
     meta = load_run_metadata(run_dir)
-    if meta:
+    if isinstance(meta, dict):
         extra = meta.get("extra") or {}
         models = extra.get("analysis_models") or []
         if models:
@@ -173,7 +173,7 @@ def _get_run_types(run_dirs: List[Path]) -> Dict[str, str]:
     result = {}
     for d in run_dirs:
         meta = load_run_metadata(d)
-        result[d.name] = (meta or {}).get("command", "unknown")
+        result[d.name] = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
     return result
 
 
@@ -271,7 +271,7 @@ def _find_new_and_resolved(
     Only compares runs of the same command type — a finding in scan-001
     but absent from validate-001 is expected, not "resolved."
     """
-    run_order = sorted(d.name for d in run_dirs)
+    run_order = [d.name for d in sorted(run_dirs, key=lambda d: d.stat().st_mtime)]
 
     key_to_runs_by_type: Dict[tuple, Dict[str, List[str]]] = defaultdict(
         lambda: defaultdict(list),
@@ -533,7 +533,7 @@ def _build_trends(
 
     Returns {finding_label: [{run, status, score, model}]} ordered by run time.
     """
-    run_order = sorted(d.name for d in run_dirs)
+    run_order = [d.name for d in sorted(run_dirs, key=lambda d: d.stat().st_mtime)]
 
     key_to_history: Dict[tuple, List[Dict]] = defaultdict(list)
     for run_name, findings in findings_by_run.items():
@@ -565,7 +565,7 @@ def _build_tool_coverage(run_dirs: List[Path]) -> Dict[str, List[str]]:
 
     for d in run_dirs:
         meta = load_run_metadata(d)
-        tool = (meta or {}).get("command", "unknown")
+        tool = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
         findings = load_findings_from_dir(d)
         for f in findings:
             fp = f.get("file", "")

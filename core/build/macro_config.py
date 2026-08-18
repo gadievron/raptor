@@ -169,7 +169,7 @@ def _from_kconfig(path: Path) -> MacroConfig:
     defined: Dict[str, str] = {}
     undefined: set = set()
     for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$", text, re.MULTILINE):
-        defined[m.group(1)] = "1"
+        defined[m.group(1)] = "1" if m.group(2) == "y" else "m"
     for m in re.finditer(r"^#\s*(CONFIG_[A-Z0-9_]+)\s+is\s+not\s+set\s*$",
                          text, re.MULTILINE):
         # A CONFIG_X set to =y elsewhere wins (shouldn't happen in a real

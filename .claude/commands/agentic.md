@@ -85,28 +85,29 @@ finding's analysis prompt.
 The dispatch pipeline runs these tasks in sequence:
 
 1. **AnalysisTask** — Stages A-D per finding (validation + analysis in one call)
-2. **CrossFamilyCheckTask** — re-check suspicious responses via a different model family
-3. **RetryTask** — Stage F: self-consistency check, retry contradictions + low confidence
-4. **ConsensusTask** — blind second model votes on true positives (if `--consensus`)
-5. **JudgeTask** — non-blind review of primary reasoning (if `--judge`)
-6. **Correlation** — multi-model agreement matrix + confidence signals (if 2+ `--model`)
-7. **AggregationTask** — final synthesis into `aggregation.json`, consumed by `agentic-report.md` (if `--aggregate`)
-8. **ExploitTask** — PoCs for final-verdict exploitable findings
-9. **PatchTask** — secure fixes for exploitable findings
-10. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
+2. **DataflowValidation** — IRIS dataflow check: refute hallucinated dataflow claims (`--no-validate-dataflow` disables; `--deep-validate` / `--deep-validate-budget` extend it)
+3. **CrossFamilyCheckTask** — re-check suspicious responses via a different model family
+4. **RetryTask** — Stage F: self-consistency check, retry contradictions + low confidence
+5. **ConsensusTask** — blind second model votes on true positives (if `--consensus`)
+6. **JudgeTask** — non-blind review of primary reasoning (if `--judge`)
+7. **Correlation** — multi-model agreement matrix + confidence signals (if 2+ `--model`)
+8. **AggregationTask** — final synthesis into `aggregation.json`, consumed by `agentic-report.md` (if `--aggregate`)
+9. **ExploitTask** — PoCs for final-verdict exploitable findings
+10. **PatchTask** — secure fixes for exploitable findings
+11. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
 
 Cost tracking is real-time with adaptive budget cutoff.
 
 ## Multi-model analysis
 
-By default, the primary model is auto-detected from `~/.config/raptor/models.json` or API key env vars (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY). Use `--model` to override.
+By default, the primary model is auto-detected from `~/.config/raptor/models.json` or API key env vars (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, AWS_BEARER_TOKEN_BEDROCK, local Ollama). Use `--model` to override.
 
-`--model` is repeatable. Multiple models each independently analyse every finding (Stages A-D), then results are correlated — agreement matrix, confidence signals, clusters, unique insights. With 3+ analysis models, `--consensus` is auto-skipped (redundant).
+`--model` is repeatable. Multiple models each independently analyse every finding (Stages A-D), then results are correlated — agreement matrix, confidence signals, clusters, unique insights. With 3+ analysis models, the auto-loaded default consensus model is skipped (redundant); an explicit `--consensus` flag is always honoured.
 
 | Flag | Role | What it does |
 |------|------|-------------|
 | `--model MODEL` (repeatable) | Analysis | Each model independently analyses every finding. Multiple = multi-model correlation. |
-| `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. Auto-skipped with 3+ `--model`. |
+| `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. The auto-loaded default is skipped with 3+ `--model`; an explicit flag is always honoured. |
 | `--judge MODEL` | Non-blind review | Sees the primary analysis reasoning and critiques it. Flags missed attack paths, flawed logic, or inconsistent verdicts. |
 | `--aggregate MODEL` | Final synthesis (optional) | LLM-written narrative summary on top of the deterministic correlation. Adds top findings, disputed findings, and recommended next actions to `aggregation.json` and the final `agentic-report.md`. Without it, you still get the correlation results. Requires at least two `--model` values. |
 

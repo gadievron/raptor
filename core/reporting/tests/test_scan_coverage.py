@@ -139,6 +139,47 @@ class TestSemgrepFailedPacks:
         assert "failed" not in out.lower()
 
 
+class TestFindingsByTool:
+    def test_findings_by_tool_preferred_over_heuristic(self, tmp_path):
+        _write(tmp_path, "coverage-semgrep.json", {
+            "tool": "semgrep", "rules_applied": 2,
+        })
+        _write(tmp_path, "coverage-coccinelle.json", {
+            "tool": "coccinelle", "rules_applied": 1,
+        })
+        _write(tmp_path, "coverage-codeql.json", {
+            "tool": "codeql", "rules_applied": 3,
+        })
+        _write(tmp_path, "scan_metrics.json", {
+            "findings_by_tool": {
+                "semgrep": 10,
+                "coccinelle": 3,
+                "codeql": 7,
+            },
+            "findings_by_rule": {
+                "custom_rule_no_dots": 3,
+                "engine.semgrep.rules.foo": 10,
+                "cpp/something": 7,
+            },
+        })
+        out = render_scan_coverage(tmp_path)
+        assert "10 findings" in out
+        assert " 3 findings" in out
+        assert " 7 findings" in out
+
+    def test_falls_back_to_heuristic_without_findings_by_tool(self, tmp_path):
+        _write(tmp_path, "coverage-semgrep.json", {
+            "tool": "semgrep", "rules_applied": 1,
+        })
+        _write(tmp_path, "scan_metrics.json", {
+            "findings_by_rule": {
+                "engine.semgrep.rules.foo": 5,
+            },
+        })
+        out = render_scan_coverage(tmp_path)
+        assert "5 findings" in out
+
+
 class TestRobustness:
     def test_malformed_coverage_file_skipped(self, tmp_path):
         # Garbage JSON in one file → that tool's line is skipped;

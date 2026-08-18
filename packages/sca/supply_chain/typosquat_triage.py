@@ -272,6 +272,8 @@ def _age_days(iso: Optional[str]) -> Optional[int]:
 
 def _norm_npm(meta: dict) -> dict:
     versions = meta.get("versions") or {}
+    if not isinstance(versions, dict):
+        versions = {}
     latest = (meta.get("dist-tags") or {}).get("latest")
     vm = versions.get(latest, {}) if latest else {}
     return dict(

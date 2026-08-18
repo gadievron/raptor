@@ -161,6 +161,16 @@ def format_report(results: List[ABResult]) -> str:
                     f"  patched     false-pos  control {c_rate*100:5.1f}%  "
                     f"treatment {t_rate*100:5.1f}%  delta {(t_rate-c_rate)*100:+5.1f}%"
                 )
+            # Per-sample detail: the aggregate hides which sample
+            # produced (or destroyed) the lift — one mislabeled sample
+            # can skew the whole rate.
+            for r in results:
+                if (r.strategy, r.variant) != (strat, variant):
+                    continue
+                lines.append(
+                    f"    {r.sample_id}  ctrl {r.control_flagged}/{r.runs}"
+                    f"  treat {r.treatment_flagged}/{r.runs}"
+                )
         lines.append("")
     return "\n".join(lines).rstrip()
 

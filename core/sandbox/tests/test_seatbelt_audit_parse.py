@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+from core.sandbox import evidence as evidence_mod
 from core.sandbox import seatbelt_audit
 from core.sandbox.seatbelt import SANDBOX_KEXT_SENDER
 
@@ -158,7 +159,8 @@ def test_log_streamer_appends_one_line_per_record(tmp_path):
     rec2 = {"b": 2}
     streamer._append_record(rec1)
     streamer._append_record(rec2)
-    path = tmp_path / seatbelt_audit.DENIALS_FILE
+    path = (tmp_path / evidence_mod.AUDIT_SUBDIR
+            / seatbelt_audit.DENIALS_FILE)
     assert path.exists()
     lines = path.read_text().splitlines()
     assert len(lines) == 2
@@ -174,7 +176,8 @@ def test_log_streamer_creates_run_dir(tmp_path):
     streamer = seatbelt_audit.LogStreamer(new_dir)
     streamer._append_record({"x": 1})
     assert new_dir.exists()
-    assert (new_dir / seatbelt_audit.DENIALS_FILE).exists()
+    assert (new_dir / evidence_mod.AUDIT_SUBDIR
+            / seatbelt_audit.DENIALS_FILE).exists()
 
 
 # --- LogStreamer ↔ AuditBudget integration ----------------------------
@@ -198,7 +201,8 @@ def test_log_streamer_uses_injected_budget_for_summary(tmp_path):
     # No proc started — stop() should still flush the summary.
     streamer.stop()
 
-    lines = (tmp_path / seatbelt_audit.DENIALS_FILE).read_text().splitlines()
+    lines = (tmp_path / evidence_mod.AUDIT_SUBDIR
+             / seatbelt_audit.DENIALS_FILE).read_text().splitlines()
     summaries = [json.loads(line) for line in lines
                   if json.loads(line).get("type") == "audit_summary"]
     assert len(summaries) == 1
@@ -222,14 +226,150 @@ def test_log_streamer_default_budget_is_cli_aware(tmp_path):
         state._cli_sandbox_audit_budget = None
 
 
+# --- LogStreamer PID scoping ------------------------------------------
+# `log stream` is a host-wide feed: every Sandbox.kext event on the
+# machine matches the sender predicate, including events from
+# unrelated or sibling sandboxed processes. The scoping layers below
+# keep foreign events out of this run's JSONL (and its nonce and
+# budget). Canned records; runs hermetically on Linux.
+
+def _scope_record(pid: int, *, action: str = "file-write-data",
+                  path: str = "/tmp/x", name: str = "proc") -> dict:
+    entry = _kext_entry(msg=f"Sandbox: {name}({pid}) deny {action} {path}")
+    return seatbelt_audit.parse_log_entry(entry)
+
+
+def _no_pgid(monkeypatch):
+    """Pin the exact-PID path: process-group resolution always fails,
+    as it does for a PID that has already exited (or one from a
+    canned record that never existed on the test host)."""
+    def _raise(pid):
+        raise ProcessLookupError(pid)
+    monkeypatch.setattr(seatbelt_audit.os, "getpgid", _raise)
+
+
+def test_unscoped_streamer_accepts_any_pid(tmp_path):
+    """Back-compat: with no scope registered, attribution stays
+    host-wide (documented as unguaranteed in the class docstring)."""
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    assert streamer._record_in_scope(_scope_record(4444)) is True
+
+
+def test_own_pid_event_kept(tmp_path, monkeypatch):
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(1234)
+    assert streamer._record_in_scope(_scope_record(1234)) is True
+
+
+def test_foreign_pid_event_rejected(tmp_path, monkeypatch):
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(1234)
+    assert streamer._record_in_scope(_scope_record(4444)) is False
+
+
+def test_record_without_pid_rejected_when_scoped(tmp_path, monkeypatch):
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(1234)
+    rec = _scope_record(1234)
+    del rec["target_pid"]
+    assert streamer._record_in_scope(rec) is False
+
+
+def test_process_group_widens_scope(tmp_path, monkeypatch):
+    """Children the target forks carry other PIDs but share its
+    process group — the parse-time filter must keep them."""
+    pgids = {1234: 500, 777: 500, 999: 600}
+
+    def fake_getpgid(pid):
+        try:
+            return pgids[pid]
+        except KeyError:
+            raise ProcessLookupError(pid) from None
+
+    monkeypatch.setattr(seatbelt_audit.os, "getpgid", fake_getpgid)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(1234)
+    assert streamer._record_in_scope(_scope_record(777)) is True   # same pgid
+    assert streamer._record_in_scope(_scope_record(999)) is False  # other pgid
+    assert streamer._record_in_scope(_scope_record(31337)) is False  # gone
+
+
+def test_read_loop_drops_foreign_pid_records(tmp_path, monkeypatch):
+    """End-to-end through _read_loop with a canned log-stream feed:
+    the foreign-PID event must never be nonce-stamped into this
+    run's JSONL; the own-PID event must land."""
+    import types
+
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(
+        tmp_path, observe_mode=True, observe_nonce="nonce-own-run",
+    )
+    streamer.register_target_pid(1234)
+    own = _kext_entry(
+        msg="Sandbox: mine(1234) deny file-write-data /tmp/mine",
+    )
+    foreign = _kext_entry(
+        msg="Sandbox: other(4444) deny file-write-data /tmp/theirs",
+    )
+    streamer._proc = types.SimpleNamespace(
+        stdout=[json.dumps(own) + "\n", json.dumps(foreign) + "\n"],
+    )
+    streamer._read_loop()
+
+    lines = (tmp_path / evidence_mod.AUDIT_SUBDIR
+             / seatbelt_audit.OBSERVE_FILE).read_text().splitlines()
+    records = [json.loads(line) for line in lines]
+    assert len(records) == 1
+    assert records[0]["target_pid"] == 1234
+    assert records[0]["path"] == "/tmp/mine"
+    assert records[0]["nonce"] == "nonce-own-run"
+
+
+def test_predicate_default_is_sender_scoped_only(tmp_path):
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    predicate = streamer._build_predicate()
+    assert SANDBOX_KEXT_SENDER in predicate
+    assert "eventMessage" not in predicate
+
+
+def test_predicate_pid_scoped_when_target_pid_known(tmp_path):
+    streamer = seatbelt_audit.LogStreamer(tmp_path, target_pid=4242)
+    predicate = streamer._build_predicate()
+    assert SANDBOX_KEXT_SENDER in predicate
+    assert 'eventMessage CONTAINS "(4242) "' in predicate
+
+
+def test_constructor_target_pid_also_registers_parse_scope(tmp_path,
+                                                           monkeypatch):
+    """Defence in depth: a construction-time target_pid engages the
+    parse-time filter too, not just the predicate."""
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path, target_pid=4242)
+    assert streamer._record_in_scope(_scope_record(4242)) is True
+    assert streamer._record_in_scope(_scope_record(4444)) is False
+
+
+def test_start_log_streamer_threads_target_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(seatbelt_audit.LogStreamer, "start",
+                        lambda self: None)
+    streamer = seatbelt_audit.start_log_streamer(tmp_path, target_pid=99)
+    assert streamer._target_pid == 99
+
+
 def test_log_streamer_o_nofollow_blocks_symlink(tmp_path):
-    """Defence in depth: a sandboxed child with write access to
-    run_dir could pre-plant DENIALS_FILE as a symlink to a host
-    file. O_NOFOLLOW must reject the open with ELOOP rather than
-    follow the link and append to the host file."""
+    """Defence in depth: an attacker with write access to the
+    evidence dir could pre-plant DENIALS_FILE as a symlink to a host
+    file. The evidence open (O_EXCL create → O_NOFOLLOW append
+    fallback) must reject it with ELOOP rather than follow the link
+    and append to the host file."""
     target = tmp_path / "target"
     target.write_text("")
-    link = tmp_path / seatbelt_audit.DENIALS_FILE
+    evdir = tmp_path / evidence_mod.AUDIT_SUBDIR
+    evdir.mkdir(mode=0o700)
+    link = evdir / seatbelt_audit.DENIALS_FILE
     link.symlink_to(target)
     streamer = seatbelt_audit.LogStreamer(tmp_path)
     try:

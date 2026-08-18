@@ -72,3 +72,114 @@ def test_spawn_worker_env_none_defaults_to_safe_env(fake_dispatcher):
     # And the dispatcher vars must still be set.
     assert captured_env.get("RAPTOR_LLM_SOCKET") == "./fake.sock"
     assert captured_env.get("RAPTOR_LLM_TOKEN_FD") == "99"
+
+
+def test_spawn_worker_env_none_preserves_operator_proxy(
+    fake_dispatcher, monkeypatch,
+):
+    """Mandatory-egress-proxy hosts: workers are RAPTOR's own scripts
+    whose egress proxies / `claude` CLI grandchildren resolve the
+    upstream route from the worker's env. env=None must therefore
+    carry the operator's launch-time proxy vars through, not strip
+    them with the bare get_safe_env() default.
+    """
+    from core.llm.dispatcher import spawn as spawn_mod
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+    monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+    monkeypatch.setenv("NO_PROXY", "169.254.169.254")
+
+    captured_env: dict[str, str] = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+
+    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+            patch("os.close"):
+        spawn_mod.spawn_worker(
+            fake_dispatcher,
+            ["/bin/true"],
+            label="test-worker",
+            env=None,
+        )
+
+    assert captured_env.get("HTTPS_PROXY") == "http://proxy.corp:3128"
+    assert captured_env.get("https_proxy") == "http://proxy.corp:3128"
+    assert captured_env.get("NO_PROXY") == "169.254.169.254"
+
+
+def test_spawn_worker_env_none_carries_routing_family_not_secrets(
+    fake_dispatcher, monkeypatch,
+):
+    """Workers resolve their models.json entries locally: the default
+    baseline must carry the LLM transport-routing NAMES
+    (CLAUDE_CODE_USE_*, ANTHROPIC_MODEL, AWS profile/region,
+    RAPTOR_BEDROCK_*) so a minimal Bedrock entry backfills in the
+    child exactly as in the parent — while credential isolation is
+    preserved (secrets are dispatcher-injected, never env-passed).
+    """
+    from core.llm.dispatcher import spawn as spawn_mod
+
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+    monkeypatch.setenv("CLAUDE_CODE_USE_MANTLE", "1")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "us.anthropic.claude-opus-4-8-v1:0")
+    monkeypatch.setenv("AWS_PROFILE", "llm-signing")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("RAPTOR_BEDROCK_API", "mantle")
+    # Secrets that must NOT reach the worker on the default baseline.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-secret")
+
+    captured_env: dict[str, str] = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+
+    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+            patch("os.close"):
+        spawn_mod.spawn_worker(
+            fake_dispatcher,
+            ["/bin/true"],
+            label="test-worker",
+            env=None,
+        )
+
+    assert captured_env.get("CLAUDE_CODE_USE_BEDROCK") == "1"
+    assert captured_env.get("CLAUDE_CODE_USE_MANTLE") == "1"
+    assert captured_env.get("ANTHROPIC_MODEL") == (
+        "us.anthropic.claude-opus-4-8-v1:0")
+    assert captured_env.get("AWS_PROFILE") == "llm-signing"
+    assert captured_env.get("AWS_REGION") == "us-east-1"
+    assert captured_env.get("RAPTOR_BEDROCK_API") == "mantle"
+    assert "ANTHROPIC_API_KEY" not in captured_env
+    assert "AWS_SECRET_ACCESS_KEY" not in captured_env
+    assert "AWS_BEARER_TOKEN_BEDROCK" not in captured_env
+
+
+def test_spawn_worker_explicit_env_not_overlaid(fake_dispatcher, monkeypatch):
+    """An explicitly-passed env is the caller's contract — spawn_worker
+    must not overlay the routing family onto it (callers that want the
+    family pass get_llm_env())."""
+    from core.llm.dispatcher import spawn as spawn_mod
+
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+
+    captured_env: dict[str, str] = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+
+    with patch.object(spawn_mod.subprocess, "Popen", FakePopen), \
+            patch("os.close"):
+        spawn_mod.spawn_worker(
+            fake_dispatcher,
+            ["/bin/true"],
+            label="test-worker",
+            env={"PATH": "/usr/bin"},
+        )
+
+    assert "CLAUDE_CODE_USE_BEDROCK" not in captured_env

@@ -13,20 +13,21 @@ engine.
 """
 
 import logging
-from typing import Any, Dict, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
-logger = logging.getLogger(__name__)
-
-from core.security.prompt_envelope import (  # noqa: E402
+from core.security.prompt_defense_profiles import CONSERVATIVE
+from core.security.prompt_envelope import (
     ModelDefenseProfile,
     PromptBundle,
     TaintedString,
     UntrustedBlock,
     build_prompt,
 )
-from core.security.prompt_defense_profiles import CONSERVATIVE  # noqa: E402
 
-from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS  # noqa: E402
+from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS
+
+logger = logging.getLogger(__name__)
 
 _ANALYSIS_BLOCK_PRIORITIES: dict[str, int] = {
     "vulnerable-code": 0,
@@ -40,6 +41,8 @@ _ANALYSIS_BLOCK_PRIORITIES: dict[str, int] = {
     "ast-view": 1,
     "surrounding-context": 1,
     "source-intel-evidence": 1,
+    "flow-trace-context": 2,
+    "caller-call-sites": 2,
     "verified-exemplars": 2,
     "sage-historical-context": 3,
 }
@@ -282,7 +285,7 @@ be used if the FUNCTION BODY ITSELF (not its containing \
 scope) is provably unreachable under all inputs."""
 
 
-def build_analysis_schema(has_dataflow: bool = False) -> Dict[str, str]:
+def build_analysis_schema(has_dataflow: bool = False) -> dict[str, str]:
     """Build the analysis schema, optionally including dataflow fields."""
     schema = dict(ANALYSIS_SCHEMA)
     if has_dataflow:
@@ -290,7 +293,7 @@ def build_analysis_schema(has_dataflow: bool = False) -> Dict[str, str]:
     return schema
 
 
-def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
+def _format_metadata_for_block(metadata: dict[str, Any]) -> str:
     """Format inventory metadata as plain text for embedding in an untrusted block."""
     parts = []
     if metadata.get("class_name"):
@@ -313,7 +316,7 @@ def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _format_reachability_block(metadata: Dict[str, Any]) -> str:
+def _format_reachability_block(metadata: dict[str, Any]) -> str:
     """Render reachability evidence — fires whenever ANY reachability
     signal is present on the function.
 
@@ -408,9 +411,10 @@ def _build_strategy_block(
     *,
     file_path: str,
     function_name: str,
-    cwe_id: Optional[str],
+    cwe_id: str | None,
     file_includes: Iterable[str],
     function_calls_made: Iterable[str],
+    repo_path: str | None = None,
 ) -> str:
     """Render the matching CWE-strategy guidance for the analysis prompt.
 
@@ -427,7 +431,7 @@ def _build_strategy_block(
             pick_strategies,
             render_strategies,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — substrate probe, never fatal
         # Substrate not present (older deployments); skip silently.
         return ""
 
@@ -443,6 +447,10 @@ def _build_strategy_block(
             function_calls_made=tuple(function_calls_made),
             candidate_cwes=tuple(candidate_cwes),
             max_strategies=3,
+            # Kernel targets get the linux_kernel signal profile —
+            # the kernel API signal bulk lives there, not in the
+            # generic strategy YAMLs.
+            target_path=repo_path or None,
         )
         if not picked:
             return ""
@@ -450,7 +458,7 @@ def _build_strategy_block(
     except Exception as e:
         # Best-effort — analysis must continue even if strategy
         # rendering fails for an exotic input.
-        logger.debug(f"strategy block render failed: {e}", exc_info=True)
+        logger.debug("strategy block render failed: %s", e, exc_info=True)
         return ""
 
     return (
@@ -467,33 +475,39 @@ def _build_strategy_block(
 def _build_verified_exemplar_block(
     *,
     rule_id: str,
-    cwe_id: Optional[str],
+    cwe_id: str | None,
     file_path: str,
     verified_outcomes: Iterable[Any],
-) -> str:
+) -> tuple[str, tuple[str, ...]]:
     """Render RAPTOR's own prior verified outcomes for this finding.
 
-    Tier-3 retrieval: the nearest previously-confirmed outcomes (witness /
-    CodeQL backends) primed as exemplars beside the curated CVE ones — RAPTOR's
-    own ground truth, so the set sharpens as it runs. Empty when nothing
-    matches or the substrate is absent. Best-effort: analysis continues
-    regardless. The caller places the returned text inside an
-    ``UntrustedBlock`` envelope (it carries scanned-repo-derived fields), not
-    the trusted system prompt.
+    Tier-3 retrieval: L3-retrieved exemplars first (recency / dedup /
+    diversity ranked), with the caller's pre-collected VerifiedOutcome
+    corpus as fallback — RAPTOR's own ground truth, so the set sharpens
+    as it runs. The empty-corpus early-out preserves the caller's
+    opt-in gate: no supplied corpus means the exemplar slot stays off.
+    Best-effort: analysis continues regardless. The caller places the
+    returned text inside an ``UntrustedBlock`` envelope (it carries
+    scanned-repo-derived fields), not the trusted system prompt.
+
+    Returns ``(block, exemplar_ids)`` — ids are non-empty only when L3
+    retrieval served the block, so the caller can record which
+    exemplars were in the prompt (``LabeledAttempt.exemplars_used``).
     """
     outcomes = list(verified_outcomes)
     if not outcomes:
-        return ""
+        return "", ()
     try:
-        from core.labeled_attempts.view import render_verified_exemplars
-    except Exception:
-        return ""  # substrate absent (older deployment) — skip silently
+        from core.labeled_attempts.view import exemplar_slot_for_finding
+    except Exception:  # noqa: BLE001 — substrate probe, never fatal
+        return "", ()  # substrate absent (older deployment) — skip silently
     try:
         finding = {"id": rule_id, "cwe_id": cwe_id, "file": file_path}
-        return render_verified_exemplars(finding, outcomes)
+        slot = exemplar_slot_for_finding(finding, outcomes=outcomes)
+        return slot.block, slot.exemplar_ids
     except Exception as e:
-        logger.debug(f"verified-exemplar block render failed: {e}", exc_info=True)
-        return ""
+        logger.debug("verified-exemplar block render failed: %s", e, exc_info=True)
+        return "", ()
 
 
 def build_analysis_prompt_bundle(
@@ -507,21 +521,22 @@ def build_analysis_prompt_bundle(
     code: str = "",
     surrounding_context: str = "",
     has_dataflow: bool = False,
-    dataflow_source: Optional[Dict[str, Any]] = None,
-    dataflow_sink: Optional[Dict[str, Any]] = None,
-    dataflow_steps: Optional[list] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    repo_path: Optional[str] = None,
-    profile: Optional[ModelDefenseProfile] = None,
+    dataflow_source: dict[str, Any] | None = None,
+    dataflow_sink: dict[str, Any] | None = None,
+    dataflow_steps: list | None = None,
+    metadata: dict[str, Any] | None = None,
+    repo_path: str | None = None,
+    profile: ModelDefenseProfile | None = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
-    cwe_id: Optional[str] = None,
-    function_name: Optional[str] = None,
+    cwe_id: str | None = None,
+    function_name: str | None = None,
     file_includes: Iterable[str] = (),
     function_calls_made: Iterable[str] = (),
-    ast_view: Optional[Dict[str, Any]] = None,
+    ast_view: dict[str, Any] | None = None,
     allow_unreachable: bool = False,
     verified_outcomes: Iterable[Any] = (),
     budget_tokens: int = 0,
+    exemplar_usage: dict[str, Any] | None = None,
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -562,6 +577,7 @@ def build_analysis_prompt_bundle(
         cwe_id=cwe_id,
         file_includes=tuple(file_includes),
         function_calls_made=tuple(function_calls_made),
+        repo_path=repo_path,
     )
     if strategy_block:
         system += "\n\n" + strategy_block
@@ -574,12 +590,18 @@ def build_analysis_prompt_bundle(
     # untrusted-block envelope rather than the trusted system prompt. Empty
     # unless the caller supplies a corpus and something ranks against this
     # finding, so default behaviour is unchanged.
-    verified_block = _build_verified_exemplar_block(
+    verified_block, exemplar_ids = _build_verified_exemplar_block(
         rule_id=rule_id,
         cwe_id=cwe_id,
         file_path=file_path,
         verified_outcomes=verified_outcomes,
     )
+    if exemplar_ids and exemplar_usage is not None:
+        # PromptBundle is frozen (messages + nonce only), so which
+        # L3 exemplars landed in the prompt travels back through this
+        # caller-supplied dict; the caller persists it on the finding's
+        # analysis record (LabeledAttempt.exemplars_used shape).
+        exemplar_usage["exemplars_used"] = list(exemplar_ids)
     if verified_block:
         blocks.append(UntrustedBlock(
             content=verified_block,
@@ -662,20 +684,6 @@ def build_analysis_prompt_bundle(
                 kind="surrounding-context",
                 origin=file_path,
             ))
-
-    # SAGE historical context is prior LLM output —
-    # propagated trust label is "untrusted".
-    try:
-        from core.sage.hooks import enrich_analysis_prompt
-        sage_context = enrich_analysis_prompt(rule_id, file_path, repo_path=repo_path)
-        if sage_context:
-            blocks.append(UntrustedBlock(
-                content=sage_context,
-                kind="sage-historical-context",
-                origin="sage:cross-run-learning",
-            ))
-    except Exception:
-        pass
 
     # Caller-supplied extra blocks (e.g. RetryTask prior-reasoning + contradictions).
     # All extras are untrusted by definition (callers cannot pass trusted content here).
@@ -772,11 +780,11 @@ def build_dataflow_validation_bundle(
     *,
     rule_id: str,
     message: str,
-    dataflow_source: Dict[str, Any],
-    dataflow_sink: Dict[str, Any],
-    dataflow_steps: Optional[list] = None,
-    sanitizers_found: Optional[list] = None,
-    profile: Optional[ModelDefenseProfile] = None,
+    dataflow_source: dict[str, Any],
+    dataflow_sink: dict[str, Any],
+    dataflow_steps: list | None = None,
+    sanitizers_found: list | None = None,
+    profile: ModelDefenseProfile | None = None,
 ) -> PromptBundle:
     """Build a prompt bundle for deep dataflow validation.
 
@@ -862,9 +870,9 @@ def build_dataflow_validation_bundle(
 
 
 def build_analysis_prompt_bundle_from_finding(
-    finding: Dict[str, Any],
+    finding: dict[str, Any],
     *,
-    profile: Optional[ModelDefenseProfile] = None,
+    profile: ModelDefenseProfile | None = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
     allow_unreachable: bool = False,
     budget_tokens: int = 0,
@@ -879,6 +887,19 @@ def build_analysis_prompt_bundle_from_finding(
     """
     dataflow = finding.get("dataflow", {})
     metadata = finding.get("metadata") or {}
+    # Flow-trace + caller call-site context (prepared once per run via
+    # flow_context_inject.prepare_flow_context). Best-effort: findings
+    # off any traced flow / without caller data add nothing.
+    try:
+        from packages.llm_analysis.flow_context_inject import (
+            context_blocks_for_finding,
+        )
+
+        extra_blocks = tuple(extra_blocks) + context_blocks_for_finding(
+            finding,
+        )
+    except Exception:
+        logger.debug("flow-context injection failed", exc_info=True)
     return build_analysis_prompt_bundle(
         rule_id=finding.get("rule_id", "unknown"),
         level=finding.get("level", "warning"),
@@ -931,9 +952,9 @@ _AST_VIEW_MAX_RETURNS = 10
 
 
 def _render_ast_view_block(
-    ast_view: Dict[str, Any],
+    ast_view: dict[str, Any],
     *,
-    file_path_override: Optional[str] = None,
+    file_path_override: str | None = None,
 ) -> str:
     """Render an ``ast_view`` dict (from ``core.ast.view().to_dict()``)
     as a compact text summary for inclusion in the analysis prompt.
@@ -995,7 +1016,7 @@ def _render_ast_view_block(
         # Deduplicate by callee name; record hit counts. ``chain``
         # is the ordered name components (``["obj", "method"]`` for
         # ``obj.method()``); render the dotted form.
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         order: list = []
         for c in calls:
             chain = c.get("chain") or []

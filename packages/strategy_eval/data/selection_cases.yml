@@ -6,19 +6,27 @@
 # shouldn't — the over-trigger / collision guard.
 #
 # signals: forwarded verbatim to pick_strategies (file_path required).
+#
+# Kernel-vocabulary cases declare `profile: linux_kernel` — the kernel
+# signal bulk lives in the linux_kernel profile pack and is applied at
+# run time by target detection (or an explicit operator profile); the
+# generic strategy YAMLs carry universal signals only.
 
 cases:
   - name: input_handling via netfilter path
-    signals: {file_path: net/netfilter/nf_tables_api.c, function_name: nft_payload_eval}
+    signals: {file_path: net/netfilter/nf_tables_api.c, function_name: nft_payload_eval,
+              profile: linux_kernel}
     expect_selected: [input_handling]
     expect_not_selected: [lifecycle_drift]
 
   - name: concurrency via locking path
-    signals: {file_path: kernel/locking/rwsem.c, function_name: rwsem_down_read}
+    signals: {file_path: kernel/locking/rwsem.c, function_name: rwsem_down_read,
+              profile: linux_kernel}
     expect_selected: [concurrency]
 
   - name: concurrency via mutex include
-    signals: {file_path: src/dev.c, function_name: dev_ioctl, file_includes: [linux/mutex.h]}
+    signals: {file_path: src/dev.c, function_name: dev_ioctl, file_includes: [linux/mutex.h],
+              profile: linux_kernel}
     expect_selected: [concurrency]
 
   - name: memory_management via refcount keyword
@@ -42,12 +50,14 @@ cases:
       file_path: kernel/ptrace.c
       function_name: __ptrace_may_access
       function_calls_made: [get_dumpable]
+      profile: linux_kernel
     expect_selected: [lifecycle_drift]
     # De-collision: it routes via the bespoke callee, not a shared CWE tag.
     expect_not_selected: [auth_privilege]
 
   - name: lifecycle_drift via dumpable keyword
-    signals: {file_path: src/foo.c, function_name: check_dumpable}
+    signals: {file_path: src/foo.c, function_name: check_dumpable,
+              profile: linux_kernel}
     expect_selected: [lifecycle_drift]
 
   # --- over-trigger / collision negatives ---
@@ -67,3 +77,26 @@ cases:
   - name: general always present on a signal-less target
     signals: {file_path: data/blob.bin, function_name: opaque}
     expect_selected: [general]
+
+  # --- universal (non-kernel) seeds route without any profile ---
+
+  - name: memory_management via libc allocator callees
+    signals: {file_path: src/pool.c, function_name: recycle,
+              function_calls_made: [malloc, free]}
+    expect_selected: [memory_management]
+
+  - name: concurrency via pthread callees
+    signals: {file_path: src/worker.c, function_name: drain_queue,
+              function_calls_made: [pthread_mutex_lock, pthread_cond_wait]}
+    expect_selected: [concurrency]
+
+  - name: auth_privilege via setuid callees
+    signals: {file_path: src/helper.c, function_name: drop_privs,
+              function_calls_made: [setuid, setgroups]}
+    expect_selected: [auth_privilege]
+    expect_not_selected: [lifecycle_drift]
+
+  - name: input_handling via libc ingress callees
+    signals: {file_path: src/server/request.c, function_name: read_frame,
+              function_calls_made: [recv, memcpy]}
+    expect_selected: [input_handling]

@@ -49,19 +49,18 @@ def _load_coverage_record(out_dir: Path, tool: str) -> Optional[Dict]:
 
 
 def _findings_for_tool(metrics: Dict, tool: str) -> int:
-    """Count findings attributable to ``tool`` from
-    ``scan_metrics.json::findings_by_rule``. The rule-id namespace
-    distinguishes which tool produced each rule:
+    """Count findings attributable to ``tool``.
 
-      * ``semgrep`` → keys start with ``engine.semgrep.rules.`` or
-        the registry pack notation ``c.lang.security.foo``
-      * ``codeql`` → keys match ``<lang>/<rule-id>`` (slash-separated)
-      * ``coccinelle`` → keys typically snake_case (``lock_imbalance``)
-
-    Returns 0 when no rules match (the tool ran but found nothing,
-    OR the tool didn't run at all — caller distinguishes via
-    coverage-file presence).
+    Prefers the authoritative ``findings_by_tool`` dict (keyed by
+    canonical tool name, populated from SARIF driver metadata).
+    Falls back to rule-id heuristics for old-format metrics files
+    that lack ``findings_by_tool``.
     """
+    by_tool = metrics.get("findings_by_tool")
+    if by_tool and tool in by_tool:
+        v = by_tool[tool]
+        return v if isinstance(v, int) else 0
+
     findings_by_rule = metrics.get("findings_by_rule") or {}
     total = 0
     for rule_id, count in findings_by_rule.items():
@@ -72,19 +71,12 @@ def _findings_for_tool(metrics: Dict, tool: str) -> int:
             if (rule_lower.startswith(("engine.semgrep.", "c.lang.", "python.lang.")) or "semgrep" in rule_lower):
                 total += count
         elif tool == "codeql":
-            # CodeQL convention: ``<lang>/<rule-id>``. The cpp/, py/,
-            # js/ etc. prefixes disambiguate from
-            # semgrep / coccinelle. Filter to slash-separated ids
-            # whose first segment is a known language.
             head = rule_id.split("/", 1)[0] if "/" in rule_id else ""
             if head in {"cpp", "c", "py", "python", "js", "java",
                         "javascript", "ts", "typescript", "go",
                         "rb", "ruby", "cs", "csharp"}:
                 total += count
         elif tool == "coccinelle":
-            # Cocci ids are typically a single snake_case token with
-            # no dots / slashes. Distinguish from Semgrep's dotted
-            # ids by absence of separators.
             if "/" not in rule_id and "." not in rule_id:
                 total += count
     return total

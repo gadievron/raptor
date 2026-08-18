@@ -114,8 +114,8 @@ libexec/raptor-sca-run /path/to/project --offline
 ## Important notes
 
 - Always use absolute paths for the target.
-- 10 manifest/lockfile formats supported: `pom.xml`, `build.gradle`, `gradle.lockfile`, `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements*.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`.
-- 8 ecosystems queried via OSV: Maven / npm / PyPI / Cargo / Go / RubyGems / NuGet / Packagist.
+- ~30 manifest/lockfile parsers, including `pom.xml`, `build.gradle`, `gradle.lockfile`, `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements*.txt`, `pyproject.toml`, `Pipfile.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `go.mod`, `Gemfile.lock`, `composer.lock`, `vcpkg.json`, `conanfile.*`, Helm charts, `.gitmodules`, and CMake FetchContent.
+- 12 ecosystems queried via OSV, including Maven / npm / PyPI / Cargo / Go / RubyGems / NuGet / Packagist / vcpkg / ConanCenter / OSS-Fuzz / GitHub Actions.
 - KEV (CISA known-exploited) and EPSS (FIRST.org probability) are always checked when network is available; both degrade gracefully on outage.
 - Reachability is **module-level** (Python AST + npm import sweep) — flags whether the dep is imported in non-test code, not whether the vulnerable function is called.
 - All optional dependencies (`defusedxml`, `packaging`, `tomli` on 3.10-, `PyYAML`) degrade gracefully — missing one only narrows ecosystem coverage.

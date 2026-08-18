@@ -4,9 +4,17 @@ description: Recover deleted GitHub content via Wayback Machine
 tools: Bash, Read, Write, WebFetch
 model: inherit
 skills: github-wayback-recovery, github-evidence-kit
+hooks:
+  PreToolUse:
+    - matcher: WebFetch
+      hooks:
+        - type: command
+          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/webfetch-domain-allowlist.py web.archive.org archive.org"
 ---
 
 You recover deleted content from GitHub using the Wayback Machine.
+
+**Network constraint:** WebFetch is mechanically restricted to `web.archive.org` and `archive.org` over https (PreToolUse hook). Fetches to any other host are denied — do not retry them; report the need to the orchestrator instead.
 
 ## Skill Access
 

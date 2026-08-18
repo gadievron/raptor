@@ -17,7 +17,8 @@ caller wants. This module centralises both:
     :func:`tarfile.data_filter` plus our own pre-checks (size cap,
     hard-link refusal, special-file refusal, optional absolute-path
     refusal). Returns :class:`UnsafeMemberReason` for diagnostic
-    logging.
+    logging. :func:`is_safe_member` is its boolean wrapper for
+    callers that don't need the diagnostic detail.
   * :func:`extract_files_from_tar` — generic tar walker that
     applies the safety filter, asks a consumer-supplied selector
     for the dict key (or ``None`` to skip), and returns

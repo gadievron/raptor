@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Live proof for the CC credential-proxy posture.
+
+Spawns ONE real ``claude`` CLI child in ``credential_mode="proxy"``
+through the production dispatch substrate (sandboxed
+``run_untrusted_networked`` + dispatcher UDS bridge) and captures
+evidence for five legs:
+
+  A. round-trip succeeded THROUGH the dispatcher (real provider call);
+  B. the child env contained ZERO credential material — the exact env
+     dict is dumped and grepped (AWS_/API_KEY/SECRET/BEARER); only the
+     minted scoped token is present;
+  C. budget enforcement live: the token's budget is set below one
+     call's cost, so a SECOND spawn is refused by the dispatcher with
+     a clear 402 while the parent sees a clean fast failure (no
+     provider traffic for the refused call);
+  D. the token's dispatcher-booked spend matches the provider-reported
+     cost of the call (the CLI's own exit-report figure);
+  E. the child token cannot reach the mint/revoke/spend management
+     endpoints.
+
+Exactly ONE real provider send is made (leg A). Leg C's refusal is
+pre-forward — zero provider traffic. Artifacts (transcript, exact
+child env, spend snapshot, dispatcher audit log) land in ``--out``.
+
+Usage::
+
+    libexec/raptor-cred-proxy-proof [--budget-usd 0.01] [--out DIR]
+"""
+
+from __future__ import annotations
+
+import sys
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+import hashlib  # noqa: E402
+import argparse  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
+
+_BRIDGE_PORT = 61781
+_CRED_SHAPED = re.compile(r"AWS_|API_KEY|SECRET|BEARER")
+_PROOF_PHRASE = "CRED-PROXY-PROOF-OK"
+
+
+class _Transcript:
+    def __init__(self, path: Path):
+        self._path = path
+        self._fh = open(path, "w", encoding="utf-8")  # noqa: SIM115
+
+    def line(self, text: str = "") -> None:
+        print(text)
+        self._fh.write(text + "\n")
+        self._fh.flush()
+
+    def close(self):
+        self._fh.close()
+
+
+def _model_pins() -> list[str]:
+    return [
+        m for m in (
+            os.environ.get("ANTHROPIC_MODEL"),
+            os.environ.get("ANTHROPIC_SMALL_FAST_MODEL"),
+            os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+            os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            os.environ.get("RAPTOR_CC_MODEL"),
+            os.environ.get("RAPTOR_CC_FALLBACK_MODEL"),
+        ) if m
+    ]
+
+
+def _spawn_cc_child(env: dict, out_dir: Path, target_dir: Path,
+                    claude_bin: str, timeout_s: int = 300):
+    """The production dispatch substrate: sandboxed CLI child with the
+    dispatcher UDS bridged into its network namespace."""
+    from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
+    from core.llm.cc_proxy_hosts import (
+        proxy_hosts_for_cc_dispatch,
+        readable_paths_for_cc_dispatch,
+    )
+    from core.sandbox import run_untrusted_networked
+
+    cmd = build_cc_command(CCDispatchConfig(
+        claude_bin=claude_bin,
+        tools="",
+        # CLI-side per-call cap stays generous: the DISPATCHER token
+        # budget is the enforcement under proof, not the CLI's own.
+        budget_usd="2.00",
+        timeout_s=timeout_s,
+        capture_json_envelope=True,
+    ))
+    # Prompt via stdin FILE, matching the production proxy-mode
+    # dispatch: only the fork spawn backend runs the dispatcher bridge
+    # inside the child's netns, and it cannot plumb ``input=``. Same
+    # transport as production — a 0600 tempfile unlinked before the
+    # spawn, so the prompt never persists on disk and the child reads
+    # it through the fd dup2'd onto its stdin.
+    fd, tmp_prompt_path = tempfile.mkstemp(prefix="cc-prompt-")
+    try:
+        os.unlink(tmp_prompt_path)
+        prompt_fh = os.fdopen(fd, "w+b")
+    except OSError:
+        os.close(fd)
+        raise
+    prompt_fh.write(f"Reply with exactly: {_PROOF_PHRASE}".encode())
+    prompt_fh.flush()
+    prompt_fh.seek(0)
+    with prompt_fh:
+        return run_untrusted_networked(
+            cmd,
+            stdin=prompt_fh,
+            text=True, capture_output=True, timeout=timeout_s,
+            target=str(target_dir), output=str(out_dir),
+            cwd=str(out_dir),
+            env=env,
+            keep_trust_markers=True,
+            readable_paths=readable_paths_for_cc_dispatch(claude_bin),
+            proxy_hosts=proxy_hosts_for_cc_dispatch(
+                claude_bin, credential_mode="proxy",
+            ),
+            loopback_unix_bridges={
+                _BRIDGE_PORT: os.environ["RAPTOR_LLM_SOCKET"],
+            },
+            caller_label="cred-proxy-proof",
+        )
+
+
+def _audit_events(audit_path: Path) -> list[dict]:
+    if not audit_path.exists():
+        return []
+    out = []
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--budget-usd", type=float, default=0.01,
+                    help="scoped token budget — deliberately below one "
+                         "call's cost so the run exhausts it (default "
+                         "0.01)")
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--timeout", type=int, default=300)
+    args = ap.parse_args()
+
+    out_dir = args.out or (
+        _RAPTOR_DIR / "out" / f"cred-proxy-proof-{int(time.time())}"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = out_dir / "scratch-target"
+    target_dir.mkdir(exist_ok=True)
+    t = _Transcript(out_dir / "proof-transcript.txt")
+    failures: list[str] = []
+
+    def check(ok: bool, label: str, detail: str = ""):
+        mark = "PASS" if ok else "FAIL"
+        t.line(f"[{mark}] {label}" + (f" — {detail}" if detail else ""))
+        if not ok:
+            failures.append(label)
+
+    from core.llm.cc_adapter import resolve_claude_cli
+    claude_bin = resolve_claude_cli()
+    if not claude_bin:
+        t.line("claude CLI not found — cannot run the live proof")
+        return 2
+
+    # ---- dispatcher (the real one, parent-held credentials) ----
+    from core.llm.dispatcher.auth import CredentialStore, seed_from_config
+    from core.llm.dispatcher.server import LLMDispatcher
+    creds = CredentialStore()
+    seed_from_config(creds)
+    audit_path = out_dir / "audit-llm-dispatcher.jsonl"
+    dispatcher = LLMDispatcher(
+        run_id="cred-proxy-proof", audit_path=audit_path, creds=creds,
+    )
+    os.environ["RAPTOR_LLM_SOCKET"] = str(dispatcher.socket_path)
+    t.line(f"dispatcher up (uds={dispatcher.socket_path.name})")
+
+    try:
+        # ---- mint (parent-side issuance, same store as workers) ----
+        pins = _model_pins()
+        token, info = dispatcher.allocate_child(
+            "cred-proxy-proof",
+            budget_usd=args.budget_usd,
+            models=pins or None,
+            ttl_s=args.timeout + 600,
+        )
+        t.line(
+            f"minted scoped token {info['token_id']}: "
+            f"budget=${args.budget_usd:.4f} ttl={args.timeout + 600}s "
+            f"models={len(pins)} pin(s)"
+        )
+
+        # ---- child env: build + dump + grep (leg B) ----
+        from core.llm.cc_adapter import cc_subprocess_env
+        env = cc_subprocess_env(
+            credential_mode="proxy",
+            proxy_base_url=f"http://127.0.0.1:{_BRIDGE_PORT}",
+            proxy_auth_token=token,
+        )
+        env_path = out_dir / "child-env.txt"
+
+        def _masked(value: str) -> str:
+            # The evidence dump proves which VARS the child received —
+            # never persist the live token value itself. Mask it with a
+            # fingerprint so the transcript stays verifiable.
+            if token and token in value:
+                digest = hashlib.sha256(token.encode()).hexdigest()[:12]
+                return value.replace(
+                    token, f"<masked sha256:{digest} len={len(token)}>"
+                )
+            return value
+
+        with open(env_path, "w", encoding="utf-8") as fh:
+            fh.writelines(
+                f"{k}={_masked(str(env[k]))}\n" for k in sorted(env)
+            )
+        os.chmod(env_path, 0o600)
+        offenders = sorted(k for k in env if _CRED_SHAPED.search(k))
+        token_vars = sorted(
+            k for k, v in env.items() if token and token in str(v)
+        )
+        check(
+            offenders == [],
+            "leg B: zero credential material in child env",
+            f"cred-shaped keys={offenders or 'none'}; env dumped to "
+            f"{env_path.name} ({len(env)} vars)",
+        )
+        check(
+            token_vars == ["ANTHROPIC_AUTH_TOKEN"],
+            "leg B: only the minted token present",
+            f"token-bearing vars={token_vars}",
+        )
+
+        # ---- leg E: child token cannot reach the management plane ----
+        # Run while the token is ACTIVE so the check exercises the
+        # plane/kind gate itself (an exhausted token would be turned
+        # away earlier, with a 401, proving less).
+        import httpx
+        transport = httpx.HTTPTransport(uds=str(dispatcher.socket_path))
+        with httpx.Client(transport=transport, timeout=10.0) as client:
+            statuses = {}
+            for op, payload in (
+                ("mint", {"budget_usd": 100.0}),
+                ("revoke", {"token_id": info["token_id"]}),
+                ("spend", {"token_id": info["token_id"]}),
+            ):
+                r = client.post(
+                    f"http://_/_child/{op}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    content=json.dumps(payload).encode(),
+                )
+                statuses[op] = r.status_code
+        check(
+            all(s == 403 for s in statuses.values()),
+            "leg E: management endpoints refuse the child token",
+            f"statuses={statuses}",
+        )
+        still = dispatcher.child_spend(info["token_id"]) or {}
+        check(
+            still.get("budget_usd") == args.budget_usd
+            and still.get("status") in ("pending", "active"),
+            "leg E: no escalation side effects",
+            f"status={still.get('status')} "
+            f"budget=${still.get('budget_usd')}",
+        )
+
+        # ---- run 1: the ONE real provider send (leg A) ----
+        t.line("spawning sandboxed claude child (production path)…")
+        t0 = time.monotonic()
+        proc = _spawn_cc_child(
+            env, out_dir, target_dir, claude_bin, args.timeout,
+        )
+        run1_s = time.monotonic() - t0
+        envelope: dict = {}
+        try:
+            envelope = json.loads(proc.stdout.strip())
+        except (json.JSONDecodeError, ValueError):
+            pass
+        result_text = str(envelope.get("result", ""))
+        child_cost = envelope.get("total_cost_usd") or 0.0
+        (out_dir / "run1-envelope.json").write_text(
+            json.dumps(envelope, indent=2), encoding="utf-8",
+        )
+        check(
+            proc.returncode == 0 and _PROOF_PHRASE in result_text,
+            "leg A: round-trip through the dispatcher",
+            f"rc={proc.returncode} in {run1_s:.1f}s; "
+            f"result={result_text[:60]!r}; child-reported cost "
+            f"${child_cost:.6f}",
+        )
+        events = _audit_events(audit_path)
+        dispatched = [
+            e for e in events
+            if e.get("event") == "request.dispatch"
+            and e.get("status") == "ok"
+        ]
+        spends = [
+            e for e in events if e.get("event") == "child_token.spend"
+        ]
+        check(
+            len(dispatched) >= 1 and len(spends) >= 1,
+            "leg A: dispatcher audit shows the forwarded call + booking",
+            f"request.dispatch={len(dispatched)} "
+            f"child_token.spend={len(spends)}",
+        )
+
+        # ---- leg D: dispatcher ledger vs provider-reported cost ----
+        spend = dispatcher.child_spend(info["token_id"]) or {}
+        (out_dir / "spend.json").write_text(
+            json.dumps(spend, indent=2), encoding="utf-8",
+        )
+        booked = float(spend.get("spent_usd") or 0.0)
+        ratio = (booked / child_cost) if child_cost else 0.0
+        check(
+            booked > 0 and child_cost > 0 and 0.25 <= ratio <= 4.0,
+            "leg D: token spend matches provider-reported cost",
+            f"dispatcher=${booked:.6f} child-report=${child_cost:.6f} "
+            f"ratio={ratio:.2f} "
+            f"(requests={spend.get('requests_made')}, "
+            f"model={spend.get('last_model')})",
+        )
+        check(
+            booked >= args.budget_usd,
+            "leg C precondition: one call exhausted the budget",
+            f"booked ${booked:.6f} >= budget ${args.budget_usd:.4f}",
+        )
+
+        # ---- run 2: refused pre-forward, clean fast failure (leg C) ----
+        n_dispatch_before = len(dispatched)
+        t0 = time.monotonic()
+        proc2 = _spawn_cc_child(
+            env, out_dir, target_dir, claude_bin, args.timeout,
+        )
+        run2_s = time.monotonic() - t0
+        events = _audit_events(audit_path)
+        rejects = [
+            e for e in events
+            if e.get("event") == "child_token.reject"
+            and "budget exhausted" in (e.get("reason") or "")
+        ]
+        dispatched_after = [
+            e for e in events
+            if e.get("event") == "request.dispatch"
+            and e.get("status") == "ok"
+        ]
+        combined = (proc2.stdout or "") + (proc2.stderr or "")
+        check(
+            proc2.returncode != 0 and run2_s < args.timeout,
+            "leg C: exhausted token → clean fast child failure, no hang",
+            f"rc={proc2.returncode} in {run2_s:.1f}s",
+        )
+        check(
+            len(rejects) >= 1,
+            "leg C: dispatcher refused with the budget error",
+            (rejects[0].get("reason") if rejects else "no reject event"),
+        )
+        check(
+            len(dispatched_after) == n_dispatch_before,
+            "leg C: refused call produced ZERO provider traffic",
+            f"request.dispatch count {n_dispatch_before} → "
+            f"{len(dispatched_after)}",
+        )
+        check(
+            ("402" in combined) or ("exhausted" in combined.lower()),
+            "leg C: the budget error surfaced to the parent",
+            combined.strip()[-160:].replace("\n", " ") or "(no output)",
+        )
+        (out_dir / "run2-output.txt").write_text(
+            combined, encoding="utf-8",
+        )
+
+        # ---- settle ----
+        dispatcher.revoke_child(info["token_id"])
+        final = dispatcher.child_spend(info["token_id"]) or {}
+        t.line(
+            f"settled: token {info['token_id']} revoked; final spend "
+            f"${final.get('spent_usd', 0):.6f} of "
+            f"${args.budget_usd:.4f} budget"
+        )
+    finally:
+        dispatcher.shutdown()
+
+    t.line()
+    if failures:
+        t.line(f"PROOF FAILED — {len(failures)} leg(s): {failures}")
+        t.line(f"artifacts: {out_dir}")
+        t.close()
+        return 1
+    t.line("PROOF PASSED — all legs")
+    t.line(f"artifacts: {out_dir}")
+    t.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

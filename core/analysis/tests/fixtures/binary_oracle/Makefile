@@ -8,7 +8,12 @@
 
 CC      ?= gcc
 CFLAGS  ?= -O2 -g -ffunction-sections -fdata-sections
-LDFLAGS ?= -Wl,--gc-sections
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    LDFLAGS ?= -Wl,-dead_strip
+else
+    LDFLAGS ?= -Wl,--gc-sections
+endif
 
 # Detect an ICF-capable linker. lld supports --icf=all unconditionally;
 # GNU ld grew --icf=safe later (binutils 2.38+). Order: lld → GNU ld --icf.

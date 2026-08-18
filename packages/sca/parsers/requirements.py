@@ -16,9 +16,15 @@ Ignored (intentionally — these are pip behaviour, not deps):
 Recursion safety:
 - Visited-set keyed by resolved absolute path → no cycles.
 - Depth cap (``_MAX_INCLUDE_DEPTH``) → bounded work on adversarial files.
-- Includes that escape the manifest's directory are still followed (we
-  don't enforce containment) but a warning is logged so the operator
-  notices the unusual layout.
+- Include containment: absolute ``-r``/``-c`` targets are refused, and
+  relative targets whose RESOLVED path escapes the scan root are refused
+  with a warning. Same threat shape (hostile manifest steering reads at
+  arbitrary files) and same idiom as ``pom_inheritance.py`` / ``sln.py``.
+  When no ``scan_root`` is supplied (registry dispatch passes only the
+  path), the bound falls back to the manifest's grandparent directory —
+  weaker, but covers the common ``requirements/dev.txt → -r ../base.txt``
+  layout without opening arbitrary traversal. Nested includes inherit
+  the same bound.
 """
 
 from __future__ import annotations
@@ -26,7 +32,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register
@@ -82,7 +87,8 @@ _PIP_OPTION_PREFIXES = (
     "--python-version",
     "--implementation",
     "--abi",
-    "--editable=",    # only the bare-flag form; --editable <spec> is handled below
+    # --editable is NOT listed here; --editable=<spec> is handled
+    # alongside -e / --editable <spec> in the parse loop below.
 )
 
 # Lines that begin with this hash form are pure comments — anywhere else
@@ -111,23 +117,51 @@ _GIT_URL_PREFIXES = ("git+", "git:", "git@")
 _VCS_PREFIXES = _GIT_URL_PREFIXES + ("hg+", "svn+", "bzr+")
 
 
-def parse(path: Path) -> List[Dependency]:
-    """Entry point — parse the file plus any -r/-c includes."""
+def parse(
+    path: Path, *, scan_root: Path | None = None,
+) -> list[Dependency]:
+    """Entry point — parse the file plus any -r/-c includes.
+
+    ``scan_root`` is the scan-target root. When provided, every
+    ``-r``/``-c`` include must resolve under it. When omitted (the
+    registry dispatch passes only the path), the bound falls back
+    to the manifest's grandparent directory — mirroring the
+    ``sln.py`` legacy-caller fallback: strictly weaker, but still
+    refuses ``-r ../../../etc/passwd``-style traversal.
+    """
     if not _AVAILABLE:
         logger.warning(
             "sca.parsers.requirements: skipping %s — 'packaging' not installed",
             path,
         )
         return []
-    visited: Set[Path] = set()
-    return _parse_file(path, depth=0, visited=visited)
+    try:
+        top = path.resolve(strict=False)
+    except OSError as e:
+        logger.warning(
+            "sca.parsers.requirements: cannot resolve %s: %s", path, e
+        )
+        return []
+    if scan_root is not None:
+        try:
+            include_bound = scan_root.resolve()
+        except OSError:
+            include_bound = top.parent.parent
+    else:
+        include_bound = top.parent.parent
+    visited: set[Path] = set()
+    return _parse_file(
+        path, depth=0, visited=visited, include_bound=include_bound,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
-def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
+def _parse_file(
+    path: Path, depth: int, visited: set[Path], include_bound: Path,
+) -> list[Dependency]:
     if depth > _MAX_INCLUDE_DEPTH:
         logger.warning(
             "sca.parsers.requirements: include depth cap hit at %s; "
@@ -154,7 +188,7 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
         )
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for raw_line in _logical_lines(text):
         commented = False
         stripped = raw_line.strip()
@@ -166,22 +200,37 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
             # what's left doesn't parse as a PEP 508 line, the parser
             # silently drops it (so ``# pip install foo`` and ``# this
             # is just a note`` don't pollute findings).
-            body = stripped.lstrip("#").lstrip()
+            raw_body = stripped.lstrip("#").lstrip()
+            body = _strip_comment(raw_body)
             if not body:
                 continue
+            # Preserve the inline comment for round-trip rewriting.
+            inline_note = raw_body[len(body):].lstrip()
+            if inline_note.startswith("#"):
+                inline_note = inline_note[1:].lstrip()
+            else:
+                inline_note = ""
             line = body
             commented = True
         else:
+            inline_note = ""
             line = _strip_comment(raw_line).strip()
             if not line:
                 continue
         if commented and line.startswith(("-r ", "--requirement ", "--requirement=", "-c ", "--constraint ", "--constraint=")):
             continue
         if line.startswith(("-r ", "--requirement ", "--requirement=", "-c ", "--constraint ", "--constraint=")):
-            include_path = _include_path(line, resolved.parent)
+            include_path = _include_path(
+                line, resolved.parent, include_bound=include_bound,
+                declared_in=resolved,
+            )
             if include_path is None:
                 continue
-            deps.extend(_parse_file(include_path, depth + 1, visited))
+            # Nested includes inherit the same containment bound.
+            deps.extend(_parse_file(
+                include_path, depth + 1, visited,
+                include_bound=include_bound,
+            ))
             continue
         if _is_pip_option(line):
             continue
@@ -190,6 +239,9 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
         if line.startswith(("-e ", "--editable ")):
             editable = True
             line = line.split(maxsplit=1)[1].strip()
+        elif line.startswith("--editable="):
+            editable = True
+            line = line.split("=", 1)[1].strip()
 
         # Strip trailing inline directives that pip permits on a
         # requirement line (currently just ``--hash=...``). Anything
@@ -201,16 +253,17 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
         d = _parse_requirement_line(
             line, declared_in=resolved, editable=editable,
             commented=commented,
+            inline_comment=inline_note or None,
         )
         if d is not None:
             deps.append(d)
     return deps
 
 
-def _logical_lines(text: str) -> List[str]:
+def _logical_lines(text: str) -> list[str]:
     """Join backslash-continued lines into single logical lines."""
-    out: List[str] = []
-    buf: List[str] = []
+    out: list[str] = []
+    buf: list[str] = []
     for raw in text.splitlines():
         if raw.endswith("\\"):
             buf.append(raw[:-1])
@@ -234,7 +287,7 @@ def _strip_comment(line: str) -> str:
     if _COMMENT_LINE_RE.match(line):
         return ""
     # Find first '#' preceded by whitespace.
-    out_chars: List[str] = []
+    out_chars: list[str] = []
     prev_was_space = True   # treat start-of-line as preceding whitespace
     for ch in line:
         if ch == "#" and prev_was_space:
@@ -252,7 +305,7 @@ def _strip_inline_directives(line: str) -> str:
     """
     # Tokenise on whitespace; truncate at the first directive token.
     tokens = line.split()
-    out: List[str] = []
+    out: list[str] = []
     for tok in tokens:
         if tok.startswith("--hash"):
             break
@@ -264,13 +317,22 @@ def _is_pip_option(line: str) -> bool:
     head = line.split()[0] if line.split() else ""
     if head.startswith("--"):
         return any(line.startswith(p) for p in _PIP_OPTION_PREFIXES)
-    if head in ("-i", "-f"):
-        return True
-    return False
+    return head in ("-i", "-f")
 
 
-def _include_path(line: str, parent_dir: Path) -> Optional[Path]:
-    """Extract the path argument from ``-r``/``--requirement``/``-c`` lines."""
+def _include_path(
+    line: str, parent_dir: Path, *,
+    include_bound: Path, declared_in: Path,
+) -> Path | None:
+    """Extract the path argument from ``-r``/``--requirement``/``-c`` lines.
+
+    Containment: absolute include targets are refused outright, and
+    relative targets are resolved and required to live under
+    ``include_bound`` — a hostile manifest must not steer the parser
+    at files outside the scan target (``-r ../../../etc/passwd``).
+    Refusals log at warning level so the operator sees the layout
+    was rejected rather than silently missing deps.
+    """
     parts = line.split(maxsplit=1)
     if len(parts) == 1 and "=" in parts[0]:
         _, _, candidate = parts[0].partition("=")
@@ -287,8 +349,37 @@ def _include_path(line: str, parent_dir: Path) -> Optional[Path]:
         return None
     candidate = parts_ws[0]
     p = Path(candidate)
-    if not p.is_absolute():
-        p = parent_dir / p
+    if p.is_absolute():
+        logger.warning(
+            "sca.parsers.requirements: refusing absolute include %r "
+            "in %s (path traversal defence)",
+            candidate, declared_in,
+        )
+        return None
+    p = parent_dir / p
+    # SECURITY: confine to the scan root. ``Path.resolve()`` follows
+    # symlinks, so a symlinked include target pointing outside the
+    # project is also caught — the resolved real path won't be under
+    # the bound.
+    try:
+        resolved = p.resolve(strict=False)
+    except OSError as e:
+        logger.warning(
+            "sca.parsers.requirements: cannot resolve include %r "
+            "in %s: %s",
+            candidate, declared_in, e,
+        )
+        return None
+    try:
+        resolved.relative_to(include_bound)
+    except ValueError:
+        logger.warning(
+            "sca.parsers.requirements: refusing include %r in %s — "
+            "resolves to %s, outside the scan root %s "
+            "(path traversal defence)",
+            candidate, declared_in, resolved, include_bound,
+        )
+        return None
     return p
 
 
@@ -298,7 +389,8 @@ def _parse_requirement_line(
     declared_in: Path,
     editable: bool,
     commented: bool = False,
-) -> Optional[Dependency]:
+    inline_comment: str | None = None,
+) -> Dependency | None:
     """Parse one non-include requirement line; return None if unparseable."""
     if _looks_like_url_only(line):
         if commented:
@@ -338,9 +430,6 @@ def _parse_requirement_line(
         else:
             pin_style = PinStyle.PATH
 
-    if editable and pin_style is PinStyle.UNKNOWN:
-        pin_style = PinStyle.PATH
-
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=_normalise_name(name),
@@ -355,6 +444,7 @@ def _parse_requirement_line(
         version_floor=version_floor,
         version_ceiling=version_ceiling,
         commented_out=commented,
+        inline_comment=inline_comment,
     )
 
 
@@ -363,21 +453,21 @@ def _looks_like_url_only(line: str) -> bool:
     head = line.split(" ", 1)[0]
     if head.startswith(_VCS_PREFIXES):
         return True
-    if head.startswith(("http://", "https://", "file:", "./", "../", "/", "~/")):
-        return True
-    return False
+    return head.startswith(
+        ("http://", "https://", "file:", "./", "../", "/", "~/")
+    )
 
 
 def _from_url_spec(
     spec: str, declared_in: Path, *, editable: bool
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Best-effort row for a bare URL/path requirement.
 
     The dependency name is recovered from ``#egg=name`` if present; otherwise
     we synthesise a placeholder so dedup still works.
     """
-    name: Optional[str] = None
-    version: Optional[str] = None
+    name: str | None = None
+    version: str | None = None
     if "#egg=" in spec:
         egg = spec.split("#egg=", 1)[1].split("&", 1)[0]
         if "==" in egg:
@@ -390,8 +480,6 @@ def _from_url_spec(
         name = f"<url:{Path(spec).name or spec}>"
 
     pin_style = PinStyle.GIT if spec.startswith(_VCS_PREFIXES) else PinStyle.PATH
-    if editable and pin_style is PinStyle.UNKNOWN:
-        pin_style = PinStyle.PATH
 
     return Dependency(
         ecosystem=ECOSYSTEM,
@@ -412,8 +500,8 @@ def _from_url_spec(
 
 def _classify_specifier(
     spec: SpecifierSet,
-    url: Optional[str],
-) -> Tuple[PinStyle, Optional[str]]:
+    url: str | None,
+) -> tuple[PinStyle, str | None]:
     if url:
         # Resolved by the caller.
         return PinStyle.UNKNOWN, None
@@ -441,15 +529,18 @@ def _classify_specifier(
     return PinStyle.RANGE, None
 
 
-def _spec_bounds(spec) -> Tuple[Optional[str], Optional[str]]:
+def _spec_bounds(spec) -> tuple[str | None, str | None]:
     """Return ``(floor, ceiling)`` from a ``SpecifierSet``: the tightest
     lower (``>=`` / ``>``) and upper (``<`` / ``<=``) version bounds, or
     None when absent.
 
     harden records these so a future bounded *downgrade* knows how far
-    down is acceptable (floor) and an upgrade knows its ceiling. ``==`` /
-    ``~=`` / ``!=`` clauses pin or exclude — they don't bound the
-    corridor — so they're ignored here.
+    down is acceptable (floor) and an upgrade knows its ceiling. ``==``
+    and ``!=`` clauses pin or exclude — they don't bound the corridor —
+    and ``~=`` is treated the same way: although PEP 440 gives it an
+    implied upper bound (``~=1.4.2`` means ``>=1.4.2, <1.5``), we do
+    not derive that ceiling here; only explicit ``>=`` / ``>`` / ``<``
+    / ``<=`` clauses count.
     """
     if spec is None or Version is None:
         return None, None
@@ -473,7 +564,7 @@ def _normalise_name(name: str) -> str:
 
 
 def _confidence(
-    pin_style: PinStyle, version: Optional[str], editable: bool
+    pin_style: PinStyle, version: str | None, editable: bool
 ) -> Confidence:
     if editable:
         return Confidence(
@@ -492,7 +583,7 @@ def _confidence(
     return Confidence("high", reason="requirements.txt structured spec")
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:pypi/{_normalise_name(name)}"
     if version:
         return f"{base}@{version}"

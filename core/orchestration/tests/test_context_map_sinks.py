@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from core.inventory.sink_discovery import (
+    FrameworkAPI,
+    SinkDiscoveryResult,
+    SinkInfo,
+    TransitiveReach,
+)
 from core.orchestration.context_map_sinks import (
     _annotate_entry_points,
     _classify_sink_type,
@@ -12,12 +19,6 @@ from core.orchestration.context_map_sinks import (
     _next_sink_id,
     _populate_sinks_array,
     enrich_with_sink_discovery,
-)
-from core.inventory.sink_discovery import (
-    FrameworkAPI,
-    SinkDiscoveryResult,
-    SinkInfo,
-    TransitiveReach,
 )
 
 
@@ -321,7 +322,7 @@ class TestE2ELibexecShim:
         result = subprocess.run(
             ["python3", str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
             env={
                 **dict(__import__("os").environ),
                 "_RAPTOR_TRUSTED": "1",
@@ -364,7 +365,7 @@ class TestE2ELibexecShim:
         result2 = subprocess.run(
             ["python3", str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
             env={
                 **dict(__import__("os").environ),
                 "_RAPTOR_TRUSTED": "1",
@@ -381,6 +382,268 @@ class TestE2ELibexecShim:
             if s.get("source") == "mechanical"
         ]
         assert len(mech_sinks2) == len(mech_sinks)
+
+
+# ---------------------------------------------------------------------------
+# Heuristic project sinks (audit sink_heuristics engine → map catalog)
+# ---------------------------------------------------------------------------
+
+
+class TestMergeHeuristicSinks:
+    def test_wrapper_sink_enters_catalog(self, tmp_path: Path):
+        target = tmp_path / "project"
+        target.mkdir()
+        (target / "handler.py").write_text(
+            "import os\n"
+            "def sh(c):\n"
+            "    os.system(c)\n"
+            "def safe_exec(c):\n"
+            "    sh(c)\n"
+            "def route_a(c):\n"
+            "    safe_exec(c)\n"
+            "def route_b(c):\n"
+            "    safe_exec(c)\n"
+        )
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target)
+
+        heuristic = [
+            s for s in context_map["sink_details"]
+            if s.get("source") == "heuristic"
+        ]
+        assert heuristic, "wrapper sink must enter the catalog"
+        names = {s["name"] for s in heuristic}
+        assert "safe_exec" in names
+        entry = next(s for s in heuristic if s["name"] == "safe_exec")
+        assert entry["confidence"] in ("high", "medium")
+        assert "wrap" in entry["description"].lower()
+        # Flat sinks array carries the project-sink marker.
+        flat = [
+            s for s in context_map["sinks"]
+            if s.get("function") == "safe_exec"
+        ]
+        assert flat and flat[0]["target"].startswith("[project]")
+
+    def test_idempotent(self, tmp_path: Path):
+        target = tmp_path / "project"
+        target.mkdir()
+        (target / "handler.py").write_text(
+            "import os\n"
+            "def sh(c):\n"
+            "    os.system(c)\n"
+            "def safe_exec(c):\n"
+            "    sh(c)\n"
+            "def route_a(c):\n"
+            "    safe_exec(c)\n"
+            "def route_b(c):\n"
+            "    safe_exec(c)\n"
+        )
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target)
+        n1 = len(context_map["sink_details"])
+        enrich_with_sink_discovery(context_map, target)
+        assert len(context_map["sink_details"]) == n1
+
+
+# ---------------------------------------------------------------------------
+# Macro-hidden sinks from the fidelity-3 expanded view
+# ---------------------------------------------------------------------------
+
+
+class _FakeView:
+    def __init__(self, ok, lines, origins):
+        self.ok = ok
+        self._lines = lines
+        self._origins = origins
+
+    def lines(self):
+        return self._lines
+
+    def origin_of(self, idx):
+        return self._origins.get(idx)
+
+
+class TestMergeExpandedViewSinks:
+    def _target(self, tmp_path: Path) -> Path:
+        target = tmp_path / "cproj"
+        target.mkdir()
+        (target / "main.c").write_text(
+            "#define SAFE_COPY(d, s) strcpy(d, s)\n"     # 1
+            "void f(char *d, char *s) {\n"               # 2
+            "    SAFE_COPY(d, s);\n"                      # 3
+            "}\n",                                        # 4
+        )
+        return target
+
+    def test_macro_hidden_sink_cataloged(self, tmp_path: Path, monkeypatch):
+        import core.audit.preprocessor_view as pv
+
+        target = self._target(tmp_path)
+        fake = _FakeView(
+            ok=True,
+            lines=[
+                "void f(char *d, char *s) {",
+                "    strcpy(d, s);",   # macro-expanded: raw line 3 has no strcpy
+                "}",
+            ],
+            origins={1: ("main.c", 2), 2: ("main.c", 3), 3: ("main.c", 4)},
+        )
+        monkeypatch.setattr(
+            pv, "expand_translation_unit", lambda **kw: fake,
+        )
+
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target)
+
+        expanded = [
+            s for s in context_map["sink_details"]
+            if s.get("source") == "mechanical-expanded"
+        ]
+        assert len(expanded) == 1
+        entry = expanded[0]
+        assert entry["file"] == "main.c"
+        assert entry["line"] == 3
+        assert entry["dangerous_target"] == "strcpy"
+        assert "macro expansion" in entry["description"]
+
+    def test_visible_call_not_cataloged(self, tmp_path: Path, monkeypatch):
+        """A call already visible in raw source is not macro-hidden."""
+        import core.audit.preprocessor_view as pv
+
+        target = tmp_path / "cproj"
+        target.mkdir()
+        (target / "main.c").write_text(
+            "void f(char *d, char *s) {\n"    # 1
+            "    strcpy(d, s);\n"             # 2 — visible in raw
+            "    OTHER_MACRO(d);\n"           # 3 — triggers prefilter
+            "}\n",
+        )
+        fake = _FakeView(
+            ok=True,
+            lines=["void f(char *d, char *s) {", "    strcpy(d, s);", "}"],
+            origins={1: ("main.c", 1), 2: ("main.c", 2), 3: ("main.c", 4)},
+        )
+        monkeypatch.setattr(
+            pv, "expand_translation_unit", lambda **kw: fake,
+        )
+
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target)
+        assert not [
+            s for s in context_map["sink_details"]
+            if s.get("source") == "mechanical-expanded"
+        ]
+
+    def test_failed_expansion_degrades(self, tmp_path: Path, monkeypatch):
+        import core.audit.preprocessor_view as pv
+
+        target = self._target(tmp_path)
+        monkeypatch.setattr(
+            pv, "expand_translation_unit",
+            lambda **kw: _FakeView(ok=False, lines=[], origins={}),
+        )
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target)
+        assert not [
+            s for s in context_map["sink_details"]
+            if s.get("source") == "mechanical-expanded"
+        ]
+
+    def test_expand_macros_opt_out(self, tmp_path: Path, monkeypatch):
+        import core.audit.preprocessor_view as pv
+
+        target = self._target(tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            pv, "expand_translation_unit",
+            lambda **kw: calls.append(kw),
+        )
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(context_map, target, expand_macros=False)
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Audit discovered-sinks.json import
+# ---------------------------------------------------------------------------
+
+
+class TestImportAuditDiscoveredSinks:
+    def _write_artifact(self, d: Path):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "discovered-sinks.json").write_text(json.dumps({
+            "discovered_sinks": [
+                {
+                    "file": "src/io.c",
+                    "function": "safe_memcpy",
+                    "reason": "wrapper",
+                    "confidence": "high",
+                    "wraps": ["memcpy"],
+                    "caller_count": 7,
+                },
+                {
+                    "file": "src/io.c",
+                    "function": "maybe_sink",
+                    "reason": "naming",
+                    "confidence": "low",
+                },
+            ],
+            "counts": {"total": 2, "wrapper": 1, "naming": 1,
+                       "side_effect": 0},
+        }))
+
+    def test_colocated_import(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import (
+            _import_audit_discovered_sinks,
+        )
+
+        run_dir = tmp_path / "understand_1"
+        self._write_artifact(run_dir)
+        context_map = {"sink_details": [], "sinks": []}
+        added = _import_audit_discovered_sinks(context_map, run_dir)
+        assert added == 1
+        entry = context_map["sink_details"][0]
+        assert entry["name"] == "safe_memcpy"
+        assert entry["source"] == "audit-heuristic"
+        assert "memcpy" in entry["dangerous_target"]
+        # LOW confidence must not enter the catalog.
+        names = {s["name"] for s in context_map["sink_details"]}
+        assert "maybe_sink" not in names
+
+    def test_project_sibling_import(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import (
+            _import_audit_discovered_sinks,
+        )
+
+        project = tmp_path / "project"
+        run_dir = project / "understand_1"
+        run_dir.mkdir(parents=True)
+        self._write_artifact(project / "audit_20260810")
+
+        context_map = {"sink_details": [], "sinks": []}
+        assert _import_audit_discovered_sinks(context_map, run_dir) == 1
+
+    def test_no_artifact_noop(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import (
+            _import_audit_discovered_sinks,
+        )
+
+        run_dir = tmp_path / "understand_1"
+        run_dir.mkdir()
+        context_map = {"sink_details": [], "sinks": []}
+        assert _import_audit_discovered_sinks(context_map, run_dir) == 0
+
+    def test_import_idempotent(self, tmp_path: Path):
+        from core.orchestration.context_map_sinks import (
+            _import_audit_discovered_sinks,
+        )
+
+        run_dir = tmp_path / "understand_1"
+        self._write_artifact(run_dir)
+        context_map = {"sink_details": [], "sinks": []}
+        _import_audit_discovered_sinks(context_map, run_dir)
+        _import_audit_discovered_sinks(context_map, run_dir)
+        assert len(context_map["sink_details"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -419,3 +682,40 @@ class TestPopulateSinksArray:
         result = _sample_result()
         _populate_sinks_array(cmap, result)
         assert len(cmap["sinks"]) == 5  # 1 existing + 2 callers + 2 callees
+
+
+class TestMergeIrisSinks:
+    def test_extra_sinks_enter_catalog_with_provenance(self, tmp_path: Path):
+        target = tmp_path / "project"
+        target.mkdir()
+        (target / "noop.py").write_text("def f():\n    pass\n")
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        modified = enrich_with_sink_discovery(
+            context_map, target,
+            extra_sinks=frozenset({"safe_copy", "run_query"}),
+        )
+        assert modified >= 2
+        iris = [
+            s for s in context_map["sink_details"]
+            if s.get("source") == "iris"
+        ]
+        assert {s["name"] for s in iris} == {"safe_copy", "run_query"}
+        flat = {
+            s["function"] for s in context_map["sinks"]
+            if not s.get("direct", True)
+        }
+        assert {"safe_copy", "run_query"} <= flat
+
+    def test_extra_sinks_idempotent(self, tmp_path: Path):
+        target = tmp_path / "project"
+        target.mkdir()
+        (target / "noop.py").write_text("def f():\n    pass\n")
+        context_map = {"entry_points": [], "sink_details": [], "meta": {}}
+        enrich_with_sink_discovery(
+            context_map, target, extra_sinks=frozenset({"safe_copy"}),
+        )
+        n = len(context_map["sink_details"])
+        enrich_with_sink_discovery(
+            context_map, target, extra_sinks=frozenset({"safe_copy"}),
+        )
+        assert len(context_map["sink_details"]) == n

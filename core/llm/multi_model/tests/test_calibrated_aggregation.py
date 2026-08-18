@@ -61,6 +61,38 @@ def test_multi_model_finding_uses_dawid_skene():
     assert verdicts["F1"].n_models == 3
     assert verdicts["F1"].decision_class == "agentic:rule-a"
     assert 0.0 <= verdicts["F1"].posterior_true_positive <= 1.0
+    # The prior the EM ran under is the key interpretive caveat on the
+    # posterior — it must ride along on the D-S path.
+    prior = verdicts["F1"].class_prior
+    assert prior is not None
+    assert set(prior) == {"alpha", "beta", "mean"}
+
+
+def test_class_prior_reflects_priors_by_class():
+    strong_prior = weak_informative_prior(mean=0.05, strength=200.0)
+    results = {
+        "F1": _make_finding("F1", "rule-x", analyses=[
+            _entry("m1", True), _entry("m2", True), _entry("m3", True),
+        ]),
+    }
+    verdicts = calibrate_results(
+        results,
+        default_prior=uniform_prior(),
+        priors_by_class={"agentic:rule-x": strong_prior},
+    )
+    if verdicts["F1"].aggregation_method == METHOD_DAWID_SKENE:
+        prior = verdicts["F1"].class_prior
+        assert prior is not None
+        assert abs(prior["mean"] - 0.05) < 1e-9
+
+
+def test_vote_fallback_has_no_class_prior():
+    results = {
+        "F1": _make_finding("F1", "rule-a", analyses=[_entry("m1", True)]),
+    }
+    verdicts = calibrate_results(results)
+    assert verdicts["F1"].aggregation_method == METHOD_VOTE
+    assert verdicts["F1"].class_prior is None
 
 
 def test_unanimous_panel_gives_strong_posterior_with_many_findings():
@@ -169,6 +201,40 @@ def test_all_error_panel_falls_back():
     verdicts = calibrate_results(results)
     assert verdicts["F1"].aggregation_method == METHOD_VOTE
     assert verdicts["F1"].aggregation_fallback_reason == "no_panel"
+
+
+def test_non_converged_ds_falls_through_to_vote(monkeypatch):
+    """When D-S does not converge, the finding should fall through to the
+    vote fallback rather than being labeled 'dawid_skene' with unconverged
+    posterior data."""
+    from core.llm.multi_model import calibrated_aggregation as ca
+    from core.llm.multi_model.dawid_skene import (
+        DawidSkeneResult, FindingPosterior,
+    )
+    from core.llm.scorecard.priors import uniform_prior
+
+    fake_result = DawidSkeneResult(
+        decision_class="agentic:rule-a",
+        findings=[FindingPosterior(
+            finding_id="F1", decision_class="agentic:rule-a",
+            posterior=0.99,
+            credible_interval=(0.8, 1.0), n_models=3,
+        )],
+        model_reliabilities=[],
+        iterations=100,
+        converged=False,
+        class_prior=uniform_prior(),
+    )
+    monkeypatch.setattr(ca, "estimate_partitioned", lambda *a, **kw: [fake_result])
+
+    results = {
+        "F1": _make_finding("F1", "rule-a", is_exploitable=True, analyses=[
+            _entry("m1", True), _entry("m2", True), _entry("m3", False),
+        ]),
+    }
+    verdicts = calibrate_results(results)
+    assert verdicts["F1"].aggregation_method == METHOD_VOTE
+    assert verdicts["F1"].aggregation_fallback_reason == "ds_did_not_converge"
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +352,11 @@ def test_verdict_to_json_round_trips():
     assert len(recovered["credible_interval"]) == 2
     assert isinstance(recovered["n_models"], int)
     assert isinstance(recovered["posterior_true_positive"], float)
+    # class_prior is part of the on-disk schema (dict on the D-S path,
+    # null on vote fallback).
+    assert "class_prior" in recovered
+    if recovered["aggregation_method"] == METHOD_DAWID_SKENE:
+        assert set(recovered["class_prior"]) == {"alpha", "beta", "mean"}
 
 
 def test_verdict_to_json_handles_vote_fallback():

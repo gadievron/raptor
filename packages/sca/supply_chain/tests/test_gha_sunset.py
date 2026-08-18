@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict
 
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.supply_chain.gha_sunset import (
@@ -32,10 +31,6 @@ def _action(
     )
 
 
-def _stub_sunset(records: Dict[str, list]) -> Dict[str, list]:
-    return records
-
-
 # ---------------------------------------------------------------------------
 # load_sunset_map
 # ---------------------------------------------------------------------------
@@ -48,7 +43,7 @@ def test_load_real_sunset_data():
     assert "actions/checkout" in out
     assert "actions/upload-artifact" in out
     # All records have the required shape.
-    for action, records in out.items():
+    for records in out.values():
         for r in records:
             assert isinstance(r.get("sunset_versions"), list)
 

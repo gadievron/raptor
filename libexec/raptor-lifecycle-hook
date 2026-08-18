@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Lifecycle hooks: auto-complete/fail runs left in 'running' state.
 
 Called by Claude Code hooks, NOT by the LLM.
@@ -21,8 +23,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]  # raptor/
+
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -31,6 +35,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -100,7 +105,7 @@ def main():
     # rather than hardcoding `REPO_ROOT / "out"`. Pre-fix the
     # hardcoded path missed runs that landed under the
     # operator-configured base (e.g. the project run dir from a
-    # `/project use` invocation, or RAPTOR_OUTPUT_BASE override
+    # `/project use` invocation, or RAPTOR_OUT_DIR override
     # for shared CI workspaces). The hook's "find the active
     # run" logic then said "no run found" for runs that
     # genuinely existed elsewhere; lifecycle events fired
@@ -110,9 +115,11 @@ def main():
         configured_out = RaptorConfig.get_out_dir()
         if configured_out.is_dir() and configured_out not in scan_dirs:
             scan_dirs.append(configured_out)
-    except Exception:
-        # core.config import failure shouldn't break the hook;
-        # fall back to the hardcoded default.
+    except (ImportError, OSError, ValueError):
+        # core.config import failure shouldn't break the hook, and
+        # get_out_dir raises ValueError when RAPTOR_OUT_DIR points at
+        # a forbidden system prefix; fall back to the hardcoded
+        # default in both cases. A miswired call still propagates.
         pass
     out_dir = REPO_ROOT / "out"
     if out_dir.is_dir() and out_dir not in scan_dirs:
@@ -133,6 +140,8 @@ def main():
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(meta, dict):
+                meta = {}
             if (meta.get("status") != STATUS_RUNNING
                     or meta.get("session_pid") != session_pid):
                 continue
@@ -162,14 +171,18 @@ def main():
                     else:
                         complete_run(d)
                     (d / FAILURE_MARKER).unlink(missing_ok=True)
-                except Exception as e:
+                except (OSError, ValueError) as e:
+                    # Missing/malformed .raptor-run.json or an unlink
+                    # failure — report and keep scanning other runs.
                     print(f"lifecycle-hook: failed to finalize {d}: {e}",
                           file=sys.stderr)
             else:  # session-end
                 try:
                     fail_run(d, "session ended without explicit completion")
                     (d / FAILURE_MARKER).unlink(missing_ok=True)
-                except Exception as e:
+                except (OSError, ValueError) as e:
+                    # Missing/malformed .raptor-run.json or an unlink
+                    # failure — report and keep scanning other runs.
                     print(f"lifecycle-hook: failed to finalize {d}: {e}",
                           file=sys.stderr)
 

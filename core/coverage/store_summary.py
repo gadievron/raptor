@@ -127,12 +127,25 @@ def render_coverage(
 def _build_store(run_dirs, checklist, store_path, annotations_base=None):
     """Construct the store on-demand: load the durable ``coverage.json`` (if
     any) then re-import the current records + /understand + annotations.
-    Idempotent and read-only (never saves). The single store-construction path."""
+    Idempotent and read-only (never saves). The single store-construction path.
+
+    ``project_dir`` is derived from ``store_path.parent`` — the coverage
+    store lives at ``<project>/coverage.json`` in project runs, so the
+    review-journal index lives at ``<project>/review-journal-index.json``
+    in the same directory. Passing this in lets ``backfill`` read LLM
+    review existence from the post-migration source of truth (the
+    journal) rather than legacy ``checked_by`` on the checklist.
+    """
     from .importer import backfill
     from .store import CoverageStore
 
     store = CoverageStore(Path(store_path))
-    backfill(store, list(run_dirs), checklist, annotations_base=annotations_base)
+    project_dir = Path(store_path).parent if store_path else None
+    backfill(
+        store, list(run_dirs), checklist,
+        annotations_base=annotations_base,
+        project_dir=project_dir,
+    )
     return store
 
 
@@ -396,15 +409,4 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
         for g in shown:
             lines.append(f"    {g['file']}:{g['function']} @ {g['line']}")
 
-    prov = view.get("provenance") or {}
-    tools = {t: vs for t, vs in (prov.get("tools") or {}).items()}
-    if tools or prov.get("models") or prov.get("newest"):
-        lines.append("  Provenance:")
-        for tool, versions in tools.items():
-            ver = ", ".join(versions) if versions else "(version unrecorded)"
-            lines.append(f"    {tool}: {ver}")
-        if prov.get("models"):
-            lines.append(f"    llm models: {', '.join(prov['models'])}")
-        if prov.get("newest"):
-            lines.append(f"    newest run: {prov['newest']}")
     return "\n".join(lines)

@@ -9,6 +9,9 @@ sched_setaffinity mask:
   /proc/version                          → "Linux version <host-release>\\n"
   /proc/cmdline                          → canonical stub
   /proc/stat                             → aggregate + N per-cpu lines
+  /proc/uptime                           → fake uptime + derived idle
+  /proc/loadavg                          → low-load stub, consistent
+                                           with /proc/stat processes
   /etc/os-release                        → Debian 12 stub
   /etc/machine-id                        → deterministic-pseudo-random
   /etc/hostname                          → "localhost"
@@ -58,6 +61,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util as _ctypes_util
 import hashlib
+import heapq
 import logging
 import os
 import threading
@@ -368,7 +372,7 @@ def _now() -> float:
 def _derive_uptime_and_processes() -> tuple[int, int]:
     """Pick a fake uptime + processes counter, deterministic per
     RAPTOR install. Uptime in [3 days, 30 days], processes in
-    [10000, 200000] — both plausible production-VM ranges.
+    [10000, 209999] — both plausible production-VM ranges.
 
     Seed is the same as _MACHINE_ID so a single install consistently
     presents the same uptime + processes across runs of the same
@@ -383,7 +387,7 @@ def _derive_uptime_and_processes() -> tuple[int, int]:
     ).digest()
     # 3 days = 259200; 30 days = 2592000. Range = 2332800.
     uptime = 259200 + (int.from_bytes(h[:4], "big") % 2332800)
-    # 10000 ≤ processes ≤ 210000
+    # 10000 ≤ processes ≤ 209999
     processes = 10000 + (int.from_bytes(h[4:8], "big") % 200000)
     return uptime, processes
 
@@ -514,7 +518,7 @@ def set_cpu_affinity(cpu_count: int) -> int:
         )
     # Pick the lowest-numbered available CPUs so the mask is contiguous
     # starting at 0, matching the persona's `/sys/cpu/online` range.
-    mask = set(sorted(available)[:effective])
+    mask = set(heapq.nsmallest(effective, available))
     os.sched_setaffinity(0, mask)
     return effective
 

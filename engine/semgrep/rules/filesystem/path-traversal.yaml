@@ -3,7 +3,9 @@ rules:
     message: Java file construction from potentially unvalidated input; canonicalise and validate inputs.
     languages: [java, kotlin]
     severity: HIGH
-    pattern: new File($USERINPUT)
+    patterns:
+      - pattern: new File($USERINPUT)
+      - pattern-not: new File("...")
     metadata:
       cwe: ["CWE-22"]
 
@@ -11,9 +13,12 @@ rules:
     message: Python open() with concatenated user input; canonicalise and validate inputs.
     languages: [python]
     severity: HIGH
-    pattern-either:
-      - pattern: open($USERINPUT + "/" + $REST)
-      - pattern: open(os.path.join($USERINPUT, $REST))
+    patterns:
+      - pattern-either:
+          - pattern: open($USERINPUT + "/" + $REST)
+          - pattern: open(os.path.join($USERINPUT, $REST))
+      - pattern-not: open("..." + "/" + $REST)
+      - pattern-not: open(os.path.join("...", $REST))
     metadata:
       cwe: ["CWE-22"]
 
@@ -21,9 +26,12 @@ rules:
     message: JavaScript path construction from user input; validate or normalise paths.
     languages: [javascript, typescript]
     severity: HIGH
-    pattern-either:
-      - pattern: fs.openSync($USERINPUT + "/" + $REST, ...)
-      - pattern: fs.readFileSync(path.join($USERINPUT, $REST), ...)
+    patterns:
+      - pattern-either:
+          - pattern: fs.openSync($USERINPUT + "/" + $REST, ...)
+          - pattern: fs.readFileSync(path.join($USERINPUT, $REST), ...)
+      - pattern-not: fs.openSync("..." + "/" + $REST, ...)
+      - pattern-not: fs.readFileSync(path.join("...", $REST), ...)
     metadata:
       cwe: ["CWE-22"]
 
@@ -47,6 +55,7 @@ rules:
           - pattern: Path($PATH)
     pattern-sanitizers:
       - pattern: os.path.abspath(...)
+      - pattern: os.path.basename(...)
       - pattern: pathlib.Path(...).resolve()
     metadata:
       cwe: ["CWE-22"]

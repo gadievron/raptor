@@ -29,7 +29,6 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="Linux ptrace + seccomp tracer — observe is Linux-only here",
@@ -38,8 +37,8 @@ pytestmark = pytest.mark.skipif(
 
 def _prereqs_met() -> tuple[bool, str]:
     from core.sandbox.probes import check_net_available
-    from core.sandbox.seccomp import check_seccomp_available
     from core.sandbox.ptrace_probe import check_ptrace_available
+    from core.sandbox.seccomp import check_seccomp_available
     if not check_net_available():
         return False, "user namespaces unavailable"
     if not check_seccomp_available():
@@ -71,7 +70,8 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
 
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (
-            OBSERVE_FILENAME, parse_observe_log,
+            OBSERVE_FILENAME,
+            parse_observe_log,
         )
 
         # Each run uses its own target/output (Landlock + tracer
@@ -122,7 +122,8 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
             )
 
             # The shared JSONL has BOTH runs' records.
-            jsonl = shared / OBSERVE_FILENAME
+            from core.sandbox.evidence import resolve_read_path
+            jsonl = resolve_read_path(shared, OBSERVE_FILENAME)
             self.assertTrue(jsonl.exists())
 
             # Parse with nonce A → A's reads, not B's.
@@ -200,7 +201,8 @@ class TestObserveJsonlAtomicity(unittest.TestCase):
             if nonce is None:
                 self.skipTest("audit didn't engage")
 
-            jsonl = run_dir / OBSERVE_FILENAME
+            from core.sandbox.evidence import resolve_read_path
+            jsonl = resolve_read_path(run_dir, OBSERVE_FILENAME)
             self.assertTrue(jsonl.exists())
 
             # Parse every line directly (not via parse_observe_log,

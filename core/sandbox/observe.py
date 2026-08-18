@@ -41,6 +41,21 @@ _BLOCKED_PATTERNS = [
     ("network", "fatal: unable to access"),
     ("network", "ConnectionError"),
     ("network", "urlopen error"),
+    # UDP-at-startup casualties of network policies that deny UDP /
+    # loopback socket use: the Linux egress-proxy FALLBACK tier
+    # (netns-incapable hosts — seccomp denies AF_INET SOCK_DGRAM
+    # creation) and macOS seatbelt's `(deny network*)` (denies UDP and
+    # loopback wholesale). JVM build tooling opens a loopback UDP
+    # socket before doing anything (gradle's FileLockContentionHandler
+    # / local-IP detection). Precise tool strings; the real gating is
+    # udp_block_engaged + rc != 0 in _check_blocked.
+    ("udp", "Could not determine a usable local IP"),
+    ("udp", "java.net.SocketException: Operation not permitted"),
+    # Daemon-IPC casualty of the degraded-mode Landlock TCP-connect deny:
+    # the daemon binds fine (bind is never restricted) but the client's
+    # loopback connect gets EACCES. Precise tool string, not a generic
+    # "could not connect", to keep the pre-filter noise-free.
+    ("network", "Could not connect to the Gradle daemon"),
     # Landlock filesystem restriction — each pattern is a pre-filter; the
     # real gating happens via landlock_engaged + path-within-writable checks
     # in _check_blocked. Landlock returns EACCES ("Permission denied"), not
@@ -137,7 +152,7 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
         if sig_num in {s.value for s in crash_signals}:
             info["crashed"] = True
             evidence_items.append(f"Process crashed with {sig_name}")
-            logger.info(f"Sandbox: {cmd_display} killed by {sig_name} (crash)")
+            logger.info("Sandbox: %s killed by %s (crash)", cmd_display, sig_name)
         elif sig_num in {s.value for s in resource_signals}:
             info["resource_exceeded"] = True
             if hasattr(signal, "SIGXCPU") and sig_num == signal.SIGXCPU:
@@ -146,17 +161,17 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
                 evidence_items.append(f"Process killed by {sig_name} — file size limit exceeded")
             else:
                 evidence_items.append(f"Process killed by {sig_name} — resource limit exceeded")
-            logger.warning(f"Sandbox: {cmd_display} killed by {sig_name} (resource limit)")
+            logger.warning("Sandbox: %s killed by %s (resource limit)", cmd_display, sig_name)
         elif sig_num in {s.value for s in seccomp_signals}:
             info["seccomp_killed"] = True
             evidence_items.append(
                 "Process killed by SIGSYS — seccomp blocked a syscall "
                 "(likely 32-bit-compat int 0x80 or an explicit KILL rule)"
             )
-            logger.info(f"Sandbox: {cmd_display} killed by SIGSYS (seccomp)")
+            logger.info("Sandbox: %s killed by SIGSYS (seccomp)", cmd_display)
         else:
             evidence_items.append(f"Process killed by {sig_name}")
-            logger.debug(f"Sandbox: {cmd_display} killed by {sig_name}")
+            logger.debug("Sandbox: %s killed by %s", cmd_display, sig_name)
 
     # Check stderr for sanitizer reports (ASAN, UBSAN, MSAN, TSAN).
     # `crashed` strictly means "process did not exit normally" — we only set
@@ -194,21 +209,25 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
             evidence_items.append(f"AddressSanitizer: {bug_type}")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info(f"Sandbox: {cmd_display} — ASAN detected {bug_type}")
+            logger.info("Sandbox: %s — ASAN detected %s", cmd_display, bug_type)
         elif "UndefinedBehaviorSanitizer" in stderr_text:
             info["sanitizer"] = "ubsan"
             evidence_items.append("UndefinedBehaviorSanitizer triggered")
-            logger.info(f"Sandbox: {cmd_display} — UBSAN triggered")
+            if died_abnormally:
+                info["crashed"] = True
+            logger.info("Sandbox: %s — UBSAN triggered", cmd_display)
         elif "MemorySanitizer" in stderr_text:
             info["sanitizer"] = "msan"
             evidence_items.append("MemorySanitizer: use of uninitialised memory")
             if died_abnormally:
                 info["crashed"] = True
-            logger.info(f"Sandbox: {cmd_display} — MSAN triggered")
+            logger.info("Sandbox: %s — MSAN triggered", cmd_display)
         elif "ThreadSanitizer" in stderr_text:
             info["sanitizer"] = "tsan"
             evidence_items.append("ThreadSanitizer: data race detected")
-            logger.info(f"Sandbox: {cmd_display} — TSAN triggered")
+            if died_abnormally:
+                info["crashed"] = True
+            logger.info("Sandbox: %s — TSAN triggered", cmd_display)
 
     # Build evidence: flat string for simple consumers, list for structured access
     if evidence_items:
@@ -252,12 +271,14 @@ def _path_within(path: str, allowed: list) -> bool:
 
 
 def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
-                   sandbox_info: dict = None,
+                   sandbox_info: dict | None = None,
                    network_engaged: bool = False,
                    landlock_engaged: bool = False,
-                   writable_paths: list = None,
+                   writable_paths: list | None = None,
                    seccomp_engaged: bool = False,
-                   seccomp_profile: str = None) -> None:
+                   seccomp_profile: str | None = None,
+                   degraded_net_deny: bool = False,
+                   udp_block_engaged: bool = False) -> None:
     """Enrich sandbox_info when stderr shows evidence of sandbox enforcement.
 
     Only fires for an enforcement layer that is actually engaged this call:
@@ -281,20 +302,26 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
         if category == "write":
             # Write blocks need "Permission denied" alongside the pattern to
             # filter noise like "cannot create output file: No space left".
-            if "Permission denied" not in stderr:
+            if "Permission denied" not in stderr and "Read-only file system" not in stderr:
                 continue
             if not landlock_engaged:
                 continue
-        if category == "seccomp":
-            # Seccomp returns EPERM ("Operation not permitted"). The pattern
-            # is inherently noisy — EPERM also comes from legitimate
-            # capability checks (ptrace on protected process, mount without
-            # privs, etc.). Fire only when seccomp is engaged AND the
-            # process actually failed (rc != 0) AND the text looks like a
-            # syscall-level message (not a higher-level "Not permitted" from
-            # a CLI tool's own error).
-            if not seccomp_engaged or returncode == 0:
-                continue
+        # UDP-block patterns only fire when the seccomp SOCK_DGRAM
+        # block is actually engaged for this call (egress-proxy
+        # fallback tier) AND the process failed — the JVM
+        # SocketException string is otherwise too generic.
+        if category == "udp" and (not udp_block_engaged or returncode == 0):
+            continue
+
+        # Seccomp returns EPERM ("Operation not permitted"). The pattern
+        # is inherently noisy — EPERM also comes from legitimate
+        # capability checks (ptrace on protected process, mount without
+        # privs, etc.). Fire only when seccomp is engaged AND the
+        # process actually failed (rc != 0) AND the text looks like a
+        # syscall-level message (not a higher-level "Not permitted" from
+        # a CLI tool's own error).
+        if category == "seccomp" and (not seccomp_engaged or returncode == 0):
+            continue
 
         # For write blocks, try to isolate the offending path. If it falls
         # inside writable_paths it cannot be Landlock — skip.
@@ -321,10 +348,27 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
         # post-run aggregate of what the sandbox blocked, with suggested
         # fixes, instead of forcing them to grep log lines.
         if category == "network":
-            logger.info(
-                f"Sandbox: outbound network blocked during: {cmd_display} "
-                f"(rc={returncode})"
-            )
+            if degraded_net_deny:
+                # Degraded-mode Landlock TCP-connect deny is stricter
+                # than the netns it substitutes for: loopback connects
+                # are denied too, so daemon-IPC tools (gradle daemon,
+                # language servers, self-spawned test servers) fail to
+                # reach their own listener. Name the exact knob.
+                logger.info(
+                    f"Sandbox: TCP connect denied during: {cmd_display} "
+                    f"(rc={returncode}) — degraded-mode Landlock deny is "
+                    f"active (no namespace backend on this host) and it "
+                    f"covers loopback as well. Daemon-IPC tools are "
+                    f"auto-nudged to no-daemon mode where possible; if "
+                    f"this workload genuinely needs loopback TCP, pass "
+                    f"degraded_net_deny=False (accepts open egress on "
+                    f"this host)."
+                )
+            else:
+                logger.info(
+                    f"Sandbox: outbound network blocked during: {cmd_display} "
+                    f"(rc={returncode})"
+                )
             blocked_evidence.append("Attempted outbound network connection (blocked by sandbox)")
             record_denial(cmd_display, returncode, "network")
         elif category == "write":
@@ -339,6 +383,24 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
             else:
                 blocked_evidence.append("Attempted write outside allowed paths (blocked by sandbox)")
                 record_denial(cmd_display, returncode, "write")
+        elif category == "udp":
+            logger.info(
+                f"Sandbox: UDP/loopback socket use denied during: "
+                f"{cmd_display} (rc={returncode}) — the active network "
+                f"policy denies it (Linux: the egress-proxy fallback "
+                f"tier's seccomp SOCK_DGRAM block on netns-incapable "
+                f"hosts; macOS: seatbelt's blanket network deny). JVM "
+                f"build tools (gradle) need a loopback UDP socket at "
+                f"startup and cannot run under this policy. On Linux "
+                f"netns-capable hosts the default proxy tier contains "
+                f"UDP topologically and they work; on macOS, JVM builds "
+                f"must run outside block_network."
+            )
+            blocked_evidence.append(
+                "UDP/loopback socket use denied by the sandbox network "
+                "policy (JVM-startup casualty)"
+            )
+            record_denial(cmd_display, returncode, "udp")
         elif category == "seccomp":
             # Actionable diagnostic — name the knob users can turn. Debug
             # unblocks ptrace; network-only turns off Landlock AND seccomp

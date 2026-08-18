@@ -110,7 +110,7 @@ def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
             else:
                 _emit = False
         if _emit:
-            logger.info(
+            logger.debug(
                 f"Resolved Anthropic model alias {name} -> {resolved} "
                 f"(from /v1/models inventory)"
             )
@@ -148,7 +148,7 @@ def _get_inventory(api_key: Optional[str]) -> list[str]:
         try:
             _INVENTORY = _fetch_inventory(api_key) if api_key else []
         except Exception as exc:
-            logger.debug(f"Anthropic model inventory fetch failed: {exc}")
+            logger.debug("Anthropic model inventory fetch failed: %s", exc)
             _INVENTORY = []
         _INVENTORY_PROBED = True
         return _INVENTORY

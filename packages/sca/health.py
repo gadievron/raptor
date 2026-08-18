@@ -7,7 +7,7 @@ and reports per-ecosystem reachability. Useful for:
   cache, the network, or a registry outage?).
 - CI gating ("don't run /sca on this builder unless the registries are
   reachable").
-- New-environment sanity-check (proxy whitelist set up correctly?).
+- New-environment sanity-check (proxy allowlist set up correctly?).
 """
 
 from __future__ import annotations
@@ -15,12 +15,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from pathlib import Path
 
 from core.json import JsonCache
-from . import SCA_CACHE_ROOT
+
 from . import default_client
 from .registries.crates import CratesClient
 from .registries.debian import DebianClient
@@ -60,26 +62,122 @@ class _ProbeResult:
     ok: bool
     elapsed_ms: int
     versions_returned: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 def main(argv: Sequence[str]) -> int:
     args = _parse_args(argv)
     _configure_logging(args.verbose)
 
-    cache = JsonCache(root=SCA_CACHE_ROOT)
-    http = default_client()
+    # Throwaway cache: this is a LIVE reachability check. Reading
+    # the shared cache would report stale verdicts (an earlier run
+    # against a blocked registry caches an empty version list, and
+    # every later health check "fails" in 0ms without touching the
+    # network); writing to it would poison real scans the other way.
+    import shutil
+    import tempfile
+    _cache_dir = tempfile.mkdtemp(prefix="raptor-sca-health-")
+    cache = JsonCache(root=Path(_cache_dir))
+    http = _ProbeBudgetClient(default_client())
 
-    results: List[_ProbeResult] = []
-    for eco, factory, probe in _PROBES:
-        client = factory(http, cache, offline=args.offline)
-        results.append(_run_probe(client, eco, probe))
+    # Probes run in parallel and with a probe-sized HTTP budget (one
+    # retry, short timeouts) — this is a reachability CHECK, not a
+    # fetch: a blocked or dropped registry must show up as a fast
+    # "unreachable" row, never stall the whole table behind the full
+    # retry/backoff policy the real fetch paths use.
+    from concurrent.futures import ThreadPoolExecutor
+    results: list[_ProbeResult] = []
+    # Capture the registry clients' swallowed-error WARNINGs so each
+    # failed row can show its actual cause (see _ThreadLogCapture).
+    # The parent logger is derived from an imported client class, not
+    # a hardcoded name: module loggers are keyed by IMPORT path
+    # (packages.sca.registries.*), while the "sca.registries.pypi:"
+    # seen in output is message text, not the logger name.
+    capture = _ThreadLogCapture()
+    _reg_logger = logging.getLogger(
+        PyPIClient.__module__.rsplit(".", 1)[0])
+    _reg_logger.addHandler(capture)
+    try:
+        with ThreadPoolExecutor(max_workers=len(_PROBES),
+                                thread_name_prefix="sca-health") as pool:
+            futs = [
+                pool.submit(_run_probe,
+                            factory(http, cache, offline=args.offline),
+                            eco, probe, capture)
+                for eco, factory, probe in _PROBES
+            ]
+            results = [f.result() for f in futs]
+    finally:
+        _reg_logger.removeHandler(capture)
+        shutil.rmtree(_cache_dir, ignore_errors=True)
 
     _print_table(results)
     return 0 if all(r.ok for r in results) else 1
 
 
-def _run_probe(client, eco: str, probe: str) -> _ProbeResult:
+class _ProbeBudgetClient:
+    """Delegating HTTP client that clamps retry/timeout budgets.
+
+    Registry clients call ``get_json``/``get_bytes`` with the
+    module-default policy (5 retries, 600s total). Appropriate for
+    real dependency fetches; pathological for a health probe against
+    an unreachable registry.
+    """
+
+    _RETRIES = 1
+    _TIMEOUT = 10
+    _TOTAL_TIMEOUT = 30
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def get_json(self, url, timeout=None, **kw):
+        kw.setdefault("total_timeout", self._TOTAL_TIMEOUT)
+        kw.setdefault("retries", self._RETRIES)
+        return self._inner.get_json(
+            url, timeout=timeout or self._TIMEOUT, **kw)
+
+    def get_bytes(self, url, timeout=None, **kw):
+        kw.setdefault("total_timeout", self._TOTAL_TIMEOUT)
+        kw.setdefault("retries", self._RETRIES)
+        return self._inner.get_bytes(
+            url, timeout=timeout or self._TIMEOUT, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+class _ThreadLogCapture(logging.Handler):
+    """Collect WARNING+ records per emitting thread.
+
+    Registry clients deliberately swallow fetch errors — they log a
+    WARNING and return an empty version list so a real scan degrades
+    instead of aborting. Correct for scans; for a health check it
+    reduced every failure to "registry returned 0 versions", hiding
+    the actual cause (upstream proxy refusal, DNS, timeout) one log
+    line above the table. Probes run in parallel threads, so records
+    are attributed by ``record.thread`` and each probe reads back only
+    its own.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self._by_thread: dict[int, list[str]] = {}
+        self._lock2 = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        with self._lock2:
+            self._by_thread.setdefault(record.thread, []).append(
+                record.getMessage())
+
+    def last_for_current_thread(self) -> str | None:
+        with self._lock2:
+            msgs = self._by_thread.get(threading.get_ident())
+            return msgs[-1] if msgs else None
+
+
+def _run_probe(client, eco: str, probe: str,
+               capture: _ThreadLogCapture | None = None) -> _ProbeResult:
     t0 = time.monotonic()
     try:
         versions = client.list_versions(probe)
@@ -92,14 +190,26 @@ def _run_probe(client, eco: str, probe: str) -> _ProbeResult:
         )
     elapsed = int((time.monotonic() - t0) * 1000)
     n = len(versions)
+    error = None
+    if n == 0:
+        cause = capture.last_for_current_thread() if capture else None
+        error = (_trim_cause(cause) if cause
+                 else "registry returned 0 versions")
     return _ProbeResult(
         ecosystem=eco, probe=probe, ok=n > 0,
         elapsed_ms=elapsed, versions_returned=n,
-        error=None if n > 0 else "registry returned 0 versions",
+        error=error,
     )
 
 
-def _print_table(results: List[_ProbeResult]) -> None:
+def _trim_cause(msg: str, limit: int = 220) -> str:
+    """One line, bounded — table rows are not stack traces."""
+    line = msg.splitlines()[0].strip()
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+
+def _print_table(results: list[_ProbeResult]) -> None:
     print(f"{'Ecosystem':<12} {'Probe':<40} {'Status':<10} "
           f"{'Time':<8} {'Versions':<10}")
     print("-" * 90)

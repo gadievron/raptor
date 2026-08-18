@@ -11,26 +11,15 @@ where the in-process proxy reads it as a (now-dead) upstream chain
 target and the test's curl call fails with exit 56.
 
 Direct ``os.environ`` mutations bypass ``monkeypatch``'s auto-cleanup,
-so we pop them explicitly here.
+so the fixture below records explicit undo entries for them on the
+shared per-test ``monkeypatch`` instance.
 """
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
-
-_PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy")
-
-# Pin OLLAMA_HOST to the documented default so these tests are hermetic
-# against a developer's ambient env. A dev running Ollama exports the
-# canonical schemeless ``OLLAMA_HOST=127.0.0.1:11434`` (or a remote
-# host), which otherwise leaks into LLMClient/detection and makes the
-# suite's outcome host-dependent. A test that genuinely exercises a
-# specific host overrides this with its own ``monkeypatch.setenv``,
-# which runs after this autouse setup and wins.
-_DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+from core.testing import reset_llm_egress_state
 
 
 @pytest.fixture(autouse=True)
@@ -44,25 +33,68 @@ def _isolate_scorecard(monkeypatch):
     """
     from core.llm.client import LLMClient
     monkeypatch.setattr(
-        LLMClient, "flush_usage_to_scorecard", lambda self: None,
+        LLMClient, "flush_usage_to_scorecard",
+        lambda self, **kwargs: None,
     )
 
 
 @pytest.fixture(autouse=True)
-def _reset_llm_egress_state():
+def _reset_llm_egress_state(monkeypatch):
     """Reset egress module flag, clear proxy env vars, and pin
-    OLLAMA_HOST before AND after every test in this directory."""
-    from core.llm import egress
-    _saved_ollama = os.environ.get("OLLAMA_HOST")
-    egress._reset_for_tests()
-    for var in _PROXY_VARS:
-        os.environ.pop(var, None)
-    os.environ["OLLAMA_HOST"] = _DEFAULT_OLLAMA_HOST
-    yield
-    egress._reset_for_tests()
-    for var in _PROXY_VARS:
-        os.environ.pop(var, None)
-    if _saved_ollama is None:
-        os.environ.pop("OLLAMA_HOST", None)
-    else:
-        os.environ["OLLAMA_HOST"] = _saved_ollama
+    OLLAMA_HOST for every test in this directory.
+
+    Shared body: :func:`core.testing.reset_llm_egress_state` — its
+    docstring carries the hard-won mechanics (single monkeypatch undo
+    stack; the setenv→delenv two-step for vars absent from the real
+    env). This directory's history is why those mechanics exist: the
+    manual pop-before-and-after version erased the operator's real
+    proxy env for the remainder of the pytest process on
+    mandatory-egress-proxy hosts, and a save/restore could not fix it
+    because ``_isolate_scorecard``'s monkeypatch instantiates first
+    and undoes after ours. The shared body also scrubs the FULL
+    8-var proxy family (this copy had drifted to 4, leaving
+    HTTP_PROXY/ALL_PROXY leaks possible)."""
+    yield from reset_llm_egress_state(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _reset_operator_primary_override():
+    """Snapshot + reset ``_operator_primary_override`` around every
+    test in this directory.
+
+    Defense-in-depth against tests elsewhere in the pytest session
+    that invoke an operator-facing CLI in-process. Concretely,
+    ``packages/code_understanding/tests/test_libexec_trajectory_e2e``
+    imports ``libexec/raptor-understand`` and runs ``main()`` with
+    ``--model fake-haiku-x``; that CLI pins the override to a fake
+    anthropic ModelConfig. Without this reset the pinned model
+    persists in module state and every subsequent core/llm test
+    that expects the default resolution chain sees the leaked
+    override instead — CI failed with three provider-preference
+    tests returning ``fake-haiku-x`` when they expected other
+    providers.
+    """
+    import core.llm.config as cfg
+    saved = getattr(cfg, "_operator_primary_override", None)
+    cfg._operator_primary_override = None
+    try:
+        yield
+    finally:
+        cfg._operator_primary_override = saved
+
+
+@pytest.fixture(autouse=True)
+def _scrub_dispatcher_route(monkeypatch):
+    """Strip an ambient ``RAPTOR_LLM_SOCKET`` for every test in this
+    directory.
+
+    The credential-isolation dispatcher route wins over direct SDK
+    construction inside ``create_provider`` and the provider
+    constructors, so a socket path leaked into the environment (e.g.
+    pytest run from a shell inside a RAPTOR-launched session) flips
+    every direct-provider assertion (anthropic/openai routes in
+    test_llm_callbacks_providers, test_turn_track_usage_and_factory)
+    to the dispatcher path. Tests that exercise the dispatcher route
+    on purpose set the var with ``monkeypatch.setenv`` inside the test
+    body, which runs after this autouse scrub and wins."""
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)

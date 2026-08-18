@@ -296,6 +296,49 @@ def test_prove_charset_sub_declines_when_danger_char_survives():
     assert v.counterexample in {"|", "`", "\n"}
 
 
+# ---------------------------------------------------------------------------
+# Bounded charset-range expansion.
+# ---------------------------------------------------------------------------
+
+def test_expand_charset_normal_ascii_ranges_still_expand():
+    assert sb._expand_charset_body("a-c") == {"a", "b", "c"}
+    assert len(sb._expand_charset_body("A-Za-z0-9")) == 62
+
+
+def test_expand_charset_huge_unicode_range_not_materialized():
+    body = " -" + chr(0x10FFFF)
+    out = sb._expand_charset_body(body)
+    # Over-cap range degrades to its three literal chars.
+    assert out == {" ", "-", chr(0x10FFFF)}
+
+
+def test_expand_charset_range_at_cap_still_expands():
+    lo, hi = chr(0), chr(sb._RANGE_EXPANSION_CAP)
+    out = sb._expand_charset_body(f"{lo}-{hi}")
+    assert len(out) == sb._RANGE_EXPANSION_CAP + 1
+
+
+def test_expand_charset_range_just_over_cap_degrades_to_literals():
+    lo, hi = chr(0), chr(sb._RANGE_EXPANSION_CAP + 1)
+    out = sb._expand_charset_body(f"{lo}-{hi}")
+    assert out == {lo, "-", hi}
+
+
+def test_expand_charset_over_cap_range_declines_not_sound():
+    # Under-approximating the forbidden set must push the verdict
+    # toward DECLINED (sound direction), never toward SOUND.
+    spec = sb.ValidatorSpec(
+        kind="charset_sub", var_name="x",
+        forbidden=" -" + chr(0x10FFFF),
+    )
+    verdict = sb._prove_charset_sub(spec, "pathtrav", ["/", "\\"])
+    assert not verdict.sound
+
+
+def test_expand_charset_descending_range_still_literal():
+    assert sb._expand_charset_body("z-a") == {"z", "-", "a"}
+
+
 def test_substitution_dominance_clean_path():
     """``x = re.sub(...)`` at line 3, sink at line 4, no reassignment
     between them -> dominates."""
@@ -1211,3 +1254,55 @@ def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)
     v = sb.prove_neutralizes(spec, sink_class)
     assert v.sound is expect_sound
+
+
+def test_prove_empty_charset_is_sound():
+    """An empty character class rejects all input — trivially sound."""
+    spec = sb.ValidatorSpec("charset", "x", "", "+...", 0)
+    v = sb.prove_neutralizes(spec, "cmdi")
+    assert v.sound is True
+
+
+# ---------------------------------------------------------------------------
+# Value-bound gate: extra_bindings agreement with the parity shadow path.
+# ---------------------------------------------------------------------------
+
+def test_value_bound_gate_passes_inter_proc_bindings(monkeypatch):
+    """The production evaluate_finding call must pass the resolver's
+    inter_proc_bindings — same as the parity shadow path — so
+    production and telemetry evaluate the same bindings."""
+    from core.analysis import finding_resolver as fr_mod
+    from core.analysis import sanitizer_cut as sc_mod
+
+    sentinel_bindings = frozenset({"SENTINEL_BINDING"})
+    resolved = fr_mod.ResolvedFinding(
+        file="x.py", enclosing_function="f",
+        source_lineno=1, source_symbols=frozenset({"x"}),
+        sink_lineno=2, sink_arg="x", cwe="CWE-22",
+        language="python", cfg=object(), source_node=object(),
+        sink_node=object(), inter_proc_bindings=sentinel_bindings,
+    )
+    captured = {}
+
+    def fake_resolve(finding):
+        return resolved
+
+    class _Result:
+        verdict = sc_mod.VERDICT_SUPPRESS
+
+    def fake_evaluate(graph, sources, sink, **kwargs):
+        captured.update(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(fr_mod, "resolve_finding", fake_resolve)
+    monkeypatch.setattr(sc_mod, "evaluate_finding", fake_evaluate)
+    monkeypatch.setattr(
+        sb._sc_config, "value_bound_enabled", lambda: True,
+    )
+
+    out = sb._value_bound_dominates(
+        file_path="x.py", validator_line=1, sink_line=2,
+        cwe="CWE-22", language="python",
+    )
+    assert out is True
+    assert captured["extra_bindings"] == sentinel_bindings

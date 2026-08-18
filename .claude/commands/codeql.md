@@ -31,12 +31,14 @@ python3 raptor.py codeql --repo <path> [options]
 ## SMT Dataflow Pre-Check
 
 When `--analyze` is enabled, dataflow findings are routed through an SMT
-pre-check before the full LLM analysis (`packages/codeql/smt_path_validator.py`):
+pre-check before the full LLM analysis (`core/smt_solver/path_feasibility.py`,
+driven from `packages/codeql/dataflow_validator.py`):
 
 1. The LLM extracts branch conditions from each path step as structured predicates
    (`"size > 0"`, `"offset + length <= buffer_size"`, etc.)
 2. Z3 checks whether those conditions are **jointly satisfiable**
-3. **unsat** → path is provably unreachable; finding skipped (no LLM call)
+3. **unsat** → path is provably unreachable; finding marked non-exploitable without
+   the full analysis LLM call (confidence capped at 0.7)
 4. **sat** → concrete satisfying values returned; fed as candidate inputs into the
    LLM prompt and `prerequisites` field of `DataflowValidation`
 5. **None** → Z3 unavailable or conditions unparseable; full LLM analysis runs

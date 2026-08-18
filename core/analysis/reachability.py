@@ -128,8 +128,8 @@ class ReachabilityResult:
 _TEST_FILE_PATTERN = re.compile(
     r"(^|/)("
     r"tests?/.*|"
-    r"test_[^/]+\.py|"
-    r"[^/]+_test\.py|"
+    r"test_[^/]+\.(?:py|c|cc|cpp|go|rs|js|ts)|"
+    r"[^/]+_test\.(?:py|c|cc|cpp|go|rs|js|ts)|"
     r"conftest\.py"
     r")$"
 )
@@ -1954,6 +1954,10 @@ def _file_path_to_module(rel_path: str) -> Optional[str]:
     if not p.suffix:
         return None
     parts = list(p.with_suffix("").parts)
+    if not parts:
+        return None
+    if parts[-1] == "__init__":
+        parts.pop()
     if not parts:
         return None
     return ".".join(parts)
@@ -4104,10 +4108,11 @@ def _find_file_record(
     Consumers needing sub-millisecond latency across many queries
     can pre-build a path→record map.
     """
+    norm = path.replace("\\", "/")
     for file_record in inventory.get("files", []):
         if not isinstance(file_record, dict):
             continue
-        if file_record.get("path") == path:
+        if (file_record.get("path", "")).replace("\\", "/") == norm:
             return file_record
     return None
 

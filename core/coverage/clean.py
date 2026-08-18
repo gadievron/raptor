@@ -184,4 +184,7 @@ def format_consequence(c: CleanConsequence) -> str:
             f"  {c.run}: drops {len(c.findings_lost)} unique finding(s) — "
             f"those functions become re-review gaps (found-then-lost)"
         )
-    return f"  {c.run}: unique coverage preserved into the store; no findings lost"
+    return (
+        f"  {c.run}: unique coverage ({len(c.coverage_files)} examined "
+        f"file(s)) preserved into the store; no findings lost"
+    )

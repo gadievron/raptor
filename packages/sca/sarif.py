@@ -125,8 +125,12 @@ def write_sarif(path: Path, *, target: Path, rows: Sequence[Dict[str, Any]],
     doc = build_sarif(target=target, rows=rows, generated_at=generated_at)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _json.dump(doc, fh, indent=2)
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            _json.dump(doc, fh, indent=2)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(path)
     return len(rows)
 
@@ -152,11 +156,14 @@ def build_sarif(
             seen_rule_ids.append(rid)
 
     rules = [_rule_definition(rid) for rid in seen_rule_ids]
+    rule_index = {rid: i for i, rid in enumerate(seen_rule_ids)}
 
     results: List[Dict[str, Any]] = []
     suppressions: List[Dict[str, Any]] = []
-    for idx, row in enumerate(rows):
-        result, suppression = _row_to_result(row, target, idx)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        result, suppression = _row_to_result(row, target, rule_index)
         if result is None:
             continue
         results.append(result)
@@ -223,16 +230,19 @@ def _safe_start_line(val: "Any") -> int:
 
 
 def _row_to_result(
-    row: Dict[str, Any], target: Path, idx: int,
+    row: Dict[str, Any], target: Path,
+    rule_index: Dict[str, int],
 ) -> "tuple[Dict[str, Any] | None, Dict[str, Any] | None]":
     rule_id = row.get("vuln_type")
     if not isinstance(rule_id, str):
         return None, None
-    severity = row.get("severity") or "info"
+    severity = str(row.get("severity") or "info")
     file_path = row.get("file") or ""
     rel = _relative_uri(file_path, target)
 
     sca = row.get("sca") or {}
+    if not isinstance(sca, dict):
+        sca = {}
     advisory = sca.get("advisory") or {}
     aliases = advisory.get("aliases") if isinstance(advisory, dict) else []
 
@@ -253,7 +263,7 @@ def _row_to_result(
 
     result: Dict[str, Any] = {
         "ruleId": rule_id,
-        "ruleIndex": idx,            # placeholder; consumers tolerate any int
+        "ruleIndex": rule_index.get(rule_id, 0),
         # Lowercase normalisation — LLM verdicts and hand-edited
         # findings.json frequently capitalise ("Critical", "HIGH"); a
         # case-sensitive lookup would silently demote them to "note"
@@ -335,7 +345,7 @@ def _relative_uri(file_path: str, target: Path) -> str:
         return ""
     try:
         return str(Path(file_path).resolve().relative_to(target.resolve()))
-    except ValueError:
+    except (ValueError, TypeError):
         return file_path
 
 

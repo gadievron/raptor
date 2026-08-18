@@ -13,14 +13,75 @@ caused httpx.AsyncClient loop-affinity failures ("Event loop is closed") on
 the second hook call onwards.
 """
 
+import os
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.logging import get_logger
 
-from .config import SageConfig
+from .config import SageConfig, ensure_loopback_no_proxy
 
 logger = get_logger()
+
+_OLLAMA_EMBED_URL = os.getenv(
+    "SAGE_OLLAMA_URL", "http://localhost:11435"
+)
+_OLLAMA_EMBED_TIMEOUT = 60.0
+
+_direct_embed: Optional[bool] = None
+_direct_embed_lock = threading.Lock()
+
+
+def _use_direct_embed() -> bool:
+    """True when we should bypass SAGE's /v1/embed and call Ollama directly.
+
+    Activated on CPU-only machines where SAGE's hardcoded 30s Go HTTP
+    client timeout is too short for Ollama under contention. On GPU
+    the SDK path is fine — embeds are sub-second.
+    """
+    global _direct_embed
+    if _direct_embed is not None:
+        return _direct_embed
+    with _direct_embed_lock:
+        if _direct_embed is not None:
+            return _direct_embed
+        from .hooks import _ollama_gpu_available
+        _direct_embed = not _ollama_gpu_available()
+        if _direct_embed:
+            logger.debug(
+                "CPU-only: embedding via Ollama directly (60s timeout) "
+                "instead of SAGE /v1/embed (30s Go-side ceiling)"
+            )
+    return _direct_embed
+
+
+def _embed_via_ollama(text: str) -> Optional[List[float]]:
+    """Call Ollama's /api/embed directly with a 60s timeout.
+
+    SAGE's /v1/embed is a pure passthrough — no consensus, no
+    validation. Calling Ollama directly removes one network hop and
+    avoids the 30s hardcoded timeout in SAGE's Go HTTP client.
+    """
+    model = os.getenv("SAGE_EMBED_MODEL", "snowflake-arctic-embed:m")
+    try:
+        import httpx
+
+        resp = httpx.post(
+            f"{_OLLAMA_EMBED_URL}/api/embed",
+            json={"model": model, "input": text},
+            timeout=_OLLAMA_EMBED_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            logger.warning("Ollama embed error (status %d): %s", resp.status_code, resp.text[:200])
+            return None
+        embeddings = resp.json().get("embeddings")
+        if embeddings and len(embeddings) > 0:
+            return embeddings[0]
+        return None
+    except Exception as e:
+        logger.warning("Ollama direct embed failed: %s", e)
+        return None
 
 # Lazy imports — sage_sdk may not be installed
 _SyncSageClient = None
@@ -61,8 +122,10 @@ class SageClient:
     """
 
     def __init__(self, config: Optional[SageConfig] = None):
+        ensure_loopback_no_proxy()
         self._config = config or SageConfig.from_env()
         self._client = None
+        self._query_cache: Dict[Tuple[str, str, int, Optional[float]], Tuple[Tuple[str, float, str], ...]] = {}
         self._register_with_egress_proxy()
 
     def _register_with_egress_proxy(self) -> None:
@@ -128,11 +191,11 @@ class SageClient:
 
             resp = httpx.get(
                 f"{self._config.url}/health",
-                timeout=self._config.timeout,
+                timeout=min(self._config.timeout, 3.0),
             )
             return resp.status_code == 200 and "status" in resp.json()
         except Exception as e:
-            logger.debug(f"SAGE health check failed: {e}")
+            logger.debug("SAGE health check failed: %s", e)
             return False
 
     def _get_client(self):
@@ -157,13 +220,17 @@ class SageClient:
 
     def embed(self, text: str) -> Optional[List[float]]:
         """Generate an embedding vector for the given text."""
+        if not self._config.enabled:
+            return None
+        if _use_direct_embed():
+            return _embed_via_ollama(text)
         client = self._get_client()
         if client is None:
             return None
         try:
             return client.embed(text)
         except Exception as e:
-            logger.warning(f"SAGE embed failed: {e}")
+            logger.warning("SAGE embed failed: %s", e)
             return None
 
     def propose(
@@ -183,11 +250,8 @@ class SageClient:
         if client is None:
             return False
         try:
-            # SAGE model usage: we intentionally delegate embedding generation
-            # to the SAGE sidecar/client. The configured embedding model is
-            # selected there, so RAPTOR stays model-agnostic at the hook layer.
             if embedding is None:
-                embedding = client.embed(content)
+                embedding = self.embed(content)
 
             # Explicit allowlist via dict membership rather than
             # `getattr(_MemoryType, memory_type, default)`. Pre-fix
@@ -245,7 +309,7 @@ class SageClient:
             client.propose(**propose_kwargs)
             return True
         except Exception as e:
-            logger.warning(f"SAGE propose failed: {e}")
+            logger.warning("SAGE propose failed: %s", e)
             return False
 
     def query(
@@ -258,30 +322,55 @@ class SageClient:
         """
         Query SAGE for semantically similar memories.
         Returns a list of dicts with content, confidence, and domain keys.
+
+        Results are LRU-cached (256 entries) keyed on
+        (text, domain_tag, top_k, min_confidence) so repeated queries
+        for the same identifier skip both embedding and vector search.
         """
+        cached = self._query_cached(text, domain_tag, top_k, min_confidence)
+        return [dict(zip(("content", "confidence", "domain"), row)) for row in cached]
+
+    def _query_cached(
+        self,
+        text: str,
+        domain_tag: str,
+        top_k: int,
+        min_confidence: Optional[float],
+    ) -> Tuple[Tuple[str, float, str], ...]:
+        """Per-instance cached query returning tuples (hashable for the cache)."""
+        key = (text, domain_tag, top_k, min_confidence)
+        cached = self._query_cache.get(key)
+        if cached is not None:
+            return cached
         client = self._get_client()
         if client is None:
-            return []
+            return ()
         try:
-            # Query path uses the same SAGE-managed embedding model as propose().
-            embedding = client.embed(text)
+            embedding = self.embed(text)
+            if embedding is None:
+                return ()
             query_kwargs: Dict[str, Any] = dict(
                 embedding=embedding,
                 domain_tag=domain_tag,
                 top_k=top_k,
+                status_filter="committed",
             )
             if min_confidence is not None:
                 query_kwargs["min_confidence"] = min_confidence
             response = client.query(**query_kwargs)
-            return [
-                {
-                    "content": r.content,
-                    "confidence": r.confidence_score,
-                    "domain": r.domain_tag,
-                }
+            result = tuple(
+                (r.content, r.confidence_score, r.domain_tag)
                 for r in response.results
-            ]
+            )
         except Exception as e:
-            logger.warning(f"SAGE query failed: {e}")
-            return []
+            logger.warning("SAGE query failed: %s", e)
+            return ()
+        if len(self._query_cache) >= 256:
+            # Evict oldest entry (first inserted) to bound memory.
+            try:
+                self._query_cache.pop(next(iter(self._query_cache)))
+            except StopIteration:
+                pass
+        self._query_cache[key] = result
+        return result
 

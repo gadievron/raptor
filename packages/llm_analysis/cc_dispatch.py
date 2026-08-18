@@ -13,13 +13,14 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from core.llm.cc_adapter import (
     CCDispatchConfig,
     build_cc_command,
-    parse_cc_structured,
+    cc_subprocess_env,
     parse_cc_freeform,
+    parse_cc_structured,
 )
 from packages.llm_analysis.dispatch import DispatchResult
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
@@ -63,11 +64,11 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     cmd = build_cc_command(config)
 
     try:
-        from core.sandbox import run_untrusted_networked
         from core.llm.cc_proxy_hosts import (
             proxy_hosts_for_cc_dispatch,
             readable_paths_for_cc_dispatch,
         )
+        from core.sandbox import run_untrusted_networked
         # Sandboxed Claude Code dispatch with restrict_reads=True so the
         # sub-agent can't read host secrets ($HOME, /proc/<host_pid>/) on
         # Landlock-only hosts (Ubuntu 24.04+ default with
@@ -85,9 +86,19 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # setting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC /
         # ENABLE_CLAUDEAI_MCP_SERVERS env vars: undocumented Claude
         # Code internals; the egress proxy allowlist is OUR policy.
+        # env: safe baseline + CLAUDE_CODE_*/ANTHROPIC_*/AWS_* overlay —
+        # a Bedrock/Vertex-backed CLI child needs its backend env to
+        # authenticate (bare get_safe_env leaves it credential-less and
+        # it hangs to timeout). The sandbox's proxy_env_overrides still
+        # win for HTTPS_PROXY, so egress stays on the chokepoint.
         proc = run_untrusted_networked(
             cmd, input=prompt, capture_output=True, text=True,
             timeout=timeout, target=str(repo_path), output=str(out_dir),
+            # mint_aws_credentials: sandboxed child — Landlock denies
+            # ~/.aws, egress denies IMDS; on IAM-role Bedrock hosts its
+            # own AWS chain is dead. The parent attaches frozen session
+            # credentials at its trust boundary.
+            env=cc_subprocess_env(mint_aws_credentials=True),
             readable_paths=readable_paths_for_cc_dispatch(claude_bin),
             proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
             caller_label="claude-sub-agent",
@@ -141,7 +152,38 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
 
     quality = 1.0
     if schema and isinstance(parsed, dict) and "error" not in parsed:
-        from core.llm.response_validation import validate_structured_response
+        from core.llm.response_validation import (
+            unknown_response_fields,
+            validate_structured_response,
+        )
+        # Strict schema floor — same security property as
+        # LLMClient.generate_structured: fields outside the requested
+        # schema never reach downstream consumers. The CC subprocess
+        # transport bypasses the client, so the check must run here
+        # too — but unlike the client's structured path there is NO
+        # retry/fallback loop at this level, so treating a benign
+        # extra key as a whole-response failure silently dropped an
+        # otherwise-valid analysis. Strip the unknown fields, keep
+        # the valid subset, and record the event for diagnosis.
+        # ``finding_id`` is transport-injected (parse_cc_structured
+        # setdefaults it into every envelope), not model-smuggled —
+        # exempt it for schemas that don't declare it.
+        unknown = [
+            k for k in unknown_response_fields(parsed, effective_schema)
+            if k != "finding_id"
+        ]
+        if unknown:
+            logger.warning(
+                "CC response carried fields outside the requested "
+                "schema (%s) — stripped; keeping the valid subset",
+                unknown,
+            )
+            write_debug(
+                out_dir, "dispatch_schema", proc.stdout, proc.stderr,
+                {"warning": f"unknown fields stripped: {unknown}"},
+            )
+            for k in unknown:
+                parsed.pop(k, None)
         validated = validate_structured_response(parsed, effective_schema)
         parsed = validated.data
         quality = validated.quality
@@ -176,7 +218,7 @@ def _safe_id(finding_id: str) -> str:
       Windows-path interactions if `finding_id` contained
       backslashes (`Path("a\\\\b").name` is OS-dependent).
 
-    Whitelist `[A-Za-z0-9._-]` (sub everything else with `_`)
+    Allowlist `[A-Za-z0-9._-]` (sub everything else with `_`)
     and cap at 80 chars (well under any FS limit, leaves room
     for the `cc_` prefix and `.txt` suffix). Empty / whitespace
     -> "unknown".
@@ -186,7 +228,7 @@ def _safe_id(finding_id: str) -> str:
     sanitised = _SAFE_ID_RE.sub("_", finding_id.strip())
     # Defence-in-depth: collapse multiple consecutive `..` runs
     # to one `_` so even after sanitisation no traversal token
-    # remains (whitelist already excludes `/` so this is mostly
+    # remains (allowlist already excludes `/` so this is mostly
     # cosmetic, but keeps the filename predictable).
     sanitised = sanitised.replace("..", "_")
     if len(sanitised) > _SAFE_ID_MAX:
@@ -217,15 +259,18 @@ def _safe_id(finding_id: str) -> str:
 
 
 def write_debug(
-    out_dir: Path,
+    out_dir: Path | str,
     finding_id: str,
     stdout: str,
     stderr: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
 ) -> None:
     """Write raw CC output to a debug file on failure."""
     try:
-        debug_dir = out_dir / "debug"
+        # Coerce: invoke_cc_simple's callers pass str out_dirs; a bare
+        # `str / str` TypeError here would turn a debug-artifact write
+        # into a dispatch crash.
+        debug_dir = Path(out_dir) / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
         safe_id = _safe_id(finding_id)
         debug_file = debug_dir / f"cc_{safe_id}.txt"
@@ -235,7 +280,7 @@ def write_debug(
         pass
 
 
-def build_schema(no_exploits: bool = False, no_patches: bool = False) -> Dict[str, Any]:
+def build_schema(no_exploits: bool = False, no_patches: bool = False) -> dict[str, Any]:
     """Build JSON Schema for CC output, excluding fields the user didn't ask for."""
     schema = copy.deepcopy(FINDING_RESULT_SCHEMA)
     if no_exploits:

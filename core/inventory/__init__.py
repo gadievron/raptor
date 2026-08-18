@@ -12,38 +12,40 @@ Usage:
 """
 
 from .builder import build_inventory
-from .languages import LANGUAGE_MAP, detect_language
+from .coverage import format_coverage_summary, get_coverage_stats, update_coverage
+from .diff import compare_inventories
 from .exclusions import (
     DEFAULT_EXCLUDES,
     GENERATED_MARKERS,
     is_binary_file,
     is_generated_file,
-    should_exclude,
     match_exclusion_reason,
+    should_exclude,
 )
 from .extractors import (
-    CodeItem,
-    FunctionInfo,
-    FunctionMetadata,
+    _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
+)
+from .extractors import (
+    KIND_CLASS,
     KIND_FUNCTION,
     KIND_GLOBAL,
     KIND_MACRO,
-    KIND_CLASS,
+    CExtractor,
+    CodeItem,
+    FunctionInfo,
+    FunctionMetadata,
+    GenericExtractor,
+    GoExtractor,
+    JavaExtractor,
+    JavaScriptExtractor,
+    PythonExtractor,
+    _get_ts_languages,
+    count_sloc,
     extract_functions,
     extract_items,
-    count_sloc,
-    PythonExtractor,
-    JavaScriptExtractor,
-    CExtractor,
-    JavaExtractor,
-    GoExtractor,
-    GenericExtractor,
-    _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
-    _get_ts_languages,
 )
+from .languages import LANGUAGE_MAP, detect_language
 from .lookup import lookup_function, normalise_path
-from .diff import compare_inventories
-from .coverage import update_coverage, get_coverage_stats, format_coverage_summary
 
 # Public re-export surface. Each name below is imported above purely
 # to make `from core.inventory import X` work for downstream callers
@@ -51,55 +53,48 @@ from .coverage import update_coverage, get_coverage_stats, format_coverage_summa
 # CodeQL prefilter). Without `__all__`, ruff F401 flags them all as
 # "unused import"; with it, ruff recognises the re-export intent and
 # `from core.inventory import *` exposes exactly this list.
-# Order follows the import statements above (grouped by submodule)
-# rather than strict alphabetical, to keep the audit trail between
-# import-site and re-export-list trivial. `save_checklist` /
-# `get_items` are module-level functions defined below — included
-# here because they're part of the public surface too.
+# Sorted (RUF022); the import statements above show which submodule
+# each name comes from. `save_checklist` / `read_checklist` /
+# `update_checklist` / `get_items` are module-level functions defined
+# below — included here because they're part of the public surface too.
 __all__ = [
-    # .builder
-    "build_inventory",
-    # .languages
-    "LANGUAGE_MAP",
-    "detect_language",
-    # .exclusions
     "DEFAULT_EXCLUDES",
+    "EXTRACTORS",
     "GENERATED_MARKERS",
-    "is_binary_file",
-    "is_generated_file",
-    "should_exclude",
-    "match_exclusion_reason",
-    # .extractors
-    "CodeItem",
-    "FunctionInfo",
-    "FunctionMetadata",
+    "KIND_CLASS",
     "KIND_FUNCTION",
     "KIND_GLOBAL",
     "KIND_MACRO",
-    "KIND_CLASS",
+    "LANGUAGE_MAP",
+    "CExtractor",
+    "CodeItem",
+    "FunctionInfo",
+    "FunctionMetadata",
+    "GenericExtractor",
+    "GoExtractor",
+    "JavaExtractor",
+    "JavaScriptExtractor",
+    "PythonExtractor",
+    "_get_ts_languages",
+    "build_inventory",
+    "compare_inventories",
+    "count_sloc",
+    "detect_language",
     "extract_functions",
     "extract_items",
-    "count_sloc",
-    "PythonExtractor",
-    "JavaScriptExtractor",
-    "CExtractor",
-    "JavaExtractor",
-    "GoExtractor",
-    "GenericExtractor",
-    "EXTRACTORS",
-    "_get_ts_languages",
-    # .lookup
-    "lookup_function",
-    "normalise_path",
-    # .diff
-    "compare_inventories",
-    # .coverage
-    "update_coverage",
-    "get_coverage_stats",
     "format_coverage_summary",
-    # module-level functions defined below
-    "save_checklist",
+    "get_coverage_stats",
     "get_items",
+    "is_binary_file",
+    "is_generated_file",
+    "lookup_function",
+    "match_exclusion_reason",
+    "normalise_path",
+    "read_checklist",
+    "save_checklist",
+    "should_exclude",
+    "update_checklist",
+    "update_coverage",
 ]
 
 
@@ -113,6 +108,68 @@ def get_items(file_entry):
     return file_entry.get("items", file_entry.get("functions", [])) or []
 
 
+def _resolve_checklist_path(output_dir):
+    """Resolve checklist.json path, following symlinks."""
+    from pathlib import Path
+    checklist_path = Path(output_dir) / "checklist.json"
+    if checklist_path.is_symlink():
+        checklist_path = checklist_path.resolve()
+    checklist_path.parent.mkdir(parents=True, exist_ok=True)
+    return checklist_path
+
+
+class _checklist_lock:
+    """Context manager that holds an exclusive flock on checklist.lock.
+
+    Used by both save_checklist (write-only) and update_checklist
+    (read-modify-write) so the lock covers the entire critical section.
+    """
+
+    __slots__ = ("_lock_file", "_lock_path")
+
+    def __init__(self, checklist_path):
+        self._lock_path = checklist_path.with_suffix(".lock")
+        self._lock_file = None
+
+    def __enter__(self):
+        import fcntl
+        import os
+        flags = (
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = os.open(self._lock_path, flags, 0o600)
+        self._lock_file = os.fdopen(fd, "w", encoding="utf-8")
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+        except OSError:
+            self._lock_file.close()
+            self._lock_file = None
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        import fcntl
+        import logging as _logging
+        _local_logger = _logging.getLogger(__name__)
+        if self._lock_file is not None:
+            try:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+            except OSError:
+                _local_logger.warning(
+                    "checklist_lock: flock LOCK_UN failed for %s",
+                    self._lock_path, exc_info=True,
+                )
+            try:
+                self._lock_file.close()
+            except OSError:
+                _local_logger.warning(
+                    "checklist_lock: lock file close failed for %s",
+                    self._lock_path, exc_info=True,
+                )
+        return False
+
+
 def save_checklist(output_dir, data):
     """Save checklist.json, resolving symlinks and using file locking.
 
@@ -123,91 +180,93 @@ def save_checklist(output_dir, data):
 
     In standalone mode, writes directly to output_dir/checklist.json.
     """
-    import fcntl
-    import os
-    from pathlib import Path
+    from core.artifacts.provenance import stamp_provenance
     from core.json import save_json
 
-    checklist_path = Path(output_dir) / "checklist.json"
+    # Provenance chokepoint for checklist.json. The mechanical
+    # inventory writer path contains no LLM-derived content, so the
+    # default stamp is untrusted:false; callers persisting LLM-enriched
+    # checklists (e.g. understand_bridge.enrich_checklist) pre-stamp
+    # untrusted:true, which stamp_provenance never downgrades.
+    if isinstance(data, dict):
+        stamp_provenance(data, "core-inventory", untrusted=False,
+                         overwrite_generator=False)
 
-    # Resolve symlink to write to the real file
-    if checklist_path.is_symlink():
-        checklist_path = checklist_path.resolve()
-
-    # Ensure parent exists
-    checklist_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # File lock for concurrent write safety.
-    #
-    # `lock_file` initialised to None BEFORE the try so the finally
-    # block doesn't raise NameError when open(lock_path, "w") itself
-    # raises (permission denied, parent read-only after the mkdir
-    # call but before this open, disk full). Pre-fix the NameError
-    # masked the real OSError, so operators saw "name 'lock_file' is
-    # not defined" instead of "permission denied" — much harder to
-    # diagnose.
-    #
-    # Lock-then-unlink race: pre-fix the finally also called
-    # `lock_path.unlink(missing_ok=True)` AFTER LOCK_UN. Race
-    # sequence:
-    #   1. Process A holds lock, writes, LOCK_UN.
-    #   2. Process B (waiting on flock on the same inode) wakes up,
-    #      now holds the lock on the still-existing-but-about-to-be-
-    #      unlinked file.
-    #   3. A unlinks lock_path. The inode survives because B still
-    #      has it open, but the directory entry is gone.
-    #   4. Process C arrives, opens lock_path — creates a NEW file
-    #      at the same path, gets the lock immediately on the new
-    #      inode.
-    #   5. B and C both think they hold the (different) lock,
-    #      write to checklist.json concurrently → corruption.
-    #
-    # Standard Unix pattern: NEVER unlink the lock file. Stale lock
-    # files at rest are harmless (flock state is in-kernel, not
-    # disk), and the cost is one tiny .lock dotfile per checklist —
-    # acceptable trade for closing the corruption window.
-    lock_path = checklist_path.with_suffix(".lock")
-    lock_file = None
-    try:
-        # `O_NOFOLLOW` to refuse a pre-existing symlink at lock_path.
-        # Pre-fix `open(lock_path, "w")` would truncate the symlink's
-        # target — an attacker (or a bizarre fixture) that plants
-        # `<dir>/.checklist.lock -> /etc/shadow` would have us truncate
-        # the target on every save_checklist call. We control the
-        # output dir but lock_path lives next to checklist.json which
-        # may sit under an operator-supplied output_dir on a shared
-        # host. ELOOP raises OSError → caught by the outer try/finally
-        # which leaves lock_file=None, so save_json never runs.
-        # Operator-visible behaviour: the save fails loudly with the
-        # OSError instead of silently mutating an unrelated file.
-        flags = (
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-        )
-        fd = os.open(lock_path, flags, 0o600)
-        lock_file = os.fdopen(fd, "w")
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    checklist_path = _resolve_checklist_path(output_dir)
+    with _checklist_lock(checklist_path):
         save_json(checklist_path, data)
-    finally:
-        if lock_file is not None:
-            # Lock-release failures are diagnostically important —
-            # a leaked advisory lock blocks every subsequent
-            # save_checklist caller from the same process. Pre-fix
-            # this was completely silent. Narrow to OSError so
-            # programming-error exceptions still propagate.
-            import logging as _logging
-            _local_logger = _logging.getLogger(__name__)
+
+
+def read_checklist(output_dir):
+    """Read checklist.json under the writers' flock + symlink resolution.
+
+    Read-side counterpart of :func:`save_checklist` /
+    :func:`update_checklist`. A raw ``json.load`` on
+    ``output_dir/checklist.json`` bypasses two properties the write
+    accessors guarantee:
+
+    - **project-symlink resolution** — in project mode the run-dir
+      checklist is a symlink to the project-level file; reading the
+      resolved path keeps read and write sides pointed at the same
+      inode;
+    - **flock over the read** — a concurrent :func:`update_checklist`
+      holds the lock across its whole read-modify-write, so taking the
+      same lock here prevents torn/mid-write reads.
+
+    Returns ``{}`` when the file is missing, malformed, or not a JSON
+    object (a non-dict checklist is corrupt for every consumer that
+    calls ``.get`` on it).
+    """
+    import json
+    import logging as _logging
+    from pathlib import Path
+
+    # Missing file → {} without side effects (_resolve_checklist_path
+    # would mkdir the output dir, which a pure read must not do).
+    if not (Path(output_dir) / "checklist.json").exists():
+        return {}
+    checklist_path = _resolve_checklist_path(output_dir)
+    with _checklist_lock(checklist_path):
+        try:
+            data = json.loads(checklist_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            _logging.getLogger(__name__).error(
+                "malformed JSON in %s", checklist_path,
+            )
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_checklist(output_dir, transform_fn):
+    """Atomically read-modify-write checklist.json.
+
+    Holds the flock across the entire read-modify-write cycle so
+    concurrent callers cannot interleave (preventing last-writer-wins
+    data loss). ``transform_fn`` receives the current checklist dict
+    (or empty dict if the file does not exist) and must return the
+    updated dict to write.
+
+    Use this instead of separate load + save_checklist when modifying
+    an existing checklist.
+    """
+    import json
+
+    from core.json import save_json
+
+    checklist_path = _resolve_checklist_path(output_dir)
+    with _checklist_lock(checklist_path):
+        current = {}
+        if checklist_path.is_file():
             try:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
-            except OSError:
-                _local_logger.warning(
-                    "save_checklist: flock LOCK_UN failed for %s",
-                    lock_path, exc_info=True,
+                current = json.loads(
+                    checklist_path.read_text(encoding="utf-8"),
                 )
-            try:
-                lock_file.close()
-            except OSError:
-                _local_logger.warning(
-                    "save_checklist: lock file close failed for %s",
-                    lock_path, exc_info=True,
-                )
+            except (json.JSONDecodeError, OSError):
+                pass
+        updated = transform_fn(current)
+        if isinstance(updated, dict):
+            # Same provenance policy as save_checklist above.
+            from core.artifacts.provenance import stamp_provenance
+            stamp_provenance(updated, "core-inventory", untrusted=False,
+                             overwrite_generator=False)
+        save_json(checklist_path, updated)

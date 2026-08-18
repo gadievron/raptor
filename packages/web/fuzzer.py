@@ -209,7 +209,7 @@ class WebFuzzer:
             )
 
             payloads = result.get('payloads', [])
-            logger.info(f"Generated {len(payloads)} payloads for {vuln_type}")
+            logger.info("Generated %d payloads for %s", len(payloads), vuln_type)
             return payloads
 
         except Exception as e:
@@ -267,7 +267,7 @@ class WebFuzzer:
             is_vulnerable = self._analyze_response(response, payload, vuln_type)
 
             if is_vulnerable:
-                logger.warning(f"Potential {vuln_type} found in {param_name}")
+                logger.warning("Potential %s found in %s", vuln_type, param_name)
                 return {
                     'url': redact_secrets(url, reveal_secrets=self.client.reveal_secrets),
                     'parameter': param_name,

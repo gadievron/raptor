@@ -240,7 +240,12 @@ def _walk_returns_python(
     import ast as _stdlib_ast  # absolute import: shadowed by core.ast namespace
     try:
         tree = _stdlib_ast.parse(content)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # Beyond SyntaxError, ast.parse signals its depth/input limits
+        # differently across interpreter versions on attacker-shaped
+        # source: RecursionError or MemoryError for deeply-nested
+        # expressions, ValueError for null bytes (pre-3.12). All mean
+        # "unparseable file" here, not a caller bug.
         return ()
     out: List[Return] = []
     for node in _stdlib_ast.walk(tree):
@@ -290,13 +295,20 @@ def _walk_returns_ts(
     out: List[Return] = []
     return_types = ("return_statement",)
 
-    def visit(node) -> None:
+    # Iterative pre-order walk with an explicit stack: the parse tree
+    # is attacker-shaped (target-repo source), so traversal depth must
+    # not be bound by Python's recursion limit — a recursive visit
+    # overflows on deeply-nested files (e.g. thousands of nested
+    # parens) and crashes the whole view.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
         # Cheap line-range prune: skip subtrees entirely outside
         # [line_start, line_end].
         n_start = node.start_point[0] + 1
         n_end = node.end_point[0] + 1
         if n_start > line_end or n_end < line_start:
-            return
+            continue
         if node.type in return_types:
             line = n_start
             if line_start <= line <= line_end:
@@ -308,10 +320,9 @@ def _walk_returns_ts(
                 out.append(Return(line=line, value_text=value_text))
             # Returns don't nest meaningfully; still descend so nested
             # functions / lambdas inside return expressions are seen.
-        for c in node.children:
-            visit(c)
-
-    visit(tree.root_node)
+        # Reversed so pop() yields children in source order,
+        # preserving the recursive walk's pre-order output.
+        stack.extend(reversed(node.children))
     return tuple(out)
 
 

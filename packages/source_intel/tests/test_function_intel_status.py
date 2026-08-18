@@ -7,9 +7,9 @@ function name.
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
+
+from packages.coccinelle.runner import meets_min_version as _spatch_meets_min
 
 from packages.source_intel.analyze import SourceIntelResult, analyze
 
@@ -20,8 +20,8 @@ def test_status_unknown_when_no_target():
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_status_in_tree_for_defined_function(tmp_path):
     src = tmp_path / "x.c"
@@ -35,8 +35,8 @@ def test_status_in_tree_for_defined_function(tmp_path):
 
 
 @pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed",
+    not _spatch_meets_min(),
+    reason="spatch >= 1.3 required for prereqs E2E",
 )
 def test_status_name_not_in_tree_for_undefined(tmp_path):
     src = tmp_path / "x.c"

@@ -8,8 +8,10 @@ DEFAULT_MAX_LEN = 80
 
 _SAFE_ID_RE = re.compile(r'[^A-Za-z0-9_-]')
 
+_FENCE_RE = re.compile(r'`{3,}')
 
-def sanitize(text: str, max_len: int = None) -> str:
+
+def sanitize(text: str, max_len: int | None = None) -> str:
     """Escape characters that break Mermaid node labels.
 
     This sanitizer is for quoted node labels and similarly quoted text. It does
@@ -37,6 +39,15 @@ def sanitize(text: str, max_len: int = None) -> str:
         .replace("\u2028", " ")
         .replace("\u2029", " ")
     )
+    # Fence-break defence: diagram text is embedded inside the
+    # renderer's ```mermaid fences (and attack-path headings sit in the
+    # surrounding markdown). A 3+ backtick run in a label sourced from
+    # attack-tree.json / hypotheses.json could terminate the wrapping
+    # fence and spill live markdown into the report. Insert a
+    # zero-width space after the second backtick \u2014 invisible when
+    # rendered, but no longer a fence token for the markdown parser.
+    # Same technique as core.security.prompt_output_sanitise.sanitise_code.
+    result = _FENCE_RE.sub(lambda m: "``\u200b" + "`" * (len(m.group(0)) - 2), result)
     if max_len and len(result) > max_len:
         result = result[:max_len - 3] + "..."
     return result

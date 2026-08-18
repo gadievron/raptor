@@ -18,13 +18,15 @@ silent overwrite.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import secrets
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from core.llm.tool_use.types import Message, TextBlock, ToolCall, ToolResult
 
@@ -139,6 +141,31 @@ def _record_to_json(record: TrajectoryRecord) -> str:
     return json.dumps(asdict(record), indent=2)
 
 
+def _mkdir_private(path: Path) -> None:
+    """Create *path* (and any missing parents) owner-only (0o700).
+
+    Trajectories embed prompts, tool output, and target details —
+    directories should not be group/world-readable. ``mkdir(mode=...)``
+    is masked by the process umask, so each component this call
+    actually creates gets an explicit ``chmod`` for determinism.
+    Pre-existing directories keep their modes — only new creations
+    change. Same shape as ``core/labeled_attempts/store.py``.
+    """
+    missing: list[Path] = []
+    probe = Path(path)
+    while not probe.exists():
+        missing.append(probe)
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    Path(path).mkdir(mode=0o700, parents=True, exist_ok=True)
+    for created in missing:
+        # A concurrent writer may have created (or pruned) the same
+        # component; the chmod is best-effort on our own creations.
+        with contextlib.suppress(OSError):
+            os.chmod(created, 0o700)
+
+
 def _write_atomic(path: Path, payload: str) -> Path:
     """O_NOFOLLOW + O_EXCL + O_CREAT atomic write. Same shape as
     labeled_attempts/store._write_atomic but without the random-suffix
@@ -150,16 +177,19 @@ def _write_atomic(path: Path, payload: str) -> Path:
     the run's trajectory still lands somewhere — but report the path
     we ended up using.
     """
+    # 0o600: trajectories embed prompts, tool output, and target
+    # details — keep new files owner-only. Existing files are not
+    # migrated.
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     try:
-        fd = os.open(path, flags, 0o644)
+        fd = os.open(path, flags, 0o600)
     except FileExistsError:
         # Already exists — for trajectories this is "this run_id was
         # written before" or a planted-symlink attack. Retry with a
         # random suffix so the run isn't lost.
         suffix = secrets.token_hex(3)
         path = path.with_name(f"{path.stem}-{suffix}{path.suffix}")
-        fd = os.open(path, flags, 0o644)
+        fd = os.open(path, flags, 0o600)
     try:
         os.write(fd, payload.encode("utf-8"))
     finally:
@@ -181,7 +211,7 @@ def write_trajectory(
       * OSError — filesystem error.
     """
     out = trajectory_path(base, record.run_id)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    _mkdir_private(out.parent)
 
     # Defence-in-depth against a planted symlink at
     # ``<base>/trajectories`` (or any parent component above the
@@ -211,7 +241,7 @@ def write_trajectory(
 
 def iter_trajectory_json(
     base: Path,
-) -> "Iterable[tuple[Path, dict]]":
+) -> Iterable[tuple[Path, dict]]:
     """Yield ``(path, parsed_json_dict)`` for each trajectory under
     ``<base>/trajectories/``.
 

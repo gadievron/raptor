@@ -6,17 +6,12 @@ description: |
   the actual buffer or table size.
 
 signals:
-  paths:
-    - net/
-    - drivers/input/
-    - drivers/usb/
-    - drivers/net/
-    - fs/
-    - sound/
-  includes:
-    - linux/skbuff.h
-    - linux/netlink.h
-    - linux/usb.h
+  # Kernel ingress bulk (net/ and drivers/ paths, linux/skbuff.h
+  # includes, the copy_from_user/skb_*/nla_* callees) lives in the
+  # linux_kernel profile pack (profiles/linux_kernel.yml). Universal
+  # libc ingress/copy calls stay here; discovered sinks and learned
+  # boundary transfers arrive via the picker's DomainVocabulary
+  # supplements.
   function_keywords:
     - parse
     - decode
@@ -24,14 +19,12 @@ signals:
     - unmarshal
     - load
   function_calls:
-    - copy_from_user
-    - get_user
-    - skb_pull
-    - skb_push
-    - skb_copy_bits
-    - nla_get_u32
-    - nla_get_u64
-    - kmemdup_array
+    - memcpy
+    - strcpy
+    - sscanf
+    - recv
+    - recvfrom
+    - fread
   cwes:
     - CWE-20    # improper input validation
     - CWE-78    # OS command injection

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Validation pipeline helper — per-stage mechanical work.
 
 Usage:
@@ -10,13 +12,15 @@ Stages 0 and 1 compose generic tools (lifecycle, checklist, coverage, diagrams)
 with validation-specific logic (bridge, stage merging, report generation).
 Stages A-F do per-stage merging, validation, and schema hints.
 """
+import contextlib
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -25,20 +29,64 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
+import hashlib  # noqa: E402
 
-import hashlib
-from core.json import load_json, save_json
-from core.schema_constants import MEMORY_CORRUPTION_TYPES, normalise_vuln_type
-from core.inventory.lookup import normalise_path
-from packages.exploitability_validation.schemas import (
-    create_empty_findings, validate_findings, validate_attack_tree,
-    validate_attack_paths, validate_attack_surface, validate_hypotheses,
+from core.artifacts.provenance import sanitise_free_text, stamp_provenance  # noqa: E402
+from core.inventory.lookup import normalise_path  # noqa: E402
+from core.json import load_json, save_json  # noqa: E402
+from core.schema_constants import MEMORY_CORRUPTION_TYPES, normalise_vuln_type  # noqa: E402
+from packages.exploitability_validation.schemas import (  # noqa: E402
+    ATTACK_PATH_SCHEMA,
+    ATTACK_SURFACE_SCHEMA,
+    ATTACK_TREE_SCHEMA,
+    DISPROVEN_SCHEMA,
+    FINDINGS_SCHEMA,
+    HYPOTHESIS_SCHEMA,
+    create_empty_findings,
+    validate_attack_paths,
+    validate_attack_surface,
+    validate_attack_tree,
     validate_disproven,
+    validate_findings,
+    validate_hypotheses,
 )
+
+# Provenance generator id for artifacts (re)written by this helper.
+# Everything here carries LLM-derived content (stage outputs, merged
+# findings, working docs), so stamps default to untrusted per
+# docs/security.md I2-(b). See core.artifacts.provenance.
+_GENERATOR = "validation-helper"
+
+# Free-text schemas per working-doc filename, used to defang prose
+# fields at this writer chokepoint before persisting.
+_DOC_TEXT_SCHEMAS = {
+    "findings.json": FINDINGS_SCHEMA,
+    "attack-surface.json": ATTACK_SURFACE_SCHEMA,
+    "attack-tree.json": ATTACK_TREE_SCHEMA,
+    "disproven.json": DISPROVEN_SCHEMA,
+    "attack-paths.json": {"items": ATTACK_PATH_SCHEMA},
+    "hypotheses.json": {"items": HYPOTHESIS_SCHEMA},
+}
+
+
+def _save_artifact(path, data):
+    """Sanitise free text, stamp provenance, and save a working doc.
+
+    The single write chokepoint for LLM-derived pipeline artifacts in
+    this helper — keeps any generator id an earlier writer recorded.
+    """
+    path = Path(path)
+    schema = _DOC_TEXT_SCHEMAS.get(path.name)
+    if schema is not None:
+        sanitise_free_text(data, schema)
+    stamp_provenance(data, _GENERATOR, untrusted=True,
+                     overwrite_generator=False)
+    save_json(path, data)
 
 STAGE_LETTERS = "ABCDEF"
 
@@ -69,7 +117,7 @@ Output: stage-c.json  {"stage":"C", "updates":{"FIND-XXXX": {sanity_check:{...},
 Output: stage-d.json  {"stage":"D", "updates":{"FIND-XXXX": {ruling:{...}, cvss_vector:str, stage_d_summary:{...}}, ...}}
   ruling: {status:"confirmed"|"ruled_out"|"exploitable", disqualifier:str|null, reason:str|null}
   cvss_vector: "CVSS:3.1/AV:.../AC:.../PR:.../UI:.../S:.../C:.../I:.../A:..."
-  stage_d_summary: {status, disqualifiers_checked:[], disqualifiers_failed:[], evidence:str}''',
+  stage_d_summary: {ruling:"confirmed"|"ruled_out"|"exploitable", disqualifiers_checked:[], disqualifiers_failed:[], evidence:str}''',
 
     "F": '''\
 Output: stage-f.json  {"stage":"F", "updates":{"FIND-XXXX": {"stage_f_summary":{...}}, ...}}
@@ -133,7 +181,7 @@ def _findings(workdir):
 
 
 def _save_findings(workdir, data):
-    save_json(Path(workdir) / "findings.json", data)
+    _save_artifact(Path(workdir) / "findings.json", data)
 
 
 WORKING_DOCS = [
@@ -193,7 +241,7 @@ def _apply_stage_file(workdir, stage_letter):
         target_path = staged.get("target_path", "")
         container = create_empty_findings("A", target_path, staged.get("vuln_type_focus"))
         container["findings"] = staged.get("findings", [])
-        save_json(findings_path, container)
+        _save_artifact(findings_path, container)
         count = len(container["findings"])
         print(f"  Built findings.json from stage-a.json: {count} findings")
     else:
@@ -209,6 +257,8 @@ def _apply_stage_file(workdir, stage_letter):
         if "updates" in staged and isinstance(staged["updates"], dict):
             # Preferred format: {"updates": {"FIND-001": {fields...}}}
             for finding_id, update_dict in staged["updates"].items():
+                if not isinstance(update_dict, dict):
+                    continue
                 finding = by_id.get(finding_id)
                 if finding:
                     _deep_merge(finding, update_dict)
@@ -238,19 +288,27 @@ def _apply_stage_file(workdir, stage_letter):
         # final_status is only set for values in the Stage E enum
         # (confirmed / exploitable); ruled_out is NOT a valid
         # final_status value — it flows via ruling.status instead.
-        _RULING_TO_FINAL = {
-            "confirmed": "confirmed",
-            "exploitable": "exploitable",
-        }
+        # ONLY on the Stage D merge: the ruling is Stage D's output,
+        # and this loop walks EVERY finding in the container — running
+        # it on the later merges silently re-clobbered Stage E/F
+        # verdicts (a ruling.status of "confirmed" overwrote Stage E's
+        # final_status of confirmed_unverified on every E/F merge).
+        # Later stages' final_status is authoritative.
+        if stage_letter.upper() == "D":
+            _RULING_TO_FINAL = {
+                "confirmed": "confirmed",
+                "exploitable": "exploitable",
+            }
+            for finding in container.get("findings", []):
+                ruling = finding.get("ruling")
+                if isinstance(ruling, dict):
+                    rs = ruling.get("status", "")
+                    if rs in ("confirmed", "ruled_out", "exploitable"):
+                        finding["status"] = rs
+                    final = _RULING_TO_FINAL.get(rs)
+                    if final:
+                        finding["final_status"] = final
         for finding in container.get("findings", []):
-            ruling = finding.get("ruling")
-            if isinstance(ruling, dict):
-                rs = ruling.get("status", "")
-                if rs in ("confirmed", "ruled_out", "exploitable"):
-                    finding["status"] = rs
-                final = _RULING_TO_FINAL.get(rs)
-                if final:
-                    finding["final_status"] = final
             # Empty cvss_vector fails schema pattern; normalise to None
             if finding.get("cvss_vector") == "":
                 finding["cvss_vector"] = None
@@ -261,22 +319,8 @@ def _apply_stage_file(workdir, stage_letter):
                 container[key] = value
 
         container["stage"] = staged.get("stage", stage_letter.upper())
-        save_json(findings_path, container)
+        _save_artifact(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
-
-    # Emit per-function annotations for stages that have a wired
-    # mapping (Stage A produces verdicts, Stage B refines with
-    # hypothesis + proximity). Best-effort — annotation failures
-    # never break the stage merge.
-    try:
-        from packages.exploitability_validation.annotation_emit import (
-            emit_stage_annotations,
-        )
-        n = emit_stage_annotations(Path(workdir), stage_letter)
-        if n > 0:
-            print(f"  Annotations emitted: {n} (per-function review trail)")
-    except Exception:
-        pass
 
     # Delete the stage file. Guard the unlink — pre-fix
     # `stage_path.unlink()` raised `FileNotFoundError` if the
@@ -381,23 +425,48 @@ def _build_standalone_pocs(target, build_dir):
     # the dangerous env vars before the compile sees them.
     # Fall back to plain `_sp.run` only if `_sandbox_run` import
     # fails — preserves pre-fix behaviour for unusual install
-    # layouts where core.sandbox isn't reachable.
+    # layouts where core.sandbox isn't reachable. The env-strip
+    # is imported separately so a sandbox-only ImportError does
+    # not silently revert the compile env to the full operator
+    # environment.
     try:
         from core.sandbox import run as _sandbox_run
+    except ImportError:
+        _sandbox_run = None
+        print(
+            "WARNING: core.sandbox unavailable — PoC compiles will run "
+            "UNSANDBOXED (no filesystem/network confinement)",
+            file=sys.stderr,
+        )
+    try:
         from core.config import RaptorConfig
         _safe_env = RaptorConfig.get_safe_env()
     except ImportError:
-        _sandbox_run = None
-        _safe_env = os.environ.copy()
+        # Last resort: minimal inline allowlist mirroring the intent of
+        # RaptorConfig.SAFE_ENV_ALLOWLIST — never the full environment.
+        _minimal_keep = {
+            "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM",
+            "TMPDIR", "LANG", "TZ",
+        }
+        _safe_env = {
+            k: v for k, v in os.environ.items()
+            if k in _minimal_keep or k.startswith("LC_")
+        }
+        print(
+            "WARNING: core.config unavailable — PoC compile env stripped "
+            "to a minimal inline allowlist instead of "
+            "RaptorConfig.get_safe_env()",
+            file=sys.stderr,
+        )
 
     compiler = "gcc"
     try:
-        _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
-    except (FileNotFoundError, _sp.CalledProcessError):
+        _sp.run([compiler, "--version"], capture_output=True, check=True, timeout=10, env=_safe_env)
+    except (FileNotFoundError, _sp.CalledProcessError, _sp.TimeoutExpired):
         compiler = "cc"
         try:
-            _sp.run([compiler, "--version"], capture_output=True, check=True, env=_safe_env)
-        except (FileNotFoundError, _sp.CalledProcessError):
+            _sp.run([compiler, "--version"], capture_output=True, check=True, timeout=10, env=_safe_env)
+        except (FileNotFoundError, _sp.CalledProcessError, _sp.TimeoutExpired):
             print("No C compiler found — skipping PoC build", file=sys.stderr)
             return
 
@@ -408,7 +477,7 @@ def _build_standalone_pocs(target, build_dir):
             built += 1
             continue
         cmd = [compiler] + _POC_GCC_FLAGS + ["-o", str(output), str(source)]
-        try:
+        with contextlib.suppress(Exception):
             if _sandbox_run is not None:
                 result = _sandbox_run(
                     cmd,
@@ -420,7 +489,7 @@ def _build_standalone_pocs(target, build_dir):
                 )
             else:
                 result = _sp.run(cmd, capture_output=True, text=True, timeout=30,
-                                env=_safe_env)
+                                check=False, env=_safe_env)
             if result.returncode == 0:
                 print(f"  Built: {source.name} -> {output.name}")
                 if result.stderr.strip():
@@ -429,8 +498,6 @@ def _build_standalone_pocs(target, build_dir):
                 built += 1
             else:
                 print(f"  Build failed: {source.name} ({result.stderr.strip()[:80]})", file=sys.stderr)
-        except Exception:
-            pass
 
     if built:
         print(f"PoC binaries: {built}/{len(sources)} in {build_dir}")
@@ -442,9 +509,9 @@ def prepare_A(workdir, target=None):
     if not checklist:
         print("✗ checklist.json not found", file=sys.stderr)
         sys.exit(1)
-    total_files = checklist['total_files']
+    total_files = checklist.get('total_files', 0)
     total_sloc = checklist.get('total_sloc', 0)
-    print(f"Checklist: {total_files} files, {checklist['total_items']} items, {total_sloc} SLOC")
+    print(f"Checklist: {total_files} files, {checklist.get('total_items', 0)} items, {total_sloc} SLOC")
     if total_files <= 20 and total_sloc < 2000:
         print("  Target size: small — keep analysis concise, one tool call per finding where possible")
     if existing:
@@ -459,6 +526,29 @@ def prepare_A(workdir, target=None):
         for pt in priority_targets:
             print(f"  {pt.get('entry_point')} → {pt.get('sink')}: {pt.get('missing_boundary')}")
 
+    # Surface prior SAGE validation memories (stage-0 recall dump).
+    # Hint-only priors per core.sage.hooks.recall_context_for_validation:
+    # a prior verdict says where to look first, a prior disproven
+    # hypothesis says what failed before — every hint is re-verified
+    # against current code, never imported as a finding. Only rows the
+    # row-MAC verifies as minted by this install have their content
+    # echoed; unverified recall text is counted, not printed.
+    sage_rows = load_json(Path(workdir) / "sage_precall_validation.json")
+    if isinstance(sage_rows, list) and sage_rows:
+        verified = [
+            r for r in sage_rows
+            if isinstance(r, dict) and r.get("mac_verified")
+        ]
+        print(
+            f"SAGE recall: {len(sage_rows)} prior validation memories "
+            f"({len(verified)} MAC-verified) — hint-only, re-verify "
+            f"against current code"
+        )
+        for row in verified[:8]:
+            content = " ".join(str(row.get("content", "")).split())[:160]
+            if content:
+                print(f"  [prior] {content}")
+
     # Discover existing binaries and build PoCs for standalone C files
     if target:
         build_dir = Path(workdir) / "build"
@@ -467,22 +557,36 @@ def prepare_A(workdir, target=None):
         executables = _discover_executables(target)
         build_exes = _discover_executables(str(build_dir)) if build_dir.exists() else {}
         if executables or build_exes:
-            print("Source → binary mapping:")
+            # Summarised: on large targets the per-file dump ran to
+            # ~95KB of stdout ("<src>: no binary" x thousands). The
+            # full map goes to source-binary-map.json; stdout carries
+            # the counts, the mapped entries (capped), and the path.
+            mapping = {}
             for f in checklist.get("files", []):
                 src = f["path"]
                 stem = Path(src).stem
                 prefix = stem.split("_")[0] if "_" in stem else ""
                 poc = build_exes.get(stem) or (build_exes.get(prefix) if prefix else "")
                 orig = executables.get(stem) or (executables.get(prefix) if prefix else "")
-                parts = []
+                entry = {}
                 if poc:
-                    parts.append(f"poc={poc}")
+                    entry["poc"] = poc
                 if orig:
-                    parts.append(f"original={orig}")
-                if parts:
-                    print(f"  {src}: {', '.join(parts)}")
-                else:
-                    print(f"  {src}: no binary")
+                    entry["original"] = orig
+                mapping[src] = entry
+            map_path = Path(workdir) / "source-binary-map.json"
+            save_json(map_path, mapping)
+            mapped = {s_: e for s_, e in mapping.items() if e}
+            print(f"Source → binary mapping: {len(mapped)} of "
+                  f"{len(mapping)} source files have a binary "
+                  f"(full map: {map_path})")
+            _MAP_PRINT_CAP = 20
+            for src, entry in list(mapped.items())[:_MAP_PRINT_CAP]:
+                parts = [f"{k}={v}" for k, v in entry.items()]
+                print(f"  {src}: {', '.join(parts)}")
+            if len(mapped) > _MAP_PRINT_CAP:
+                print(f"  ... {len(mapped) - _MAP_PRINT_CAP} more mapped "
+                      f"files in {map_path}")
     _print_schema_hint("A")
 
 
@@ -618,7 +722,9 @@ def prepare_B(workdir, target=None):
             continue
         sa = finding.get("stage_a_summary", {})
         poc = finding.get("poc", {})
-        fid = finding["id"]
+        fid = finding.get("id")
+        if not fid:
+            continue
         num = fid.split("-")[-1] if "-" in fid else str(fast_count + 1)
 
         if (finding.get("status") == "poc_success"
@@ -668,11 +774,11 @@ def prepare_B(workdir, target=None):
     # Always create all 5 working docs (empty if no data).
     # This ensures Claude can Read-then-Write without "file not found" errors.
     wdir = Path(workdir)
-    save_json(wdir / "hypotheses.json", hypotheses)
-    save_json(wdir / "attack-paths.json", attack_paths)
+    _save_artifact(wdir / "hypotheses.json", hypotheses)
+    _save_artifact(wdir / "attack-paths.json", attack_paths)
 
     # Frida runtime-evidence annotation (best-effort).
-    try:
+    with contextlib.suppress(Exception):
         from core.orchestration.frida_validation_bridge import (
             annotate_attack_paths,
             collect_runtime_evidence,
@@ -681,18 +787,21 @@ def prepare_B(workdir, target=None):
             [wdir, wdir.parent], target_path=target)
         if evidence_map and attack_paths:
             attack_paths = annotate_attack_paths(attack_paths, evidence_map)
-            save_json(wdir / "attack-paths.json", attack_paths)
+            _save_artifact(wdir / "attack-paths.json", attack_paths)
             print(f"  Frida runtime evidence: {len(evidence_map)} functions observed")
-    except Exception:
-        pass
 
     if not (wdir / "attack-surface.json").exists():
-        save_json(wdir / "attack-surface.json", {"sources": [], "sinks": [], "trust_boundaries": []})
+        _save_artifact(wdir / "attack-surface.json", {"sources": [], "sinks": [], "trust_boundaries": []})
     if not (wdir / "attack-tree.json").exists():
-        save_json(wdir / "attack-tree.json", {"root": "ROOT", "nodes": []})
+        _save_artifact(wdir / "attack-tree.json", {"root": "ROOT", "nodes": []})
     if not (wdir / "disproven.json").exists():
-        save_json(wdir / "disproven.json", {"disproven": []})
+        _save_artifact(wdir / "disproven.json", {"disproven": []})
     _save_findings(workdir, data)
+
+    # SMT feasibility over bridge-imported paths BEFORE Stage B runs,
+    # so the Stage B prompts see concrete model values / infeasibility
+    # receipts on the /understand-imported traces.
+    _run_smt_path_sweep(workdir)
 
     if fast_count:
         print(f"Fast-path: {fast_count} poc_success findings (audit trail created)")
@@ -715,6 +824,36 @@ def prepare_B(workdir, target=None):
     _print_schema_hint("B")
 
 
+def _run_smt_path_sweep(workdir):
+    """P24: mechanical SMT feasibility over condition-carrying attack paths.
+
+    Guarantees every path that carries ``path_conditions`` gets checked
+    instead of depending on the LLM electing to run
+    ``raptor-smt-validate-path`` per finding. unsat → soft demotion +
+    receipt (never suppression); sat → concrete model values recorded
+    for the Stage B/E prompts. Bounded + hash-cached inside the sweep.
+    """
+    try:
+        from packages.exploitability_validation.smt_paths import (
+            sweep_attack_paths,
+        )
+    except ImportError:
+        return
+    ap_path = Path(workdir) / "attack-paths.json"
+    paths = load_json(ap_path)
+    if not isinstance(paths, list) or not paths:
+        return
+    stats = sweep_attack_paths(paths)
+    if stats["checked"]:
+        _save_artifact(ap_path, paths)
+        print(
+            f"  SMT path sweep: {stats['checked']} checked — "
+            f"{stats['sat']} sat (model recorded), "
+            f"{stats['unsat']} unsat (demoted with receipt), "
+            f"{stats['unknown']} unknown"
+        )
+
+
 # ---------------------------------------------------------------------------
 # C: Validate Stage B output + pre-check findings against inventory
 # ---------------------------------------------------------------------------
@@ -735,6 +874,10 @@ def prepare_C(workdir, target=None):
             _validate_file(workdir, name, validator)
         else:
             print(f"  {name}: not found", file=sys.stderr)
+
+    # SMT feasibility over the Stage B-written paths (bridge-imported
+    # ones checked at prepare_B are hash-cached and skipped).
+    _run_smt_path_sweep(workdir)
 
     # --- Carry-forward check (Stage B) ---
     findings_data = _findings(workdir)
@@ -806,6 +949,8 @@ def _run_cocci_prereqs(workdir, findings_data, target=None):
     try:
         from packages.coccinelle.prereqs import (
             evaluate_finding as _cocci_evaluate,
+        )
+        from packages.coccinelle.prereqs import (
             gather_prereqs as _cocci_gather,
         )
     except ImportError:
@@ -857,6 +1002,9 @@ def prepare_D(workdir, target=None):
 
 
     data = _findings(workdir)
+    if not data:
+        print("✗ findings.json not found — cannot run stage D", file=sys.stderr)
+        sys.exit(1)
 
     # --- Schema validation ---
     _validate_file(workdir, "findings.json", validate_findings)
@@ -939,10 +1087,72 @@ def prepare_D(workdir, target=None):
                 "synthesis": "",
             }
 
+    # --- Guard-dominance refuter (P23, pre-LLM, warm CPG only) ---
+    _run_guard_dominance(workdir, target, data)
+
     _save_findings(workdir, data)
     flagged = sum(1 for f in data["findings"] if f.get("test_code_flag"))
     print(f"Test filter: {flagged} flagged, evidence cards assembled")
     _print_schema_hint("D")
+
+
+def _run_guard_dominance(workdir, target, data):
+    """P23: mechanically test 'missing check' findings before Stage D.
+
+    A condition on the claimed identifier dominating every matched
+    sink call site (CFG dominance via Joern) refutes the claim — the
+    finding gets a guard_dominance receipt and its attack paths are
+    soft-demoted. No dominating guard is corroboration evidence.
+
+    Runs ONLY against a warm CPG (cached joern-cpg/ under the workdir
+    or its project dir) — nothing here builds one. Degrades silently
+    when joern is absent, the cache is cold, or no finding binds.
+    """
+    if not target:
+        return
+    try:
+        from core.orchestration.guard_dominance import (
+            acquire_warm_server,
+            apply_to_findings,
+            missing_check_binding,
+        )
+    except ImportError:
+        return
+
+    findings = data.get("findings", [])
+    # Cheap pre-check: don't pay the JVM start unless something binds.
+    if not any(
+        isinstance(f, dict)
+        and f.get("status") != "disproven"
+        and not f.get("guard_dominance")
+        and missing_check_binding(f)
+        for f in findings
+    ):
+        return
+
+    server = acquire_warm_server(
+        Path(target), Path(workdir), Path(workdir).parent,
+    )
+    if server is None:
+        return
+    try:
+        ap_path = Path(workdir) / "attack-paths.json"
+        attack_paths = load_json(ap_path) or []
+        stats = apply_to_findings(
+            findings, attack_paths, Path(target), server,
+        )
+        if stats["checked"]:
+            if stats["demoted_paths"]:
+                _save_artifact(ap_path, attack_paths)
+            print(
+                f"  Guard-dominance: {stats['checked']} checked — "
+                f"{stats['refuted']} refuted "
+                f"({stats['demoted_paths']} path(s) demoted), "
+                f"{stats['corroborated']} corroborated"
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            server.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -971,13 +1181,49 @@ def _discover_executables(target):
     try:
         from core.config import RaptorConfig
         _env = RaptorConfig.get_safe_env()
-    except Exception:
-        _env = os.environ.copy()
+    except Exception:  # noqa: BLE001
+        # Fail closed: the child `find` walks the UNTRUSTED target
+        # tree, so a sanitisation failure must never hand it the
+        # ambient environment. Mirror the minimal inline allowlist the
+        # PoC-compile stage uses as its own last resort.
+        _minimal_keep = {
+            "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM",
+            "TMPDIR", "LANG", "TZ",
+        }
+        _env = {
+            k: v for k, v in os.environ.items()
+            if k in _minimal_keep or k.startswith("LC_")
+        }
+        print(
+            "WARNING: RaptorConfig.get_safe_env() failed — binary "
+            "discovery env stripped to a minimal inline allowlist "
+            "instead of the ambient environment",
+            file=sys.stderr,
+        )
+        # Security-event stream: an env-sanitisation failure on the
+        # untrusted-target path is exactly the class of event the
+        # stream exists for. Observability only — the fail-closed
+        # minimal env above is the behaviour; a logging failure (the
+        # same import breakage that broke get_safe_env may reach
+        # core.logging too) must not disturb it. Payload carries the
+        # stage + target path identifier — never env names or values.
+        try:
+            from core.logging import log_security_event
+            log_security_event(
+                "env_sanitisation_failed",
+                "RaptorConfig.get_safe_env() failed during binary "
+                "discovery; child env stripped to the minimal inline "
+                "allowlist",
+                stage="stage_e_discover_executables",
+                target=str(target),
+            )
+        except Exception:  # noqa: BLE001, S110 — observability must never break the fail-closed path
+            pass
     result = {}
-    try:
+    with contextlib.suppress(Exception):
         proc = _sp.run(
             ["find", target, "-executable", "-type", "f"],
-            capture_output=True, text=True, timeout=30, env=_env
+            capture_output=True, text=True, timeout=30, check=False, env=_env
         )
         # GNU find returns rc=0 on success; BSD find with
         # `-executable` errors out (rc!=0, stderr "find: -executable:
@@ -986,7 +1232,7 @@ def _discover_executables(target):
         if proc.returncode != 0 or "unknown primary" in (proc.stderr or "").lower():
             proc = _sp.run(
                 ["find", target, "-type", "f", "-perm", "+111"],
-                capture_output=True, text=True, timeout=30, env=_env
+                capture_output=True, text=True, timeout=30, check=False, env=_env
             )
         # Track collisions on stem. Pre-fix `result[p.stem] = str(p)`
         # silently OVERWROTE earlier entries when two binaries
@@ -1020,8 +1266,6 @@ def _discover_executables(target):
                     file=sys.stderr,
                 )
             result[stem] = paths[0]
-    except Exception:
-        pass
     return result
 
 
@@ -1085,7 +1329,68 @@ def _discover_and_match_binaries(workdir, target, data):
         print(f"  {bp}: {', '.join(ids)}")
 
 
-def prepare_E(workdir, target=None):
+def _run_witness_execution(workdir, target, data, dynamic=None):
+    """Stage E witness execution (P9) — dark-verify oracle for /validate.
+
+    Gate: ``core.project.trust.resolve_dynamic_validation`` — explicit
+    ``--dynamic`` / ``--no-dynamic`` wins, else the project's
+    ``dynamic`` trust marker, else off. Witness harnesses run
+    target-derived code, so this is exactly the gate that authorises
+    /audit's dynamic channels; no new execution authority.
+
+    Eligibility, execution, and ruling upgrades live in
+    ``packages.exploitability_validation.witness_stage``. Best-effort:
+    a missing import degrades to a no-op, and any per-finding failure
+    is contained inside the stage.
+    """
+    try:
+        from core.project.trust import resolve_dynamic_validation
+        from packages.exploitability_validation.witness_stage import (
+            eligible_findings,
+            run_witness_stage,
+        )
+    except ImportError:
+        return
+
+    eligible = eligible_findings(data.get("findings", []))
+    if not eligible:
+        return
+
+    if not resolve_dynamic_validation(dynamic):
+        print(
+            f"  Witness execution: {len(eligible)} eligible finding(s) "
+            "skipped — dynamic execution not granted (pass --dynamic or "
+            "set the project 'dynamic' trust marker)"
+        )
+        return
+
+    if not target:
+        print("  Witness execution: no --target provided; skipped",
+              file=sys.stderr)
+        return
+
+    try:
+        from core.llm.client import LLMClient
+        client = LLMClient()
+    except Exception as e:  # noqa: BLE001 — no LLM, no witness specs
+        print(f"  Witness execution: no LLM available ({e}); skipped",
+              file=sys.stderr)
+        return
+
+    def _llm_call(prompt, system):
+        return client.generate(prompt, system_prompt=system or None).content
+
+    stats = run_witness_stage(data, target, llm_call=_llm_call)
+    _save_findings(workdir, data)
+    print(
+        f"  Witness execution: {stats['executed']} executed of "
+        f"{stats['eligible']} eligible — {stats['confirmed']} confirmed, "
+        f"{stats['refuted']} refuted, {stats['inconclusive']} inconclusive, "
+        f"{stats['skipped']} skipped"
+    )
+
+
+def prepare_E(workdir, target=None, dynamic=None):
     _apply_stage_file(workdir, "D")
 
 
@@ -1120,27 +1425,44 @@ def prepare_E(workdir, target=None):
     else:
         print("  No --target provided, skipping binary discovery")
 
+    # --- Witness execution (dark-verify oracle, gated on dynamic trust) ---
+    _run_witness_execution(workdir, target, data, dynamic=dynamic)
+
 
 # ---------------------------------------------------------------------------
 # F: Map Stage E verdicts + CVSS scoring + consistency checks
 # ---------------------------------------------------------------------------
 
+# Canonical mapping — kept identical to the Python orchestrator's
+# verdict_to_status (packages/exploitability_validation/orchestrator.py).
+# The two implementations previously diverged here: this map collapsed
+# likely_exploitable into exploitable (overstating what was proven) and
+# had no rows for unknown/error. likely_exploitable stays a distinct
+# final status — operator-facing output preserves the proven-vs-probable
+# distinction; both statuses are valid per the findings schema.
 VERDICT_MAP = {
-    "likely": "exploitable",
-    "likely_exploitable": "exploitable",
+    "likely": "likely_exploitable",
+    "likely_exploitable": "likely_exploitable",
     "exploitable": "exploitable",
     "difficult": "confirmed_constrained",
     "unlikely": "confirmed_blocked",
+    "unknown": "confirmed_unverified",
+    "error": "confirmed_unverified",
+    # E-5 table row (stage-e-feasibility.md): no binary to analyse
+    # means the source-confirmed finding stays unverified — without
+    # this row the fallback below stamped final_status "confirmed",
+    # overstating what Stage E proved. (The orchestrator reaches the
+    # same value via its unknown-verdict default.)
+    "binary_not_found": "confirmed_unverified",
 }
 
 
 def prepare_F(workdir, target=None):
     merged_e = _apply_stage_file(workdir, "E")
-    if not merged_e:
-        # Stage E may have been skipped (no memory-corruption findings).
-        # Merge stage-d.json here so the ruling data is not lost.
-        if _apply_stage_file(workdir, "D"):
-            print("  (Stage E skipped — merged stage-d.json directly)")
+    # Stage E may have been skipped (no memory-corruption findings).
+    # Merge stage-d.json here so the ruling data is not lost.
+    if not merged_e and _apply_stage_file(workdir, "D"):
+        print("  (Stage E skipped — merged stage-d.json directly)")
 
     data = _findings(workdir)
 
@@ -1169,9 +1491,13 @@ def prepare_F(workdir, target=None):
             finding["final_status"] = status
 
     # --- Derive is_exploitable from final_status ---
+    # likely_exploitable counts as exploitable for downstream
+    # prioritisation (same family grouping as the orchestrator's
+    # confirmed-findings report); the status string itself preserves
+    # the proven-vs-probable distinction for the operator.
     for finding in data.get("findings", []):
         fs = finding.get("final_status", "")
-        if fs in ("exploitable",):
+        if fs in ("exploitable", "likely_exploitable"):
             finding["is_exploitable"] = True
         elif fs in ("confirmed_constrained", "confirmed_blocked", "confirmed",
                     "confirmed_unverified", "ruled_out", "disproven"):
@@ -1195,7 +1521,7 @@ def prepare_F(workdir, target=None):
             if score is not None:
                 print(f"  {finding['id']}: {vector} -> {score}")
         _save_findings(workdir, data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"  ⚠️  CVSS scoring error: {e}", file=sys.stderr)
 
     # --- Verdict mapping consistency ---
@@ -1260,8 +1586,12 @@ def _bridge_understand_output(out_dir, checklist, target,
         against current disk.
     """
     from core.orchestration.understand_bridge import (
-        find_understand_output, load_understand_context, enrich_checklist,
-        _extract_hashes, _find_stale_files, _filter_context_map,
+        _extract_hashes,
+        _filter_context_map,
+        _find_stale_files,
+        enrich_checklist,
+        find_understand_output,
+        load_understand_context,
     )
 
     understand_dir, stale_files = find_understand_output(
@@ -1289,7 +1619,7 @@ def _bridge_understand_output(out_dir, checklist, target,
     if understand_dir == out_dir:
         context_map_path = out_dir / "context-map.json"
         if context_map_path.exists():
-            from core.json import load_json, save_json
+            from core.json import load_json
             context_map = load_json(context_map_path)
             if context_map:
                 if stale_files:
@@ -1297,7 +1627,7 @@ def _bridge_understand_output(out_dir, checklist, target,
                 # Write attack-surface.json from (filtered) context-map so
                 # Stage B has consistent data.  Matches tier 2/3 behavior
                 # where load_understand_context always writes this file.
-                save_json(out_dir / "attack-surface.json", {
+                _save_artifact(out_dir / "attack-surface.json", {
                     "sources": context_map.get("sources", []),
                     "sinks": context_map.get("sinks", []),
                     "trust_boundaries": context_map.get("trust_boundaries", []),
@@ -1318,17 +1648,65 @@ def _bridge_understand_output(out_dir, checklist, target,
         print(f"  Bridge: loaded {understand_dir.name}"
               f" — {n_sources} sources, {n_sinks} sinks,"
               f" {n_traces} traces, {n_targets} priority targets")
+        prov = bridge.get("context_map_provenance") or {}
+        if prov:
+            # Visibility plumbing (docs/security.md I2-(b)): the
+            # imported context-map is LLM-derived; record its stamp.
+            print(f"  Bridge: context-map provenance —"
+                  f" generator={prov.get('generator')}"
+                  f" untrusted={prov.get('untrusted')}"
+                  f" legacy={prov.get('legacy')}")
 
 
-def prepare_bridge(workdir, target=None):
-    """Import /understand output into the validate run."""
-    from core.json import load_json
-    checklist = load_json(Path(workdir) / "checklist.json")
-    if not checklist:
-        print("ERROR: checklist.json not found — run raptor-build-checklist first",
-              file=sys.stderr)
-        sys.exit(1)
-    _bridge_understand_output(Path(workdir), checklist, target)
+def _bridge_audit_output(out_dir, target=None):
+    """Import /audit constraints, chains, summaries, and dark outcomes into the validate run."""
+    try:
+        from core.orchestration.audit_bridge import (
+            enrich_attack_paths,
+            enrich_with_summaries,
+            find_audit_output,
+            inject_chains_as_hypotheses,
+            inject_dark_as_hypotheses,
+            load_attack_chains,
+            load_audit_constraints,
+            load_dark_findings,
+            load_summaries,
+        )
+    except ImportError:
+        return
+
+    audit_dir = find_audit_output(out_dir, target_path=target)
+    if not audit_dir:
+        return
+
+    constraints = load_audit_constraints(audit_dir)
+    if constraints:
+        attack_paths_file = Path(out_dir) / "attack-paths.json"
+        enriched = enrich_attack_paths(attack_paths_file, constraints)
+        n_constraints = len(constraints)
+        print(f"  Audit bridge: loaded {n_constraints} constraints from {audit_dir.name}"
+              f" — enriched {enriched} attack-path steps")
+
+    chains = load_attack_chains(audit_dir)
+    if chains:
+        attack_surface_file = Path(out_dir) / "attack-surface.json"
+        injected = inject_chains_as_hypotheses(chains, attack_surface_file)
+        print(f"  Audit bridge: injected {injected} chain hypotheses into attack-surface")
+
+    # Dark outcomes: /audit's "tool-blind, needs concrete verification"
+    # bucket — /validate is exactly the pipeline built to judge them.
+    dark = load_dark_findings(audit_dir)
+    if dark:
+        attack_surface_file = Path(out_dir) / "attack-surface.json"
+        injected_dark = inject_dark_as_hypotheses(dark, attack_surface_file)
+        print(f"  Audit bridge: injected {injected_dark} dark-outcome hypotheses"
+              f" (needs_validation) into attack-surface")
+
+    summaries = load_summaries(audit_dir)
+    if summaries:
+        attack_paths_file = Path(out_dir) / "attack-paths.json"
+        enriched_steps = enrich_with_summaries(attack_paths_file, summaries)
+        print(f"  Audit bridge: enriched {enriched_steps} attack-path steps with callee contracts")
 
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
@@ -1339,8 +1717,8 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         print("ERROR: --target is required for stage 0", file=sys.stderr)
         sys.exit(1)
 
-    from core.run.output import get_output_dir, TargetMismatchError
     from core.run.metadata import start_run
+    from core.run.output import TargetMismatchError, get_output_dir
     from packages.exploitability_validation import build_checklist
 
     try:
@@ -1385,14 +1763,21 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
     # of `/project status` listed the orphan as in-progress;
     # `coverage-summary` skipped it; cleanup never fired.
     # SAGE recall: pull prior validation verdicts + methodology before analysis.
-    try:
+    with contextlib.suppress(Exception):
         from core.sage.hooks import recall_context_for_validation
         sage_memories = recall_context_for_validation(target)
         if sage_memories:
             from core.json import save_json
             save_json(out_dir / "sage_precall_validation.json", sage_memories)
-    except Exception:
-        pass
+            n_verified = sum(
+                1 for r in sage_memories
+                if isinstance(r, dict) and r.get("mac_verified")
+            )
+            print(
+                f"SAGE recall: {len(sage_memories)} prior validation "
+                f"memories ({n_verified} MAC-verified) → "
+                f"sage_precall_validation.json (surfaced by stage A prep)"
+            )
 
     from core.run.metadata import fail_run
     try:
@@ -1422,6 +1807,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,
                                       pre_rebuild_checklist=pre_rebuild_checklist)
+            _bridge_audit_output(out_dir, target)
 
         print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
         print(f"OUTPUT_DIR={out_dir}")
@@ -1430,14 +1816,12 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         # see the right state. Re-raise so the caller (validate
         # CLI) sees the exception and can surface it to the
         # operator with stack trace.
-        try:
+        # Best-effort — if even fail_run breaks (filesystem
+        # error mid-stage), we'd rather the original
+        # exception propagate than mask it with a metadata-
+        # write error.
+        with contextlib.suppress(Exception):
             fail_run(out_dir, str(e))
-        except Exception:
-            # Best-effort — if even fail_run breaks (filesystem
-            # error mid-stage), we'd rather the original
-            # exception propagate than mask it with a metadata-
-            # write error.
-            pass
         raise
 
 
@@ -1446,18 +1830,26 @@ def prepare_1(workdir, target=None, model=None):
     _apply_stage_file(workdir, "F")
 
     # Report
-    from packages.exploitability_validation.report import write_validation_report, generate_summary
+    from packages.exploitability_validation.report import (
+        generate_summary,
+        write_validation_report,
+    )
     try:
         write_validation_report(workdir)
         print("Report generated")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"⚠️  Report error: {e}", file=sys.stderr)
 
     print(generate_summary(workdir))
 
     # Coverage record from findings + reads manifest
-    try:
-        from core.coverage.record import build_from_findings, write_record, cleanup_manifest, READS_MANIFEST
+    with contextlib.suppress(Exception):
+        from core.coverage.record import (
+            READS_MANIFEST,
+            build_from_findings,
+            cleanup_manifest,
+            write_record,
+        )
         findings_path = Path(workdir) / "findings.json"
         manifest_path = Path(workdir) / READS_MANIFEST
         record = build_from_findings(
@@ -1468,15 +1860,16 @@ def prepare_1(workdir, target=None, model=None):
         if record:
             write_record(Path(workdir), record, tool_name="llm")
             cleanup_manifest(Path(workdir))
-    except Exception:
-        pass
 
     # SAGE store: persist validation verdicts + disproven hypotheses for cross-run learning.
-    try:
+    with contextlib.suppress(Exception):
         from core.json import load_json
         findings_data = load_json(Path(workdir) / "findings.json")
         if findings_data:
-            from core.sage.hooks import store_validation_verdicts, store_validation_disproven
+            from core.sage.hooks import (
+                store_validation_disproven,
+                store_validation_verdicts,
+            )
             findings_list = findings_data.get("findings", [])
             summary = findings_data.get("summary", {})
             resolved_target = findings_data.get("target_path", target or "")
@@ -1488,27 +1881,23 @@ def prepare_1(workdir, target=None, model=None):
                 disproven_list = disproven_data.get("disproven", []) if disproven_data else []
                 if disproven_list:
                     store_validation_disproven(resolved_target, disproven_list)
-    except Exception:
-        pass
 
     # Diagrams
     try:
         from packages.diagram import render_and_write
         render_and_write(Path(workdir))
         print("Diagrams generated")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"⚠️  Diagram error: {e}", file=sys.stderr)
 
     # Coverage summary (unified store-backed report; file-level tier when
     # there's no function inventory).
-    try:
+    with contextlib.suppress(Exception):
         from core.coverage.store_summary import render_run_coverage
         cov = render_run_coverage(workdir)
         if cov:
             print()
             print(cov)
-    except Exception:
-        pass
 
     # Complete lifecycle. Record the ambient harness model the agent passed via
     # --model (only the harness knows /model — RAPTOR's Python can't read it);
@@ -1518,12 +1907,25 @@ def prepare_1(workdir, target=None, model=None):
     try:
         entry = harness_model_entry(model)
         manifest = {"models": [entry]} if entry else None
-    except Exception:
+    except Exception:  # noqa: BLE001
         manifest = None
     try:
         complete_run(Path(workdir), manifest=manifest)
-    except Exception as e:
-        print(f"⚠️  Lifecycle error: {e}", file=sys.stderr)
+    except FileNotFoundError as e:
+        # No .raptor-run.json in the workdir: it was materialised
+        # outside the run lifecycle (e.g. /agentic's fuzz-validation
+        # handoff builds a validate-style dir and runs stage 1 on
+        # it directly). There is no run to orphan — informational
+        # only, stage output stands.
+        print(f"⚠️  Lifecycle skipped (not a lifecycle-managed run "
+              f"dir): {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — CLI boundary: report and exit
+        # Match raptor-run-lifecycle `complete` semantics: a failed
+        # completion of a STARTED run must exit nonzero, otherwise
+        # the run is orphaned with status=running while the caller
+        # believes the pipeline sealed it.
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1545,7 +1947,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--model <id>] [--no-bridge] [--dynamic|--no-dynamic] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]
@@ -1567,6 +1969,14 @@ def main():
         if idx + 1 < len(args):
             model = args[idx + 1]
     no_bridge = "--no-bridge" in args
+    # Witness-execution gate (stage E): tri-state. None = no explicit
+    # choice (project 'dynamic' trust marker decides); --no-dynamic
+    # wins over --dynamic.
+    dynamic = None
+    if "--no-dynamic" in args:
+        dynamic = False
+    elif "--dynamic" in args:
+        dynamic = True
     findings_path = None
     if "--findings" in args:
         idx = args.index("--findings")
@@ -1615,6 +2025,8 @@ def main():
 
     if stage == "1":
         prepare_1(workdir, target, model=model)
+    elif stage == "E":
+        prepare_E(workdir, target, dynamic=dynamic)
     else:
         STAGES[stage](workdir, target)
 

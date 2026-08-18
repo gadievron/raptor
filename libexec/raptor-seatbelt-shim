@@ -1,4 +1,6 @@
 #!/usr/bin/python3 -I
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """RAPTOR seatbelt outer-watcher shim for the macOS sandbox-exec path.
 
 -I (isolated mode) is belt-and-braces: get_safe_env() strips PYTHON* env
@@ -60,7 +62,6 @@ path) and the `_spawn.py` exec-status pipe (the Linux mount-ns path).
 from __future__ import annotations
 
 import faulthandler
-import os
 import signal
 import sys
 
@@ -69,6 +70,8 @@ if hasattr(signal, "SIGUSR1"):
     faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
 
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -77,6 +80,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 # Fixed fd the in-sandbox /bin/sh trampoline writes the readiness byte to.

@@ -14,7 +14,7 @@ import tarfile
 import pytest
 from typing import List, Optional
 
-from core.tar.extract import extract_files_from_tar
+from core.tar.extract import TarTotalBytesExceeded, extract_files_from_tar
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,15 @@ def _select_by_extensions(*exts: str):
             if member.name.endswith(e):
                 return member.name
         return None
+    return _s
+
+
+def _select_named(*names: str):
+    """Selector factory that keeps only exactly-named members."""
+    wanted = set(names)
+
+    def _s(member: tarfile.TarInfo) -> Optional[str]:
+        return member.name if member.name in wanted else None
     return _s
 
 
@@ -326,3 +335,136 @@ def test_max_total_and_entry_caps_with_default_unchanged():
     with pytest.raises(TarEntryCountExceeded):
         extract_files_from_tar(
             raw, selector=lambda m: m.name, mode="r:", max_entry_count=2)
+
+
+# ---------------------------------------------------------------------------
+# Decompression budget — max_total_bytes counts skipped members too
+#
+# In stream mode (``r|gz``) tarfile must decompress a member's data
+# even to skip past it, so a gzip-bomb layer whose huge member is
+# skipped (selector miss, safety-filter reject) would burn unbounded
+# CPU if only kept members' bytes counted. Every member's
+# header-declared size is charged against the budget — before the
+# member's data is consumed — so the walk aborts ahead of
+# decompressing a bomb member.
+# ---------------------------------------------------------------------------
+
+
+def test_selector_missed_member_counts_toward_total_bytes():
+    """A big member the selector skips must still trip the budget —
+    the OCI gzip-bomb shape (huge non-wanted member first)."""
+    raw = _make_tar([
+        ("bomb.bin", b"\x00" * 10_000),
+        ("var/lib/dpkg/status", b"wanted"),
+    ], gzipped=True)
+    with pytest.raises(TarTotalBytesExceeded):
+        extract_files_from_tar(
+            _chunks(raw),
+            selector=_select_named("var/lib/dpkg/status"),
+            mode="r|gz",
+            max_total_bytes=1_000,
+        )
+
+
+def test_safety_filter_rejected_member_counts_toward_total_bytes():
+    """A member the safety filter rejects (oversized per-member) is
+    skipped-and-decompressed in stream mode — it must count too."""
+    raw = _make_tar([
+        ("oversized.bin", b"\x00" * 10_000),
+        ("small.txt", b"ok"),
+    ], gzipped=True)
+    with pytest.raises(TarTotalBytesExceeded):
+        extract_files_from_tar(
+            _chunks(raw),
+            selector=lambda m: m.name,
+            mode="r|gz",
+            max_member_bytes=100,
+            max_total_bytes=1_000,
+        )
+
+
+def test_budget_check_happens_before_member_data_is_consumed():
+    """The budget must trip at header-read time, BEFORE tarfile pulls
+    the bomb member's data from the stream — that early abort is the
+    entire CPU-DoS defense."""
+    bomb = b"\x00" * 1_000_000
+    raw = _make_tar([("bomb.bin", bomb)])  # uncompressed → byte-countable
+
+    consumed = 0
+
+    def _counting_chunks():
+        nonlocal consumed
+        for i in range(0, len(raw), 512):
+            chunk = raw[i:i + 512]
+            consumed += len(chunk)
+            yield chunk
+
+    with pytest.raises(TarTotalBytesExceeded):
+        extract_files_from_tar(
+            _counting_chunks(),
+            selector=lambda m: None,  # everything is skipped
+            mode="r|",
+            max_total_bytes=10_000,
+        )
+    # Header blocks plus tarfile read-ahead only — nowhere near the
+    # 1 MB member body.
+    assert consumed < len(bomb) // 2
+
+
+def test_kept_members_still_enforce_budget_in_stream_mode():
+    """Kept bytes trip the cap in stream mode too."""
+    raw = _make_tar([(f"f{i}", b"A" * 100) for i in range(5)], gzipped=True)
+    with pytest.raises(TarTotalBytesExceeded):
+        extract_files_from_tar(
+            _chunks(raw),
+            selector=lambda m: m.name,
+            mode="r|gz",
+            max_total_bytes=250,
+        )
+
+
+def test_under_budget_mixed_kept_and_skipped_succeeds():
+    raw = _make_tar([
+        ("skip.bin", b"\x00" * 300),
+        ("keep.txt", b"payload"),
+    ], gzipped=True)
+    out = extract_files_from_tar(
+        _chunks(raw),
+        selector=_select_named("keep.txt"),
+        mode="r|gz",
+        max_total_bytes=1_000,
+    )
+    assert out == {"keep.txt": b"payload"}
+
+
+def test_no_cap_leaves_skipped_members_unbudgeted():
+    """max_total_bytes=None (the opt-out) is unchanged: no counting,
+    no exception, big skipped members tolerated."""
+    raw = _make_tar([
+        ("big-skip.bin", b"\x00" * 50_000),
+        ("keep.txt", b"data"),
+    ], gzipped=True)
+    out = extract_files_from_tar(
+        _chunks(raw),
+        selector=_select_named("keep.txt"),
+        mode="r|gz",
+        max_total_bytes=None,
+    )
+    assert out == {"keep.txt": b"data"}
+
+
+def test_expected_count_short_circuits_before_later_bomb():
+    """Once the wanted members are found, the walk stops — a bomb
+    member AFTER the last wanted one must not trip the budget."""
+    raw = _make_tar([
+        ("keep.txt", b"data"),
+        ("bomb.bin", b"\x00" * 50_000),
+    ], gzipped=True)
+    out = extract_files_from_tar(
+        _chunks(raw),
+        selector=_select_named("keep.txt"),
+        mode="r|gz",
+        max_total_bytes=10_000,
+        expected_count=1,
+    )
+    assert out == {"keep.txt": b"data"}

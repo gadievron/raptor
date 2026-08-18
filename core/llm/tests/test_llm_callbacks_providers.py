@@ -1,8 +1,9 @@
 """Tests for provider creation and cost calculation.
 
 Replaces the old multi-provider LiteLLM callback tests. Now tests
-create_provider factory, SDK availability gating, and split-pricing
-cost calculation without any LiteLLM dependency.
+create_provider factory, SDK availability gating, split-pricing
+cost calculation without any LiteLLM dependency, and endpoint/secret
+redaction on provider error paths.
 """
 
 import pytest
@@ -16,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.llm.config import ModelConfig
 from core.llm.model_data import MODEL_COSTS
+from core.llm.providers import _endpoint_display, _redact_endpoint
+from core.llm.tool_use.types import Message, StopReason, TextBlock
 import core.llm.providers as _providers_module
 
 
@@ -460,3 +463,199 @@ class TestContentFilterDetection:
             assert result.finish_reason == "content_filter"
         finally:
             cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Endpoint / secret redaction on provider error paths.
+#
+# Remote ``api_base`` locations (e.g. a remote OLLAMA_HOST) must never
+# reach logs — neither via the provider-init debug line nor via
+# interpolated SDK exception text — and ``redact_secrets`` must be
+# applied to SDK exception bodies before they are logged or placed in
+# ``TurnResponse.error_message``.
+# ---------------------------------------------------------------------------
+
+# Documentation-only test host (TEST-NET-3, RFC 5737).
+_REMOTE_HOST = "203.0.113.7"
+_REMOTE_BASE = f"http://{_REMOTE_HOST}:11434/v1"
+_FAKE_OPENAI_KEY = "sk-" + "a" * 48
+_FAKE_ANTHROPIC_KEY = "sk-ant-" + "b" * 95
+
+
+class _RecordingLogger:
+    """Minimal logger stand-in capturing fully-formatted messages."""
+
+    def __init__(self):
+        self.messages: list[str] = []
+
+    def _record(self, msg, *args):
+        self.messages.append(msg % args if args else str(msg))
+
+    debug = info = warning = error = _record
+
+
+class TestEndpointHelpers:
+    """Verify the _endpoint_display / _redact_endpoint scrub helpers."""
+
+    def test_display_none_is_default(self):
+        assert _endpoint_display(None) == "default"
+
+    def test_display_loopback_verbatim(self):
+        assert _endpoint_display("http://127.0.0.1:11434/v1") == (
+            "http://127.0.0.1:11434/v1"
+        )
+        assert _endpoint_display("http://localhost:11434/v1") == (
+            "http://localhost:11434/v1"
+        )
+
+    def test_display_remote_placeholder(self):
+        out = _endpoint_display(_REMOTE_BASE)
+        assert _REMOTE_HOST not in out
+        assert out == "[REMOTE-ENDPOINT]"
+
+    def test_redact_endpoint_netloc_and_bare_host(self):
+        text = (
+            f"Connection error for {_REMOTE_HOST}:11434 — "
+            f"HTTPConnectionPool(host='{_REMOTE_HOST}', port=11434)"
+        )
+        out = _redact_endpoint(text, _REMOTE_BASE)
+        assert _REMOTE_HOST not in out
+        assert "[REMOTE-ENDPOINT]" in out
+
+    def test_redact_endpoint_loopback_untouched(self):
+        text = "refused by 127.0.0.1:11434"
+        assert _redact_endpoint(text, "http://127.0.0.1:11434/v1") == text
+
+    def test_redact_endpoint_no_base_untouched(self):
+        assert _redact_endpoint("anything", None) == "anything"
+
+
+def _openai_provider(monkeypatch, recorder):
+    pytest.importorskip("openai")
+    monkeypatch.setattr(_providers_module, "logger", recorder)
+    return _providers_module.OpenAICompatibleProvider(ModelConfig(
+        provider="ollama", model_name="test-model",
+        api_key="unused", api_base=_REMOTE_BASE, timeout=1,
+    ))
+
+
+def _openai_status_error(message: str):
+    import httpx
+    import openai
+    req = httpx.Request("POST", f"{_REMOTE_BASE}/chat/completions")
+    resp = httpx.Response(400, request=req)
+    return openai.APIStatusError(message, response=resp, body=None)
+
+
+class _RaisingCompletions:
+    def __init__(self, exc):
+        self._exc = exc
+
+    def create(self, **kwargs):
+        raise self._exc
+
+
+class _RaisingClient:
+    def __init__(self, exc):
+        self.chat = type("chat", (), {})()
+        self.chat.completions = _RaisingCompletions(exc)
+
+
+class TestOpenAIProviderRedaction:
+    """Verify OpenAICompatibleProvider redacts endpoints and secrets."""
+
+    def test_init_debug_log_has_no_remote_base(self, monkeypatch):
+        recorder = _RecordingLogger()
+        _openai_provider(monkeypatch, recorder)
+        joined = "\n".join(recorder.messages)
+        assert _REMOTE_HOST not in joined
+        assert any("base_url=[REMOTE-ENDPOINT]" in m for m in recorder.messages)
+
+    def test_turn_error_message_redacted(self, monkeypatch):
+        recorder = _RecordingLogger()
+        p = _openai_provider(monkeypatch, recorder)
+        exc = _openai_status_error(
+            f"400 from {_REMOTE_BASE}: Authorization: Bearer {_FAKE_OPENAI_KEY}"
+        )
+        p.client = _RaisingClient(exc)
+        resp = p.turn(
+            [Message(role="user", content=[TextBlock(text="hi")])],
+            [], max_retries=0,
+        )
+        assert resp.stop_reason == StopReason.ERROR
+        assert _FAKE_OPENAI_KEY not in resp.error_message
+        assert _REMOTE_HOST not in resp.error_message
+        joined = "\n".join(recorder.messages)
+        assert _FAKE_OPENAI_KEY not in joined
+        assert _REMOTE_HOST not in joined
+
+    def test_turn_stream_warning_redacted(self, monkeypatch):
+        recorder = _RecordingLogger()
+        p = _openai_provider(monkeypatch, recorder)
+        exc = _openai_status_error(
+            f"stream fail at {_REMOTE_BASE} key {_FAKE_OPENAI_KEY}"
+        )
+        p.client = _RaisingClient(exc)
+        chunks = list(p.turn_stream(
+            [Message(role="user", content=[TextBlock(text="hi")])],
+            [], max_retries=0,
+        ))
+        assert chunks[-1].stop_reason == StopReason.ERROR
+        joined = "\n".join(recorder.messages)
+        assert _FAKE_OPENAI_KEY not in joined
+        assert _REMOTE_HOST not in joined
+
+    def test_note_instructor_failure_redacted(self, monkeypatch):
+        recorder = _RecordingLogger()
+        p = _openai_provider(monkeypatch, recorder)
+        recorder.messages.clear()
+        p._note_instructor_failure(RuntimeError(
+            f"x-api-key: {_FAKE_OPENAI_KEY} via {_REMOTE_HOST}:11434"
+        ))
+        joined = "\n".join(recorder.messages)
+        assert "Instructor structured generation failed" in joined
+        assert _FAKE_OPENAI_KEY not in joined
+        assert _REMOTE_HOST not in joined
+        assert "[REDACTED]" in joined
+
+
+class _RaisingMessages:
+    def __init__(self, exc):
+        self._exc = exc
+
+    def create(self, **kwargs):
+        raise self._exc
+
+
+class TestAnthropicProviderRedaction:
+    """Verify AnthropicProvider redacts secrets on the turn error path."""
+
+    def test_turn_error_message_redacted(self, monkeypatch):
+        pytest.importorskip("anthropic")
+        import anthropic
+        import httpx
+
+        recorder = _RecordingLogger()
+        monkeypatch.setattr(_providers_module, "logger", recorder)
+        p = _providers_module.AnthropicProvider(ModelConfig(
+            provider="anthropic", model_name="claude-opus-4-6",
+            api_key="test-key", timeout=1,
+        ))
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx.Response(400, request=req)
+        exc = anthropic.APIStatusError(
+            f"invalid request; x-api-key: {_FAKE_ANTHROPIC_KEY}",
+            response=resp, body=None,
+        )
+        p.client = type(
+            "client", (), {"messages": _RaisingMessages(exc)},
+        )()
+        turn = p.turn(
+            [Message(role="user", content=[TextBlock(text="hi")])],
+            [], max_retries=0,
+        )
+        assert turn.stop_reason == StopReason.ERROR
+        assert _FAKE_ANTHROPIC_KEY not in turn.error_message
+        assert "[REDACTED]" in turn.error_message
+        joined = "\n".join(recorder.messages)
+        assert _FAKE_ANTHROPIC_KEY not in joined

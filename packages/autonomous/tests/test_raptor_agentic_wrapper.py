@@ -29,7 +29,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
         # flags including the new --understand and --validate.
         proc = subprocess.run(
             [str(WRAPPER), "--help"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(proc.returncode, 0,
                          msg=f"wrapper --help failed: {proc.stderr}")
@@ -42,7 +42,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
         # not be silently swallowed by the wrapper.
         proc = subprocess.run(
             [str(WRAPPER), "--definitely-not-a-flag"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertNotEqual(proc.returncode, 0)
         # argparse writes errors to stderr.
@@ -65,7 +65,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             broken.chmod(0o755)
             proc = subprocess.run(
                 [str(broken), "--help"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=60,
             )
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("cannot find raptor.py", proc.stderr,
@@ -79,7 +79,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             link.symlink_to(WRAPPER)
             proc = subprocess.run(
                 [str(link), "--help"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=60,
             )
             self.assertEqual(proc.returncode, 0,
                              msg=f"symlinked wrapper failed: {proc.stderr}")

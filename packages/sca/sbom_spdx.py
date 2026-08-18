@@ -58,11 +58,13 @@ def write_sbom_spdx_json(
     deps: Iterable[Dependency],
     target_name: str,
     namespace_uri: Optional[str] = None,
+    project_license: Optional[str] = None,
 ) -> None:
     """Render an SPDX 2.3 JSON SBOM and write it atomically."""
     doc = render_sbom_spdx(
         deps=deps, target_name=target_name,
         namespace_uri=namespace_uri,
+        project_license=project_license,
     )
     atomic_write_text(path, _json.dumps(doc, indent=2) + "\n")
 
@@ -72,8 +74,15 @@ def render_sbom_spdx(
     deps: Iterable[Dependency],
     target_name: str,
     namespace_uri: Optional[str] = None,
+    project_license: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the SPDX 2.3 document dict (does not write to disk)."""
+    """Build the SPDX 2.3 document dict (does not write to disk).
+
+    ``project_license`` — the scanned project's own manifest-declared
+    license. When known, a root ``SPDXRef-Project`` package carries it
+    as ``licenseDeclared``; dep packages never do — a dep's license
+    only ever comes from data that describes that dep.
+    """
     deps_list = list(deps)
     spdx_doc_id = "SPDXRef-DOCUMENT"
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -92,6 +101,27 @@ def render_sbom_spdx(
         # to its top-level package(s). Without a single "root"
         # package we DESCRIBE every dep — equivalent semantically.
     ]
+    if project_license:
+        # Root package for the scanned project itself — the only
+        # place its manifest-declared license belongs. Emitted only
+        # when the license is known; a bare root package with all
+        # NOASSERTION fields adds nothing for consumers.
+        root_id = "SPDXRef-Project"
+        packages.append({
+            "SPDXID": root_id,
+            "name": target_name,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseDeclared": _spdx_license_value(project_license),
+            "licenseConcluded": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+            "supplier": "NOASSERTION",
+        })
+        relationships.append({
+            "spdxElementId": spdx_doc_id,
+            "relatedSpdxElement": root_id,
+            "relationshipType": "DESCRIBES",
+        })
     seen_refs: set = set()
     for d in deps_list:
         spdx_id = _spdx_id_for(d, seen_refs)

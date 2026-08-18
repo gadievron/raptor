@@ -7,7 +7,8 @@ high-bit-set values as two's-complement negatives when ``signed=True``.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Union
+from collections.abc import Mapping
+from typing import Any
 
 from .availability import z3
 
@@ -51,7 +52,7 @@ def bv_to_int(raw: int, width: int, signed: bool) -> int:
 
 def _resolve_signedness(
     name: str,
-    signed: Union[bool, Mapping[str, bool]],
+    signed: bool | Mapping[str, bool],
 ) -> bool:
     """Resolve per-decl signedness from either a bool default or a map.
 
@@ -78,8 +79,8 @@ def _resolve_signedness(
 
 def format_witness(
     model: Any,
-    signed: Union[bool, Mapping[str, bool]],
-) -> Dict[str, int]:
+    signed: bool | Mapping[str, bool],
+) -> dict[str, int]:
     """Render every concrete BitVec decl in a Z3 model as ``{name: int}``.
 
     `signed` accepts either a global `bool` (legacy) or a
@@ -97,7 +98,7 @@ def format_witness(
     # disambiguating suffix (`x`, `x__1`, `x__2`, ...) so all values
     # survive and the operator can see the multiplicity in the
     # output.
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for decl in model.decls():
         val = model[decl]
         if not z3.is_bv_value(val):
@@ -117,11 +118,11 @@ def format_witness(
 
 def format_vars(
     model: Any,
-    vars_: Dict[str, Any],
-    signed: Union[bool, Mapping[str, bool]],
+    vars_: dict[str, Any],
+    signed: bool | Mapping[str, bool],
     *,
     completion: bool = False,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Render the caller's named variables from a Z3 model.
 
     Unlike ``format_witness``, this walks the caller's variable registry
@@ -152,7 +153,7 @@ def format_vars(
     line on each silent skip lets operators investigate
     suspicious witness gaps without changing the public API.
     """
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for name, var in vars_.items():
         if completion:
             val = model.eval(var, model_completion=True)
@@ -172,7 +173,7 @@ def format_vars(
                     "(consider completion=True for model_completion semantics)",
                     name, name, val,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 — observability must never break witness extraction (matches core/logging emitter guards)
                 pass
             continue
         out[name] = bv_to_int(

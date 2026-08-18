@@ -27,6 +27,7 @@ def test_bare_model_id_peels_aggregator_then_provider():
     # both peel; the lookup in models.json sees just ``claude-haiku-4-5``.
     assert bare_model_id("together/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
     assert bare_model_id("openrouter/openai/gpt-5") == "gpt-5"
+    assert bare_model_id("orcarouter/openai/gpt-5") == "gpt-5"
 
 
 def test_bare_model_id_leaves_unknown_prefixes_alone():

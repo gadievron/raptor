@@ -53,6 +53,56 @@ def test_truncates_oversize_diff():
     assert big not in md
 
 
+# --- byte-accurate diff truncation ---
+# DIFF_BODY_LIMIT_BYTES and the "diff truncated at N bytes" note both
+# describe a byte count, so the check and slice must measure the UTF-8
+# encoding (dropping any partial trailing character), not the Python
+# character count — multi-byte diffs could otherwise run up to ~4x past
+# the advertised cap.
+
+def _utf8_bundle(diff_text: str) -> DiffBundle:
+    return _bundle(diff_text=diff_text,
+                   bytes_size=len(diff_text.encode("utf-8")))
+
+
+def test_multibyte_diff_truncates_at_byte_limit_not_char_count():
+    """Char count under the limit, byte count over: must truncate."""
+    # 2 bytes per char in UTF-8; chars < limit < bytes.
+    big = "é" * (markdown.DIFF_BODY_LIMIT_BYTES // 2 + 512)
+    assert len(big) < markdown.DIFF_BODY_LIMIT_BYTES < len(big.encode("utf-8"))
+    md = markdown.render(_utf8_bundle(big))
+    assert "diff truncated" in md
+    assert big not in md
+
+
+def test_truncated_body_does_not_exceed_byte_limit():
+    big = "é" * markdown.DIFF_BODY_LIMIT_BYTES  # 2x the limit in bytes
+    md = markdown.render(_utf8_bundle(big))
+    start = md.index("```diff\n") + len("```diff\n")
+    end = md.index("\n```", start)
+    body = md[start:end]
+    # The neutraliser only rewrites backtick runs; none here, so the
+    # fenced body is the truncated diff verbatim.
+    assert len(body.encode("utf-8")) <= markdown.DIFF_BODY_LIMIT_BYTES
+
+
+def test_byte_cut_mid_codepoint_drops_partial_char_cleanly():
+    """A cut landing inside a multi-byte sequence must not surface a
+    replacement char or raise."""
+    diff = "a" * (markdown.DIFF_BODY_LIMIT_BYTES - 1) + "é" + "tail"
+    md = markdown.render(_utf8_bundle(diff))
+    assert "diff truncated" in md
+    assert "�" not in md
+    assert "tail" not in md
+
+
+def test_ascii_diff_at_exact_limit_is_not_truncated():
+    exact = "x" * markdown.DIFF_BODY_LIMIT_BYTES
+    md = markdown.render(_utf8_bundle(exact))
+    assert "diff truncated" not in md
+    assert exact in md
+
+
 def test_handles_dot_git_url():
     ref = RepoRef(
         repository_url="https://github.com/curl/curl.git",
@@ -120,3 +170,9 @@ def test_render_failure_strips_typed_exception_prefix() -> None:
     # Headline should be the rationale, no "UnsupportedSource:" prefix duplicated
     assert "F5 BIG-IP appliance is closed-source" in md
     assert "UnsupportedSource: CVE-X-005:" not in md
+
+
+def test_humanize_class_maps_identical_commits_error() -> None:
+    label = markdown._humanize_class("IdenticalCommitsError")
+    assert not label.startswith("Other (")
+    assert "same commit" in label

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -33,10 +33,10 @@ from packages.sca.refresh_typosquat_lists import (
 class _StubHttp:
     """Records URLs hit + returns canned JSON per URL prefix."""
 
-    def __init__(self, responses: Dict[str, Any]) -> None:
+    def __init__(self, responses: dict[str, Any]) -> None:
         # ``responses`` maps URL substring → response dict.
         self._responses = responses
-        self.calls: List[str] = []
+        self.calls: list[str] = []
 
     def get_json(self, url: str, *args, **kwargs) -> Any:
         self.calls.append(url)
@@ -253,7 +253,7 @@ class _FlakyHttp:
         self.exc = exc
         self.fail_times = fail_times
         self.calls = 0
-        self.max_bytes_seen: List[Any] = []
+        self.max_bytes_seen: list[Any] = []
 
     def get_json(self, url: str, *, retries: int = 0,
                  max_bytes: Any = None, **kw: Any) -> Any:
@@ -266,9 +266,10 @@ class _FlakyHttp:
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    """Keep the retry backoff from slowing the suite."""
-    monkeypatch.setattr(
-        "packages.sca.refresh_typosquat_lists.time.sleep", lambda *_: None)
+    """Keep the retry backoff from slowing the suite. The backoff now
+    lives in core.run.retry, which looks ``time.sleep`` up at call
+    time — patching the ``time`` module covers it."""
+    monkeypatch.setattr("time.sleep", lambda *_: None)
 
 
 def test_get_json_retries_transient_non_json():

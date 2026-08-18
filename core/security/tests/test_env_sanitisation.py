@@ -2,7 +2,11 @@
 
 import unittest
 
-from core.security.env_sanitisation import strip_env_vars, intersect_env_vars
+from core.security.env_sanitisation import (
+    intersect_env_vars,
+    normalise_proxy_url,
+    strip_env_vars,
+)
 
 
 class TestStripEnvVars(unittest.TestCase):
@@ -44,6 +48,26 @@ class TestStripEnvVars(unittest.TestCase):
         env = {"A": 1, "B": 2, "LD_PRELOAD": "/evil", "C": 3}
         result = strip_env_vars(env, ["LD_PRELOAD"])
         self.assertEqual(list(result.keys()), ["A", "B", "C"])
+
+
+class TestNormaliseProxyUrl(unittest.TestCase):
+    def test_strips_trailing_slash(self):
+        self.assertEqual(
+            normalise_proxy_url("http://proxy.corp:3128/"),
+            "http://proxy.corp:3128")
+
+    def test_strips_multiple_slashes_and_whitespace(self):
+        self.assertEqual(
+            normalise_proxy_url("  http://proxy.corp:3128//  "),
+            "http://proxy.corp:3128")
+
+    def test_clean_value_unchanged(self):
+        self.assertEqual(
+            normalise_proxy_url("http://proxy.corp:3128"),
+            "http://proxy.corp:3128")
+
+    def test_empty_stays_empty(self):
+        self.assertEqual(normalise_proxy_url(""), "")
 
 
 class TestIntersectEnvVars(unittest.TestCase):

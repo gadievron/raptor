@@ -110,7 +110,10 @@ class TestExplicitLanguagesNormalised:
             seen_languages.append(lang)
             return None
         def fake_no_build(lang):
-            from packages.codeql.build_detector import BuildSystem
+            # cpp routes through the buildless default, whose
+            # no-build config call is the canonical-name witness.
+            seen_languages.append(lang)
+            from core.build.build_detector import BuildSystem
             return BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,
                 env_vars={}, confidence=1.0, detected_files=[],
@@ -119,8 +122,12 @@ class TestExplicitLanguagesNormalised:
         agent.build_detector.synthesise_build_command.side_effect = fake_synthesise
         agent.build_detector.generate_no_build_config.side_effect = fake_no_build
 
-        # database_manager returns empty so workflow exits cleanly
+        # database_manager returns empty so workflow exits cleanly;
+        # buildless probe reports a modern CLI.
         agent.database_manager.create_databases_parallel.return_value = {}
+        agent.database_manager.supports_buildless_cpp.return_value = (
+            True, "2.26.0",
+        )
 
         agent.run_autonomous_analysis(languages=["c"])
 
@@ -171,7 +178,7 @@ class TestSmallTargetRetry:
 
         agent.build_detector.detect_build_system.return_value = None
         agent.build_detector.synthesise_build_command.return_value = None
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         agent.build_detector.generate_no_build_config.return_value = (
             BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,
@@ -220,7 +227,7 @@ class TestSmallTargetRetry:
         )
         agent.build_detector.detect_build_system.return_value = None
         agent.build_detector.synthesise_build_command.return_value = None
-        from packages.codeql.build_detector import BuildSystem
+        from core.build.build_detector import BuildSystem
         agent.build_detector.generate_no_build_config.return_value = (
             BuildSystem(
                 type="no-build", command="", working_dir=tmp_path,

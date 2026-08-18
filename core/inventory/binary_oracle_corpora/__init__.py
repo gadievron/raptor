@@ -9,17 +9,17 @@ below. Keep the registration explicit so the available corpora are
 discoverable from one place.
 """
 
-from typing import Any, Dict
+from typing import Any
 
+from .leveldb import driver as _leveldb_driver
+from .libsodium import driver as _libsodium_driver
+from .regex_rust import driver as _regex_rust_driver
+from .snappy import driver as _snappy_driver
 from .synthetic import driver as _synthetic_driver
 from .zlib import driver as _zlib_driver
-from .libsodium import driver as _libsodium_driver
-from .snappy import driver as _snappy_driver
-from .leveldb import driver as _leveldb_driver
-from .regex_rust import driver as _regex_rust_driver
 from .zstd_holdout import driver as _zstd_holdout_driver
 
-REGISTRY: Dict[str, Any] = {
+REGISTRY: dict[str, Any] = {
     _synthetic_driver.name: _synthetic_driver,
     _zlib_driver.name: _zlib_driver,
     _libsodium_driver.name: _libsodium_driver,
