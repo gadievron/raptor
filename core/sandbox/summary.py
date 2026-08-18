@@ -56,6 +56,7 @@ provided.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -387,6 +388,13 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         "instructions": instructions,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Provenance stamp (see telemetry_mac): triage lowers a verdict's
+    # stated confidence when this marker is present, so a target-
+    # planted marker must not verify. Unstampable → legacy unstamped.
+    from . import telemetry_mac as _tmac
+    _token = _tmac.mint(_tmac.audit_degraded_fields(payload))
+    if _token:
+        payload["mac"] = _token
     # Atomic write: audit-degraded marker is emitted once per run when
     # sandbox observability degrades; a torn write would leave the
     # marker in an unparseable state, and operator tooling treats
@@ -547,6 +555,20 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         "by_type": by_type,
         "denials": denials,
     }
+    # Provenance stamp over the denial payload (content hash) so a
+    # target-planted or target-edited sandbox-summary.json fails
+    # triage verification: the summariser only writes when denials
+    # exist, so on a denial-free run a pre-planted file would
+    # otherwise survive to run end and feed triage verbatim. An
+    # unstampable environment degrades to the legacy unstamped shape.
+    from . import telemetry_mac as _tmac
+    _denials_sha = hashlib.sha256(
+        json.dumps(denials, sort_keys=True, ensure_ascii=True)
+        .encode("utf-8")
+    ).hexdigest()
+    _token = _tmac.mint(_tmac.summary_fields(len(denials), _denials_sha))
+    if _token:
+        summary["mac"] = _token
 
     summary_path = run_dir / SUMMARY_FILE
     # Atomic write: sandbox denial summary is the run's final audit

@@ -27,12 +27,14 @@ separate, larger change.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.atomic_fs import write_text_atomically
+from core.sandbox import telemetry_mac
 from core.sandbox.escalation_signatures import (
     DEFAULT_HOST_RECON_THRESHOLD,
     ESCAPE_PRIMITIVE_SYSCALLS,
@@ -81,6 +83,102 @@ _MAX_EVIDENCE_ITEMS = 32
 _MAX_EVIDENCE_ITEM_LEN = 512
 
 
+# Verification outcomes for a triage input artifact. "verified" =
+# provenance token(s) present and valid; "legacy" = no token at all
+# (pre-MAC run, or no usable key when it was written) — accepted, with
+# a confidence caveat; "tampered" = token(s) present-but-invalid or a
+# mixed stamped/unstamped stream — the failing records are excluded
+# from signal derivation and a HIGH signal fires, because the only
+# writer that stamps is this install's parent process: content that
+# fails is content something else wrote into the run dir, and the one
+# thing with both the motive and the write access is the target.
+_INTEGRITY_VERIFIED = "verified"
+_INTEGRITY_LEGACY = "legacy"
+_INTEGRITY_TAMPERED = "tampered"
+
+
+def _signals_sha256(signals: List[dict]) -> str:
+    return hashlib.sha256(
+        json.dumps(signals, sort_keys=True, ensure_ascii=True)
+        .encode("utf-8")
+    ).hexdigest()
+
+
+def verify_triage_report(report: Optional[dict]) -> str:
+    """Provenance state of a loaded sandbox-triage.json for downstream
+    consumers: 'verified' / 'legacy' (no token) / 'tampered'."""
+    if not isinstance(report, dict):
+        return _INTEGRITY_TAMPERED
+    token = report.get("mac")
+    if not token:
+        return _INTEGRITY_LEGACY
+    fields = telemetry_mac.triage_report_fields(
+        report.get("verdict", ""),
+        _signals_sha256(report.get("signals", [])),
+    )
+    return (_INTEGRITY_VERIFIED
+            if telemetry_mac.verify(fields, token)
+            else _INTEGRITY_TAMPERED)
+
+
+def _denials_sha256(denials: List[dict]) -> str:
+    return hashlib.sha256(
+        json.dumps(denials, sort_keys=True, ensure_ascii=True)
+        .encode("utf-8")
+    ).hexdigest()
+
+
+def _verify_proxy_events(
+        events: List[dict]) -> Tuple[List[dict], int, str]:
+    """Partition proxy events by provenance. Returns
+    ``(usable_events, rejected_count, integrity)``."""
+    if not events:
+        return [], 0, _INTEGRITY_VERIFIED
+    if not any("mac" in e for e in events):
+        return events, 0, _INTEGRITY_LEGACY
+    usable = [
+        e for e in events
+        if telemetry_mac.verify(
+            telemetry_mac.proxy_event_fields(e), e.get("mac"))
+    ]
+    rejected = len(events) - len(usable)
+    integrity = (_INTEGRITY_TAMPERED if rejected
+                 else _INTEGRITY_VERIFIED)
+    return usable, rejected, integrity
+
+
+def _verify_summary(
+        summary: Optional[dict]) -> Tuple[Optional[dict], str]:
+    """Returns ``(usable_summary, integrity)`` — a summary that fails
+    verification is dropped entirely (its denials are untrusted as a
+    whole; there is no per-record salvage)."""
+    if summary is None:
+        return None, _INTEGRITY_VERIFIED
+    token = summary.get("mac")
+    if not token:
+        return summary, _INTEGRITY_LEGACY
+    fields = telemetry_mac.summary_fields(
+        summary.get("total_denials", 0),
+        _denials_sha256(summary.get("denials", [])),
+    )
+    if telemetry_mac.verify(fields, token):
+        return summary, _INTEGRITY_VERIFIED
+    return None, _INTEGRITY_TAMPERED
+
+
+def _verify_audit_degraded(
+        marker: Optional[dict]) -> Tuple[Optional[dict], str]:
+    if marker is None:
+        return None, _INTEGRITY_VERIFIED
+    token = marker.get("mac")
+    if not token:
+        return marker, _INTEGRITY_LEGACY
+    if telemetry_mac.verify(
+            telemetry_mac.audit_degraded_fields(marker), token):
+        return marker, _INTEGRITY_VERIFIED
+    return None, _INTEGRITY_TAMPERED
+
+
 def _cap_evidence(items: List[str]) -> List[str]:
     capped = [
         item if len(item) <= _MAX_EVIDENCE_ITEM_LEN
@@ -125,12 +223,23 @@ def triage_run(run_dir: Path, *,
     run) — this is the same behaviour as before this parameter existed.
     """
     run_dir = Path(run_dir)
-    summary = _load_json(run_dir / SUMMARY_FILE)
-    proxy_events = _load_jsonl(run_dir / PROXY_EVENTS_FILENAME)
-    audit_degraded = _load_json(run_dir / AUDIT_DEGRADED_FILE)
+    raw_summary = _load_json(run_dir / SUMMARY_FILE)
+    raw_proxy_events = _load_jsonl(run_dir / PROXY_EVENTS_FILENAME)
+    raw_audit_degraded = _load_json(run_dir / AUDIT_DEGRADED_FILE)
 
-    if summary is None and not proxy_events:
+    # Existence check runs on the RAW inputs: even a fully-forged
+    # artifact means "something happened" and must produce a report
+    # (carrying the tampering signal), never silence.
+    if raw_summary is None and not raw_proxy_events:
         return None
+
+    # Provenance gates: the run dir is target-writable during the
+    # run, so every input is verified before it may drive a verdict.
+    summary, summary_integrity = _verify_summary(raw_summary)
+    proxy_events, rejected_events, events_integrity = (
+        _verify_proxy_events(raw_proxy_events))
+    audit_degraded, degraded_integrity = (
+        _verify_audit_degraded(raw_audit_degraded))
 
     denials = (summary or {}).get("denials", [])
     enforcement_denials = [d for d in denials
@@ -156,6 +265,27 @@ def triage_run(run_dir: Path, *,
     signals += _check_credential_path_touch(enforcement_denials)
     signals += _check_volume_anomaly(summary, budget_markers)
 
+    integrity = {
+        "sandbox_summary": summary_integrity,
+        "proxy_events": events_integrity,
+        "audit_degraded": degraded_integrity,
+    }
+    tampered = [name for name, state in integrity.items()
+                if state == _INTEGRITY_TAMPERED]
+    if tampered:
+        evidence = [f"{name}: provenance verification failed"
+                    for name in sorted(tampered)]
+        if rejected_events:
+            evidence.append(
+                f"{rejected_events} proxy event(s) rejected "
+                f"(missing/invalid token in a stamped stream)")
+        signals.append({
+            "type": "telemetry_tampering",
+            "severity": SEVERITY_HIGH,
+            "count": len(tampered),
+            "evidence": evidence,
+        })
+
     verdict = _derive_verdict(signals)
 
     report: Dict[str, Any] = {
@@ -164,14 +294,26 @@ def triage_run(run_dir: Path, *,
         "verdict": verdict,
         "signals": signals,
         "inputs": {
-            "sandbox_summary_present": summary is not None,
-            "proxy_events_present": bool(proxy_events),
+            "sandbox_summary_present": raw_summary is not None,
+            "proxy_events_present": bool(raw_proxy_events),
             "total_denials": (summary or {}).get("total_denials", 0),
             "total_proxy_events": len(proxy_events),
+            "integrity": integrity,
         },
         "audit_degraded": audit_degraded is not None,
         "caveats": [],
     }
+    legacy = sorted(name for name, state in integrity.items()
+                    if state == _INTEGRITY_LEGACY)
+    if legacy:
+        report["caveats"].append(
+            "Unstamped telemetry accepted at face value: "
+            + ", ".join(legacy)
+            + " carry no provenance token (pre-provenance run or no "
+            "usable telemetry-mac key). The run dir is writable by "
+            "the sandboxed target, so treat this verdict with "
+            "correspondingly lower confidence."
+        )
     if audit_degraded is not None:
         report["caveats"].append(
             "Audit tracer did not engage this run "
@@ -355,6 +497,16 @@ def _load_jsonl(path: Path) -> List[dict]:
 
 
 def _write(path: Path, report: dict) -> None:
+    # Self-stamp: on a no-telemetry run the lifecycle writes no report,
+    # so a target-planted sandbox-triage.json would otherwise survive
+    # to be read by downstream consumers (deep pass, /review, project
+    # views). Those consumers verify via verify_triage_report().
+    token = telemetry_mac.mint(telemetry_mac.triage_report_fields(
+        report.get("verdict", ""),
+        _signals_sha256(report.get("signals", [])),
+    ))
+    if token:
+        report["mac"] = token
     write_text_atomically(
         path,
         json.dumps(report, indent=2, ensure_ascii=True) + "\n",
