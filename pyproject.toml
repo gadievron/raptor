@@ -1,10 +1,13 @@
-# Root tool configuration for RAPTOR's own development controls.
-#
+[project]
+name = "raptor"
+requires-python  = ">=3.10"
+license = "MIT"
+
 # This is deliberately not a packaging migration. Runtime and development
 # dependencies still live in requirements.txt / requirements-dev.txt.
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 
 [tool.ruff.lint]
 # Keep this in one place. The CI lint workflow reads Ruff's normal config
