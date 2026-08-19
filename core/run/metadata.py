@@ -716,7 +716,11 @@ def _finalize_sandbox_triage(output_dir: Path) -> str | None:
     import logging
     log = logging.getLogger(__name__)
     try:
-        result = triage_run(output_dir)
+        # Current lifecycle runs fail closed on provenance: the run dir is
+        # target-writable until this point, so unstamped artefacts must not
+        # be allowed to drive a verdict. Manual/post-hoc triage keeps legacy
+        # support for genuinely old runs.
+        result = triage_run(output_dir, allow_legacy=False)
         # Discoverability: only log when there's something to see — a
         # clean run (the common case) shouldn't add chatter. Mirrors the
         # "if result is not None" gate in _finalize_sandbox_summary.

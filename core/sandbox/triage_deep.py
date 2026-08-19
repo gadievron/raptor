@@ -29,11 +29,12 @@ Trust rules, in priority order:
      against the report (unknown signal types dropped), judgements are
      coerced to the fixed enum, rationales are sanitised and
      length-capped before they land on disk.
-  4. **Provenance in, provenance out.** A ``tampered`` triage report
-     (see triage.verify_triage_report) is refused outright — reasoning
-     over forged telemetry would launder it. The output report is
-     stamped with the telemetry-mac key like every other triage
-     artifact.
+  4. **Provenance in, provenance out.** Only a ``verified`` triage
+     report (see triage.verify_triage_report) is accepted by default —
+     reasoning over forged or merely unstamped telemetry would launder
+     it. Explicit legacy re-triage remains available for old runs. The
+     output report is stamped with the telemetry-mac key like every
+     other triage artifact.
 """
 
 from __future__ import annotations
@@ -204,7 +205,8 @@ def _parse_assessments(text: str, report: dict) -> tuple:
     return assessments, note, dropped
 
 
-def deep_analyse(run_dir: Path, *, client=None) -> dict | None:
+def deep_analyse(run_dir: Path, *, client=None,
+                 allow_legacy: bool = False) -> dict | None:
     """Run the LLM pass over ``<run_dir>/sandbox-triage.json``.
 
     Returns the deep-report dict (also written to
@@ -213,6 +215,10 @@ def deep_analyse(run_dir: Path, *, client=None) -> dict | None:
     clean verdict (nothing to contextualise), or no configured LLM.
     Callers distinguish the cases via the log/stderr surface of their
     own entry point; this function never raises for those states.
+
+    ``allow_legacy`` is intentionally opt-in. A current run's output dir is
+    target-writable, so an unstamped report must not be handed to the model
+    unless an operator is deliberately re-triaging an old pre-provenance run.
     """
     run_dir = Path(run_dir)
     from core.sandbox.triage import _load_json
@@ -225,6 +231,12 @@ def deep_analyse(run_dir: Path, *, client=None) -> dict | None:
         logger.warning(
             "triage_deep: %s fails provenance verification — refusing "
             "to reason over forged telemetry", run_dir / TRIAGE_FILE)
+        return None
+    if integrity == "legacy" and not allow_legacy:
+        logger.warning(
+            "triage_deep: %s has no provenance token — refusing to "
+            "reason over unstamped telemetry without allow_legacy=True",
+            run_dir / TRIAGE_FILE)
         return None
     if not report.get("signals"):
         logger.info("triage_deep: clean verdict, nothing to assess")

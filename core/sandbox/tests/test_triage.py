@@ -557,6 +557,40 @@ class TestLifecycleIntegration:
         assert not (run_dir / summary_mod.SUMMARY_FILE).exists()
         assert not (run_dir / triage_mod.TRIAGE_FILE).exists()
 
+    def test_lifecycle_rejects_planted_unstamped_summary(self, tmp_path):
+        from core.run.metadata import start_run, complete_run
+
+        run_dir = tmp_path / "scan-planted-summary"
+        start_run(run_dir, command="scan")
+        _write_summary(run_dir, [
+            {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
+        ])
+
+        complete_run(run_dir)
+
+        report = json.loads((run_dir / triage_mod.TRIAGE_FILE).read_text())
+        assert report["inputs"]["integrity"]["sandbox_summary"] == "tampered"
+        assert not any(s["type"] == "escape_primitive_denied"
+                       for s in report["signals"])
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in report["signals"])
+        status = json.loads((run_dir / ".raptor-run.json").read_text())
+        assert status["extra"]["sandbox_triage"] == "suspicious"
+
+    def test_lifecycle_removes_planted_triage_when_no_telemetry(self, tmp_path):
+        from core.run.metadata import start_run, complete_run
+
+        run_dir = tmp_path / "scan-planted-triage"
+        start_run(run_dir, command="scan")
+        (run_dir / triage_mod.TRIAGE_FILE).write_text(json.dumps({
+            "verdict": "suspicious",
+            "signals": [{"type": "escape_primitive_denied"}],
+        }))
+
+        complete_run(run_dir)
+
+        assert not (run_dir / triage_mod.TRIAGE_FILE).exists()
+
     def test_triage_finalize_failure_does_not_break_lifecycle(
         self, tmp_path, monkeypatch,
     ):

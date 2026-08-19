@@ -137,6 +137,20 @@ class TestDeepAnalyse:
         assert client.calls == [], "no LLM call over forged telemetry"
         assert not (tmp_path / deep_mod.DEEP_FILE).exists()
 
+    def test_unstamped_triage_report_refused_by_default(self, tmp_path):
+        report_path = tmp_path / triage_mod.TRIAGE_FILE
+        report_path.write_text(json.dumps({
+            "run_dir": str(tmp_path),
+            "verdict": "suspicious",
+            "signals": [{"type": "escape_primitive_denied",
+                         "severity": "high", "count": 1,
+                         "evidence": ["ptrace"]}],
+        }))
+        client = _FakeClient(_reply())
+        assert deep_mod.deep_analyse(tmp_path, client=client) is None
+        assert client.calls == [], "no LLM call over unstamped telemetry"
+        assert not (tmp_path / deep_mod.DEEP_FILE).exists()
+
     def test_missing_report_and_no_client_return_none(
             self, tmp_path, monkeypatch):
         assert deep_mod.deep_analyse(tmp_path,

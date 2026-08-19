@@ -312,6 +312,31 @@ class TestResolvedIpBannerCap:
         finally:
             proxy.stop()
 
+    def test_banner_cap_resets_for_next_registered_run(
+            self, reset_proxy, monkeypatch):
+        writes = []
+        monkeypatch.setattr(proxy_mod, "_stderr_write",
+                            lambda msg: writes.append(msg))
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        try:
+            cap = proxy_mod._LIVE_RESOLVED_IP_BANNER_CAP
+            first = proxy.register_sandbox(caller_label="run-a")
+            for i in range(cap + 1):
+                proxy._record(
+                    _denied_resolved_ip_event(resolved_ip=f"10.9.3.{i}"))
+            proxy.unregister_sandbox(first)
+            assert len(writes) == cap + 1
+            assert "suppressed" in writes[-1]
+
+            second = proxy.register_sandbox(caller_label="run-b")
+            proxy._record(
+                _denied_resolved_ip_event(resolved_ip="10.9.4.1"))
+            proxy.unregister_sandbox(second)
+            assert len(writes) == cap + 2
+            assert "10.9.4.1" in writes[-1]
+        finally:
+            proxy.stop()
+
 
 class TestBannerSanitisation:
 

@@ -136,6 +136,14 @@ def _load_or_create_key() -> bytes | None:
         return None
     if data is not None and len(data) == _KEY_LEN:
         return data
+    if data is not None:
+        _warn_once_suspect_key(
+            path,
+            f"wrong length ({len(data)} bytes, expected {_KEY_LEN})",
+            "remove the suspect key and investigate; a fresh key is "
+            "created on the next stamp",
+        )
+        return None
     data = data or b""
 
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -150,8 +158,16 @@ def _load_or_create_key() -> bytes | None:
             raced = _read_existing_key(path)
             if raced is _REFUSED:
                 return None
-            if raced:
+            if raced is not None and len(raced) == _KEY_LEN:
                 return raced
+            if raced is not None:
+                _warn_once_suspect_key(
+                    path,
+                    f"wrong length ({len(raced)} bytes, expected {_KEY_LEN})",
+                    "remove the suspect key and investigate; a fresh key "
+                    "is created on the next stamp",
+                )
+                return None
             data = raced if raced is not None else b""
             time.sleep(0.01)
         return data

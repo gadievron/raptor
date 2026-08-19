@@ -724,6 +724,9 @@ class EgressProxy:
         # setting" pattern as update_idle_timeout's max-semantics
         # above, scoped to the bucket.
         self._live_recon: dict = {}
+        # Fallback resolved-IP state for events recorded outside any active
+        # sandbox registration. Registered runs keep their own state in the
+        # lane bucket below so one run hitting the cap cannot silence another.
         self._live_resolved_ip_escalated: set[str] = set()
         self._live_resolved_ip_cap_announced = False
         # Atomic snapshot of the buffer-list refs for the hot path.
@@ -1147,6 +1150,8 @@ class EgressProxy:
             if state is None:
                 state = {"hosts": set(), "escalated": False,
                          "threshold": DEFAULT_HOST_RECON_THRESHOLD,
+                         "resolved_ips": set(),
+                         "resolved_ip_cap_announced": False,
                          "refs": 0}
                 self._live_recon[lane_sub] = state
             state["refs"] += 1
@@ -1270,6 +1275,20 @@ class EgressProxy:
                 buf.append(event)
         self._live_escalate(event)
 
+    def _live_bucket_states(self, event: dict) -> list[dict]:
+        """Return the active lane/global live-escalation buckets for event."""
+        lane_id = event.get("lane_id")
+        buckets = []
+        if lane_id is not None:
+            lane_state = self._live_recon.get(lane_id)
+            if lane_state is not None:
+                buckets.append(lane_state)
+        global_state = self._live_recon.get(None)
+        if global_state is not None and all(
+                global_state is not state for state in buckets):
+            buckets.append(global_state)
+        return buckets
+
     def _live_escalate(self, event: dict) -> None:
         """Immediate stderr escalation for HIGH-severity proxy signals,
         ahead of the run-end sandbox-triage.json classification —
@@ -1292,37 +1311,62 @@ class EgressProxy:
 
         if result == "denied_resolved_ip":
             resolved_ip = event.get("resolved_ip")
-            if (not resolved_ip
-                    or resolved_ip in self._live_resolved_ip_escalated):
+            if not resolved_ip:
                 return
-            if (len(self._live_resolved_ip_escalated)
-                    >= _LIVE_RESOLVED_IP_BANNER_CAP):
+            buckets = self._live_bucket_states(event)
+            emit_banner = False
+            emit_suppression = False
+            if buckets:
+                for state in buckets:
+                    escalated = state["resolved_ips"]
+                    if resolved_ip in escalated:
+                        continue
+                    if len(escalated) >= _LIVE_RESOLVED_IP_BANNER_CAP:
+                        if not state["resolved_ip_cap_announced"]:
+                            state["resolved_ip_cap_announced"] = True
+                            emit_suppression = True
+                        continue
+                    escalated.add(resolved_ip)
+                    emit_banner = True
+            else:
+                # Events outside a register/unregister window keep the
+                # pre-lane fallback behaviour for diagnostics/tests.
+                if resolved_ip in self._live_resolved_ip_escalated:
+                    return
+                if (len(self._live_resolved_ip_escalated)
+                        >= _LIVE_RESOLVED_IP_BANNER_CAP):
+                    if not self._live_resolved_ip_cap_announced:
+                        self._live_resolved_ip_cap_announced = True
+                        emit_suppression = True
+                else:
+                    self._live_resolved_ip_escalated.add(resolved_ip)
+                    emit_banner = True
+            if not emit_banner and not emit_suppression:
+                return
+            if emit_banner:
+                # The hostname is attacker-controlled (the sandboxed
+                # target picked it); sanitise + bound before it reaches
+                # the operator's terminal. resolved_ip comes from our own
+                # resolver — safe to embed as-is.
+                _host = sanitise_for_terminal(str(event.get("host")))
+                _stderr_write(
+                    f"RAPTOR sandbox ALERT: proxy CONNECT resolved to a "
+                    f"blocked IP range: {resolved_ip} (host="
+                    f"'{_host}'). Consistent with an "
+                    f"SSRF/DNS-rebinding/cloud-metadata probing attempt, "
+                    f"not ordinary allowlist noise. See sandbox-"
+                    f"triage.json at run end for full context.\n"
+                )
+            if emit_suppression:
                 # Bound the dedup set AND the terminal spam — a DNS-
                 # rebinding target can mint unlimited distinct IPs.
-                if not self._live_resolved_ip_cap_announced:
-                    self._live_resolved_ip_cap_announced = True
-                    _stderr_write(
-                        f"RAPTOR sandbox ALERT: further blocked-"
-                        f"resolved-IP alerts suppressed after "
-                        f"{_LIVE_RESOLVED_IP_BANNER_CAP} distinct IPs — "
-                        f"full list in proxy-events.jsonl / sandbox-"
-                        f"triage.json at run end.\n"
-                    )
-                return
-            self._live_resolved_ip_escalated.add(resolved_ip)
-            # The hostname is attacker-controlled (the sandboxed
-            # target picked it); sanitise + bound before it reaches
-            # the operator's terminal. resolved_ip comes from our own
-            # resolver — safe to embed as-is.
-            _host = sanitise_for_terminal(str(event.get("host")))
-            _stderr_write(
-                f"RAPTOR sandbox ALERT: proxy CONNECT resolved to a "
-                f"blocked IP range: {resolved_ip} (host="
-                f"'{_host}'). Consistent with an "
-                f"SSRF/DNS-rebinding/cloud-metadata probing attempt, "
-                f"not ordinary allowlist noise. See sandbox-"
-                f"triage.json at run end for full context.\n"
-            )
+                _stderr_write(
+                    f"RAPTOR sandbox ALERT: further blocked-"
+                    f"resolved-IP alerts suppressed after "
+                    f"{_LIVE_RESOLVED_IP_BANNER_CAP} distinct IPs — "
+                    f"full list in proxy-events.jsonl / sandbox-"
+                    f"triage.json at run end.\n"
+                )
             return
 
         if result in ("denied_host", "would_deny_host"):
@@ -1337,15 +1381,7 @@ class EgressProxy:
             # counting, matching the buffer semantics for events that
             # arrive outside any register/unregister window; triage
             # still sees them post-hoc via proxy-events.jsonl.
-            lane_id = event.get("lane_id")
-            buckets = []
-            if lane_id is not None:
-                lane_state = self._live_recon.get(lane_id)
-                if lane_state is not None:
-                    buckets.append(lane_state)
-            global_state = self._live_recon.get(None)
-            if global_state is not None:
-                buckets.append(global_state)
+            buckets = self._live_bucket_states(event)
             for state in buckets:
                 if state["escalated"]:
                     continue

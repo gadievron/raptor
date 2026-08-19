@@ -87,13 +87,15 @@ _MAX_EVIDENCE_ITEM_LEN = 512
 
 # Verification outcomes for a triage input artifact. "verified" =
 # provenance token(s) present and valid; "legacy" = no token at all
-# (pre-MAC run, or no usable key when it was written) — accepted, with
-# a confidence caveat; "tampered" = token(s) present-but-invalid or a
-# mixed stamped/unstamped stream — the failing records are excluded
-# from signal derivation and a HIGH signal fires, because the only
-# writer that stamps is this install's parent process: content that
-# fails is content something else wrote into the run dir, and the one
-# thing with both the motive and the write access is the target.
+# (pre-MAC run, or no usable key when it was written) — accepted only
+# for explicit/manual re-triage of old artefacts, with a confidence
+# caveat; "tampered" = token(s) present-but-invalid, a mixed
+# stamped/unstamped stream, or an unstamped artifact seen during the
+# current lifecycle path. Failing records are excluded from signal
+# derivation and a HIGH signal fires, because the only writer that
+# stamps is this install's parent process: content that fails is
+# content something else wrote into the run dir, and the one thing
+# with both the motive and the write access is the target.
 _INTEGRITY_VERIFIED = "verified"
 _INTEGRITY_LEGACY = "legacy"
 _INTEGRITY_TAMPERED = "tampered"
@@ -131,12 +133,15 @@ def _denials_sha256(denials: List[dict]) -> str:
 
 
 def _verify_proxy_events(
-        events: List[dict]) -> Tuple[List[dict], int, str]:
+        events: List[dict], *, allow_legacy: bool = True,
+        ) -> Tuple[List[dict], int, str]:
     """Partition proxy events by provenance. Returns
     ``(usable_events, rejected_count, integrity)``."""
     if not events:
         return [], 0, _INTEGRITY_VERIFIED
     if not any("mac" in e for e in events):
+        if not allow_legacy:
+            return [], len(events), _INTEGRITY_TAMPERED
         return events, 0, _INTEGRITY_LEGACY
     usable = [
         e for e in events
@@ -150,7 +155,8 @@ def _verify_proxy_events(
 
 
 def _verify_summary(
-        summary: Optional[dict]) -> Tuple[Optional[dict], str]:
+        summary: Optional[dict], *, allow_legacy: bool = True,
+        ) -> Tuple[Optional[dict], str]:
     """Returns ``(usable_summary, integrity)`` — a summary that fails
     verification is dropped entirely (its denials are untrusted as a
     whole; there is no per-record salvage)."""
@@ -158,6 +164,8 @@ def _verify_summary(
         return None, _INTEGRITY_VERIFIED
     token = summary.get("mac")
     if not token:
+        if not allow_legacy:
+            return None, _INTEGRITY_TAMPERED
         return summary, _INTEGRITY_LEGACY
     fields = telemetry_mac.summary_fields(
         summary.get("total_denials", 0),
@@ -169,11 +177,14 @@ def _verify_summary(
 
 
 def _verify_audit_degraded(
-        marker: Optional[dict]) -> Tuple[Optional[dict], str]:
+        marker: Optional[dict], *, allow_legacy: bool = True,
+        ) -> Tuple[Optional[dict], str]:
     if marker is None:
         return None, _INTEGRITY_VERIFIED
     token = marker.get("mac")
     if not token:
+        if not allow_legacy:
+            return None, _INTEGRITY_TAMPERED
         return marker, _INTEGRITY_LEGACY
     if telemetry_mac.verify(
             telemetry_mac.audit_degraded_fields(marker), token):
@@ -196,6 +207,7 @@ def _cap_evidence(items: List[str]) -> List[str]:
 
 def triage_run(run_dir: Path, *,
                 host_recon_threshold: Optional[int] = None,
+                allow_legacy: bool = True,
                 ) -> Optional[Dict[str, Any]]:
     """Classify a completed run's sandbox telemetry.
 
@@ -204,6 +216,11 @@ def triage_run(run_dir: Path, *,
     for this run_dir — mirrors summarize_and_write's "no denials → None, no
     file written" convention so file-presence keeps meaning "something
     happened" across every sibling run-dir artifact.
+
+    ``allow_legacy`` keeps the manual ``raptor-sandbox-triage`` surface
+    able to re-triage old pre-provenance runs. Lifecycle callers MUST pass
+    ``False``: the run dir is target-writable while the workload runs, so
+    unstamped current-run artifacts cannot be allowed to drive a verdict.
 
     ``host_recon_threshold``: explicit override (e.g. from a CLI flag or a
     test wanting deterministic behaviour) takes precedence exactly as
@@ -233,15 +250,18 @@ def triage_run(run_dir: Path, *,
     # artifact means "something happened" and must produce a report
     # (carrying the tampering signal), never silence.
     if raw_summary is None and not raw_proxy_events:
+        if not allow_legacy:
+            _remove_stale_triage_report(run_dir)
         return None
 
     # Provenance gates: the run dir is target-writable during the
     # run, so every input is verified before it may drive a verdict.
-    summary, summary_integrity = _verify_summary(raw_summary)
+    summary, summary_integrity = _verify_summary(
+        raw_summary, allow_legacy=allow_legacy)
     proxy_events, rejected_events, events_integrity = (
-        _verify_proxy_events(raw_proxy_events))
+        _verify_proxy_events(raw_proxy_events, allow_legacy=allow_legacy))
     audit_degraded, degraded_integrity = (
-        _verify_audit_degraded(raw_audit_degraded))
+        _verify_audit_degraded(raw_audit_degraded, allow_legacy=allow_legacy))
 
     denials = (summary or {}).get("denials", [])
     enforcement_denials = [d for d in denials
@@ -280,7 +300,7 @@ def triage_run(run_dir: Path, *,
         if rejected_events:
             evidence.append(
                 f"{rejected_events} proxy event(s) rejected "
-                f"(missing/invalid token in a stamped stream)")
+                f"(missing/invalid provenance token)")
         signals.append({
             "type": "telemetry_tampering",
             "severity": SEVERITY_HIGH,
@@ -563,6 +583,22 @@ def _write(path: Path, report: dict) -> None:
         json.dumps(report, indent=2, ensure_ascii=True) + "\n",
         tmp_prefix=".~triage-",
     )
+
+
+def _remove_stale_triage_report(run_dir: Path) -> None:
+    """Remove a target-planted report on a current run with no telemetry.
+
+    A clean lifecycle run writes no triage report. Without this cleanup a
+    target can pre-plant ``sandbox-triage.json`` and leave it behind for
+    downstream readers after triage correctly decides there was nothing to
+    classify.
+    """
+    try:
+        (run_dir / TRIAGE_FILE).unlink(missing_ok=True)
+    except OSError:
+        # Best-effort only: downstream consumers still verify provenance and
+        # refuse an unstamped report. Never let cleanup fail the lifecycle.
+        pass
 
 
 def _cli_main(argv: Optional[list] = None) -> int:

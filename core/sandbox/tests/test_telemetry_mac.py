@@ -49,6 +49,15 @@ class TestKeyHandling:
         key.chmod(0o644)
         assert tmac.mint({"kind": "proxy-event", "host": "h"}) is None
 
+    @pytest.mark.parametrize("size", [1, 31, 33, 128])
+    def test_wrong_length_key_refused(self, tmp_path, size):
+        raptor_dir = tmp_path / "xdg" / "raptor"
+        raptor_dir.mkdir(mode=0o700, parents=True)
+        key = raptor_dir / "telemetry-mac.key"
+        key.write_bytes(b"k" * size)
+        key.chmod(0o600)
+        assert tmac.mint({"kind": "proxy-event", "host": "h"}) is None
+
 
 class TestMintVerify:
     def test_roundtrip(self):
