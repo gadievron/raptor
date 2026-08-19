@@ -25,7 +25,7 @@ from core.analysis.sanitizer_cut import (
     VERDICT_SUPPRESS,
     evaluate_finding,
 )
-
+from core.testing.treesitter import requires_ts
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -483,3 +483,171 @@ class TestDeadColumnPlumbingRemoved:
         finding = _raptor_native(str(src), 1, 3, source_col=5, sink_col=11)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
+
+
+# ---------------------------------------------------------------------------
+# Java sink forwarding (assignment-located findings) and receiver-hop
+# (zero-argument receiver calls) — b33
+# ---------------------------------------------------------------------------
+
+_JAVA_PS_SAFE = """\
+public class T {
+    public void doPost(HttpServletRequest request) throws Exception {
+        String param = request.getHeader("X");
+        String bar = "safe!";
+        java.util.HashMap<String, Object> map = new java.util.HashMap<String, Object>();
+        map.put("keyA", "a_Value");
+        map.put("keyB", param);
+        bar = (String) map.get("keyA");
+        String sql = "SELECT * from USERS where USERNAME='" + bar + "'";
+        java.sql.PreparedStatement statement = connection.prepareStatement(sql);
+        statement.setString(1, "foo");
+        statement.execute();
+    }
+}
+"""
+
+
+def _java_native(path, source_line, sink_line):
+    return {"cwe": "CWE-89", "file_path": str(path),
+            "source_line": source_line, "sink_line": sink_line,
+            "language": "java", "rule_id": "test", "tool": "test"}
+
+
+@requires_ts("java")
+class TestJavaSinkForwardingAndReceiverHop:
+    def test_assignment_sink_forwards_to_consuming_call(self, tmp_path):
+        f = _write(tmp_path, "T.java", _JAVA_PS_SAFE)
+        r = resolve_finding(_java_native(f, 3, 9))  # sink = concat line
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_arg == "sql"
+        assert r.sink_node.lineno == 10  # forwarded to prepareStatement
+
+    def test_zero_arg_receiver_call_hops_to_constructor(self, tmp_path):
+        f = _write(tmp_path, "T.java", _JAVA_PS_SAFE)
+        r = resolve_finding(_java_native(f, 3, 12))  # sink = execute()
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_arg == "sql"
+        assert r.sink_node.lineno == 10
+
+    def test_forwarding_refuses_on_intervening_reassignment(self, tmp_path):
+        src = _JAVA_PS_SAFE.replace(
+            "java.sql.PreparedStatement statement",
+            "sql = sql + param;\n        java.sql.PreparedStatement statement")
+        f = _write(tmp_path, "T.java", src)
+        r = resolve_finding(_java_native(f, 3, 9))
+        assert not isinstance(r, ResolvedFinding)
+
+    def test_forwarding_refuses_when_never_consumed(self, tmp_path):
+        src = _JAVA_PS_SAFE.replace("prepareStatement(sql)",
+                                    "prepareStatement(other)")
+        f = _write(tmp_path, "T.java", src)
+        r = resolve_finding(_java_native(f, 3, 9))
+        assert not isinstance(r, ResolvedFinding)
+
+    def test_receiver_hop_full_reassignment_targets_latest(self, tmp_path):
+        # A straight-line reassignment KILLS the earlier construction —
+        # hopping to the latest one is the sound target.
+        src = _JAVA_PS_SAFE.replace(
+            "statement.setString(1, \"foo\");",
+            "statement = connection.prepareStatement(other);")
+        f = _write(tmp_path, "T.java", src)
+        r = resolve_finding(_java_native(f, 3, 12))
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_arg == "other"
+
+    def test_receiver_hop_refuses_branch_merged_definers(self, tmp_path):
+        # Two constructions reach the execute on different paths — no
+        # single value identity, the hop must refuse.
+        src = _JAVA_PS_SAFE.replace(
+            "statement.setString(1, \"foo\");",
+            "if (param.length() > 3) { statement = connection.prepareStatement(other); }")
+        f = _write(tmp_path, "T.java", src)
+        r = resolve_finding(_java_native(f, 3, 12))
+        assert not isinstance(r, ResolvedFinding)
+
+    def test_receiver_hop_refuses_multi_arg_constructor(self, tmp_path):
+        src = _JAVA_PS_SAFE.replace("prepareStatement(sql)",
+                                    "prepareStatement(sql, mode)")
+        f = _write(tmp_path, "T.java", src)
+        r = resolve_finding(_java_native(f, 3, 12))
+        assert not isinstance(r, ResolvedFinding)
+
+
+_JAVA_B41 = (
+    "import javax.servlet.http.HttpServletRequest;\n"           # 1
+    "public class T {\n"                                        # 2
+    "    public void handle(HttpServletRequest request,"
+    " java.io.PrintWriter out) {\n"                             # 3
+    "        String x = request.getParameter(\"q\");\n"         # 4
+    "        String pre = \"Result: \";\n"                      # 5
+    "        out.println(pre + x);\n"                           # 6
+    "        out.format(java.util.Locale.US, \"%s\", x);\n"     # 7
+    "        out.println(\n"                                    # 8
+    "                x); // continuation\n"                     # 9
+    "    }\n"                                                   # 10
+    "}\n"                                                       # 11
+)
+
+
+@requires_ts("java")
+class TestJavaB41SinkShapes:
+    def test_deep_multi_name_concat_binds_value_name(self, tmp_path):
+        # println(pre + x): no bare-name argument, two deep names —
+        # the historical refusal; b41 binds one deterministically and
+        # the gate's sibling guards adjudicate the other.
+        f = _write(tmp_path, "T.java", _JAVA_B41)
+        r = resolve_finding(_java_native(f, 4, 6))
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_arg in ("pre", "x")
+
+    def test_package_chain_pick_prefers_value_carrying_name(self, tmp_path):
+        # format(java.util.Locale.US, "%s", x): "java" rides the
+        # argument surfaces as a package-root leftover; the pick must
+        # land on the value-carrying name.
+        f = _write(tmp_path, "T.java", _JAVA_B41)
+        r = resolve_finding(_java_native(f, 4, 7))
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_arg == "x"
+
+    def test_multiline_continuation_line_retargets_to_statement(
+            self, tmp_path):
+        # The finding flags the continuation line of a multi-line
+        # statement; resolution retargets to the statement start,
+        # whose node carries the call.
+        f = _write(tmp_path, "T.java", _JAVA_B41)
+        r = resolve_finding(_java_native(f, 4, 9))
+        assert isinstance(r, ResolvedFinding)
+        assert r.sink_node.lineno == 8
+        assert r.sink_arg == "x"
+
+    def test_statement_start_line_helper(self):
+        from core.analysis.finding_resolver import (
+            _java_statement_start_line,
+        )
+        assert _java_statement_start_line(_JAVA_B41, 9) == 8
+        # A line that is its own statement start returns itself.
+        assert _java_statement_start_line(_JAVA_B41, 6) == 6
+        # A line outside any leaf statement returns None.
+        assert _java_statement_start_line(_JAVA_B41, 2) is None
+
+    def test_pick_value_name_prefers_defined_over_namespace(self):
+        from core.analysis.finding_resolver import _pick_value_name
+
+        class _N:
+            def __init__(self, defs):
+                self.defs = frozenset(defs)
+
+        class _Cfg:
+            params = ("request", "out")
+
+            def nodes(self):
+                return [_N({"x"}), _N({"pre"})]
+
+        cfg = _Cfg()
+        # "java" sorts first lexicographically but carries no value.
+        assert _pick_value_name({"java", "x"}, cfg) == "x"
+        # Within the carrying class, lexicographic keeps determinism.
+        assert _pick_value_name({"x", "pre"}, cfg) == "pre"
+        # All-namespace surfaces fall back to plain lexicographic.
+        assert _pick_value_name({"java", "javax"}, cfg) == "java"
