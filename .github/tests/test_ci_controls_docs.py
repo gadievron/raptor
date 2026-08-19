@@ -15,7 +15,7 @@ def _read(relative: str) -> str:
 
 def test_ruff_rules_live_in_root_pyproject() -> None:
     config = tomllib.loads(_read("pyproject.toml"))
-    assert config["tool"]["ruff"]["target-version"] == "py312"
+    assert config["tool"]["ruff"]["target-version"] == "py310"
     assert config["tool"]["ruff"]["lint"]["select"] == [
         "F401",
         "F811",
