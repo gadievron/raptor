@@ -18,9 +18,9 @@ That distinction matters. Having a dependency in `requirements-dev.txt` is not t
 
 | Control | Tool | Scope | Trigger | Parameters | Reproduce locally |
 |---|---|---|---|---|---|
-| Python lint gate | Ruff | Changed Python files in a PR | `.github/workflows/lint.yml` on `pull_request` and `merge_group` | `F401`, `F811`, `F821`, `F841`; Python 3.12 target | `ruff check <changed.py files>` |
+| Python lint gate | Ruff | Changed Python files in a PR | `.github/workflows/lint.yml` on `pull_request` and `merge_group` | `F401`, `F811`, `F821`, `F841`; Python 3.10 target | `ruff check <changed.py files>` |
 | Full-tree Python lint audit | Ruff | Entire repository tree | `.github/workflows/lint.yml` on `push: main`, weekly cron, manual run | Same rule set as PR gate | `ruff check .` |
-| Fast Python test suite | Pytest | `core/`, `packages/`, split into subsystem tiers by `test_scope.py` | `.github/workflows/tests.yml` on PRs, pushes, merge queue | Default excludes `slow` and `integration`; `RAPTOR_MAX_TEST_SECONDS=10`; `--durations=25` | `python3 -m pytest core packages` |
+| Fast Python test suite | Pytest | `core/`, `packages/`, split into subsystem tiers by `test_scope.py` | `.github/workflows/tests.yml` on PRs, pushes, merge queue | Default excludes `slow` and `integration`; `RAPTOR_MAX_TEST_SECONDS=10`; per-test wall-clock guard | `python3 -m pytest core packages` |
 | Prompt-envelope audit | Pytest | Registered prompt construction paths | `.github/workflows/tests.yml` `python-prompt-audit` job | Narrow AST-based audit | `python3 -m pytest core/security/tests/test_prompt_envelope_audit.py -q` |
 | Code scanning | GitHub CodeQL Advanced | Python, C/C++, GitHub Actions | `.github/workflows/codeql.yml` on PRs, pushes, merge queue, weekly cron | Languages: `python`, `c-cpp`, `actions`; path exclusions in `.github/codeql/codeql-config.yml`; import-graph scope narrowing via `codeql_scope.py` for PRs | Use GitHub workflow; local CodeQL requires the CLI and packs |
 | Slash-command metadata lint | In-tree Python checker | `.claude/commands/*.md` dispatch metadata | `.github/workflows/lint.yml` on every lint run | Validates `dispatch:` targets and exclusion-list drift | `python3 .github/scripts/check_command_metadata.py` |
@@ -55,7 +55,7 @@ That distinction matters. Having a dependency in `requirements-dev.txt` is not t
 | Corpus / artefact | What it proves | Reproduce |
 |---|---|---|
 | `core/dataflow/corpus/` | Validator precision, recall, F1, and false-positive-category tracking across CodeQL, Semgrep, OWASP Benchmark, WebGoat, Juice Shop, and source-intel fixtures | `core/dataflow/scripts/corpus-run ...` then `core/dataflow/scripts/corpus-metrics <csv> --check-pivot-gate` |
-| `core/audit/corpus/labels/` | Audit hypothesis quality: per-CWE label set with pinned upstream source, schema-linted and pin-verified in CI | `python3 -m core.audit.corpus.lint --mode schema` then `--mode pins --fetch-missing` |
+| `core/audit/corpus/labels/` | Audit hypothesis quality: each label file under `labels/<bug_class>/` pins one function in an upstream tree, schema-linted and pin-verified in CI as labels land. The linter and workflow are committed; no label sets are committed in-tree yet | `python3 -m core.audit.corpus.lint --mode schema` then `--mode pins --fetch-missing` |
 | `test/data/smt_codeql_testbench/` | Z3 / SMT path feasibility behaviour for SAT, UNSAT, and indeterminate paths | `python3 -m pytest packages/codeql/tests/test_smt_path_validator.py` |
 | `test/data/sca-e2e/compromise-corpus/` | SCA detects known compromise classes such as Log4Shell, event-stream, ua-parser-js, node-ipc, Spring4Shell, and typosquat/install-hook cases | `packages/sca/scripts/raptor-sca-compromise-check test/data/sca-e2e/compromise-corpus` |
 | `test/data/sca-e2e/modes-corpus/` | SCA operator modes (`scan`, `bump`, `fix`, `check`, `whatif`) still behave correctly on real-shape fixtures | `packages/sca/scripts/raptor-sca-modes-check test/data/sca-e2e/modes-corpus` |
@@ -115,6 +115,7 @@ These are not security controls, but they support the controls above.
 | Tool | Current state |
 |---|---|
 | `mypy` | Pinned in `requirements-dev.txt`, but there is no CI job running it yet |
+| Python 3.10 floor (runtime) | The README states Python 3.10+. Ruff's `target-version = "py310"` (root `pyproject.toml`) enforces this at the syntax level on every lint run, but the CI test suite executes on a single recent interpreter — 3.10-only API regressions would not be caught by tests |
 | Ruff formatter | Ruff linting is enforced; `ruff format` is not |
 | Semgrep self-scan | RAPTOR ships and uses Semgrep for target analysis, but the repo does not currently have a dedicated Semgrep-against-RAPTOR CI workflow |
 

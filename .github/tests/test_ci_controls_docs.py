@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-import tomllib
+import sys
 from pathlib import Path
+
+# tomllib is stdlib on 3.11+; older interpreters need the `tomli` backport.
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover — env-dependent
+    import tomli as tomllib
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -59,6 +65,7 @@ def test_documented_control_paths_exist() -> None:
         ".github/workflows/ci-deps-image.yml",
         ".github/workflows/_tier.yml",
         ".github/workflows/release.yml",
+        ".github/workflows/dockerhub-publish.yml",
         ".github/scripts/check_command_metadata.py",
         ".github/scripts/check_miswiring.py",
         ".github/scripts/check_env_docs.py",
@@ -66,6 +73,7 @@ def test_documented_control_paths_exist() -> None:
         ".github/scripts/check_optional_dep_imports.py",
         ".github/scripts/test_scope.py",
         ".github/scripts/codeql_scope.py",
+        ".github/scripts/test_impact.py",
         ".github/scripts/sarif_known_fp_suppressions.py",
         ".github/scripts/miswiring_baseline.json",
         ".github/scripts/vocab_baseline.json",
@@ -74,12 +82,21 @@ def test_documented_control_paths_exist() -> None:
         ".github/codeql/codeql-config.yml",
         "core/dataflow/corpus",
         "core/dataflow/corpus_metrics.py",
+        "core/dataflow/scripts/corpus-run",
+        "core/dataflow/scripts/corpus-metrics",
+        "core/security/tests/test_prompt_envelope_audit.py",
         "test/data/smt_codeql_testbench",
         "test/data/sca-e2e/compromise-corpus",
         "test/data/sca-e2e/modes-corpus",
         "packages/sca/data/calibration",
+        "packages/sca/data/calibration/stress_baseline.json",
         "packages/sca/calibration/validate.py",
         "packages/sca/calibration/stress.py",
+        "packages/sca/scripts/raptor-sca-compromise-check",
+        "packages/sca/scripts/raptor-sca-modes-check",
+        "packages/sca/scripts/raptor-sca-validate-corpus",
+        "packages/codeql/tests/test_smt_path_validator.py",
+        ".semgrepignore",
     ]
 
     missing = [path for path in required if not (REPO / path).exists()]
