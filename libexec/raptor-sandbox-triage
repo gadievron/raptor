@@ -11,10 +11,12 @@ terminal-state transition; this shim re-runs it by hand for stranded
 runs or post-hoc re-classification.
 
 Usage:
-  raptor-sandbox-triage <run_dir> [--json]
+  raptor-sandbox-triage <run_dir> [--json] [--deep] [--legacy]
 
 Exit codes: 0 clean (or no telemetry), 1 error, 2 usage, 3 notable,
-4 suspicious — scriptable as a CI gate.
+4 suspicious — scriptable as a CI gate. Unstamped telemetry is treated
+as tampering by default (fail-closed for gates); pass --legacy only
+for run directories that predate provenance stamping.
 
 Implemented as a shim over core.sandbox.triage._cli_main rather than
 `python -m core.sandbox.triage` to avoid the runpy double-import warning

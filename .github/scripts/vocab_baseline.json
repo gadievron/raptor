@@ -1206,6 +1206,11 @@
   "count": 19,
   "kind": "literal"
  },
+ "core/sandbox/escalation_signatures.py::ESCAPE_PRIMITIVE_SYSCALLS": {
+  "count": 16,
+  "kind": "literal",
+  "note": "Linux syscall names mirroring seccomp's block sets (drift-pinned by test_escalation_signatures.py::test_escape_primitives_match_seccomp_block_sets) \u2014 kernel ABI vocabulary like the tracer's _NAME_TO_TYPE entry, not project APIs"
+ },
  "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
   "count": 23,
   "kind": "literal"

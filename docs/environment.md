@@ -251,6 +251,7 @@ to 120. Raise it only for unusually slow toolchains.
 | `RAPTOR_SCA_NPM_AUTH` | unset | Same, for the npm mirror (`NPM_CONFIG_REGISTRY`). |
 | `RAPTOR_SCA_MAVEN_AUTH` | unset | Same, for the Maven mirror (`RAPTOR_SCA_MAVEN_REGISTRY`). |
 | `RAPTOR_SAGE_AFL_PRIOR` | `1` | Falsy disables mechanical AFL flag injection from high-confidence SAGE cross-run priors. Shared toggle spellings (`off` now works); unrecognised values warn and leave it enabled. |
+| `RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED` | unset | Truthy (`1/true/yes/on`) silences the live stderr escalation banners for HIGH-severity sandbox telemetry (escape-primitive syscalls, credential-path touches, blocked-resolved-IP CONNECTs). Alerting only — enforcement and the run-end `sandbox-triage.json` classification are unaffected. See [Sandbox](sandbox.md) triage section. |
 | `RAPTOR_EF_CONFIG` | unset | Path to `packages/exploit_feasibility`'s analysis-settings JSON (chain: explicit arg > `RAPTOR_EF_CONFIG` > `./.raptor.json` > `~/.config/raptor/config.json`). Not to be confused with `RAPTOR_CONFIG` (core.llm models config) — this reader historically shared that name; each side's schema guard names the right variable on mismatch. See "Exploit-feasibility analysis settings" below for the rest of the `RAPTOR_EF_*` family. |
 
 ### OCI registry credentials

@@ -96,6 +96,21 @@ class TestSyscallArgDecoding:
         assert sigs.decode_syscall_args("ioctl", [0, 0x1234]) == {
             "ioctl_cmd": "0x1234"}
 
+    def test_32bit_truncation_masked(self):
+        """Registers are 64-bit but the kernel reads family/cmd as
+        32-bit — the same truncation seccomp's MASKED_EQ rules cover.
+        socket(AF_PACKET | 1<<32) is DENIED by the masked filter; the
+        decoder must label it hostile, not unknown."""
+        high = 1 << 32
+        assert sigs.decode_syscall_args("socket", [17 | high, 3, 0]) == {
+            "socket_family": "AF_PACKET", "socket_type": "SOCK_RAW"}
+        assert sigs.decode_syscall_args("ioctl", [0, 0x5412 | high]) == {
+            "ioctl_cmd": "TIOCSTI"}
+        assert sigs.hostile_arg_label(
+            "socket", [17 | high, 1, 0]) == "socket(AF_PACKET)"
+        assert sigs.hostile_arg_label(
+            "ioctl", [0, 0x5412 | high]) == "ioctl(TIOCSTI)"
+
     def test_other_syscalls_and_malformed_args_empty(self):
         assert sigs.decode_syscall_args("openat", [1, 2, 3]) == {}
         assert sigs.decode_syscall_args("socket", []) == {}

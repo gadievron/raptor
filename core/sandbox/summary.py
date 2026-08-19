@@ -392,7 +392,8 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
     # stated confidence when this marker is present, so a target-
     # planted marker must not verify. Unstampable → legacy unstamped.
     from . import telemetry_mac as _tmac
-    _token = _tmac.mint(_tmac.audit_degraded_fields(payload))
+    _token = _tmac.mint(_tmac.audit_degraded_fields(
+        payload, run=_tmac.run_binding(run_dir)))
     if _token:
         payload["mac"] = _token
     # Atomic write: audit-degraded marker is emitted once per run when
@@ -566,7 +567,8 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         json.dumps(denials, sort_keys=True, ensure_ascii=True)
         .encode("utf-8")
     ).hexdigest()
-    _token = _tmac.mint(_tmac.summary_fields(len(denials), _denials_sha))
+    _token = _tmac.mint(_tmac.summary_fields(
+        len(denials), _denials_sha, run=_tmac.run_binding(run_dir)))
     if _token:
         summary["mac"] = _token
 

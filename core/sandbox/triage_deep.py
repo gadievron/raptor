@@ -125,15 +125,24 @@ def _build_prompt(report: dict, denial_lines: list,
     return user, system_text
 
 
-def _denial_context(run_dir: Path) -> list:
+def _denial_context(run_dir: Path, *, allow_legacy: bool = False) -> list:
     """Up to _MAX_DENIAL_CONTEXT_LINES denial command lines from the
     (provenance-verified) summary — the model sees WHAT was attempted,
-    not only the classifier's abstraction of it."""
+    not only the classifier's abstraction of it.
+
+    ``allow_legacy`` mirrors deep_analyse's own gate: this module's
+    contract is that unverified content never reaches the model, and
+    a target-planted unstamped summary (possible on a run whose real
+    execution produced no denials) must not smuggle its cmd lines
+    into the prompt through this side door."""
+    from core.sandbox import telemetry_mac
     from core.sandbox.triage import _load_json, _verify_summary
     from core.sandbox.summary import SUMMARY_FILE
 
     summary, _integrity = _verify_summary(
-        _load_json(run_dir / SUMMARY_FILE))
+        _load_json(run_dir / SUMMARY_FILE),
+        telemetry_mac.run_binding(run_dir),
+        allow_legacy=allow_legacy)
     if not summary:
         return []
     lines = []
@@ -226,7 +235,7 @@ def deep_analyse(run_dir: Path, *, client=None,
     if report is None:
         logger.warning("triage_deep: no %s in %s", TRIAGE_FILE, run_dir)
         return None
-    integrity = verify_triage_report(report)
+    integrity = verify_triage_report(report, run_dir)
     if integrity == "tampered":
         logger.warning(
             "triage_deep: %s fails provenance verification — refusing "
@@ -251,7 +260,9 @@ def deep_analyse(run_dir: Path, *, client=None,
 
     model_id = getattr(client, "model_name", "") or ""
     user, system = _build_prompt(
-        report, _denial_context(run_dir), model_id)
+        report,
+        _denial_context(run_dir, allow_legacy=allow_legacy),
+        model_id)
     from core.llm.task_types import TaskType
     response = client.generate(
         user,

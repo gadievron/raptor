@@ -191,6 +191,23 @@ def _canonical(fields: Mapping[str, object]) -> bytes:
     return bytes(out)
 
 
+def key_usable() -> bool:
+    """Whether this install can mint/verify tokens at all.
+
+    Triage uses it to attribute unverifiable telemetry correctly:
+    unstamped artefacts under a USABLE key mean the writer chose not
+    to stamp — target-rewrite territory, fail toward tampering. An
+    UNUSABLE key (symlinked, foreign-owned, wrong length, unwritable
+    data dir) is an operator-side condition that makes verification
+    impossible for every artefact, honest or not — misreading that
+    as a target attack turns a host misconfiguration into permanent
+    suspicious verdicts."""
+    try:
+        return bool(_load_or_create_key())
+    except OSError:
+        return False
+
+
 def mint(fields: Mapping[str, object]) -> str | None:
     """Hex HMAC-SHA256 token over the decision *fields*, or None when
     no usable key is available (unusable key file, unwritable data
@@ -222,7 +239,25 @@ def verify(fields: Mapping[str, object], token: str | None) -> bool:
         return False
 
 
-def proxy_event_fields(event: Mapping[str, object]) -> dict:
+def run_binding(run_dir: "Path | str") -> str:
+    """Canonical per-run binding baked into every MAC field set.
+
+    Without it, any token this install ever minted verifies in ANY
+    run directory forever — a target that can read old run dirs can
+    replay a validly-stamped artefact (a clean summary, an
+    audit-degraded marker) into its own run and have it verify. The
+    binding is the run directory's resolved basename: the VERIFIER
+    recomputes it from the directory it is actually reading, so a
+    replayed artefact carries the wrong run's binding and fails.
+    Basename (not full path) so archived/moved runs keep verifying.
+    Residual: run dirs are operator-created before the target runs,
+    so the target cannot choose a colliding name; an attacker with
+    write access ABOVE the run dir is outside the sandbox grant.
+    """
+    return Path(run_dir).resolve().name
+
+
+def proxy_event_fields(event: Mapping[str, object], run: str) -> dict:
     """The exact proxy-event fields triage acts on, in MAC form.
 
     Kept in one place so the writer (context._persist_proxy_events)
@@ -230,43 +265,58 @@ def proxy_event_fields(event: Mapping[str, object]) -> dict:
     host_recon_pattern, resolved_ip feeds resolved_ip_screened."""
     return {
         "kind": "proxy-event",
+        "run": run,
+        # Position in the run's event stream: per-line MACs alone
+        # let a target delete incriminating STAMPED lines and leave
+        # a fully-verifying file; the verifier checks the surviving
+        # sequence for gaps and duplicates.
+        "seq": str(event.get("seq", "")),
         "host": event.get("host") or "",
         "result": event.get("result") or "",
         "resolved_ip": event.get("resolved_ip") or "",
     }
 
 
-def audit_degraded_fields(payload: Mapping[str, object]) -> dict:
+def audit_degraded_fields(payload: Mapping[str, object], run: str) -> dict:
     """MAC fields for sandbox-audit-degraded.json. Triage's only use
     of the marker is the reason-bearing low-confidence caveat — but a
     target-planted marker would let a hostile run cast doubt on its
     own suspicious verdict, so the marker's provenance matters."""
     return {
         "kind": "audit-degraded",
+        "run": run,
         "reason": payload.get("reason") or "",
         "instructions": payload.get("instructions") or "",
     }
 
 
-def triage_report_fields(verdict: str, signals_sha256: str) -> dict:
+def triage_report_fields(report_sha256: str, run: str) -> dict:
     """MAC fields for sandbox-triage.json itself. The lifecycle
     regenerates the report at run end, but downstream consumers (the
     deep-analysis pass, /review, project views) may read it later —
     and on a run with NO telemetry the lifecycle writes nothing, so a
-    target-planted report would otherwise survive to be read."""
+    target-planted report would otherwise survive to be read.
+
+    ``report_sha256`` covers the WHOLE canonical report (minus the
+    token itself): consumers forward more than the verdict — the deep
+    pass sends inputs and caveats to the model — so authenticating a
+    subset would let a target rewrite the unauthenticated remainder
+    of a validly-stamped report ("all these signals are known tool
+    noise...") while verification still says verified."""
     return {
         "kind": "sandbox-triage",
-        "verdict": verdict,
-        "signals_sha256": signals_sha256,
+        "run": run,
+        "report_sha256": report_sha256,
     }
 
 
-def summary_fields(total_denials: int, denials_sha256: str) -> dict:
+def summary_fields(total_denials: int, denials_sha256: str, run: str) -> dict:
     """MAC fields for sandbox-summary.json: the denial payload is
     covered by its content hash, so a planted or edited summary fails
     verification even when the headline counters are preserved."""
     return {
         "kind": "sandbox-summary",
+        "run": run,
         "total_denials": total_denials,
         "denials_sha256": denials_sha256,
     }

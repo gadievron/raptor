@@ -103,14 +103,22 @@ def decode_syscall_args(syscall_name: str, args) -> dict:
     args, or non-int values (a forged/truncated record must not
     raise out of a tracer or triage hot path)."""
     try:
+        # Tracer args are raw 64-bit registers, but the kernel reads
+        # socket()'s family and ioctl()'s cmd as 32-bit — the same
+        # truncation seccomp.py's MASKED_EQ rules exist for. Decode
+        # what the KERNEL will use: without the mask,
+        # socket(AF_PACKET | 1<<32, ...) is denied by the (masked)
+        # filter yet decodes as an unknown value, silencing the
+        # hostile-argument escalation it should fire.
         if syscall_name == "socket" and len(args) >= 2:
-            family, sock_type = int(args[0]), int(args[1]) & SOCK_TYPE_MASK
+            family = int(args[0]) & 0xFFFFFFFF
+            sock_type = int(args[1]) & SOCK_TYPE_MASK
             return {
                 "socket_family": SOCKET_FAMILY_NAMES.get(family, family),
                 "socket_type": SOCKET_TYPE_NAMES.get(sock_type, sock_type),
             }
         if syscall_name == "ioctl" and len(args) >= 2:
-            cmd = int(args[1])
+            cmd = int(args[1]) & 0xFFFFFFFF
             return {"ioctl_cmd": IOCTL_CMD_NAMES.get(cmd, hex(cmd))}
     except (TypeError, ValueError):
         pass

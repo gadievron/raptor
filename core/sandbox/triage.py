@@ -101,24 +101,33 @@ _INTEGRITY_LEGACY = "legacy"
 _INTEGRITY_TAMPERED = "tampered"
 
 
-def _signals_sha256(signals: List[dict]) -> str:
+def _report_sha256(report: dict) -> str:
+    """Canonical hash of the WHOLE report minus its own token — the
+    MAC must cover everything consumers forward (verdict, signals,
+    inputs, caveats, ...), not a subset a target could rewrite."""
+    body = {k: v for k, v in report.items() if k != "mac"}
     return hashlib.sha256(
-        json.dumps(signals, sort_keys=True, ensure_ascii=True)
+        json.dumps(body, sort_keys=True, ensure_ascii=True)
         .encode("utf-8")
     ).hexdigest()
 
 
-def verify_triage_report(report: Optional[dict]) -> str:
+def verify_triage_report(report: Optional[dict], run_dir: Path) -> str:
     """Provenance state of a loaded sandbox-triage.json for downstream
-    consumers: 'verified' / 'legacy' (no token) / 'tampered'."""
+    consumers: 'verified' / 'legacy' (no token) / 'tampered'.
+
+    ``run_dir`` is the directory the report was READ from — the run
+    binding is recomputed from it, so a report replayed from another
+    run fails verification even though its token was validly minted.
+    """
     if not isinstance(report, dict):
         return _INTEGRITY_TAMPERED
     token = report.get("mac")
     if not token:
         return _INTEGRITY_LEGACY
     fields = telemetry_mac.triage_report_fields(
-        report.get("verdict", ""),
-        _signals_sha256(report.get("signals", [])),
+        _report_sha256(report),
+        run=telemetry_mac.run_binding(run_dir),
     )
     return (_INTEGRITY_VERIFIED
             if telemetry_mac.verify(fields, token)
@@ -133,7 +142,7 @@ def _denials_sha256(denials: List[dict]) -> str:
 
 
 def _verify_proxy_events(
-        events: List[dict], *, allow_legacy: bool = True,
+        events: List[dict], run: str, *, allow_legacy: bool = True,
         ) -> Tuple[List[dict], int, str]:
     """Partition proxy events by provenance. Returns
     ``(usable_events, rejected_count, integrity)``."""
@@ -146,16 +155,36 @@ def _verify_proxy_events(
     usable = [
         e for e in events
         if telemetry_mac.verify(
-            telemetry_mac.proxy_event_fields(e), e.get("mac"))
+            telemetry_mac.proxy_event_fields(e, run), e.get("mac"))
     ]
     rejected = len(events) - len(usable)
     integrity = (_INTEGRITY_TAMPERED if rejected
                  else _INTEGRITY_VERIFIED)
+    # Stream continuity: per-line MACs alone let a target DELETE
+    # incriminating stamped lines and leave a fully-verifying file.
+    # The writer numbers events 0..n-1 inside the MAC; a gap means a
+    # stamped line was removed, a duplicate means the file was
+    # truncated mid-run and later batches re-counted over it. The
+    # verified events themselves stay usable — they are genuine —
+    # but the stream is flagged tampered so the verdict carries the
+    # tampering signal.
+    if usable:
+        seqs = []
+        for e in usable:
+            try:
+                seqs.append(int(e.get("seq")))
+            except (TypeError, ValueError):
+                integrity = _INTEGRITY_TAMPERED
+        if seqs and (len(set(seqs)) != len(seqs)
+                     or set(seqs) != set(range(min(seqs),
+                                               min(seqs) + len(seqs)))
+                     or min(seqs) != 0):
+            integrity = _INTEGRITY_TAMPERED
     return usable, rejected, integrity
 
 
 def _verify_summary(
-        summary: Optional[dict], *, allow_legacy: bool = True,
+        summary: Optional[dict], run: str, *, allow_legacy: bool = True,
         ) -> Tuple[Optional[dict], str]:
     """Returns ``(usable_summary, integrity)`` — a summary that fails
     verification is dropped entirely (its denials are untrusted as a
@@ -170,6 +199,7 @@ def _verify_summary(
     fields = telemetry_mac.summary_fields(
         summary.get("total_denials", 0),
         _denials_sha256(summary.get("denials", [])),
+        run=run,
     )
     if telemetry_mac.verify(fields, token):
         return summary, _INTEGRITY_VERIFIED
@@ -177,7 +207,7 @@ def _verify_summary(
 
 
 def _verify_audit_degraded(
-        marker: Optional[dict], *, allow_legacy: bool = True,
+        marker: Optional[dict], run: str, *, allow_legacy: bool = True,
         ) -> Tuple[Optional[dict], str]:
     if marker is None:
         return None, _INTEGRITY_VERIFIED
@@ -187,7 +217,7 @@ def _verify_audit_degraded(
             return None, _INTEGRITY_TAMPERED
         return marker, _INTEGRITY_LEGACY
     if telemetry_mac.verify(
-            telemetry_mac.audit_degraded_fields(marker), token):
+            telemetry_mac.audit_degraded_fields(marker, run), token):
         return marker, _INTEGRITY_VERIFIED
     return None, _INTEGRITY_TAMPERED
 
@@ -248,20 +278,48 @@ def triage_run(run_dir: Path, *,
 
     # Existence check runs on the RAW inputs: even a fully-forged
     # artifact means "something happened" and must produce a report
-    # (carrying the tampering signal), never silence.
+    # (carrying the tampering signal), never silence. Presence is
+    # probed with lstat, not "did it parse": MAC forgery already
+    # fails toward suspicious, so destruction (garbage bytes, an
+    # oversized blob, a planted FIFO/symlink) must not fail toward
+    # clean by reading as "no telemetry".
+    summary_present = _artifact_present(run_dir / SUMMARY_FILE)
+    events_present = _artifact_present(run_dir / PROXY_EVENTS_FILENAME)
+    summary_destroyed = summary_present and raw_summary is None
+    events_destroyed = events_present and not raw_proxy_events
     if raw_summary is None and not raw_proxy_events:
-        if not allow_legacy:
-            _remove_stale_triage_report(run_dir)
-        return None
+        if not allow_legacy and (summary_destroyed or events_destroyed):
+            pass  # fall through: unusable artifacts drive a report
+        else:
+            if not allow_legacy:
+                _remove_stale_triage_report(run_dir)
+            return None
 
     # Provenance gates: the run dir is target-writable during the
     # run, so every input is verified before it may drive a verdict.
+    # The run binding is recomputed from THIS directory — artefacts
+    # replayed from another run carry that run's binding and fail.
+    #
+    # When this install has NO usable telemetry-mac key, verification
+    # is impossible for every artefact, honest or not: that is an
+    # operator-side condition (symlinked/foreign/wrong-length key,
+    # unwritable data dir), and reading it as target tampering would
+    # turn a host misconfiguration into permanent suspicious verdicts.
+    # Inputs are then accepted at legacy confidence and a distinct
+    # MEDIUM provenance_unavailable signal (verdict >= notable) plus a
+    # caveat carry the condition instead.
+    provenance_unavailable = (not allow_legacy
+                              and not telemetry_mac.key_usable())
+    _verify_legacy = allow_legacy or provenance_unavailable
+    _run_binding = telemetry_mac.run_binding(run_dir)
     summary, summary_integrity = _verify_summary(
-        raw_summary, allow_legacy=allow_legacy)
+        raw_summary, _run_binding, allow_legacy=_verify_legacy)
     proxy_events, rejected_events, events_integrity = (
-        _verify_proxy_events(raw_proxy_events, allow_legacy=allow_legacy))
+        _verify_proxy_events(
+            raw_proxy_events, _run_binding, allow_legacy=_verify_legacy))
     audit_degraded, degraded_integrity = (
-        _verify_audit_degraded(raw_audit_degraded, allow_legacy=allow_legacy))
+        _verify_audit_degraded(
+            raw_audit_degraded, _run_binding, allow_legacy=_verify_legacy))
 
     denials = (summary or {}).get("denials", [])
     enforcement_denials = [d for d in denials
@@ -287,6 +345,19 @@ def triage_run(run_dir: Path, *,
     signals += _check_credential_path_touch(enforcement_denials)
     signals += _check_volume_anomaly(summary, budget_markers)
 
+    # Destruction detection: an artifact that exists but yields no
+    # usable content (garbage bytes, oversized blob, FIFO, symlink)
+    # is tampering evidence under fail-closed semantics — MAC forgery
+    # already demotes; destruction must not grade better than forgery.
+    destroyed = []
+    if not allow_legacy:
+        if summary_destroyed:
+            destroyed.append("sandbox_summary")
+            summary_integrity = _INTEGRITY_TAMPERED
+        if events_destroyed:
+            destroyed.append("proxy_events")
+            events_integrity = _INTEGRITY_TAMPERED
+
     integrity = {
         "sandbox_summary": summary_integrity,
         "proxy_events": events_integrity,
@@ -296,7 +367,10 @@ def triage_run(run_dir: Path, *,
                 if state == _INTEGRITY_TAMPERED]
     if tampered:
         evidence = [f"{name}: provenance verification failed"
-                    for name in sorted(tampered)]
+                    for name in sorted(set(tampered) - set(destroyed))]
+        evidence += [
+            f"{name}: file present but yielded no readable content "
+            f"(destroyed/replaced)" for name in sorted(destroyed)]
         if rejected_events:
             evidence.append(
                 f"{rejected_events} proxy event(s) rejected "
@@ -306,6 +380,19 @@ def triage_run(run_dir: Path, *,
             "severity": SEVERITY_HIGH,
             "count": len(tampered),
             "evidence": evidence,
+        })
+
+    if provenance_unavailable:
+        signals.append({
+            "type": "provenance_unavailable",
+            "severity": SEVERITY_MEDIUM,
+            "count": 1,
+            "evidence": [
+                "no usable telemetry-mac key on this install — "
+                "telemetry accepted at legacy confidence; see the "
+                "warn-once log line from core.sandbox.telemetry_mac "
+                "for the key path and remedy",
+            ],
         })
 
     verdict = _derive_verdict(signals)
@@ -549,6 +636,19 @@ def _load_json(path: Path) -> Optional[dict]:
     return loaded if isinstance(loaded, dict) else None
 
 
+def _artifact_present(path: Path) -> bool:
+    """Whether SOMETHING exists at path — including a dangling
+    symlink or a FIFO the bounded reader refuses to read. Destruction
+    must not read as absence: a target that replaces its telemetry
+    with a FIFO, an oversized blob, or garbage bytes must land in the
+    tampered path, not the "no telemetry" path."""
+    try:
+        os.lstat(path)
+        return True
+    except OSError:
+        return False
+
+
 def _load_jsonl(path: Path) -> List[dict]:
     data = _read_bounded(path)
     if data is None:
@@ -573,8 +673,8 @@ def _write(path: Path, report: dict) -> None:
     # to be read by downstream consumers (deep pass, /review, project
     # views). Those consumers verify via verify_triage_report().
     token = telemetry_mac.mint(telemetry_mac.triage_report_fields(
-        report.get("verdict", ""),
-        _signals_sha256(report.get("signals", [])),
+        _report_sha256(report),
+        run=telemetry_mac.run_binding(path.parent),
     ))
     if token:
         report["mac"] = token
@@ -622,6 +722,15 @@ def _cli_main(argv: Optional[list] = None) -> int:
              "model; writes sandbox-triage-deep.json; advisory only — "
              "never changes the rules verdict or the exit code)",
     )
+    parser.add_argument(
+        "--legacy", action="store_true",
+        help="accept unstamped (pre-provenance) telemetry at face "
+             "value. Only for run directories created before "
+             "provenance stamping existed — on current runs an "
+             "attacker who rewrote the telemetry produces exactly "
+             "this unstamped shape, so the default (off) treats it "
+             "as tampering. Do NOT pass this in CI gates.",
+    )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     except SystemExit as exc:
@@ -632,7 +741,10 @@ def _cli_main(argv: Optional[list] = None) -> int:
         print(f"error: {target} is not a directory", file=sys.stderr)
         return 1
 
-    result = triage_run(target)
+    # Fail-closed by default: this exit code is documented as a CI
+    # gate, and unstamped telemetry on a current run is exactly what
+    # a target that rewrote its own telemetry looks like.
+    result = triage_run(target, allow_legacy=args.legacy)
     if result is None:
         print(f"(no sandbox telemetry found for {target})")
         return 0

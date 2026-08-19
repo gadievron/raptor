@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -186,6 +187,37 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
     )
 
 
+# Serialises seq assignment across concurrent sandbox() exits in one
+# process: two writers counting the same file then appending would
+# mint duplicate sequence numbers and read as tampering at triage.
+_PROXY_PERSIST_LOCK = threading.Lock()
+
+
+def _count_lines_bounded(path) -> int:
+    """Newline count of the existing event log, same open discipline
+    as the writer (O_NOFOLLOW/O_NONBLOCK + fstat-regular); 0 on any
+    refusal — a refused file also refuses the append below."""
+    try:
+        fd = os.open(str(path),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                     | os.O_CLOEXEC)
+    except OSError:
+        return 0
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 0
+        count = 0
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return count
+            count += chunk.count(b"\n")
+    except OSError:
+        return 0
+    finally:
+        os.close(fd)
+
+
 def _persist_proxy_events(
     events,
     *,
@@ -250,6 +282,8 @@ def _persist_proxy_events(
 
     from . import proxy as _proxy_mod
     _log_path = os.path.join(output, _proxy_mod.PROXY_EVENTS_FILENAME)
+    _persist_lock = _PROXY_PERSIST_LOCK
+    _persist_lock.acquire()
     try:
         # Opened with O_NOFOLLOW + O_NONBLOCK so a child-planted
         # symlink (→ ~/.ssh/authorized_keys etc.) can't redirect
@@ -268,6 +302,7 @@ def _persist_proxy_events(
             "Sandbox: could not open %s for proxy-event "
             "persistence: %s", _log_path, _log_err,
         )
+        _persist_lock.release()
         return
     _fd_owned = True
     try:
@@ -290,17 +325,24 @@ def _persist_proxy_events(
         import json as _json
 
         from . import telemetry_mac as _tmac
+        _seq_start = _count_lines_bounded(_log_path)
+        _run_binding = _tmac.run_binding(output)
         with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
             _fd_owned = False  # fdopen took ownership
-            for e in events:
+            for _i, e in enumerate(events):
                 # Provenance stamp: triage verifies this token before
                 # letting the event drive a verdict — the target can
                 # append to this file mid-run (it holds Landlock write
                 # on `output`), and an unstampable environment (no
                 # usable key) degrades to the legacy unstamped shape
-                # triage already accepts with a caveat.
-                token = _tmac.mint(_tmac.proxy_event_fields(e))
-                line = {**e, "mac": token} if token else e
+                # triage already accepts with a caveat. ``seq`` rides
+                # inside the MAC so deleting stamped lines leaves a
+                # detectable gap (and a mid-run truncation collides
+                # with the next batch's recounted numbering).
+                stamped = {**e, "seq": _seq_start + _i}
+                token = _tmac.mint(_tmac.proxy_event_fields(
+                    stamped, run=_run_binding))
+                line = {**stamped, "mac": token} if token else e
                 _f.write(_json.dumps(line) + "\n")
     except BaseException as _persist_exc:
         # os.fdopen takes ownership on success; on any pre-fdopen
@@ -321,6 +363,8 @@ def _persist_proxy_events(
             "Sandbox: could not write proxy events to %s",
             _log_path, exc_info=True,
         )
+    finally:
+        _persist_lock.release()
 
 
 def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:

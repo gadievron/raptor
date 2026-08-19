@@ -63,16 +63,27 @@ class TestMintVerify:
     def test_roundtrip(self):
         fields = tmac.proxy_event_fields(
             {"host": "evil.example", "result": "denied_host",
-             "resolved_ip": None})
+             "resolved_ip": None}, run="run_a")
         token = tmac.mint(fields)
         assert tmac.verify(fields, token)
 
+    def test_run_binding_rejects_cross_run_replay(self):
+        """A validly-minted token must not verify under another run's
+        binding — replaying stamped artefacts from an old run dir into
+        a new one is the attack the binding exists to stop."""
+        event = {"host": "evil.example", "result": "denied_host",
+                 "resolved_ip": None}
+        token = tmac.mint(tmac.proxy_event_fields(event, run="run_a"))
+        assert tmac.verify(tmac.proxy_event_fields(event, run="run_a"), token)
+        assert not tmac.verify(
+            tmac.proxy_event_fields(event, run="run_b"), token)
+
     def test_field_change_fails(self):
         fields = tmac.proxy_event_fields(
-            {"host": "evil.example", "result": "denied_host"})
+            {"host": "evil.example", "result": "denied_host"}, run="r")
         token = tmac.mint(fields)
         forged = tmac.proxy_event_fields(
-            {"host": "benign.example", "result": "denied_host"})
+            {"host": "benign.example", "result": "denied_host"}, run="r")
         assert not tmac.verify(forged, token)
 
     def test_kind_domain_separation(self):

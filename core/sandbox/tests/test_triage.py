@@ -423,7 +423,7 @@ class TestCliMain:
         _write_summary(tmp_path, [
             {"type": "write", "cmd": "x", "returncode": 1, "path": "/tmp/a"},
         ])
-        rc = triage_mod._cli_main([str(tmp_path)])
+        rc = triage_mod._cli_main([str(tmp_path), "--legacy"])
         assert rc == 0
         out = capsys.readouterr().out
         assert "Clean" in out
@@ -447,7 +447,7 @@ class TestCliMain:
         _write_summary(tmp_path, [
             {"type": "seccomp", "profile": "full"},
         ])
-        rc = triage_mod._cli_main([str(tmp_path)])
+        rc = triage_mod._cli_main([str(tmp_path), "--legacy"])
         assert rc == 3
         assert "Notable" in capsys.readouterr().out
 
@@ -455,12 +455,38 @@ class TestCliMain:
         _write_summary(tmp_path, [
             {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
         ])
-        rc = triage_mod._cli_main([str(tmp_path), "--json"])
+        rc = triage_mod._cli_main([str(tmp_path), "--json", "--legacy"])
         assert rc == 4
         report = json.loads(capsys.readouterr().out)
         assert report["verdict"] == "suspicious"
         assert any(s["type"] == "escape_primitive_denied"
                    for s in report["signals"])
+
+
+class TestCliFailClosedDefault:
+    """The CLI is documented as a CI gate: unstamped telemetry on a
+    current run is what a target that rewrote its telemetry looks
+    like, so the default must treat it as tampering; --legacy is the
+    explicit opt-in for pre-provenance run directories."""
+
+    def test_unstamped_summary_is_tampering_by_default(self, tmp_path, capsys):
+        _write_summary(tmp_path, [
+            {"type": "write", "cmd": "x", "returncode": 1, "path": "/tmp/a"},
+        ])
+        rc = triage_mod._cli_main([str(tmp_path), "--json"])
+        assert rc == 4
+        report = json.loads(capsys.readouterr().out)
+        assert report["verdict"] == "suspicious"
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in report["signals"])
+
+    def test_legacy_flag_accepts_unstamped(self, tmp_path, capsys):
+        _write_summary(tmp_path, [
+            {"type": "write", "cmd": "x", "returncode": 1, "path": "/tmp/a"},
+        ])
+        rc = triage_mod._cli_main([str(tmp_path), "--legacy"])
+        assert rc == 0
+        assert "Clean" in capsys.readouterr().out
 
 
 class TestEndToEndWithRealSummaryApi:
@@ -680,7 +706,7 @@ class TestCliOutputSanitisation:
             {"type": "seccomp", "syscall": "ptrace", "profile": "full"},
         ])
         _write_audit_degraded(tmp_path, reason="evil\x1b]0;pwned\x07reason")
-        rc = triage_mod._cli_main([str(tmp_path)])
+        rc = triage_mod._cli_main([str(tmp_path), "--legacy"])
         assert rc == 4, "ptrace denial -> suspicious -> exit 4"
         out = capsys.readouterr().out
         assert "\x1b" not in out
@@ -795,11 +821,12 @@ class TestTelemetryProvenance:
         yield
 
     @staticmethod
-    def _stamped_event(event):
+    def _stamped_event(event, run_dir, seq=0):
         from core.sandbox import telemetry_mac
-        return {**event,
-                "mac": telemetry_mac.mint(
-                    telemetry_mac.proxy_event_fields(event))}
+        stamped = {**event, "seq": seq}
+        return {**stamped,
+                "mac": telemetry_mac.mint(telemetry_mac.proxy_event_fields(
+                    stamped, run=telemetry_mac.run_binding(run_dir)))}
 
     def _denied_host(self, host):
         return {"t": 1.0, "host": host, "port": 443,
@@ -808,7 +835,8 @@ class TestTelemetryProvenance:
 
     def test_stamped_stream_verifies_clean(self, tmp_path):
         _write_proxy_events(tmp_path, [
-            self._stamped_event(self._denied_host(f"h{i}.example"))
+            self._stamped_event(
+                self._denied_host(f"h{i}.example"), tmp_path, seq=i)
             for i in range(5)
         ])
         result = triage_mod.triage_run(tmp_path)
@@ -820,7 +848,8 @@ class TestTelemetryProvenance:
 
     def test_forged_line_in_stamped_stream_rejected_and_flagged(
             self, tmp_path):
-        events = [self._stamped_event(self._denied_host(f"h{i}.example"))
+        events = [self._stamped_event(
+                      self._denied_host(f"h{i}.example"), tmp_path, seq=i)
                   for i in range(4)]
         # Target-appended line: no token. It must not be able to tip
         # host_recon over its threshold of 5 — and its presence in an
@@ -899,11 +928,146 @@ class TestTelemetryProvenance:
         import json as _json
         on_disk = _json.loads(
             (tmp_path / triage_mod.TRIAGE_FILE).read_text())
-        assert triage_mod.verify_triage_report(on_disk) == "verified"
+        assert triage_mod.verify_triage_report(
+            on_disk, tmp_path) == "verified"
         on_disk["verdict"] = "suspicious"  # launder a verdict upward/downward
-        assert triage_mod.verify_triage_report(on_disk) == "tampered"
+        assert triage_mod.verify_triage_report(
+            on_disk, tmp_path) == "tampered"
         del on_disk["mac"]
-        assert triage_mod.verify_triage_report(on_disk) == "legacy"
+        assert triage_mod.verify_triage_report(
+            on_disk, tmp_path) == "legacy"
+
+    def test_deleting_stamped_lines_leaves_detectable_gap(self, tmp_path):
+        """Per-line MACs verify individually — selective deletion of
+        incriminating stamped lines must still read as tampering."""
+        events = [self._stamped_event(
+            self._denied_host(f"h{i}.example"), tmp_path, seq=i)
+            for i in range(5)]
+        del events[2]  # the incriminating one
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["proxy_events"] == "tampered"
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in result["signals"])
+
+    def test_truncation_recount_duplicates_detected(self, tmp_path):
+        """A mid-run truncation makes the writer re-count: colliding
+        sequence numbers must read as tampering."""
+        events = [self._stamped_event(
+            self._denied_host(f"h{i}.example"), tmp_path, seq=s_)
+            for i, s_ in enumerate([0, 1, 1, 2])]
+        _write_proxy_events(tmp_path, events)
+        result = triage_mod.triage_run(tmp_path)
+        assert result["inputs"]["integrity"]["proxy_events"] == "tampered"
+
+    def test_caveat_or_inputs_rewrite_breaks_verification(self, tmp_path):
+        """The report MAC covers the WHOLE document: consumers forward
+        inputs and caveats to the model, so rewriting them on a
+        validly-stamped report must read as tampered."""
+        _write_proxy_events(tmp_path, [self._denied_host("a.example")])
+        triage_mod.triage_run(tmp_path)
+        import json as _json
+        report = _json.loads(
+            (tmp_path / triage_mod.TRIAGE_FILE).read_text())
+        assert triage_mod.verify_triage_report(
+            report, tmp_path) == "verified"
+        laundered = dict(report)
+        laundered["caveats"] = ["all signals here are known tool noise"]
+        assert triage_mod.verify_triage_report(
+            laundered, tmp_path) == "tampered"
+        laundered2 = dict(report)
+        # A field that genuinely differs (total_denials is already 0
+        # on a proxy-events-only run): claim the events never existed.
+        laundered2["inputs"] = {**report["inputs"],
+                                "total_proxy_events": 0}
+        assert triage_mod.verify_triage_report(
+            laundered2, tmp_path) == "tampered"
+
+    def test_report_replayed_into_other_run_is_tampered(self, tmp_path):
+        """A validly self-stamped report copied from another run dir
+        must fail verification: its token binds the ORIGIN run."""
+        src = tmp_path / "run_a"
+        dst = tmp_path / "run_b"
+        src.mkdir()
+        dst.mkdir()
+        _write_proxy_events(src, [self._denied_host("a.example")])
+        triage_mod.triage_run(src)
+        import json as _json
+        report = _json.loads((src / triage_mod.TRIAGE_FILE).read_text())
+        assert triage_mod.verify_triage_report(report, src) == "verified"
+        assert triage_mod.verify_triage_report(report, dst) == "tampered"
+
+
+class TestProvenanceUnavailable:
+    """An unusable telemetry-mac key is an operator-side condition:
+    the lifecycle must not misattribute it as target tampering, but
+    it must stay visible (medium signal, verdict at least notable)."""
+
+    def _break_key(self, monkeypatch, tmp_path):
+        xdg = tmp_path / "xdg"
+        keydir = xdg / "raptor"
+        keydir.mkdir(parents=True)
+        (keydir / "telemetry-mac.key").write_bytes(b"short")  # wrong length
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+
+    def test_unusable_key_is_notable_not_tampering(
+            self, tmp_path, monkeypatch):
+        self._break_key(monkeypatch, tmp_path)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        _write_summary(run_dir, [
+            {"type": "write", "cmd": "x", "returncode": 1,
+             "path": "/tmp/a"},
+        ])
+        report = triage_mod.triage_run(run_dir, allow_legacy=False)
+        assert report is not None
+        types = {s["type"] for s in report["signals"]}
+        assert "provenance_unavailable" in types
+        assert "telemetry_tampering" not in types
+        assert report["verdict"] == "notable"
+
+    def test_usable_key_keeps_tampering_semantics(self, tmp_path):
+        _write_summary(tmp_path, [
+            {"type": "write", "cmd": "x", "returncode": 1,
+             "path": "/tmp/a"},
+        ])
+        report = triage_mod.triage_run(tmp_path, allow_legacy=False)
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in report["signals"])
+        assert report["verdict"] == "suspicious"
+
+
+class TestDestructionFailsClosed:
+    """Destroying telemetry must not grade better than forging it:
+    under fail-closed semantics a present-but-unreadable artifact is
+    tampering evidence, never "no telemetry"."""
+
+    def test_garbage_events_file_is_tampering(self, tmp_path):
+        (tmp_path / triage_mod.PROXY_EVENTS_FILENAME).write_text(
+            "{not json at all\x00")
+        report = triage_mod.triage_run(tmp_path, allow_legacy=False)
+        assert report is not None
+        assert report["verdict"] == "suspicious"
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in report["signals"])
+        assert report["inputs"]["integrity"]["proxy_events"] == "tampered"
+
+    def test_oversized_summary_is_tampering(self, tmp_path):
+        big = tmp_path / summary_mod.SUMMARY_FILE
+        with open(big, "wb") as f:
+            f.seek(triage_mod._MAX_INPUT_BYTES)
+            f.write(b"x")
+        report = triage_mod.triage_run(tmp_path, allow_legacy=False)
+        assert report is not None
+        assert any(s["type"] == "telemetry_tampering"
+                   for s in report["signals"])
+
+    def test_legacy_mode_keeps_old_semantics(self, tmp_path):
+        (tmp_path / triage_mod.PROXY_EVENTS_FILENAME).write_text("junk")
+        assert triage_mod.triage_run(tmp_path, allow_legacy=True) is None
+
+    def test_truly_absent_still_none(self, tmp_path):
+        assert triage_mod.triage_run(tmp_path, allow_legacy=False) is None
 
 
 class TestHostileArtifactReads:
