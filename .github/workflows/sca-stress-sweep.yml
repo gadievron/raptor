@@ -59,7 +59,7 @@ jobs:
         # sweep then drives the actual scanner against each sample.
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip==26.1.1
+          python -m pip install --upgrade pip==26.1.2
           pip install -r requirements.txt
 
       - name: Run stress sweep

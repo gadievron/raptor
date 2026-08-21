@@ -90,6 +90,93 @@ from packages.zkpox.reproduce import (
 )
 from packages.zkpox.surfacing import render_run_eligibility
 
+# ---------------------------------------------------------------------------
+# Tier 2/3 lazy re-exports (PEP 562 ``__getattr__``)
+# ---------------------------------------------------------------------------
+#
+# The CBOR disclosure schema (``disclosure``), Sigstore anchoring
+# (``anchor``), and the layered envelope (``envelope``) are the heavy
+# Tier 2/3 surface: they import ``cbor2`` / ``cryptography`` at module
+# load. ``cbor2`` is an OPTIONAL dependency (commented out in
+# requirements.txt), so importing them eagerly here would break the
+# dependency-free Tier 0/1 import contract — and the
+# ``test_zkpox_import_pulls_no_heavy_deps`` invariant. PEP 562 defers
+# each submodule import until a caller actually touches one of these
+# names (``zkpox.Bundle``, ``zkpox.anchor_bundle``, ``zkpox.seal``, …),
+# keeping ``import packages.zkpox`` cheap while preserving the
+# top-level access pattern that ``raptor_zkpox.py`` and the tests use.
+_LAZY_EXPORTS: dict[str, str] = {
+    # CBOR disclosure schema — packages.zkpox.disclosure
+    "DisclosureBundle": "disclosure",
+    "disclosure_from_manifest": "disclosure",
+    "manifest_target_bare_hex": "disclosure",
+    "target_hash_matches": "disclosure",
+    "BUNDLE_VERSION": "disclosure",
+    "ENVELOPE_SCHEME": "disclosure",
+    "Target": "disclosure",
+    "Vulnerability": "disclosure",
+    "Proof": "disclosure",
+    "HarnessRef": "disclosure",
+    "VendorEnvelope": "disclosure",
+    "Researcher": "disclosure",
+    "Timestamp": "disclosure",
+    "sha256_file": "disclosure",
+    "sha256_bytes": "disclosure",
+    "vendor_envelope_from": "disclosure",
+    "to_cbor": "disclosure",
+    "from_cbor": "disclosure",
+    "bundle_hash_pre_timestamp": "disclosure",
+    "with_timestamp": "disclosure",
+    # Sigstore Rekor anchoring — packages.zkpox.anchor
+    "Ed25519Keypair": "anchor",
+    "AnchorError": "anchor",
+    "anchor_bundle": "anchor",
+    "fetch_log_entry": "anchor",
+    "confirm_anchor_matches": "anchor",
+    "gen_ed25519_keypair": "anchor",
+    "load_ed25519_secret_pem": "anchor",
+    # Phase 1.5.3 Rekor verification primitives
+    "verify_inclusion_proof": "anchor",
+    "verify_set": "anchor",
+    "canonical_set_payload": "anchor",
+    "InclusionProofError": "anchor",
+    "SignatureError": "anchor",
+    "LEGACY_V1_REKOR_URL": "anchor",
+    # Layered envelope — packages.zkpox.envelope
+    "Envelope": "envelope",
+    "AgeKeypair": "envelope",
+    "EnvelopeError": "envelope",
+    "EnvelopeToolError": "envelope",
+    "EnvelopeRoundTripError": "envelope",
+    "seal": "envelope",
+    "open_via_vendor": "envelope",
+    "open_via_tlock": "envelope",
+    "gen_age_keypair": "envelope",
+    "age_encrypt_to": "envelope",
+    "age_decrypt_with": "envelope",
+    "tle_encrypt": "envelope",
+    "tle_decrypt": "envelope",
+    "aes_encrypt": "envelope",
+    "aes_decrypt": "envelope",
+}
+
+
+def __getattr__(name: str):
+    submodule = _LAZY_EXPORTS.get(name)
+    if submodule is None:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}"
+        )
+    import importlib
+
+    mod = importlib.import_module(f"{__name__}.{submodule}")
+    return getattr(mod, name)
+
+
+def __dir__() -> list:
+    return sorted([*globals(), *_LAZY_EXPORTS])
+
+
 __all__ = [
     "ZKPoXEligibility",
     "is_zkpox_eligible",
@@ -107,4 +194,6 @@ __all__ = [
     "ProvingStackUnavailable",
     "proving_stack_available",
     "require_proving_stack",
+    # Tier 2/3 lazy re-exports (see _LAZY_EXPORTS / __getattr__)
+    *sorted(_LAZY_EXPORTS),
 ]

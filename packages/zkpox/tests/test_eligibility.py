@@ -178,3 +178,28 @@ def test_render_shows_ratio_and_breakdown():
     assert "ZKPoX-eligible witnesses: 1 / 2" in out
     assert "provable: 1" in out
     assert "outcome_not_provable: 1" in out
+
+
+def test_render_hint_present_when_any_eligible():
+    """When there's at least one eligible witness, the rendered
+    block ends with a `→ next: ... zkpox bundle ...` discoverability
+    hint pointing at the on-request Tier 0/1 step."""
+    witnesses = [
+        _w(outcome=WitnessOutcome.EXIT_SIGNAL,
+           target_binary_hash="a" * 64, data=b"1"),
+    ]
+    out = render_eligibility_summary(witnesses)
+    assert "→ next:" in out
+    assert "raptor.py zkpox bundle" in out
+
+
+def test_render_hint_absent_when_zero_eligible():
+    """No point pointing the operator at `bundle` when nothing
+    qualifies — the hint stays off if eligible == 0."""
+    witnesses = [
+        _w(outcome=WitnessOutcome.NOT_RUN,
+           target_binary_hash="a" * 64, data=b"x"),
+    ]
+    out = render_eligibility_summary(witnesses)
+    assert "→ next:" not in out
+    assert "zkpox bundle" not in out
