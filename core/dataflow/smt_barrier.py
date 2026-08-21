@@ -1297,6 +1297,42 @@ def _python_chain_reaches_sink(
     return False
 
 
+def _lexical_var_reaches_sink(
+    var: str, source_text: str, validator_line: int,
+    sink_line: int, sink_line_text: str,
+) -> bool:
+    """AST-free analogue of ``_python_chain_reaches_sink``'s rebind-KILL,
+    for languages without a parsed tree (JS/TS/Java).
+
+    Returns ``True`` iff ``var`` appears at the sink line AND is not
+    rebound between the validator and the sink. Previously the non-Python
+    path was a bare ``\\bvar\\b`` match at the sink with NO rebind-KILL
+    (a204f309): ``x = validate(raw); x = req.query.evil; sink(x)`` left
+    ``x`` "validated" at the sink and the charset prescreen suppressed a
+    live flow. A reassignment ``var = <expr not referencing var>`` between
+    validator and sink rebinds it to a value the validator never
+    constrained, so it must KILL the reach.
+
+    Conservative by design: it detects reassignments lexically and errs
+    toward KILL (declining the suppression → the finding falls through to
+    LLM validation), which is the sound direction for a false-negative
+    fix. Member/index writes (``var.f = …``, ``var[i] = …``) and
+    comparisons (``==``/``!=``/``<=``/``>=``) do not count as rebinds.
+    """
+    if not _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
+        return False
+    lines = source_text.splitlines()
+    assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
+    self_re = _re.compile(rf"\b{_re.escape(var)}\b")
+    for lineno in range(validator_line + 1, sink_line):
+        if 1 <= lineno <= len(lines):
+            text = lines[lineno - 1]
+            m = assign_re.search(text)
+            if m and not self_re.search(text[m.end():]):
+                return False  # rebind from a non-self RHS -> KILL
+    return True
+
+
 def substitution_dominates_sink(
     source_text: str,
     validator_line: int,
@@ -1699,9 +1735,9 @@ def try_tier0(
                 chain_tree, spec.var_name, line, sink_line, sink_line_text,
             )
     else:
-        var_reaches = bool(_re.search(
-            rf"\b{_re.escape(spec.var_name)}\b", sink_line_text,
-        ))
+        var_reaches = _lexical_var_reaches_sink(
+            spec.var_name, source_text, line, sink_line, sink_line_text,
+        )
     if not var_reaches:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

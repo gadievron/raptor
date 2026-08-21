@@ -17,6 +17,7 @@ import pytest
 pytest.importorskip("z3")
 
 from core.dataflow import injection_prescreen as ip
+from core.dataflow.smt_barrier import ValidatorSpec
 from core.dataflow.injection_prescreen import (
     PrescreenVerdict,
     prescreen_finding,
@@ -414,3 +415,48 @@ class TestGatesAndTelemetry:
         after_miss = snapshot_stats()
         assert after_miss["no_signal"] == after_refute["no_signal"] + 1
         assert after_miss["refuted"] == after_refute["refuted"]
+
+
+class TestNonPythonRebindKill:
+    """a204f309: the non-Python value-reach must apply the rebind-KILL, so
+    a charset guard whose variable is re-tainted after the guard does NOT
+    suppress a live JS/TS/Java finding."""
+
+    _SPEC = ValidatorSpec(
+        kind="charset", var_name="p", charset="A-Za-z0-9",
+        source_line="+  p = p.replace(/[^A-Za-z0-9]/g, '')", forbidden=0,
+    )
+
+    def _refute(self, src, step_line, sink_line):
+        return ip._step_refutes_path(
+            spec=self._SPEC, step_file="app.js", step_line=step_line,
+            sink_file="app.js", sink_line=sink_line, source_text=src,
+            language="javascript", sink_classes=frozenset({"pathtrav"}),
+        )
+
+    def test_no_rebind_still_refutes(self):
+        # legitimate guard, value flows straight to the sink -> suppressed
+        src = (
+            "function h(req){\n"
+            "  let p = req.query.name;\n"
+            "  p = p.replace(/[^A-Za-z0-9]/g, '');\n"   # 3 validator
+            "  fs.readFile('/data/'+p);\n"              # 4 sink
+            "}\n"
+        )
+        refuted, _reason, _conf = self._refute(src, 3, 4)
+        assert refuted is True
+
+    def test_rebind_to_attacker_data_does_not_refute(self):
+        # p re-tainted after the guard -> the charset proof is stale -> the
+        # finding must fall through to LLM validation, not be suppressed.
+        src = (
+            "function h(req){\n"
+            "  let p = req.query.name;\n"
+            "  p = p.replace(/[^A-Za-z0-9]/g, '');\n"   # 3 validator
+            "  p = req.query.evil;\n"                   # 4 rebind
+            "  fs.readFile('/data/'+p);\n"              # 5 sink
+            "}\n"
+        )
+        refuted, reason, _conf = self._refute(src, 3, 5)
+        assert refuted is False
+        assert "value chain" in reason

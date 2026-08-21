@@ -56,6 +56,7 @@ from core.dataflow.smt_barrier import (
     ValidatorSpec,
     _crosses_function_boundary,
     _python_chain_reaches_sink,
+    _lexical_var_reaches_sink,
     extract_validator_from_line,
     extractor_languages,
     prove_neutralizes,
@@ -327,9 +328,10 @@ def _step_refutes_path(
             tree, spec.var_name, step_line, sink_line, sink_line_text,
         )
     else:
-        var_reaches = bool(_re.search(
-            rf"\b{_re.escape(spec.var_name)}\b", sink_line_text,
-        ))
+        var_reaches = _lexical_var_reaches_sink(
+            spec.var_name, source_text, step_line, sink_line,
+            sink_line_text,
+        )
     if not var_reaches:
         return False, (
             f"validated variable {spec.var_name!r} not in the sink's "

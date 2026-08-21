@@ -54,6 +54,7 @@ from core.dataflow.smt_barrier import (
     _crosses_function_boundary,
     _function_containing,
     _python_chain_reaches_sink,
+    _lexical_var_reaches_sink,
     _same_function_in_order,
     prove_neutralizes,
     substitution_dominates_sink,
@@ -375,9 +376,10 @@ def _try_known_safe_call(
             tree, spec.variable_name, validator_line, sink_line, sink_line_text,
         )
     elif spec.variable_name:
-        chain_ok = bool(_re.search(
-            rf"\b{_re.escape(spec.variable_name)}\b", sink_line_text,
-        ))
+        chain_ok = _lexical_var_reaches_sink(
+            spec.variable_name, source_text, validator_line, sink_line,
+            sink_line_text,
+        )
     else:
         chain_ok = False
     if not chain_ok:
@@ -526,9 +528,10 @@ def try_tier1b(
                 tree, mech.var_name, validator_line, sink_line, sink_line_text,
             )
         else:
-            chain_ok = bool(_re.search(
-                rf"\b{_re.escape(mech.var_name)}\b", sink_line_text,
-            ))
+            chain_ok = _lexical_var_reaches_sink(
+                mech.var_name, source_text, validator_line, sink_line,
+                sink_line_text,
+            )
         if not chain_ok:
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
