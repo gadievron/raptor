@@ -504,6 +504,24 @@ def clone_repository(
         raise RuntimeError(
             f"git clone failed: {stderr or stdout or 'unknown error'}"
         )
+    # Host-side materialisation check. git's exit status reports what
+    # happened INSIDE the sandbox — under the mount-ns backend the
+    # child gets a private tmpfs /tmp, so if the destination isn't
+    # covered by the bind tree (e.g. ``target.parent`` is /tmp itself,
+    # which the per-ns tmpfs shadows and the bind step skips), git
+    # writes the clone into the tmpfs, exits 0, and the tree vanishes
+    # with the sandbox. Returning True there hands callers a phantom
+    # clone that only fails at their next (host-side) access, far from
+    # the cause. Verify on the HOST that the tree actually landed.
+    if not target.is_dir():
+        raise RuntimeError(
+            f"git clone reported success but {target} does not exist "
+            f"on the host filesystem — the clone likely landed in the "
+            f"sandbox's private /tmp tmpfs because the destination's "
+            f"parent directory is not part of the sandbox bind tree. "
+            f"Use a destination at least one level below /tmp (so its "
+            f"parent is bind-mountable) or another writable workspace."
+        )
     return True
 
 

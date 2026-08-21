@@ -190,6 +190,7 @@ class TestPromoteSpecOnAnnotation:
         ])
         result = promote_spec_on_annotation(
             "src/cmd.py", "exec_cmd", "sink", out_dir=run_dir,
+            human_grade=True,
         )
         assert result == EvidenceTier.XREF_BACKED
         reloaded = load_specs(run_dir)
@@ -205,6 +206,7 @@ class TestPromoteSpecOnAnnotation:
         ])
         result = promote_spec_on_annotation(
             "src/io.py", "read_input", "entry_point", out_dir=run_dir,
+            human_grade=True,
         )
         assert result == EvidenceTier.XREF_BACKED
         reloaded = load_specs(run_dir)
@@ -261,6 +263,7 @@ class TestPromoteSpecOnAnnotation:
         ])
         result = promote_spec_on_annotation(
             "src/cmd.py", "exec_cmd", "finding", out_dir=run_dir,
+            human_grade=True,
         )
         assert result == EvidenceTier.XREF_BACKED
         reloaded = load_specs(run_dir)
@@ -289,6 +292,7 @@ class TestPromoteSpecOnAnnotation:
         ])
         result = promote_spec_on_annotation(
             "src/auth.py", "check_pw", "sink", out_dir=run_dir,
+            human_grade=True,
         )
         assert result == EvidenceTier.XREF_BACKED
 
@@ -393,6 +397,19 @@ class TestPromoteSpecTierByGrade:
             human_grade=False,
         )
         assert result is None
+
+    def test_default_is_hint_tier_not_operator_authority(self, tmp_path):
+        """Omitting human_grade must fail CLOSED: hint-tier promotion
+        only. Operator authority is asserted explicitly by the caller
+        (libexec/raptor-annotate passes the provenance-derived value)."""
+        run_dir = self._store(tmp_path)
+        result = promote_spec_on_annotation(
+            "src/cmd.py", "exec_cmd", "sink", out_dir=run_dir,
+        )
+        assert result == EvidenceTier.HEADER_BACKED
+        reloaded = load_specs(run_dir)
+        assert reloaded[0].evidence_tier == EvidenceTier.HEADER_BACKED
+        assert reloaded[0].source == "annotation_asserted"
 
     def test_human_grade_promotes_over_header_backed(self, tmp_path):
         # A prior hint-tier promotion doesn't block the operator's.

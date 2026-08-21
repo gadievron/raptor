@@ -413,7 +413,7 @@ def test_run_attach_failure_marks_failed(tmp_path: Path):
     assert meta["ok"] is False
     assert "ptrace denied" in (meta["error"] or "")
     report = (tmp_path / "frida-report.md").read_text()
-    assert "FAILED" in report
+    assert "**Status:** Failed" in report
     # events.jsonl is created up-front, so it exists even on a failed run.
     assert (tmp_path / "events.jsonl").is_file()
 

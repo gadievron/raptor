@@ -85,14 +85,14 @@ def test_run_with_timeout_returns_when_subprocess_run_itself_hangs(
     import threading
     import time as _time
 
-    monkeypatch.setattr("cve_env.utils.run._REAP_GRACE_S", 1.0)
+    monkeypatch.setattr("core.container.proc._REAP_GRACE_S", 1.0)
     entered = threading.Event()
 
     def _hang(*_args: object, **_kwargs: object) -> None:
         entered.set()
         _time.sleep(60.0)  # models subprocess.run's wedged internal post-kill wait()
 
-    monkeypatch.setattr("cve_env.utils.run.subprocess.run", _hang)
+    monkeypatch.setattr("core.container.proc.subprocess.run", _hang)
 
     start = _time.monotonic()
     outcome = run_with_timeout(["docker", "build", "."], timeout=1.0)
@@ -116,7 +116,7 @@ def test_run_with_timeout_catches_oserror_during_spawn() -> None:
     failures (EAGAIN, EMFILE, broken pipe). The helper catches OSError too so
     those callers can drop their try/except wrappers without losing tolerance."""
     fake_oserror = OSError(24, "Too many open files")
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_oserror):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_oserror):
         outcome = run_with_timeout(["echo", "hello"], timeout=2.0)
     assert isinstance(outcome, RunOutcome)
     assert outcome.timed_out is False

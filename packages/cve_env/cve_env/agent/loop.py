@@ -1,130 +1,61 @@
-"""Agent turn loop: drive ``claude_agent_sdk.query`` and derive one ``Outcome``.
+"""Outcome classification and shared agent-engine machinery.
 
-Responsibilities:
+Historically this module WAS the agent engine — a 2,700-line driver for
+the vendored claude-agent-sdk. The backend A/B (two rounds, ten CVEs,
+fully symmetric verdicts) retired that engine: the core ToolUseLoop
+backend (:mod:`cve_env.agent.core_loop`) is now the only driver, and
+the SDK path was deleted rather than kept as a fallback.
 
-1. Render the user prompt from a ``CveRecord`` + ``HostInfo``.
-2. Register the 11 MCP tools and run the query under the SDK-enforced
-   turn cap and dollar cap.
-3. Observe each streamed message, map ``tool_use_id`` -> tool name, and
-   parse tool results to detect:
-   - ``verify.passed`` -> success
-   - ``give_up.terminal`` -> unresolvable
-4. Write one ``AuditEntry`` per message into the per-run audit JSONL.
-5. Assemble a final ``Outcome`` from the SDK's ``ResultMessage`` + the
-   derived success/give_up signals.
+What remains here is the engine-neutral machinery the surviving
+backend (and the classifier test corpus) consume:
 
-The SDK-side turn cap and budget raise are surfaced via ``stop_reason``;
-we map those to ``turn_cap`` / ``budget_exhausted`` on the Outcome.
+* :class:`_StreamState` — the per-run stream state every signal folds
+  into;
+* :func:`_track_tool_result` — one tool result → state (launch/build/
+  verify/give_up tracking, the give_up reclassifiers);
+* :func:`_map_status` / :func:`_classify_verify_outcome` /
+  :func:`_terminal_status_for_result` — the terminal classification
+  (priority order is regression-locked; see the docstrings);
+* :func:`_compose_system_prompt` — constraints + runtime-caps + static
+  system prompt assembly;
+* :func:`should_extend_turn_cap` / :func:`_is_productive_outcome` —
+  the productive-extension policy (the cost twin lives in config);
+* :func:`_classify_api_overload`, the version-assertion helpers, and
+  the recovery-telemetry emitter.
 """
 
 from __future__ import annotations
 
-import contextlib
-import json
 import os
 import re
-import sys
-import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ResultMessage,
-    TextBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
-
-from cve_env.agent.audit import AuditEntry, AuditStatus, AuditWriter
+from cve_env.agent.audit import AuditEntry, AuditStatus
 from cve_env.agent.health_constraints import (
     ServiceConstraint,
     format_constraints_for_prompt,
 )
-from cve_env.agent.llm import (
-    BudgetCapExceeded,
-    GiveUpReceived,
-    NoProgressReached,
-    SuccessReached,
-    TurnCapReached,
-    WallBudgetExceeded,
-    run_agent,
-)
 from cve_env.agent.prompts import (
-    BENIGN_VERIFY_CONTINUATION_PROMPT,
-    CONTINUATION_USER_PROMPT,
-    FORCE_RESOLVE_CONTINUATION_PROMPT,
-    PROPRIETARY_VERIFY_CONTINUATION_PROMPT,
     SYSTEM_PROMPT,
     render_runtime_caps_block,
-    render_user_prompt,
-)
-from cve_env.agent.refusals import RefusalScanner, append_events, default_log_path
-
-# Per-CVE tool-state reset aggregator (one registry replaces hand-wired resets).
-from cve_env.agent.tools import (
-    ALL_TOOLS,
-    reset_all_tool_state,
-    set_cve_id_context,
-    set_cve_version_context,
 )
 from cve_env.config import (
-    AGENTIC_AUDIT_ROOT,
-    INTERNAL_WALL_BUDGET_S,
-    MAX_COST_USD_PER_CVE_SOFT,
-    MAX_TOOL_ATTEMPT_EXTENSIONS,
-    MAX_TURN_EXTENSIONS,
-    MODEL,
-    NO_PROGRESS_GIVEUP_TURNS,
     POST_BUILD_PRODUCTIVE_TOOLS,
-    PRODUCTIVE_RECENCY_TURNS,
     PRODUCTIVE_TOOLS,
     STAGES,
-    TURN_CAP,
-    TURN_EXTENSION_PCT,
     VERSION_ASSERTION_CMD_PATTERN,
-    estimate_cost_from_tokens,
-    estimate_cost_from_turns,
-    get_benign_verify_continuation_max,
-    get_enable_benign_verify_continuation,
-    get_enable_halt_on_verified_success,
-    get_enable_proprietary_verify_continuation,
-    get_force_resolve_budget_fraction,
-    get_force_resolve_max,
-    get_proprietary_verify_max,
     productive_extension_allowed,
     stage_for_tool,
 )
-from cve_env.config import get_recovery_eligible_stages as _get_recovery_eligible_stages
-from cve_env.config import get_recovery_gap_turns as _get_recovery_gap_turns
-from cve_env.config import get_tool_attempt_cap as _get_tool_attempt_cap
-from cve_env.config import over_budget_stages as _over_budget_stages
-from cve_env.config import should_extend_cost_cap as _should_extend_cost_cap
-from cve_env.config import stage_hard_budget_breach as _stage_hard_budget_breach
-from cve_env.models import CveRecord, HostInfo, Outcome, OutcomeStatus
-from cve_env.tools._smoke import has_functional_smoke
-
-# Emit per-tool ``T<turn> ✓ <tool_name> <hint>`` lines to stderr
-# during the build so single-CVE runs aren't silent. Bench50.sh has its own
-# live monitor (bench_status.sh); this brings the same story to one-off
-# `cve-env build` smokes. Set CVE_ENV_QUIET=1 to suppress (tests do this
-# to keep pytest output clean).
-_LIVE_STDERR_DISABLED: bool = os.environ.get("CVE_ENV_QUIET", "").strip() in (
-    "1",
-    "true",
-    "True",
+from cve_env.config import (
+    get_recovery_eligible_stages as _get_recovery_eligible_stages,
 )
-
-# Fix #8 (continuation loop on premature end_turn): the prompt's
-# commitment-enforcement rule alone does NOT close a measured follow-through gap
-# (source-build-no-verify cases that are near-builds), so a runtime continuation
-# backstops it. The runtime lives in ``_should_continue_for_verify`` + the
-# continuation loop in ``build()`` (BOTH the prompt rule AND this runtime are
-# kept). Reuses ``CONTINUATION_USER_PROMPT`` (prompts.py) + ``resume`` on
-# ``run_agent`` (llm.py); the ``test_fix8_*`` tests are the behavioral spec.
-
+from cve_env.config import (
+    get_recovery_gap_turns as _get_recovery_gap_turns,
+)
+from cve_env.models import OutcomeStatus
+from cve_env.tools._smoke import has_functional_smoke
 
 # Lifecycle vs active payload check types.
 #
@@ -137,41 +68,26 @@ _LIVE_STDERR_DISABLED: bool = os.environ.get("CVE_ENV_QUIET", "").strip() in (
 _LIFECYCLE_ONLY_CHECK_TYPES = frozenset(
     {"container_status", "http_check", "log_check", "stability_wait"}
 )
+
+
 _ACTIVE_CHECK_TYPES = frozenset({"http_request_check", "exec_check", "tcp_probe_check"})
+
 
 # Backwards-compat alias retained briefly during transition.
 _ACTIVE_PROBE_CHECK_TYPES = _ACTIVE_CHECK_TYPES
+
 
 # Launch-stage tools whose ok=true result means a Docker
 # environment is up. Used by _StreamState/launched_ok tracking +
 # _map_status to surface the launched-but-never-verified anti-pattern.
 _LAUNCH_TOOLS = frozenset({"docker_run", "docker_compose_up", "run_in_container"})
 
+
 # Build-path tools. Single source of truth for "did the agent
 # BUILD vs just RESOLVE+RUN?" The strict version-marker gate
 # only fires for build-path runs because for image-pulled runs the
 # registry tag is itself the version assertion.
 _BUILD_TOOLS = frozenset({"docker_build", "dockerfile_gen", "source_build"})
-
-# The bundled `claude` CLI halts with stop_reason="max_turns_reached" at SDK
-# num_turns=30-39 regardless of the --max-turns value passed. Setting
-# `sdk_max_turns = max_turns × 4` does NOT move the SDK out of its buggy zone —
-# the SDK isn't bound by the configured budget at the halt point. The 4×
-# multiplier is therefore harmless headroom: the F-9 + B-20 runtime caps (with
-# unit-test coverage) cap state.turn at 96 (or 115 with the B-20 extension),
-# well below the SDK's halt point. The multiplier remains so that IF the SDK
-# premature-halt is ever fixed upstream, F-9 stays the authoritative cap
-# enforcer rather than a smaller sdk_max_turns value silently halting the run.
-_SDK_MAX_TURNS_SAFETY_MULTIPLIER = 4
-
-# Mid-run stuck-after-launch turn-gap interventions are NOT safe — they
-# false-positive (regressions observed in benches). The cost-based adaptive
-# extension is the principled replacement. The TERMINAL classifier (in
-# _map_status at the turn_cap branch) STAYS — it fires at terminal time only,
-# no false-positive risk.
-
-# Version-assertion detection. Pattern lives in `cve_env.config`
-# so verify.py and loop.py share a single source of truth.
 
 
 # API-Overload classifier. CVEs that hit an Anthropic 529 Overload during an
@@ -199,73 +115,12 @@ def _classify_api_overload(final_text: str) -> str:
     return ""
 
 
-def _check_wall_budget(wall_start_time: float, budget_s: float, turn: int) -> None:
-    """Raise WallBudgetExceeded when elapsed wall-clock exceeds budget.
-
-    Uses time.time() (NOT time.monotonic()) because monotonic clocks also
-    pause during macOS host sleep — only time.time() advances during sleep.
-    External wall-guards (gtimeout/perl-alarm) suffer the same kernel-timer
-    pause; this Python-side check is the durable backstop.
-
-    Args:
-        wall_start_time: time.time() snapshot at build() entry; 0.0 means
-            uninitialized (check skipped).
-        budget_s: max wall-clock seconds; 0 means disabled (check skipped).
-        turn: current agent turn for the error message.
-
-    Raises:
-        WallBudgetExceeded: when budget_s > 0 AND wall_start_time > 0 AND
-            (time.time() - wall_start_time) > budget_s.
-    """
-    if budget_s <= 0 or wall_start_time <= 0:
-        return
-    elapsed = time.time() - wall_start_time
-    if elapsed > budget_s:
-        raise WallBudgetExceeded(
-            f"internal wall budget {budget_s:.0f}s exceeded "
-            f"after {elapsed:.0f}s at turn {turn}"
-        )
-
-
-def _check_no_progress(
-    current_turn: int, last_productive_turn: int, threshold: int
-) -> None:
-    """Anti-thrash: raise NoProgressReached when the agent has gone
-    more than ``threshold`` turns with no productive progress.
-
-    ``last_productive_turn`` is updated (by _is_productive_outcome) on any
-    PRODUCTIVE_TOOLS ok OR any post-build verify/run_in_container — so the gap
-    only grows while the agent is making NO progress (cheap research/Bash churn,
-    not the convergent post-build verify loop, which keeps the marker fresh).
-
-    Strictly-greater so the data-floor (≥72; a winning CVE had a 71-turn
-    productive gap) is honored at the boundary.
-
-    Args:
-        current_turn: the live agent turn.
-        last_productive_turn: turn of the most recent productive outcome (0 = none yet).
-        threshold: CVE_ENV_NO_PROGRESS_GIVEUP_TURNS; 0 means disabled (skip).
-
-    Raises:
-        NoProgressReached: when threshold > 0 AND (current_turn - last_productive_turn) > threshold.
-    """
-    if threshold <= 0:
-        return
-    gap = current_turn - last_productive_turn
-    if gap > threshold:
-        raise NoProgressReached(
-            f"no productive progress for {gap} turns "
-            f"(turn={current_turn}, last_productive_turn={last_productive_turn}, "
-            f"threshold={threshold})"
-        )
-
-
 def _is_version_assertion_exec_check(check_entry: dict[str, Any]) -> bool:
     """Does this exec_check entry look like a version assertion?
 
     Inspects the command text for known version-discovery shapes. Returns
     False for non-exec_check entries, missing/non-string commands, or
-    commands that don't match any whitelisted pattern.
+    commands that don't match any allowlisted pattern.
     """
     if check_entry.get("type") != "exec_check":
         return False
@@ -420,12 +275,6 @@ class _StreamState:
     last_productive_turn: int = 0
     extension_count: int = 0
     effective_max_turns: int = 0
-    # Wall-clock anchor for the internal wall-budget check. Set to time.time()
-    # at build() entry. on_message compares (time.time() - wall_start_time)
-    # against INTERNAL_WALL_BUDGET_S to detect runs that exceed wall budget —
-    # works even when macOS sleep pauses external kernel alarm timers.
-    # 0.0 = uninitialized (check skipped).
-    wall_start_time: float = 0.0
     # True iff ANY launch-stage tool returned ok=true. Used by the classifier to
     # distinguish "agent launched but never tried verify" from "agent never
     # reached launch" (no_verify_pass with no launch evidence). Set on
@@ -440,23 +289,10 @@ class _StreamState:
     # classifier branch to distinguish "agent had a usable image_ref but never
     # tried docker_run" (the Shellshock pattern) from generic research-only paths.
     image_resolve_ok: bool = False
-    # Per-stage cost attribution for the budget engine.
-    # `stage_costs[stage]` = USD attributed to that stage.
-    # `stage_calls[stage]` = # of llm_turn tool_use events per stage.
-    # `last_tool_stage` = stage of the most-recent ToolUseBlock processed.
-    #
-    # Attribution mechanism: a per-segment dual-path approach:
-    #   (a) PRIMARY: AssistantMessage token-derived attribution
-    #       (`_accum_tokens` + `estimate_cost_from_tokens`) — credits each AM
-    #       to the most-recent tool's stage in real time. Captures the
-    #       under-attribution mode where ResultMessage cost does not equal
-    #       sum-of-stage-costs for retry-storms.
-    #   (b) RESIDUAL: ResultMessage path computes
-    #       `residual = rm_reported_cost - am_credited_in_segment` and credits
-    #       residual to last_tool_stage. Closes the under-attribution mode.
-    # Per-segment credit equals `max(AM_token_estimate, RM_reported_cost)` —
-    # NOT a strict either-or; sum/total ≈ 100% on non-trivial CVEs.
-    # Telemetry ONLY — no decisions are baked on these fields.
+    # Per-stage cost attribution (telemetry only — no decisions ride on
+    # these): each completed turn's cost credits the stage of the most
+    # recent tool (OTHER before any tool call); stage_calls counts tool
+    # dispatches per stage.
     stage_costs: dict[str, float] = field(
         default_factory=lambda: {s: 0.0 for s in STAGES}
     )
@@ -479,14 +315,6 @@ class _StreamState:
     # `max_cost_usd` (set in build()) and is bumped on each granted extension.
     cost_extension_count: int = 0
     effective_max_cost_usd: float = 0.0
-    # Per-tool attempt counts. Incremented on each ToolUseBlock. Compared against
-    # ``config.get_tool_attempt_cap(tool_name)`` — when cap > 0 and count > cap,
-    # the run terminates with ``give_up_reason="max_tool_attempts_<tool>"``.
-    # Default cap=0 means unbounded (current behavior). Opt-in.
-    tool_attempt_count: dict[str, int] = field(default_factory=dict)
-    # Per-tool count of progress-aware cap EXTENSIONS granted (bounded by
-    # MAX_TOOL_ATTEMPT_EXTENSIONS). Mirrors B-20's extension_count.
-    tool_cap_extension_count: dict[str, int] = field(default_factory=dict)
     # Recovery audit telemetry tracking.
     # ``last_tool_error_turn[tool_name]`` = most-recent failure turn for
     # that tool; cleared on success (recovery emit) or when gap exceeds K.
@@ -500,225 +328,6 @@ class _StreamState:
     # launched-but-never-verified anti-pattern (e.g. agent runs docker_run.ok=true,
     # then a Bash 'docker logs', then end_turn, never invoking verify).
     verify_attempted: bool = False
-
-
-def _parse_tool_result_payload(block: ToolResultBlock) -> dict[str, Any] | None:
-    """Extract the JSON payload our tools embed in ``content[0].text``."""
-    content = block.content
-    if not isinstance(content, list):
-        return None
-    for item in content:
-        if not isinstance(item, dict) or item.get("type") != "text":
-            continue
-        text = item.get("text")
-        if not isinstance(text, str):
-            continue
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
-def _mcp_suffix(name: str) -> str:
-    """Strip the ``mcp__<server>__`` prefix added by the SDK."""
-    parts = name.split("__", 2)
-    if len(parts) == 3 and parts[0] == "mcp":
-        return parts[2]
-    return name
-
-
-def _accum_tokens(state: _StreamState, usage: Any) -> None:
-    """Add ``usage``'s input/output tokens to ``state`` totals.
-
-    ``usage`` is dict[str, Any] | object | None per the SDK type hint
-    (``claude_agent_sdk.types.ResultMessage.usage`` and
-    ``AssistantMessage.usage``). No-op when usage is falsy.
-    """
-    if not usage:
-        return
-    if isinstance(usage, dict):
-        state.total_input_tokens += int(usage.get("input_tokens", 0) or 0)
-        state.total_output_tokens += int(usage.get("output_tokens", 0) or 0)
-    else:
-        state.total_input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-        state.total_output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-
-
-def _merge_cumulative_tokens(state: _StreamState, usage: Any) -> None:
-    """Merge a CUMULATIVE-per-session usage block (``ResultMessage.usage``) into
-    the running token totals via ``max()``, NOT ``+=``.
-
-    ``ResultMessage.usage`` is the session aggregate (SDK ``types.py``:
-    "Cumulative API usage for the session"), whereas ``AssistantMessage.usage``
-    (counted via :func:`_accum_tokens`) is per-message. Summing both
-    double-counts the session's tokens (~2x, worse across multi-ResultMessage
-    retry storms). ``max()`` lifts the totals to the cumulative floor without
-    re-adding the per-message tokens already counted, and never lowers them — so
-    a give_up run that never reaches a terminal ResultMessage keeps its
-    per-message accumulation. No-op when ``usage`` is falsy.
-
-    ASSUMPTION (benign — these totals only feed the token-estimate floor in
-    _floor_cost, which never wins the max() under session auth, so cost is
-    unaffected): the session-cumulative continues across continuation runs, which
-    all resume the same session (``run_agent(..., resume=...)``). If a future SDK
-    were to RESET the cumulative on resume, this max() would freeze at the largest
-    single-run value and under-count tokens across continuations; the per-message
-    AssistantMessage += would then be the more accurate signal.
-    """
-    if not usage:
-        return
-    if isinstance(usage, dict):
-        in_tok = int(usage.get("input_tokens", 0) or 0)
-        out_tok = int(usage.get("output_tokens", 0) or 0)
-    else:
-        in_tok = int(getattr(usage, "input_tokens", 0) or 0)
-        out_tok = int(getattr(usage, "output_tokens", 0) or 0)
-    state.total_input_tokens = max(state.total_input_tokens, in_tok)
-    state.total_output_tokens = max(state.total_output_tokens, out_tok)
-
-
-def _accumulate_result_cost_and_turns(state: _StreamState, msg: Any) -> None:
-    """ResultMessage cost/turn aggregation, extracted from ``on_message``
-    (behavior-preserving). Handles the multi-ResultMessage cost storm: credit the
-    RESIDUAL (this RM's cost minus what the AssistantMessages in the current
-    segment already credited) to the current stage, accumulate total cost + max
-    turns, then advance ``current_segment_id`` so subsequent AssistantMessages
-    start a fresh segment. ``last_cost_usd`` is accumulated unconditionally — it
-    drives the cap check, not stage telemetry.
-    """
-    # Assumption: SDK cost_usd is per-segment, not session-cumulative.
-    # Verified for claude_agent_sdk 0.x. If SDK changes to cumulative,
-    # this will double-count.
-    cost_delta = msg.total_cost_usd or 0.0
-    if cost_delta > 0:
-        am_credited = state.am_credited_per_segment.get(state.current_segment_id, 0.0)
-        residual = cost_delta - am_credited
-        if residual > 0:
-            state.stage_costs[state.last_tool_stage] = (
-                state.stage_costs.get(state.last_tool_stage, 0.0) + residual
-            )
-    state.last_cost_usd += cost_delta
-    state.last_num_turns = max(state.last_num_turns, msg.num_turns or 0)
-    state.current_segment_id += 1
-
-
-def _latch_assistant_token_cost(state: _StreamState, msg: Any, model: str) -> None:
-    """AssistantMessage token accumulation + per-call cost attribution, extracted
-    from ``on_message`` (behavior-preserving). Accumulates tokens and attributes
-    THIS LLM call's token-derived cost to ``last_tool_stage`` (the stage of the
-    tool whose result motivated this turn), recording the amount per-segment so the
-    ResultMessage handler can credit only the RESIDUAL (closes both the all-zeros
-    and under-attribution failure modes).
-    """
-    usage_obj = getattr(msg, "usage", None)
-    _accum_tokens(state, usage_obj)
-    if usage_obj is not None:
-        if isinstance(usage_obj, dict):
-            in_t = int(usage_obj.get("input_tokens", 0) or 0)
-            out_t = int(usage_obj.get("output_tokens", 0) or 0)
-        else:
-            in_t = int(getattr(usage_obj, "input_tokens", 0) or 0)
-            out_t = int(getattr(usage_obj, "output_tokens", 0) or 0)
-        if in_t > 0 or out_t > 0:
-            cost = estimate_cost_from_tokens(in_t, out_t, model)
-            state.stage_costs[state.last_tool_stage] = (
-                state.stage_costs.get(state.last_tool_stage, 0.0) + cost
-            )
-            state.am_credited_per_segment[state.current_segment_id] = (
-                state.am_credited_per_segment.get(state.current_segment_id, 0.0) + cost
-            )
-
-
-# Terminal statuses where the SDK was INTERRUPTED mid-run (no clean end_turn
-# ResultMessage emitted) so its reported cost is unreliable — the turns-based
-# floor applies only to these. Covers every abnormal termination in the
-# OutcomeStatus taxonomy (models.py): the turn/budget caps, a mid-run exception
-# (``error`` and the generic ``interrupted``/``incomplete`` alias — the default
-# terminal status on the exception path), and a 529 throttle giving up
-# (``rate_limited``). Clean exits — success, verified_partial, verify_failed,
-# launched_no_verify, and the give-up family (unresolvable), which all end via a
-# natural end_turn with the SDK's full cost reported — are excluded so the floor
-# never inflates a correctly-reported cost.
-_INTERRUPTED_EXIT_STATUSES = frozenset(
-    {
-        "turn_cap",
-        "budget_exhausted",
-        "error",
-        "interrupted",
-        "incomplete",
-        "rate_limited",
-    }
-)
-
-
-def _floor_cost(
-    status: str,
-    num_turns: int,
-    last_cost_usd: float,
-    cont_cost_usd: float,
-    input_tokens: int,
-    output_tokens: int,
-    model: str,
-    effective_max_cost_usd: float,
-) -> float:
-    """Resolve the final ``total_cost_usd`` with all floors applied.
-
-    Base = max(SDK-reported cost, continuation-summed cost, token estimate).
-    Adds a turns-based floor for any INTERRUPTED exit (turn_cap / budget / error
-    / ...). Under Claude Code session auth the SDK under-reports cost on an
-    interrupted run AND ``usage`` is a tiny NONZERO stub (observed in=10, out=2),
-    so both the SDK cost and the token estimate collapse and a multi-turn run
-    would otherwise log ~$0. The floor is a ``max()`` bounded by
-    ``effective_max_cost_usd``, so it only ever RAISES: a correctly-reported
-    token-bearing (API-key) run keeps its real cost (its token estimate already
-    exceeds the conservative per-turn floor), and the floor never exceeds the
-    run's budget cap. Clean exits are excluded by ``_INTERRUPTED_EXIT_STATUSES``
-    membership (NOT by a token check — production never reports exactly 0 tokens).
-    """
-    cost = max(
-        last_cost_usd,
-        cont_cost_usd,
-        estimate_cost_from_tokens(input_tokens, output_tokens, model),
-    )
-    if status in _INTERRUPTED_EXIT_STATUSES:
-        turns_floor = estimate_cost_from_turns(num_turns, model)
-        if effective_max_cost_usd > 0:
-            turns_floor = min(turns_floor, effective_max_cost_usd)
-        cost = max(cost, turns_floor)
-    return cost
-
-
-def _latch_text_and_scan(
-    state: _StreamState,
-    block: Any,
-    *,
-    refusal_scanner: RefusalScanner,
-    pending_tool_use: dict[str, Any] | None,
-    writer: AuditWriter,
-    cve: CveRecord,
-) -> None:
-    """TextBlock handling extracted from ``on_message`` (behavior-preserving):
-    capture ``final_text``, scan + observe the assistant text for refusals, and
-    audit the turn's text.
-    """
-    state.final_text = block.text
-    refusal_scanner.scan_text(
-        turn=state.turn, text=block.text, tool_call=pending_tool_use
-    )
-    refusal_scanner.observe(
-        {"turn": state.turn, "kind": "assistant_text", "text": block.text[:600]}
-    )
-    writer.write(
-        cve_id=cve.cve_id,
-        entry=AuditEntry(
-            turn=state.turn,
-            status="llm_turn",
-            llm_message={"text": block.text[:4000]},
-        ),
-    )
 
 
 def _process_tool_result_for_recovery(
@@ -799,28 +408,6 @@ def _process_tool_result_for_recovery(
     )
 
 
-def _live_progress_hint(tool_name: str, payload: Any) -> str:
-    """Format the one-line stderr-progress hint per tool result.
-
-    Returns the most informative ``"key=value"`` field from the payload,
-    or ``""`` when no payload field applies. Pure; no I/O, no state,
-    no side effects.
-    """
-    if not isinstance(payload, dict):
-        return ""
-    if payload.get("decision"):
-        return f"decision={payload['decision']}"
-    if payload.get("reason_class") and payload["reason_class"] != "ok":
-        return f"reason={payload['reason_class']}"
-    if tool_name == "verify":
-        results = payload.get("results") or []
-        if isinstance(results, list):
-            ok = sum(1 for r in results if isinstance(r, dict) and r.get("passed"))
-            return f"{ok}/{len(results)} passed"
-    if tool_name == "give_up":
-        return f"reason={payload.get('reason', '')}"
-    return ""
-
 
 def _terminal_status_for_result(state: _StreamState, sr_lower: str) -> AuditStatus:
     """Map a ResultMessage to its terminal AuditStatus."""
@@ -864,17 +451,6 @@ def _terminal_status_for_result(state: _StreamState, sr_lower: str) -> AuditStat
     # fired). Use final_no_verify so triage tools can distinguish.
     return "final_no_verify"
 
-
-def _should_halt_on_verified_success(terminal_status: str) -> bool:
-    """Halt-on-verified-success gate. Returns True iff the per-ResultMessage
-    terminal status is ``final_success`` AND the default-OFF flag is enabled.
-
-    ``final_success`` is produced by ``_terminal_status_for_result`` ONLY for a
-    non-cap stop_reason (clean end_turn) with ``verify_passed`` — the cap branches
-    (max_turns / budget) precede the verify branch and return
-    ``final_turn_cap`` / ``budget_exhausted`` instead. So this gate can NEVER fire
-    on a cap termination, preserving the cap-overrides-verify lock."""
-    return terminal_status == "final_success" and get_enable_halt_on_verified_success()
 
 
 def should_extend_turn_cap(
@@ -1285,861 +861,34 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
     return "error", stop_reason or "unknown"
 
 
-# Fix #8 staging tools — a tool_ok from one of these (suffix-matched so the
-# MCP-prefixed forms like ``mcp__cve_env__dockerfile_gen`` also match) before a
-# premature end_turn warrants a verify-continuation.
-_FIX8_STAGING_TOOLS = frozenset({"Bash", "Write", "dockerfile_gen", "image_resolve"})
-_FIX8_MAX_CONTINUATIONS = 2
-_FIX8_BUDGET_FRACTION = 0.70
-
-# force-resolve-before-giveup bounds are CONFIG-DRIVEN: see
-# config.get_force_resolve_max() (env CVE_ENV_FORCE_RESOLVE_MAX, default 1; 0 =
-# disabled) + config.get_force_resolve_budget_fraction() (env
-# CVE_ENV_FORCE_RESOLVE_BUDGET_FRACTION, default 0.50 — leaves headroom for the
-# Fix #8 verify gate at 0.70). Resolved at call time in _should_continue_for_resolve.
-
-
-def _should_continue_for_verify(
-    run: Any,
-    state: _StreamState,
-    continuation_count: int,
-    cost_acc: float,
-    max_cost_usd: float,
-) -> bool:
-    """Fix #8: the agent ended the turn after a successful build/staging step but
-    never ran verify and never gave up → return True to re-prompt it (resume +
-    CONTINUATION_USER_PROMPT) to finish. Backstops a measured follow-through gap
-    (source-build-no-verify cases that are near-builds) that the prompt rule alone
-    does not close.
-
-    Bounds (mandatory): clean end_turn only; ≤2 continuations; only while
-    accumulated cost < 70% of the cap. NEVER fires once verify was attempted
-    (even if it FAILED — don't re-loop a genuine verify failure), once verify
-    passed, or once give_up was called.
-    """
-    if run.stop_reason != "end_turn":
-        return False
-    if state.verify_passed or state.verify_attempted or state.give_up_reason:
-        return False
-    if continuation_count >= _FIX8_MAX_CONTINUATIONS:
-        return False
-    if max_cost_usd and cost_acc >= _FIX8_BUDGET_FRACTION * max_cost_usd:
-        return False
-    names = [str(u.get("name", "")).split("__")[-1] for u in state.tool_uses_seen]
-    last_staging = bool(names) and names[-1] in _FIX8_STAGING_TOOLS
-    # Data-justified EXTENSION beyond the original staging-only trigger: a
-    # build/launch that succeeded (the near-builds live here — docker_build /
-    # docker_run / source_build), which the staging set alone missed.
-    build_ok = state.docker_built_ok or state.launched_ok or "source_build" in names
-    return last_staging or build_ok
-
-
-# build-engagement gate: non-proprietary pre-build give-up reasons that
-# force-resolve will re-prompt past. proprietary (closed-source, genuinely
-# unbuildable) and arch_incompatible (host-limited) are deliberately EXCLUDED —
-# never burn a continuation forcing a build on the proprietary corpus slice.
-_FORCE_RESOLVE_ELIGIBLE_REASONS: frozenset[str] = frozenset(
-    {
-        "skipped_image_lookup",  # no_image emitted without image_resolve (cascade-skip)
-        "no_image",  # incl. resolve-only: image_resolve not_found, no build pivot
-        "unresolvable_metadata",
-    }
-)
-
-
-def _build_attempted(state: _StreamState) -> bool:
-    """True iff the agent called an ACTUAL build tool (docker_build /
-    dockerfile_gen / source_build). image_resolve alone is NOT a build — a
-    resolve that returned not_found without a source_build/dockerfile_gen pivot
-    is exactly the resolve-only cascade-skip the gate targets (corpus-wide,
-    wins reach a build tool far more often than losses)."""
-    return any(u.get("name") in _BUILD_TOOLS for u in state.tool_uses_seen)
-
-
-def _should_continue_for_resolve(
-    run: Any,
-    state: _StreamState,
-    count: int,
-    cost_acc: float,
-    max_cost_usd: float,
-) -> bool:
-    """build-engagement gate (generalized force-resolve): the agent emitted a
-    NON-proprietary pre-build give-up (``skipped_image_lookup`` / ``no_image`` /
-    ``unresolvable_metadata``) WITHOUT attempting an actual build tool
-    (docker_build / dockerfile_gen / source_build). image_resolve alone is NOT a
-    build — a resolve that returned not_found and then gave up without a
-    source_build/dockerfile_gen pivot is a resolve-only cascade-skip. Re-prompt
-    ONCE (resume + FORCE_RESOLVE_CONTINUATION_PROMPT) to actually attempt a build
-    before the give_up stands — the engine forces the missing step rather than
-    trusting a prompt rule (Fix #8 pattern; prompt-only rules have ~0%
-    follow-through). Corpus-wide, wins reach a build tool far more often than
-    losses.
-
-    The critical guard: ``proprietary`` (closed-source, genuinely unbuildable)
-    and ``arch_incompatible`` (host-limited) are NOT in
-    ``_FORCE_RESOLVE_ELIGIBLE_REASONS`` — they never fire, protecting the
-    proprietary corpus slice from wasted continuations.
-
-    Bounds (all config-driven): ``run.stop_reason == 'end_turn'`` (give_up
-    converts to end_turn in llm._consume); reason in the eligible set AND no
-    build tool attempted; ``count < get_force_resolve_max()`` (0 disables);
-    accumulated cost < ``get_force_resolve_budget_fraction()`` of the cap (leaves
-    headroom for the Fix #8 0.70 verify gate); and a NON-EMPTY ``session_id``
-    (a give_up can raise before any ResultMessage arrives → empty session_id,
-    which would break ``resume``).
-    """
-    if run.stop_reason != "end_turn":
-        return False
-    if state.give_up_reason not in _FORCE_RESOLVE_ELIGIBLE_REASONS:
-        return False
-    if _build_attempted(state):
-        # An actual build tool was already attempted — the agent engaged the
-        # cascade; honor the give_up rather than force another attempt.
-        return False
-    if state.force_resolve_attempted:
-        return False
-    if count >= get_force_resolve_max():
-        return False
-    if max_cost_usd and cost_acc >= get_force_resolve_budget_fraction() * max_cost_usd:
-        return False
-    # A resumable session is required. give_up raises mid-stream, BEFORE the
-    # terminal ResultMessage that sets run.session_id, so run.session_id is
-    # usually empty here — fall back to the session id captured from streaming
-    # AssistantMessages (state.last_session_id). Without either, resume can't work.
-    return bool(state.last_session_id or run.session_id)
-
-
-def _should_continue_for_proprietary_verify(
-    run: Any,
-    state: _StreamState,
-    count: int,
-    cost_acc: float,
-    max_cost_usd: float,
-) -> bool:
-    """proprietary-verify continuation (agentic, env-gated default-ON):
-    the agent gave up ``proprietary`` WITHOUT ever calling ``image_resolve`` — it
-    reasoned the target unbuildable from its name/metadata without probing.
-    "Proprietary/unbuildable" is then an UNVERIFIED assumption, and many proprietary
-    VENDORS also ship open-source products (Oracle→MySQL, VMware→Spring), so a
-    name-only give-up can wrongly skip a buildable OSS product. This gate is the
-    runtime backstop for such an unprobed give-up.
-    RESUME ONCE (PROPRIETARY_VERIFY_CONTINUATION_PROMPT) to run a single
-    image_resolve before the give-up is final — the runtime "verify-the-negative"
-    (mirrors ``_should_continue_for_resolve``; prompt-only rules have ~0%
-    follow-through).
-
-    The critical efficiency guard: if image_resolve was ALREADY called (a confirmed
-    negative), the gate does NOT fire, so genuinely-proprietary targets pay at most
-    ONE extra probe and only when no probe was done.
-
-    Bounds (mirror force-resolve): env-gate enabled; ``run.stop_reason == 'end_turn'``;
-    ``give_up_reason == 'proprietary'``; NO image_resolve in ``tool_uses_seen``; not
-    already attempted; ``count < get_proprietary_verify_max()`` (0 disables);
-    accumulated cost < the force-resolve budget fraction of the cap; a resumable
-    session id (``last_session_id`` or ``run.session_id``)."""
-    if not get_enable_proprietary_verify_continuation():
-        return False
-    if run.stop_reason != "end_turn":
-        return False
-    if state.give_up_reason != "proprietary":
-        return False
-    if any(u.get("name") == "image_resolve" for u in state.tool_uses_seen):
-        # Already probed (confirmed negative) — honor the give_up, don't re-probe.
-        return False
-    if state.proprietary_verify_attempted:
-        return False
-    pv_max = get_proprietary_verify_max()
-    if pv_max <= 0 or count >= pv_max:
-        return False
-    if max_cost_usd and cost_acc >= get_force_resolve_budget_fraction() * max_cost_usd:
-        return False
-    return bool(state.last_session_id or run.session_id)
-
-
-# benign-verify continuation (agentic, default-off). Runs LAST of the
-# continuation gates (after force-resolve 0.50 + Fix #8 0.70), so a higher
-# cost-headroom fraction is appropriate — by here the env is already
-# built+launched and only cheap health checks remain.
-_BENIGN_VERIFY_BUDGET_FRACTION: float = 0.85
-
-
-def _should_continue_for_post_launch_refusal(
-    run: Any,
-    state: _StreamState,
-    count: int,
-    cost_acc: float,
-    max_cost_usd: float,
-) -> bool:
-    """benign-verify continuation (agentic, env-gated default-off): a POST-LAUNCH
-    refusal blocked verify — the refusal latched (``refusal_stop_reason_seen``),
-    the env is launched (``launched_ok``), and verify was NEVER attempted or
-    passed. RESUME the SAME session (keeping the built-env context) with an
-    explicit benign-only verify prompt so the model runs safe health checks
-    instead of the CVE-trigger activity that drew the refusal. An agentic recovery
-    that can convert refused→verified; the structural ``launched_no_verify`` floor
-    is the fallback when this does not fire or does not succeed.
-
-    Distinct from run_agent's de-escalation retry (FRESH session, generic
-    preamble, ~10% post-build follow-through): this RESUMES with a verify-only
-    benign framing, so the model need not rebuild — only health-check.
-
-    Unlike the other gates this does NOT require ``stop_reason == 'end_turn'``: a
-    TERMINAL refusal (stop_reason='refusal') is the prime case to rescue, and a
-    latched-refusal+end_turn qualifies too. Bounds: env-gate enabled; refusal
-    latched; env launched; verify NOT attempted/passed; ``count`` < configured
-    max (0 disables); accumulated cost < 85% of the cap; a resumable session id
-    (``last_session_id`` or ``run.session_id``).
-    """
-    if not get_enable_benign_verify_continuation():
-        return False
-    if not state.refusal_stop_reason_seen:
-        return False
-    if not state.launched_ok:
-        return False
-    if state.verify_passed or state.verify_attempted:
-        return False
-    bv_max = get_benign_verify_continuation_max()
-    if bv_max <= 0 or count >= bv_max:
-        return False
-    if max_cost_usd and cost_acc >= _BENIGN_VERIFY_BUDGET_FRACTION * max_cost_usd:
-        return False
-    return bool(state.last_session_id or run.session_id)
-
-
-async def build(
-    cve: CveRecord,
-    host: HostInfo,
+def _compose_system_prompt(
+    constraints: list[ServiceConstraint] | None,
     *,
-    run_id: str,
-    audit_root: Path | None = None,
-    model: str = MODEL,
-    max_turns: int = TURN_CAP,
-    max_cost_usd: float = MAX_COST_USD_PER_CVE_SOFT,
-    constraints: list[ServiceConstraint] | None = None,
-    max_turn_extensions: int | None = None,
-    turn_extension_pct: float | None = None,
-) -> Outcome:
-    """Drive one agent session for ``cve`` and return its ``Outcome``.
+    max_turns: int,
+    max_cost_usd: float,
+    max_extensions: int,
+    extension_pct: float,
+) -> str:
+    """Assemble the run's system prompt.
 
-    Every streamed message is audited to
-    ``<audit_root>/<run_id>/<sanitized cve_id>.jsonl``.
+    Doctor → agent constraints are prepended when present (e.g. Docker
+    Hub rate-limited → avoid vulhub-* methods this run), then the
+    runtime caps block (actual turn/cost budget + extension policy),
+    then the static SYSTEM_PROMPT. ``CVE_ENV_EXTRA_PROMPT_PREFIX``
+    (bench harness experimental hook) goes at the very top —
+    length-capped and control-character-rejected.
     """
-    # Start each CVE with a clean slate: clear the docker_run sticky-retry
-    # memory AND tear down any compose stacks left over from prior CVEs.
-    # Also clear the per-product rate-limit budget so a CVE on a fresh product
-    # doesn't inherit a prior CVE's exhausted counter.
-    reset_all_tool_state()  # resets all per-CVE tool state via one registry
-    # Register the CVE's version with the verify tool wrapper so the runtime
-    # injector can fill in expected_stdout_contains when the agent omits or
-    # under-specifies the version literal.
-    set_cve_version_context(cve.version)
-    # Register the CVE id so docker_build labels every built image
-    # cve-env.cve-id=<id>, enabling exact per-CVE result-image cleanup.
-    set_cve_id_context(cve.cve_id)
-    writer = AuditWriter(
-        run_id=run_id,
-        root=audit_root or AGENTIC_AUDIT_ROOT,
-    )
-    audit_path = writer._path_for(cve_id=cve.cve_id)
-    refusal_scanner = RefusalScanner(
-        project="cve-env",
-        cve_id=cve.cve_id,
-        run_id=run_id,
-        audit_path=audit_path,
-        model=model,
-        host_arch=host.arch,
-    )
-    pending_tool_use: dict[str, Any] | None = None
-    state = _StreamState()
-    # Anchor wall-clock for the internal wall-budget check. Uses time.time()
-    # (NOT time.monotonic()) because monotonic pauses during macOS host sleep;
-    # only time.time() advances during sleep.
-    state.wall_start_time = time.time()
-    user_prompt = render_user_prompt(cve, host, run_id=run_id)
-
-    # Productive-extension knob defaults from config.
-    eff_max_turn_extensions = (
-        max_turn_extensions if max_turn_extensions is not None else MAX_TURN_EXTENSIONS
-    )
-    eff_turn_extension_pct = (
-        turn_extension_pct if turn_extension_pct is not None else TURN_EXTENSION_PCT
-    )
-    state.effective_max_turns = max_turns
-    # Initialize effective_max_cost_usd from the build()'s cap; this is the cap
-    # used by the adaptive extension. Bumped by should_extend_cost_cap when
-    # productive progress is detected.
-    state.effective_max_cost_usd = max_cost_usd
-    # The SDK has its own max_turns gate that fires before our F-9 if both are set
-    # to the same value. Solution: tell the SDK a HIGHER max_turns (= max + all
-    # possible extensions) so the SDK never halts before our logic. F-9 + B-20
-    # enforce the real cap via state.effective_max_turns.
-    #
-    # See the module-level _SDK_MAX_TURNS_SAFETY_MULTIPLIER comment block for the
-    # multiplier rationale.
-    sdk_max_turns = int(
-        max_turns
-        * max(
-            1.0 + eff_turn_extension_pct * eff_max_turn_extensions,
-            float(_SDK_MAX_TURNS_SAFETY_MULTIPLIER),
-        )
-    )
-
-    def on_message(msg: Any) -> None:
-        nonlocal pending_tool_use
-        # Counts every SDK message (Assistant+User+Result), not LLM turns;
-        # effective_max_turns compensated via _SDK_MAX_TURNS_SAFETY_MULTIPLIER
-        state.turn += 1
-        # Capture the live session id from any message that carries it
-        # (AssistantMessage does). The terminal ResultMessage arrives only at
-        # query END — AFTER a mid-stream give_up raises — so run.session_id is
-        # empty for give_up runs; this is the only reliable session handle for the
-        # force-resolve resume.
-        _sid = getattr(msg, "session_id", None)
-        if _sid:
-            state.last_session_id = _sid
-        # Internal wall-budget check (default off). Fires BEFORE turn-cap so
-        # wall-time takes priority when both could trigger. Survives macOS host
-        # sleep — see _check_wall_budget.
-        _check_wall_budget(state.wall_start_time, INTERNAL_WALL_BUDGET_S, state.turn)
-        # Anti-thrash: early give-up after prolonged no-progress churn (default
-        # off, threshold 0). Fires AFTER wall-budget, BEFORE the turn-cap so a
-        # stuck CVE is reclaimed before burning the full cap. The gap only grows
-        # while NO productive tool fires (research/Bash loops); post-build verify
-        # churn keeps last_productive_turn fresh, so this never kills a convergent
-        # verify loop. Log the give-up to the audit BEFORE re-raising.
-        try:
-            _check_no_progress(
-                state.turn, state.last_productive_turn, NO_PROGRESS_GIVEUP_TURNS
-            )
-        except NoProgressReached as exc:
-            writer.write(
-                cve_id=cve.cve_id,
-                entry=AuditEntry(
-                    turn=state.turn,
-                    status="llm_turn",
-                    reason=f"anti-thrash no_progress give-up: {exc}",
-                ),
-            )
-            raise
-        # Defensive runtime turn-cap with productive-extension.
-        # If agent is approaching cap with recent build progress, auto-extend
-        # by ``turn_extension_pct`` (default +20%) up to ``max_turn_extensions``
-        # times. Otherwise raise TurnCapReached so _run_query_once halts.
-        if state.turn > state.effective_max_turns:
-            new_cap = should_extend_turn_cap(
-                current_turn=state.turn,
-                current_max_turns=state.effective_max_turns,
-                last_productive_turn=state.last_productive_turn,
-                extension_count=state.extension_count,
-                current_cost_usd=state.last_cost_usd,
-                max_cost_usd=max_cost_usd,
-                max_extensions=eff_max_turn_extensions,
-                extension_pct=eff_turn_extension_pct,
-                recency_window=PRODUCTIVE_RECENCY_TURNS,
-            )
-            if new_cap is not None:
-                # Grant the extension; log to audit so post-bench analysis
-                # can see when/why the cap was bumped.
-                state.extension_count += 1
-                state.effective_max_turns = new_cap
-                writer.write(
-                    cve_id=cve.cve_id,
-                    entry=AuditEntry(
-                        turn=state.turn,
-                        status="llm_turn",
-                        reason=(
-                            f"B-20 turn-cap auto-extended to {new_cap} "
-                            f"(extension #{state.extension_count}/"
-                            f"{eff_max_turn_extensions}; "
-                            f"last_productive_turn={state.last_productive_turn})"
-                        ),
-                    ),
-                )
-                # Don't raise — let the agent continue.
-            else:
-                raise TurnCapReached(
-                    f"state.turn={state.turn} > max_turns="
-                    f"{state.effective_max_turns} (extensions used: "
-                    f"{state.extension_count}/{eff_max_turn_extensions})"
-                )
-        if isinstance(msg, AssistantMessage):
-            # Tokens are reported on EACH AssistantMessage (per-call), not just
-            # the final ResultMessage. Listening only on ResultMessage would lose
-            # all token data for runs that emit no ResultMessage. Accumulate here
-            # too. Token accumulation + per-call cost attribution MUST run before
-            # this message's ToolUseBlocks update last_tool_stage.
-            _latch_assistant_token_cost(state, msg, model)
-            for block in msg.content:
-                if isinstance(block, ToolUseBlock):
-                    short_name = _mcp_suffix(block.name)
-                    state.tool_name_by_id[block.id] = short_name
-                    # Capture input parallel to name so the tool_result writer can
-                    # recover it.
-                    state.tool_input_by_id[block.id] = (
-                        dict(block.input) if isinstance(block.input, dict) else {}
-                    )
-                    state.tool_uses_seen.append(
-                        {"name": short_name, "input": block.input}
-                    )
-                    # Per-stage telemetry — record this tool's stage so the next
-                    # ResultMessage's cost-delta can be attributed to it.
-                    state.last_tool_stage = stage_for_tool(short_name)
-                    state.stage_calls[state.last_tool_stage] = (
-                        state.stage_calls.get(state.last_tool_stage, 0) + 1
-                    )
-                    # Per-tool attempts cap (opt-in, default 0), PROGRESS-AWARE
-                    # (mirrors B-20). When the cap is exceeded but the agent made
-                    # recent productive build progress, EXTEND it (+1×base, up to
-                    # MAX_TOOL_ATTEMPT_EXTENSIONS) instead of giving up — only a
-                    # true no-progress spiral fires.
-                    state.tool_attempt_count[short_name] = (
-                        state.tool_attempt_count.get(short_name, 0) + 1
-                    )
-                    _cap = _get_tool_attempt_cap(short_name)
-                    _ext = state.tool_cap_extension_count.get(short_name, 0)
-                    if (
-                        _cap > 0
-                        and state.tool_attempt_count[short_name] > _cap * (1 + _ext)
-                        and not state.give_up_reason
-                    ):
-                        if productive_extension_allowed(
-                            last_productive_turn=state.last_productive_turn,
-                            current_turn=state.turn,
-                            extension_count=_ext,
-                            max_extensions=MAX_TOOL_ATTEMPT_EXTENSIONS,
-                        ):
-                            # Recent productive progress → extend. The turn /
-                            # cost-cap sites write an audit line on each extension;
-                            # here we bump telemetry state only (per-tool extensions
-                            # are high-frequency) — tool_cap_extension_count holds
-                            # it. Only a no-progress spiral reaches give_up below.
-                            state.tool_cap_extension_count[short_name] = _ext + 1
-                        else:
-                            state.give_up_reason = f"max_tool_attempts_{short_name}"
-                            state.give_up_detail = (
-                                f"per-tool attempts cap exceeded: {short_name} "
-                                f"called {state.tool_attempt_count[short_name]} "
-                                f"times; cap={_cap}×{1 + _ext} extension(s) (env "
-                                f"CVE_ENV_MAX_{short_name.upper()}_ATTEMPTS); "
-                                f"no recent productive progress."
-                            )
-                    pending_tool_use = {"name": short_name, "input": block.input}
-                    refusal_scanner.observe(
-                        {
-                            "turn": state.turn,
-                            "kind": "assistant_tool_use",
-                            "tool_name": short_name,
-                            "input": dict(block.input)
-                            if isinstance(block.input, dict)
-                            else {},
-                        }
-                    )
-                    writer.write(
-                        cve_id=cve.cve_id,
-                        entry=AuditEntry(
-                            turn=state.turn,
-                            status="llm_turn",
-                            tool_name=short_name,
-                            tool_input=dict(block.input)
-                            if isinstance(block.input, dict)
-                            else {},
-                        ),
-                    )
-                elif isinstance(block, TextBlock):
-                    _latch_text_and_scan(
-                        state,
-                        block,
-                        refusal_scanner=refusal_scanner,
-                        pending_tool_use=pending_tool_use,
-                        writer=writer,
-                        cve=cve,
-                    )
-        elif isinstance(msg, UserMessage):
-            if isinstance(msg.content, list):
-                for block in msg.content:
-                    if not isinstance(block, ToolResultBlock):
-                        continue
-                    tool_name = state.tool_name_by_id.get(block.tool_use_id, "")
-                    payload = _parse_tool_result_payload(block)
-                    # Track launch-stage tool successes + verify attempts so the
-                    # classifier can distinguish "launched but never tried verify"
-                    # from "never reached launch".
-                    if (
-                        tool_name in _LAUNCH_TOOLS
-                        and isinstance(payload, dict)
-                        and payload.get("ok") is True
-                    ):
-                        state.launched_ok = True
-                    # Track docker_build success for the
-                    # stuck_after_launch_after_build triage marker. Set ONCE at
-                    # first success and remains True for the run (parallel to
-                    # launched_ok semantics).
-                    if (
-                        tool_name == "docker_build"
-                        and isinstance(payload, dict)
-                        and payload.get("ok") is True
-                    ):
-                        state.docker_built_ok = True
-                    # A build/daemon tool result classified daemon_corruption =
-                    # HOST containerd corruption (infra, not engine). Latch it so
-                    # the Outcome surfaces it (any tool that carries reason_class —
-                    # docker_build/run/compose).
-                    if (
-                        isinstance(payload, dict)
-                        and payload.get("reason_class") == "daemon_corruption"
-                    ):
-                        state.daemon_corruption_seen = True
-                    # Track image_resolve success for the classifier branch
-                    # (quit_after_image_resolve). Set once at first ok=True
-                    # (parallel to launched_ok / docker_built_ok semantics).
-                    if (
-                        tool_name == "image_resolve"
-                        and isinstance(payload, dict)
-                        and payload.get("ok") is True
-                    ):
-                        state.image_resolve_ok = True
-                    # Track most-recent productive turn so
-                    # ``should_extend_turn_cap`` can grant a turn-cap extension
-                    # when the agent is making build progress. verify and
-                    # run_in_container count as productive AFTER a build succeeded
-                    # (state.docker_built_ok) — see _is_productive_outcome.
-                    if _is_productive_outcome(
-                        tool_name, payload, state.docker_built_ok
-                    ):
-                        state.last_productive_turn = state.turn
-                    # Track "did we BUILD?" — used by the strict version-marker
-                    # gate. Set on result (not use) -- if SDK crashes between
-                    # use/result, the lenient marker check applies. Acceptable:
-                    # crashed builds shouldn't get strict checking.
-                    if tool_name in _BUILD_TOOLS:
-                        state.has_built = True
-                    if tool_name == "verify":
-                        state.verify_attempted = True
-                    if tool_name == "verify" and isinstance(payload, dict):
-                        state.last_verify_result = payload
-                        if payload.get("passed") is True:
-                            state.verify_passed = True
-                            # Record turn-of-latest-verify-pass for the
-                            # refusal-recovery comparison in _map_status.
-                            state.verify_passed_turn = state.turn
-                            # Union the check types from this passing verify. Flag
-                            # version-assertion exec_check and classify functional
-                            # smoke (heuristic mirrors
-                            # verify._compute_verify_quality_warning) and
-                            # vuln-confirmed (payload-class checks only).
-                            results = payload.get("results") or []
-                            for entry in results:
-                                if not isinstance(entry, dict):
-                                    continue
-                                t = entry.get("type")
-                                if isinstance(t, str) and t:
-                                    state.passing_verify_check_types.add(t)
-                                if _is_version_assertion_exec_check(entry):
-                                    state.passing_verify_has_version_assertion = True
-                                # Credit a SPECIFIC version marker INDEPENDENTLY of
-                                # command shape. A passing exec_check whose
-                                # expected_stdout_contains carries a specific
-                                # \d+\.\d+ marker pins the version even when the
-                                # command is not a whitelisted version-discovery
-                                # shape (e.g. `head -3 .../lesspipe.sh`). Nesting
-                                # this credit under the command-shape gate would
-                                # orphan file-read version checks and downgrade
-                                # success to verified_partial.
-                                # _has_specific_version_marker still guards
-                                # type==exec_check + a real \d+\.\d+ marker.
-                                if _has_specific_version_marker(entry):
-                                    state.passing_verify_has_specific_version_marker = (
-                                        True
-                                    )
-                            # The functional-smoke predicate lives in the shared
-                            # helper in verify.py (single source of truth — matches
-                            # the same heuristic that drives verify_quality_warning
-                            # emission).
-                            if has_functional_smoke(results):
-                                state.passing_verify_has_functional_smoke = True
-                    elif tool_name == "give_up" and isinstance(payload, dict):
-                        if payload.get("terminal") is True:
-                            raw_reason = str(payload.get("reason", ""))
-                            raw_detail = str(payload.get("detail", ""))
-                            # Runtime classifiers for give_up(reason='no_image').
-                            # Two patterns mask as a no_image finding; both checked
-                            # here in priority order before passing through.
-                            if raw_reason == "no_image":
-                                has_refusals = (
-                                    state.refusal_stop_reason_seen
-                                    or len(refusal_scanner.events) > 0
-                                )
-                                has_image_resolve = any(
-                                    u.get("name") == "image_resolve"
-                                    for u in state.tool_uses_seen
-                                )
-                                if has_refusals:
-                                    # Refusals corrupted the run; no_image was the
-                                    # agent's fallback when blocked, not a genuine
-                                    # cascade-exhausted finding.
-                                    refusal_n = max(
-                                        len(refusal_scanner.events),
-                                        int(state.refusal_stop_reason_seen),
-                                    )
-                                    state.give_up_reason = "refusal_no_recovery"
-                                    state.give_up_detail = (
-                                        f"agent gave up with reason='no_image' "
-                                        f"after {refusal_n} refusal event(s); "
-                                        f"refusals are the likely root cause, "
-                                        f"not registry-cascade exhaustion. "
-                                        f"Original detail: {raw_detail[:200]}"
-                                    )
-                                elif not has_image_resolve:
-                                    # Cascade-skip pattern: give_up(no_image)
-                                    # without any image_resolve call.
-                                    state.give_up_reason = "skipped_image_lookup"
-                                    state.give_up_detail = (
-                                        "agent emitted give_up(reason='no_image') "
-                                        "without ever calling image_resolve; "
-                                        "cascade-skip pattern. "
-                                        f"Original detail: {raw_detail[:200]}"
-                                    )
-                                else:
-                                    # Legitimate cascade-exhausted no_image.
-                                    state.give_up_reason = raw_reason
-                                    state.give_up_detail = raw_detail
-                            else:
-                                state.give_up_reason = raw_reason
-                                state.give_up_detail = raw_detail
-                    tool_status: AuditStatus = (
-                        "tool_error" if getattr(block, "is_error", False) else "tool_ok"
-                    )
-                    tool_result_value: Any = (
-                        payload if payload is not None else str(block.content)[:4000]
-                    )
-                    refusal_scanner.observe(
-                        {
-                            "turn": state.turn,
-                            "kind": "tool_result",
-                            "tool_name": tool_name,
-                            "result_preview": (
-                                str(payload)[:600]
-                                if payload is not None
-                                else str(block.content)[:600]
-                            ),
-                        }
-                    )
-                    # Retrieve input recorded at the paired llm_turn handler so
-                    # tool_ok / tool_error rows carry the originating input dict.
-                    tool_input_for_result = state.tool_input_by_id.get(
-                        block.tool_use_id, {}
-                    )
-                    writer.write(
-                        cve_id=cve.cve_id,
-                        entry=AuditEntry(
-                            turn=state.turn,
-                            status=tool_status,
-                            tool_name=tool_name,
-                            tool_input=tool_input_for_result,
-                            tool_result=tool_result_value,
-                        ),
-                    )
-                    # Recovery audit telemetry. When this tool has a same-tool
-                    # failure within RECOVERY_GAP_TURNS turns AND the stage is
-                    # eligible (ACQUIRE/RESOLVE/LAUNCH/VERIFY by default), emit a
-                    # ``status="recovery"`` audit row alongside the ordinary
-                    # tool_ok row. The detector inspects the parsed payload dict
-                    # (``payload``, not ``tool_result_value`` which may be a string
-                    # fallback). Idempotent: one recovery per error→ok pair.
-                    recovery_entry = _process_tool_result_for_recovery(
-                        state,
-                        tool_name=tool_name,
-                        turn=state.turn,
-                        tool_status=tool_status,
-                        tool_result=payload,
-                    )
-                    if recovery_entry is not None:
-                        writer.write(cve_id=cve.cve_id, entry=recovery_entry)
-                    # Emit ONE-LINE live progress to stderr per tool result so
-                    # single-CVE `cve-env build` runs aren't silent for the full
-                    # ~5 minute run. Bench50.sh has its own live bench_status.sh;
-                    # this gives the same story for one-off smokes.
-                    # Format: ``T<turn> <glyph> <tool_name> <hint>``.
-                    if not _LIVE_STDERR_DISABLED:
-                        glyph = "✗" if tool_status == "tool_error" else "✓"
-                        hint = _live_progress_hint(tool_name, payload)
-                        print(
-                            f"  T{state.turn:<3} {glyph} {tool_name}"
-                            + (f"  {hint}" if hint else ""),
-                            file=sys.stderr,
-                            flush=True,
-                        )
-        elif isinstance(msg, ResultMessage):
-            state.result_received = True
-            # Latch refusal across multiple ResultMessages. The SDK can emit
-            # several (mid-run refusal, retry, retry); only the last one survives
-            # in run.stop_reason. We need to remember if ANY was refusal-class so
-            # _map_status can classify "incomplete" even when the final
-            # stop_reason is "end_turn".
-            sr = (msg.stop_reason or "").lower()
-            if "refusal" in sr or "usage policy" in sr:
-                state.refusal_stop_reason_seen = True
-                state.refusal_stop_reason_turn = state.turn  # track LATEST
-            terminal_status: AuditStatus = _terminal_status_for_result(state, sr)
-            refusal_scanner.observe(
-                {
-                    "turn": state.turn,
-                    "kind": "result",
-                    "stop_reason": msg.stop_reason or "",
-                    "total_cost_usd": msg.total_cost_usd or 0.0,
-                    "num_turns": msg.num_turns,
-                }
-            )
-            # Aggregate cost + turns across multi-ResultMessage retry storms.
-            #   cost_usd: per-segment (the SDK emits each segment's cost
-            #     individually). Use SUM so Outcome reflects true billed cost.
-            #   num_turns: cumulative turn counter inside the run_agent
-            #     call (each ResultMessage's num_turns is total-so-far).
-            #     Use MAX (last ResultMessage's value, monotonically largest).
-            # Per-stage cost attribution: ResultMessage cost-delta attributed to
-            # the most-recent tool's stage. Proxy: real per-call cost varies with
-            # context, but call-stage-of-last-tool is the best signal available at
-            # ResultMessage time. Attribute the RESIDUAL between this RM's reported
-            # cost and what the AssistantMessage path already credited for this
-            # segment. Net per-segment credit = max(AM_estimate, RM_reported_cost).
-            # This closes the under-attribution mode where a boolean dedup would
-            # skip RM entirely when AM credited a tiny amount.
-            # ``state.last_cost_usd`` is still summed unconditionally — it drives
-            # the cap check, not stage telemetry. After processing this
-            # ResultMessage, advance the segment id so subsequent AMs start a fresh
-            # segment.
-            _accumulate_result_cost_and_turns(state, msg)
-            # Per-stage HARD-mode enforcement. If any stage with mode="hard"
-            # exceeded its budget, synthesize a give_up so the existing
-            # GiveUpReceived path halts the run. Default mode is "soft" → no
-            # termination; users opt-in via ``CVE_ENV_BUDGET_<STAGE>_MODE=hard``.
-            if not state.give_up_reason:
-                breached_stage = _stage_hard_budget_breach(state.stage_costs)
-                if breached_stage is not None:
-                    state.give_up_reason = f"stage_budget_exhausted_{breached_stage}"
-                    state.give_up_detail = (
-                        f"HARD-mode stage budget exceeded: stage {breached_stage} "
-                        f"cost ${state.stage_costs[breached_stage]:.3f} > budget; "
-                        f"terminating run (Phase 12.3)."
-                    )
-            # Merge the ResultMessage's CUMULATIVE session usage via max() (not
-            # +=) so it doesn't double-count the per-message AssistantMessage
-            # usage already accumulated; lets us estimate cost when the SDK
-            # reports total_cost_usd=0 despite real LLM rounds.
-            _merge_cumulative_tokens(state, msg.usage)
-            # If accumulated cost (across multi-ResultMessage retry storms)
-            # exceeded max_cost_usd, halt SDK iteration. Without this, SDK retries
-            # consume budget independently and total can exceed cap by 2-3×.
-            #
-            # Before raising BudgetCapExceeded, check if the agent qualifies for an
-            # adaptive cost-cap extension (productive activity recent + extensions
-            # remaining). If granted, bump effective_max_cost_usd and continue.
-            # Otherwise raise as before. Default MAX_COST_EXTENSIONS=1 PCT=0.10
-            # (10% bump, max 1 extension). Set CVE_ENV_MAX_COST_EXTENSIONS=0 to
-            # disable.
-            if state.last_cost_usd > state.effective_max_cost_usd:
-                new_cost_cap = _should_extend_cost_cap(
-                    current_cost_usd=state.last_cost_usd,
-                    max_cost_usd=state.effective_max_cost_usd,
-                    last_productive_turn=state.last_productive_turn,
-                    current_turn=state.turn,
-                    cost_extension_count=state.cost_extension_count,
-                )
-                if new_cost_cap is not None:
-                    state.cost_extension_count += 1
-                    state.effective_max_cost_usd = new_cost_cap
-                    # Audit: extension granted
-                    writer.write(
-                        cve_id=cve.cve_id,
-                        entry=AuditEntry(
-                            turn=state.turn,
-                            status="llm_turn",
-                            reason=(
-                                f"phase_12.4_cost_extension granted "
-                                f"#{state.cost_extension_count}: new_cap="
-                                f"${state.effective_max_cost_usd:.2f}; "
-                                f"last_productive_turn={state.last_productive_turn}"
-                            ),
-                        ),
-                    )
-                else:
-                    raise BudgetCapExceeded(
-                        f"state.last_cost_usd=${state.last_cost_usd:.2f} > "
-                        f"effective_max_cost_usd=${state.effective_max_cost_usd:.2f} "
-                        f"(extensions used: {state.cost_extension_count})"
-                    )
-            writer.write(
-                cve_id=cve.cve_id,
-                entry=AuditEntry(
-                    turn=state.turn,
-                    status=terminal_status,
-                    input_tokens=int(getattr(msg.usage, "input_tokens", 0) or 0)
-                    if msg.usage
-                    else 0,
-                    output_tokens=int(getattr(msg.usage, "output_tokens", 0) or 0)
-                    if msg.usage
-                    else 0,
-                    cost_usd=msg.total_cost_usd or 0.0,
-                    reason=msg.stop_reason or "",
-                ),
-            )
-            # Halt-on-verified-success (default-OFF): symmetric to the give_up halt
-            # below. A `final_success` terminal status means a clean end_turn with
-            # verify_passed; raise AFTER the audit write so triage sees the success
-            # event, then stop the SDK iteration before the agent can over-run into
-            # max_turns (which would mis-grade it turn_cap via cap-overrides-verify).
-            # Cap terminations never produce `final_success`, so this cannot weaken
-            # the cap-overrides-verify lock.
-            if _should_halt_on_verified_success(terminal_status):
-                raise SuccessReached(
-                    f"verify passed + clean end_turn (turn={state.turn}, "
-                    f"stop_reason={sr!r}); halting before over-run"
-                )
-
-        # Intentional: once give_up_reason is set, every subsequent on_message
-        # re-raises to halt the SDK. Caught by _run_query_once._consume().
-        # If give_up.terminal=True was processed in this on_message call (or any
-        # prior), halt the SDK iteration. on_message's audit write for the give_up
-        # tool result has already happened above by the time we reach this point
-        # (for agent-issued give_ups). For per-tool attempt cap give_ups, the
-        # GiveUpReceived fires before the tool_result arrives — write a tool_error
-        # entry so the audit trail is complete.
-        if state.give_up_reason:
-            if state.give_up_reason.startswith("max_tool_attempts_"):
-                _cap_tool = state.give_up_reason[len("max_tool_attempts_"):]
-                writer.write(
-                    cve_id=cve.cve_id,
-                    entry=AuditEntry(
-                        turn=state.turn,
-                        status="tool_error",
-                        tool_name=_cap_tool,
-                        reason=state.give_up_detail or "tool attempt cap exceeded",
-                    ),
-                )
-            raise GiveUpReceived(
-                f"agent issued give_up(reason={state.give_up_reason!r})"
-            )
-
-    # Prepend doctor → agent constraints to the system prompt when present (e.g.
-    # Docker Hub rate-limited → tell the agent to AVOID vulhub-* methods this run).
-    # Empty when no constraints. Also prepend the runtime caps block so the agent
-    # knows the actual turn/cost budget + extension policy for this run.
     constraints_prefix = format_constraints_for_prompt(constraints or [])
     caps_block = render_runtime_caps_block(
         max_turns=max_turns,
         max_cost_usd=max_cost_usd,
-        max_extensions=eff_max_turn_extensions,
-        extension_pct=eff_turn_extension_pct,
+        max_extensions=max_extensions,
+        extension_pct=extension_pct,
     )
     if constraints_prefix:
         system_prompt_final = f"{constraints_prefix}\n{caps_block}\n{SYSTEM_PROMPT}"
     else:
         system_prompt_final = f"{caps_block}\n{SYSTEM_PROMPT}"
-    # Experimental: ``CVE_ENV_EXTRA_PROMPT_PREFIX`` lets bench harnesses
-    # inject a per-run instruction block at the very top of the system
-    # prompt without modifying source. Used for method-exploration runs
-    # (e.g., "deny vulhub + docker.io, exercise alternate cascades").
-    # Empty/unset == no-op.
     _EXTRA_PREFIX_MAX_CHARS = 2000
     extra_prefix = os.environ.get("CVE_ENV_EXTRA_PROMPT_PREFIX", "").strip()
     if extra_prefix:
@@ -2149,491 +898,165 @@ async def build(
             extra_prefix = ""
         if extra_prefix:
             system_prompt_final = f"{extra_prefix}\n\n{system_prompt_final}"
-    try:
-        run = await run_agent(
-            system_prompt=system_prompt_final,
-            user_prompt=user_prompt,
-            tools=ALL_TOOLS,
-            model=model,
-            # Pass the SDK an upper bound that accommodates all possible
-            # auto-extensions; F-9 + B-20 enforce the actual per-CVE cap via
-            # state.effective_max_turns.
-            max_turns=sdk_max_turns,
-            max_cost_usd=max_cost_usd,
-            on_message=on_message,
-            # Retry a refusal-terminal run with de-escalation, unless a verify
-            # already passed (don't discard an earned success).
-            verify_passed_check=lambda: state.verify_passed,
-        )
-    except Exception as exc:  # noqa: BLE001 -- surface whatever the SDK throws
-        # If the agent already called give_up (terminal decision) or passed
-        # verify, a late stream-drain exception is cosmetic -- the run had reached
-        # a logical conclusion. Relabel to the corresponding terminal status
-        # instead of masking a real outcome as 'error'.
-        #
-        # Only trust state.verify_passed if the SDK actually emitted a
-        # ResultMessage. Otherwise the verify call may have come from a partial
-        # dead retry whose run never converged (a usage-policy refusal across
-        # retries can leave state.verify_passed=True with num_turns=0, mistagging
-        # a refusal as success).
-        # Refusal-class exceptions force `incomplete` even if verify passed
-        # earlier (same pattern as _map_status above). Reuses llm._is_refusal —
-        # the canonical refusal-signature matcher.
-        from cve_env.agent.llm import InStreamRefusal, _is_refusal
+    return system_prompt_final
 
-        # An InStreamRefusal that survived all run_agent retries (the run kept
-        # terminating on a refusal stop_reason) is refusal-class too.
-        is_refusal_exc = _is_refusal(exc) or isinstance(exc, InStreamRefusal)
-        # Runtime api_overload classifier wiring. Without it, the runtime hot path
-        # would leave state.give_up_reason="" on 529 Overloaded exceptions,
-        # surfacing as status="error" with empty give_up_reason in Outcome JSON.
-        # Fires BEFORE the is_refusal_exc branch so api_overload (an external
-        # Anthropic outage) is distinguished from refusal-class (which trips the
-        # safety classifier).
-        if _classify_api_overload(str(exc)) == "api_overload":
-            state.give_up_reason = "api_overload"
-            state.give_up_detail = (
-                f"Anthropic API 529 Overloaded exception: {type(exc).__name__}: "
-                f"{str(exc)[:200]}"
-            )
-        if is_refusal_exc:
-            # Post-build refusal classifier. A refusal AFTER
-            # state.launched_ok=True is a distinct class — the verify-plan
-            # composition or downstream tool input tripped Anthropic's safety
-            # classifier, not the NVD-description (which the sanitizer already
-            # covers). Emit a dedicated audit entry BEFORE the terminal-status
-            # mapping so post-bench forensic can count this class without
-            # re-deriving from raw state. Paired with the prompts.py open-clause
-            # verify-plan composition rule.
-            if state.launched_ok:
-                writer.write(
-                    cve_id=cve.cve_id,
-                    entry=AuditEntry(
-                        turn=state.turn,
-                        status="post_build_refusal",
-                        reason=(
-                            f"refusal exception after launched_ok=True "
-                            f"(verify_passed={state.verify_passed}, "
-                            f"docker_built_ok={state.docker_built_ok}): "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                    ),
+
+def _track_tool_result(
+    state: _StreamState,
+    tool_name: str,
+    payload: dict[str, Any] | None,
+    *,
+    refusal_event_count: int,
+) -> None:
+    """Fold one tool result into the stream state (extracted from
+    ``build``'s ``on_message`` verbatim; shared with the core agent
+    backend so both backends feed the outcome classifier identically).
+    ``refusal_event_count`` is the scanner's current event tally — the
+    give_up(no_image) reclassifier needs it without holding a scanner
+    reference."""
+    # Track launch-stage tool successes + verify attempts so the
+    # classifier can distinguish "launched but never tried verify"
+    # from "never reached launch".
+    if (
+        tool_name in _LAUNCH_TOOLS
+        and isinstance(payload, dict)
+        and payload.get("ok") is True
+    ):
+        state.launched_ok = True
+    # Track docker_build success for the
+    # stuck_after_launch_after_build triage marker. Set ONCE at
+    # first success and remains True for the run (parallel to
+    # launched_ok semantics).
+    if (
+        tool_name == "docker_build"
+        and isinstance(payload, dict)
+        and payload.get("ok") is True
+    ):
+        state.docker_built_ok = True
+    # A build/daemon tool result classified daemon_corruption =
+    # HOST containerd corruption (infra, not engine). Latch it so
+    # the Outcome surfaces it (any tool that carries reason_class —
+    # docker_build/run/compose).
+    if (
+        isinstance(payload, dict)
+        and payload.get("reason_class") == "daemon_corruption"
+    ):
+        state.daemon_corruption_seen = True
+    # Track image_resolve success for the classifier branch
+    # (quit_after_image_resolve). Set once at first ok=True
+    # (parallel to launched_ok / docker_built_ok semantics).
+    if (
+        tool_name == "image_resolve"
+        and isinstance(payload, dict)
+        and payload.get("ok") is True
+    ):
+        state.image_resolve_ok = True
+    # Track most-recent productive turn so
+    # ``should_extend_turn_cap`` can grant a turn-cap extension
+    # when the agent is making build progress. verify and
+    # run_in_container count as productive AFTER a build succeeded
+    # (state.docker_built_ok) — see _is_productive_outcome.
+    if _is_productive_outcome(
+        tool_name, payload, state.docker_built_ok
+    ):
+        state.last_productive_turn = state.turn
+    # Track "did we BUILD?" — used by the strict version-marker
+    # gate. Set on result (not use) -- if SDK crashes between
+    # use/result, the lenient marker check applies. Acceptable:
+    # crashed builds shouldn't get strict checking.
+    if tool_name in _BUILD_TOOLS:
+        state.has_built = True
+    if tool_name == "verify":
+        state.verify_attempted = True
+    if tool_name == "verify" and isinstance(payload, dict):
+        state.last_verify_result = payload
+        if payload.get("passed") is True:
+            state.verify_passed = True
+            # Record turn-of-latest-verify-pass for the
+            # refusal-recovery comparison in _map_status.
+            state.verify_passed_turn = state.turn
+            # Union the check types from this passing verify. Flag
+            # version-assertion exec_check and classify functional
+            # smoke (heuristic mirrors
+            # verify._compute_verify_quality_warning) and
+            # vuln-confirmed (payload-class checks only).
+            results = payload.get("results") or []
+            for entry in results:
+                if not isinstance(entry, dict):
+                    continue
+                t = entry.get("type")
+                if isinstance(t, str) and t:
+                    state.passing_verify_check_types.add(t)
+                if _is_version_assertion_exec_check(entry):
+                    state.passing_verify_has_version_assertion = True
+                # Credit a SPECIFIC version marker INDEPENDENTLY of
+                # command shape. A passing exec_check whose
+                # expected_stdout_contains carries a specific
+                # \d+\.\d+ marker pins the version even when the
+                # command is not an allowlisted version-discovery
+                # shape (e.g. `head -3 .../lesspipe.sh`). Nesting
+                # this credit under the command-shape gate would
+                # orphan file-read version checks and downgrade
+                # success to verified_partial.
+                # _has_specific_version_marker still guards
+                # type==exec_check + a real \d+\.\d+ marker.
+                if _has_specific_version_marker(entry):
+                    state.passing_verify_has_specific_version_marker = (
+                        True
+                    )
+            # The functional-smoke predicate lives in the shared
+            # helper in verify.py (single source of truth — matches
+            # the same heuristic that drives verify_quality_warning
+            # emission).
+            if has_functional_smoke(results):
+                state.passing_verify_has_functional_smoke = True
+    elif tool_name == "give_up" and isinstance(payload, dict):
+        if payload.get("terminal") is True:
+            raw_reason = str(payload.get("reason", ""))
+            raw_detail = str(payload.get("detail", ""))
+            # Runtime classifiers for give_up(reason='no_image').
+            # Two patterns mask as a no_image finding; both checked
+            # here in priority order before passing through.
+            if raw_reason == "no_image":
+                has_refusals = (
+                    state.refusal_stop_reason_seen
+                    or refusal_event_count > 0
                 )
-            terminal_status_on_err: OutcomeStatus = "interrupted"
-            terminal_reason = (
-                f"SDK terminated with refusal exception "
-                f"(verify_passed={state.verify_passed}): "
-                f"{type(exc).__name__}: {exc}"
-            )
-        elif state.give_up_reason == "api_overload":
-            # Anthropic API 529/overload exception — NOT a CVE-merit failure (the
-            # build never got a fair chance). Dedicated `rate_limited` status so
-            # humans, cards, and bench_select_retry treat it as re-runnable, not as
-            # "this CVE can't be built." Without this branch, api_overload would
-            # fall into the generic give_up branch below and be mis-labeled
-            # `unresolvable`. Must precede the generic ``elif
-            # state.give_up_reason:`` so the specific reason wins.
-            terminal_status_on_err = "rate_limited"
-            terminal_reason = (
-                state.give_up_detail or "Anthropic API rate-limited (529 Overloaded)"
-            )
-        elif state.give_up_reason:
-            # The agent's voluntary give_up wins over any racing runtime cap
-            # exception. A TurnCapReached / BudgetCapExceeded firing AFTER give_up
-            # but BEFORE the SDK's ResultMessage must NOT cause the run to be
-            # classified by the runtime exception class rather than the agent's own
-            # decision. If give_up_reason is set at except-time, this is
-            # unresolvable, full stop. Kept ABOVE the cap-exception branches so the
-            # "give_up > cap" precedence is preserved.
-            terminal_status_on_err = "unresolvable"
-            terminal_reason = state.give_up_reason
-        elif isinstance(exc, TurnCapReached):
-            # Defensive turn-cap raised; map to turn_cap status. HOISTED above the
-            # verify-pass branch: cap signals win over mid-run verify-pass,
-            # mirroring the priority in _map_status. This path is reached only if
-            # future changes let the exception propagate past the llm.py catch; it
-            # locks the "cap > verify-pass" invariant everywhere it could trigger.
-            # The give_up branch staying above preserves "give_up > cap".
-            terminal_status_on_err = "turn_cap"
-            terminal_reason = f"runtime turn-cap fired ({exc})"
-        elif isinstance(exc, BudgetCapExceeded):
-            # Accumulated cost overran cap; map to budget_exhausted. HOISTED above
-            # the verify-pass branch (see TurnCapReached comment above).
-            terminal_status_on_err = "budget_exhausted"
-            terminal_reason = f"runtime budget cap fired ({exc})"
-        elif isinstance(exc, WallBudgetExceeded):
-            # Internal wall-budget fired. Reuses budget_exhausted status (cost vs
-            # wall both denote "ran out of the named budget"); the descriptive
-            # reason field carries the wall-vs-cost distinction. HOISTED above the
-            # verify-pass branch to preserve the "cap > verify-pass" invariant.
-            terminal_status_on_err = "budget_exhausted"
-            terminal_reason = f"internal wall budget exhausted ({exc})"
-        elif isinstance(exc, NoProgressReached):
-            # Anti-thrash: prolonged no-progress churn give-up. Reuses turn_cap
-            # status (the CVE was heading to the turn cap anyway — we reclaim the
-            # wasted tail early); the distinct ``no_progress`` reason makes it
-            # greppable for accounting. HOISTED above the verify-pass branch to
-            # preserve the "cap > verify-pass" invariant (mirrors TurnCap/Wall
-            # above).
-            terminal_status_on_err = "turn_cap"
-            terminal_reason = f"anti-thrash no_progress give-up ({exc})"
-        elif state.verify_passed and state.result_received:
-            # Delegate to the shared helper for parity with _map_status. DEMOTED
-            # below the cap-exception branches. Non-cap exceptions (transport
-            # drops, connection resets, generic RuntimeError) still classify via
-            # this branch when verify_passed=True.
-            terminal_status_on_err, terminal_reason = _classify_verify_outcome(state)
-        else:
-            terminal_status_on_err = "error"
-            terminal_reason = f"{type(exc).__name__}: {exc}"
-        # Finalize refusal audit on the exception path too. Without this, refusal
-        # events captured before the SDK threw are lost.
-        refusal_scanner.finalize(
-            final_outcome_status=terminal_status_on_err,
-            verify_passed=state.verify_passed,
-        )
-        if refusal_scanner.events:
-            with contextlib.suppress(OSError):
-                append_events(refusal_scanner.events, log_path=default_log_path())
-        return Outcome(
-            cve_id=cve.cve_id,
-            status=terminal_status_on_err,
-            reason=terminal_reason,
-            # Propagate accumulated cost/turns from any ResultMessage that arrived
-            # BEFORE the exception (otherwise these default to 0). Floor num_turns
-            # at len(tool_uses_seen) so post-hoc analysis sees real work even when
-            # no ResultMessage arrived before the exception (proprietary fast-fail
-            # and give_up paths can report t=0 despite ≥3 tool calls). Include
-            # state.turn — the AUTHORITATIVE engine counter (incremented per
-            # on_message, enforces the turn cap); the SDK's msg.num_turns
-            # (→ state.last_num_turns) UNDERREPORTS it, confounding
-            # turn-cap-vs-cost-bound diagnosis. max() keeps the existing floors.
-            num_turns=max(state.turn, state.last_num_turns, len(state.tool_uses_seen)),
-            # Floors: SDK-reported cost, then a token-based estimate, then a
-            # turns-based estimate for interrupted exits with no token usage
-            # (session auth). max() ensures a floor only kicks in when the
-            # reported cost is zero/missing. See _floor_cost.
-            total_cost_usd=_floor_cost(
-                terminal_status_on_err,
-                max(state.turn, state.last_num_turns, len(state.tool_uses_seen)),
-                state.last_cost_usd,
-                0.0,
-                state.total_input_tokens,
-                state.total_output_tokens,
-                model,
-                state.effective_max_cost_usd,
-            ),
-            verify_passed=state.verify_passed,
-            verify_result=state.last_verify_result,
-            give_up_reason=state.give_up_reason,
-            give_up_detail=state.give_up_detail,
-            final_text=state.final_text,
-            tool_names_called=[u["name"] for u in state.tool_uses_seen],
-            error=str(exc) if terminal_status_on_err == "error" else "",
-            audit_path=writer._path_for(cve_id=cve.cve_id),
-            # Refusal count from RefusalScanner + SDK-level latch. len(events)
-            # captures pattern-matched refusals (LLM text + SDK error wrappers);
-            # + 1 if the SDK ResultMessage had a refusal stop_reason but no text
-            # pattern fired (ensures we never under-count when only one detection
-            # layer caught it).
-            refusals=max(
-                len(refusal_scanner.events),
-                int(state.refusal_stop_reason_seen),
-            ),
-            # Host containerd-corruption flag on the exception-path too.
-            daemon_corruption=state.daemon_corruption_seen,
-            # Per-stage telemetry on the exception-path too.
-            stage_costs=dict(state.stage_costs),
-            stage_calls=dict(state.stage_calls),
-            # Over-budget stages on the exception-path too.
-            over_budget_stages_list=_over_budget_stages(state.stage_costs),
-        )
+                has_image_resolve = any(
+                    u.get("name") == "image_resolve"
+                    for u in state.tool_uses_seen
+                )
+                if has_refusals:
+                    # Refusals corrupted the run; no_image was the
+                    # agent's fallback when blocked, not a genuine
+                    # cascade-exhausted finding.
+                    refusal_n = max(
+                        refusal_event_count,
+                        int(state.refusal_stop_reason_seen),
+                    )
+                    state.give_up_reason = "refusal_no_recovery"
+                    state.give_up_detail = (
+                        f"agent gave up with reason='no_image' "
+                        f"after {refusal_n} refusal event(s); "
+                        f"refusals are the likely root cause, "
+                        f"not registry-cascade exhaustion. "
+                        f"Original detail: {raw_detail[:200]}"
+                    )
+                elif not has_image_resolve:
+                    # Cascade-skip pattern: give_up(no_image)
+                    # without any image_resolve call.
+                    state.give_up_reason = "skipped_image_lookup"
+                    state.give_up_detail = (
+                        "agent emitted give_up(reason='no_image') "
+                        "without ever calling image_resolve; "
+                        "cascade-skip pattern. "
+                        f"Original detail: {raw_detail[:200]}"
+                    )
+                else:
+                    # Legitimate cascade-exhausted no_image.
+                    state.give_up_reason = raw_reason
+                    state.give_up_detail = raw_detail
+            else:
+                state.give_up_reason = raw_reason
+                state.give_up_detail = raw_detail
 
-    # Fix #8 force-verify continuation. The agent often builds an env then
-    # end_turns without verify (many such cases are near-builds). Re-prompt it to
-    # finish via resume + CONTINUATION_USER_PROMPT, bounded to 2 attempts + a
-    # 70%-cost gate. Cost/turns accumulate across runs; on a clean success/give_up
-    # the loop stops and _map_status classifies as usual.
-    cont_cost_acc = state.last_cost_usd or run.total_cost_usd or 0.0
-    cont_turns_acc = run.num_turns or 0
-    continuation_count = 0
-
-    # proprietary-verify continuation (agentic, env-gated default-ON): the agent
-    # gave up `proprietary` WITHOUT calling image_resolve (it reasoned the target
-    # unbuildable from its name/metadata without probing). Re-prompt ONCE to run a
-    # single image_resolve before the give-up is final — verify-the-negative
-    # against the open-source-by-proprietary-vendor false-positive class
-    # (Spring4Shell/vmware). Runs FIRST so a successful resolve cascades into the
-    # force-resolve/Fix #8 build+verify gates below; SKIPS CVEs that already
-    # probed (confirmed negative). Shares the cost/turn accumulators.
-    proprietary_verify_count = 0
-    while _should_continue_for_proprietary_verify(
-        run, state, proprietary_verify_count, cont_cost_acc, max_cost_usd
-    ):
-        proprietary_verify_count += 1
-        state.proprietary_verify_attempted = True
-        saved_give_up_reason = state.give_up_reason
-        saved_give_up_detail = state.give_up_detail
-        saved_verify_attempted = state.verify_attempted
-        state.give_up_reason = ""
-        state.give_up_detail = ""
-        state.verify_attempted = False
-        resume_sid = state.last_session_id or run.session_id
-        writer.write(
-            cve_id=cve.cve_id,
-            entry=AuditEntry(
-                turn=state.turn,
-                status="proprietary_verify_continuation",
-                reason=(
-                    "give_up(proprietary) without image_resolve probe "
-                    "(unprobed name-only give-up); re-prompting to verify-the-negative; "
-                    f"resume={resume_sid}"
-                ),
-            ),
-        )
-        try:
-            run = await run_agent(
-                system_prompt=system_prompt_final,
-                user_prompt=PROPRIETARY_VERIFY_CONTINUATION_PROMPT,
-                tools=ALL_TOOLS,
-                model=model,
-                max_turns=max(2, sdk_max_turns - cont_turns_acc),
-                max_cost_usd=max_cost_usd,
-                on_message=on_message,
-                resume=resume_sid,
-                verify_passed_check=lambda: state.verify_passed,
-            )
-        except Exception:  # noqa: BLE001 -- a continuation that raises just stops; restore the give_up
-            state.give_up_reason = saved_give_up_reason
-            state.give_up_detail = saved_give_up_detail
-            state.verify_attempted = saved_verify_attempted
-            break
-        cont_cost_acc += run.total_cost_usd or 0.0
-        cont_turns_acc += run.num_turns or 0
-        # Restore the proprietary give_up UNLESS the probe improved things: a
-        # successful build/launch, verify_passed, or a fresh terminal give_up the
-        # agent re-emitted (non-empty give_up_reason — e.g. proprietary now WITH
-        # image_resolve called, which this gate will no longer re-fire on).
-        if (
-            not state.give_up_reason
-            and not state.verify_passed
-            and not (state.docker_built_ok or state.launched_ok)
-        ):
-            state.give_up_reason = saved_give_up_reason
-            state.give_up_detail = saved_give_up_detail
-            state.verify_attempted = saved_verify_attempted
-
-    # build-engagement gate: a NON-proprietary pre-build give-up
-    # (skipped_image_lookup / no_image / unresolvable_metadata) emitted WITHOUT
-    # attempting an actual build tool (docker_build/dockerfile_gen/source_build)
-    # is a cascade-skip — incl. resolve-only (image_resolve not_found, no build
-    # pivot). Re-prompt the agent ONCE to actually build before the give_up
-    # stands. Runs BEFORE the Fix #8 verify loop and shares its cost/turn
-    # accumulators, so a successful resolve+build then flows into Fix #8.
-    force_resolve_count = 0
-    while _should_continue_for_resolve(
-        run, state, force_resolve_count, cont_cost_acc, max_cost_usd
-    ):
-        force_resolve_count += 1
-        state.force_resolve_attempted = True
-        # Save, then clear so the re-query can reach a fresh outcome;
-        # restored below unless the continuation actually improves.
-        saved_give_up_reason = state.give_up_reason
-        saved_give_up_detail = state.give_up_detail
-        saved_verify_attempted = state.verify_attempted
-        state.give_up_reason = ""
-        state.give_up_detail = ""
-        state.verify_attempted = False
-        # Prefer the streamed session id (run.session_id is empty for give_up
-        # runs — the terminal ResultMessage never arrived).
-        resume_sid = state.last_session_id or run.session_id
-        writer.write(
-            cve_id=cve.cve_id,
-            entry=AuditEntry(
-                turn=state.turn,
-                status="force_resolve_continuation",
-                reason=(
-                    "pre-build give_up without any build tool attempted "
-                    "(build-engagement gate); "
-                    f"re-prompting to resolve; resume={resume_sid}"
-                ),
-            ),
-        )
-        try:
-            run = await run_agent(
-                system_prompt=system_prompt_final,
-                user_prompt=FORCE_RESOLVE_CONTINUATION_PROMPT,
-                tools=ALL_TOOLS,
-                model=model,
-                max_turns=max(2, sdk_max_turns - cont_turns_acc),
-                max_cost_usd=max_cost_usd,
-                on_message=on_message,
-                resume=resume_sid,
-                verify_passed_check=lambda: state.verify_passed,
-            )
-        except Exception:  # noqa: BLE001 -- a continuation that raises just stops; restore the give_up
-            state.give_up_reason = saved_give_up_reason
-            state.give_up_detail = saved_give_up_detail
-            state.verify_attempted = saved_verify_attempted
-            break
-        cont_cost_acc += run.total_cost_usd or 0.0
-        cont_turns_acc += run.num_turns or 0
-        # Restore the original give_up UNLESS the continuation improved —
-        # reached verify_passed, a successful build/launch, or a fresh terminal
-        # give_up (e.g. now-legitimate no_image with image_resolve called, which
-        # the detector repopulates). Otherwise keep the cascade-skip classification.
-        if (
-            not state.give_up_reason
-            and not state.verify_passed
-            and not (state.docker_built_ok or state.launched_ok)
-        ):
-            state.give_up_reason = saved_give_up_reason
-            state.give_up_detail = saved_give_up_detail
-            state.verify_attempted = saved_verify_attempted
-
-    while _should_continue_for_verify(
-        run, state, continuation_count, cont_cost_acc, max_cost_usd
-    ):
-        continuation_count += 1
-        writer.write(
-            cve_id=cve.cve_id,
-            entry=AuditEntry(
-                turn=state.turn,
-                status="fix8_continuation",
-                reason=(
-                    f"end_turn after build/staging without verify "
-                    f"(continuation {continuation_count}/{_FIX8_MAX_CONTINUATIONS}; "
-                    f"docker_built_ok={state.docker_built_ok} "
-                    f"launched_ok={state.launched_ok}); resume={run.session_id}"
-                ),
-            ),
-        )
-        try:
-            run = await run_agent(
-                system_prompt=system_prompt_final,
-                user_prompt=CONTINUATION_USER_PROMPT,
-                tools=ALL_TOOLS,
-                model=model,
-                max_turns=max(2, sdk_max_turns - cont_turns_acc),
-                max_cost_usd=max_cost_usd,
-                on_message=on_message,
-                resume=state.last_session_id or run.session_id,
-                verify_passed_check=lambda: state.verify_passed,
-            )
-        except Exception:  # noqa: BLE001 -- a continuation that raises just stops the loop
-            break
-        cont_cost_acc += run.total_cost_usd or 0.0
-        cont_turns_acc += run.num_turns or 0
-
-    # benign-verify continuation (agentic, env-gated default-off): a POST-LAUNCH
-    # refusal blocked verify — the env is up but verify never ran (the generic
-    # Fix #8 continuation above re-refuses ~10% of the time on the same
-    # exploit-flavored framing). RESUME the session with a benign-only verify
-    # prompt so the model runs safe health checks instead. Runs LAST, shares the
-    # cost/turn accumulators; the structural launched_no_verify floor remains the
-    # fallback when this does not fire or does not succeed.
-    benign_verify_count = 0
-    while _should_continue_for_post_launch_refusal(
-        run, state, benign_verify_count, cont_cost_acc, max_cost_usd
-    ):
-        benign_verify_count += 1
-        resume_sid = state.last_session_id or run.session_id
-        writer.write(
-            cve_id=cve.cve_id,
-            entry=AuditEntry(
-                turn=state.turn,
-                status="benign_verify_continuation",
-                reason=(
-                    "post-launch refusal blocked verify (env launched, verify "
-                    "not attempted); re-prompting benign-only verify "
-                    f"({benign_verify_count}/"
-                    f"{get_benign_verify_continuation_max()}); resume={resume_sid}"
-                ),
-            ),
-        )
-        try:
-            run = await run_agent(
-                system_prompt=system_prompt_final,
-                user_prompt=BENIGN_VERIFY_CONTINUATION_PROMPT,
-                tools=ALL_TOOLS,
-                model=model,
-                max_turns=max(2, sdk_max_turns - cont_turns_acc),
-                max_cost_usd=max_cost_usd,
-                on_message=on_message,
-                resume=resume_sid,
-                verify_passed_check=lambda: state.verify_passed,
-            )
-        except Exception:  # noqa: BLE001 -- a continuation that raises just stops the loop
-            break
-        cont_cost_acc += run.total_cost_usd or 0.0
-        cont_turns_acc += run.num_turns or 0
-
-    status, reason = _map_status(run.stop_reason, state)
-    refusal_scanner.finalize(
-        final_outcome_status=status,
-        verify_passed=state.verify_passed,
-    )
-    if refusal_scanner.events:
-        # Logging must never block the outcome; disk full / permission deny etc.
-        with contextlib.suppress(OSError):
-            append_events(refusal_scanner.events, log_path=default_log_path())
-    return Outcome(
-        cve_id=cve.cve_id,
-        status=status,
-        reason=reason,
-        # Use accumulated state values, not the last ResultMessage's values from
-        # `run`. For a single-ResultMessage call (the common case), state.last_*
-        # equals run.* — for retry-storm calls the state has the SUM of cost across
-        # segments and the MAX of turns. The SDK can report
-        # stop_reason="max_turns_reached" while emitting num_turns=0 in the same
-        # ResultMessage; floor num_turns at len(tool_uses_seen) so post-hoc
-        # analysis sees real work even when the SDK contradicts itself.
-        # cont_turns_acc / cont_cost_acc SUM across continuation runs (==run.* for
-        # the common single-run case, so no regression there). state.turn (the
-        # authoritative engine counter, per on_message, accumulates across
-        # continuation runs) is the real turn count; the SDK msg.num_turns
-        # underreports it. max() keeps the existing floors.
-        num_turns=max(
-            state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)
-        ),
-        # Include a token-based estimate as a third floor, then a turns-based
-        # floor for interrupted exits with no token usage (session auth). The SDK
-        # has been observed reporting total_cost_usd=0 on max_turns_reached even
-        # after multiple LLM rounds; the floors recover that data. See _floor_cost.
-        total_cost_usd=_floor_cost(
-            status,
-            max(
-                state.turn,
-                state.last_num_turns,
-                cont_turns_acc,
-                len(state.tool_uses_seen),
-            ),
-            state.last_cost_usd,
-            cont_cost_acc,
-            state.total_input_tokens,
-            state.total_output_tokens,
-            model,
-            state.effective_max_cost_usd,
-        ),
-        session_id=run.session_id,
-        stop_reason=run.stop_reason,
-        verify_passed=state.verify_passed,
-        verify_result=state.last_verify_result,
-        give_up_reason=state.give_up_reason,
-        give_up_detail=state.give_up_detail,
-        final_text=state.final_text,
-        tool_names_called=[u["name"] for u in state.tool_uses_seen],
-        audit_path=audit_path,
-        # See exception-path comment above for rationale.
-        refusals=max(
-            len(refusal_scanner.events),
-            int(state.refusal_stop_reason_seen),
-        ),
-        # Host containerd-corruption flag for the bench heal.
-        daemon_corruption=state.daemon_corruption_seen,
-        # Per-stage cost + call telemetry.
-        stage_costs=dict(state.stage_costs),
-        stage_calls=dict(state.stage_calls),
-        # Stages that exceeded their soft budget.
-        over_budget_stages_list=_over_budget_stages(state.stage_costs),
-    )

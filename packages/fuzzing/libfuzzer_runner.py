@@ -88,11 +88,19 @@ class LibFuzzerRunner:
         if not self.harness.stat().st_mode & 0o111:
             raise PermissionError(f"Harness is not executable: {harness_path}")
 
-        self.output_dir = (
-            Path(output_dir).resolve()
-            if output_dir
-            else Path(f"out/libfuzzer_{self.harness.stem}_{int(time.time())}").resolve()
-        )
+        # Anchor the default output dir to RaptorConfig.get_out_dir()
+        # (active project run dir, or the configured output base) —
+        # NOT a literal `out/` relative to whatever cwd the runner was
+        # constructed from. Same rule as the AFL runner: a CWD-relative
+        # default planted libfuzzer_* dirs inside the operator's
+        # current directory (or `/out` under cron/CI started from /).
+        if output_dir:
+            self.output_dir = Path(output_dir).resolve()
+        else:
+            self.output_dir = (
+                RaptorConfig.get_out_dir()
+                / f"libfuzzer_{self.harness.stem}_{int(time.time())}"
+            ).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.source_corpus_dir = Path(corpus_dir).resolve() if corpus_dir else None

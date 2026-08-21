@@ -203,3 +203,33 @@ def test_check_suppress_string_false_manual_override_is_not_truthy(
     )
     # "false" → False → suppression fires
     assert decision is not None
+
+
+def test_coerce_manual_override_shared_convention() -> None:
+    """One coercion for every consumer (reachability suppression, the
+    SAGE prior-verdict skip): string-False shapes are False, anything
+    affirmatively truthy is True."""
+    from core.analysis.reach_chokepoint import coerce_manual_override
+
+    for falsy in (None, False, 0, "", "false", "FALSE", " 0 ", "no",
+                  "off"):
+        assert coerce_manual_override(falsy) is False, falsy
+    for truthy in (True, 1, "true", "yes", "1", "on", "anything"):
+        assert coerce_manual_override(truthy) is True, truthy
+
+
+def test_sage_fp_skip_honours_manual_override() -> None:
+    """Wiring pin: the /agentic SAGE prior-verdict skip gates on the
+    per-finding manual_override via the shared coercion — previously
+    only the run-wide env kill switch applied."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    src = (root / "packages" / "llm_analysis" / "agent.py").read_text(
+        encoding="utf-8")
+    recall_at = src.index("recall_prior_finding_verdict(")
+    gate_at = src.index(
+        "coerce_manual_override(\n"
+        "                            finding.get(\"manual_override\"))")
+    assert gate_at < recall_at, (
+        "the manual_override gate must run before the SAGE recall"
+    )

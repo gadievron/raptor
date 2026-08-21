@@ -5,18 +5,23 @@ RAPTOR AFL++ Runner
 Orchestrates AFL++ fuzzing campaigns with parallel workers.
 """
 
+import os
 import re
 import shutil
+import signal
 import subprocess
+import threading
 
 # _run_trusted: read-only tools (strings, --help checks) — no namespace overhead.
-# Full sandbox for afl-showmap (execute untrusted binary): network block +
-# Landlock (target=output=self.output_dir — AFL reads and writes the same
-# corpus/queue/crash directories).
-# afl-fuzz itself is NOT sandboxed: the long-lived campaign runs via a plain
-# subprocess.Popen with only a sanitised environment (get_safe_env()) and
-# pdeathsig — the untrusted target executes outside the sandbox layer during
-# fuzzing.
+# Full sandbox for afl-showmap AND the afl-fuzz campaign itself (both
+# execute the untrusted target binary): network block + Landlock
+# (target=output=self.output_dir — AFL reads and writes the same
+# corpus/queue/crash directories) + seccomp + rlimits.
+# The sandbox has no background/Popen API, so each afl-fuzz instance
+# runs as a BLOCKING `core.sandbox.run` call on a supervising thread
+# (`_SandboxedAFLInstance`). That works because AFL's control surface
+# is the filesystem, not the process: the monitor loop reads
+# `fuzzer_stats` and `crashes/` from the output directory.
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -38,6 +43,148 @@ AFL_PATHS_FOUND_KEYS = (
     "paths_found", "corpus_found", "queued_paths", "cur_path", "corpus_count",
 )
 _AFL_CRASH_EXECS_RE = re.compile(r"(?:^|,)execs:(\d+)(?:,|$)")
+
+
+class _SandboxedAFLInstance:
+    """One afl-fuzz instance: a blocking ``core.sandbox.run`` call on a
+    supervising thread.
+
+    Containment matches the afl-showmap / libFuzzer siblings: network
+    namespace deny, Landlock writes confined to the AFL output
+    directory, seccomp escape-vector blocklist, rlimits. Reads stay
+    wide (plus explicit ``readable_paths``) so targets with shared
+    libraries outside the binary's directory keep working — mirroring
+    the afl-showmap call shape.
+
+    Lifetime: afl-fuzz self-terminates via ``-V <duration>`` and the
+    sandbox ``timeout=`` is a wedge net above that. Early stop
+    (max_crashes reached, operator interrupt) SIGTERMs the afl-fuzz
+    process located by scanning ``/proc`` for this instance's unique
+    argv — the host sees the real PID even when the sandbox runs the
+    campaign in a PID namespace, and afl-fuzz installs a SIGTERM
+    handler that stops the campaign and reaps the target.
+    """
+
+    _JOIN_GRACE_S = 15
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        cmd: list[str],
+        env: dict,
+        stdout_path: Path,
+        stderr_path: Path,
+        output_dir: Path,
+        readable_paths: list[str],
+        timeout_s: int,
+    ) -> None:
+        self.name = name
+        self.cmd = list(cmd)
+        self.env = env
+        self.stdout_path = stdout_path
+        self.stderr_path = stderr_path
+        self.output_dir = output_dir
+        self.readable_paths = list(readable_paths)
+        self.timeout_s = timeout_s
+        self.result: subprocess.CompletedProcess | None = None
+        self.error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run, name=f"afl-{name}", daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            with open(self.stdout_path, "wb") as stdout_fp, \
+                    open(self.stderr_path, "wb") as stderr_fp:
+                self.result = _sandbox_run(
+                    self.cmd,
+                    block_network=True,
+                    target=str(self.output_dir),
+                    output=str(self.output_dir),
+                    readable_paths=self.readable_paths,
+                    cwd=str(self.output_dir),
+                    env=self.env,
+                    stdout=stdout_fp,
+                    stderr=stderr_fp,
+                    timeout=self.timeout_s,
+                    caller_label=f"afl-fuzz-{self.name}",
+                )
+        except BaseException as exc:  # noqa: BLE001 — surfaced by the monitor loop
+            self.error = exc
+
+    def is_running(self) -> bool:
+        return self._thread.is_alive()
+
+    def returncode(self) -> int | None:
+        if self.result is not None:
+            return self.result.returncode
+        return None
+
+    def _host_pid(self) -> int | None:
+        """Find this instance's afl-fuzz host PID via its unique argv.
+
+        The campaign's argv is unique per instance: ``afl-fuzz`` argv0,
+        the campaign output directory after ``-o``, and this instance's
+        name after ``-M``/``-S``. AFL writes only its namespace-local
+        PID into ``fuzzer_stats``, which is useless for host-side
+        signalling — the /proc scan recovers the host PID instead.
+        """
+        needle_out = str(self.output_dir)
+        try:
+            proc_entries = list(Path("/proc").iterdir())
+        except OSError:
+            return None
+        for pid_dir in proc_entries:
+            if not pid_dir.name.isdigit():
+                continue
+            try:
+                raw = (pid_dir / "cmdline").read_bytes()
+            except OSError:
+                continue
+            args = [
+                a.decode("utf-8", errors="replace")
+                for a in raw.split(b"\0") if a
+            ]
+            if not args or Path(args[0]).name != "afl-fuzz":
+                continue
+            if needle_out not in args:
+                continue
+            for flag in ("-M", "-S"):
+                try:
+                    idx = args.index(flag)
+                except ValueError:
+                    continue
+                if idx + 1 < len(args) and args[idx + 1] == self.name:
+                    return int(pid_dir.name)
+        return None
+
+    def request_stop(self) -> None:
+        """Stop the campaign: SIGTERM afl-fuzz, escalate to SIGKILL."""
+        if not self.is_running():
+            return
+        pid = self._host_pid()
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pid = None
+        self._thread.join(self._JOIN_GRACE_S)
+        if self._thread.is_alive() and pid is not None:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            self._thread.join(5)
+        if self._thread.is_alive():
+            logger.warning(
+                "AFL instance %s did not stop on request; the sandbox "
+                "timeout (%ss) will reap it",
+                self.name, self.timeout_s,
+            )
 
 
 class AFLRunner:
@@ -371,7 +518,7 @@ class AFLRunner:
         parallel_jobs: int = 1,
         timeout_ms: int = 1000,
         max_crashes: int | None = None,
-    ) -> tuple[int, Path]:
+    ) -> tuple[int, Path | None]:
         """
         Run AFL++ fuzzing campaign.
 
@@ -382,7 +529,9 @@ class AFLRunner:
             max_crashes: Stop after finding N unique crashes
 
         Returns:
-            Tuple of (num_crashes, crashes_dir)
+            Tuple of (num_crashes, crashes_dir). crashes_dir is None
+            when the campaign produced no crashes and AFL never created
+            a crashes directory.
         """
         logger.info("=" * 70)
         logger.info("STARTING AFL++ FUZZING CAMPAIGN")
@@ -408,10 +557,19 @@ class AFLRunner:
         if self.recompile_guide:
             self.show_recompile_guide()
 
-        # Start AFL instances
-        processes = []
+        # Start AFL instances — each one a blocking `core.sandbox.run`
+        # on a supervising thread (see _SandboxedAFLInstance). Landlock
+        # writes are confined to output_dir; explicit readable paths
+        # cover the binary/corpus inputs that live outside it (same
+        # shape as the afl-showmap call below).
+        instances: list[_SandboxedAFLInstance] = []
         log_dir = self.output_dir / "raptor-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+
+        readable_paths = [str(self.binary.parent), str(self.corpus_dir)]
+        for extra in (self.dict_path, self.cmplog_binary, self.custom_mutator):
+            if extra:
+                readable_paths.append(str(Path(extra).parent))
 
         try:
             for job_id in range(parallel_jobs):
@@ -423,6 +581,7 @@ class AFLRunner:
                     is_main=is_main,
                     timeout_ms=timeout_ms,
                     use_qemu=not is_instrumented,
+                    duration=duration,
                 )
 
                 logger.info("Starting AFL instance: %s", instance_name)
@@ -463,49 +622,38 @@ class AFLRunner:
 
                 stdout_path = log_dir / f"{instance_name}.stdout.log"
                 stderr_path = log_dir / f"{instance_name}.stderr.log"
-                stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
-                try:
-                    stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
-                except BaseException:
-                    stdout_fp.close()
-                    raise
                 (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
 
-                try:
-                    from core.sandbox.preexec import set_pdeathsig
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdout=stdout_fp,
-                        stderr=stderr_fp,
-                        text=True,
-                        env=afl_env,
-                        preexec_fn=set_pdeathsig(),  # noqa: PLW1509 — single-threaded at spawn time; pdeathsig is required
-                    )
-                except BaseException:
-                    stdout_fp.close()
-                    stderr_fp.close()
-                    raise
-                processes.append({
-                    "name": instance_name,
-                    "proc": proc,
-                    "stdout_path": stdout_path,
-                    "stderr_path": stderr_path,
-                    "stdout_fp": stdout_fp,
-                    "stderr_fp": stderr_fp,
-                })
+                instance = _SandboxedAFLInstance(
+                    name=instance_name,
+                    cmd=cmd,
+                    env=afl_env,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    output_dir=self.output_dir,
+                    readable_paths=readable_paths,
+                    # afl-fuzz self-terminates via -V; the sandbox
+                    # timeout is a wedge net well above that.
+                    timeout_s=duration + 300,
+                )
+                instance.start()
+                instances.append(instance)
         except BaseException:
-            for p in processes:
-                try:
-                    p["proc"].kill()
-                except OSError:
-                    pass
-                p["stdout_fp"].close()
-                p["stderr_fp"].close()
+            for inst in instances:
+                inst.request_stop()
             raise
+
+        all_instances = list(instances)
 
         # Monitor fuzzing
         start_time = time.time()
-        last_logged_crashes = 0
+        # Track crash paths already reported to telemetry. A count
+        # slice over the re-sorted union of all instances' crash dirs
+        # mis-attributes new files: a fresh crash that sorts BEFORE an
+        # already-seen one (secondary instances interleave) fell inside
+        # the "seen" prefix and was never recorded, while an old crash
+        # got re-emitted in its place.
+        seen_crash_paths: set[Path] = set()
         last_status_time = 0
 
         try:
@@ -517,13 +665,14 @@ class AFLRunner:
                 crash_files = self._collect_all_crash_files()
                 num_crashes = len(crash_files)
 
-                if num_crashes > last_logged_crashes:
+                new_crashes = [p for p in crash_files if p not in seen_crash_paths]
+                if new_crashes:
                     logger.info("Progress: %s unique crashes found", num_crashes)
                     # Telemetry: emit a per-crash event for new ones only
                     if self.telemetry:
-                        for crash_path in crash_files[last_logged_crashes:]:
+                        for crash_path in new_crashes:
                             self.telemetry.record_crash(str(crash_path), signal="afl")
-                    last_logged_crashes = num_crashes
+                    seen_crash_paths.update(new_crashes)
 
                 if max_crashes is not None and num_crashes >= max_crashes:
                     logger.info("✓ Reached %s crashes, stopping early", max_crashes)
@@ -559,64 +708,62 @@ class AFLRunner:
 
                     last_status_time = current_time
 
-                # Check if all processes are still running
-                running_processes = []
-                for entry in processes:
-                    name = entry["name"]
-                    proc = entry["proc"]
-                    if proc.poll() is not None:
-                        exit_code = proc.returncode
-                        self._close_process_logs(entry)
-                        stderr_str = self._tail_file(entry["stderr_path"])
-                        if stderr_str:
-                            logger.error("AFL instance %s exited with code %s", name, exit_code)
-                            logger.error("AFL stderr saved to: %s", entry['stderr_path'])
-                            logger.error("AFL stderr tail:\n%s", stderr_str)
-                            self._log_common_afl_startup_error(stderr_str)
-                            if self.telemetry:
-                                self.telemetry.record_error(
-                                    f"AFL {name} exited {exit_code}: {stderr_str[-500:]}"
-                                )
-                        else:
-                            logger.warning(
-                                f"AFL instance {name} exited unexpectedly with code {exit_code}; "
-                                f"stdout={entry['stdout_path']} stderr={entry['stderr_path']}"
+                # Check if all instances are still running
+                running_instances = []
+                for inst in instances:
+                    if inst.is_running():
+                        running_instances.append(inst)
+                        continue
+                    if isinstance(inst.error, SandboxSetupError):
+                        # Isolation could not engage — fail loud, never
+                        # fall back to an unsandboxed campaign.
+                        raise inst.error
+                    exit_code = inst.returncode()
+                    if isinstance(inst.error, subprocess.TimeoutExpired):
+                        logger.warning(
+                            "AFL instance %s hit the sandbox wedge timeout (%ss)",
+                            inst.name, inst.timeout_s,
+                        )
+                    stderr_str = self._tail_file(inst.stderr_path)
+                    if exit_code == 0:
+                        logger.info("AFL instance %s completed (exit 0)", inst.name)
+                    elif stderr_str:
+                        logger.error("AFL instance %s exited with code %s", inst.name, exit_code)
+                        logger.error("AFL stderr saved to: %s", inst.stderr_path)
+                        logger.error("AFL stderr tail:\n%s", stderr_str)
+                        self._log_common_afl_startup_error(stderr_str)
+                        if self.telemetry:
+                            self.telemetry.record_error(
+                                f"AFL {inst.name} exited {exit_code}: {stderr_str[-500:]}"
                             )
                     else:
-                        running_processes.append(entry)
-                
-                processes = running_processes
-                
-                # If no processes are running, stop fuzzing
-                if not processes:
+                        logger.warning(
+                            f"AFL instance {inst.name} exited unexpectedly with code {exit_code}; "
+                            f"stdout={inst.stdout_path} stderr={inst.stderr_path}"
+                        )
+
+                instances = running_instances
+
+                # If no instances are running, stop fuzzing
+                if not instances:
                     logger.error("All AFL instances have exited - stopping fuzzing campaign")
                     break
 
         finally:
-            # Stop all AFL instances. Both stdout and stderr are
-            # redirected to per-instance log files (see the Popen
-            # above), so there is no pipe to drain and no deadlock
-            # risk; communicate(timeout=...) here is equivalent to
-            # wait(timeout=...) and is kept for uniformity with the
-            # historical call shape.
+            # Stop all still-running AFL instances (early stop via
+            # max_crashes, operator interrupt, or duration elapsed
+            # before -V fired). request_stop SIGTERMs afl-fuzz and
+            # escalates to SIGKILL; log files are closed by each
+            # instance's own thread.
             logger.info("Stopping AFL instances...")
-            for entry in processes:
-                name = entry["name"]
-                proc = entry["proc"]
-                proc.terminate()
-                try:
-                    proc.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    logger.warning("Force killing %s", name)
-                    proc.kill()
-                    try:
-                        proc.communicate(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        # Kernel-level wedge — at this point we've
-                        # done what we can; orphan the proc.
-                        pass
-                finally:
-                    self._close_process_logs(entry)     
+            for inst in instances:
+                inst.request_stop()
+
+        # Surface sandbox-engagement failures even when the monitor
+        # loop never observed the death (zero/short durations).
+        for inst in all_instances:
+            if isinstance(inst.error, SandboxSetupError):
+                raise inst.error
 
         # Count final crashes across all instances
         crash_files = self._collect_all_crash_files()
@@ -684,14 +831,6 @@ class AFLRunner:
 
         return total_crashes, crashes_dir
 
-    @staticmethod
-    def _close_process_logs(entry: dict) -> None:
-        for key in ("stdout_fp", "stderr_fp"):
-            fp = entry.get(key)
-            if fp and not fp.closed:
-                fp.flush()
-                fp.close()
-
     def _find_first_seed(self) -> Path | None:
         """Return the first seed file in the corpus directory, or *None*.
 
@@ -718,7 +857,7 @@ class AFLRunner:
                 )
         return sorted(crash_files)
 
-    def _merge_crash_files(self, crash_files: list[Path]) -> Path:
+    def _merge_crash_files(self, crash_files: list[Path]) -> Path | None:
         """Return one directory containing every collected crash file.
 
         Single-instance campaigns (or ones where only the main instance
@@ -728,8 +867,15 @@ class AFLRunner:
         CrashCollector sees them all. Names keep their ``id:`` prefix
         (the collector filters on it) and gain an ``,instance:<name>``
         suffix to disambiguate identical AFL ids across instances.
+
+        With no crashes collected, return ``main/crashes`` only when it
+        actually exists, else ``None``. Pre-fix ``all()`` over the empty
+        list returned a possibly-nonexistent path that downstream
+        consumers (CrashCollector) rejected with FileNotFoundError.
         """
         main_crashes = self.output_dir / "main" / "crashes"
+        if not crash_files:
+            return main_crashes if main_crashes.is_dir() else None
         if all(f.parent.parent.name == "main" for f in crash_files):
             return main_crashes
 
@@ -831,6 +977,7 @@ class AFLRunner:
         is_main: bool,
         timeout_ms: int,
         use_qemu: bool = False,
+        duration: int | None = None,
     ) -> list[str]:
         """Build AFL command line.
 
@@ -840,6 +987,10 @@ class AFLRunner:
           -d                   deterministic mutations off (faster startup)
           -X <mutator.so>      custom mutator library
           -x <dict>            dictionary for structured input
+          -V <seconds>         self-terminate after the campaign duration
+                               (the campaign runs as a blocking sandboxed
+                               call — -V is its primary clock; the sandbox
+                               timeout is only the wedge net)
 
         LAF-intel is a compile-time feature (AFL_LLVM_LAF_*), so it is
         applied to the cmplog/main binary at compile time, not here.
@@ -862,6 +1013,12 @@ class AFLRunner:
 
         # Timeout
         cmd.extend(["-t", str(timeout_ms)])
+
+        # Campaign duration: afl-fuzz exits on its own after this many
+        # seconds. The runner blocks inside the sandbox for the whole
+        # campaign, so afl-fuzz must be self-terminating.
+        if duration is not None:
+            cmd.extend(["-V", str(duration)])
 
         # Power schedule -- default 'fast' is faster than the legacy 'explore'.
         # Different schedules suit different campaigns: 'explore' for breadth,

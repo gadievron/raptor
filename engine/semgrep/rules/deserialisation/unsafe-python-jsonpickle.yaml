@@ -1,0 +1,43 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — jsonpickle.decode reconstructs arbitrary Python objects
+  # (py/object tags name any importable class), giving code execution on
+  # attacker-controlled documents. Pattern-only, matching the pickle rule's
+  # posture: the API on externally-reachable data is the finding.
+  # ---------------------------------------------------------------------------
+  - id: raptor.deserialisation.unsafe.python.jsonpickle
+    message: >-
+      jsonpickle.decode reconstructs arbitrary Python objects from
+      attacker-controllable JSON (py/object tags import and instantiate any
+      class). Use plain json.loads with an explicit schema instead.
+    languages: [python]
+    severity: CRITICAL
+    pattern-either:
+      - pattern: jsonpickle.decode(...)
+      - pattern: jsonpickle.loads(...)
+      - pattern: jsonpickle.unpickler.decode(...)
+    metadata:
+      cwe: ["CWE-502"]
+      owasp_top_10: ["A8:2021-Software and Data Integrity Failures"]
+      tags: ["security", "deserialisation", "jsonpickle"]
+
+  # ---------------------------------------------------------------------------
+  # Python — dill / cloudpickle are pickle supersets: same RCE surface,
+  # commonly reached via model/cache loading paths.
+  # ---------------------------------------------------------------------------
+  - id: raptor.deserialisation.unsafe.python.dill
+    message: >-
+      dill/cloudpickle deserialise arbitrary Python objects (pickle
+      supersets) — remote code execution if the input is
+      attacker-controlled. Use a safe format or sign payloads.
+    languages: [python]
+    severity: CRITICAL
+    pattern-either:
+      - pattern: dill.loads(...)
+      - pattern: dill.load(...)
+      - pattern: cloudpickle.loads(...)
+      - pattern: cloudpickle.load(...)
+    metadata:
+      cwe: ["CWE-502"]
+      owasp_top_10: ["A8:2021-Software and Data Integrity Failures"]
+      tags: ["security", "deserialisation", "pickle"]

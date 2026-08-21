@@ -97,13 +97,20 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
@@ -118,7 +125,11 @@ rules:
               - pattern: http.NewRequestWithContext($CTX, $METHOD, $URL, ...)
               - pattern: $CLIENT.Get($URL)
               - pattern: $CLIENT.Post($URL, ...)
-              - pattern: $CLIENT.PostForm($URL, ...)
+              # exactly two args (url, data): net/http Client.PostForm.
+              # A trailing ... also matched gin's one-arg c.PostForm(key)
+              # — a source read — flagging the read itself as an SSRF
+              # request (source/sink self-overlap).
+              - pattern: $CLIENT.PostForm($URL, $DATA)
               - pattern: $CLIENT.Head($URL)
               - pattern: $CLIENT.Do($REQ)
           # Exclude source expressions that collide with $CLIENT.Get()
@@ -195,20 +206,33 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.params[...]
-          - pattern: $CTX.params.$PROP
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP
@@ -267,11 +291,14 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.redirect-following.python
     message: >-
-      HTTP client follows redirects by default. An SSRF via open redirect
-      can bypass allowlists. Consider allow_redirects=False or a
-      redirect hook that validates the target.
+      httpx does not follow redirects by default; enabling
+      follow_redirects=True lets an SSRF via open redirect bypass URL
+      allowlists. Validate redirect targets or leave redirects off.
     languages: [python]
     severity: MEDIUM
-    pattern-either:
-      - pattern: requests.$FUNC($URL, ..., allow_redirects=True, ...)
-      - pattern: httpx.$FUNC($URL, ..., follow_redirects=True, ...)
+    # requests' allow_redirects=True is deliberately NOT flagged: it
+    # is the library default made explicit, not a behaviour change.
+    pattern: httpx.$FUNC($URL, ..., follow_redirects=True, ...)
+    metadata:
+      cwe: ["CWE-918"]
+      tags: ["security", "ssrf", "redirect"]

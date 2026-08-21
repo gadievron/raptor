@@ -50,7 +50,23 @@ _NOISY_LOGGERS = (
     "google_genai",
     "google.api_core",
     "google.auth",
+    # Anthropic / OpenAI SDKs log "Retrying request to <url> in Ns" at
+    # INFO on every backoff — a corpus run's 429 storm printed ~370 of
+    # them. RAPTOR's client logs one line per retry SEQUENCE instead;
+    # the per-backoff SDK chatter is transport detail.
+    "anthropic",
+    "openai",
 )
+
+# Loggers whose ERROR lines duplicate (and misstate) what RAPTOR's own
+# funnel already reports at the right layer. instructor logs
+# "Max retries exceeded. Total attempts: N" at ERROR for EVERY
+# terminal failure — including non-retried ones, where "Total
+# attempts: 1" reads as a retry-policy lie — while
+# _note_instructor_failure logs the same failure with the sanitised
+# detail and the consecutive-failure count. Raised to CRITICAL, not
+# silenced: a truly fatal library scream still surfaces.
+_REDUNDANT_ERROR_LOGGERS = ("instructor",)
 
 
 def quiet_noisy_loggers(level: int = logging.WARNING) -> None:
@@ -59,10 +75,16 @@ def quiet_noisy_loggers(level: int = logging.WARNING) -> None:
 
     Idempotent — safe to call repeatedly. WARNING and above
     still surface so real failures (HTTP errors, auth failures)
-    aren't hidden.
+    aren't hidden. The redundant-ERROR set additionally moves to
+    CRITICAL — their ERROR lines restate failures RAPTOR's own
+    logging already covers (see ``_REDUNDANT_ERROR_LOGGERS``).
     """
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(level)
+    for name in _REDUNDANT_ERROR_LOGGERS:
+        logging.getLogger(name).setLevel(
+            max(level, logging.CRITICAL),
+        )
 
 
 __all__ = ["quiet_noisy_loggers"]

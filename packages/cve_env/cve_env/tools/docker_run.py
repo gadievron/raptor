@@ -1,16 +1,15 @@
-"""docker run + docker compose up with localhost-only ephemeral ports.
+"""docker run planner layer — mechanics live in ``core.container``.
 
-Uses subprocess (``docker`` CLI) directly instead of docker-py /
-testcontainers -- subprocess is portable, has fewer deps, avoids
-docker-py / testcontainers issues on Colima, and matches how the rest
-of the agent speaks to docker.
+The launch mechanics (hardened defaults, ephemeral ``127.0.0.1:0``
+binding with the allocated port read back from ``docker inspect``,
+fresh-pull policy, transient-failure retry with prune, label-scoped
+ownership stop) moved to :mod:`core.container.containers`. What stays
+here is the agent-facing layer: the sticky duplicate-attempt guard,
+the discriminated ``next_step_hint`` text, and the tool-result shape.
 
-Scope: one container, one primary HTTP port, teardown via the caller.
+Invariants preserved (enforced in core now):
 
-Invariants preserved:
-
-* **P9** -- ephemeral port binding ``127.0.0.1:0`` only; allocated port
-  read from ``docker inspect`` post-launch.
+* **P9** -- ephemeral port binding ``127.0.0.1:0`` only.
 * **P17** -- hardened defaults (``--cap-drop ALL``,
   ``--security-opt=no-new-privileges:true``, minimal cap_add).
 * **P18** -- bind only to ``127.0.0.1``; never ``0.0.0.0``.
@@ -18,51 +17,25 @@ Invariants preserved:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.container.containers import (
+    container_logs_tail,
+    launch_container,
+    read_allocated_host_port,
+    stop_container,
+)
+
 from cve_env.config import CVE_LABEL
-from cve_env.tools._failure_class import classify_docker_stderr, is_retry_eligible
-from cve_env.tools._image_origin import _is_external_image
-from cve_env.utils.run import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
-# Auto-retry-on-transient before surfacing failure.
-_DOCKER_RETRY_BACKOFF_S: float = 5.0  # short wait before retry
-_DOCKER_RETRY_MAX_ATTEMPTS: int = 2  # original + 1 retry
-
-# Bound `docker run --pull always` so a slow or stalled registry pull fails
-# fast and the agent can pivot, instead of hanging until the wall-guard
-# SIGKILLs the worker. Large legit-pulls land in ~390s; 600s leaves time to
-# pivot before the wall-guard fires.
-def _parse_timeout_env(env_var: str, default: float, lo: float, hi: float) -> float:
-    raw = os.environ.get(env_var, "")
-    if not raw:
-        return default
-    try:
-        val = float(raw)
-    except ValueError:
-        return default
-    if not (lo <= val <= hi):
-        return default
-    return val
-
-_DOCKER_RUN_TIMEOUT_S: float = _parse_timeout_env(
-    "CVE_ENV_DOCKER_RUN_TIMEOUT_S", default=600.0, lo=10.0, hi=3600.0
-)
-
-# Bound the post-launch `docker inspect`/`docker logs` calls so a wedged daemon
-# can't hang a worker to the wall (these run between SDK messages, where no
-# on_message guard fires). Short — both are fast local daemon queries.
-_INSPECT_POLL_TIMEOUT_S: float = 10.0
-_LOGS_TAIL_TIMEOUT_S: float = 15.0
+# source_build's local image naming convention — refs with this prefix
+# have no upstream registry, so core skips `--pull always` for them.
+_LOCAL_IMAGE_PREFIXES: tuple[str, ...] = ("cve-",)
 
 
 class RunError(RuntimeError):
@@ -80,16 +53,6 @@ class RunError(RuntimeError):
         self.reason = reason
         self.image_ref = image_ref
 
-
-DEFAULT_CAP_DROP: tuple[str, ...] = ("ALL",)
-DEFAULT_CAP_ADD: tuple[str, ...] = (
-    "CHOWN",
-    "DAC_OVERRIDE",
-    "SETGID",
-    "SETUID",
-    "NET_BIND_SERVICE",
-)
-DEFAULT_SECURITY_OPT: tuple[str, ...] = ("no-new-privileges:true",)
 
 OWNER_LABEL = "cve-env.owner"
 # CVE_LABEL imported from config (single source); re-exported here for the
@@ -223,68 +186,19 @@ def _read_allocated_host_port(
     container_port: int,
     timeout_s: float = 10.0,
 ) -> int:
-    """Poll ``docker inspect`` until the allocated host port appears.
-
-    Docker may report ``Ports=[]`` for a tick after ``run -d`` returns.
-    Poll up to ``timeout_s``.
-    """
-    deadline = time.monotonic() + timeout_s
-    last_bindings: list[dict[str, Any]] = []
-    while time.monotonic() < deadline:
-        # run_with_timeout applies safe_subprocess_env() by default, so
-        # dangerous env vars are still stripped. Bound each poll so a wedged
-        # daemon can't hang past the deadline (timed_out → returncode None →
-        # this poll is skipped, the deadline loop exits, no_host_port raised).
-        outcome = run_with_timeout(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{json .NetworkSettings.Ports}}",
-                container_id,
-            ],
-            timeout=_INSPECT_POLL_TIMEOUT_S,
-        )
-        if outcome.returncode == 0 and outcome.stdout.strip():
-            try:
-                ports = json.loads(outcome.stdout)
-            except json.JSONDecodeError:
-                ports = None
-            if isinstance(ports, dict):
-                key = f"{container_port}/tcp"
-                bindings = ports.get(key) or []
-                last_bindings = bindings if isinstance(bindings, list) else []
-                for binding in last_bindings:
-                    if (
-                        not isinstance(binding, dict)
-                        or binding.get("HostIp") != "127.0.0.1"
-                    ):
-                        continue
-                    host_port = binding.get("HostPort")
-                    if host_port is None:
-                        continue
-                    try:
-                        return int(host_port)
-                    except (TypeError, ValueError):
-                        continue
-        time.sleep(0.3)
-    msg = (
-        f"no 127.0.0.1 host binding for {container_port}/tcp (bindings={last_bindings})"
+    """Poll for the allocated host port; raise :class:`RunError` when it
+    never appears (core returns data; this shim restores the local
+    exception contract for in-package callers)."""
+    host_port, diag = read_allocated_host_port(
+        container_id, container_port=container_port, timeout_s=timeout_s
     )
-    raise RunError(msg, reason="no_host_port")
+    if host_port is None:
+        raise RunError(diag, reason="no_host_port")
+    return host_port
 
 
 def _logs_tail(container_id: str, n: int = 80) -> str:
-    # run_with_timeout applies safe_subprocess_env() by default. Bound so a
-    # wedged daemon can't hang; best-effort on timeout.
-    outcome = run_with_timeout(
-        ["docker", "logs", "--tail", str(n), container_id],
-        timeout=_LOGS_TAIL_TIMEOUT_S,
-    )
-    out = outcome.stdout or ""
-    err = outcome.stderr or ""
-    combined = f"{out}\n{err}".strip()
-    return combined[-4000:]
+    return container_logs_tail(container_id, n=n)
 
 
 def docker_run(
@@ -320,39 +234,22 @@ def docker_run(
                 "platform='linux/amd64' (Rosetta); if the image lacks the needed "
                 "arch entirely, consider give_up(arch_incompatible) or source_build."
             ),
+            next_step_hint=_docker_run_next_step_hint(
+                "duplicate_failing_attempt", "unknown", ""
+            ),
         )
 
-    name = f"cve-env-{uuid.uuid4().hex[:12]}"
-    cmd: list[str] = [
-        "docker",
-        "run",
-        "-d",
-        "--name",
-        name,
-    ]
-    for cap in DEFAULT_CAP_DROP:
-        cmd.extend(["--cap-drop", cap])
-    for cap in DEFAULT_CAP_ADD:
-        cmd.extend(["--cap-add", cap])
-    for opt in DEFAULT_SECURITY_OPT:
-        cmd.extend(["--security-opt", opt])
-    cmd.extend(["--memory", "4g", "--memory-swap", "4g"])
-    cmd.extend(["--cpus", "2"])
-    cmd.extend(["--pids-limit", "512"])
-    cmd.extend(["-p", f"127.0.0.1::{container_port}"])
-    cmd.extend(["--label", f"{OWNER_LABEL}=cve-env"])
+    labels: dict[str, str] = {OWNER_LABEL: "cve-env"}
     if cve_id:
-        cmd.extend(["--label", f"{CVE_LABEL}={cve_id}"])
+        labels[CVE_LABEL] = cve_id
     if run_id:
-        cmd.extend(["--label", f"cve-env.run-id={run_id}"])
-    if platform:
-        cmd.extend(["--platform", platform])
-    # Reject env keys containing '=' — an LLM-controlled key like "FOO=BAR"
-    # would produce `-e FOO=BAR=value`, creating misnamed env var "FOO" with
-    # value "BAR=value" inside the container.
+        labels["cve-env.run-id"] = run_id
+
     if env:
         bad_keys = [k for k in env if "=" in k]
         if bad_keys:
+            # Shape check surfaced HERE (before core) so the hint text and
+            # the no-sticky-guard behaviour stay exactly as before.
             return RunResult(
                 ok=False,
                 reason="invalid_env_key",
@@ -363,133 +260,73 @@ def docker_run(
                     "and retry."
                 ),
             )
-    for k, v in (env or {}).items():
-        if k.startswith("-"):
-            continue  # reject flag-shaped keys
-        cmd.extend(["-e", f"{k}={v}"])
-    # Force fresh pull for registry-pulled images. Bypasses the local Docker
-    # layer cache, which can silently re-use cached layers even when Docker
-    # Hub is rate-limited. Skipped for locally-built images (source_build
-    # output, bare names) which have no upstream to pull from.
-    if _is_external_image(image):
-        cmd.extend(["--pull", "always"])
-    cmd.append(image)
 
-    # Auto-retry-on-transient. If the first run fails with a retry-eligible
-    # class (disk_full, transport, network, unknown), prune dangling images +
-    # retry once before declaring failure.
-    proc = None
-    last_reason_class = "ok"
-    for attempt in range(1, _DOCKER_RETRY_MAX_ATTEMPTS + 1):
-        # Bound the `docker run --pull always` call. run_with_timeout applies
-        # safe_subprocess_env() when env is None, so dangerous env vars are
-        # stripped before docker run. RunOutcome exposes
-        # .returncode/.stdout/.stderr; on timeout .returncode is None and
-        # .timed_out is True.
-        proc = run_with_timeout(cmd, timeout=_DOCKER_RUN_TIMEOUT_S)
-        if proc.returncode == 0:
-            break
-        # A stalled pull (timed_out) won't recover on an identical retry, and a
-        # 2nd full _DOCKER_RUN_TIMEOUT_S window would push the docker_run budget
-        # toward the wall-guard this timeout exists to beat. Fail FAST → the
-        # post-loop pull_timeout branch tells the agent to pivot. Other
-        # transient failures (transport/disk_full from stderr) still get the
-        # original one retry.
-        if proc.timed_out:
-            last_reason_class = "transport"
-            break
-        last_reason_class = classify_docker_stderr(proc.stderr)
-        if attempt >= _DOCKER_RETRY_MAX_ATTEMPTS or not is_retry_eligible(
-            last_reason_class
-        ):
-            break
-        # Retry-eligible failure: prune + wait briefly, then retry.
-        if last_reason_class == "disk_full":
-            logger.info(
-                "docker_run disk_full on %s; pruning + retrying in %ss",
-                image,
-                _DOCKER_RETRY_BACKOFF_S,
-            )
-            # Best-effort prune; run_with_timeout catches all transport
-            # failures (a prune timeout must not break the retry) and we
-            # ignore the outcome.
-            run_with_timeout(
-                ["docker", "system", "prune", "-f"],
-                timeout=30,
-            )
-        else:
-            logger.info(
-                "docker_run %s on %s; retrying in %ss",
-                last_reason_class,
-                image,
-                _DOCKER_RETRY_BACKOFF_S,
-            )
-        time.sleep(_DOCKER_RETRY_BACKOFF_S)
-        # Generate a fresh container name so the second attempt doesn't collide.
-        for i, arg in enumerate(cmd):
-            if arg == "--name" and i + 1 < len(cmd):
-                cmd[i + 1] = f"cve-env-{uuid.uuid4().hex[:12]}"
-                break
+    launch = launch_container(
+        image=image,
+        container_port=container_port,
+        name_prefix="cve-env",
+        labels=labels,
+        platform=platform,
+        env=env,
+        local_prefixes=_LOCAL_IMAGE_PREFIXES,
+        run_timeout_s=_docker_run_timeout_s(),
+    )
 
-    assert proc is not None  # noqa: S101 -- loop above always assigns
-    if proc.returncode != 0:
-        _FAILED_ATTEMPTS.add(attempt_key)
-        # A stalled `docker run --pull always` hit the timeout. Tell the agent
-        # to pivot rather than re-pull the same ref.
-        if proc.timed_out:
-            return RunResult(
-                ok=False,
-                reason="pull_timeout",
-                reason_class="transport",
-                stderr=(
-                    f"docker run --pull always exceeded {_DOCKER_RUN_TIMEOUT_S:.0f}s "
-                    "— registry pull slow/stalled"
-                ),
-                next_step_hint=(
-                    "image pull exceeded the timeout (slow/stalled registry). "
-                    "Do NOT retry the same pull — pivot: source_build from the "
-                    "upstream repo, or a different image tag/registry."
-                ),
-            )
-        stderr_text = proc.stderr.strip()[-4000:]
+    if launch.ok:
         return RunResult(
-            ok=False,
-            reason="docker_run_failed",
-            reason_class=last_reason_class,
-            stderr=stderr_text,
-            next_step_hint=_docker_run_next_step_hint(
-                "docker_run_failed", last_reason_class, stderr_text
+            ok=True,
+            container_id=launch.container_id,
+            host_port=launch.host_port,
+            container_port=launch.container_port,
+            host_ip=launch.host_ip,
+            next_step_hint=(
+                f"container running on 127.0.0.1:{launch.host_port} "
+                f"(container port {launch.container_port} → host "
+                f"{launch.host_port}). "
+                "YOUR LITERAL NEXT TOOL CALL MUST BE `verify` with a plan "
+                "including container_status + http_check (or tcp_probe_check "
+                "for non-HTTP services like Redis/Postgres/SSH) + a "
+                "version-assertion exec_check (e.g. `pip show <pkg>`, "
+                "`dpkg -l | grep <pkg>`, `<binary> --version`). Do NOT emit "
+                "end_turn until verify has been attempted at least once — "
+                "the runtime classifies launched-but-never-verified as a "
+                "distinct failure mode (Phase 57 launched_unverified)."
             ),
         )
 
-    container_id = proc.stdout.strip()
-    if not container_id:
-        _FAILED_ATTEMPTS.add(attempt_key)
+    _FAILED_ATTEMPTS.add(attempt_key)
+    if launch.reason == "pull_timeout":
+        return RunResult(
+            ok=False,
+            reason="pull_timeout",
+            reason_class="transport",
+            stderr=launch.stderr,
+            next_step_hint=(
+                "image pull exceeded the timeout (slow/stalled registry). "
+                "Do NOT retry the same pull — pivot: source_build from the "
+                "upstream repo, or a different image tag/registry."
+            ),
+        )
+    if launch.reason == "no_container_id":
         return RunResult(
             ok=False,
             reason="no_container_id",
             reason_class="unknown",
-            stderr=proc.stderr.strip()[-4000:],
+            stderr=launch.stderr,
             next_step_hint=(
                 "docker run returned no container_id. The image likely failed "
                 "to pull or couldn't be created. Check stderr; consider a "
                 "different image or `docker_build` from source"
             ),
         )
-
-    try:
-        host_port = _read_allocated_host_port(
-            container_id, container_port=container_port
-        )
-    except RunError as exc:
-        _FAILED_ATTEMPTS.add(attempt_key)
+    if launch.reason == "no_host_port":
         return RunResult(
             ok=False,
-            container_id=container_id,
-            container_port=container_port,
-            reason=exc.reason or "no_host_port",
-            logs_tail=_logs_tail(container_id),
-            stderr=str(exc),
+            container_id=launch.container_id,
+            container_port=launch.container_port,
+            reason="no_host_port",
+            logs_tail=launch.logs_tail,
+            stderr=launch.stderr,
             next_step_hint=(
                 "container started but didn't bind the expected host port. "
                 "It may have crashed early — check logs_tail. Otherwise "
@@ -497,60 +334,43 @@ def docker_run(
                 "correct `container_port` arg"
             ),
         )
-
+    # launch.reason == "run_failed"
     return RunResult(
-        ok=True,
-        container_id=container_id,
-        host_port=host_port,
-        container_port=container_port,
-        host_ip="127.0.0.1",
-        next_step_hint=(
-            f"container running on 127.0.0.1:{host_port} "
-            f"(container port {container_port} → host {host_port}). "
-            "YOUR LITERAL NEXT TOOL CALL MUST BE `verify` with a plan "
-            "including container_status + http_check (or tcp_probe_check "
-            "for non-HTTP services like Redis/Postgres/SSH) + a "
-            "version-assertion exec_check (e.g. `pip show <pkg>`, "
-            "`dpkg -l | grep <pkg>`, `<binary> --version`). Do NOT emit "
-            "end_turn until verify has been attempted at least once — "
-            "the runtime classifies launched-but-never-verified as a "
-            "distinct failure mode (Phase 57 launched_unverified)."
+        ok=False,
+        reason="docker_run_failed",
+        reason_class=launch.reason_class,
+        stderr=launch.stderr,
+        next_step_hint=_docker_run_next_step_hint(
+            "docker_run_failed", launch.reason_class, launch.stderr
         ),
     )
 
 
-def _is_owned_container(container_id: str) -> bool:
-    """Return True only if the container carries the ``cve-env.owner=cve-env`` label.
+def _docker_run_timeout_s() -> float:
+    """Operator override for the `docker run --pull always` wall bound.
 
-    Prevents the agent from stopping arbitrary host containers.
+    Large legit-pulls land in ~390s; the 600s default leaves time to
+    pivot before the per-CVE wall-guard fires.
     """
-    outcome = run_with_timeout(
-        [
-            "docker",
-            "inspect",
-            "--format",
-            f'{{{{index .Config.Labels "{OWNER_LABEL}"}}}}',
-            container_id,
-        ],
-        timeout=5.0,
-    )
-    return (
-        outcome.returncode == 0
-        and (outcome.stdout or "").strip() == "cve-env"
-    )
+    import os
+
+    raw = os.environ.get("CVE_ENV_DOCKER_RUN_TIMEOUT_S", "")
+    if not raw:
+        return 600.0
+    try:
+        val = float(raw)
+    except ValueError:
+        return 600.0
+    if not (10.0 <= val <= 3600.0):
+        return 600.0
+    return val
 
 
 def docker_stop(container_id: str) -> None:
     """Stop + remove ``container_id``. Errors are swallowed (best effort).
 
-    ``run_with_timeout`` catches all transport failures (including timeouts)
-    so the "errors are swallowed" contract holds.
+    Core's ownership gate refuses containers that don't carry the
+    ``cve-env.owner=cve-env`` label — the agent can never stop
+    arbitrary host containers.
     """
-    if not _is_owned_container(container_id):
-        logger.warning(
-            "docker_stop: container %s is not owned by cve-env; skipping",
-            container_id,
-        )
-        return
-    run_with_timeout(["docker", "stop", container_id], timeout=30)
-    run_with_timeout(["docker", "rm", "-f", container_id], timeout=30)
+    stop_container(container_id, required_label=(OWNER_LABEL, "cve-env"))

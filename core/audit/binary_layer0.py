@@ -755,7 +755,11 @@ def format_layer0_context(
     if findings:
         lines.append(f"**{len(findings)} mechanical findings:**")
         for f in findings[:15]:
-            tier = f.evidence_tier.upper()
+            # Title Case for the human/prompt rendering; the JSON
+            # export keeps the raw snake_case enum. ``evidence_tier``
+            # may be the EvidenceTier member or its plain-string value.
+            raw = getattr(f.evidence_tier, "value", f.evidence_tier)
+            tier = str(raw).replace("_", " ").title()
             lines.append(f"- [{tier}] `{f.function}()`: {f.description}")
         if len(findings) > 15:
             lines.append(f"  ...and {len(findings) - 15} more")

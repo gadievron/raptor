@@ -21,10 +21,29 @@ logger = logging.getLogger(__name__)
 _C_EXTENSIONS = frozenset({".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"})
 _JOERN_STALL_FLOOR_S = 30
 
-_JOERN_EXTENSIONS = frozenset({
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".scala", ".kt",
-    ".go", ".rb", ".php",
-})
+# Recognised source languages Joern has NO curated profile for.
+# lang_config.detect_language() would classify such a target as its
+# DEFAULT (Python) and pin the pythonsrc frontend — an empty or
+# wrong-language CPG — so the gate refuses them with a logged reason
+# instead of booting Joern.
+# .rb and .php stay here deliberately: joern ships rubysrc2cpg and
+# php2cpg frontends, but rubysrc's embedded ast-gen fails loading its
+# parser gem (empty CPG, exit 0) and php2cpg needs a php interpreter
+# on PATH — both probed and rejected; see lang_config's profile note.
+_UNPROFILED_EXTENSIONS = frozenset({".rb", ".php", ".scala"})
+
+
+def _joern_extensions() -> frozenset[str]:
+    """Non-C extensions with a curated Joern language profile.
+
+    Derived from lang_config's extension map so the gate can never
+    admit a language the frontend pinning would mis-route.
+    """
+    try:
+        from packages.joern.lang_config import supported_source_extensions
+    except ImportError:
+        return frozenset()
+    return supported_source_extensions() - _C_EXTENSIONS
 
 
 def target_has_c_sources(target_path: Path | None) -> bool:
@@ -38,12 +57,31 @@ def target_has_c_sources(target_path: Path | None) -> bool:
 
 
 def target_has_joern_sources(target_path: Path | None) -> bool:
-    """Check if target has non-C sources that Joern can parse."""
+    """Check if target has non-C sources Joern has a curated profile for.
+
+    Targets whose only recognised sources are unprofiled languages
+    (Ruby, PHP, Scala, Kotlin) gate to False with a logged reason —
+    the audit then runs on the tree-sitter + LLM fallback.
+    """
     if not target_path or not target_path.is_dir():
         return False
+    supported = _joern_extensions()
+    unprofiled_seen: set[str] = set()
     for p in target_path.rglob("*"):
-        if p.is_file() and p.suffix.lower() in _JOERN_EXTENSIONS:
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext in supported:
             return True
+        if ext in _UNPROFILED_EXTENSIONS:
+            unprofiled_seen.add(ext)
+    if unprofiled_seen:
+        logger.warning(
+            "Joern disabled for %s: only %s sources found — no curated "
+            "joern-parse profile for these languages; audit falls back "
+            "to tree-sitter + LLM",
+            target_path, ", ".join(sorted(unprofiled_seen)),
+        )
     return False
 
 
@@ -79,12 +117,20 @@ def joern_tunables(overrides: dict[str, Any] | None = None):
             return None
 
 
-def start_joern_server(target_path, joern_overrides=None, tunables=None):
+def start_joern_server(target_path, joern_overrides=None, tunables=None,
+                       out_dir=None):
     """Start or reuse a persistent Joern server if Joern is available.
 
     Returns the server instance or None.  When reusing a lifecycle-managed
     server, builds/imports the CPG for *target_path* so queries run
     against the correct codebase.
+
+    After the CPG loads, tool-corroborated project sanitisers from the
+    IRIS store are installed as flow-semantics kill rows so taint
+    sweeps stop propagating through validators the refinement loop has
+    confirmed. ``out_dir`` (a run output dir) pins the store lookup;
+    without it the store resolves via the active project. Callers that
+    pass their own server through config own its semantics.
     """
     if not joern_available(overrides=joern_overrides):
         return None
@@ -121,7 +167,50 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None):
         except Exception:
             logger.debug("joern server stop failed", exc_info=True)
         return None
+    install_flow_semantics(srv, target_path, out_dir=out_dir)
     return srv
+
+
+def install_flow_semantics(srv, target_path, out_dir=None) -> int:
+    """Install learned sanitiser kill rows on a booted Joern server.
+
+    Rows come from the IRIS store's suppression-direction reader
+    (``get_project_sanitisers`` — tool-corroborated / operator-promoted
+    specs only, the same XREF_BACKED floor guard-adequacy uses). Kill
+    rows remove flows, so the suppression-direction gate is
+    load-bearing: a heuristic-tier sanitiser must not silence a sweep.
+
+    Returns the number of rows installed. No learned sanitisers, a
+    server without semantics support, or any store/install failure
+    degrade to 0 rows with the server untouched — vocabulary quality
+    must never cost a sweep.
+    """
+    if srv is None or not hasattr(srv, "set_flow_semantics"):
+        return 0
+    try:
+        from core.iris.api import get_project_sanitisers
+    except ImportError:
+        return 0
+    try:
+        names = get_project_sanitisers(
+            out_dir=Path(out_dir) if out_dir else None,
+            target_path=Path(target_path) if target_path else None,
+        )
+    except Exception:
+        logger.debug("IRIS sanitiser recall failed", exc_info=True)
+        return 0
+    if not names:
+        return 0
+    try:
+        installed = srv.set_flow_semantics(sorted(names))
+    except Exception:
+        logger.debug("flow-semantics install failed", exc_info=True)
+        return 0
+    logger.info(
+        "joern flow semantics: %d of %d learned sanitiser kill row(s) "
+        "installed", installed, len(names),
+    )
+    return installed
 
 
 def _ensure_cpg_loaded(srv, target_path, tunables=None):
@@ -259,12 +348,54 @@ def enrich_joern_evidence(
             rec.joern_sink_args = deduped
 
 
+#: Run-dir artifact recording an interrupted/re-queued pre-sweep.
+#: Written by :func:`build_joern_evidence`; read by the report
+#: summary and the critique pass so a lost taint window is surfaced
+#: instead of living only in a log WARNING.
+PRESWEEP_STATUS_FILENAME = "joern-presweep-status.json"
+
+
+def _write_presweep_status(out_dir, status: dict) -> None:
+    """Persist the pre-sweep interruption record. Best-effort."""
+    if not out_dir:
+        return
+    try:
+        from datetime import datetime, timezone
+
+        from core.json import save_json
+        record = dict(status)
+        record["ts"] = datetime.now(timezone.utc).isoformat()
+        save_json(Path(out_dir) / PRESWEEP_STATUS_FILENAME, record)
+    except Exception:  # noqa: BLE001 — bookkeeping must not cost the sweep
+        logger.debug("pre-sweep status write failed", exc_info=True)
+
+
+def load_presweep_status(out_dir) -> dict | None:
+    """Read the pre-sweep interruption record, or None when absent."""
+    if not out_dir:
+        return None
+    path = Path(out_dir) / PRESWEEP_STATUS_FILENAME
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def build_joern_evidence(
     target_path, out_dir, joern_overrides=None,
     on_progress: Callable | None = None,
     joern_server=None,
 ) -> dict[str, list] | None:
-    """Run Joern pre-sweep (standard_sinks.sc) if available."""
+    """Run Joern pre-sweep (standard_sinks.sc) if available.
+
+    When the pre-sweep window was interrupted by a server restart, the
+    outcome (re-queued and recovered, or lost) is persisted to
+    ``joern-presweep-status.json`` in the run dir for the summary and
+    critique — a lost taint window must not be a log-only event.
+    """
     try:
         from .sweep import run_joern_pre_sweep
     except ImportError:
@@ -274,6 +405,7 @@ def build_joern_evidence(
     if tunables is None:
         return None
     cache_dir = resolve_cpg_cache_dir(out_dir)
+    status: dict = {}
     flows = run_joern_pre_sweep(
         target_path, {},
         cache_dir=cache_dir,
@@ -282,7 +414,13 @@ def build_joern_evidence(
         query_timeout=tunables.query_timeout_s,
         heap_mb=tunables.heap_mb,
         server=joern_server,
+        status_out=status,
     )
+    if status.get("interrupted"):
+        status["flows_recovered"] = sum(
+            len(v) for v in (flows or {}).values()
+        )
+        _write_presweep_status(out_dir, status)
     return flows or None
 
 
@@ -494,9 +632,10 @@ def _current_content_hash(out_dir, target_path) -> str | None:
         try:
             with open(manifest_path, encoding="utf-8") as f:
                 own = json.load(f)
-            own_hash = own.get("content_hash", "")
-            if own_hash:
-                return own_hash
+            if isinstance(own, dict):
+                own_hash = own.get("content_hash", "")
+                if own_hash:
+                    return own_hash
         except (json.JSONDecodeError, OSError):
             pass
     if target_path is None or not Path(target_path).is_dir():
@@ -518,6 +657,7 @@ def import_sibling_joern_flows(
     if not siblings:
         return None
     imported: dict[str, list] = {}
+    skipped_stale = 0
     current_hash: str | None = None
     current_hash_resolved = False
     for sibling_dir in siblings:
@@ -529,22 +669,27 @@ def import_sibling_joern_flows(
             try:
                 with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
-                sibling_hash = manifest.get("content_hash", "")
+                sibling_hash = (
+                    manifest.get("content_hash", "")
+                    if isinstance(manifest, dict) else ""
+                )
                 if sibling_hash:
                     # Staleness gate: a sibling run at a different
                     # commit carries taint flows for code that no
-                    # longer exists. Only enforced when both hashes
-                    # are known — legacy siblings without hashes
-                    # import as before.
+                    # longer exists (line drift makes them actively
+                    # misleading). Only enforced when both hashes are
+                    # known — legacy siblings without hashes import
+                    # as before.
                     if not current_hash_resolved:
                         current_hash = _current_content_hash(
                             out_dir, target_path,
                         )
                         current_hash_resolved = True
                     if current_hash and sibling_hash != current_hash:
+                        skipped_stale += 1
                         logger.info(
                             "sibling %s joern-flows stale "
-                            "(hash %s → %s) — skipped",
+                            "(hash %s != %s) — skipped",
                             sibling_dir.name,
                             sibling_hash[:8], current_hash[:8],
                         )
@@ -554,10 +699,21 @@ def import_sibling_joern_flows(
         try:
             with open(flows_path, encoding="utf-8") as f:
                 flows_data = json.load(f)
+            if not isinstance(flows_data, dict):
+                logger.debug(
+                    "malformed joern-flows in %s — skipped",
+                    sibling_dir.name,
+                )
+                continue
             for key, flows in flows_data.items():
                 imported.setdefault(key, []).extend(flows)
         except (json.JSONDecodeError, OSError):
             logger.debug("failed to import joern-flows from %s", sibling_dir.name)
+    if skipped_stale:
+        logger.info(
+            "sibling joern-flow import: %d stale run(s) skipped",
+            skipped_stale,
+        )
     return imported if imported else None
 
 
@@ -581,6 +737,10 @@ def sibling_run_dirs(
                 try:
                     with open(manifest, encoding="utf-8") as f:
                         m = json.load(f)
+                    # Malformed metadata (valid JSON, wrong shape) is
+                    # as disqualifying as unparseable JSON.
+                    if not isinstance(m, dict):
+                        continue
                     sibling_target = m.get("target_path") or m.get("target", "")
                     if sibling_target and Path(sibling_target).resolve() != Path(target_path).resolve():
                         continue

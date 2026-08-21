@@ -30,6 +30,7 @@ field regardless of which evidence shape produced the record.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import Counter
@@ -56,6 +57,7 @@ __all__ = [
     "Oracle",
     "OutcomeStatus",
     "ScoredOutcome",
+    "VERIFIED_OUTCOMES_FILENAME",
     "VerifiedOutcome",
     "collect_outcomes",
     "exemplar_block_for_finding",
@@ -87,6 +89,11 @@ class Oracle(str, Enum):
     CODEQL = "codeql"     # isBarrier adjudication / trust-witness soundness
     WEB = "web"           # /web live-target dynamic confirmation
     MANUAL = "manual"     # operator-supplied
+    CONSENSUS = "consensus"  # independent-source agreement (e.g. /cve-diff
+    #                          OSV + NVD fix-pointer consensus)
+    RUNTIME = "runtime"   # live-environment behavioural checks (e.g.
+    #                       /cve-env's verify DAG against the launched
+    #                       container: version assertion + functional smoke)
 
 
 class OutcomeStatus(str, Enum):
@@ -209,6 +216,10 @@ def from_labeled_attempt(la: LabeledAttempt) -> Optional[VerifiedOutcome]:
         when ``is_sound=True``). Reproducible.
       * ``web_evidence`` + ``outcome="success"`` → VERIFIED. NOT
         reproducible (live-HTTP point-in-time).
+      * ``web_evidence`` + ``outcome="reasoned_failure"`` +
+        ``response_evidence.refuted_by_control`` → REFUTED (the web
+        oracle's benign-control experiment showed the signal is page
+        noise).
       * Anything else → INCONCLUSIVE.
 
     Returns ``None`` for records that carry no oracle evidence at all
@@ -279,13 +290,27 @@ def from_labeled_attempt(la: LabeledAttempt) -> Optional[VerifiedOutcome]:
 
     if la.web_evidence is not None:
         we = la.web_evidence
+        # REFUTED requires BOTH the producer committing to a reasoned
+        # failure AND the evidence carrying a positive control
+        # refutation (the web oracle's benign-control legs showed the
+        # signal is page noise). A mere failed replay never sets the
+        # flag, so flakiness stays INCONCLUSIVE — matching the CodeQL
+        # branch's rule that REFUTED needs technical evidence, not
+        # just a non-success outcome.
+        refuted = (
+            la.outcome == "reasoned_failure"
+            and bool((we.response_evidence or {}).get("refuted_by_control"))
+        )
+        if la.outcome == "success":
+            web_status = OutcomeStatus.VERIFIED
+        elif refuted:
+            web_status = OutcomeStatus.REFUTED
+        else:
+            web_status = OutcomeStatus.INCONCLUSIVE
         return VerifiedOutcome(
             finding_id=la.finding_id,
             oracle=Oracle.WEB,
-            status=(
-                OutcomeStatus.VERIFIED if la.outcome == "success"
-                else OutcomeStatus.INCONCLUSIVE
-            ),
+            status=web_status,
             reproducible=False,  # live-HTTP point-in-time
             evidence={
                 "target_url": we.target_url,
@@ -435,6 +460,12 @@ def from_barrier_synthesis(
 # ---------------------------------------------------------------------------
 
 
+# Run-local VerifiedOutcome sidecar: one ``VerifiedOutcome.to_dict()``
+# JSON object per line, appended by producers whose oracle evidence
+# doesn't fit the LabeledAttempt shapes (source 3 in collect_outcomes).
+VERIFIED_OUTCOMES_FILENAME = "verified-outcomes.jsonl"
+
+
 def collect_outcomes(
     output_dir: Optional[Path],
     *,
@@ -494,6 +525,18 @@ def collect_outcomes(
                 vo = from_labeled_attempt(la)
                 if vo is not None:
                     outcomes.append(vo)
+        # A run output directory may carry its own per-run pool
+        # (producers like the /web oracle write to
+        # <out_dir>/labeled_attempts). Read it unless it IS the
+        # project pool already read above.
+        if output_dir is not None and (
+            project_root is None
+            or Path(output_dir).resolve() != Path(project_root).resolve()
+        ):
+            for la in _safe_records(lambda: project_pool_path(output_dir)):
+                vo = from_labeled_attempt(la)
+                if vo is not None:
+                    outcomes.append(vo)
         for la in _safe_records(global_pool_path):
             vo = from_labeled_attempt(la)
             if vo is not None:
@@ -514,7 +557,49 @@ def collect_outcomes(
     except Exception as exc:
         _log.debug("legacy witness discovery failed: %s", exc)
 
+    # 3. Run-local VerifiedOutcome records — producers whose oracle
+    # evidence doesn't fit the LabeledAttempt shapes (e.g. /cve-diff's
+    # OSV+NVD fix-pointer consensus) append ``to_dict()`` lines to
+    # VERIFIED_OUTCOMES_FILENAME in their run dir. Best-effort: an
+    # unparseable line is skipped, never fatal.
+    for run_dir in _verified_outcome_dirs(output_dir, project_root):
+        path = run_dir / VERIFIED_OUTCOMES_FILENAME
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                outcomes.append(VerifiedOutcome.from_dict(json.loads(line)))
+            except Exception:
+                _log.debug(
+                    "skipping malformed verified-outcome line in %s",
+                    path, exc_info=True,
+                )
+
     return outcomes
+
+
+def _verified_outcome_dirs(
+    output_dir: Optional[Path],
+    project_root: Optional[Path],
+) -> List[Path]:
+    """Candidate directories for run-local verified-outcome files: the
+    run itself plus (cross-run view) the project's sibling run dirs."""
+    dirs: List[Path] = []
+    if output_dir is not None:
+        dirs.append(Path(output_dir))
+    if project_root is not None:
+        try:
+            for child in sorted(Path(project_root).iterdir()):
+                if child.is_dir() and child not in dirs:
+                    dirs.append(child)
+        except OSError:
+            pass
+    return dirs
 
 
 # ---------------------------------------------------------------------------

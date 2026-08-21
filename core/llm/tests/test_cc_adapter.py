@@ -576,12 +576,12 @@ class TestCcSubprocessEnv:
         from core.llm.cc_adapter import cc_subprocess_env
         monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
         monkeypatch.setenv("ANTHROPIC_MODEL", "anthropic.claude-mythos-5")
-        monkeypatch.setenv("AWS_PROFILE", "mythos")
+        monkeypatch.setenv("AWS_PROFILE", "bedrock-ci")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
         env = cc_subprocess_env()
         assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
         assert env["ANTHROPIC_MODEL"] == "anthropic.claude-mythos-5"
-        assert env["AWS_PROFILE"] == "mythos"
+        assert env["AWS_PROFILE"] == "bedrock-ci"
         assert env["AWS_REGION"] == "us-east-1"
 
     def test_aws_gated_on_bedrock(self, monkeypatch):
@@ -610,6 +610,20 @@ class TestCcSubprocessEnv:
         assert "PATH" in env
         assert "HOME" in env
 
+    def test_children_stamped_non_interactive(self):
+        """Dispatched CLI children are unattended by definition: the
+        AskUserQuestion gate's explicit override must be present so a
+        sub-agent session never raises an operator prompt. Also pins
+        the module-local constant to the gate's canonical name."""
+        from core.llm.cc_adapter import (
+            _NONINTERACTIVE_ENV,
+            cc_subprocess_env,
+        )
+        from core.ux.interactivity import NONINTERACTIVE_ENV
+        assert _NONINTERACTIVE_ENV == NONINTERACTIVE_ENV
+        env = cc_subprocess_env()
+        assert env[_NONINTERACTIVE_ENV] == "1"
+
     def test_operator_proxy_propagated(self, monkeypatch):
         """Mandatory-egress-proxy hosts: the CLI child has no route to
         any backend unless the operator's proxy env survives."""
@@ -621,6 +635,36 @@ class TestCcSubprocessEnv:
         env = cc_subprocess_env()
         assert env["HTTPS_PROXY"] == "http://proxy.corp:3128"
         assert env["NO_PROXY"] == "169.254.169.254"
+
+    def test_proxied_child_no_proxy_gains_imds(self, monkeypatch):
+        """Children that resolve their own credential chain probe IMDS;
+        on proxied hosts those link-local probes must never travel to
+        the operator proxy (which denies them). The child's NO_PROXY
+        gains the IMDS entry, operator entries preserved first."""
+        from core.llm import egress
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setattr(egress, "_original_proxy_env", None)
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+        monkeypatch.setenv("NO_PROXY", "internal.corp")
+        env = cc_subprocess_env()
+        entries = [p.strip() for p in env["NO_PROXY"].split(",")]
+        assert entries[0] == "internal.corp"
+        assert "169.254.169.254" in entries
+        assert env["no_proxy"] == env["NO_PROXY"]
+
+    def test_unproxied_child_env_stays_mutation_free(self, monkeypatch):
+        """No operator proxy → nothing to exempt from; the child env
+        must not have a NO_PROXY invented for it."""
+        from core.llm import egress
+        from core.llm.cc_adapter import cc_subprocess_env
+        monkeypatch.setattr(egress, "_original_proxy_env", None)
+        for v in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY",
+                  "https_proxy", "ALL_PROXY", "all_proxy",
+                  "NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(v, raising=False)
+        env = cc_subprocess_env()
+        assert "NO_PROXY" not in env
+        assert "no_proxy" not in env
 
     def test_proxy_snapshot_wins_over_egress_rewrite(self, monkeypatch):
         """After enable_llm_egress points HTTPS_PROXY at the in-process
@@ -758,6 +802,12 @@ class TestCcSubprocessEnvProxyMode:
         assert env["no_proxy"] == env["NO_PROXY"]
         # Operator proxy still available for anything non-loopback.
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+
+    def test_proxy_mode_children_stamped_non_interactive(self):
+        """The zero-credential posture must not lose the unattended
+        marker — proxy-mode children are dispatched sub-agents too."""
+        env = self._proxy_env()
+        assert env["RAPTOR_NONINTERACTIVE"] == "1"
 
     def test_proxy_mode_requires_route_and_token(self):
         import pytest
@@ -897,7 +947,7 @@ class TestMintChildAwsCredentials:
     def test_mints_when_no_secret_material(self, monkeypatch):
         from core.llm.cc_adapter import _mint_child_aws_credentials
         session_cls = self._patch_session(monkeypatch, self._frozen())
-        env = {"AWS_PROFILE": "mythos", "AWS_REGION": "us-east-1",
+        env = {"AWS_PROFILE": "bedrock-ci", "AWS_REGION": "us-east-1",
                "AWS_CONFIG_FILE": "/home/op/.aws/config"}
         _mint_child_aws_credentials(env)
         assert env["AWS_ACCESS_KEY_ID"] == "ASIAMINTED"
@@ -910,7 +960,7 @@ class TestMintChildAwsCredentials:
         assert "AWS_CONFIG_FILE" not in env
         assert env["AWS_REGION"] == "us-east-1"
         # The parent's profile drove the resolution.
-        assert session_cls.call_args.kwargs["profile"] == "mythos"
+        assert session_cls.call_args.kwargs["profile"] == "bedrock-ci"
 
     def test_static_key_present_no_mint(self, monkeypatch):
         from core.llm.cc_adapter import _mint_child_aws_credentials
@@ -936,7 +986,7 @@ class TestMintChildAwsCredentials:
         def boom(**kwargs):
             raise RuntimeError("no chain")
         self._install_botocore_stub(monkeypatch, boom)
-        env = {"AWS_PROFILE": "mythos"}
+        env = {"AWS_PROFILE": "bedrock-ci"}
         with caplog.at_level("WARNING", logger="core.llm.cc_adapter"):
             _mint_child_aws_credentials(env)  # must not raise
         assert "AWS_ACCESS_KEY_ID" not in env
@@ -968,17 +1018,17 @@ class TestMintChildAwsCredentials:
         session_cls = MagicMock()
         self._install_botocore_stub(monkeypatch, session_cls)
         monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
-        monkeypatch.setenv("AWS_PROFILE", "mythos")
+        monkeypatch.setenv("AWS_PROFILE", "bedrock-ci")
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         env = cc_subprocess_env()
         session_cls.assert_not_called()
-        assert env["AWS_PROFILE"] == "mythos"
+        assert env["AWS_PROFILE"] == "bedrock-ci"
 
     def test_cc_subprocess_env_mints_when_opted_in(self, monkeypatch):
         from core.llm.cc_adapter import cc_subprocess_env
         self._patch_session(monkeypatch, self._frozen())
         monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
-        monkeypatch.setenv("AWS_PROFILE", "mythos")
+        monkeypatch.setenv("AWS_PROFILE", "bedrock-ci")
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         env = cc_subprocess_env(mint_aws_credentials=True)
@@ -1005,7 +1055,7 @@ class TestMintChildAwsCredentials:
         from core.llm.cc_adapter import _mint_child_aws_credentials
         monkeypatch.setitem(sys.modules, "botocore", None)
         monkeypatch.setitem(sys.modules, "botocore.session", None)
-        env = {"AWS_PROFILE": "mythos"}
+        env = {"AWS_PROFILE": "bedrock-ci"}
         with caplog.at_level("WARNING", logger="core.llm.cc_adapter"):
             _mint_child_aws_credentials(env)  # must not raise
         assert "AWS_ACCESS_KEY_ID" not in env

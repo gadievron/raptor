@@ -326,6 +326,91 @@ django = "^4.2.7"
     assert 'python = "^3.10"' in body
 
 
+def test_pyproject_toml_pep621_preserves_range_bounds(tmp_path: Path) -> None:
+    """PEP 621 entries keep the declared corridor around the new pin —
+    same behaviour as the requirements.txt rewriter."""
+    py = tmp_path / "pyproject.toml"
+    py.write_text("""\
+[project]
+dependencies = [
+  "requests>=2.0,<3.0",
+]
+""", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=py,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
+    assert '"requests>=2.0,==2.31.0,<3.0"' in proposed.read_text()
+
+
+def test_pyproject_toml_pep621_declines_out_of_corridor_target(
+    tmp_path: Path,
+) -> None:
+    """A fix target above the operator's declared ceiling is declined
+    (never emit an unsatisfiable spec)."""
+    py = tmp_path / "pyproject.toml"
+    py.write_text("""\
+[project]
+dependencies = [
+  "requests>=2.0,<2.25",
+]
+""", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=py,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    assert not list((out / "proposed").rglob("pyproject.toml"))
+    changes = json.loads((out / "changes.json").read_text())
+    assert "not safely bumpable" in changes[0]["skipped_reason"]
+
+
+def test_requirements_txt_declines_out_of_corridor_target(
+    tmp_path: Path,
+) -> None:
+    """``requests>=2.0,<2.25`` must not become
+    ``requests>=2.0,==2.31.0,<2.25`` — decline with a reason instead."""
+    req = tmp_path / "requirements.txt"
+    req.write_text("requests>=2.0,<2.25\n", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=req, pin_style="range",
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    assert not list((out / "proposed").rglob("requirements.txt"))
+    changes = json.loads((out / "changes.json").read_text())
+    assert "not safely bumpable" in changes[0]["skipped_reason"]
+
+
+def test_pypi_pin_preserving_bounds_corridor_conflicts() -> None:
+    from packages.sca.update import _pypi_pin_preserving_bounds
+
+    # Target above the ceiling → decline.
+    assert _pypi_pin_preserving_bounds(">=2.0,<2.25", "2.31.0") is None
+    assert _pypi_pin_preserving_bounds("<=2.25", "2.31.0") is None
+    # Target below the floor → decline.
+    assert _pypi_pin_preserving_bounds(">=2.0", "1.9") is None
+    assert _pypi_pin_preserving_bounds(">2.0", "2.0") is None
+    # In-corridor target keeps both bounds.
+    assert (_pypi_pin_preserving_bounds(">=2.0,<3.0", "2.31.0")
+            == ">=2.0,==2.31.0,<3.0")
+    # floor_raise: ceiling still guards; old floor is replaced.
+    assert _pypi_pin_preserving_bounds(
+        ">=2.0,<2.25", "2.31.0", floor_raise=True) is None
+    assert (_pypi_pin_preserving_bounds(
+        ">=2.0,<3.0", "2.31.0", floor_raise=True) == ">=2.31.0,<3.0")
+    # Uncomparable bound → decline rather than guess.
+    assert _pypi_pin_preserving_bounds("<not-a-version", "2.31.0") is None
+
+
 # ---------------------------------------------------------------------------
 # Mode flags
 # ---------------------------------------------------------------------------

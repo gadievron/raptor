@@ -243,7 +243,10 @@ def detect_framework(
         "flask": ["from flask", "import flask", "Flask("],
         "express": ["require('express')", 'require("express")', "from 'express'"],
         "spring": ["org.springframework", "@SpringBootApplication", "@RestController"],
-        "go": ["net/http", "func.*http.HandlerFunc", "http.Handle"],
+        # Literal substrings only — this matcher does `pat in source`,
+        # so regex-shaped entries never fire.
+        "go": ["net/http", "http.HandlerFunc", "http.ResponseWriter",
+               "http.Handle"],
     }
 
     for gap in gaps:
@@ -647,13 +650,6 @@ _XML_SAFE_GUARD = re.compile(
     r"(?:defusedxml|resolve_entities\s*=\s*False|XMLParser\s*\([^)]*resolve_entities|"
     r"set_feature\s*\(\s*feature_external_ges)",
     re.IGNORECASE,
-)
-
-_UNBOUNDED_WRITE = re.compile(
-    r"\.(?:write|send|sendall|sendto|put|append|extend)\s*\([^)]*\bwhile\b|"
-    r"(?:fwrite|fputs|fprintf|write)\s*\(.*\bwhile\b|"
-    r"\bwhile\b[^{]*\.(?:write|send|append)\s*\(",
-    re.IGNORECASE | re.DOTALL,
 )
 
 _HASH_COLLISION = re.compile(
@@ -1472,9 +1468,17 @@ def check_multi_process(
 
 # ── Deployment assumption patterns ────────────────────────────────────
 
+# Detection vocabulary matched against SCANNED third-party code —
+# the legacy whitelist token stays (older codebases use it) and the
+# allowlist/blocklist spellings are listed alongside; this is exempt
+# from the house allowlist/blocklist terminology rule.
 _HARDCODED_LOCALHOST = re.compile(
-    r"""(?:127\.0\.0\.1|localhost|0\.0\.0\.0).*(?:auth|secur|allow|trust|permit|acl|whitelist)"""
-    r"""|(?:auth|secur|allow|trust|permit|acl|whitelist).*(?:127\.0\.0\.1|localhost|0\.0\.0\.0)""",
+    r"""(?:127\.0\.0\.1|localhost|0\.0\.0\.0).*"""
+    r"""(?:auth|secur|allow|trust|permit|acl|whitelist|allowlist"""
+    r"""|allow_list|blocklist|denylist)"""
+    r"""|(?:auth|secur|allow|trust|permit|acl|whitelist|allowlist"""
+    r"""|allow_list|blocklist|denylist).*"""
+    r"""(?:127\.0\.0\.1|localhost|0\.0\.0\.0)""",
     re.IGNORECASE,
 )
 
@@ -1755,4 +1759,394 @@ def check_lock_ordering(
                     ))
                     break
 
+    return findings
+
+
+# ------------------------------------------------------------------
+# Auth-mode-conditional exposure
+# ------------------------------------------------------------------
+
+# Generic seed only — the real auth-mode vocabulary (predicate names,
+# mode constants) is learned from the target's domain model
+# (auth_predicates / security_fields), never hardcoded per framework.
+_AUTH_TERM_SEED = frozenset({"auth", "login", "authentication"})
+
+_AMR_CALL_RE = re.compile(r"\b([A-Za-z_][\w.]*)\s*\(")
+_AMR_KEYWORDS = frozenset({
+    "if", "elif", "while", "for", "return", "switch", "sizeof",
+    "assert", "print", "len", "isinstance", "super", "str", "int",
+    "getattr", "hasattr", "setattr",
+})
+_AMR_COND_RE = re.compile(r"^(\s*)(?:el)?if\b(.*)$")
+
+# The check's subject is REGISTRATION-style callees (its docstring's
+# words): wiring calls that expose a capability. Telemetry, logging,
+# config-default and plain lookups gated on an auth mode are normal
+# mode-specific housekeeping — an asymmetry receipt on them is noise
+# that trains reviewers to dismiss the receipt where it matters, and
+# arms verdict floors against clean functions. Morphology, not a name
+# list: the callee tail must carry a wiring verb or view/api suffix.
+_AMR_REGISTRATION_SHAPE_RE = re.compile(
+    r"add|register|route|mount|attach|expose|bind|subscribe|install"
+    r"|include|blueprint|_view$|_views$|_api$|_endpoint",
+    re.IGNORECASE,
+)
+
+
+def _auth_terms_from_domain_model(domain_model: Any) -> set[str]:
+    """Auth-mode vocabulary: learned predicate/field names + a generic
+    seed. Entries come from the study loop's domain model."""
+    terms = set(_AUTH_TERM_SEED)
+    dm = domain_model or {}
+    for section in ("auth_predicates", "security_fields"):
+        for entry in dm.get(section, []) or []:
+            name = (
+                entry.get("name") if isinstance(entry, dict) else str(entry)
+            )
+            if name and len(name) >= 3:
+                terms.add(str(name).strip().lower())
+    return terms
+
+
+def _amr_callee_tail(callee: str) -> str:
+    return callee.rsplit(".", 1)[-1]
+
+
+def check_auth_mode_registration(
+    gap: dict[str, Any],
+    *,
+    domain_model: Any = None,
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
+    """Flag registrations reachable regardless of the auth mode.
+
+    Structural: inside one function, an if/elif chain whose condition
+    references the auth-mode vocabulary gates several calls to some
+    registration-style callee; further calls to the SAME callee sit
+    OUTSIDE the chain and therefore run in every mode. Whether the
+    ungated registration is security-relevant (a password-reset view
+    under OAuth/LDAP) is the reviewer's judgement — this check only
+    surfaces the asymmetry the excerpt makes invisible.
+    """
+    source = gap.get("source", "") or (
+        read_gap_source(gap, target_path) if target_path else ""
+    )
+    if not source or "if" not in source:
+        return []
+    terms = _auth_terms_from_domain_model(domain_model)
+
+    lines = source.splitlines()
+    gated_spans: list[tuple[int, int]] = []  # [start, end) line idx
+    cond_snippets: list[str] = []
+
+    i = 0
+    while i < len(lines):
+        m = _AMR_COND_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        indent, cond = len(m.group(1)), m.group(2).lower()
+        if not any(t in cond for t in terms):
+            i += 1
+            continue
+        # Gated region: subsequent lines with deeper indentation;
+        # elif/else arms at the same indent extend the chain.
+        j = i + 1
+        while j < len(lines):
+            line = lines[j]
+            if not line.strip():
+                j += 1
+                continue
+            line_indent = len(line) - len(line.lstrip())
+            if line_indent > indent:
+                j += 1
+                continue
+            stripped = line.strip()
+            if line_indent == indent and (
+                stripped.startswith(("elif", "else"))
+                or stripped.startswith("} else")
+            ):
+                j += 1
+                continue
+            break
+        gated_spans.append((i, j))
+        cond_snippets.append(cond.strip()[:80])
+        i = j
+
+    if not gated_spans:
+        return []
+
+    def _in_gated(idx: int) -> bool:
+        return any(s < idx < e for s, e in gated_spans)
+
+    gated_calls: dict[str, int] = {}
+    ungated_calls: dict[str, list[int]] = {}
+    for idx, line in enumerate(lines):
+        for callee in _AMR_CALL_RE.findall(line):
+            tail = _amr_callee_tail(callee)
+            if tail in _AMR_KEYWORDS or len(tail) < 3:
+                continue
+            if not _AMR_REGISTRATION_SHAPE_RE.search(tail):
+                continue
+            if _in_gated(idx):
+                gated_calls[tail] = gated_calls.get(tail, 0) + 1
+            else:
+                ungated_calls.setdefault(tail, []).append(idx + 1)
+
+    findings: list[NegativeSpaceFinding] = []
+    for tail, gated_count in gated_calls.items():
+        ungated = ungated_calls.get(tail)
+        if gated_count < 2 or not ungated:
+            continue
+        line_refs = ", ".join(str(n) for n in ungated[:4])
+        findings.append(NegativeSpaceFinding(
+            check_type="auth_mode_registration",
+            expected=(
+                f"every security-relevant {tail}() registration is "
+                f"gated on the active auth mode"
+            ),
+            evidence=(
+                f"{gated_count} {tail}() call(s) are gated on an "
+                f"auth-mode conditional ({cond_snippets[0]}), but the "
+                f"{tail}() call(s) at line(s) {line_refs} run "
+                f"REGARDLESS of the mode. If any of them expose an "
+                f"auth-mode-specific capability (password reset/change, "
+                f"local login, registration), they are reachable under "
+                f"every other mode too."
+            ),
+            cwe="CWE-306",
+            confidence="medium",
+            convention="",
+            strategy="protocol_checklist",
+            file=gap.get("file", ""),
+            function=gap.get("name", ""),
+            title=f"auth-mode-unconditional {tail}() registration",
+        ))
+    return findings
+
+
+# ------------------------------------------------------------------
+# Go shared-writer race (peer-convention / non-atomic multi-write)
+# ------------------------------------------------------------------
+
+_GO_METHOD_RE = re.compile(
+    r"^func\s*\(\s*(\w+)\s+\*?(\w+)\s*\)\s*(\w+)\s*\(", re.MULTILINE,
+)
+_GO_STRUCT_RE_TMPL = r"type\s+{name}\s+struct\s*\{{([^}}]*)\}}"
+_GO_MUTEX_RE = re.compile(r"\bsync\.(?:RW)?Mutex\b")
+_GO_LOCK_CALL_RE = re.compile(r"\.(?:R)?Lock\s*\(")
+
+
+def _go_method_bodies(source: str) -> list[tuple[str, str, str, str]]:
+    """Yield ``(receiver_var, receiver_type, method, body)`` for each
+    Go method. Body extent = brace balance from the signature line."""
+    out = []
+    for m in _GO_METHOD_RE.finditer(source):
+        start = source.find("{", m.end() - 1)
+        sig_end = source.find("\n", m.end())
+        brace = source.find("{", sig_end - 1 if sig_end > 0 else m.end())
+        if brace < 0:
+            continue
+        depth = 0
+        end = brace
+        for i in range(brace, len(source)):
+            c = source[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        out.append((m.group(1), m.group(2), m.group(3),
+                    source[brace:end + 1]))
+        del start
+    return out
+
+
+def check_shared_writer_race(
+    gap: dict[str, Any],
+    *,
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
+    """Non-atomic multi-write to a shared writer field, no lock.
+
+    A Go method that performs TWO OR MORE separate ``recv.field.Write``
+    (or embedded-writer) calls per invocation is non-atomic even when
+    each write is: concurrent callers interleave the fragments. When
+    neither the method body locks anything nor the receiver struct
+    carries a mutex, concurrent use races. Whether callers actually
+    run concurrently is cross-file — the finding states exactly that,
+    so the reviewer tests the caller-set assumption instead of
+    assuming a single feeding goroutine.
+    """
+    file = gap.get("file", "")
+    if not file.endswith(".go"):
+        return []
+    func = gap.get("name", "")
+    source = gap.get("file_source", "") or gap.get("source", "") or (
+        read_gap_source(gap, target_path) if target_path else ""
+    )
+    if not source or "func" not in source:
+        return []
+
+    findings: list[NegativeSpaceFinding] = []
+    for recv_var, recv_type, method, body in _go_method_bodies(source):
+        if method != func and f"{recv_type}.{method}" != func:
+            continue
+        write_calls = re.findall(
+            rf"\b{re.escape(recv_var)}\.(?:\w+\.)?Write\s*\(", body,
+        )
+        if len(write_calls) < 2:
+            continue
+        if _GO_LOCK_CALL_RE.search(body):
+            continue
+        # Receiver struct: a mutex field means the AUTHOR considered
+        # concurrency; absence + multi-write is the race shape.
+        struct_m = re.search(
+            _GO_STRUCT_RE_TMPL.format(name=re.escape(recv_type)), source,
+        )
+        if struct_m and _GO_MUTEX_RE.search(struct_m.group(1)):
+            continue
+        findings.append(NegativeSpaceFinding(
+            check_type="shared_writer_race",
+            expected=(
+                f"{method}() writes to the shared writer atomically "
+                f"or under a lock"
+            ),
+            evidence=(
+                f"{method}() performs {len(write_calls)} separate "
+                f"Write() calls on {recv_var}'s writer field per "
+                f"invocation, holds no lock, and {recv_type} carries "
+                f"no mutex. Two concurrent callers interleave the "
+                f"fragments even on a thread-safe writer. Do NOT "
+                f"assume a single feeding goroutine: check the actual "
+                f"caller set — a receiver handed out through a "
+                f"constructor/interface escapes to arbitrary callers."
+            ),
+            cwe="CWE-362",
+            confidence="medium",
+            convention="",
+            strategy="sibling_asymmetry",
+            file=file,
+            function=func,
+            title=f"non-atomic multi-write in {method}() without lock",
+        ))
+    return findings
+
+
+# ------------------------------------------------------------------
+# URL/string-composition boundary injection
+# ------------------------------------------------------------------
+
+# f-string (or .format/concat) composing a URL: a placeholder sits
+# immediately after "://" — the authority segment is interpolated.
+_URL_FSTRING_BODY_RE = re.compile(r"""f["']([^"']+)["']""")
+_URL_PLACEHOLDER_RE = re.compile(r"\{([^}]+)\}")
+_URL_CONCAT_RE = re.compile(
+    r"""["'][^"']*://["']\s*\+\s*([A-Za-z_]\w*)""",
+)
+_URL_SANITIZE_RE_TMPL = (
+    r"(?:quote|escape|encode_uri|urlencode)\s*\(\s*{var}\b"
+    r"|{var}\s*=\s*{var}\.(?:split|partition)\s*\(\s*[\"'][/?#]"
+    r"|[\"'][/?#][\"']\s+(?:not\s+)?in\s+{var}\b"
+    r"|{var}\.(?:startswith|find|index|count)\s*\(\s*[\"'][/?#]"
+)
+
+
+def check_url_boundary_composition(
+    gap: dict[str, Any],
+    *,
+    target_path: Path | None = None,
+) -> list[NegativeSpaceFinding]:
+    """Untrusted header value interpolated into a URL composite.
+
+    ``f"{scheme}://{host_header}{path}"``: a ``/``, ``?``, or ``#`` in
+    the interpolated authority segment shifts every later component's
+    boundary when the composite is re-parsed — request.url.path
+    diverges from the routed path, defeating path-based checks. Fires
+    when the placeholder right after ``://`` is header-derived (name,
+    or assignment provenance inside the function) and nothing
+    validates it for delimiter characters.
+    """
+    file = gap.get("file", "")
+    if not file.endswith(".py"):
+        return []
+    source = gap.get("source", "") or (
+        read_gap_source(gap, target_path) if target_path else ""
+    )
+    if not source or "://" not in source:
+        return []
+
+    findings: list[NegativeSpaceFinding] = []
+    seen: set[str] = set()
+    lines = source.splitlines()
+    lower_src = source.lower()
+
+    def _header_derived(var: str) -> bool:
+        if "header" in var.lower():
+            return True
+        assign_re = re.compile(rf"\b{re.escape(var)}\s*=\s*(.+)$")
+        for ln in lines:
+            m = assign_re.search(ln)
+            if m and "header" in m.group(1).lower():
+                return True
+        return False
+
+    candidates: list[tuple[str, int]] = []
+    for i, ln in enumerate(lines):
+        for body_m in _URL_FSTRING_BODY_RE.finditer(ln):
+            body = body_m.group(1)
+            pos = 0
+            for pm in _URL_PLACEHOLDER_RE.finditer(body):
+                literal_before = body[pos:pm.start()]
+                pos = pm.end()
+                if not literal_before.endswith("://"):
+                    continue
+                var = pm.group(1).split("!")[0].split(":")[0].strip()
+                candidates.append((var, i + 1))
+        cm = _URL_CONCAT_RE.search(ln)
+        if cm:
+            candidates.append((cm.group(1), i + 1))
+
+    for var, lineno in candidates:
+        if var in seen:
+            continue
+        seen.add(var)
+        if not _header_derived(var):
+            continue
+        sanitize_re = re.compile(
+            _URL_SANITIZE_RE_TMPL.format(var=re.escape(var)),
+            re.IGNORECASE,
+        )
+        if sanitize_re.search(source):
+            continue
+        # Only meaningful when the composite is (or plausibly will
+        # be) re-parsed; a pure log string cannot shift boundaries.
+        reparsed = bool(re.search(r"urlsplit|urlparse|hyperlink", lower_src))
+        findings.append(NegativeSpaceFinding(
+            check_type="url_boundary_composition",
+            expected=(
+                f"'{var}' is validated for '/', '?', '#' before being "
+                f"interpolated into the URL authority"
+            ),
+            evidence=(
+                f"line {lineno}: '{var}' (header-derived) is "
+                f"interpolated directly after '://' in a composed URL. "
+                f"A '/', '?', or '#' inside it shifts the path/query/"
+                f"fragment boundaries when the composite is re-parsed"
+                f"{' (this code re-parses it)' if reparsed else ''} — "
+                f"request.url.path then diverges from the routed path, "
+                f"bypassing path-based authorization. Trusting the Host "
+                f"header's VALUE is a separate question from whether "
+                f"its CHARACTERS can shift component boundaries."
+            ),
+            cwe="CWE-20",
+            confidence="medium" if reparsed else "low",
+            convention="",
+            strategy="pattern_scan",
+            file=file,
+            function=gap.get("name", ""),
+            title=f"URL boundary injection via '{var}' in composed URL",
+        ))
     return findings

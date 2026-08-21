@@ -71,6 +71,18 @@ def _cache_key_component(value: str) -> str:
     return enc
 
 
+def _url_component(value: str, *, safe: str = "") -> str:
+    """Percent-encode one URL path segment.
+
+    Names and versions here come from scanned manifests and remote
+    registry metadata — both untrusted. Interpolating them raw lets a
+    hostile name containing ``/``, ``?``, ``#`` or ``..`` redirect the
+    request to a different registry path (the same injection class the
+    registries/ clients already quote against).
+    """
+    return urllib.parse.quote(value, safe=safe)
+
+
 # Bounded recursion. Even huge dep trees rarely exceed depth 10 in
 # practice (npm/PyPI; Cargo less). 12 is a safe soft cap.
 DEFAULT_MAX_DEPTH = 12
@@ -480,7 +492,8 @@ def _fetch_pypi(
     Over-inclusion costs candidate noise; under-inclusion costs a
     missed vulnerable dependency — the wrong trade for a scanner.
     """
-    url = f"https://pypi.org/pypi/{name}/{version}/json"
+    url = (f"https://pypi.org/pypi/{_url_component(name)}/"
+           f"{_url_component(version)}/json")
     try:
         data = http.get_json(url, retries=0)
     except HttpError as e:
@@ -519,7 +532,10 @@ def _fetch_npm(
     are commonly the supply-chain-attack delivery vehicle. We don't
     walk ``devDependencies`` (test/build-only).
     """
-    url = f"https://registry.npmjs.org/{name}/{version}"
+    # Scoped npm names keep the ``@`` and percent-encode the ``/``
+    # (``@scope%2Fname``), matching the registries/npm client.
+    url = (f"https://registry.npmjs.org/{_url_component(name, safe='@')}/"
+           f"{_url_component(version)}")
     try:
         data = http.get_json(url, retries=0)
     except HttpError as e:
@@ -550,7 +566,8 @@ def _fetch_crates(
     into the binary.
     """
     url = (
-        f"https://crates.io/api/v1/crates/{name}/{version}/dependencies"
+        f"https://crates.io/api/v1/crates/{_url_component(name)}/"
+        f"{_url_component(version)}/dependencies"
     )
     try:
         data = http.get_json(url, retries=0)
@@ -612,7 +629,11 @@ def package_version_exists(
     url_tmpl = _EXISTENCE_URLS.get(ecosystem)
     if url_tmpl is None:
         return None
-    url = url_tmpl.format(name=name, version=version)
+    safe = "@" if ecosystem == "npm" else ""
+    url = url_tmpl.format(
+        name=_url_component(name, safe=safe),
+        version=_url_component(version),
+    )
     try:
         http.get_json(url, retries=0)
     except HttpError as e:

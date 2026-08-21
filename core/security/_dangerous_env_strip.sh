@@ -26,8 +26,8 @@
 #   * bin/cve-diff stripped 13 vars (a strict subset, missing the
 #     newer additions)
 #
-# The drift was real: when batch 581 added LD_DEBUG/LD_PROFILE/
-# LD_PROFILE_OUTPUT to bin/raptor, bin/cve-diff was NOT updated —
+# The drift was real: when LD_DEBUG/LD_PROFILE/LD_PROFILE_OUTPUT
+# were added to bin/raptor, bin/cve-diff was NOT updated —
 # operators running cve-diff had a wider attack surface than
 # operators running raptor. The shared fragment closes that gap and
 # guarantees future additions land in both launchers atomically.

@@ -830,6 +830,183 @@ class TestGlanceFallbackBudget:
         )
 
 
+class TestSerialStopSkipsGlanceFlush:
+    """A budget/SIGTERM stop must not dispatch a fresh glance LLM
+    batch — queued glance tasks stay unreviewed gaps, matching the
+    async stop path."""
+
+    @staticmethod
+    def _glance_setup(monkeypatch, n, batch_calls):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeBucket:
+            value: str
+
+        @dataclass
+        class FakeTriageResult:
+            bucket: FakeBucket
+
+        wq = [_gap("a.py", f"f{i}") for i in range(n)]
+        graph = TaskGraph.from_workqueue(wq, [])
+        shared = MagicMock()
+        shared.triage_results = {
+            f"a.py:f{i}:1": FakeTriageResult(FakeBucket("glance"))
+            for i in range(n)
+        }
+
+        def fake_batch_review_fn(contexts, config):
+            batch_calls.append(len(contexts))
+            raise AssertionError("no glance batch may run after a stop")
+
+        import core.audit.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "_get_batch_review_fn",
+                            lambda shared, config: fake_batch_review_fn)
+        return graph, shared
+
+    def test_budget_stop_drops_queued_glance_batch(
+        self, monkeypatch,
+    ) -> None:
+        batch_calls: list[int] = []
+        graph, shared = self._glance_setup(monkeypatch, 3, batch_calls)
+        result = _FakeResult()
+        checks = [0]
+
+        def budget_fn():
+            checks[0] += 1
+            return checks[0] > 2  # let two glance tasks queue first
+
+        stats = run_executor_sync(
+            graph, MagicMock(), shared, MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=_mock_review_fn,
+            budget_check=budget_fn,
+        )
+
+        assert stats.budget_stopped
+        assert batch_calls == []
+        assert stats.completed == 0
+        assert graph.pending == 3  # queued glance tasks stay gaps
+
+    def test_shutdown_stop_drops_queued_glance_batch(
+        self, monkeypatch,
+    ) -> None:
+        from core.audit.orchestrator import _shutdown_event
+
+        batch_calls: list[int] = []
+        graph, shared = self._glance_setup(monkeypatch, 2, batch_calls)
+        result = _FakeResult()
+
+        real_pop = graph.pop_ready
+
+        def popping(n):
+            tasks = real_pop(n)
+            # First glance task queued — request shutdown before the
+            # next loop iteration.
+            _shutdown_event.set()
+            return tasks
+
+        graph.pop_ready = popping
+        _shutdown_event.clear()
+        try:
+            stats = run_executor_sync(
+                graph, MagicMock(), shared, MagicMock(), result,
+                ExecutorConfig(max_workers=1),
+                review_one_fn=_mock_review_fn,
+            )
+        finally:
+            _shutdown_event.clear()
+
+        assert stats.budget_stopped
+        assert batch_calls == []
+
+
+class TestTaskFailureRecording:
+    """Unexpected review exceptions must record error outcomes and
+    unblock dependents instead of stranding them (async) or killing
+    the run (serial)."""
+
+    @staticmethod
+    def _failing_review(fail_names):
+        def review(gap, shared, config, review_fn, result_obj, **kw):
+            if gap["name"] in fail_names:
+                raise ValueError("boom in review")
+            return _mock_review_fn(
+                gap, shared, config, review_fn, result_obj, **kw)
+        return review
+
+    def test_serial_failure_records_error_and_continues(self) -> None:
+        wq = [_gap("a.py", "caller", 0.9), _gap("a.py", "callee", 0.5)]
+        edges = [_edge("a.py", "caller", "a.py", "callee")]
+        graph = TaskGraph.from_workqueue(wq, edges)
+        result = _FakeResult()
+        collector = MagicMock()
+
+        stats = run_executor_sync(
+            graph, MagicMock(), MagicMock(), MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=self._failing_review({"callee"}),
+            collector=collector,
+        )
+
+        assert stats.failed == 1
+        assert stats.completed == 2  # caller still reviewed
+        assert graph.pending == 0
+        assert result.errors == 1
+        # error outcome reached the collector
+        submitted = [c.args[0] for c in collector.submit.call_args_list]
+        assert any(o.status == "error" for o in submitted)
+
+    def test_async_failure_unblocks_dependents(self) -> None:
+        wq = [_gap("a.py", "caller", 0.9), _gap("a.py", "callee", 0.5)]
+        edges = [_edge("a.py", "caller", "a.py", "callee")]
+        graph = TaskGraph.from_workqueue(wq, edges)
+        result = _FakeResult()
+        collector = MagicMock()
+        reviewed: list[str] = []
+
+        def review(gap, shared, config, review_fn, result_obj, **kw):
+            if gap["name"] == "callee":
+                raise ValueError("boom in review")
+            reviewed.append(gap["name"])
+            return _mock_review_fn(
+                gap, shared, config, review_fn, result_obj, **kw)
+
+        stats = run_executor_sync(
+            graph, MagicMock(), MagicMock(), MagicMock(), result,
+            ExecutorConfig(max_workers=2),
+            review_one_fn=review,
+            collector=collector,
+        )
+
+        assert stats.failed == 1
+        assert graph.pending == 0
+        assert "caller" in reviewed  # dependent was NOT stranded
+        assert result.errors == 1
+
+    def test_serial_budget_error_still_stops(self) -> None:
+        wq = [_gap("a.py", "f1")]
+        graph = TaskGraph.from_workqueue(wq, [])
+        result = _FakeResult()
+
+        def budget_review(gap, shared, config, review_fn, result_obj, **kw):
+            raise RuntimeError("LLM budget exceeded")
+
+        stats = run_executor_sync(
+            graph, MagicMock(), MagicMock(), MagicMock(), result,
+            ExecutorConfig(max_workers=1),
+            review_one_fn=budget_review,
+        )
+        assert stats.budget_stopped
+        assert stats.failed == 0
+        assert result.terminated_by == "llm_budget_exceeded"
+
+    def test_failed_counts_in_stats_dict(self) -> None:
+        from core.audit.executor import ExecutorStats
+        s = ExecutorStats(failed=3)
+        assert s.to_dict()["failed"] == 3
+
+
 class TestExecutorStatsToDict:
     def test_to_dict_round_trips(self) -> None:
         from core.audit.executor import ExecutorStats

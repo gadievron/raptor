@@ -42,10 +42,21 @@ def _shim(name: str) -> Path:
     return p
 
 
+def _shim_env() -> dict:
+    # The scripts' sys.path bootstrap is the RAPTOR_DIR hard lookup
+    # (launcher contract) — provide it the way the launcher would,
+    # pointing at THIS checkout so the tests exercise this tree.
+    import os
+    env = dict(os.environ)
+    env["RAPTOR_DIR"] = str(_REPO_ROOT)
+    return env
+
+
 def test_corpus_run_shim_produces_csv_with_one_row_per_finding(tmp_path: Path):
     out = tmp_path / "result.csv"
     rc = subprocess.call(
-        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(out)]
+        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(out)],
+        env=_shim_env(),
     )
     assert rc == 0
     assert out.exists()
@@ -59,7 +70,8 @@ def test_corpus_run_shim_produces_csv_with_one_row_per_finding(tmp_path: Path):
 def test_corpus_run_shim_then_metrics_shim_succeeds(tmp_path: Path):
     csv_path = tmp_path / "result.csv"
     rc = subprocess.call(
-        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(csv_path)]
+        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(csv_path)],
+        env=_shim_env(),
     )
     assert rc == 0
 
@@ -68,6 +80,7 @@ def test_corpus_run_shim_then_metrics_shim_succeeds(tmp_path: Path):
         capture_output=True,
         text=True,
         check=False,
+        env=_shim_env(),
     )
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
@@ -83,10 +96,12 @@ def test_metrics_shim_pivot_gate_passes_on_seed_corpus(tmp_path: Path):
     grow the corpus where the gate becomes meaningful."""
     csv_path = tmp_path / "result.csv"
     subprocess.check_call(
-        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(csv_path)]
+        [sys.executable, str(_shim("raptor-corpus-run")), "--output", str(csv_path)],
+        env=_shim_env(),
     )
     rc = subprocess.call(
         [sys.executable, str(_shim("raptor-corpus-metrics")),
-         str(csv_path), "--check-pivot-gate"]
+         str(csv_path), "--check-pivot-gate"],
+        env=_shim_env(),
     )
     assert rc == 0

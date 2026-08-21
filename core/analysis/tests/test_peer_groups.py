@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from core.analysis.peer_groups import (
@@ -21,6 +22,14 @@ from core.analysis.peer_groups import (
     _verb_prefix_groups,
     resolve_peer_groups,
 )
+
+# Anchor probe subprocesses to the SAME tree these tests run from,
+# passed as argv[1] (the test_fork_safe_warn*.py idiom). A bare
+# ``python -c "from core... import"`` child resolves imports through
+# its cwd, which is not guaranteed to be this repo root by the time
+# the test runs (observed under shuffled order: cwd drift made the
+# hash-seed probe die with ModuleNotFoundError: 'core').
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -598,6 +607,8 @@ class TestPairedOperationGroups:
         # Set iteration order varies with PYTHONHASHSEED; the pairing
         # must not.
         snippet = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
             "from core.analysis.peer_groups import _paired_operation_groups\n"
             f"names = {list(self.COLLIDING)!r}\n"
             "fns = [{'name': n, 'file': 'src/mod.c', 'line': 1}"
@@ -609,7 +620,7 @@ class TestPairedOperationGroups:
         for seed in ("0", "1", "42"):
             env = dict(os.environ, PYTHONHASHSEED=seed)
             proc = subprocess.run(
-                [sys.executable, "-c", snippet],
+                [sys.executable, "-c", snippet, _REPO_ROOT],
                 capture_output=True, text=True, env=env, check=True,
             )
             outputs.add(proc.stdout.strip())

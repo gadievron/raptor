@@ -30,7 +30,10 @@ Scope:
 * **Python intra-procedural** — full end-to-end.
 * **C / C++ intra-procedural** — full end-to-end via Phase 9's
   :func:`build_cpp_intraproc_cfg`, wired through here in Phase 11.
-* **Java / other** — return ``ResolutionFailure`` with
+* **Java intra-procedural** — tree-sitter CFG with import-resolved
+  callable names; methods containing constructs the builder can't
+  model faithfully are refused (whole-build ``ResolutionFailure``).
+* **Other languages** — return ``ResolutionFailure`` with
   ``reason="language=… not yet supported"``; they await future
   arcs.
 
@@ -46,6 +49,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     FrozenSet,
     List,
@@ -65,6 +69,9 @@ from core.analysis.cfg_builder_cpp import (
     CPPCFGNode,
     build_cpp_intraproc_cfg,
 )
+
+if TYPE_CHECKING:                                       # pragma: no cover
+    from core.analysis.cfg_builder_java import JavaCFG
 
 
 # CWE extraction patterns.
@@ -107,9 +114,9 @@ class ResolvedFinding:
     sink_arg: str
     cwe: str
     language: str
-    cfg: Union[PythonCFG, CPPCFG]
-    source_node: Union[PyCFGNode, CPPCFGNode]
-    sink_node: Union[PyCFGNode, CPPCFGNode]
+    cfg: Union[PythonCFG, CPPCFG, "JavaCFG"]
+    source_node: Any
+    sink_node: Any
     inter_proc_bindings: FrozenSet = frozenset()
 
 
@@ -378,11 +385,13 @@ def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
         return _resolve_from_parsed_python(parsed)
     if parsed.language in ("c", "cpp"):
         return _resolve_from_parsed_cpp(parsed)
+    if parsed.language == "java":
+        return _resolve_from_parsed_java(parsed)
     return ResolutionFailure(
         reason=(
             f"language={parsed.language!r} not yet supported — "
-            "python is shipped (phases 1-7), c/c++ wired in phase 11; "
-            "other languages await future arcs"
+            "python is shipped (phases 1-7), c/c++ wired in phase 11, "
+            "java in the b13 leg; other languages await future arcs"
         ),
     )
 
@@ -655,6 +664,82 @@ def _resolve_source(
     return node, symbols
 
 
+def _forward_assignment_sink_java(cfg, node):
+    """Forward an assignment-located java sink to its consuming call.
+
+    Applies only when the flagged node defines exactly one name and
+    carries no call of its own. The first later call taking that name
+    as a (deep) argument becomes the sink — but only when the flagged
+    assignment is the SOLE reaching definer of the name at that call:
+    any intervening or branch-merged redefinition breaks the value
+    identity the finding flagged, so the first failing candidate
+    refuses outright (a later consumer is strictly worse). Returns
+    ``(None, "")`` on any refusal.
+    """
+    from core.analysis.dataflow import reaching_defs as _rd
+
+    if node is None or node.call_sites or len(node.defs) != 1:
+        return None, ""
+    name = next(iter(node.defs))
+    rd = _rd(cfg)
+    candidates = sorted(
+        (
+            n for n in cfg.nodes()
+            if getattr(n, "lineno", 0) > node.lineno
+            and any(
+                name in cs.arg_names
+                or name in getattr(cs, "arg_deep_names", frozenset())
+                for cs in getattr(n, "call_sites", ())
+            )
+        ),
+        key=lambda n: n.lineno,
+    )
+    for cand in candidates:
+        if rd.at(cand, name) == frozenset({node}):
+            return cand, name
+        return None, ""
+    return None, ""
+
+
+def _receiver_hop_sink_java(cfg, node):
+    """Hop a zero-argument receiver call to its constructing call.
+
+    ``statement.execute()`` carries the sink data in ``statement``'s
+    construction. Requires: the outermost call has no (deep) arguments,
+    the node uses exactly one name (the receiver), that name has
+    exactly one reaching definer here, and the definer assigns the
+    receiver from a call with exactly one bare-name argument (or a
+    single deep name when no bare names exist). Anything else returns
+    ``(None, "")`` — reassigned receivers, multi-use statements, and
+    multi-argument constructors all break the single-value identity.
+    """
+    from core.analysis.dataflow import reaching_defs as _rd
+
+    outermost = node.call_sites[-1]
+    if outermost.arg_names or getattr(outermost, "arg_deep_names",
+                                      frozenset()):
+        return None, ""
+    if len(node.uses) != 1:
+        return None, ""
+    receiver = next(iter(node.uses))
+    definers = _rd(cfg).at(node, receiver)
+    if len(definers) != 1:
+        return None, ""
+    definer = next(iter(definers))
+    if definer is getattr(cfg, "entry_node", None):
+        return None, ""
+    for cs in getattr(definer, "call_sites", ()):
+        if receiver not in cs.assigned_names:
+            continue
+        if len(cs.arg_names) == 1:
+            return definer, next(iter(cs.arg_names))
+        deep = getattr(cs, "arg_deep_names", frozenset())
+        if not cs.arg_names and len(deep) == 1:
+            return definer, next(iter(deep))
+        return None, ""
+    return None, ""
+
+
 def _resolve_sink(
     cfg: PythonCFG,
     sink_line: int,
@@ -683,9 +768,19 @@ def _resolve_sink(
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
     outermost = node.call_sites[-1]
-    if not outermost.arg_names:
-        return None, ""
-    return node, sorted(outermost.arg_names)[0]
+    if outermost.arg_names:
+        return node, sorted(outermost.arg_names)[0]
+    # Fallback: no bare-name argument, but the argument subtrees
+    # reference exactly ONE variable (``print(bar.toCharArray())``,
+    # ``println("x: " + bar)``) — the sink consumes that variable's
+    # value, so binding sink_arg to it asks the gate exactly the
+    # right exclusivity question. Two or more referenced names stay
+    # a refusal: picking one would under-constrain the others.
+    # Producers that don't populate arg_deep_names (python/c today)
+    # keep the historical refusal.
+    if len(outermost.arg_deep_names) == 1:
+        return node, next(iter(outermost.arg_deep_names))
+    return None, ""
 
 
 def _node_at_lineno(cfg: PythonCFG, lineno: int) -> Optional[PyCFGNode]:
@@ -695,6 +790,296 @@ def _node_at_lineno(cfg: PythonCFG, lineno: int) -> Optional[PyCFGNode]:
         if n.lineno == lineno:
             return n
     return None
+
+
+# ---------------------------------------------------------------------------
+# Java resolution (b13 leg)
+# ---------------------------------------------------------------------------
+
+
+_JAVA_STMT_TYPES = frozenset({
+    "local_variable_declaration",
+    "expression_statement",
+    "return_statement",
+    "throw_statement",
+})
+
+
+def _java_statement_start_line(
+    source_text: str, lineno: int,
+) -> Optional[int]:
+    """Start line of the smallest Java STATEMENT spanning ``lineno``.
+
+    Findings frequently flag a continuation line of a multi-line
+    statement (``new java.io.FileWriter(\\n    fileTarget, true);``
+    flagged on the constructor line) — the CFG's statement node lives
+    at the statement's start line, so an exact-line lookup lands on
+    nothing. Returns ``None`` when the grammar is missing or no
+    statement spans the line; returns the start line otherwise (which
+    may equal ``lineno`` — the caller treats that as "no retarget").
+    Only leaf statement kinds are considered: retargeting to a
+    compound statement (if/try/block) would bind a different
+    computation than the finding flagged.
+    """
+    from core.analysis.cfg_builder_java import _get_parser
+
+    parser = _get_parser()
+    if parser is None:
+        return None
+    tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    best: Optional[Tuple[int, int]] = None      # (span, start_line)
+    stack = [tree.root_node]
+    while stack:
+        cur = stack.pop()
+        start = cur.start_point[0] + 1
+        end = cur.end_point[0] + 1
+        if start > lineno or end < lineno:
+            continue
+        if cur.type in _JAVA_STMT_TYPES:
+            span = end - start
+            if best is None or span < best[0]:
+                best = (span, start)
+        for c in cur.children:
+            if c.is_named:
+                stack.append(c)
+    return best[1] if best is not None else None
+
+
+def _pick_value_name(names, cfg) -> str:
+    """Deterministic sink-arg pick from a multi-name argument surface.
+
+    Prefers names that carry values in this CFG — parameters or names
+    some node defines — over namespace-shaped leftovers the argument
+    walkers cannot distinguish syntactically (``java`` from a
+    ``java.util.Locale.US`` chain, unimported ``String`` receivers):
+    binding those asks the gate a question about a name with no
+    definitions, wasting the adjudication. Lexicographic within each
+    preference class keeps the pick deterministic. Soundness is
+    unchanged by the pick: every non-picked argument name is
+    adjudicated by the gate's sibling guards regardless
+    (``_sibling_args_tainted`` / ``_siblings_fold_or_refuse``), so the
+    pick only selects which name gets the primary value question.
+    """
+    ranked = sorted(names)
+    defined = set(getattr(cfg, "params", ()) or ())
+    for n in cfg.nodes():
+        defined |= set(getattr(n, "defs", ()) or ())
+    carrying = [n for n in ranked if n in defined]
+    return (carrying or ranked)[0]
+
+
+def _resolve_from_parsed_java(parsed: _ParsedFinding) -> Resolution:
+    """Java branch of the resolver.
+
+    Uses the tree-sitter Java builder
+    (:func:`core.analysis.cfg_builder_java.build_java_intraproc_cfg`)
+    with the finding's line range as the overload disambiguator —
+    Java methods share names across overloads, so name-only selection
+    could build the wrong body. The builder REFUSES methods
+    containing constructs it cannot model faithfully (lambdas,
+    anonymous classes, switch, labeled jumps); refusal degrades to
+    :class:`ResolutionFailure`, never a silently wrong graph.
+    """
+    from core.analysis.cfg_builder_java import (
+        JavaCFGNode,
+        build_java_intraproc_cfg,
+        find_enclosing_method,
+    )
+
+    # Route through the ..-containment guard the Python (_resolve_from_
+    # parsed_python) and C++ (_resolve_from_parsed_cpp) branches already
+    # use; the Java branch previously read the untrusted finding path
+    # directly, skipping the check (00092 residual).
+    source_text = _read_finding_source(parsed.file)
+    if isinstance(source_text, ResolutionFailure):
+        return source_text
+
+    fn_name, fn_start = find_enclosing_method(
+        source_text, parsed.source_lineno, parsed.sink_lineno,
+    )
+    if fn_name is None:
+        return ResolutionFailure(
+            reason=(
+                f"no enclosing Java method for source line "
+                f"{parsed.source_lineno} / sink line {parsed.sink_lineno} "
+                f"in {parsed.file} (tree-sitter grammar missing or no "
+                "method declaration spans the range)"
+            ),
+        )
+
+    cfg = build_java_intraproc_cfg(
+        source_text, fn_name,
+        line_hint=(parsed.source_lineno, parsed.sink_lineno),
+    )
+    if cfg is None:
+        return ResolutionFailure(
+            reason=(
+                f"Java CFG construction refused for {fn_name} in "
+                f"{parsed.file} (grammar missing, or the method contains "
+                "a construct the builder refuses: lambda, method "
+                "reference, anonymous/local class, switch, or labeled "
+                "jump)"
+            ),
+        )
+
+    def node_at(lineno: int) -> Optional[JavaCFGNode]:
+        for n in cfg.nodes():
+            if isinstance(n, JavaCFGNode) and n.lineno == lineno:
+                return n
+        return None
+
+    def node_at_or_statement_start(lineno: int) -> Optional[JavaCFGNode]:
+        """Exact-line node, retargeted to the enclosing statement's
+        start line when the flagged line is a continuation line of a
+        multi-line statement (exact node missing, or present but
+        empty — the builder emits content-free nodes for some
+        continuation lines). The retargeted node carries the whole
+        statement's calls/defs, which is the computation the finding
+        flagged."""
+        node = node_at(lineno)
+        if node is not None and (
+                node.call_sites or node.defs or node.uses):
+            return node
+        start = _java_statement_start_line(source_text, lineno)
+        if start is None or start == lineno:
+            return node
+        retargeted = node_at(start)
+        if retargeted is not None and (
+                retargeted.call_sites or retargeted.defs
+                or retargeted.uses):
+            return retargeted
+        return node
+
+    if parsed.source_lineno == fn_start:
+        source_node, source_symbols = cfg.entry_node, frozenset(cfg.params)
+    else:
+        source_node = node_at_or_statement_start(parsed.source_lineno)
+        if source_node is None:
+            return ResolutionFailure(
+                reason=(
+                    f"no source statement at line {parsed.source_lineno} "
+                    f"in {fn_name}"
+                ),
+            )
+        source_symbols = source_node.defs \
+            if source_node.defs else source_node.uses
+
+    sink_node = node_at_or_statement_start(parsed.sink_lineno)
+    if sink_node is None or not sink_node.call_sites:
+        # Assignment-located finding (``sql = "..." + bar + "...";`` —
+        # the concatenated-sql / assignment-shaped rule class): no call
+        # exists on the flagged line, but the assigned value flows to a
+        # later consuming call. Forward the sink to that call iff the
+        # flagged assignment is provably the value the call receives
+        # (sole reaching definer) — then the gate asks exactly the
+        # exclusivity question the finding raised.
+        fwd_node, fwd_arg = _forward_assignment_sink_java(cfg, sink_node)
+        if fwd_node is None:
+            return ResolutionFailure(
+                reason=(
+                    f"no sink call at line {parsed.sink_lineno} in {fn_name}"
+                ),
+            )
+        sink_node, sink_arg = fwd_node, fwd_arg
+        inter_proc = _inter_proc_bindings_java(
+            source_text, cfg,
+            (parsed.source_lineno, parsed.sink_lineno), parsed.cwe,
+        )
+        return ResolvedFinding(
+            file=parsed.file,
+            enclosing_function=fn_name,
+            source_lineno=parsed.source_lineno,
+            source_symbols=source_symbols,
+            sink_lineno=parsed.sink_lineno,
+            sink_arg=sink_arg,
+            cwe=parsed.cwe,
+            language=parsed.language,
+            cfg=cfg,
+            source_node=source_node,
+            sink_node=sink_node,
+            inter_proc_bindings=inter_proc,
+        )
+    sink_arg = ""
+    if parsed.sink_arg_hint:
+        for cs in sink_node.call_sites:
+            if parsed.sink_arg_hint in cs.arg_names:
+                sink_arg = parsed.sink_arg_hint
+                break
+    if not sink_arg:
+        outermost = sink_node.call_sites[-1]
+        if outermost.arg_names:
+            sink_arg = _pick_value_name(outermost.arg_names, cfg)
+        elif outermost.arg_deep_names:
+            # No bare-name argument, but the argument subtrees
+            # reference variables (``print(bar.toCharArray())``,
+            # ``exec(cmd + bar)``) — the sink consumes their values,
+            # so binding sink_arg to one asks the gate the primary
+            # value question, and EVERY other referenced name is
+            # adjudicated by the gate's sibling-argument guards
+            # (fold-or-refuse on the constant/whole-array paths,
+            # taint-front plus per-path value conditions elsewhere) —
+            # the same division of labor multi-bare-name calls have
+            # always had. The historical two-or-more refusal predates
+            # those guards.
+            sink_arg = _pick_value_name(outermost.arg_deep_names, cfg)
+    if not sink_arg:
+        # Zero-argument sink call on a receiver (``statement.execute()``
+        # — the prepared-statement execute shape): the sink data is the
+        # receiver's construction. Hop through the single-use receiver
+        # to its constructing call's single bare argument, provided the
+        # construction is the receiver's sole reaching definer.
+        hop_node, hop_arg = _receiver_hop_sink_java(cfg, sink_node)
+        if hop_node is not None:
+            sink_node, sink_arg = hop_node, hop_arg
+    if not sink_arg:
+        return ResolutionFailure(
+            reason=(
+                f"sink call at line {parsed.sink_lineno} has no bare-name "
+                "argument; cannot resolve sink_arg"
+            ),
+        )
+
+    inter_proc = _inter_proc_bindings_java(
+        source_text, cfg,
+        (parsed.source_lineno, parsed.sink_lineno), parsed.cwe,
+    )
+
+    return ResolvedFinding(
+        file=parsed.file,
+        enclosing_function=fn_name,
+        source_lineno=parsed.source_lineno,
+        source_symbols=source_symbols,
+        sink_lineno=parsed.sink_lineno,
+        sink_arg=sink_arg,
+        cwe=parsed.cwe,
+        language=parsed.language,
+        cfg=cfg,
+        source_node=source_node,
+        sink_node=sink_node,
+        inter_proc_bindings=inter_proc,
+    )
+
+
+def _inter_proc_bindings_java(
+    source_text: str,
+    cfg: "JavaCFG",
+    line_hint: Tuple[int, int],
+    cwe: str,
+) -> FrozenSet:
+    """Java analog of :func:`_inter_proc_bindings_python` — one-level
+    same-class wrapper summaries
+    (:mod:`core.analysis.java_wrapper_summaries`) synthesised into
+    bindings at qualifying call sites. Empty frozenset on any failure
+    (best-effort — the intra-procedural verdict still stands)."""
+    try:
+        from core.analysis.java_wrapper_summaries import (
+            synthetic_wrapper_bindings_java,
+        )
+        return synthetic_wrapper_bindings_java(
+            cfg, source_text, line_hint, cwe, "java",
+        )
+    except Exception:                                       # noqa: BLE001
+        return frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -788,9 +1173,19 @@ def _resolve_sink_cpp(
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
     outermost = node.call_sites[-1]
-    if not outermost.arg_names:
-        return None, ""
-    return node, sorted(outermost.arg_names)[0]
+    if outermost.arg_names:
+        return node, sorted(outermost.arg_names)[0]
+    # Fallback: no bare-name argument, but the argument subtrees
+    # reference exactly ONE variable (``print(bar.toCharArray())``,
+    # ``println("x: " + bar)``) — the sink consumes that variable's
+    # value, so binding sink_arg to it asks the gate exactly the
+    # right exclusivity question. Two or more referenced names stay
+    # a refusal: picking one would under-constrain the others.
+    # Producers that don't populate arg_deep_names (python/c today)
+    # keep the historical refusal.
+    if len(outermost.arg_deep_names) == 1:
+        return node, next(iter(outermost.arg_deep_names))
+    return None, ""
 
 
 def _cpp_node_at_lineno(cfg: CPPCFG, lineno: int) -> Optional[CPPCFGNode]:

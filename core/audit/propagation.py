@@ -101,6 +101,10 @@ class PropagationConfig:
     max_depth: int = DEFAULT_MAX_DEPTH
     max_callers_per_hop: int = DEFAULT_MAX_CALLERS_PER_HOP
     codeql_db_path: str | None = None
+    # Per-file database resolver for multi-language runs (falls back
+    # to codeql_db_path when unset). Threaded from the orchestrator's
+    # CodeqlDbRouter; this module never builds one.
+    codeql_db_for: Any | None = None
     codeql_bin: str | None = None
     coccinelle_available: bool = False
     target_path: Path | None = None
@@ -342,10 +346,14 @@ def try_codeql_resolve(
     """
     if not constraint.is_taint_expressible():
         return None
-    if not config.codeql_db_path:
+    db_path = (
+        config.codeql_db_for(constraint.file)
+        if config.codeql_db_for else config.codeql_db_path
+    )
+    if not db_path:
         return None
 
-    db = Path(config.codeql_db_path)
+    db = Path(db_path)
     if not db.is_dir():
         return None
 
@@ -370,7 +378,7 @@ def try_codeql_resolve(
     try:
         result = validate_dataflow_claim(
             claim,
-            db_path=config.codeql_db_path,
+            db_path=db_path,
             codeql_bin=config.codeql_bin,
         )
         if result.confirmed is True:

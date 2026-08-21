@@ -243,8 +243,15 @@ def compute_gaps(
     scope_list: list[str] | None = None
     if scope:
         scope_list = [scope] if isinstance(scope, str) else list(scope)
+        # A target-root entry ("." / "./" / "") means the whole tree.
+        # The prefix matcher below can never match it ("index.js" is
+        # neither equal to "." nor startswith("./")), so a root entry
+        # used to silently exclude EVERY gap — observed as corpus
+        # groups with repo-root labeled files reviewing 0 functions.
+        if any(s.rstrip("/") in ("", ".") for s in scope_list):
+            scope_list = None
         target_path = checklist.get("target_path", "")
-        if target_path:
+        if scope_list and target_path:
             normalised = target_path.rstrip("/")
             scope_list = [
                 s for s in scope_list
@@ -408,6 +415,13 @@ def compute_gaps(
                 "sloc": sloc,
                 "metadata": metadata,
             }
+            # Receiver-qualified display/report name. Same-named
+            # methods (seven ``Null*.Scan`` in one file) are otherwise
+            # indistinguishable in progress lines, journal rows, and
+            # attribution joins.
+            _class_name = metadata.get("class_name")
+            if _class_name:
+                gap["qualified_name"] = f"{_class_name}.{name}"
             if shape is not None:
                 gap["parser_shape"] = shape.to_dict()
 
@@ -461,18 +475,101 @@ def compute_gaps(
     return gaps
 
 
+def gap_keys(gap: dict[str, Any]) -> set:
+    """All ``file:function`` keys a gap answers to.
+
+    The bare inventory key always; additionally the receiver-qualified
+    key (``file:Class.method`` / ``file:Receiver.Method``) when the
+    extractor recorded a ``metadata.class_name`` (Python/Java classes,
+    Go receiver types with the ``*`` stripped, C++ inline methods).
+    Pins and corpus labels use the qualified spelling, so matching on
+    the bare name alone silently no-ops every dotted pin — a corpus
+    run lost the force/prefilter-bypass guarantee on all 78
+    receiver-qualified pin instances that way.
+    """
+    file_path = gap.get("file", "")
+    name = gap.get("name", "")
+    keys = {f"{file_path}:{name}"}
+    class_name = (gap.get("metadata") or {}).get("class_name")
+    if class_name and name:
+        keys.add(f"{file_path}:{class_name}.{name}")
+    return keys
+
+
+def _classify_unmatched_pin(
+    pin: str,
+    checklist: dict[str, Any] | None,
+) -> str:
+    """Truthful cause for a pin that matched no gap.
+
+    Three distinct situations used to share one (wrong) warning
+    string: the item exists in the inventory but produced no gap
+    (already reviewed / filtered), the item is absent from the
+    inventory entirely (label drift, preprocessor-dead code), or the
+    receiver qualification matches nothing although the bare method
+    name exists in the file (name mismatch).
+    """
+    if not checklist:
+        return "unclassified (no checklist available)"
+    file_part, _, name_part = pin.rpartition(":")
+    bare = name_part.rsplit(".", 1)[-1]
+    exact = False
+    bare_in_file = False
+    for file_info in checklist.get("files", []):
+        if file_info.get("path", "") != file_part:
+            continue
+        for item in file_info.get("items", file_info.get("functions", [])):
+            item_name = item.get("name", "")
+            class_name = (item.get("metadata") or {}).get("class_name")
+            qualified = f"{class_name}.{item_name}" if class_name else ""
+            if name_part in (item_name, qualified):
+                exact = True
+            if item_name == bare or (
+                item_name.rsplit(".", 1)[-1] == bare
+            ):
+                bare_in_file = True
+    if exact:
+        return (
+            "in the inventory but not in the gap list — already "
+            "reviewed this run, suppressed by coverage, or filtered "
+            "(re-review needs --force)"
+        )
+    if bare_in_file:
+        return (
+            "receiver/name mismatch — the bare method name exists in "
+            "the file's inventory but no item carries this "
+            "qualification (check the receiver/class spelling)"
+        )
+    return (
+        "not in the checklist inventory — the function does not "
+        "exist at this path in the analysed tree (label drift or "
+        "preprocessor-excluded code)"
+    )
+
+
 def hoist_pins(
     gaps: list[dict[str, Any]],
     pins: list[str] | None,
+    *,
+    checklist: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Hoist operator-pinned gaps to the head of the ordered list.
 
-    ``pins`` are ``file:function`` keys (``--pin``, repeatable). Pinned
-    gaps move to the front — the budget cut and the scope floor then
-    cannot drop them, and the review loop reaches them first. Guidance
-    only: unlike the ``--functions`` filter nothing is excluded, and
-    unmatched pins warn loudly instead of failing the run (an
-    already-reviewed function is not a gap — re-review needs --force).
+    ``pins`` are ``file:function`` keys (``--pin``, repeatable), where
+    ``function`` may be receiver-qualified (``Class.method``, Go
+    ``Receiver.Method``). Pinned gaps move to the front — the budget
+    cut and the scope floor then cannot drop them, and the review loop
+    reaches them first. Guidance only: unlike the ``--functions``
+    filter nothing is excluded, and unmatched pins warn loudly instead
+    of failing the run, with the actual cause per pin (classified
+    against *checklist* when provided).
+
+    Matching: a pin matches a gap on the bare inventory key or the
+    metadata-qualified key (see :func:`gap_keys`). A qualified pin
+    whose qualification matches no gap falls back to the bare method
+    name ONLY when exactly one gap in that file bears it — an
+    ambiguous bare fallback (seven ``Null*.Scan`` methods in one file)
+    must not hoist an arbitrary sibling.
 
     Motivating run: a scoped head-to-head where every per-file floor
     slot went to a finding-free sibling while the functions under
@@ -482,24 +579,54 @@ def hoist_pins(
     if not wanted or not gaps:
         return gaps
     pin_set = set(wanted)
-    pinned = [
-        g for g in gaps
-        if f"{g.get('file', '')}:{g.get('name', '')}" in pin_set
-    ]
-    matched = {f"{g.get('file', '')}:{g.get('name', '')}" for g in pinned}
+
+    keys_by_gap = [(g, gap_keys(g)) for g in gaps]
+    matched: set = set()
+    pinned: list[dict[str, Any]] = []
+    pinned_ids: set = set()
+
+    def _take(gap: dict[str, Any], pin: str) -> None:
+        matched.add(pin)
+        if id(gap) not in pinned_ids:
+            pinned_ids.add(id(gap))
+            pinned.append(gap)
+
+    for g, keys in keys_by_gap:
+        for pin in keys & pin_set:
+            _take(g, pin)
+
+    # Unambiguous bare-name fallback for qualified pins the metadata
+    # could not qualify (extractors without class_name capture).
+    for pin in sorted(pin_set - matched):
+        file_part, _, name_part = pin.rpartition(":")
+        if "." not in name_part:
+            continue
+        bare = name_part.rsplit(".", 1)[-1]
+        candidates = [
+            g for g, _keys in keys_by_gap
+            if g.get("file", "") == file_part and g.get("name", "") == bare
+        ]
+        if len(candidates) == 1:
+            _take(candidates[0], pin)
+
     unmatched = sorted(pin_set - matched)
     if unmatched:
+        causes = [
+            f"{pin}: {_classify_unmatched_pin(pin, checklist)}"
+            for pin in unmatched
+        ]
         logger.warning(
-            "--pin: %d pin(s) matched no gap and will not be reviewed: "
-            "%s (already-reviewed functions are not gaps — use --force "
-            "to re-review)",
-            len(unmatched), ", ".join(unmatched),
+            "--pin: %d pin(s) matched no gap — pin priority (hoist + "
+            "triage/prefilter bypass) NOT applied; the function may "
+            "still be reviewed by the normal schedule:\n  %s",
+            len(unmatched), "\n  ".join(causes),
         )
     if not pinned:
         return gaps
     logger.info(
-        "--pin: %d function(s) hoisted to the front of the schedule: %s",
-        len(matched), ", ".join(sorted(matched)),
+        "--pin: %d pin(s) matched %d gap(s) hoisted to the front of "
+        "the schedule: %s",
+        len(matched), len(pinned), ", ".join(sorted(matched)),
     )
     # An operator pin is an explicit review order: mark the gap so the
     # review loop's triage-skip gate cannot drop it (a pinned function
@@ -507,7 +634,6 @@ def hoist_pins(
     # "guaranteed slot" without guaranteed review).
     for g in pinned:
         g["pinned"] = True
-    pinned_ids = {id(g) for g in pinned}
     return pinned + [g for g in gaps if id(g) not in pinned_ids]
 
 
@@ -1159,10 +1285,45 @@ def _build_covered_set(
     suppresses only one same-named item per covered key instead of
     all of them.
     """
+    from core.coverage.registry import (
+        CATEGORY_LLM,
+        CATEGORY_RUNTIME,
+        DEPTH_ANALYSED,
+        category_of,
+        classify,
+    )
+
     covered = set()
     for record in records:
+        # Legacy coverage-record.json shape (files{...functions{}}).
+        # Runtime records (coverage-fuzz.json carries the same nested
+        # shape for its consumers) are excluded: a fuzzer REACHING a
+        # function is reachability evidence, not a review — folding it
+        # here would suppress exactly the functions fuzzing proved live.
+        if category_of(record.get("tool", "")) == CATEGORY_RUNTIME:
+            continue
         for file_path, file_data in record.get("files", {}).items():
             for func_name in file_data.get("functions", {}):
+                covered.add(make_function_key(file_path, func_name))
+        # Modern per-tool records carry function-level review marks in
+        # functions_analysed (operator --mark, coverage-llm.json,
+        # coverage-journal.json). Pre-fix only the legacy shape was
+        # parsed, so an operator's --mark never suppressed a gap. Only
+        # review-grade labels count: files_examined (whole-file, any
+        # depth) and scanned-depth marks (read / understand) must not
+        # suppress review gaps.
+        if classify(record.get("tool", "")) != (CATEGORY_LLM, DEPTH_ANALYSED):
+            continue
+        for fa in record.get("functions_analysed") or []:
+            if not isinstance(fa, dict):
+                continue
+            if fa.get("status") == "error":
+                # A review that errored is not coverage — same discipline
+                # as import_journal's error-verdict skip.
+                continue
+            file_path = fa.get("file") or ""
+            func_name = fa.get("function") or ""
+            if file_path and func_name:
                 covered.add(make_function_key(file_path, func_name))
     return covered
 
@@ -1213,6 +1374,18 @@ def _fold_journal_into_covered(
       source (see ``_fold_project_index``). A function that changed
       since its review must be re-reviewed, not silently skipped.
 
+    **Kind-aware**: only FUNCTION-GRADE entries (/audit reviews) fold.
+    Finding-grade entries — /agentic's per-finding analyses, stamped
+    ``producer="agentic"`` — never suppress a gap and are never
+    reuse-imported: analysing one scanner finding in a function is not
+    a review of the function. Before the kind gate their fate was
+    accidental: hash-verified entries resurfaced via the reuse
+    screen's strategy-set mismatch, unverifiable ones silently
+    suppressed, and ``--no-verdict-reuse`` flipped everything to
+    suppress. They still contribute file-level tool coverage (the
+    priority tiers) via the coverage records — deprioritised, never
+    skipped.
+
     Deletion note: this replaces the ``checked_by`` read that was
     removed under Phase 3 and the ``recreate_coverage_from_journal``
     shim that was likewise removed. Without one of these bridges,
@@ -1242,8 +1415,11 @@ def _fold_journal_into_covered(
                     source_label="same-run",
                 )
             else:
-                from .journal import reviewed_set
-                covered.update(reviewed_set(out_dir))
+                from .journal import is_function_grade, load_entries
+                covered.update(
+                    e.key for e in load_entries(out_dir)
+                    if e.verdict != "error" and is_function_grade(e)
+                )
         except Exception:
             logger.warning(
                 "journal-fold: failed to read per-run journal at %s — "
@@ -1357,12 +1533,19 @@ def _fold_project_index(
     the plain fold behaviour: suppressed, nothing imported.
     Unverifiable entries are never placed in the sink — reuse
     requires positive hash evidence.
+
+    Kind-aware collapse: the index is read through
+    ``latest_function_grade_index``, not ``load_index`` — the plain
+    latest-per-function collapse would let a newer /agentic
+    finding-analysis shadow the /audit verdict this fold exists to
+    honour (and finding-grade entries never fold; see
+    ``_fold_journal_into_covered``).
     """
-    from .journal import load_index
+    from .journal import latest_function_grade_index
 
     _verify_entries_fold(
         covered,
-        list(load_index(project_dir).values()),
+        list(latest_function_grade_index(project_dir).values()),
         target_path=target_path,
         current_spans=current_spans,
         reuse_sink=reuse_sink,
@@ -1396,10 +1579,16 @@ def _verify_entries_fold(
 
     ``source_label`` names the entry source in log lines
     (``same-run`` / ``prior-run``).
+
+    Finding-grade entries are dropped here as well as at the collapse
+    (belt-and-braces): the same-run resume path feeds this fold from
+    ``latest_entries`` on a run dir that could carry mixed producers.
     """
+    from .journal import is_function_grade
+
     to_verify: dict[str, list] = {}
     for entry in entries:
-        if entry.verdict == "error":
+        if entry.verdict == "error" or not is_function_grade(entry):
             continue
         key = f"{entry.file}:{entry.function}"
         span = current_spans.get(key)

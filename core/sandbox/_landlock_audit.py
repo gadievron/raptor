@@ -275,6 +275,19 @@ def _drain_pipes_until_eof(
     fds_open = set(bufs)
     target_exited = False
     while fds_open:
+        # Enforce the caller's deadline on EVERY iteration, not only when
+        # select() returns idle: a hostile target that keeps a pipe
+        # continuously readable makes select() return non-empty each tick,
+        # so control never entered the `if not ready:` branch below where
+        # the deadline was previously the only checked (14d5c87c residual).
+        # Skip while target_exited — the final sweep is a bounded, non-
+        # blocking drain of already-buffered bytes and must not be cut.
+        if (
+            not target_exited
+            and deadline is not None
+            and time.monotonic() >= deadline
+        ):
+            break
         if target_exited:
             # Final sweep: consume whatever is already buffered in
             # the pipes, but don't block for more.
@@ -347,6 +360,7 @@ def run_landlock_audit(
     text: bool = True,
     stdin=None,
     start_new_session: bool = True,
+    install_death_fd: bool = False,
 ) -> subprocess.CompletedProcess:
     """Spawn ``cmd`` under Landlock + seccomp + ptrace tracer, no
     namespaces.
@@ -361,6 +375,21 @@ def run_landlock_audit(
     the target's first traced syscall would fire SCMP_ACT_TRACE
     with no tracer attached → kernel SIGSYS-kills the process.
 
+    ``install_death_fd=True`` plumbs the pid1-shim orphan-teardown
+    liveness pipe through this path, mirroring the non-audit
+    ``need_unshare`` branch in context.py: the READ end is inherited
+    by the target chain (advertised via ``_RAPTOR_DEATH_FD`` in the
+    child env; the fd is made inheritable so it survives the
+    unshare→prlimit→shim execs), while THIS process holds the sole
+    surviving WRITE end for the duration of the call. If the
+    orchestrator is hard-killed (SIGKILL/OOM) mid-run, the write end
+    closes, the shim reads EOF and exits, and the kernel cascade-
+    SIGKILLs the pid-ns — without it, a shim spawned via the audit
+    path outlived a dead orchestrator. Pass it only when ``cmd``
+    actually carries the shim (context.py gates on ``need_unshare``);
+    requires an explicit ``env=`` because the fd must be advertised
+    through the child environment.
+
     Returns a CompletedProcess shaped to match subprocess.run's
     return value.
     """
@@ -368,6 +397,13 @@ def run_landlock_audit(
         raise ValueError(
             "run_landlock_audit requires audit_run_dir= so the "
             "tracer has a place to write the JSONL"
+        )
+    if install_death_fd and env is None:
+        raise ValueError(
+            "run_landlock_audit(install_death_fd=True) requires env= "
+            "— the death fd is advertised via _RAPTOR_DEATH_FD in the "
+            "child env, and silently falling back to os.environ here "
+            "would hand the child an unsanitised environment."
         )
 
     # F11: create the evidence JSONL up-front in <run_dir>/.audit/
@@ -406,19 +442,31 @@ def run_landlock_audit(
     # opened above — the covering try below has not been entered yet.
     p_go_r = p_go_w = t_ready_r = t_ready_w = -1
     out_r = out_w = err_r = err_w = -1
+    death_r = death_w = -1
     try:
         p_go_r, p_go_w = os.pipe()
         t_ready_r, t_ready_w = os.pipe()
         # The tracer subprocess inherits t_ready_w via execvpe →
         # mark inheritable (PEP 446 sets O_CLOEXEC by default).
         os.set_inheritable(t_ready_w, True)
+        # Orphan-teardown liveness pipe (see docstring). Read end is
+        # inheritable so it survives the target chain's execs; the
+        # write end stays non-inheritable — it closes at the tracer's
+        # exec and at the target's exec, leaving THIS process as the
+        # sole holder, which is exactly the one-bit "parent still
+        # alive" signal the shim watches.
+        if install_death_fd:
+            death_r, death_w = os.pipe()
+            os.set_inheritable(death_r, True)
+            env = {**env, "_RAPTOR_DEATH_FD": str(death_r)}
         # Capture pipes (only when capture_output=True).
         if capture_output:
             out_r, out_w = os.pipe()
             err_r, err_w = os.pipe()
     except BaseException:
         for fd in (p_go_r, p_go_w, t_ready_r, t_ready_w,
-                   out_r, out_w, err_r, err_w):
+                   out_r, out_w, err_r, err_w,
+                   death_r, death_w):
             _close_safely(fd)
         _close_safely(config_fd)
         evidence_file.close(verify=False)
@@ -429,11 +477,14 @@ def run_landlock_audit(
     def _cleanup_fds() -> None:
         nonlocal p_go_r, p_go_w, t_ready_r, t_ready_w
         nonlocal out_r, out_w, err_r, err_w
+        nonlocal death_r, death_w
         for fd in (p_go_r, p_go_w, t_ready_r, t_ready_w,
-                   out_r, out_w, err_r, err_w):
+                   out_r, out_w, err_r, err_w,
+                   death_r, death_w):
             _close_safely(fd)
         p_go_r = p_go_w = t_ready_r = t_ready_w = -1
         out_r = out_w = err_r = err_w = -1
+        death_r = death_w = -1
 
     try:
         # ----- Fork the target -----
@@ -526,7 +577,18 @@ def run_landlock_audit(
                 # survive this exec except stdio.
                 import resource as _resource
                 _soft, _ = _resource.getrlimit(_resource.RLIMIT_NOFILE)
-                os.closerange(3, min(_soft, 65536))
+                _sweep_cap = min(_soft, 65536)
+                if death_r >= 3:
+                    # The orphan-teardown liveness read end must
+                    # survive into the target chain (it is advertised
+                    # via _RAPTOR_DEATH_FD and watched by the pid1
+                    # shim) — split the sweep around it, the same
+                    # shape as the spawn grandchild's closerange
+                    # split around status_w.
+                    os.closerange(3, death_r)
+                    os.closerange(death_r + 1, _sweep_cap)
+                else:
+                    os.closerange(3, _sweep_cap)
 
                 # Apply Landlock then seccomp(audit). Ordering:
                 # Landlock first (filesystem isolation in place),
@@ -556,6 +618,12 @@ def run_landlock_audit(
         # the target owns them now.
         _close_safely(p_go_r)
         p_go_r = -1
+        # Same for the death pipe's read end: the target chain holds
+        # its inheritable copy; only the write end stays here (held
+        # until the finally so a hard-killed parent closes it and the
+        # shim's EOF fires).
+        _close_safely(death_r)
+        death_r = -1
         if capture_output:
             _close_safely(out_w)
             out_w = -1

@@ -162,6 +162,14 @@ def _a2l_prog(tmp_path_factory):
     # Compile a tiny non-PIE C program ONCE per session — the three _live
     # tests below all need the same ELF + main's PC. Cold-CI gcc dominates
     # this test class; sharing the compile cuts ~2/3 of wall.
+    #
+    # The three consumers are all @pytest.mark.slow: the cold-CI compile
+    # lands as 7-12s of SETUP on whichever consumer runs first (over the
+    # default tier's 10s budget), so the whole fixture-sharing group moves
+    # to the nightly slow tier together — gating only some consumers would
+    # just migrate the compile cost onto the ones left behind. The
+    # toolchain-free parse/wiring tests above keep default-tier coverage
+    # of the same collect paths.
     d = tmp_path_factory.mktemp("a2l_prog")
     (d / "prog.c").write_text("int helper(int n){ return n+1; }\n"
                               "int main(void){ return helper(2); }\n")
@@ -174,6 +182,7 @@ def _a2l_prog(tmp_path_factory):
     return d / "prog", main_addr
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
 def test_collect_sancov_live(_a2l_prog, tmp_path):
     prog, main_v = _a2l_prog
@@ -184,6 +193,7 @@ def test_collect_sancov_live(_a2l_prog, tmp_path):
     assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
 def test_collect_drcov_live(_a2l_prog, tmp_path):
     prog, main_v = _a2l_prog
@@ -195,6 +205,7 @@ def test_collect_drcov_live(_a2l_prog, tmp_path):
     assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
 def test_collect_addr2line_live(_a2l_prog):
     prog, main_addr = _a2l_prog

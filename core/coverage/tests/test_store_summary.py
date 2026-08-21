@@ -343,3 +343,47 @@ def test_render_coverage_detailed_includes_per_file_table(tmp_path):
     # Non-detailed omits the table.
     plain = render_coverage([run], _CHECKLIST, run / "coverage.json")
     assert "Per-file" not in plain
+
+
+class TestReadTrackingHealth:
+    """The read-tracking leg fails silently at several points; the
+    summary must say whether it ever engaged."""
+
+    def test_no_reads_anywhere_gets_a_hint(self, tmp_path):
+        from core.coverage.store_summary import (
+            format_read_tracking,
+            read_tracking_status,
+        )
+        run = tmp_path / "run-1"
+        run.mkdir()
+        line = format_read_tracking(read_tracking_status([run]))
+        assert "no LLM reads recorded" in line
+
+    def test_pending_manifest_reported(self, tmp_path):
+        from core.coverage.store_summary import (
+            format_read_tracking,
+            read_tracking_status,
+        )
+        run = tmp_path / "run-1"
+        run.mkdir()
+        (run / ".reads-manifest").write_text("/t/a.c\n")
+        line = format_read_tracking(read_tracking_status([run]))
+        assert "not yet converted" in line
+
+    def test_active_when_record_exists(self, tmp_path):
+        from core.coverage.store_summary import (
+            format_read_tracking,
+            read_tracking_status,
+        )
+        run = tmp_path / "run-1"
+        run.mkdir()
+        (run / "coverage-read.json").write_text("{}")
+        line = format_read_tracking(read_tracking_status([run]))
+        assert line.startswith("  Read tracking: active")
+
+    def test_no_runs_says_nothing(self):
+        from core.coverage.store_summary import (
+            format_read_tracking,
+            read_tracking_status,
+        )
+        assert format_read_tracking(read_tracking_status([])) is None

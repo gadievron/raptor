@@ -306,6 +306,93 @@ def _build_file_record(gen: PerlasmGenerator, flavour: str,
     }
 
 
+# Simple scalar assignment in the generator preamble
+# (``$prefix="aes_v8";`` / ``my $foo = 'bar';``). Only literal
+# word-ish values interpolate — anything computed stays unresolved
+# and the label definition using it is skipped (best-effort).
+_PL_SCALAR_ASSIGN_RE = re.compile(
+    r'(?m)^\s*(?:my\s+)?\$(\w+)\s*=\s*(["\'])([\w.$-]*)\2\s*;'
+)
+# Column-0 asm label DEFINITION inside a heredoc, possibly spelled
+# with perl interpolation (``${prefix}_encrypt_kernel:``).
+# Local (.L*) and numeric labels are not routines (AsmExtractor rule).
+_PL_LABEL_DEF_RE = re.compile(r"^([A-Za-z_$][\w.${}]*):[ \t]*$")
+_PL_VAR_RE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def pl_kernel_items(pl_text: str, kernel_names: set[str]) -> list:
+    """Map generated asm kernels back to their on-disk generator spans.
+
+    The generated ``.S`` kernels are inventoried under the virtual
+    ``.perlasm-generated/`` record, but the SOURCE of each kernel is a
+    heredoc block in the ``.pl`` generator — the location an operator
+    pin or corpus label spells (with the literal on-disk name, e.g.
+    ``${prefix}_encrypt_kernel``). Without a matching item on
+    the ``.pl`` file itself such a pin can never match a gap and the
+    kernel's source span is never a reviewable unit.
+
+    For every column-0 label definition in *pl_text* whose
+    perl-interpolated rendering (simple scalar assignments only)
+    matches a generated kernel name, emit a ``FunctionInfo`` named
+    with the literal on-disk spelling, spanning from the definition
+    line to the kernel's ``.size`` directive (fallback: the next
+    kernel definition / EOF).
+    """
+    from core.inventory.extractors import FunctionInfo, FunctionMetadata
+
+    if not kernel_names:
+        return []
+    assigns = {
+        m.group(1): m.group(3)
+        for m in _PL_SCALAR_ASSIGN_RE.finditer(pl_text)
+    }
+    lines = pl_text.split("\n")
+    defs: list[tuple[int, str, str]] = []
+    for i, line in enumerate(lines, 1):
+        m = _PL_LABEL_DEF_RE.match(line)
+        if not m:
+            continue
+        literal = m.group(1)
+        unresolved = [False]
+
+        def _sub(mm, _unresolved=unresolved):
+            var = mm.group(1) or mm.group(2)
+            if var in assigns:
+                return assigns[var]
+            _unresolved[0] = True
+            return mm.group(0)
+
+        rendered = _PL_VAR_RE.sub(_sub, literal)
+        if unresolved[0]:
+            continue
+        defs.append((i, literal, rendered))
+
+    items = []
+    seen: set[str] = set()
+    for idx, (ln, literal, rendered) in enumerate(defs):
+        if rendered not in kernel_names or literal in seen:
+            continue
+        seen.add(literal)
+        end = None
+        for j in range(ln, len(lines)):
+            stripped = lines[j].strip()
+            if stripped.startswith(".size") and literal in stripped:
+                end = j + 1
+                break
+        if end is None:
+            end = defs[idx + 1][0] - 1 if idx + 1 < len(defs) else len(lines)
+        items.append(FunctionInfo(
+            name=literal,
+            line_start=ln,
+            line_end=end,
+            signature=f"{literal}()",
+            metadata=FunctionMetadata(
+                attributes=[f"perlasm_kernel:{rendered}"],
+            ),
+        ))
+    return items
+
+
 def run_perlasm_pass(target: Path, *, cache_dir: Path | None = None,
                      max_generators: int = MAX_GENERATORS) -> PerlasmResult:
     """Full detect -> derive -> generate -> extract pass over *target*."""
@@ -385,6 +472,39 @@ def enrich_inventory_with_perlasm(inventory: dict, target_path: str | Path,
         added_items += len(record["items"])
         added_functions += len(record["items"])
         added_sloc += record["sloc"]
+
+    # Source-span kernels: the generator's OWN file record gains one
+    # item per generated kernel, named with the literal on-disk
+    # spelling, so pins/labels on the ``.pl`` source resolve to a
+    # reviewable unit (see pl_kernel_items).
+    by_path = {f.get("path"): f for f in files}
+    for record in result.file_records:
+        gen_rel = (record.get("perlasm") or {}).get("generator")
+        pl_record = by_path.get(gen_rel)
+        if pl_record is None:
+            continue
+        kernel_names = {
+            it.get("name", "") for it in record.get("items", [])
+        }
+        try:
+            pl_text = (Path(target_path) / gen_rel).read_text(
+                errors="replace",
+            )
+        except OSError:
+            continue
+        have = {it.get("name") for it in pl_record.get("items", [])}
+        new_items = [
+            fi.to_dict() for fi in pl_kernel_items(pl_text, kernel_names)
+            if fi.name not in have
+        ]
+        if new_items:
+            pl_record.setdefault("items", []).extend(new_items)
+            added_items += len(new_items)
+            added_functions += len(new_items)
+            logger.info(
+                "perlasm: %d source-span kernel item(s) added to %s",
+                len(new_items), gen_rel,
+            )
     if result.file_records:
         inventory["total_files"] = inventory.get("total_files", 0) + len(
             result.file_records

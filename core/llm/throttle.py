@@ -2,10 +2,14 @@
 
 When a worker receives a 429 (rate-limit) response, it signals the
 throttle which temporarily halves the effective concurrency.  After a
-cooldown period without further 429s, concurrency restores to the
-original level.  This prevents the stampede where N workers all hit
-429 simultaneously, each independently backing off while the semaphore
-keeps dispatching at full rate.
+cooldown period without further 429s, concurrency RAMPS back — one
+doubling per quiet cooldown interval (1 → 2 → 4 → 8) — instead of
+snapping straight to the baseline.  This prevents both the stampede
+where N workers all hit 429 simultaneously (each independently backing
+off while the semaphore keeps dispatching at full rate) and the
+restore-retrip oscillation a corpus run demonstrated: concurrency
+pinned at 1 through a 429 storm, snapped 1 → 8 at cooldown, and
+immediately re-tripped the limiter.
 
 Thread-safe: multiple workers can signal concurrently from provider
 threads.  The concurrency gate uses a counter + asyncio.Event so
@@ -28,7 +32,7 @@ Usage standalone (serial loops)::
     throttle = AdaptiveThrottle(max_workers=4)
     throttle.signal_rate_limit()  # halves to 2
     throttle.effective_workers    # 2
-    # after cooldown_s with no signals → restores to 4
+    # after each quiet cooldown_s interval → doubles: 2 → 4
 """
 
 from __future__ import annotations
@@ -58,9 +62,11 @@ class AdaptiveThrottle:
     Parameters
     ----------
     max_workers:
-        The baseline (maximum) concurrency.  Restored after cooldown.
+        The baseline (maximum) concurrency.  Ramped back to after
+        quiet cooldown intervals (one doubling per interval).
     cooldown_s:
-        Seconds after the last 429 signal before restoring concurrency.
+        Seconds of quiet (no 429 signal, no ramp step) before the next
+        doubling.
     min_workers:
         Floor — never reduce below this.
     """
@@ -80,6 +86,10 @@ class AdaptiveThrottle:
         self._lock = threading.Lock()
         self._effective = self._max_workers
         self._last_signal: float = 0.0
+        # Timestamp of the last ramp-up step — each doubling opens a
+        # fresh cooldown window, so recovery is 1 → 2 → 4 → 8 over
+        # quiet intervals rather than an instant snap to baseline.
+        self._last_ramp: float = 0.0
         self._signal_count: int = 0
         self._in_flight: int = 0
         # Normal-priority acquire_sync callers currently blocked
@@ -156,26 +166,47 @@ class AdaptiveThrottle:
             self._condition.notify_all()
 
     def _maybe_restore(self) -> None:
-        """Restore concurrency if cooldown has elapsed since last signal.
+        """Ramp concurrency up one doubling per quiet cooldown interval.
 
         Called from ``acquire()`` (event-loop thread), ``acquire_sync()``
-        (worker thread), and property accessors.  When capacity
-        increases, sets the asyncio event (if present — routed through
-        the owning loop when called off-loop, since ``asyncio.Event``
-        is not thread-safe) and notifies sync waiters.
+        (worker thread), and property accessors.  Each step doubles the
+        effective level (capped at ``max_workers``) and restarts the
+        cooldown window, so a deep throttle recovers 1 → 2 → 4 → 8
+        instead of snapping to baseline and re-tripping the limiter.
+        When capacity increases, sets the asyncio event (if present —
+        routed through the owning loop when called off-loop, since
+        ``asyncio.Event`` is not thread-safe) and notifies sync
+        waiters.
         """
         if self._effective >= self._max_workers:
             return
         with self._condition:
             if self._effective >= self._max_workers:
                 return
-            elapsed = time.monotonic() - self._last_signal
+            anchor = max(self._last_signal, self._last_ramp)
+            elapsed = time.monotonic() - anchor
             if elapsed >= self._cooldown_s:
+                # Credit every FULL quiet interval since the anchor —
+                # a checker that only wakes occasionally still earns
+                # one doubling per interval, and a long-idle throttle
+                # recovers fully in one call.
+                steps = (
+                    int(elapsed // self._cooldown_s)
+                    if self._cooldown_s > 0 else 1
+                )
                 old = self._effective
-                self._effective = self._max_workers
+                new = max(self._effective, self._min_workers, 1)
+                for _ in range(max(steps, 1)):
+                    if new >= self._max_workers:
+                        break
+                    new *= 2
+                self._effective = min(new, self._max_workers)
+                self._last_ramp = time.monotonic()
                 logger.info(
-                    "throttle: cooldown elapsed — concurrency %d → %d",
+                    "throttle: cooldown elapsed — concurrency %d → %d%s",
                     old, self._effective,
+                    ("" if self._effective >= self._max_workers
+                     else " (ramping)"),
                 )
                 self._set_event_threadsafe()
                 self._condition.notify_all()

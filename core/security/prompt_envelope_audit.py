@@ -328,10 +328,11 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         file='packages/codeql/dataflow_validator.py',
         func_name='DataflowValidator.validate_dataflow_path',
         attr='reasoning',
-        expr_text='{smt_result.reasoning}',
+        expr_text='{r.reasoning}',
         audit_note=(
-            'DataflowValidation.reasoning return field; smt_result '
-            'source is RAPTOR-internal'
+            'DataflowValidation.reasoning return field; r iterates the '
+            'per-path SMT results (refuted list) — RAPTOR-internal '
+            'solver output, same provenance as smt_result.reasoning'
         ),
     ),
     # ----- packages/hypothesis_validation/runner.py (_evaluate_with_refinement) -----

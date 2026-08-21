@@ -76,8 +76,9 @@ def test_has_critical_failure_detects_critical_only() -> None:
     assert has_critical_failure([]) is False
 
 
-def test_probe_anthropic_requires_api_key(monkeypatch) -> None:
+def test_probe_anthropic_requires_api_key(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "ANTHROPIC_API_KEY not set" in r.detail
@@ -99,7 +100,31 @@ def test_probes_tuple_lists_dns_first() -> None:
 
 import json as _json
 
+import pytest
+
 from core.http import HttpError, Response
+
+import cve_diff.llm.auth as _auth_mod
+
+
+@pytest.fixture
+def _anthropic_routed(monkeypatch):
+    """Pin the probe's default-model resolution to an Anthropic model.
+
+    ``probe_anthropic`` consults ``cve_diff.llm.auth.default_model_id()``,
+    which resolves through the shared LLM registry — ambient operator
+    config (``~/.config/raptor/models.json``, provider env keys) and
+    process-global caches primed by OTHER tests in the same run
+    (``core.llm.config._cached_thinking_model``) can steer it to a
+    non-Anthropic provider, flipping the probe onto its informational
+    skip branch. These unit tests exercise the Anthropic probe itself,
+    so the routing decision must be pinned, not inherited from the
+    session (hermeticity: no dependence on host config or sibling-test
+    pollution). The skip branch has its own dedicated tests below.
+    """
+    monkeypatch.setattr(
+        _auth_mod, "default_model_id", lambda: "claude-sonnet-4-6",
+    )
 
 
 def _stub_client(monkeypatch, *, request_fn=None):
@@ -144,7 +169,7 @@ def test_timed_get_network_failure_returns_error_and_no_body(monkeypatch) -> Non
 
 # --- probe_anthropic (POST, with explicit branches) ---
 
-def test_probe_anthropic_success_when_post_returns_200(monkeypatch) -> None:
+def test_probe_anthropic_success_when_post_returns_200(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = service_health.probe_anthropic()
@@ -152,7 +177,7 @@ def test_probe_anthropic_success_when_post_returns_200(monkeypatch) -> None:
     assert "ok" in r.detail
 
 
-def test_probe_anthropic_marks_401_as_auth_failure(monkeypatch) -> None:
+def test_probe_anthropic_marks_401_as_auth_failure(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad")
     def raise_401(m, u, **kw):
         raise HttpError("unauthorized", status=401)
@@ -162,7 +187,7 @@ def test_probe_anthropic_marks_401_as_auth_failure(monkeypatch) -> None:
     assert "auth" in r.detail.lower()
 
 
-def test_probe_anthropic_marks_529_as_overloaded(monkeypatch) -> None:
+def test_probe_anthropic_marks_529_as_overloaded(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     def raise_529(m, u, **kw):
         raise HttpError("overloaded", status=529)
@@ -172,7 +197,7 @@ def test_probe_anthropic_marks_529_as_overloaded(monkeypatch) -> None:
     assert "overloaded" in r.detail.lower()
 
 
-def test_probe_anthropic_marks_429_as_rate_limited(monkeypatch) -> None:
+def test_probe_anthropic_marks_429_as_rate_limited(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     def raise_429(m, u, **kw):
         raise HttpError("rate limited", status=429, retry_after=30)
@@ -183,7 +208,7 @@ def test_probe_anthropic_marks_429_as_rate_limited(monkeypatch) -> None:
     assert r.rate_limit == "30"
 
 
-def test_probe_anthropic_marks_other_http_codes_as_failure(monkeypatch) -> None:
+def test_probe_anthropic_marks_other_http_codes_as_failure(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     def raise_503(m, u, **kw):
         raise HttpError("http 503", status=503)
@@ -193,7 +218,7 @@ def test_probe_anthropic_marks_other_http_codes_as_failure(monkeypatch) -> None:
     assert "503" in r.detail
 
 
-def test_probe_anthropic_handles_network_failure(monkeypatch) -> None:
+def test_probe_anthropic_handles_network_failure(monkeypatch, _anthropic_routed) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     def boom(m, u, **kw):
         raise HttpError("dns fail")
@@ -201,6 +226,37 @@ def test_probe_anthropic_handles_network_failure(monkeypatch) -> None:
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "network" in r.detail
+
+
+def test_probe_anthropic_skips_when_default_routes_elsewhere(monkeypatch) -> None:
+    """When the configured primary model routes to another provider,
+    Anthropic is off the run's critical path: the probe reports an
+    informational skip (ok=True) and never touches the network — even
+    with Anthropic auth present."""
+    monkeypatch.setattr(
+        _auth_mod, "default_model_id", lambda: "gemini-2.5-pro",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    def no_network(m, u, **kw):
+        raise AssertionError("skip branch must not make network calls")
+    _stub_client(monkeypatch, request_fn=no_network)
+    r = service_health.probe_anthropic()
+    assert r.ok is True
+    assert "skipped" in r.detail
+    assert "gemini" in r.detail
+
+
+def test_probe_anthropic_probes_when_model_resolution_fails(monkeypatch) -> None:
+    """Registry trouble must fall back to the historical behaviour:
+    treat the run as Anthropic-routed and probe for real."""
+    def registry_boom():
+        raise RuntimeError("registry unavailable")
+    monkeypatch.setattr(_auth_mod, "default_model_id", registry_boom)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
+    r = service_health.probe_anthropic()
+    assert r.ok is True
+    assert "1-token ping" in r.detail
 
 
 # --- probe_nvd ---
@@ -345,8 +401,6 @@ def test_probe_github_handles_gh_cli_timeout(monkeypatch) -> None:
 
 
 # --- probe_debian / probe_ubuntu / probe_redhat (parametrized — same shape) ---
-
-import pytest
 
 
 @pytest.mark.parametrize("probe", [

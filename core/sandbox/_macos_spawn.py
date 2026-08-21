@@ -192,6 +192,7 @@ def run_sandboxed(cmd: list[str], *,
                   input: "bytes | str | None" = None,  # noqa: A002 — subprocess parity
                   audit_mode: bool = False,
                   audit_run_dir: str | None = None,
+                  audit_required: bool = False,
                   audit_verbose: bool = False,
                   observe_mode: bool = False,
                   observe_nonce: str | None = None,
@@ -238,6 +239,16 @@ def run_sandboxed(cmd: list[str], *,
                   # profile). macOS sandbox-exec doesn't use mount-ns;
                   # accepted + ignored for signature parity.
                   skip_mount_ns=False,
+                  # rootfs: Linux-only — mount-ns pivot into an unpacked
+                  # container-image tree. Accepted for signature parity
+                  # but NOT ignored like the kwargs above: those are
+                  # protection extras whose absence weakens nothing the
+                  # SBPL profile promised, whereas rootfs names the
+                  # execution SUBSTRATE — ignoring it would run the
+                  # command against the HOST filesystem. context.py's
+                  # fail-closed gate raises before dispatch ever reaches
+                  # darwin; the body-level raise is defence in depth.
+                  rootfs: str | None = None,
                   # proxy_unix_socket / proxy_forwarder_port: Linux-only
                   # — used by _spawn to fork a TCP-to-Unix relay inside
                   # the child's empty netns for proxy enforcement on
@@ -304,6 +315,14 @@ def run_sandboxed(cmd: list[str], *,
     are bounded by core.sandbox.audit_budget.AuditBudget's per-
     category caps + 1-in-N sampling so the JSONL doesn't bloat.
     """
+    if rootfs is not None:
+        from .errors import SandboxSetupError
+        raise SandboxSetupError(
+            "sandbox(rootfs=...) requires the Linux mount-namespace "
+            "backend; macOS sandbox-exec cannot pivot into an image "
+            "rootfs — refusing to run against the host filesystem.",
+            "run image-rootfs sandboxes on a Linux host.",
+        )
     # 0. Validate audit-mode + audit_run_dir invariant. Mirrors
     # core/sandbox/_spawn.py for parity — caller asking for audit
     # without giving the tracer a place to write JSONL is almost
@@ -508,6 +527,21 @@ def run_sandboxed(cmd: list[str], *,
                     "audit_mode on hosts where the streamer cannot attach"
                 ),
             )
+            if audit_required:
+                # Fail closed BEFORE spawning the workload: the caller
+                # demanded audit evidence and macOS has no other audit
+                # tier to fall back to. Marker above is kept — it
+                # documents the refused degradation.
+                from .errors import SandboxSetupError
+                raise SandboxSetupError(
+                    f"audit_required=True but the seatbelt log "
+                    f"streamer failed to start "
+                    f"({type(exc).__name__}: {exc}) — refusing to "
+                    f"run the target unaudited.",
+                    "check the macOS unified log subsystem (log show "
+                    "/ log stream), or drop audit_required= to accept "
+                    "marker-recorded degradation.",
+                ) from exc
 
     # 5b. Status + death pipes for the seatbelt shim.
     #     status: the inner shim writes one readiness byte after the profile

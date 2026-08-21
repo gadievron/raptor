@@ -217,6 +217,38 @@ def _now_iso() -> str:
     ).isoformat().replace("+00:00", "Z")
 
 
+def _probe_env(env_keys: Iterable[str]) -> dict | None:
+    """Child env for the calibration probe, honouring ``env_keys``.
+
+    The cache key discriminates on the ``env_keys`` values, so the
+    probe must actually SEE them — pre-fix the probe never received
+    an env and the sandbox spawned it under ``get_safe_env()``, which
+    strips exactly the discriminator variables (e.g.
+    ``CLAUDE_CODE_USE_BEDROCK`` / ``ANTHROPIC_BASE_URL``): every env
+    shape produced the identical measurement, and a Bedrock-configured
+    operator got a direct-endpoint profile cached under the Bedrock
+    fingerprint.
+
+    Returns ``get_safe_env()`` overlaid with exactly the declared
+    discriminator keys from the operator environment (set → copied
+    in; unset → removed, so a stale allowlisted value can't leak
+    through). ``None`` when no keys are declared — the sandbox then
+    applies its own safe-env default, unchanged.
+    """
+    keys = sorted(set(env_keys or ()))
+    if not keys:
+        return None
+    from core.config import RaptorConfig
+    env = RaptorConfig.get_safe_env()
+    for k in keys:
+        v = os.environ.get(k)
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
+    return env
+
+
 # ---------------------------------------------------------------------------
 # Probe spawn
 # ---------------------------------------------------------------------------
@@ -371,6 +403,7 @@ def calibrate_binary(
 
     profile, rc = _spawn_probe(
         bin_real, list(probe_args), timeout=timeout,
+        extra_env=_probe_env(env_keys),
     )
     # Fill identity fields the spawn helper couldn't know.
     profile.binary_path = str(bin_real)

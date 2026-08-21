@@ -7,7 +7,6 @@ requests and smokes; the parallel bench runner lives in ``scripts/bench_parallel
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
 import json
 import os
@@ -17,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cve_env.agent.loop import build
+from cve_env.agent.core_loop import build_core
 from cve_env.config import AGENTIC_AUDIT_ROOT, VERSION_ASSERTION_CMD_PATTERN
 from cve_env.models import CveRecord, HostInfo, derive_build_method
 from cve_env.tools.arch import detect_host_arch
@@ -75,24 +74,22 @@ def _cmd_build(args: argparse.Namespace) -> int:
         # argparse always populates these attrs at real CLI invocation.
         from cve_env.config import MAX_TURN_EXTENSIONS, TURN_EXTENSION_PCT
 
-        outcome = asyncio.run(
-            build(
-                cve,
-                host,
-                run_id=run_id,
-                audit_root=audit_root,
-                max_turns=args.max_turns,
-                max_cost_usd=args.max_cost_usd,
-                max_turn_extensions=getattr(
-                    args, "max_turn_extensions", MAX_TURN_EXTENSIONS
-                ),
-                turn_extension_pct=getattr(
-                    args, "turn_extension_pct", TURN_EXTENSION_PCT
-                ),
-                constraints=constraints,
-            )
+        outcome = build_core(
+            cve,
+            host,
+            run_id=run_id,
+            audit_root=audit_root,
+            max_turns=args.max_turns,
+            max_cost_usd=args.max_cost_usd,
+            max_turn_extensions=getattr(
+                args, "max_turn_extensions", MAX_TURN_EXTENSIONS
+            ),
+            turn_extension_pct=getattr(
+                args, "turn_extension_pct", TURN_EXTENSION_PCT
+            ),
+            constraints=constraints,
         )
-        # Manual whitelist — must be updated when Outcome fields change.
+        # Manual allowlist — must be updated when Outcome fields change.
         # Consider dataclasses.asdict() with exclusions.
         outcome_dict = {
             "cve_id": outcome.cve_id,
@@ -116,7 +113,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
             # Host containerd-corruption flag → lets the bench heal +
             # bench_select_retry detect it without parsing the audit JSONL.
             "daemon_corruption": outcome.daemon_corruption,
-            # Per-stage telemetry fields. `outcome_dict` is a manual whitelist,
+            # Per-stage telemetry fields. `outcome_dict` is a manual allowlist,
             # so these must be listed explicitly to reach the sidecar.
             "stage_costs": outcome.stage_costs,
             "stage_calls": outcome.stage_calls,

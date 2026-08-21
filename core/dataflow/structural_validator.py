@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from core.inventory.call_graph import (
     FileCallGraph,
@@ -76,16 +76,16 @@ class StepVerification:
     step_index: int
     file: str
     line: int
-    function: Optional[str]
+    function: str | None
     exists: bool
-    call_link_to_next: Optional[bool] = None
+    call_link_to_next: bool | None = None
     has_indirection: bool = False
-    sanitizer_calls: List[str] = field(default_factory=list)
-    branch_guards: List[str] = field(default_factory=list)
+    sanitizer_calls: list[str] = field(default_factory=list)
+    branch_guards: list[str] = field(default_factory=list)
     detail: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "step_index": self.step_index,
             "file": self.file,
             "line": self.line,
@@ -111,9 +111,9 @@ class StructuralResult:
     """Validation result matching the IRIS output shape."""
     verdict: str
     reasoning: str
-    evidence: List[Dict[str, Any]] = field(default_factory=list)
-    sanitizers: List[str] = field(default_factory=list)
-    path_conditions: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    sanitizers: list[str] = field(default_factory=list)
+    path_conditions: list[dict[str, Any]] = field(default_factory=list)
     confidence: str = "low"
     method: str = "structural-treesitter"
 
@@ -125,7 +125,7 @@ class StructuralResult:
     def iterations(self) -> int:
         return 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "verdict": self.verdict,
             "reasoning": self.reasoning,
@@ -137,7 +137,7 @@ class StructuralResult:
         }
 
 
-def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
+def _resolve_file(step: dict, repo_path: Path) -> Path | None:
     """Resolve a step's file path against the repo root.
 
     Rejects paths that escape ``repo_path`` (traversal defense — step
@@ -168,7 +168,7 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
     return None
 
 
-def _read_file_content(path: Path) -> Optional[str]:
+def _read_file_content(path: Path) -> str | None:
     """Read file content, returning None on failure."""
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -176,7 +176,7 @@ def _read_file_content(path: Path) -> Optional[str]:
         return None
 
 
-def _extract_graph(content: str, language: str) -> Optional[FileCallGraph]:
+def _extract_graph(content: str, language: str) -> FileCallGraph | None:
     """Extract call graph for the given language.
 
     Returns ``None`` (no evidence) when the language is unsupported OR
@@ -200,7 +200,7 @@ def _extract_graph(content: str, language: str) -> Optional[FileCallGraph]:
             return None
     try:
         return extractor(content)
-    except Exception:
+    except Exception:  # noqa: BLE001 — hostile source: any parse failure degrades to no-graph
         return None
 
 
@@ -209,7 +209,7 @@ def _find_enclosing_function(
     graph: FileCallGraph,
     content: str,
     language: str,
-) -> Optional[str]:
+) -> str | None:
     """Find the function name enclosing a given line number.
 
     Uses call sites' caller field as a hint, then falls back to
@@ -232,11 +232,11 @@ def _find_enclosing_function(
 
 
 def _check_call_link(
-    from_func: Optional[str],
-    to_func: Optional[str],
+    from_func: str | None,
+    to_func: str | None,
     graph: FileCallGraph,
     cross_file: bool = False,
-) -> Tuple[Optional[bool], bool]:
+) -> tuple[bool | None, bool]:
     """Check if from_func calls to_func via the call graph.
 
     Returns (link_found, has_indirection).
@@ -244,6 +244,14 @@ def _check_call_link(
     """
     if not to_func:
         return None, False
+
+    if not cross_file and from_func and from_func == to_func:
+        # Consecutive steps inside the SAME function (the normal shape
+        # of an intra-procedural taint path: source line → assignment
+        # → sink line) are linked by straight-line control flow, not
+        # by a call edge.  Requiring a self-call edge here refuted
+        # every intra-procedural path with high confidence.
+        return True, False
 
     to_name = to_func.split(".")[-1]
 
@@ -281,7 +289,7 @@ def _check_call_link(
 def _identify_sanitizer_calls(
     calls: list,
     label: str,
-) -> List[str]:
+) -> list[str]:
     """Identify sanitizer/validator calls from call sites and labels."""
     found = []
     for call in calls:
@@ -306,7 +314,7 @@ def _extract_branch_guards_from_content(
     content: str,
     line: int,
     language: str,
-) -> List[str]:
+) -> list[str]:
     """Extract branch guard conditions enclosing the given line.
 
     Uses tree-sitter when available, falls back to regex for
@@ -335,7 +343,7 @@ def _extract_branch_guards_from_content(
     return guards
 
 
-def _build_all_steps(dataflow_path: Dict) -> List[Dict]:
+def _build_all_steps(dataflow_path: dict) -> list[dict]:
     """Build the ordered step list from a dataflow_path dict."""
     source = dataflow_path.get("source")
     sink = dataflow_path.get("sink")
@@ -351,10 +359,10 @@ def _build_all_steps(dataflow_path: Dict) -> List[Dict]:
 
 
 def validate_structurally(
-    dataflow_path: Dict[str, Any],
+    dataflow_path: dict[str, Any],
     repo_path: Path,
     *,
-    language: Optional[str] = None,
+    language: str | None = None,
 ) -> StructuralResult:
     """Validate a claimed dataflow path using tree-sitter structural analysis.
 
@@ -375,10 +383,10 @@ def validate_structurally(
             confidence="low",
         )
 
-    verifications: List[StepVerification] = []
-    all_sanitizers: List[str] = []
-    all_conditions: List[Dict[str, Any]] = []
-    file_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[FileCallGraph]]] = {}
+    verifications: list[StepVerification] = []
+    all_sanitizers: list[str] = []
+    all_conditions: list[dict[str, Any]] = []
+    file_cache: dict[str, tuple[str | None, str | None, FileCallGraph | None]] = {}
 
     for i, step in enumerate(steps):
         file_path_str = step.get("file", "")
@@ -435,7 +443,7 @@ def validate_structurally(
             sanitizer_calls = _identify_sanitizer_calls(calls_in_range, label)
             all_sanitizers.extend(sanitizer_calls)
 
-        guards: List[str] = []
+        guards: list[str] = []
         if lang and content:
             guards = _extract_branch_guards_from_content(content, line, lang)
             for g in guards:
@@ -445,7 +453,7 @@ def validate_structurally(
                     "negated": False,
                 })
 
-        call_link: Optional[bool] = None
+        call_link: bool | None = None
         has_indirection = False
         if i < len(steps) - 1:
             next_step = steps[i + 1]
@@ -489,9 +497,9 @@ def validate_structurally(
 
 
 def _compute_verdict(
-    verifications: List[StepVerification],
-    sanitizers: List[str],
-    path_conditions: List[Dict[str, Any]],
+    verifications: list[StepVerification],
+    sanitizers: list[str],
+    path_conditions: list[dict[str, Any]],
 ) -> StructuralResult:
     """Derive a verdict from step verifications."""
     if not verifications:

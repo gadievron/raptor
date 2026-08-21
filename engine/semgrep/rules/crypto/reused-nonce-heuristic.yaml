@@ -1,23 +1,86 @@
 rules:
-  - id: raptor.crypto.nonce.reuse.gcm.literal.java
-    message: Potential nonce reuse. Detected literal or constant nonce with AES-GCM. Verify unique nonces per key.
+  # Actual reuse heuristics. Literal / constant nonces are reported by
+  # insecure-iv-or-nonce.yaml; the rules here fire only on evidence of the
+  # SAME nonce value feeding more than one encryption, which is the
+  # catastrophic case for AES-GCM / ChaCha20-Poly1305 (key stream and auth
+  # key recovery).
+
+  - id: raptor.crypto.nonce.reuse.spec.java
+    message: >
+      Potential nonce reuse. The same GCMParameterSpec instance initialises two
+      Cipher operations, so both use the same IV under (typically) the same key.
+      Generate a fresh nonce per encryption.
     languages: [java, kotlin]
     severity: HIGH
-    pattern-either:
-      - pattern: new GCMParameterSpec($T, new byte[] { ... })
+    patterns:
+      - pattern: |
+          $S = new GCMParameterSpec(...);
+          ...
+          $C1.init($M1, $K1, $S);
+          ...
+          $C2.init($M2, $K2, $S);
+      - pattern-not: |
+          $S = new GCMParameterSpec(...);
+          ...
+          $C1.init($M1, $K1, $S);
+          ...
+          $S = ...;
+          ...
+          $C2.init($M2, $K2, $S);
     metadata:
-      cwe: ["CWE-323","CWE-330"]
+      cwe: ["CWE-323", "CWE-330"]
       asvs: ["V7.3"]
 
-  - id: raptor.crypto.nonce.reuse.gcm.literal.python
-    message: Potential nonce reuse. Literal nonce used for AEAD. Verify unique nonces per key.
+  - id: raptor.crypto.nonce.reuse.two-calls.python
+    message: >
+      Potential nonce reuse. The same nonce variable is passed to two encrypt
+      calls on the same AEAD object without being reassigned in between.
+      Generate a fresh nonce per encryption.
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern: AESGCM($K).encrypt($NONCE, $PT, $AD)
-      - metavariable-pattern:
+      - pattern: |
+          $C.encrypt($NONCE, ...)
+          ...
+          $C.encrypt($NONCE, ...)
+      - pattern-not: |
+          $C.encrypt($NONCE, ...)
+          ...
+          $NONCE = ...
+          ...
+          $C.encrypt($NONCE, ...)
+      - metavariable-regex:
           metavariable: $NONCE
-          pattern: b"..."
+          regex: "^[A-Za-z_][A-Za-z0-9_.]*$"
     metadata:
-      cwe: ["CWE-323","CWE-330"]
+      cwe: ["CWE-323", "CWE-330"]
+      asvs: ["V7.3"]
+
+  - id: raptor.crypto.nonce.reuse.loop.python
+    message: >
+      Potential nonce reuse. A nonce assigned once outside a loop is used for
+      an encrypt call inside the loop, so every iteration encrypts under the
+      same nonce. Generate a fresh nonce inside the loop.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern: |
+          $NONCE = ...
+          ...
+          for $X in $ITER:
+              ...
+              $C.encrypt($NONCE, ...)
+      - pattern-not: |
+          $NONCE = ...
+          ...
+          for $X in $ITER:
+              ...
+              $NONCE = ...
+              ...
+              $C.encrypt($NONCE, ...)
+      - metavariable-regex:
+          metavariable: $NONCE
+          regex: "^[A-Za-z_][A-Za-z0-9_.]*$"
+    metadata:
+      cwe: ["CWE-323", "CWE-330"]
       asvs: ["V7.3"]

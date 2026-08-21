@@ -19,7 +19,6 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from core.json import JsonCache
 
@@ -74,10 +73,14 @@ def main(argv: Sequence[str]) -> int:
     # against a blocked registry caches an empty version list, and
     # every later health check "fails" in 0ms without touching the
     # network); writing to it would poison real scans the other way.
-    import shutil
-    import tempfile
-    _cache_dir = tempfile.mkdtemp(prefix="raptor-sca-health-")
-    cache = JsonCache(root=Path(_cache_dir))
+    # ``scratch_dir`` registers its prefix with the tmp reaper, so a
+    # dir orphaned by SIGTERM/OOM is reclaimed by the next run's sweep.
+    import contextlib
+
+    from core.run.scratch import scratch_dir
+    _scratch = contextlib.ExitStack()
+    _cache_dir = _scratch.enter_context(scratch_dir("raptor-sca-health-"))
+    cache = JsonCache(root=_cache_dir)
     http = _ProbeBudgetClient(default_client())
 
     # Probes run in parallel and with a probe-sized HTTP budget (one
@@ -109,7 +112,7 @@ def main(argv: Sequence[str]) -> int:
             results = [f.result() for f in futs]
     finally:
         _reg_logger.removeHandler(capture)
-        shutil.rmtree(_cache_dir, ignore_errors=True)
+        _scratch.close()
 
     _print_table(results)
     return 0 if all(r.ok for r in results) else 1
@@ -214,7 +217,7 @@ def _print_table(results: list[_ProbeResult]) -> None:
           f"{'Time':<8} {'Versions':<10}")
     print("-" * 90)
     for r in results:
-        status = "OK" if r.ok else "FAIL"
+        status = "Ok" if r.ok else "Fail"
         print(f"{r.ecosystem:<12} {r.probe:<40} {status:<10} "
               f"{r.elapsed_ms:<8} {r.versions_returned:<10}")
         if r.error and not r.ok:

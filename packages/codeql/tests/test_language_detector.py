@@ -504,3 +504,75 @@ class TestManifestOnlyCeiling:
 
         assert "go" in detected
         assert detected["go"].confidence >= 0.6
+
+
+class TestRustDetection:
+    """Rust routes to CodeQL only when the CLI ships the extractor."""
+
+    def _rust_repo(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "Cargo.toml", "[package]\nname = \"x\"\n")
+        _write(tmp_path, "src/main.rs", "fn main() {}\n")
+        _write(tmp_path, "src/lib.rs", "pub fn f() {}\n")
+        _write(tmp_path, "src/util.rs", "pub fn g() {}\n")
+        return tmp_path
+
+    def _reset_probe_cache(self):
+        LanguageDetector._extractor_langs = None
+
+    def test_rust_detected(self, tmp_path: Path):
+        detected = LanguageDetector(self._rust_repo(tmp_path)).detect_languages()
+        assert "rust" in detected
+        assert "Cargo.toml" in detected["rust"].build_files_found
+
+    def test_rust_kept_when_extractor_present(self, tmp_path: Path, monkeypatch):
+        self._reset_probe_cache()
+        monkeypatch.setattr(
+            LanguageDetector, "_extractor_langs", frozenset({"rust", "cpp"}),
+        )
+        det = LanguageDetector(self._rust_repo(tmp_path))
+        supported = det.filter_codeql_supported(det.detect_languages())
+        assert "rust" in supported
+
+    def test_rust_dropped_when_extractor_absent(self, tmp_path: Path, monkeypatch):
+        self._reset_probe_cache()
+        monkeypatch.setattr(
+            LanguageDetector, "_extractor_langs", frozenset({"cpp"}),
+        )
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+        det = LanguageDetector(self._rust_repo(tmp_path))
+        supported = det.filter_codeql_supported(det.detect_languages())
+        assert "rust" not in supported
+        warns = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
+        assert any("extractor" in w for w in warns)
+
+    def test_probe_failure_reads_as_unavailable(self, tmp_path: Path, monkeypatch):
+        # A failed probe caches frozenset() — probed languages drop,
+        # statically-supported languages are unaffected.
+        self._reset_probe_cache()
+        import shutil as _shutil
+        monkeypatch.setattr(_shutil, "which", lambda _name: None)
+        _write(tmp_path, "go.mod", "module m\n")
+        _write(tmp_path, "a.go", "package m\n")
+        det = LanguageDetector(self._rust_repo(tmp_path))
+        try:
+            supported = det.filter_codeql_supported(det.detect_languages())
+            assert "rust" not in supported
+            assert "go" in supported
+        finally:
+            self._reset_probe_cache()
+
+    def test_non_probed_languages_bypass_probe(self, tmp_path: Path, monkeypatch):
+        # No probe should even run for a repo with no probed language.
+        self._reset_probe_cache()
+        called = []
+        monkeypatch.setattr(
+            LanguageDetector, "_extractor_available",
+            lambda self, lang: called.append(lang) or True,
+        )
+        _write(tmp_path, "go.mod", "module m\n")
+        _write(tmp_path, "a.go", "package m\n")
+        _write(tmp_path, "b.go", "package m\n")
+        det = LanguageDetector(tmp_path)
+        det.filter_codeql_supported(det.detect_languages())
+        assert called == []

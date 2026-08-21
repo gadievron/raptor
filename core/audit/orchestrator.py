@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading as _threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -326,14 +327,35 @@ def install_sigterm_grace() -> bool:
     return True
 
 
+def _reset_shutdown_state() -> None:
+    """Reset per-run shutdown/SIGTERM request state at run start.
+
+    The events and the TERM count are module globals: a prior
+    in-process run that was stopped (SIGTERM drain, request_shutdown)
+    left them set, so a second run in the same process stopped
+    immediately at its first ``is_shutdown_requested()`` check, and
+    its first real SIGTERM was miscounted as the second (immediate
+    exit 130 instead of the graceful drain). Reset at run start like
+    the per-run caches. The handler-installed flag persists — the
+    signal disposition is process-global and installing is
+    idempotent-guarded.
+    """
+    _shutdown_event.clear()
+    _sigterm_event.clear()
+    _sigterm_state["count"] = 0
+
+
 def _update_run_progress(out_dir: Path, result: Any) -> None:
     """Update run metadata with progress checkpoint.
 
     Atomic + locked like every other ``.raptor-run.json`` writer
-    (``_update_status``): a bare ``write_text`` torn by a kill left
-    the run metadata unparseable, and an unlocked read-modify-write
-    raced the lifecycle writers (last writer dropped the other's
-    update).
+    (``core.run.metadata._update_status``): the previous bare
+    ``write_text`` could be torn by a kill mid-write, leaving the run
+    metadata unparseable, and the unlocked read-modify-write raced the
+    lifecycle writers — the last writer silently dropped the other's
+    update (a SIGTERM drain marking the run ``interrupted`` could be
+    clobbered back to ``running`` by a checkpoint that loaded the
+    stale status a moment earlier).
     """
     meta_path = out_dir / ".raptor-run.json"
     try:
@@ -388,9 +410,35 @@ class OrchestratorConfig:
     no_binary_oracle: bool = False
     inventory: dict[str, Any] | None = None
     codeql_db_path: str | None = None
+    # Repeatable ``--codeql-db``: one database per language for
+    # multi-language targets. Normalised at run start into
+    # ``codeql_db_router`` (see core.audit.codeql_dbs); after
+    # normalisation ``codeql_db_path`` holds the router's primary.
+    codeql_db_paths: list[str] | None = None
+    # Derived at run start (never set by callers).
+    codeql_db_router: Any | None = None
     threat_model: dict[str, Any] | None = None
     validate: bool = True
     prefilter: bool = True
+    # Prefilter skip_llm shortcut. False keeps the prefilter running
+    # (hits still feed review context and the post-review structural
+    # override) but a skip_llm verdict no longer resolves the function
+    # clean without review (corpus calibration sets this off so labeled
+    # deep mechanisms are actually exercised). Production default
+    # unchanged (on).
+    prefilter_skip: bool = True
+    # Triage-classifier SKIP shortcut. False disables the skip — every
+    # workqueue function gets a real review instead of a classifier
+    # "clean" (corpus calibration sets this off so labeled deep
+    # mechanisms are actually exercised). Buckets other than SKIP
+    # (glance/investigate/deep_dive) are unaffected.
+    triage: bool = True
+    # Vendored/generated-code triage tier (--no-vendored-triage to
+    # disable): files with corroborated generator provenance route to
+    # the skip tier, uncorroborated banners / vendored paths /
+    # generated-shape structure to the glance tier. Every decision
+    # writes a suppressions.jsonl record; pinned gaps are exempt.
+    vendored_triage: bool = True
     sweep_validate_findings: bool = True
     deepen_suspicious: bool = True
     # Slice of the LLM cost cap held back from the discovery loop so
@@ -400,6 +448,16 @@ class OrchestratorConfig:
     # the deepen phase starts (or immediately when deepen has nothing
     # to do). 0 disables the reserve.
     deepen_reserve_fraction: float = 0.15
+    # Slice of the LLM cost cap held back from the PRE-review bulk
+    # passes (prep, study, synthesis, summaries) so the per-function
+    # review loop is guaranteed headroom. Held on the budget client at
+    # run start, released when the review executor takes over (the
+    # deepen reserve then takes its own slice for re-reviews). Same
+    # mechanism as deepen_reserve_fraction — the client holds one
+    # reserve at a time, and the two phases hand it over. 0 (default)
+    # disables it; the corpus runner sets it so label reviews are
+    # never starved by a hungry prep phase.
+    review_reserve_fraction: float = 0.0
     enable_session_context: bool = True
     review_passes: int = 1
     max_propagation_depth: int | None = None
@@ -441,6 +499,51 @@ class OrchestratorConfig:
     # unchanged reviewed functions are suppressed, nothing imported.
     # ``force=True`` bypasses both (everything re-reviews).
     verdict_reuse: bool = True
+    # Set by the end-of-run corrective passes: once final statuses are
+    # re-journaled/re-logged, any straggler commit (an abandoned study
+    # re-review finishing after the drain gave up on it) must not
+    # append — it would land after the corrective rows and win the
+    # last-row-wins read with a verdict the export never saw.
+    _verdicts_finalized: bool = False
+    # ── Accumulated-knowledge gates ────────────────────────────────
+    # Every gate below defaults ON — today's production behaviour.
+    # The corpus runner's cold profile turns them off so a
+    # measurement run sees exactly what a first-time user with
+    # default flags and cold caches would see; nothing outside the
+    # run's own target and out_dir feeds the verdicts. Each disabled
+    # gate logs one INFO line at run start (see _apply_profile_gates)
+    # so runs are self-describing.
+    #
+    # Profile label stamped into those log lines. Informational only;
+    # no behaviour keys off the string.
+    profile: str = "deployed"
+    # IRIS: taint-spec synthesis, project-sink store reads, the
+    # refinement loop (including its prior_specs store reads), and
+    # the heuristic assumption/bypass passes.
+    iris: bool = True
+    # SAGE recall READS: prior hypothesis-verdict recall, prior-run
+    # observation seeding, and SAGE-recalled proven-rule replay in
+    # checker synthesis. SAGE writes are unaffected.
+    sage_recall: bool = True
+    # Graduated-rule library replay (RuleLibrary.find_replayable) in
+    # checker synthesis. In-run on-demand synthesis, library writes,
+    # and graduation stay on.
+    library_replay: bool = True
+    # Cross-run journal reads: the verdict-reuse import eligibility
+    # AND the sibling-run / project-index sources feeding external
+    # checker-synthesis seeds. The run's OWN journal stays readable.
+    cross_run_import: bool = True
+    # Prior domain-model import: when False, domain-model loads see
+    # only THIS run's out_dir (the in-run study pass still writes and
+    # re-reads its fresh model there); a project-level
+    # domain-model.json from an earlier /understand --study run is
+    # not imported.
+    domain_model_import: bool = True
+    # Operator annotation reads (review-context assembly, the
+    # stale-annotation merge, fp-feedback). When False the project
+    # resolve fallback is suppressed and annotations_dir is cleared
+    # at run start.
+    annotations_read: bool = True
     # Opt-in (--pre-scan): when NO scan SARIF exists — neither this
     # run's scan/ dir nor any fresh sibling run — run one bounded
     # semgrep baseline pass over the scoped target with RAPTOR's
@@ -500,6 +603,24 @@ class OrchestratorConfig:
     # 1 for a first run; the segment number stamped by
     # core.run.metadata.resume_run for resumed segments.
     resume_segment: int = 1
+    # Extra run dirs whose review journals feed prior FINDING-GRADE
+    # claims (/agentic per-finding analyses) into review context
+    # (``--prior-journal``, repeatable). The project index is always
+    # consulted; this covers journals not yet merged into it — the
+    # /agentic post-pass launches the audit BEFORE the parent run
+    # completes (the lifecycle merge happens at completion).
+    prior_journal_dirs: list[Path] | None = None
+    # Derived at run start (never set by callers): ``file:function`` →
+    # newest-first finding-grade journal entries, consumed by
+    # ``_build_context`` as prior claims. Kind-gated OUT of coverage
+    # by the gap fold; kind-gated INTO the prompt here.
+    prior_finding_analyses: dict[str, list] | None = None
+    # Newest-first cap on prior finding-grade claims per function
+    # (``--prior-claims``; 0 disables the injection entirely) and the
+    # per-claim body excerpt length. Defaults are starting points, not
+    # measured optima — tune per target density.
+    prior_claims_per_function: int = 3
+    prior_claim_excerpt_chars: int = 600
 
 
 @dataclass
@@ -510,6 +631,12 @@ class ReviewOutcome:
     function: str
     status: str
     body: str
+    # Receiver-qualified name (``Class.method`` / Go ``Receiver.Method``)
+    # when the inventory metadata carries one — stamped at the commit
+    # chokepoint from ``gap["qualified_name"]``. Presentation and
+    # report-join identity only; ``function`` stays the bare inventory
+    # name every call-graph/coverage key is built from.
+    function_qualified: str = ""
     hypothesis: str = ""
     hypotheses: list[dict[str, Any]] | None = None
     evidence_tool: str = ""
@@ -577,6 +704,12 @@ class ReviewOutcome:
             return VerificationTier.CONFIRMED.value
 
         first_tool = et_lower.split("+")[0].strip()
+        from .evidence_grade import _PROVENANCE_WRAPPERS
+        for _wrapper in _PROVENANCE_WRAPPERS:
+            if first_tool.startswith(_wrapper):
+                # Provenance wrapper (e.g. ``clean-refuted:smt``): the
+                # wrapped stamp names the tool that actually ran.
+                first_tool = first_tool[len(_wrapper):]
         tool_name = first_tool.split(":")[0].strip()
         if tool_name in dispatched or any(
             tool_name in t for t in dispatched
@@ -626,6 +759,8 @@ def _make_tier_counters() -> dict[str, TierCounters]:
         "synthesis_on_demand": TierCounters(),
         "adapter_aggregation": TierCounters(),
         "secondary_sweep": TierCounters(),
+        "sweep_validate": TierCounters(),
+        "primary_sweep": TierCounters(),
         "lifecycle": TierCounters(),
         "triage_skip": TierCounters(),
         "joern_guard": TierCounters(),
@@ -672,6 +807,10 @@ class OrchestratorResult:
     terminated_by: str = "complete"
     prefilter_skipped: int = 0
     prefilter_hits: int = 0
+    # Vendored/generated triage decisions (run-summary counters;
+    # per-function records live in suppressions.jsonl).
+    vendored_skipped: int = 0
+    vendored_glanced: int = 0
     sweep_validated: int = 0
     sweep_demoted: int = 0
     sweep_promoted: int = 0
@@ -847,6 +986,96 @@ def _line_near(line: int, target_lines: set, *, tolerance: int = 3) -> bool:
     return any(abs(line - t) <= tolerance for t in target_lines)
 
 
+def _fn_filter_match(gap: dict[str, Any], fn_filter: tuple) -> bool:
+    """True when *gap* matches a ``--functions`` spec.
+
+    Specs are ``file:name`` (simple) or ``file:name:line`` (line-scoped,
+    matched with ``_line_near``'s tolerance). Class-qualified specs
+    (``file:Class.method``) match through the gap's ``class_name``
+    metadata.
+    """
+    simple, lined = fn_filter
+    key = f"{gap['file']}:{gap['name']}"
+    line = gap.get("line_start", 0)
+    meta = gap.get("metadata") or {}
+    cls = meta.get("class_name")
+    qual_key = f"{gap['file']}:{cls}.{gap['name']}" if cls else key
+    if key in simple or qual_key in simple:
+        return True
+    return (
+        _line_near(line, lined.get(key, set()))
+        or _line_near(line, lined.get(qual_key, set()))
+    )
+
+
+def _fn_filter_keep(gap: dict[str, Any], fn_filter: tuple) -> bool:
+    """True when the ``--functions`` filter keeps *gap* for review.
+
+    Pinned gaps are always kept: an operator pin is an explicit review
+    order, and pins carry no line number — a spec whose line number has
+    drifted from the current source must not silently drop the pinned
+    function. (Observed: a calibration run where the ±3 line tolerance
+    dropped every pinned label from the workqueue, so none of them was
+    ever reviewed.)
+    """
+    if gap.get("pinned"):
+        return True
+    return _fn_filter_match(gap, fn_filter)
+
+
+# Accumulated-knowledge gates: (config field, log label). Order is
+# the log order at run start.
+_KNOWLEDGE_GATES = (
+    ("iris", "iris"),
+    ("sage_recall", "sage recall"),
+    ("library_replay", "graduated-rule library replay"),
+    ("cross_run_import", "cross-run journal import"),
+    ("domain_model_import", "prior domain-model import"),
+    ("annotations_read", "annotations read"),
+)
+
+
+def _apply_profile_gates(config: OrchestratorConfig) -> None:
+    """Log one INFO line per disabled accumulated-knowledge gate and
+    normalize dependent config.
+
+    Runs once at run start so a cold-profile run is self-describing
+    in its log. ``annotations_read=False`` also clears
+    ``annotations_dir`` here — every downstream consumer reads that
+    field directly, so clearing it at the source covers them all
+    (the resolve fallback is gated separately at its two seams).
+    """
+    profile = getattr(config, "profile", "deployed") or "deployed"
+    for field_name, label in _KNOWLEDGE_GATES:
+        if not getattr(config, field_name, True):
+            logger.info("profile=%s: %s disabled", profile, label)
+    if not getattr(config, "annotations_read", True):
+        config.annotations_dir = None
+
+
+def _load_domain_model(config: OrchestratorConfig):
+    """Domain-model read chokepoint honouring ``domain_model_import``.
+
+    Gate on (default): the standard search — this run's out_dir, then
+    the project-level ``concepts/domain-model.json`` locations a prior
+    /understand --study run may have produced. Gate off: only the
+    run's own out_dir, so the in-run study pass's fresh model is
+    still picked up but nothing pre-existing is imported.
+    """
+    from .journal import load_domain_model
+    return load_domain_model(
+        config.out_dir,
+        run_only=not getattr(config, "domain_model_import", True),
+    )
+
+
+def _annotations_dir(config: OrchestratorConfig):
+    """Annotations-read chokepoint for the resolve-fallback seams."""
+    if not getattr(config, "annotations_read", True):
+        return None
+    return config.annotations_dir or _resolve_ann_dir(config.out_dir)
+
+
 def run_orchestrator(
     config: OrchestratorConfig,
     review_fn: Callable[[dict[str, Any], OrchestratorConfig], ReviewOutcome],
@@ -868,6 +1097,30 @@ def run_orchestrator(
         OrchestratorResult summarizing the run.
     """
     start_time = time.monotonic()
+
+    # Accumulated-knowledge gate banner + config normalization (one
+    # INFO line per disabled gate; clears annotations_dir when
+    # annotation reads are off).
+    _apply_profile_gates(config)
+
+    # CodeQL database routing: normalise the single-path and
+    # multi-path config fields into one router. Per-function dispatch
+    # goes through _codeql_db_for (language match on multi-database
+    # runs); single-database consumers (IRIS runner, capability flag)
+    # read config.codeql_db_path, which becomes the router's primary.
+    from .codeql_dbs import CodeqlDbRouter
+    config.codeql_db_router = CodeqlDbRouter(
+        config.codeql_db_paths
+        or ([config.codeql_db_path] if config.codeql_db_path else []),
+    )
+    config.codeql_db_paths = config.codeql_db_router.paths or None
+    config.codeql_db_path = config.codeql_db_router.primary
+
+    # Reset per-run shutdown state BEFORE installing the handler (see
+    # _reset_shutdown_state): a prior in-process run's stop request or
+    # first-TERM count must not poison this run.
+    if prep_cache is None or not prep_cache.get("_caches_cleared"):
+        _reset_shutdown_state()
 
     # Graceful SIGTERM (main thread, once): drain + salvage instead of
     # dying mid-write when an external supervisor stops the run.
@@ -891,6 +1144,7 @@ def run_orchestrator(
     if prep_cache is None or not prep_cache.get("_caches_cleared"):
         _sink_guard_cache.clear()
         _file_lines_cache.clear()
+        _parse_wrapper_cache.clear()
         # line_end values come from the run's inventory — stale bounds
         # from a previous in-process run mis-window the sweeps.
         _line_end_cache.clear()
@@ -1091,6 +1345,14 @@ def review_one_function(
     # ── Triage skip ───────────────────────────────────────────────────
     triage = triage_results.get(gap_key_lined) or triage_results.get(gap_key)
     if (
+        triage is not None
+        and triage.bucket == TriageBucket.SKIP
+        and not getattr(config, "triage", True)
+    ):
+        # Triage-classifier skips disabled for this run: fall through
+        # to a real review instead of recording a classifier clean.
+        triage = None
+    if (
         triage
         and triage.bucket == TriageBucket.SKIP
         and gap.get("pinned")
@@ -1249,15 +1511,28 @@ def review_one_function(
 
         line_start = gap.get("line_start", 0)
         if line_start:
+            # Whole-function span: the gap carries the function bounds,
+            # so hash line_start..line_end rather than a ±10 window —
+            # a change anywhere in the function invalidates the prior
+            # verdict (compute_finding_source_hash also folds in the
+            # full file content).
             src_hash = compute_finding_source_hash(
                 config.target_path / gap["file"],
                 line_start,
+                line_end=gap.get("line_end") or None,
             )
             if src_hash:
                 gap["_sage_source_hash"] = src_hash
 
     # ── SAGE: recall prior hypothesis verdict → skip if clean/dormant ─
-    if not config.force and not gap.get("force_review") and gap.get("_sage_source_hash"):
+    # Gated by ``config.sage_recall`` (cold-profile corpus runs) on
+    # top of the force/force_review bypasses.
+    if (
+        getattr(config, "sage_recall", True)
+        and not config.force
+        and not gap.get("force_review")
+        and gap.get("_sage_source_hash")
+    ):
         try:
             from core.sage.hooks import recall_audit_hypothesis_verdict
 
@@ -1549,11 +1824,68 @@ def review_one_function(
                 exc_info=True,
             )
 
+    # Convention-independent structural checks (the asymmetry/race
+    # shape is intra-function or intra-file), so they run even when no
+    # project conventions were discovered. Findings ride the same
+    # ctx["negative_space"] channel into the review prompt.
+    auth_mode_findings: list = []
+    try:
+        from .negative_space import (
+            check_auth_mode_registration,
+            check_shared_writer_race,
+            check_url_boundary_composition,
+        )
+        # ctx["source"] is the PROMPT rendering — every line carries a
+        # "{n:4d}  " number prefix (context._read_source), which
+        # defeats the structural checkers' line-start regexes: they
+        # silently returned [] on it. Hand them the gap without the
+        # rendered source so they read the raw span from disk.
+        if gap.get("source"):
+            _structural_gap = gap_with_source
+        else:
+            _structural_gap = {
+                k: v for k, v in gap_with_source.items()
+                if k != "source"
+            }
+        auth_mode_findings = check_auth_mode_registration(
+            _structural_gap, domain_model=shared.domain_model,
+            target_path=config.target_path,
+        )
+        auth_mode_findings.extend(
+            check_url_boundary_composition(
+                _structural_gap, target_path=config.target_path,
+            ),
+        )
+        if gap.get("file", "").endswith(".go"):
+            _swr_gap = dict(_structural_gap)
+            with contextlib.suppress(OSError):
+                _fp = config.target_path / gap.get("file", "")
+                if _fp.is_file():
+                    # Whole-file source: the receiver struct decl and
+                    # method bodies live outside the function span.
+                    _swr_gap["file_source"] = _fp.read_text(
+                        errors="replace",
+                    )
+            auth_mode_findings.extend(
+                check_shared_writer_race(
+                    _swr_gap, target_path=config.target_path,
+                ),
+            )
+    except Exception:
+        logger.debug(
+            "structural negative-space checks failed for %s:%s",
+            gap.get("file"), gap.get("name"), exc_info=True,
+        )
+    if auth_mode_findings and not conventions:
+        ctx["negative_space"] = (
+            ctx.get("negative_space", []) + auth_mode_findings
+        )
+
     if conventions:
         strategies = gap.get("strategies", set())
         if isinstance(strategies, (list, tuple)):
             strategies = set(strategies)
-        ns_findings = []
+        ns_findings = list(auth_mode_findings)
         for strat in strategies or {"general"}:
             ns_findings.extend(
                 check_negative_space(gap_with_source, conventions, strat)
@@ -1684,6 +2016,11 @@ def review_one_function(
     pf_result = None
     if config.prefilter:
         pf_result = _run_prefilter_for_gap(config, gap, ctx, domain_model)
+        if pf_result.skip_llm and not getattr(config, "prefilter_skip", True):
+            # Prefilter skips disabled for this run: fall through to a
+            # real review instead of recording a mechanical clean. The
+            # prefilter's hits (below) still feed review context.
+            pf_result.skip_llm = False
         if pf_result.skip_llm:
             if ctx.get("sink_unreachable"):
                 _increment_tier(result, "sink_unreach", "confirmed")
@@ -1887,9 +2224,45 @@ def review_one_function(
     # ── Anti-self-refutation gate (promotion: clean → suspicious) ────
     if outcome.status == "clean":
         try:
-            from .refutation import rescue_self_refuted
+            from .refutation import diagnose_rescue, rescue_self_refuted
 
-            rv = rescue_self_refuted(outcome)
+            # Raw disk span (not the prompt rendering): the gate's
+            # race-protection acceptance needs lock-call syntax intact.
+            _rescue_src = _read_raw_source(
+                config.target_path,
+                gap.get("file", ""),
+                gap.get("line_start", 0),
+                gap.get("line_end"),
+            )
+            rv = rescue_self_refuted(
+                outcome,
+                negative_space=ctx.get("negative_space"),
+                source=_rescue_src or None,
+                pre_evidence=gap.get("_smt_pre_evidence"),
+                detector_findings=ctx.get("mechanical_detector_findings"),
+            )
+            if rv is None:
+                # Durable receipt for the non-fire: when a structural
+                # receipt exists on this function (or the reviewer
+                # refuted a hypothesis), record which precondition
+                # blocked the rescue so a miss is diagnosable from the
+                # audit log instead of invisible.
+                diag = diagnose_rescue(
+                    outcome, negative_space=ctx.get("negative_space"),
+                )
+                if diag is not None and (
+                    diag.get("receipts")
+                    or "refuted" in (diag.get("confidences") or [])
+                ):
+                    append_audit_log(config.out_dir, {
+                        "action": "rescue_diagnostic",
+                        "gate": "anti_self_refutation",
+                        "key": f"{outcome.file}:{outcome.function}:{gap.get('line_start', 0)}",
+                        "file": outcome.file,
+                        "function": outcome.function,
+                        "stage": "review",
+                        **diag,
+                    })
             if rv is not None:
                 append_audit_log(config.out_dir, {
                     "action": "refutation_gate",
@@ -1911,12 +2284,23 @@ def review_one_function(
                 outcome.body = (
                     f"[{rv.gate}: {rv.reason}]\n\n" + outcome.body
                 )
-        except Exception:
-            logger.debug(
-                "anti-self-refutation error for %s:%s",
-                outcome.file, outcome.function,
+        except Exception as exc:
+            logger.warning(
+                "anti-self-refutation error for %s:%s: %s",
+                outcome.file, outcome.function, exc,
                 exc_info=True,
             )
+            with contextlib.suppress(Exception):
+                append_audit_log(config.out_dir, {
+                    "action": "rescue_diagnostic",
+                    "gate": "anti_self_refutation",
+                    "key": f"{outcome.file}:{outcome.function}:{gap.get('line_start', 0)}",
+                    "file": outcome.file,
+                    "function": outcome.function,
+                    "stage": "review",
+                    "blocked_on": "exception",
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
 
     # ── Clean check ───────────────────────────────────────────────────
     if config.clean_check and outcome.status == "clean":
@@ -2311,6 +2695,7 @@ def review_one_function(
                 config,
                 seen_keys,
                 synthesis_count=result.synthesis_amplified,
+                quarantined_rules=set(shared.quarantined_rules),
             )
             if synth and synth.cost_usd:
                 result.cost_tracker.record_call(
@@ -2469,15 +2854,27 @@ def review_one_function(
                 exc_info=True,
             )
 
+    # In-run rule precision feedback. ``is_tp`` mirrors record_match's
+    # convention: a claim verdict on the matched function counts the
+    # match as a true positive; clean/dormant counts it false.
+    _rule_is_tp = outcome.status in ("finding", "suspicious")
     if (
         pf_result
         and pf_result.hits
         and checker_library
         and checker_library.all_entries()
     ):
-        is_tp = outcome.status in ("finding", "suspicious")
+        library_rule_ids = {
+            e.rule_id for e in checker_library.all_entries()
+        }
         for hit in pf_result.hits:
-            checker_library.record_match(hit.rule_id, is_tp)
+            checker_library.record_match(hit.rule_id, _rule_is_tp)
+            if hit.rule_id in library_rule_ids:
+                _note_rule_triage(shared, hit.rule_id, _rule_is_tp)
+    if outcome.status != "error" and gap.get("synthesis_rule_id"):
+        # This gap exists because a run-synthesized rule matched it —
+        # the review verdict is a direct triage of that match.
+        _note_rule_triage(shared, gap["synthesis_rule_id"], _rule_is_tp)
 
     disagree = _check_layer_disagreement(outcome, ctx, gap)
     if disagree is not None and layer_disagreements is not None:
@@ -2630,6 +3027,177 @@ def _record_triage_suppressions(
     return written
 
 
+def _vendored_triage_verdicts(
+    config: OrchestratorConfig,
+    gaps: list[dict[str, Any]],
+    *,
+    checklist: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Per-file vendored/generated verdicts for the triage tier.
+
+    Gated by ``config.vendored_triage`` (``--no-vendored-triage``
+    disables the tier for a run). Best-effort — a detector failure
+    must never kill prep.
+    """
+    if not getattr(config, "vendored_triage", True):
+        logger.info(
+            "vendored/generated triage disabled for this run "
+            "(--no-vendored-triage)"
+        )
+        return {}
+    vendor_verdicts: dict[str, Any] = {}
+    try:
+        from .vendored_detector import KIND_GENERATED, detect_vendored_files
+
+        vendor_verdicts = detect_vendored_files(
+            gaps, target_path=config.target_path, checklist=checklist,
+        )
+    except Exception:
+        logger.debug(
+            "vendored/generated detection failed", exc_info=True,
+        )
+        return {}
+    if vendor_verdicts:
+        _n_gen = sum(
+            1 for v in vendor_verdicts.values() if v.kind == KIND_GENERATED
+        )
+        logger.info(
+            "vendored/generated triage: %d files detected "
+            "(%d generated, %d vendored)",
+            len(vendor_verdicts), _n_gen, len(vendor_verdicts) - _n_gen,
+        )
+    return vendor_verdicts
+
+
+def _record_vendored_suppressions(
+    gaps: list[dict[str, Any]],
+    triage_results: dict,
+    vendor_verdicts: dict[str, Any],
+    out_dir: Path | None,
+) -> tuple[int, int]:
+    """suppressions.jsonl audit trail for vendored/generated triage
+    decisions — one record per skipped or glance-routed function, same
+    house shape as the binary-oracle triage records (single writer:
+    core.analysis.reach_chokepoint.record_suppression). Functions the
+    tier saw but did not route (pinned, boundary-adjacent vendored)
+    get no record — no decision was made for them.
+
+    Returns ``(skipped, glanced)``.
+    """
+    if not vendor_verdicts or not out_dir:
+        return (0, 0)
+    try:
+        from core.analysis.reach_chokepoint import record_suppression
+    except ImportError:
+        return (0, 0)
+    from .triage import vendor_decision
+    from .vendored_detector import KIND_GENERATED
+
+    skipped = glanced = 0
+    for gap in gaps:
+        verdict = vendor_verdicts.get(gap["file"])
+        if verdict is None:
+            continue
+        key = f"{gap['file']}:{gap['name']}"
+        line = gap.get("line_start", 0) or 0
+        tr = triage_results.get(f"{key}:{line}") or triage_results.get(key)
+        if tr is None:
+            continue
+        tier = vendor_decision(tr)
+        if tier is None:
+            continue
+        record_suppression(
+            out_dir,
+            finding={
+                "finding_id": f"audit-triage:{key}:{line}",
+                "rule_id": "audit:vendored-triage",
+                "file_path": gap["file"],
+                "line": line,
+                "function": gap["name"],
+            },
+            verdict=(
+                "generated_code" if verdict.kind == KIND_GENERATED
+                else "vendored_code"
+            ),
+            reason=(
+                f"hypothesis triage: {verdict.kind} code "
+                f"({verdict.signal}: {verdict.detail}) — routed to "
+                f"{tier} tier"
+            ),
+            dropped=False,
+            extra={
+                "stage": "hypothesis-triage",
+                "tier": tier,
+                "signal": verdict.signal,
+            },
+        )
+        if tier == "skip":
+            skipped += 1
+        else:
+            glanced += 1
+    return (skipped, glanced)
+
+
+def _iris_prep_specs(
+    config: OrchestratorConfig,
+    gaps: list[dict[str, Any]],
+    taint_summary_results: dict | None,
+) -> tuple[list, Any]:
+    """IRIS prep seam: taint-spec synthesis + project-sink store read.
+
+    Returns ``(iris_taint_specs, project_sinks)``. Gated by
+    ``config.iris`` — a cold-profile run gets ``([], None)`` without
+    touching the spec synthesiser or the persistent sink store (the
+    disable is announced once at run start by _apply_profile_gates).
+    """
+    if not getattr(config, "iris", True):
+        return [], None
+
+    iris_taint_specs: list = []
+    try:
+        from .iris_specs import compile_joern_config, identify_candidates, specs_to_json
+
+        taint_chain_callees: set[str] = set()
+        if taint_summary_results:
+            for _ts_summ in taint_summary_results.values():
+                for _ts_callee in getattr(_ts_summ, "callees", []):
+                    taint_chain_callees.add(_ts_callee)
+        iris_candidates = identify_candidates(
+            gaps,
+            taint_chain_callees=taint_chain_callees,
+        )
+        if iris_candidates:
+            iris_taint_specs = [_iris_candidate_to_spec(c) for c in iris_candidates]
+            if iris_taint_specs and config.out_dir:
+                spec_path = config.out_dir / "iris-taint-specs.json"
+                spec_path.write_text(specs_to_json(iris_taint_specs))
+                joern_cfg = compile_joern_config(iris_taint_specs)
+                if joern_cfg.strip():
+                    (config.out_dir / "iris-joern.scala").write_text(joern_cfg)
+                logger.info(
+                    "IRIS: synthesised %d taint specs (%d sources, %d sinks, "
+                    "%d sanitisers, %d propagators)",
+                    len(iris_taint_specs),
+                    sum(1 for s in iris_taint_specs if s.role == "source"),
+                    sum(1 for s in iris_taint_specs if s.role == "sink"),
+                    sum(1 for s in iris_taint_specs if s.role == "sanitiser"),
+                    sum(1 for s in iris_taint_specs if s.role == "propagator"),
+                )
+    except Exception:
+        logger.debug("IRIS spec synthesis failed", exc_info=True)
+
+    project_sinks = None
+    try:
+        from core.iris.api import get_project_sinks
+        project_sinks = get_project_sinks(out_dir=config.out_dir)
+        if project_sinks:
+            logger.info("IRIS: loaded %d project sinks for wrapper pre-filter", len(project_sinks))
+    except Exception:
+        logger.debug("IRIS sink loading skipped", exc_info=True)
+
+    return iris_taint_specs, project_sinks
+
+
 def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     """Compute all mode-independent prep for the audit loop.
 
@@ -2746,8 +3314,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         except Exception:
             logger.debug("baseline pre-scan failed", exc_info=True)
 
-    if config.codeql_db_path and not sarif_cache:
-        _codeql_pre_sweep_raw(config.codeql_db_path, config.out_dir, sarif_cache)
+    if config.codeql_db_paths and not sarif_cache:
+        # One suite per database; run_suite writes per-language SARIF
+        # (codeql_<language>.sarif), so multi-database runs don't
+        # clobber each other's output.
+        for _db in config.codeql_db_paths:
+            _codeql_pre_sweep_raw(_db, config.out_dir, sarif_cache)
 
     sarif_clean_files: set[str] = set()
     if sarif_cache:
@@ -2985,7 +3557,19 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
 
     checker_library = RuleLibrary()
     if checker_library.all_entries():
-        logger.info(checker_library.summary())
+        # Provenance suffix: under a replay-gated profile (cold corpus
+        # runs) the library entries are inert for THIS run — without
+        # the suffix the banner is indistinguishable from a
+        # replay-gate breach when a rule synthesized by an earlier
+        # group in the same process shows up here.
+        if getattr(config, "library_replay", True):
+            _lib_provenance = "replay enabled"
+        else:
+            _lib_provenance = (
+                "replay gated off — entries inert this run; any new "
+                "rules are synthesized this run"
+            )
+        logger.info("%s [%s]", checker_library.summary(), _lib_provenance)
 
     summary_cache = None
     try:
@@ -3052,6 +3636,12 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         if config.out_dir and (Path(config.out_dir) / ".raptor-run.json").exists()
         else None
     )
+    # Prior finding-grade claims (/agentic per-finding analyses) for
+    # review context. The gap fold kind-gates these OUT of coverage;
+    # this map kind-gates them INTO the prompt as prior claims.
+    config.prior_finding_analyses = _build_prior_finding_analyses(
+        config, _project_dir,
+    )
     # Cross-run verdict reuse: compute_gaps fills this with
     # hash-verified, reuse-eligible prior-run journal entries; they
     # are imported as $0 outcomes just before the review loop.
@@ -3061,6 +3651,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     )
     _reuse_enabled = (
         getattr(config, "verdict_reuse", True)
+        and getattr(config, "cross_run_import", True)
         and not config.force
         and (_project_dir is not None or _same_run_reuse)
     )
@@ -3133,51 +3724,14 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
                     taint_summary_results,
                 )
 
-    iris_taint_specs: list = []
-    try:
-        from .iris_specs import compile_joern_config, identify_candidates, specs_to_json
-
-        taint_chain_callees: set[str] = set()
-        if taint_summary_results:
-            for _ts_summ in taint_summary_results.values():
-                for _ts_callee in getattr(_ts_summ, "callees", []):
-                    taint_chain_callees.add(_ts_callee)
-        iris_candidates = identify_candidates(
-            gaps,
-            taint_chain_callees=taint_chain_callees,
-        )
-        if iris_candidates:
-            iris_taint_specs = [_iris_candidate_to_spec(c) for c in iris_candidates]
-            if iris_taint_specs and config.out_dir:
-                spec_path = config.out_dir / "iris-taint-specs.json"
-                spec_path.write_text(specs_to_json(iris_taint_specs))
-                joern_cfg = compile_joern_config(iris_taint_specs)
-                if joern_cfg.strip():
-                    (config.out_dir / "iris-joern.scala").write_text(joern_cfg)
-                logger.info(
-                    "IRIS: synthesised %d taint specs (%d sources, %d sinks, "
-                    "%d sanitisers, %d propagators)",
-                    len(iris_taint_specs),
-                    sum(1 for s in iris_taint_specs if s.role == "source"),
-                    sum(1 for s in iris_taint_specs if s.role == "sink"),
-                    sum(1 for s in iris_taint_specs if s.role == "sanitiser"),
-                    sum(1 for s in iris_taint_specs if s.role == "propagator"),
-                )
-    except Exception:
-        logger.debug("IRIS spec synthesis failed", exc_info=True)
-
-    project_sinks = None
-    try:
-        from core.iris.api import get_project_sinks
-        project_sinks = get_project_sinks(out_dir=config.out_dir)
-        if project_sinks:
-            logger.info("IRIS: loaded %d project sinks for wrapper pre-filter", len(project_sinks))
-    except Exception:
-        logger.debug("IRIS sink loading skipped", exc_info=True)
+    iris_taint_specs, project_sinks = _iris_prep_specs(
+        config, gaps, taint_summary_results,
+    )
 
     if config.include_stale:
-        ann_dir = config.annotations_dir or _resolve_ann_dir(config.out_dir)
-        gaps = _merge_stale(gaps, ann_dir, config.target_path)
+        ann_dir = _annotations_dir(config)
+        if ann_dir is not None:
+            gaps = _merge_stale(gaps, ann_dir, config.target_path)
 
     prior_constraints = load_constraints(config.out_dir)
     open_keys = (
@@ -3294,8 +3848,11 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         logger.debug("SCA advisory enrichment failed", exc_info=True)
 
     # Operator pins (``--pin file:function``): guaranteed review slots,
-    # hoisted ahead of the budget cut. See gaps.hoist_pins.
-    gaps = hoist_pins(gaps, getattr(config, "pins", None))
+    # hoisted ahead of the budget cut. See gaps.hoist_pins. The
+    # checklist classifies any unmatched pin's cause in the warning.
+    gaps = hoist_pins(
+        gaps, getattr(config, "pins", None), checklist=checklist,
+    )
 
     if config.budget and config.budget > 0:
         # Records the dropped tail in not-attempted.json so the run
@@ -3310,6 +3867,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
 
     entry_points = extract_context_map_set(context_map, "entry_points")
 
+    _ops_eps: set = set()
     try:
         from .ops_struct import collect_ops_entry_points
 
@@ -3378,24 +3936,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         for k, approx in (taint_approx_results or {}).items()
         if _taint_approx_has_flow(approx)
     )
-    from .triage import detect_generated_files
-
-    generated_files = set(detect_generated_files(gaps, target_path=config.target_path))
-    if generated_files:
-        logger.info(
-            "triage: %d generated files detected — functions will be skipped",
-            len(generated_files),
-        )
-    gen_prefilters: dict[str, PrefilterResult] = {}
-    for gap in gaps:
-        if gap["file"] in generated_files:
-            key = f"{gap['file']}:{gap['name']}"
-            gen_prefilters[key] = PrefilterResult(
-                file=gap["file"],
-                function=gap["name"],
-                skip_llm=True,
-                skip_reason="generated code",
-            )
+    vendor_verdicts = _vendored_triage_verdicts(
+        config, gaps, checklist=checklist,
+    )
     # Hydrated detector gaps + dispatch tables are built BEFORE triage
     # so the classifier can consume the dispatch-table census: a
     # function registered as a handler is invoked through a function
@@ -3436,8 +3979,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         dangerous_callee_keys=dangerous_callee_keys,
         callback_target_names=callback_target_names,
         priority_scores=priority_scores,
-        prefilter_results=gen_prefilters or None,
         target_path=Path(config.target_path),
+        vendor_verdicts=vendor_verdicts or None,
     )
     logger.info(format_triage_summary(triage_results))
     try:
@@ -3452,6 +3995,26 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
             )
     except Exception:
         logger.debug("triage suppression records failed", exc_info=True)
+    # MANDATORY audit trail: every vendored/generated skip/glance
+    # decision leaves one suppressions.jsonl record — nothing is
+    # silently dropped. Counts surface in the run summary.
+    vendored_triage_counts = {
+        "files": len(vendor_verdicts), "skipped": 0, "glanced": 0,
+    }
+    try:
+        _n_vskip, _n_vglance = _record_vendored_suppressions(
+            gaps, triage_results, vendor_verdicts, config.out_dir,
+        )
+        vendored_triage_counts["skipped"] = _n_vskip
+        vendored_triage_counts["glanced"] = _n_vglance
+        if _n_vskip or _n_vglance:
+            logger.info(
+                "vendored/generated triage: %d functions skipped, %d "
+                "routed to glance — records in suppressions.jsonl",
+                _n_vskip, _n_vglance,
+            )
+    except Exception:
+        logger.debug("vendored suppression records failed", exc_info=True)
 
     from .negative_space import (
         check_sibling_negative_space,
@@ -3463,9 +4026,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     # OSErrors can legitimately escape.
     with contextlib.suppress(OSError):
         from .condition_smt import DomainVocabulary
-        from .journal import load_domain_model
         conv_vocab = DomainVocabulary.from_domain_model(
-            load_domain_model(config.out_dir),
+            _load_domain_model(config),
             target_path=config.target_path,
         )
     conventions = discover_conventions(
@@ -3484,9 +4046,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     # at this call site, so it never ran.
     prep_domain_model = None
     try:
-        from .journal import load_domain_model
 
-        prep_domain_model = load_domain_model(config.out_dir)
+        prep_domain_model = _load_domain_model(config)
     except Exception:
         logger.debug(
             "domain model load for peer groups failed", exc_info=True,
@@ -3667,6 +4228,15 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
             logger.debug(
                 "semantic-consistency routing failed", exc_info=True,
             )
+
+    # Ops-struct reachability receipts: a function reached through an
+    # ops-struct member (file_operations, net_device_ops, ...) is an
+    # indirect entry point — the collector only widened entry_points,
+    # so the channel fired without ever leaving a receipt and could
+    # not be attributed. Route a detector record through the standard
+    # mechanical-findings channel for every reviewed gap it covers.
+    if _ops_eps:
+        _route_ops_struct_receipts(gaps, _ops_eps, mechanical_findings)
 
     # Route perlasm generated-asm leads through the same channel:
     # the zero-length-loop-entry check runs over inventory records
@@ -4044,6 +4614,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
         "priority_scores": priority_scores,
         "taint_path_keys": taint_path_keys,
         "triage_results": triage_results,
+        "vendored_triage_counts": vendored_triage_counts,
         "conventions": conventions,
         "sibling_ns_findings": sibling_ns_findings,
         "peer_groups": peer_groups,
@@ -4662,6 +5233,280 @@ def _demotion_log_entry(d) -> dict:
     }
 
 
+def _cleanup_after_executor_failure(
+    throttle: Any,
+    study_queue: Any,
+    study_consumer_thread: Any,
+    collector: Any,
+) -> None:
+    """Best-effort teardown when the main review executor raises.
+
+    Runs the same drain/close/flush steps the success path performs
+    after the executor returns, so an executor crash cannot leak the
+    study consumer (blocked on its queue forever), the throttle's
+    cooldown thread, or the collector's buffered outcomes/audit log.
+    Every step is individually guarded — the caller re-raises the
+    original exception.
+    """
+    if study_queue is not None:
+        try:
+            study_queue.signal_producer_done()
+        except Exception:
+            logger.debug(
+                "study queue shutdown failed during executor-failure "
+                "cleanup", exc_info=True,
+            )
+    if study_consumer_thread is not None:
+        try:
+            _drain_study_consumer(
+                study_consumer_thread, study_queue, budget_exhausted=True,
+            )
+        except Exception:
+            logger.debug(
+                "study consumer drain failed during executor-failure "
+                "cleanup", exc_info=True,
+            )
+    try:
+        throttle.close()
+    except Exception:
+        logger.debug(
+            "throttle close failed during executor-failure cleanup",
+            exc_info=True,
+        )
+    if collector is not None:
+        try:
+            collector.flush()
+        except Exception:
+            logger.warning(
+                "collector flush failed during executor-failure cleanup "
+                "— buffered outcomes may be lost", exc_info=True,
+            )
+
+
+
+
+def _iris_refine_and_bypass(
+    config: OrchestratorConfig,
+    gaps: list[dict[str, Any]],
+    taint_summary_results: dict | None,
+    joern_server: Any,
+    checklist: dict[str, Any],
+    iris_taint_specs: list,
+) -> tuple[Any, list[Any]]:
+    """IRIS post-loop seam: refinement loop + bypass detection.
+
+    Returns ``(bypass_runner, iris_bypass_findings)`` — always bound,
+    ``(None, [])`` when nothing refines. Gated by ``config.iris``: a
+    cold-profile run skips the refine loop, its prior_specs store
+    reads, and the bypass analyzer entirely (announced once at run
+    start by _apply_profile_gates).
+    """
+    if not getattr(config, "iris", True):
+        return None, []
+
+    bypass_runner = None
+    iris_bypass_findings: list[Any] = []
+    try:
+        from core.iris.refine import refine_loop as iris_refine_loop
+
+        from .iris_specs import identify_candidates
+
+        taint_chain_callees_post: set[str] = set()
+        if taint_summary_results:
+            for _ts_summ in taint_summary_results.values():
+                for _ts_callee in getattr(_ts_summ, "callees", []):
+                    taint_chain_callees_post.add(_ts_callee)
+        iris_candidates = identify_candidates(
+            gaps,
+            taint_chain_callees=taint_chain_callees_post,
+        )
+        if iris_candidates:
+            joern_tool_runner = None
+            if joern_server is not None:
+                joern_tool_runner = _make_iris_joern_tool_runner(joern_server)
+
+            bypass_runner = None
+            try:
+                from core.inventory.call_graph import load_call_graphs
+                from core.iris import CompositionalAnalyzer
+
+                call_graphs = load_call_graphs(config.target_path, checklist)
+                if call_graphs:
+                    analyzer = CompositionalAnalyzer(call_graphs)
+
+                    def bypass_runner(assumptions):
+                        findings = []
+                        seen: set[tuple[str, str, str]] = set()
+                        for a in assumptions:
+                            findings.extend(analyzer.detect_bypasses(a))
+                            findings.extend(analyzer.detect_ordering_violations(a))
+                            findings.extend(analyzer.detect_type_hierarchy_bypasses(a))
+                        widened: list = []
+                        for f in findings:
+                            if f.via_intermediate:
+                                widened.extend(analyzer.widen_from_finding(f))
+                        findings.extend(widened)
+                        deduped: list = []
+                        for f in findings:
+                            key = (f.caller_file, f.caller_function, f.missing_enforcer)
+                            if key not in seen:
+                                seen.add(key)
+                                deduped.append(f)
+                        return deduped
+            except Exception:
+                logger.debug("IRIS bypass analyzer init failed", exc_info=True)
+
+            iris_llm = None
+            try:
+                # Budget-governed client: iris refinement spend must hit
+                # the run ledger and the reservation gate (a private
+                # client once dispatched an iris call 11 minutes after
+                # budget exhaustion).
+                iris_llm = _run_llm_client(config)
+            except Exception:
+                logger.debug("IRIS LLM client init failed", exc_info=True)
+
+            codeql_tool_runner = None
+            if config.codeql_db_path:
+                try:
+                    from core.iris.codeql_runner import make_codeql_tool_runner
+
+                    codeql_tool_runner = make_codeql_tool_runner(
+                        db_path=Path(config.codeql_db_path),
+                        out_dir=config.out_dir,
+                    )
+                except Exception:
+                    logger.debug("IRIS CodeQL runner init failed", exc_info=True)
+
+            iris_tool_runner = _composite_tool_runner(
+                joern_tool_runner,
+                codeql_tool_runner,
+            )
+
+            # Prior specs: persistent project store + the run-local
+            # refined artifact (resume / re-entry continuity), then
+            # this run's heuristic candidates. merge_specs keeps the
+            # higher evidence tier on collision, so a tool-confirmed
+            # spec from a previous round is never demoted by a fresh
+            # heuristic candidate.
+            prior_specs = iris_taint_specs or []
+            try:
+                from core.iris.store import (
+                    load_refined_specs as _iris_load_refined,
+                )
+                from core.iris.store import (
+                    load_specs as _iris_load_store,
+                )
+                from core.iris.store import (
+                    merge_specs as _iris_merge,
+                )
+
+                _iris_prior_store: list = []
+                _iris_prior_refined: list = []
+                if config.out_dir:
+                    _iris_prior_store = _iris_load_store(
+                        config.out_dir,
+                        target_path=Path(config.target_path),
+                    )
+                    _iris_prior_refined = _iris_load_refined(
+                        config.out_dir,
+                    )
+                if _iris_prior_store or _iris_prior_refined:
+                    prior_specs = _iris_merge(
+                        _iris_merge(
+                            _iris_prior_store, _iris_prior_refined,
+                        ),
+                        prior_specs,
+                    )
+                    logger.info(
+                        "IRIS: seeded refine loop with %d prior specs "
+                        "(%d store, %d refined artifact)",
+                        len(prior_specs), len(_iris_prior_store),
+                        len(_iris_prior_refined),
+                    )
+            except Exception:
+                logger.debug(
+                    "IRIS prior-spec load failed", exc_info=True,
+                )
+            refined_specs, history, assumptions, bypass_findings = iris_refine_loop(
+                iris_candidates,
+                llm_client=iris_llm,
+                tool_runner=iris_tool_runner,
+                prior_specs=prior_specs,
+                bypass_runner=bypass_runner,
+                target_path=config.target_path,
+            )
+
+            if refined_specs:
+                from .iris_specs import specs_to_json
+
+                logger.info(
+                    "IRIS: refined %d specs (%d rounds)",
+                    len(refined_specs),
+                    len(history),
+                )
+                if config.out_dir:
+                    spec_path = config.out_dir / "iris-taint-specs-refined.json"
+                    spec_path.write_text(specs_to_json(refined_specs))
+                    # Caller-persist step: merge the refined specs
+                    # into the persistent project store (evidence
+                    # tiers carried through; envelope metadata —
+                    # history, assumptions, target — preserved).
+                    # Suppression-direction readers are tier-gated in
+                    # core.iris.api, so heuristic-tier refined specs
+                    # land as prompt-only hints, never suppression.
+                    try:
+                        from dataclasses import asdict as _dc_asdict
+
+                        from core.iris.store import (
+                            checklist_sha as _iris_cl_sha,
+                        )
+                        from core.iris.store import (
+                            persist_refined_specs as _iris_persist,
+                        )
+
+                        _iris_persist(
+                            config.out_dir,
+                            refined_specs,
+                            cl_sha=(
+                                _iris_cl_sha(checklist)
+                                if checklist else ""
+                            ),
+                            history=[_dc_asdict(r) for r in history],
+                            assumptions=assumptions or None,
+                            target_path=Path(config.target_path),
+                        )
+                    except Exception:
+                        logger.debug(
+                            "IRIS refined-spec store persist failed",
+                            exc_info=True,
+                        )
+
+            if assumptions:
+                logger.info(
+                    "iris.synthesise: %d assumptions from %d sink/sanitiser specs",
+                    len(assumptions),
+                    sum(1 for s in refined_specs if s.role in ("sink", "sanitiser")),
+                )
+
+            if bypass_findings:
+                logger.info(
+                    "IRIS bypass: %d bypass findings",
+                    len(bypass_findings),
+                )
+                iris_bypass_findings = [
+                    bf for bf in bypass_findings
+                    if hasattr(bf, "caller_file")
+                ]
+                if config.out_dir:
+                    _write_iris_bypass_findings(
+                        config.out_dir, iris_bypass_findings,
+                    )
+    except Exception:
+        logger.debug("IRIS refinement/bypass failed", exc_info=True)
+    return bypass_runner, iris_bypass_findings
+
+
 def _run_audit_body(
     config,
     review_fn,
@@ -4676,6 +5521,14 @@ def _run_audit_body(
     """Inner orchestrator body, always wrapped in try/finally for server cleanup."""
     global _active_target_path
     _active_target_path = config.target_path
+
+    # --- Review budget reserve ---
+    # Held before ANY bulk pass spends (prep, study, synthesis,
+    # summaries): they gate against cap - reserve, guaranteeing the
+    # per-function review loop its slice. Released right before the
+    # executor starts; the deepen reserve then takes over for the
+    # announced re-reviews.
+    review_reserve_held = _hold_review_reserve(config)
 
     if joern_server is not None:
         from core.analysis.reach_audit import set_joern_server
@@ -4748,6 +5601,9 @@ def _run_audit_body(
     trust_boundary_set = _prep.get("trust_boundary_set", set())
     priority_scores = _prep["priority_scores"]
     triage_results = _prep["triage_results"]
+    _vt_counts = _prep.get("vendored_triage_counts") or {}
+    result.vendored_skipped = int(_vt_counts.get("skipped", 0) or 0)
+    result.vendored_glanced = int(_vt_counts.get("glanced", 0) or 0)
     conventions = _prep["conventions"]
     sibling_ns_findings = _prep["sibling_ns_findings"]
     peer_groups = _prep["peer_groups"]
@@ -4836,6 +5692,15 @@ def _run_audit_body(
         if key in reviewed_set:
             result.skipped += 1
             continue
+        # --functions filter first, so a kept gap carries force_review
+        # BEFORE the mechanical clean-resolvers below — an explicitly
+        # selected (or pinned) function must reach a real review, not
+        # be resolved by the guard-clean / sarif-clean shortcuts.
+        if fn_filter is not None:
+            if not _fn_filter_keep(gap, fn_filter):
+                result.skipped += 1
+                continue
+            gap["force_review"] = True
         if (
             key in guard_clean_keys
             and key not in entry_points
@@ -4865,22 +5730,6 @@ def _run_audit_body(
             result.prefilter_skipped += 1
             guard_clean_resolved += 1
             continue
-        if fn_filter is not None:
-            simple, lined = fn_filter
-            line = gap.get("line_start", 0)
-            meta = gap.get("metadata") or {}
-            cls = meta.get("class_name")
-            qual_key = f"{gap['file']}:{cls}.{gap['name']}" if cls else key
-            in_simple = key in simple or qual_key in simple
-            in_lined = (
-                _line_near(line, lined.get(key, set()))
-                or _line_near(line, lined.get(qual_key, set()))
-            )
-            if not in_simple and not in_lined:
-                result.skipped += 1
-                continue
-            gap["force_review"] = True
-
         if (
             sarif_clean_files
             and not gap.get("force_review")
@@ -5092,6 +5941,7 @@ def _run_audit_body(
             operator_override=config.max_propagation_depth,
         ),
         codeql_db_path=config.codeql_db_path,
+        codeql_db_for=(lambda f: _codeql_db_for(config, f)),
         target_path=config.target_path,
         binary_verdicts=config.binary_verdicts,
         inventory=config.inventory,
@@ -5158,9 +6008,8 @@ def _run_audit_body(
     # --- Domain model: loaded once, reloaded after study loop ---
     domain_model = None
     try:
-        from .journal import load_domain_model
 
-        domain_model = load_domain_model(config.out_dir)
+        domain_model = _load_domain_model(config)
         if domain_model:
             n_inv = len(domain_model.get("invariants", []))
             n_con = len(domain_model.get("concepts", []))
@@ -5466,30 +6315,44 @@ def _run_audit_body(
     # execute the re-reviews it announces; the discovery loop (and the
     # study/synthesis passes that run before deepen) gate against
     # cap - reserve. Released right before the deepen phase.
+    if review_reserve_held:
+        _release_review_reserve(config)
     deepen_reserve_held = _hold_deepen_reserve(config)
 
-    executor_stats = run_executor_sync(
-        graph,
-        review_fn,
-        shared,
-        config,
-        result,
-        executor_config,
-        joern_server=joern_server,
-        audit_log=audit_log,
-        workqueue=workqueue,
-        reviewed_set=reviewed_set,
-        start_time=start_time,
-        layer_disagreements=layer_disagreements,
-        on_progress=on_progress,
-        collector=collector,
-        budget_check=lambda: _check_budget(config, start_time, result),
-        on_tick=_joern_tick,
-        reviewed_outcomes=reviewed_outcomes,
-        throttle=throttle,
-        study_queue=study_queue,
-        concept_index_ref=concept_index_ref,
-    )
+    try:
+        executor_stats = run_executor_sync(
+            graph,
+            review_fn,
+            shared,
+            config,
+            result,
+            executor_config,
+            joern_server=joern_server,
+            audit_log=audit_log,
+            workqueue=workqueue,
+            reviewed_set=reviewed_set,
+            start_time=start_time,
+            layer_disagreements=layer_disagreements,
+            on_progress=on_progress,
+            collector=collector,
+            budget_check=lambda: _check_budget(config, start_time, result),
+            on_tick=_joern_tick,
+            reviewed_outcomes=reviewed_outcomes,
+            throttle=throttle,
+            study_queue=study_queue,
+            concept_index_ref=concept_index_ref,
+        )
+    except BaseException:
+        # Exception-path cleanup mirroring the success path below:
+        # without it an executor crash left the study consumer blocked
+        # on its queue forever, leaked the throttle's cooldown thread,
+        # and discarded every outcome buffered in the collector. Each
+        # step is best-effort so the ORIGINAL exception always
+        # propagates.
+        _cleanup_after_executor_failure(
+            throttle, study_queue, study_consumer_thread, collector,
+        )
+        raise
     joern_future = joern_state["future"]
     _record_executor_stop(result, executor_stats)
     if executor_stats.budget_stopped:
@@ -5558,6 +6421,20 @@ def _run_audit_body(
         if shared.synthesis_queue and not executor_stats.budget_stopped:
             synth_hits = list(shared.synthesis_queue)
             shared.synthesis_queue.clear()
+            if shared.quarantined_rules:
+                kept = [
+                    h for h in synth_hits
+                    if h.get("rule_id") not in shared.quarantined_rules
+                ]
+                dropped = len(synth_hits) - len(kept)
+                if dropped:
+                    logger.info(
+                        "synthesis pass: %d hit(s) dropped from "
+                        "quarantined rule(s) (%s)",
+                        dropped,
+                        ", ".join(sorted(shared.quarantined_rules)),
+                    )
+                synth_hits = kept
             synth_gaps = _synthesis_hits_to_gaps(
                 synth_hits,
                 checklist,
@@ -6014,6 +6891,8 @@ def _run_audit_body(
                     "duration_s": 0.0,
                     "hypothesis": outcome.hypothesis or "",
                 }
+                if getattr(outcome, "function_qualified", ""):
+                    entry["function_qualified"] = outcome.function_qualified
                 append_audit_log(config.out_dir, entry)
 
     if config.adversarial:
@@ -6162,210 +7041,14 @@ def _run_audit_body(
             logger.debug("IRIS re-query failed", exc_info=True)
 
     # --- IRIS refinement loop + bypass detection ---
-    # Bound unconditionally: the assignment inside ``if iris_candidates``
-    # below never runs when there are no candidates (or when the refine
-    # imports fail first), and the heuristic-assumption pass afterwards
-    # reads the name.
-    bypass_runner = None
-    iris_bypass_findings: list[Any] = []
-    try:
-        from core.iris.refine import refine_loop as iris_refine_loop
-
-        from .iris_specs import identify_candidates
-
-        taint_chain_callees_post: set[str] = set()
-        if taint_summary_results:
-            for _ts_summ in taint_summary_results.values():
-                for _ts_callee in getattr(_ts_summ, "callees", []):
-                    taint_chain_callees_post.add(_ts_callee)
-        iris_candidates = identify_candidates(
-            gaps,
-            taint_chain_callees=taint_chain_callees_post,
-        )
-        if iris_candidates:
-            joern_tool_runner = None
-            if joern_server is not None:
-                joern_tool_runner = _make_iris_joern_tool_runner(joern_server)
-
-            bypass_runner = None
-            try:
-                from core.inventory.call_graph import load_call_graphs
-                from core.iris import CompositionalAnalyzer
-
-                call_graphs = load_call_graphs(config.target_path, checklist)
-                if call_graphs:
-                    analyzer = CompositionalAnalyzer(call_graphs)
-
-                    def bypass_runner(assumptions):
-                        findings = []
-                        seen: set[tuple[str, str, str]] = set()
-                        for a in assumptions:
-                            findings.extend(analyzer.detect_bypasses(a))
-                            findings.extend(analyzer.detect_ordering_violations(a))
-                            findings.extend(analyzer.detect_type_hierarchy_bypasses(a))
-                        widened: list = []
-                        for f in findings:
-                            if f.via_intermediate:
-                                widened.extend(analyzer.widen_from_finding(f))
-                        findings.extend(widened)
-                        deduped: list = []
-                        for f in findings:
-                            key = (f.caller_file, f.caller_function, f.missing_enforcer)
-                            if key not in seen:
-                                seen.add(key)
-                                deduped.append(f)
-                        return deduped
-            except Exception:
-                logger.debug("IRIS bypass analyzer init failed", exc_info=True)
-
-            iris_llm = None
-            try:
-                # Budget-governed client: iris refinement spend must hit
-                # the run ledger and the reservation gate (a private
-                # client once dispatched an iris call 11 minutes after
-                # budget exhaustion).
-                iris_llm = _run_llm_client(config)
-            except Exception:
-                logger.debug("IRIS LLM client init failed", exc_info=True)
-
-            codeql_tool_runner = None
-            if config.codeql_db_path:
-                try:
-                    from core.iris.codeql_runner import make_codeql_tool_runner
-
-                    codeql_tool_runner = make_codeql_tool_runner(
-                        db_path=Path(config.codeql_db_path),
-                        out_dir=config.out_dir,
-                    )
-                except Exception:
-                    logger.debug("IRIS CodeQL runner init failed", exc_info=True)
-
-            iris_tool_runner = _composite_tool_runner(
-                joern_tool_runner,
-                codeql_tool_runner,
-            )
-
-            # Prior specs: persistent project store + the run-local
-            # refined artifact (resume / re-entry continuity), then
-            # this run's heuristic candidates. merge_specs keeps the
-            # higher evidence tier on collision, so a tool-confirmed
-            # spec from a previous round is never demoted by a fresh
-            # heuristic candidate.
-            prior_specs = iris_taint_specs or []
-            try:
-                from core.iris.store import (
-                    load_refined_specs as _iris_load_refined,
-                )
-                from core.iris.store import (
-                    load_specs as _iris_load_store,
-                )
-                from core.iris.store import (
-                    merge_specs as _iris_merge,
-                )
-
-                _iris_prior_store: list = []
-                _iris_prior_refined: list = []
-                if config.out_dir:
-                    _iris_prior_store = _iris_load_store(
-                        config.out_dir,
-                        target_path=Path(config.target_path),
-                    )
-                    _iris_prior_refined = _iris_load_refined(
-                        config.out_dir,
-                    )
-                if _iris_prior_store or _iris_prior_refined:
-                    prior_specs = _iris_merge(
-                        _iris_merge(
-                            _iris_prior_store, _iris_prior_refined,
-                        ),
-                        prior_specs,
-                    )
-                    logger.info(
-                        "IRIS: seeded refine loop with %d prior specs "
-                        "(%d store, %d refined artifact)",
-                        len(prior_specs), len(_iris_prior_store),
-                        len(_iris_prior_refined),
-                    )
-            except Exception:
-                logger.debug(
-                    "IRIS prior-spec load failed", exc_info=True,
-                )
-            refined_specs, history, assumptions, bypass_findings = iris_refine_loop(
-                iris_candidates,
-                llm_client=iris_llm,
-                tool_runner=iris_tool_runner,
-                prior_specs=prior_specs,
-                bypass_runner=bypass_runner,
-                target_path=config.target_path,
-            )
-
-            if refined_specs:
-                from .iris_specs import specs_to_json
-
-                logger.info(
-                    "IRIS: refined %d specs (%d rounds)",
-                    len(refined_specs),
-                    len(history),
-                )
-                if config.out_dir:
-                    spec_path = config.out_dir / "iris-taint-specs-refined.json"
-                    spec_path.write_text(specs_to_json(refined_specs))
-                    # Caller-persist step: merge the refined specs
-                    # into the persistent project store (evidence
-                    # tiers carried through; envelope metadata —
-                    # history, assumptions, target — preserved).
-                    # Suppression-direction readers are tier-gated in
-                    # core.iris.api, so heuristic-tier refined specs
-                    # land as prompt-only hints, never suppression.
-                    try:
-                        from dataclasses import asdict as _dc_asdict
-
-                        from core.iris.store import (
-                            checklist_sha as _iris_cl_sha,
-                        )
-                        from core.iris.store import (
-                            persist_refined_specs as _iris_persist,
-                        )
-
-                        _iris_persist(
-                            config.out_dir,
-                            refined_specs,
-                            cl_sha=(
-                                _iris_cl_sha(checklist)
-                                if checklist else ""
-                            ),
-                            history=[_dc_asdict(r) for r in history],
-                            assumptions=assumptions or None,
-                            target_path=Path(config.target_path),
-                        )
-                    except Exception:
-                        logger.debug(
-                            "IRIS refined-spec store persist failed",
-                            exc_info=True,
-                        )
-
-            if assumptions:
-                logger.info(
-                    "iris.synthesise: %d assumptions from %d sink/sanitiser specs",
-                    len(assumptions),
-                    sum(1 for s in refined_specs if s.role in ("sink", "sanitiser")),
-                )
-
-            if bypass_findings:
-                logger.info(
-                    "IRIS bypass: %d bypass findings",
-                    len(bypass_findings),
-                )
-                iris_bypass_findings = [
-                    bf for bf in bypass_findings
-                    if hasattr(bf, "caller_file")
-                ]
-                if config.out_dir:
-                    _write_iris_bypass_findings(
-                        config.out_dir, iris_bypass_findings,
-                    )
-    except Exception:
-        logger.debug("IRIS refinement/bypass failed", exc_info=True)
+    bypass_runner, iris_bypass_findings = _iris_refine_and_bypass(
+        config,
+        gaps,
+        taint_summary_results,
+        joern_server,
+        checklist,
+        iris_taint_specs,
+    )
 
     if result.findings >= 2 and config.out_dir:
         try:
@@ -6395,7 +7078,12 @@ def _run_audit_body(
     except Exception:
         logger.debug("taint-spec post-loop checks failed", exc_info=True)
 
-    post_loop_findings.extend(_heuristic_bypass_findings(gaps, bypass_runner))
+    if getattr(config, "iris", True):
+        # Heuristic assumption/bypass pass rides the same IRIS gate
+        # as spec synthesis and refinement.
+        post_loop_findings.extend(
+            _heuristic_bypass_findings(gaps, bypass_runner),
+        )
     post_loop_findings.extend(
         _refine_bypass_post_loop_findings(
             iris_bypass_findings, post_loop_findings,
@@ -6430,6 +7118,28 @@ def _run_audit_body(
             post_loop_findings.append(nf.to_dict())
         for nf in check_protocol_ambiguity(gaps, target_path=tp):
             post_loop_findings.append(nf.to_dict())
+        from .negative_space import (
+            check_auth_mode_registration,
+            check_shared_writer_race,
+            check_url_boundary_composition,
+        )
+        for g in gaps:
+            for nf in check_auth_mode_registration(
+                g, domain_model=domain_model, target_path=tp,
+            ):
+                post_loop_findings.append(nf.to_dict())
+            for nf in check_url_boundary_composition(g, target_path=tp):
+                post_loop_findings.append(nf.to_dict())
+            if (g.get("file") or "").endswith(".go"):
+                _swr_g = dict(g)
+                with contextlib.suppress(OSError):
+                    _gfp = tp / (g.get("file") or "")
+                    if _gfp.is_file():
+                        _swr_g["file_source"] = _gfp.read_text(
+                            errors="replace",
+                        )
+                for nf in check_shared_writer_race(_swr_g):
+                    post_loop_findings.append(nf.to_dict())
         for nf in check_missing_app_features(gaps, target_path=tp):
             post_loop_findings.append(nf.to_dict())
         for nf in check_signal_safety(
@@ -6564,6 +7274,29 @@ def _run_audit_body(
                     plf_func,
                     exc_info=True,
                 )
+
+    # --- Structural-receipt rescue composition (post-loop) ---
+    #
+    # The review-time anti-self-refutation gate depends on the receipt
+    # surviving in ctx["negative_space"] at gate time. The post-loop
+    # pass re-derives the same structural receipts for every gap, so a
+    # clean outcome whose own hypotheses contradict an active receipt
+    # gets one deterministic re-evaluation here — before the corrective
+    # journal/log passes, which propagate the flipped status.
+    try:
+        n_rescued = _post_loop_receipt_rescue(
+            result, post_loop_findings, config,
+            mechanical_findings=mechanical_findings,
+            gaps=gaps,
+        )
+        if n_rescued:
+            logger.info(
+                "post-loop receipt rescue: %d clean outcomes floored "
+                "to suspicious",
+                n_rescued,
+            )
+    except Exception:
+        logger.debug("post-loop receipt rescue failed", exc_info=True)
 
     # --- Consistency pre-pass outcomes (LLM-free promote path) ---
     #
@@ -6806,6 +7539,11 @@ def _run_audit_body(
         _rejournal_final_statuses(result, config)
     except Exception:
         logger.debug("re-journal pass failed", exc_info=True)
+    try:
+        _relog_final_statuses(result, config)
+        config._verdicts_finalized = True
+    except Exception:
+        logger.debug("re-log pass failed", exc_info=True)
 
     try:
         from .findings_export import export_findings, write_graded_findings
@@ -6984,6 +7722,11 @@ def _sigterm_salvage(
         _rejournal_final_statuses(result, config)
     except Exception:
         logger.debug("salvage: re-journal pass failed", exc_info=True)
+    try:
+        _relog_final_statuses(result, config)
+        config._verdicts_finalized = True
+    except Exception:
+        logger.debug("salvage: re-log pass failed", exc_info=True)
 
     try:
         from .findings_export import export_findings, write_graded_findings
@@ -7392,8 +8135,7 @@ class _InjectModeResolver:
             self._check_lock_domain = check_lock_domain
             dm = None
             with contextlib.suppress(OSError):
-                from .journal import load_domain_model
-                dm = load_domain_model(config.out_dir)
+                dm = _load_domain_model(config)
             self._vocab = DomainVocabulary.from_domain_model(
                 dm, target_path=config.target_path,
             )
@@ -7514,6 +8256,39 @@ class _InjectModeResolver:
 
         self._cache[key] = findings
         return findings
+
+
+def _route_ops_struct_receipts(
+    gaps: list[dict[str, Any]],
+    ops_eps: set,
+    mechanical_findings: dict[str, list[dict[str, Any]]],
+) -> int:
+    """Detector receipts for ops-struct-reached functions.
+
+    The collector only widened ``entry_points``, so the channel fired
+    without ever leaving a receipt: nothing downstream (review prompt,
+    mechanical-findings.json, attribution) could see that a function
+    is reachable through a function-pointer table. Returns the number
+    of receipts routed.
+    """
+    routed = 0
+    for gap in gaps:
+        gk = f"{gap.get('file', '')}:{gap.get('name', '')}"
+        if gk not in ops_eps:
+            continue
+        mechanical_findings.setdefault(gk, []).append({
+            "file": gap.get("file", ""),
+            "function": gap.get("name", ""),
+            "detector": "ops_struct",
+            "line": gap.get("line_start", 0),
+            "description": (
+                "reached indirectly via an ops-struct member "
+                "registration (function pointer table) — an entry "
+                "point regardless of direct callers"
+            ),
+        })
+        routed += 1
+    return routed
 
 
 def _run_mechanical_detectors(
@@ -7713,7 +8488,17 @@ def _run_mechanical_detectors(
                                     f"for {sg.sink_api}: {detail}"
                                 ),
                             ))
-                    if not has_insufficient:
+                    # Clearing a sink guard (skipping the CPG
+                    # decorative-guard round) requires a GENUINE
+                    # sufficiency proof (feasible is False).  Empty
+                    # result lists and inconclusive checks (feasible is
+                    # None: no sufficiency model, unmodeled boolean
+                    # structure, insufficient variables) are the
+                    # absence of an analysis, not a proof.
+                    has_proof = any(
+                        sr.feasible is False for sr in results
+                    )
+                    if not has_insufficient and has_proof:
                         _smt_cleared.add(idx)
             except Exception:
                 logger.debug("condition_smt failed for %s", fp, exc_info=True)
@@ -7758,7 +8543,13 @@ def _run_mechanical_detectors(
                         for guard in sg.guards:
                             if not guard.resolvable:
                                 continue
-                            smr = _check_sm(guard)
+                            # Pass the file source so the check can
+                            # consult the variable's declared type —
+                            # unknown signedness produces no finding
+                            # (the old default assumed every variable
+                            # unsigned and stamped a witness-carrying
+                            # mismatch per resolvable guard).
+                            smr = _check_sm(guard, source=src)
                             if smr.mismatch:
                                 detector = "signed_mismatch_smt"
                                 desc = f"SMT: {smr.reasoning}"
@@ -7931,9 +8722,8 @@ def _run_mechanical_detectors(
         cb_vocab = None
         with contextlib.suppress(OSError):
             from .condition_smt import DomainVocabulary
-            from .journal import load_domain_model
             cb_vocab = DomainVocabulary.from_domain_model(
-                load_domain_model(config.out_dir),
+                _load_domain_model(config),
                 target_path=config.target_path,
             )
 
@@ -7961,6 +8751,53 @@ def _run_mechanical_detectors(
     except Exception:
         logger.debug("mechanical: callback_lifetime failed", exc_info=True)
 
+    # --- Auth-dismissal witnesses (Java) ---
+    try:
+        from .auth_witnesses import scan_gaps as _authw_scan
+
+        for aw in _authw_scan(gaps, source_texts):
+            _add(aw.file, aw.function, aw.detector, aw.line, aw.description)
+    except Exception:
+        logger.debug("mechanical: auth_witnesses failed", exc_info=True)
+
+    # --- Check-then-create compound (keyed registration race) ---
+    try:
+        from .check_then_create import scan_gaps as _ctc_scan
+
+        for cf in _ctc_scan(gaps, source_texts):
+            _add(
+                cf.file, cf.function, "check_then_create",
+                cf.write_line, cf.description(),
+            )
+    except Exception:
+        logger.debug(
+            "mechanical: check_then_create failed", exc_info=True,
+        )
+
+    # --- ASN.1 template declared-vs-accessed type witness ---
+    try:
+        from .asn1_template_mismatch import scan_sources as _asn1_scan
+
+        for am in _asn1_scan(source_texts):
+            func_name = ""
+            for gap in gaps:
+                if gap.get("file") != am.file:
+                    continue
+                gs = gap.get("line_start", 0)
+                ge = gap.get("line_end", gs)
+                if gs <= am.line <= (ge or gs):
+                    func_name = gap.get("name", "")
+                    break
+            if func_name:
+                _add(
+                    am.file, func_name, "asn1_template_mismatch",
+                    am.line, am.description(),
+                )
+    except Exception:
+        logger.debug(
+            "mechanical: asn1_template_mismatch failed", exc_info=True,
+        )
+
     # --- Standing Coccinelle templates ---
     try:
         from packages.coccinelle.runner import (
@@ -7978,8 +8815,15 @@ def _run_mechanical_detectors(
             standing_rules: set[str] = set()
             for entry in CWE_TO_TOOL_DISPATCH.values():
                 cocci_name = entry.get("cocci")
-                if cocci_name:
-                    rule_path = rules_dir / cocci_name
+                # A dispatch entry carries one rule filename or a list
+                # of them (a CWE family with more than one standing
+                # witness shape).
+                cocci_names = (
+                    cocci_name if isinstance(cocci_name, (list, tuple))
+                    else [cocci_name] if cocci_name else []
+                )
+                for one_name in cocci_names:
+                    rule_path = rules_dir / one_name
                     if rule_path.is_file():
                         standing_rules.add(str(rule_path))
             if standing_rules:
@@ -8077,6 +8921,89 @@ def _merge_stale(
     return gaps
 
 
+def _codeql_db_for(config, file_path):
+    """CodeQL database for ``file_path`` via the run's router.
+
+    Falls back to the single configured path when the router is absent
+    (unit tests driving internals without run_orchestrator's
+    normalisation)."""
+    router = getattr(config, "codeql_db_router", None)
+    if router is not None:
+        return router.for_file(file_path)
+    return config.codeql_db_path
+
+
+def _build_prior_finding_analyses(
+    config: OrchestratorConfig,
+    project_dir: Path | None,
+) -> dict[str, list] | None:
+    """``file:function`` → newest-first finding-grade journal entries.
+
+    Sources: the project journal index (prior runs, any producer) and
+    ``config.prior_journal_dirs`` (journals not yet merged into the
+    index — the /agentic post-pass case). Only FINDING-GRADE entries
+    qualify: function-grade priors already reach the prompt through
+    the verdict-reuse / prior_verdict machinery.
+
+    The per-function cap (newest first) keeps a finding-dense function
+    from flooding the review prompt with near-duplicate per-finding
+    narratives; bodies are excerpted here so every consumer sees the
+    same bound. ``config.prior_claims_per_function == 0`` disables the
+    injection entirely.
+
+    Best-effort — a missing or corrupt journal costs the claims, never
+    the run. Returns None when nothing qualifies so callers can gate
+    on truthiness.
+    """
+    cap = getattr(config, "prior_claims_per_function", 3)
+    if cap <= 0:
+        return None
+    excerpt = max(int(getattr(config, "prior_claim_excerpt_chars", 600)), 0)
+    from core.coverage.journal import (
+        is_function_grade,
+        load_entries,
+        load_index_full,
+    )
+
+    entries: list = []
+    if project_dir is not None:
+        try:
+            entries.extend(load_index_full(project_dir).values())
+        except Exception:
+            logger.debug("prior-claim index read failed", exc_info=True)
+    for run_dir in config.prior_journal_dirs or []:
+        try:
+            entries.extend(load_entries(Path(run_dir)))
+        except Exception:
+            logger.debug(
+                "prior-claim journal read failed for %s",
+                run_dir, exc_info=True,
+            )
+
+    claims: dict[str, list] = {}
+    for entry in entries:
+        if is_function_grade(entry) or entry.verdict == "error":
+            continue
+        claims.setdefault(f"{entry.file}:{entry.function}", []).append(entry)
+    if not claims:
+        return None
+    out: dict[str, list] = {}
+    for key, group in claims.items():
+        group.sort(key=lambda e: e.ts, reverse=True)
+        out[key] = [
+            {
+                "verdict": e.verdict,
+                "cwe": e.cwe,
+                "model": e.model,
+                "run_id": e.run_id,
+                "ts": e.ts,
+                "body": (e.body or "")[:excerpt],
+            }
+            for e in group[:cap]
+        ]
+    return out
+
+
 def _build_context(
     config: OrchestratorConfig,
     gap: dict[str, Any],
@@ -8093,7 +9020,7 @@ def _build_context(
     so the LLM reasons from code alone.  sink_unreachable is still set
     (it's a prefilter, not a leading hint).
     """
-    ann_dir = config.annotations_dir or _resolve_ann_dir(config.out_dir)
+    ann_dir = _annotations_dir(config)
     ctx = assemble_context(
         target_path=config.target_path,
         file_path=gap["file"],
@@ -8152,6 +9079,17 @@ def _build_context(
         # fix-history mining) ride the gap into the review prompt.
         ctx["injected_hypotheses"] = list(gap["injected_hypotheses"])
 
+    if not blind and config.prior_finding_analyses:
+        # Prior finding-grade claims (/agentic per-finding analyses of
+        # scanner findings located in this function). Advisory prior
+        # claims only — withheld in blind mode like the mechanical
+        # evidence, and never a verdict.
+        claims = config.prior_finding_analyses.get(
+            f"{gap['file']}:{gap['name']}"
+        )
+        if claims:
+            ctx["prior_finding_analyses"] = claims
+
     if config.models:
         ctx["model"] = config.models[0]
 
@@ -8177,6 +9115,14 @@ def _commit_outcome(
     completion; consumers wanting per-function verdict/context read
     the journal directly.
     """
+    if config._verdicts_finalized:
+        logger.warning(
+            "late commit after verdict finalization suppressed for "
+            "%s:%s (status %s) — the run's exports are already cut",
+            outcome.file, outcome.function, outcome.status,
+        )
+        return
+
     checked_by = ["audit"]
     if outcome.model:
         checked_by.append(outcome.model)
@@ -8210,6 +9156,12 @@ def _commit_outcome(
         "cost_usd": outcome.cost_usd,
         "duration_s": outcome.duration_s,
     }
+    _qualified = (
+        gap.get("qualified_name")
+        or getattr(outcome, "function_qualified", "")
+    )
+    if _qualified:
+        entry["function_qualified"] = _qualified
     if outcome.hypothesis:
         entry["hypothesis"] = outcome.hypothesis
     if outcome.hypotheses:
@@ -8497,6 +9449,17 @@ def _outcome_to_panel_result(
     return result
 
 
+def _is_budget_exceeded(exc: Exception) -> bool:
+    """True for the budget-exceeded RuntimeError the executor stops on.
+
+    Review fallbacks must re-raise it — journaling it as a
+    per-function 'error' outcome (or dispatching another fallback
+    pass) hides the stop signal and keeps spending past the cap.
+    """
+    from core.llm.client import is_budget_exceeded_error
+    return isinstance(exc, RuntimeError) and is_budget_exceeded_error(exc)
+
+
 def _multi_pass_review(
     review_fn: Callable,
     ctx: dict[str, Any],
@@ -8666,7 +9629,13 @@ def _multi_pass_review(
                 "multi_review unavailable, falling back to inline loop",
                 exc_info=True,
             )
-        except Exception:
+        except Exception as exc:
+            # Budget exhaustion is the executor's stop signal, not a
+            # per-function failure: swallowing it here journaled an
+            # 'error' verdict (or bought MORE spend via the fallback
+            # passes below) after the cap was already blown.
+            if _is_budget_exceeded(exc):
+                raise
             # The operator asked for cross-model consensus (--model A
             # --model B); a runtime failure here silently downgrades
             # to single-model self-consistency — say so visibly.
@@ -8702,7 +9671,9 @@ def _multi_pass_review(
                     return {"file": file_path, "function": function_name,
                             "status": "error",
                             "body": "blocked by content filter"}
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
+                    if _is_budget_exceeded(exc):
+                        raise
                     logger.warning(
                         "review_fn pass failed for %s:%s: %s",
                         file_path, function_name, exc,
@@ -8760,7 +9731,9 @@ def _multi_pass_review(
                 "falling back to a single pass",
                 file_path, function_name,
             )
-        except Exception:
+        except Exception as exc:
+            if _is_budget_exceeded(exc):
+                raise
             logger.warning(
                 "self-consistency substrate failed for %s:%s — "
                 "falling back to a single pass",
@@ -8780,7 +9753,9 @@ def _multi_pass_review(
             status="error",
             body="blocked by content filter",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        if _is_budget_exceeded(exc):
+            raise
         logger.warning(
             "review_fn pass failed for %s:%s: %s",
             file_path, function_name, exc,
@@ -9013,6 +9988,56 @@ def _record_executor_stop(result: OrchestratorResult, executor_stats: Any) -> No
     """
     if executor_stats.budget_stopped and result.terminated_by == "complete":
         result.terminated_by = "shutdown"
+
+
+def _hold_review_reserve(config: OrchestratorConfig) -> float:
+    """Hold the review loop's budget slice on the run's budget client.
+
+    Mirrors :func:`_hold_deepen_reserve` for the phase boundary one
+    step earlier: the pre-review bulk passes gate against
+    ``cap - reserve`` so the per-function reviews (and the deepen
+    re-reviews after them) can always execute. Returns the amount
+    held (0.0 when no reserve was taken)."""
+    fraction = getattr(config, "review_reserve_fraction", 0.0) or 0.0
+    if fraction <= 0:
+        return 0.0
+    client = getattr(config, "llm_budget_client", None)
+    if client is None or not hasattr(client, "hold_budget_reserve"):
+        return 0.0
+    try:
+        cap = getattr(
+            getattr(client, "config", None), "max_cost_per_scan", 0,
+        ) or 0
+        if not cap or cap == float("inf"):
+            return 0.0
+        held = client.hold_budget_reserve(cap * min(fraction, 0.9))
+        if held:
+            logger.info(
+                "review: holding $%.2f (%.0f%% of the $%.2f cap) in "
+                "reserve so the review loop cannot be starved by the "
+                "prep passes",
+                held, 100.0 * min(fraction, 0.9), cap,
+            )
+        return held
+    except Exception:  # reserve is an optimisation, never fatal
+        logger.debug("review reserve hold failed", exc_info=True)
+        return 0.0
+
+
+def _release_review_reserve(config: OrchestratorConfig) -> None:
+    """Release the review reserve back to dispatch (idempotent)."""
+    client = getattr(config, "llm_budget_client", None)
+    if client is None or not hasattr(client, "release_budget_reserve"):
+        return
+    try:
+        released = client.release_budget_reserve()
+        if released:
+            logger.info(
+                "review: released the $%.2f reserve to the review "
+                "loop", released,
+            )
+    except Exception:
+        logger.debug("review reserve release failed", exc_info=True)
 
 
 def _hold_deepen_reserve(config: OrchestratorConfig) -> float:
@@ -9650,10 +10675,90 @@ def _mark_unsupported_unresolvable(
         )
 
 
+def _resolve_scoped(
+    root: Path,
+    all_idents: list[str],
+    ident_reqs: list[StudyRequest],
+    resolve_identifiers,
+    *,
+    include_c: bool = False,
+):
+    """Directory-scoped identifier resolution, any study language.
+
+    A stdlib- or kernel-sized tree defeats the resolver's flat file
+    cap (a root scan stops after the cap and reports resolvable
+    identifiers as not-found — observed marking a critical premise
+    question unresolvable for a function that exists in the tree), so
+    each request's subsystem directory is searched first — premise
+    questions overwhelmingly name identifiers defined near the
+    reviewed code. Identifiers the subsystem passes leave unresolved
+    get an include-chase pass over each request source file's
+    ``#include`` graph — definitions in shared header roots
+    (``include/linux/...``) are reachable from the reviewed code but
+    sit in neither its directory nor the capped root scan (observed
+    live: a static-inline helper under ``include/`` reported as
+    not-found for a driver-subsystem request). Leftovers after that
+    get one root-scoped pass (which fully covers small trees).
+    """
+    merged_items: list = []
+    remaining = list(all_idents)
+    scopes: list[Path] = []
+    seen_scopes: set[str] = set()
+    for req in ident_reqs:
+        sf = (req.source_file or "").strip()
+        if not sf:
+            continue
+        d = root / Path(sf).parent
+        key = str(d)
+        if key not in seen_scopes and d.is_dir() and d != root:
+            seen_scopes.add(key)
+            scopes.append(d)
+    for scope in scopes:
+        if not remaining:
+            break
+        res = resolve_identifiers(
+            root, remaining, scope=scope, include_c=include_c,
+        )
+        merged_items.extend(res.items)
+        unres = {u["name"] for u in res.unresolved}
+        remaining = [n for n in remaining if n in unres]
+    if remaining:
+        chase_files: list = []
+        chase_seen: set = set()
+        chased: set[str] = set()
+        try:
+            from core.concepts.lang_resolve import include_scope_files
+            for req in ident_reqs:
+                sf = (req.source_file or "").strip()
+                if not sf or sf in chased:
+                    continue
+                chased.add(sf)
+                for p in include_scope_files(root, sf):
+                    if p not in chase_seen:
+                        chase_seen.add(p)
+                        chase_files.append(p)
+        except Exception:
+            logger.debug(
+                "study-consumer: include chase failed", exc_info=True,
+            )
+        if chase_files:
+            res = resolve_identifiers(
+                root, remaining, files=chase_files, include_c=include_c,
+            )
+            merged_items.extend(res.items)
+            unres = {u["name"] for u in res.unresolved}
+            remaining = [n for n in remaining if n in unres]
+    final = resolve_identifiers(root, remaining, include_c=include_c)
+    final.items = merged_items + final.items
+    return final
+
+
 def _resolve_multilang_requests(
     config: OrchestratorConfig,
     ml_reqs: list[StudyRequest],
     study_list_path: Path | None,
+    *,
+    include_c: bool = False,
 ) -> dict[str, str]:
     """Per-batch in-process resolution for non-C study requests.
 
@@ -9662,6 +10767,14 @@ def _resolve_multilang_requests(
     Returns ``{question: reason}`` for questions whose identifiers
     could not be statically resolved — the caller marks those
     reading-list items unresolvable instead of resolved-clean.
+
+    With ``include_c`` True this is the C per-batch definition splice:
+    study-prep runs once, so C questions raised in later batches never
+    gain corpus definitions through it. Resolution is scoped to each
+    request's subsystem directory first (bounded on huge trees), then
+    the tree root for leftovers. The caller must not treat C misses as
+    authoritative failures — the one-shot prep corpus may already
+    carry the concept.
     """
     failures: dict[str, str] = {}
     try:
@@ -9698,7 +10811,10 @@ def _resolve_multilang_requests(
 
     unresolved_by_name: dict[str, str] = {}
     if all_idents:
-        res = resolve_identifiers(root, all_idents)
+        res = _resolve_scoped(
+            root, all_idents, ident_reqs, resolve_identifiers,
+            include_c=include_c,
+        )
         unresolved_by_name = {
             u["name"]: u["reason"] for u in res.unresolved
         }
@@ -9713,8 +10829,9 @@ def _resolve_multilang_requests(
                     exc_info=True,
                 )
         logger.info(
-            "study-consumer: multilang batch: %d identifiers → "
+            "study-consumer: %s batch: %d identifiers → "
             "%d items, %d unresolvable",
+            "C splice" if include_c else "multilang",
             len(all_idents), len(res.items), len(res.unresolved),
         )
 
@@ -10112,6 +11229,78 @@ def _mark_batch_reading_list(
                 domain_model, cl or spot_l, tail or spot_l,
             ) is not None
             concept_id = f"spotcheck:{spot.identifier}"
+            # A spot-check answer that CONTRADICTS the question's
+            # asserted value (matches is False — the assertion the
+            # reviewing LLM staked its hypothesis on) does not get
+            # unconditional trust: the regex extractor is
+            # deterministic but can read the wrong statement.  Same
+            # agreement gate as any other flip-causing answer.
+            # Displacing a domain-model summary with an AGREEING or
+            # open-question value is precedence, not contradiction —
+            # it keeps the deterministic exemption.
+            contradicts = spot.matches is False
+            agreement = {
+                "agreed": True,
+                "reason": "mechanical answer — deterministic, "
+                          "gate skipped",
+            }
+            if contradicts:
+                if study_client is None or source_root is None:
+                    agreement = {
+                        "agreed": False,
+                        "reason": "no verification client available",
+                    }
+                else:
+                    try:
+                        from core.concepts.answer_gate import (
+                            verify_flip_answer,
+                        )
+                        snippets = [
+                            it for it in study_items
+                            if isinstance(it, dict)
+                            and (it.get("name") or "").lower()
+                            in (spot_l, tail, cl)
+                        ] or study_items[:4]
+                        agreement = verify_flip_answer(
+                            req.question, snippets,
+                            spot.receipt.to_dict(),
+                            study_client, Path(source_root),
+                            tier="mechanical",
+                            contradicts_llm=True,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "spot-check agreement gate failed",
+                            exc_info=True,
+                        )
+                        agreement = {
+                            "agreed": False,
+                            "reason": "verification call failed",
+                        }
+            if not agreement.get("agreed"):
+                logger.info(
+                    "study-consumer: contradicting spot-check answer "
+                    "quarantined (%s): %s",
+                    agreement.get("reason"), req.question,
+                )
+                _record_study_scorecard(
+                    scorecard_model, False,
+                    agreement.get("reason") or "",
+                )
+                ledger.append(StudyAnswer(
+                    question=req.question,
+                    source_file=req.source_file,
+                    source_function=req.source_function,
+                    assumption=req.context or "",
+                    answer=spot.answer,
+                    tier="mechanical",
+                    receipt=spot.receipt.to_dict(),
+                    status="inconclusive",
+                    reason=agreement.get("reason") or "",
+                    spot_check_override=overrode,
+                    agreement=agreement,
+                ))
+                continue
             item.resolve(concept_id)
             changed = True
             eligible.add(fn_key)
@@ -10134,11 +11323,7 @@ def _mark_batch_reading_list(
                 status="resolved",
                 resolved_concept_id=concept_id,
                 spot_check_override=overrode,
-                agreement={
-                    "agreed": True,
-                    "reason": "mechanical answer — deterministic, "
-                              "gate skipped",
-                },
+                agreement=agreement,
             ))
             continue
 
@@ -10361,9 +11546,21 @@ def _drain_study_consumer(
             )
 
     if thread.is_alive():
+        # Abandonment must carry a stop: the run is over, so anything
+        # the consumer produces from here is unusable by design — but
+        # without a stop the still-alive daemon thread keeps
+        # dispatching re-reviews into non-daemon executor workers,
+        # which the interpreter joins at exit. Observed as trailing
+        # LLM retry loops after results were written (dispatcher
+        # request.error ReadErrors after server.stop), up to a manual
+        # kill. The timeout-with-activity path used to be the one
+        # abandonment branch that never requested a stop.
+        if study_queue is not None and not stop_sent:
+            study_queue.request_stop()
         logger.warning(
             "study-consumer: did not drain within %.0fs — abandoning "
-            "(daemon thread; study results for this run are incomplete)",
+            "with stop requested (daemon thread unwinds at its next "
+            "checkpoint; study results for this run are incomplete)",
             time.monotonic() - drain_start,
         )
 
@@ -10805,6 +12002,18 @@ def _study_consumer_loop(
                 config, ml_reqs, study_list_path,
             )
 
+        # C per-batch definition splice: prep runs once, so C questions
+        # raised after it (premise questions, re-review assumptions)
+        # otherwise never gain corpus definitions and stall pending.
+        # Failures are NOT propagated — the prep corpus may already
+        # carry the concept; a splice miss must not mark a question
+        # unresolvable that run_study can still answer.
+        _c_ident_reqs = [r for r in c_reqs if r.resolution != "concept"]
+        if _c_ident_reqs:
+            _resolve_multilang_requests(
+                config, _c_ident_reqs, study_list_path, include_c=True,
+            )
+
         # Study-run: in-process, scoped to this batch's reading-list.
         if study_queue.stop_requested:
             logger.info(
@@ -10870,9 +12079,8 @@ def _study_consumer_loop(
 
         # Reload domain model
         try:
-            from .journal import load_domain_model
 
-            new_dm = load_domain_model(config.out_dir)
+            new_dm = _load_domain_model(config)
             if new_dm:
                 shared.domain_model = new_dm
                 if collector is not None:
@@ -11198,8 +12406,11 @@ def _seed_observations_from_sage(config: OrchestratorConfig) -> list[dict[str, s
     so they inform prompts but never drive mechanical decisions.
     Recalled text passes through ``_sanitise_observation`` — the same
     injection scan live observations get — before it can re-enter a
-    prompt. Never raises; returns ``[]`` when SAGE is unavailable.
+    prompt. Never raises; returns ``[]`` when SAGE is unavailable or
+    SAGE recall is gated off (cold-profile corpus runs).
     """
+    if not getattr(config, "sage_recall", True):
+        return []
     try:
         from core.sage.hooks import recall_audit_observations
     except ImportError:
@@ -11481,6 +12692,10 @@ def _synthesis_hits_to_gaps(
             gap["synthesis_snippet"] = hit["snippet"]
         if hit.get("provenance"):
             gap["synthesis_provenance"] = hit["provenance"]
+        if hit.get("rule_id"):
+            # Joins the review verdict on this gap back to the rule
+            # that produced it — the in-run quarantine's evidence.
+            gap["synthesis_rule_id"] = hit["rule_id"]
         gaps.append(gap)
 
     if unresolved:
@@ -11494,6 +12709,46 @@ def _synthesis_hits_to_gaps(
             _write_unresolved_synthesis_hits(unresolved, out_dir)
 
     return gaps
+
+
+# A run-synthesized rule whose triaged matches are ALL false positives
+# is deactivated for the rest of the run once this many verdicts are
+# in.  Rule-of-thumb floor: below 3 triages a single unlucky match
+# would quarantine every young rule; at 3+ with zero true positives
+# the rule is demonstrably minting review work (and, worse, promotion
+# receipts) from a pattern the reviewers keep rejecting.
+_RULE_QUARANTINE_MIN_TRIAGES = 3
+
+
+def _note_rule_triage(shared: SharedState, rule_id: str, is_tp: bool) -> None:
+    """Record one triaged match for a synthesized/library rule and
+    quarantine the rule for the remainder of the run at 0% precision.
+
+    Quarantine is run-scoped: the library entry survives (cross-run
+    retirement stays ``retire_low_precision``'s job), but this run
+    stops sweeping the rule's remaining hits into review gaps.  One
+    corpus run watched an on-demand rule confirm a no-defect
+    hypothesis and then sit at "avg precision 0%" in every subsequent
+    group with nothing acting on it.
+    """
+    if not rule_id:
+        return
+    with shared._rule_triage_lock:
+        counts = shared.rule_triage.setdefault(rule_id, [0, 0])
+        counts[0 if is_tp else 1] += 1
+        tp, fp = counts
+        if (
+            tp == 0
+            and fp >= _RULE_QUARANTINE_MIN_TRIAGES
+            and rule_id not in shared.quarantined_rules
+        ):
+            shared.quarantined_rules.add(rule_id)
+            logger.warning(
+                "rule quarantine: %s deactivated for the remainder of "
+                "this run — %d/%d triaged match(es) false-positive "
+                "(0%% precision)",
+                rule_id, fp, tp + fp,
+            )
 
 
 def _write_unresolved_synthesis_hits(
@@ -11692,7 +12947,16 @@ def _review_items(
             try:
                 from .refutation import rescue_self_refuted
 
-                rv = rescue_self_refuted(outcome)
+                rv = rescue_self_refuted(
+                    outcome,
+                    source=_read_raw_source(
+                        config.target_path,
+                        gap.get("file", ""),
+                        gap.get("line_start", 0),
+                        gap.get("line_end"),
+                    ) or None,
+                    pre_evidence=gap.get("_smt_pre_evidence"),
+                )
                 if rv is not None:
                     append_audit_log(config.out_dir, {
                         "action": "refutation_gate",
@@ -12030,7 +13294,22 @@ def _run_prefilter_for_gap(
     )
 
 
-_file_lines_cache: dict[str, list | None] = {}
+# Keyed by (path, mtime, size) so a file rewritten mid-run (build
+# steps, generated sources, a second in-process run on a drifted
+# target) is re-read instead of served stale; LRU-bounded so a large
+# target cannot pin every source file's lines in memory for the whole
+# run. Guarded by a lock — async-path reviews call this from worker
+# threads.
+_FILE_LINES_CACHE_MAX = 256
+_file_lines_cache: OrderedDict[tuple[str, float, int], list | None] = (
+    OrderedDict()
+)
+_file_lines_cache_lock = _threading.Lock()
+
+# Same-file parse-wrapper names for the parsed-int contract screen,
+# keyed like _file_lines_cache (absolute path) so concurrent targets
+# in one process never share entries.
+_parse_wrapper_cache: dict[str, frozenset] = {}
 
 
 def _read_raw_source(
@@ -12040,19 +13319,25 @@ def _read_raw_source(
     line_end: int | None,
 ) -> str:
     """Read raw source lines without line-number prefixes."""
-    cache_key = str(target_path / file_path)
-    if cache_key not in _file_lines_cache:
-        full_path = target_path / file_path
-        if not full_path.exists():
-            _file_lines_cache[cache_key] = None
+    full_path = target_path / file_path
+    try:
+        st = full_path.stat()
+    except OSError:
+        return ""
+    cache_key = (str(full_path), st.st_mtime, st.st_size)
+    with _file_lines_cache_lock:
+        if cache_key in _file_lines_cache:
+            _file_lines_cache.move_to_end(cache_key)
+            lines = _file_lines_cache[cache_key]
         else:
+            lines = None
             try:
-                _file_lines_cache[cache_key] = full_path.read_text(
-                    errors="replace",
-                ).splitlines()
+                lines = full_path.read_text(errors="replace").splitlines()
             except OSError:
-                _file_lines_cache[cache_key] = None
-    lines = _file_lines_cache[cache_key]
+                lines = None
+            _file_lines_cache[cache_key] = lines
+            while len(_file_lines_cache) > _FILE_LINES_CACHE_MAX:
+                _file_lines_cache.popitem(last=False)
     if lines is None:
         return ""
     start = max(0, line_start - 1)
@@ -12705,7 +13990,7 @@ def _cwe_fallback_chain(cwe: str) -> list[dict[str, Any]]:
     chain: list[dict[str, Any]] = []
     try:
         from .cwe_dispatch import (
-            cocci_rule_for_cwe,
+            cocci_rules_for_cwe,
             codeql_query_for_cwe,
             joern_applicable,
             sinks_for_cwe,
@@ -12795,8 +14080,7 @@ def _cwe_fallback_chain(cwe: str) -> list[dict[str, Any]]:
     if smt_verb:
         chain.append({"type": "smt", "config": {"verb": smt_verb}})
 
-    cocci_rule = cocci_rule_for_cwe(cwe)
-    if cocci_rule:
+    for cocci_rule in cocci_rules_for_cwe(cwe):
         chain.append({"type": "coccinelle", "config": {"rule": cocci_rule}})
 
     codeql_query = codeql_query_for_cwe(cwe)
@@ -12966,8 +14250,7 @@ def _run_tool_chain(
     if domain_vocab is None and config.out_dir:
         with contextlib.suppress(OSError):
             from .condition_smt import DomainVocabulary
-            from .journal import load_domain_model
-            dm = load_domain_model(config.out_dir)
+            dm = _load_domain_model(config)
             domain_vocab = DomainVocabulary.from_domain_model(
                 dm, target_path=effective_target,
             )
@@ -13452,8 +14735,7 @@ def _run_tool_chain(
 
                 rb_dm = None
                 with contextlib.suppress(Exception):
-                    from .journal import load_domain_model as _rb_ldm
-                    rb_dm = _rb_ldm(config.out_dir) \
+                    rb_dm = _load_domain_model(config) \
                         if config.out_dir else None
                 rb_ctx = _RbRoleCtx(
                     out_dir=config.out_dir,
@@ -13520,8 +14802,7 @@ def _run_tool_chain(
 
                 ro_dm = None
                 with contextlib.suppress(Exception):
-                    from .journal import load_domain_model as _ro_ldm
-                    ro_dm = _ro_ldm(config.out_dir) \
+                    ro_dm = _load_domain_model(config) \
                         if config.out_dir else None
                 ro_ctx = _RoRoleCtx(
                     out_dir=config.out_dir,
@@ -13589,8 +14870,7 @@ def _run_tool_chain(
 
                 ps_dm = None
                 with contextlib.suppress(Exception):
-                    from .journal import load_domain_model as _ps_ldm
-                    ps_dm = _ps_ldm(config.out_dir) \
+                    ps_dm = _load_domain_model(config) \
                         if config.out_dir else None
                 ps_ctx = _PsRoleCtx(
                     out_dir=config.out_dir,
@@ -13776,7 +15056,8 @@ def _run_tool_chain(
                     )
 
             elif tool_type == "codeql":
-                if not config.codeql_db_path:
+                _tool_db = _codeql_db_for(config, file_path)
+                if not _tool_db:
                     # Startup already recorded this degradation
                     # (codeql → semgrep taint mode); honour it at
                     # dispatch instead of erroring at run time — the
@@ -13797,7 +15078,7 @@ def _run_tool_chain(
                     file_path=file_path,
                     function_name=function_name,
                     query_path=tool_cfg["query"],
-                    database_path=config.codeql_db_path,
+                    database_path=_tool_db,
                     line_start=line_start,
                     line_end=_checklist_line_end(
                         config, file_path, function_name)
@@ -14154,6 +15435,17 @@ def _sweep_validate(
             "[sweep validation: finding demoted — no testable hypothesis]",
         )
 
+    # Premise binding, same rule as the secondary-sweep and smt-clean
+    # escalation lanes: this pass grades the LLM's OWN finding, so a
+    # function-local confirm re-proves the lexical shape the reviewer
+    # already saw — it encodes nothing about the hypothesis's
+    # cross-function counter ("the caller validates the level"). Such
+    # a confirm may not ground the finding: the verdict falls through
+    # ungrounded, the G2 gate holds it at suspicious, and the parked
+    # premise awaits a study receipt. Cross-function-capable channels
+    # (Joern, CodeQL dataflow) still ground it.
+    premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+
     is_binary = is_binary or outcome.file.startswith("binary:")
     if source_override is not None:
         source = source_override
@@ -14197,17 +15489,23 @@ def _sweep_validate(
                     )
                 ]
                 if correlated:
-                    return _stamp_evidence(
-                        outcome, f"prefilter:{correlated[0].rule_id}",
+                    _pf_tool = f"prefilter:{correlated[0].rule_id}"
+                    if not _premise_blocks_confirm(premise_h, [_pf_tool]):
+                        return _stamp_evidence(outcome, _pf_tool)
+                    _note_premise_blocked_validation(
+                        outcome, premise_h, [_pf_tool],
+                        config, tier_counters,
                     )
-                _record_uncorrelated_hits(outcome, pf.hits)
-                logger.info(
-                    "sweep_validate: %s:%s prefilter hits (%s) uncorrelated "
-                    "with hypothesis — kept as context, not evidence",
-                    outcome.file,
-                    outcome.function,
-                    ",".join(h.rule_id for h in pf.hits[:3]),
-                )
+                else:
+                    _record_uncorrelated_hits(outcome, pf.hits)
+                    logger.info(
+                        "sweep_validate: %s:%s prefilter hits (%s) "
+                        "uncorrelated with hypothesis — kept as context, "
+                        "not evidence",
+                        outcome.file,
+                        outcome.function,
+                        ",".join(h.rule_id for h in pf.hits[:3]),
+                    )
 
         chain = _hypothesis_to_tool_chain(hypothesis, effective_file, cwe=cwe)
 
@@ -14249,7 +15547,11 @@ def _sweep_validate(
         outcome.tools_dispatched = (outcome.tools_dispatched or set()) | dispatched
         if errored:
             outcome.tools_errored = (outcome.tools_errored or set()) | errored
-        if confirmed:
+        if confirmed and _premise_blocks_confirm(premise_h, confirmed):
+            _note_premise_blocked_validation(
+                outcome, premise_h, confirmed, config, tier_counters,
+            )
+        elif confirmed:
             high_prec = [t for t in confirmed if not _is_detection_only(t)]
             if high_prec:
                 tool_label = "+".join(high_prec)
@@ -14288,7 +15590,8 @@ def _sweep_validate(
 
     # CodeQL bespoke dataflow validation (when LLM claims a source→sink
     # flow and no standard tool confirmed it)
-    if not is_binary and config.codeql_db_path and "codeql" not in dispatched:
+    _outcome_db = _codeql_db_for(config, outcome.file)
+    if not is_binary and _outcome_db and "codeql" not in dispatched:
         try:
             from .codeql_validation import (
                 extract_claims_from_review,
@@ -14299,7 +15602,7 @@ def _sweep_validate(
             for claim in claims:
                 vr = validate_dataflow_claim(
                     claim,
-                    db_path=Path(config.codeql_db_path),
+                    db_path=Path(_outcome_db),
                     target_path=config.target_path,
                 )
                 if vr.smt_pruned and tier_counters:
@@ -14368,13 +15671,19 @@ def _sweep_validate(
                     outcome.review_result["evidence_tool"] = "smt:disproof:unsat"
                 return outcome
             elif smt_result.disproved is False:
-                logger.info(
-                    "sweep_validate: %s:%s overflow feasible "
-                    "(Z3 SAT) — stamping supporting evidence",
-                    outcome.file,
-                    outcome.function,
-                )
-                return _stamp_evidence(outcome, "smt:disproof:sat")
+                if _premise_blocks_confirm(premise_h, ["smt:disproof:sat"]):
+                    _note_premise_blocked_validation(
+                        outcome, premise_h, ["smt:disproof:sat"],
+                        config, tier_counters,
+                    )
+                else:
+                    logger.info(
+                        "sweep_validate: %s:%s overflow feasible "
+                        "(Z3 SAT) — stamping supporting evidence",
+                        outcome.file,
+                        outcome.function,
+                    )
+                    return _stamp_evidence(outcome, "smt:disproof:sat")
         except Exception:
             logger.debug(
                 "disprove_integer_overflow failed for %s:%s",
@@ -14578,7 +15887,8 @@ def _proactive_validate(
             elif tier_counters:
                 _increment_tier_dict(tier_counters, "joern", "refuted")
 
-    if _has_cwe_dispatch and "codeql" not in dispatched and config.codeql_db_path:
+    _cwe_db = _codeql_db_for(config, outcome.file)
+    if _has_cwe_dispatch and "codeql" not in dispatched and _cwe_db:
         sinks = sinks_for_cwe(cwe)
         if sinks:
             try:
@@ -14591,7 +15901,7 @@ def _proactive_validate(
                         file_path=outcome.file,
                         function_name=outcome.function,
                         query_path=f"cwe-{cwe.lower()}-{sink}",
-                        database_path=config.codeql_db_path,
+                        database_path=_cwe_db,
                         line_start=outcome.line,
                         line_end=outcome.line + 50 if outcome.line else 0,
                     )
@@ -14860,6 +16170,28 @@ def _run_critique(
     suspicious items haven't gained new tool evidence since emission.
     Runs every critique_interval functions.
     """
+    # Interrupted pre-sweep awareness (once per run): when the Joern
+    # pre-sweep window was lost to a server restart, critique's
+    # taint-tier evidence base is incomplete — absence of flows means
+    # "not swept", not "no flows". Surface it on the critique cadence,
+    # not just as a startup log line.
+    if not getattr(config, "_presweep_loss_warned", False) and config.out_dir:
+        try:
+            from .joern_backend import load_presweep_status
+            presweep = load_presweep_status(config.out_dir)
+        except Exception:  # noqa: BLE001 — critique must not fail on bookkeeping
+            presweep = None
+        if presweep and not presweep.get("recovered"):
+            logger.warning(
+                "critique: Joern pre-sweep window was LOST to a server "
+                "restart (%d re-queue attempt(s) failed) — taint-flow "
+                "evidence for this run is incomplete; treating missing "
+                "flows as 'not swept'",
+                presweep.get("requeued", 0),
+            )
+        if presweep is not None:
+            config._presweep_loss_warned = True
+
     recent_findings = [
         o for o in result.outcomes[-config.critique_interval :] if o.status == "finding"
     ]
@@ -15057,9 +16389,23 @@ def _collect_reviews_until_budget(
     collected = []
     stopped = False
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        future_to_item = {
-            pool.submit(do_review, item): item for item in prepared
-        }
+        future_to_item = {}
+        try:
+            for item in prepared:
+                future_to_item[pool.submit(do_review, item)] = item
+        except RuntimeError:
+            # Interpreter shutdown between the budget check and
+            # dispatch: the run is tearing down while a background
+            # consumer thread is still queueing re-reviews. Observed
+            # live as an unhandled crash that hung the run after
+            # results were written. Anything already dispatched is
+            # still harvested below; the rest was never sent and
+            # nothing was spent on it.
+            logger.info(
+                "%s: executor rejected dispatch (shutdown in "
+                "progress) — %d re-review(s) skipped",
+                phase_label, len(prepared) - len(future_to_item),
+            )
         for fut in as_completed(future_to_item):
             # Harvest first: a future yielded here has finished (or
             # was cancelled while pending). Cancelled == never
@@ -15294,16 +16640,43 @@ def _deepen_suspicious(
         # clean genuinely supersedes a clean formed with stripped
         # context (and clears the context_reduced tag).
         _rr = outcome.review_result or {}
+        _structured_demotion = bool(
+            _rr.get("all_refuted_demotion")
+            or _rr.get("rationale_consistency_demotion")
+        )
+        _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
         _deepen_dominated = (
             outcome.status == "clean"
             and not prior_outcome.context_reduced
-            and not (
-                _rr.get("all_refuted_demotion")
-                or _rr.get("rationale_consistency_demotion")
-            )
+            and not _structured_demotion
         )
 
-        if _deepen_dominated:
+        if _referee_holds:
+            # The rejected deepen call still spent real money.
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
+            if prior_outcome.review_result is None:
+                prior_outcome.review_result = {}
+            prior_outcome.review_result["demotion_referee"] = (
+                "probe-backed suspicious retained — deepen refutation "
+                "was LLM-only"
+            )
+            prior_outcome.body = (
+                "[demotion referee: the deepen re-review concluded "
+                "clean on LLM argument alone, but this suspicious is "
+                "backed by a fired probe — retained pending a "
+                "verification-role refuter]\n\n"
+                + (prior_outcome.body or "")
+            )
+            logger.info(
+                "deepen [%d/%d] %s:%s: demotion referee — stays "
+                "suspicious (probe-backed; LLM-only refutation)",
+                idx,
+                len(targets),
+                gap["file"],
+                gap["name"],
+            )
+        elif _deepen_dominated:
             # The discarded deepen call still spent real money; the
             # accepted path books it via _tally_outcome below.
             with result._lock:
@@ -16295,6 +17668,70 @@ def _correlated_mech_detector_tool(
     return None
 
 
+# Design-pattern CWEs: a structural match asserts a code SHAPE
+# (comparison style, API misuse pattern), not attacker-reachable data.
+# A synthesized-checker receipt for one of these may promote only with
+# a trust-boundary/taint receipt from the run's context map.
+_DESIGN_PATTERN_CWES = frozenset({"CWE-697", "CWE-595", "CWE-486", "CWE-480"})
+
+_TRUST_BOUNDARY_KEYS_CACHE: dict[str, frozenset] = {}
+
+
+def _function_on_trust_boundary(
+    outcome: ReviewOutcome, config: OrchestratorConfig,
+) -> bool:
+    """Does the run's context map place this function on a trust
+    boundary (entry point or trust-boundary member)?"""
+    out_dir = getattr(config, "out_dir", None)
+    if not out_dir:
+        return False
+    cache_key = str(out_dir)
+    keys = _TRUST_BOUNDARY_KEYS_CACHE.get(cache_key)
+    if keys is None:
+        try:
+            context_map = load_context_map(Path(out_dir))
+        except OSError:
+            context_map = None
+        keys = frozenset(
+            extract_context_map_set(context_map, "entry_points")
+            | extract_context_map_set(
+                context_map, "trust_boundaries", nested_key="functions",
+            ),
+        )
+        _TRUST_BOUNDARY_KEYS_CACHE[cache_key] = keys
+    return f"{outcome.file}:{outcome.function}" in keys
+
+
+def _synth_receipt_promotion_block_reason(
+    tool_id: str,
+    outcome: ReviewOutcome,
+    cwe: str,
+    config: OrchestratorConfig,
+) -> str:
+    """Why a synthesized-checker receipt may not promote this outcome
+    ('' when it may).
+
+    Two gates: (1) self-match exclusion — a rule synthesized from this
+    function's own shape is a circular oracle on it; (2) design-pattern
+    CWEs need a trust-boundary/taint receipt — the pattern match
+    asserts a shape, not attacker-reachable data.
+    """
+    if ":synth-" not in (tool_id or ""):
+        return ""
+    from .checker_synthesis import is_self_match_synth_receipt
+    if is_self_match_synth_receipt(tool_id, outcome.file, outcome.function):
+        return "self-match: rule synthesized from this function's own shape"
+    if (cwe or "").upper().strip() in _DESIGN_PATTERN_CWES:
+        if outcome.provenance_all_trusted:
+            return "design-pattern CWE with all-trusted provenance"
+        if not _function_on_trust_boundary(outcome, config):
+            return (
+                "design-pattern CWE without a trust-boundary receipt "
+                "from the context map"
+            )
+    return ""
+
+
 def _promote_suspicious(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -16344,6 +17781,14 @@ def _promote_suspicious(
 
         refuting_counter = _has_refuting_counter(outcome)
 
+        # Premise binding for the primary hypothesis, same rule as the
+        # secondary sweep below: a function-local confirm cannot
+        # adjudicate a counter that rests on a cross-function premise
+        # — it re-proves the lexical shape the reviewer already saw
+        # and weighed. Blocked promotions stay suspicious and park the
+        # premise on the reading list.
+        premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+
         gap = _find_gap_in_checklist(checklist or {}, outcome.file, outcome.function)
         line_end = gap.get("line_end") if gap else None
 
@@ -16387,6 +17832,12 @@ def _promote_suspicious(
                     outcome.function,
                     mech_tool,
                 )
+            elif _premise_blocks_confirm(premise_h, [mech_tool]):
+                _note_premise_blocked_validation(
+                    outcome, premise_h, [mech_tool],
+                    config, result.tier_counters,
+                    lane="sweep promotion", tier="primary_sweep",
+                )
             else:
                 result.outcomes[i] = _promote_outcome(outcome, mech_tool)
                 result.sweep_promoted += 1
@@ -16426,18 +17877,25 @@ def _promote_suspicious(
             ]
             if correlated:
                 tool = f"prefilter:{correlated[0].rule_id}"
-                result.outcomes[i] = _promote_outcome(outcome, tool)
-                result.sweep_promoted += 1
-                result.suspicious -= 1
-                result.findings += 1
-                logger.info(
-                    "sweep promoted %s:%s via %s",
-                    outcome.file,
-                    outcome.function,
-                    tool,
-                )
-                continue
-            if pf.hits:
+                if _premise_blocks_confirm(premise_h, [tool]):
+                    _note_premise_blocked_validation(
+                        outcome, premise_h, [tool],
+                        config, result.tier_counters,
+                        lane="sweep promotion", tier="primary_sweep",
+                    )
+                else:
+                    result.outcomes[i] = _promote_outcome(outcome, tool)
+                    result.sweep_promoted += 1
+                    result.suspicious -= 1
+                    result.findings += 1
+                    logger.info(
+                        "sweep promoted %s:%s via %s",
+                        outcome.file,
+                        outcome.function,
+                        tool,
+                    )
+                    continue
+            if pf.hits and not correlated:
                 _record_uncorrelated_hits(outcome, pf.hits)
                 logger.info(
                     "sweep promotion withheld %s:%s — prefilter hits (%s) "
@@ -16474,6 +17932,33 @@ def _promote_suspicious(
         )
 
         if confirmed:
+            _synth_blocked = {
+                t: reason for t in confirmed
+                if (reason := _synth_receipt_promotion_block_reason(
+                    t, outcome, cwe, config,
+                ))
+            }
+            if _synth_blocked:
+                for _t, _reason in _synth_blocked.items():
+                    logger.info(
+                        "sweep promotion: synth receipt %s excluded for "
+                        "%s:%s — %s",
+                        _t, outcome.file, outcome.function, _reason,
+                    )
+                confirmed = [t for t in confirmed if t not in _synth_blocked]
+                if not confirmed:
+                    _increment_tier_dict(
+                        result.tier_counters, "adapter_aggregation",
+                        "inconclusive",
+                    )
+                    continue
+            if _premise_blocks_confirm(premise_h, confirmed):
+                _note_premise_blocked_validation(
+                    outcome, premise_h, list(confirmed),
+                    config, result.tier_counters,
+                    lane="sweep promotion", tier="primary_sweep",
+                )
+                continue
             high_prec = [
                 t for t in confirmed
                 if not _is_detection_only(t)
@@ -16605,6 +18090,23 @@ def _synthesize_unmapped_suspicious(
             result.tier_counters, "synthesis_on_demand", "inconclusive",
         )
         return
+    _block = _synth_receipt_promotion_block_reason(
+        synth.stamp, outcome, cwe, config,
+    )
+    if _block:
+        # The rule survives (library persistence + variant sweeps on
+        # OTHER functions); it just may not convict its own seed.
+        _increment_tier_dict(
+            result.tier_counters, "synthesis_on_demand", "inconclusive",
+        )
+        if outcome.review_result is not None:
+            outcome.review_result["ondemand_synth_receipt"] = synth.stamp
+            outcome.review_result["ondemand_synth_blocked"] = _block
+        logger.info(
+            "on-demand synthesis promotion blocked %s:%s via %s — %s",
+            outcome.file, outcome.function, synth.stamp, _block,
+        )
+        return
     if _check_sink_guarded_cached(outcome.function, joern_server) == "guarded":
         _increment_tier_dict(
             result.tier_counters, "synthesis_on_demand", "inconclusive",
@@ -16613,6 +18115,17 @@ def _synthesize_unmapped_suspicious(
             "on-demand synthesis promotion blocked %s:%s via %s — "
             "all tested sink calls guarded",
             outcome.file, outcome.function, synth.stamp,
+        )
+        return
+    _premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+    if _premise_blocks_confirm(_premise_h, [synth.stamp]):
+        _increment_tier_dict(
+            result.tier_counters, "synthesis_on_demand", "inconclusive",
+        )
+        _note_premise_blocked_validation(
+            outcome, _premise_h, [synth.stamp],
+            config, result.tier_counters,
+            lane="on-demand synthesis promotion", tier="primary_sweep",
         )
         return
 
@@ -17057,6 +18570,196 @@ def _refutation_is_high_confidence(h: dict[str, Any]) -> bool:
     return not any(d in lower for d in _DISMISSIVE_COUNTERS)
 
 
+# Tool-id families whose engines model ONE function at a time — they
+# cannot see caller guarantees, callee behaviour, or lock domains.
+# Joern/CodeQL (whole-program CPG/database), consistency (peer set)
+# and callsite_deviation (caller corpus) are cross-function-capable.
+_FUNCTION_LOCAL_TOOL_FAMILIES = frozenset({
+    "smt", "coccinelle", "coccinelle_flow", "semgrep", "compiler",
+    "ptr_lifecycle", "resource_bounds", "lock_region", "release_order",
+    "protocol_state", "fail_open", "prefilter",
+})
+
+
+def _tool_sees_cross_function(tool_id: str) -> bool:
+    """True when the confirming tool models more than one function."""
+    fam = (tool_id or "").split(":", 1)[0].strip().lower()
+    return bool(fam) and fam not in _FUNCTION_LOCAL_TOOL_FAMILIES
+
+
+# Fallback prose markers for a refutation resting on facts OUTSIDE the
+# reviewed function (used only when the structured ``counter_scope``
+# field is absent). Two shapes: explicit caller/callee-contract
+# language, or a named symbol coupled with a guarantee verb.
+_EXTERNAL_PREMISE_WORDS = (
+    "caller", "callers", "call site", "call sites", "callee",
+    "callees", "upstream", "api contract", "api guarantees",
+    "contract guarantees", "before this function", "before calling",
+    "grace period", "pre-validate", "pre-validates",
+)
+_GUARANTEE_VERBS = (
+    "caps", "clamps", "pins", "pinned", "validates", "ensures",
+    "guarantees", "prevents", "serialises", "serializes",
+    "serialised", "serialized", "protected by", "held across",
+    "bounded by", "never returns", "never exceeds", "cannot exceed",
+    "re-points", "repoints",
+)
+_EXTERNAL_SYMBOL_RE = re.compile(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b")
+
+
+def _refutation_scope_cross_function(h: dict[str, Any]) -> bool:
+    """Does this hypothesis's refutation rest on a cross-function premise?
+
+    Prefers the structured ``counter_scope`` field emitted by the
+    review model at generation time; falls back to a structural prose
+    check for responses predating the field.
+    """
+    scope = str(h.get("counter_scope") or "").strip().lower()
+    if scope == "cross_function":
+        return True
+    if scope == "local":
+        return False
+    counter = (h.get("counter") or "").strip().lower()
+    if len(counter) < 20:
+        return False
+    if any(w in counter for w in _EXTERNAL_PREMISE_WORDS):
+        return True
+    return (
+        bool(_EXTERNAL_SYMBOL_RE.search(counter))
+        and any(v in counter for v in _GUARANTEE_VERBS)
+    )
+
+
+def _premise_blocks_confirm(
+    h: dict[str, Any],
+    confirmed: list[str] | tuple[str, ...],
+) -> bool:
+    """Premise binding for refuted/countered-hypothesis re-verification.
+
+    A SAT/pattern confirm from a function-local engine encodes none of
+    the refutation's cross-function premise ("the caller validates the
+    level", "that helper caps the length") — it re-proves the lexical
+    shape the LLM already saw and refuted. Such a confirm grades
+    inconclusive: it may override the refutation only when at least
+    one confirming channel actually models beyond the function, or
+    when the refutation itself is function-local (the engine CAN see
+    it, so SAT genuinely contradicts it).
+    """
+    if not confirmed:
+        return False
+    if not _refutation_scope_cross_function(h):
+        return False
+    return not any(_tool_sees_cross_function(t) for t in confirmed)
+
+
+def _queue_premise_study_question(
+    config: OrchestratorConfig,
+    outcome: ReviewOutcome,
+    h: dict[str, Any],
+) -> None:
+    """Best-effort: park the refutation's cross-function premise on the
+    reading list so the study loop can verify it with a receipt. A
+    resolved premise re-enters review; an unverified one stays visible
+    instead of being silently trusted or silently overridden."""
+    try:
+        import uuid
+
+        from core.concepts.reading_list import ReadingList, ReadingListItem
+
+        counter = (h.get("counter") or "").strip()
+        if not counter or config.out_dir is None:
+            return
+        rl_path = config.out_dir / "reading-list.json"
+        rl = ReadingList.load(rl_path)
+        question = (
+            f"Does this hold: {counter[:400]} "
+            f"(refutation premise for {outcome.function})?"
+        )
+        if any(it.question == question for it in rl.items):
+            return
+        rl.queue(ReadingListItem(
+            id=f"premise-{uuid.uuid4().hex[:12]}",
+            question=question,
+            source_command="/audit",
+            source_file=outcome.file,
+            source_function=outcome.function,
+            priority="high",
+            context=(h.get("mechanism") or "")[:200],
+        ))
+        rl.save(rl_path)
+    except Exception:
+        logger.debug("premise study-question queueing failed", exc_info=True)
+
+
+def _primary_hypothesis_entry(
+    outcome: ReviewOutcome,
+    hypothesis: str,
+) -> dict[str, Any]:
+    """Structured hypothesis entry backing the resolved primary mechanism.
+
+    ``_sweep_validate`` grades a finding against its primary hypothesis
+    string; premise binding needs the structured entry that carries
+    ``counter``/``counter_scope``. Matches on mechanism text, falling
+    back to the highest-confidence entry. Returns ``{}`` when the
+    review has no structured hypotheses — the premise gate then no-ops
+    (there is no counter to weigh a confirm against).
+    """
+    hyps = getattr(outcome, "hypotheses", None) or []
+    if not hyps and outcome.review_result:
+        hyps = outcome.review_result.get("hypotheses") or []
+    entries = [h for h in hyps if isinstance(h, dict)]
+    if not entries:
+        return {}
+    head = (hypothesis or "").strip()[:120]
+    if head:
+        for h in entries:
+            mech = (h.get("mechanism") or "").strip()
+            if mech and (
+                mech.startswith(head) or head.startswith(mech[:120])
+            ):
+                return h
+    rank = {"high": 0, "medium": 1, "low": 2}
+    return min(
+        entries,
+        key=lambda h: rank.get((h.get("confidence") or "").lower(), 3),
+    )
+
+
+def _note_premise_blocked_validation(
+    outcome: ReviewOutcome,
+    h: dict[str, Any],
+    tools: list[str],
+    config: OrchestratorConfig,
+    tier_counters: dict[str, TierCounters] | None,
+    *,
+    lane: str = "finding validation",
+    tier: str = "sweep_validate",
+) -> None:
+    """Receipt + study question for a premise-blocked primary confirm.
+
+    Mirrors the secondary-sweep premise block: the confirmation is
+    recorded for the export (it is real local evidence) but does not
+    ground or promote the verdict, and the unconsumed cross-function
+    premise is parked on the reading list for a study receipt.
+    """
+    if outcome.review_result is not None:
+        outcome.review_result.setdefault(
+            "premise_blocked_confirms", [],
+        ).append({
+            "mechanism": (h.get("mechanism") or "")[:200],
+            "evidence_tool": "+".join(tools),
+            "premise_blocked": True,
+        })
+    logger.info(
+        "%s blocked %s:%s via %s — the counter rests "
+        "on a cross-function premise no confirming channel models",
+        lane, outcome.file, outcome.function, "+".join(tools),
+    )
+    if tier_counters is not None:
+        _increment_tier_dict(tier_counters, tier, "premise_blocked")
+    _queue_premise_study_question(config, outcome, h)
+
+
 def _promote_clean_refuted(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -17171,6 +18874,21 @@ def _promote_clean_refuted(
                     "confirmed" if confirmed else "inconclusive",
                 )
                 if confirmed:
+                    if _premise_blocks_confirm(h, confirmed):
+                        logger.info(
+                            "clean-refuted promotion blocked %s:%s via %s "
+                            "— the refutation rests on a cross-function "
+                            "premise no confirming channel models "
+                            "(confirm grades inconclusive)",
+                            outcome.file, outcome.function,
+                            "+".join(confirmed),
+                        )
+                        _increment_tier_dict(
+                            result.tier_counters, "refuted_sweep",
+                            "premise_blocked",
+                        )
+                        _queue_premise_study_question(config, outcome, h)
+                        continue
                     if _check_sink_guarded_cached(
                             outcome.function, joern_server) == "guarded":
                         logger.info(
@@ -17227,13 +18945,38 @@ def _promote_clean_refuted(
             if not confirmed:
                 continue
 
-            high_prec = [t for t in confirmed if not _is_detection_only(t)]
+            high_prec = [
+                t for t in confirmed
+                if not _is_detection_only(t)
+                # The fail-open channel's registry-grade confirm proves
+                # the callee is fallible and its return discarded --
+                # exactly the facts the model weighed when it REFUTED
+                # the hypothesis (intentional cleanup-path discards are
+                # the canonical counter). Re-arming the verdict off the
+                # same channel that seeded the lead is circular: the
+                # channel corroborates standing findings, it does not
+                # overturn a completed model refutation on its own.
+                and not t.startswith("fail_open:")
+            ]
             if not high_prec:
                 logger.info(
                     "refuted-hypothesis promotion blocked %s:%s — only "
-                    "detection-role rules (%s)",
+                    "detection-role/seeding-channel rules (%s)",
                     outcome.file, outcome.function, "+".join(confirmed),
                 )
+                continue
+            if _premise_blocks_confirm(h, high_prec):
+                logger.info(
+                    "refuted-hypothesis promotion blocked %s:%s via %s — "
+                    "the refutation rests on a cross-function premise no "
+                    "confirming channel models",
+                    outcome.file, outcome.function, "+".join(high_prec),
+                )
+                _increment_tier_dict(
+                    result.tier_counters, "refuted_sweep",
+                    "premise_blocked",
+                )
+                _queue_premise_study_question(config, outcome, h)
                 continue
             if _check_sink_guarded_cached(
                     outcome.function, joern_server) == "guarded":
@@ -17263,6 +19006,9 @@ def _promote_clean_refuted(
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
                 line=outcome.line,
+            )
+            rescued.function_qualified = getattr(
+                outcome, "function_qualified", "",
             )
             if rescued.review_result is not None:
                 rescued.review_result["evidence_tool"] = tool
@@ -17449,6 +19195,34 @@ def _dispatch_secondary_hypotheses(
                     "all tested sink calls guarded",
                     outcome.file, outcome.function, "+".join(high_prec),
                 )
+                continue
+            if _premise_blocks_confirm(h, high_prec):
+                # The LLM's own counter on this hypothesis rests on a
+                # cross-function premise (e.g. "the setsockopt path
+                # validates the level, the default branch is
+                # unreachable") that no confirming channel models. The
+                # confirmation is recorded for the export but may not
+                # outrank the unconsumed premise.
+                if outcome.review_result is not None:
+                    outcome.review_result.setdefault(
+                        "secondary_confirmations", [],
+                    ).append({
+                        "mechanism": mechanism[:200],
+                        "evidence_tool": "+".join(high_prec),
+                        "confidence": (h.get("confidence") or "").lower(),
+                        "premise_blocked": True,
+                    })
+                logger.info(
+                    "secondary-hypothesis promotion blocked %s:%s via %s "
+                    "— the counter rests on a cross-function premise no "
+                    "confirming channel models",
+                    outcome.file, outcome.function, "+".join(high_prec),
+                )
+                _increment_tier_dict(
+                    result.tier_counters, "secondary_sweep",
+                    "premise_blocked",
+                )
+                _queue_premise_study_question(config, outcome, h)
                 continue
 
             tool = "+".join(high_prec)
@@ -17808,16 +19582,23 @@ def _pre_loop_smt_screen(
     try:
         from .condition_smt import (
             DomainVocabulary,
+            build_consumer_width_index,
             check_auth_bypass,
             check_early_release,
             check_integer_narrowing,
             check_lock_discipline,
             check_null_propagation,
+            check_parsed_int_contract,
             check_resource_leak,
             check_toctou,
         )
     except Exception:  # noqa: BLE001
         return workqueue
+
+    # Cross-file width bindings for the parsed-int contract check:
+    # callee signatures come from the checklist (the callee usually
+    # lives in another file than the parse).
+    consumer_widths = build_consumer_width_index(checklist)
 
     _extract_sg = None
     _check_pf = None
@@ -17828,8 +19609,7 @@ def _pre_loop_smt_screen(
     dm = None
     if getattr(config, "out_dir", None):
         with contextlib.suppress(OSError):
-            from .journal import load_domain_model
-            dm = load_domain_model(config.out_dir)
+            dm = _load_domain_model(config)
     vocab = DomainVocabulary.from_domain_model(
         dm, target_path=config.target_path,
     )
@@ -17894,6 +19674,28 @@ def _pre_loop_smt_screen(
 
         if not tool_hit and is_c_or_go:
             with contextlib.suppress(*_SMT_SCREEN_ERRORS):
+                # Same-file parse wrappers (the stdlib idiom puts the
+                # strconv call one helper away from the consumer):
+                # derived once per file, mechanically, from the file
+                # itself — never from a name list.
+                _wkey = str(config.target_path / file_path)
+                wrappers = _parse_wrapper_cache.get(_wkey)
+                if wrappers is None:
+                    from .condition_smt import derive_parse_wrappers
+                    _full_src = _read_raw_source(
+                        config.target_path, file_path, 1, 10**7,
+                    )
+                    wrappers = derive_parse_wrappers(_full_src)
+                    _parse_wrapper_cache[_wkey] = wrappers
+                pir = check_parsed_int_contract(
+                    source, consumer_widths=consumer_widths,
+                    parse_wrappers=wrappers,
+                )
+                if pir.narrowing_found:
+                    tool_hit = "smt:check-parsed-int-contract"
+
+        if not tool_hit and is_c_or_go:
+            with contextlib.suppress(*_SMT_SCREEN_ERRORS):
                 err = check_early_release(source, vocab)
                 if err.early_release_found:
                     tool_hit = "smt:check-early-release"
@@ -17939,27 +19741,23 @@ def _pre_loop_smt_screen(
                             all_infeasible = False
                             break
                     if all_infeasible:
-                        outcome = ReviewOutcome(
-                            file=file_path,
-                            function=func_name,
-                            status="dormant",
-                            body=(
-                                "[pre-loop SMT screen: all sink paths "
-                                "infeasible] Z3 proved every path to a "
-                                "dangerous sink is unreachable."
-                            ),
-                            evidence_tool="smt:dead-path",
-                            line=line_start,
-                        )
-                        result.outcomes.append(outcome)
-                        result.dormant += 1
-                        result.reviewed += 1
+                        # Safety contract: condition_smt is NOT in
+                        # SUPPRESS_SOURCES, so a dead-path verdict may
+                        # only BOOST/INFORM — it must never resolve the
+                        # function without LLM review.  Inject the
+                        # evidence and keep the gap in the workqueue;
+                        # the reviewer sees the infeasibility proof as
+                        # context and decides the verdict.
+                        gap["_smt_pre_evidence"] = "smt:dead-path"
                         screened += 1
                         logger.info(
-                            "pre-loop SMT screen: %s:%s → dormant "
-                            "(all sink paths infeasible)",
+                            "pre-loop SMT screen: %s:%s → dead-path "
+                            "evidence injected (all sink paths "
+                            "infeasible per conjunctive guard model); "
+                            "kept in workqueue per safety contract",
                             file_path, func_name,
                         )
+                        kept.append(gap)
                         continue
 
         if is_c and not tool_hit:
@@ -18009,8 +19807,7 @@ def _promote_smt_clean(
     dm = None
     if getattr(config, "out_dir", None):
         with contextlib.suppress(OSError):
-            from .journal import load_domain_model
-            dm = load_domain_model(config.out_dir)
+            dm = _load_domain_model(config)
     vocab = DomainVocabulary.from_domain_model(
         dm, target_path=config.target_path,
     )
@@ -18137,6 +19934,34 @@ def _promote_smt_clean(
                 )
 
         if tool_hit:
+            # Premise binding, same rule as the clean-refuted lanes: a
+            # function-local checker hit may not re-arm a clean whose
+            # own refutation rests on a cross-function premise the
+            # checker cannot see — the hit re-proves the lexical shape
+            # the reviewer already saw and argued past (caller
+            # contract, callee guarantee, lock domain). Escalation
+            # stays for local refutations and unrefuted cleans.
+            _hyps = getattr(outcome, "hypotheses", None) or []
+            if not _hyps and outcome.review_result:
+                _hyps = outcome.review_result.get("hypotheses") or []
+            _premise_held = any(
+                isinstance(h, dict)
+                and (h.get("confidence") or "").lower() == "refuted"
+                and _premise_blocks_confirm(h, [tool_hit])
+                for h in _hyps
+            )
+            if _premise_held:
+                logger.info(
+                    "smt-clean escalation blocked %s:%s via %s — the "
+                    "clean's refutation rests on a cross-function "
+                    "premise the checker cannot see",
+                    outcome.file, outcome.function, tool_hit,
+                )
+                _increment_tier_dict(
+                    result.tier_counters, "refuted_sweep",
+                    "premise_blocked",
+                )
+                continue
             # The LLM reviewed this function and said clean; these
             # checkers are heuristic/detection-grade. Overriding clean
             # straight to finding contradicted the documented invariant
@@ -18244,7 +20069,7 @@ def _promote_hypothesis_inconsistent(result: OrchestratorResult) -> None:
 
         best = unrefuted[0]
         mechanism = best.get("mechanism", "")[:120]
-        result.outcomes[i] = ReviewOutcome(
+        promoted = ReviewOutcome(
             file=outcome.file,
             function=outcome.function,
             status="suspicious",
@@ -18262,6 +20087,10 @@ def _promote_hypothesis_inconsistent(result: OrchestratorResult) -> None:
             review_result=outcome.review_result,
             line=outcome.line,
         )
+        promoted.function_qualified = getattr(
+            outcome, "function_qualified", "",
+        )
+        result.outcomes[i] = promoted
         result.clean -= 1
         result.suspicious += 1
         logger.info(
@@ -18420,9 +20249,241 @@ def _promote_outcome(outcome: ReviewOutcome, tool: str) -> ReviewOutcome:
     promoted.tools_dispatched = outcome.tools_dispatched
     promoted.tools_errored = outcome.tools_errored
     promoted.semantic_confidence = outcome.semantic_confidence
+    promoted.function_qualified = getattr(
+        outcome, "function_qualified", "",
+    )
     if promoted.review_result:
         promoted.review_result["evidence_tool"] = tool
     return promoted
+
+
+# Structural negative-space checkers whose receipts are precise enough
+# to outrank an unverified self-refutation (the same families the
+# review-time gate consumes via ctx["negative_space"]).
+_STRUCTURAL_RECEIPT_CHECKS = frozenset({
+    "auth_mode_registration",
+    "url_boundary_composition",
+    "shared_writer_race",
+})
+
+
+# A structural receipt names the concrete call sites whose gating is
+# asymmetric ("2 add_view_no_menu() call(s) are gated on ...").
+_RECEIPT_CALL_NAME_RE = re.compile(r"\b(\w+)\(\)\s+(?:call|perform)")
+
+# Family bridge: the hypothesis must talk about the receipt's bug
+# family, in the reviewer's own words — receipt check-type token stems
+# rarely survive natural phrasing ("two Write calls without a lock"
+# carries none of shared/writer/race).
+_RECEIPT_FAMILY_HYP_RES = {
+    "auth_mode_registration": re.compile(
+        r"auth[\s_-]*(?:mode|type)|regist|reset|unconditional", re.I,
+    ),
+    "shared_writer_race": re.compile(
+        r"concurren|race|interleav|unsynchron|\block\b|mutex|goroutine",
+        re.I,
+    ),
+    "url_boundary_composition": re.compile(
+        r"\burl\b|boundar|redirect|\bhost\b|origin", re.I,
+    ),
+}
+
+
+def _receipt_corroborated_hypothesis(outcome, receipts):
+    """Floor a clean verdict when the reviewer RAISED the receipt's
+    exact shape and dismissed it without tool evidence.
+
+    The anti-self-refutation gate only consumes confidence=refuted;
+    the observed dismissal mode is different — the reviewer holds the
+    matching hypothesis at low confidence and rules clean, so the
+    receipt never reaches the verdict. Preconditions are deliberately
+    tighter than the refuted clause: the hypothesis must name at least
+    one of the concrete call sites the receipt flagged AND match the
+    receipt family's token stems, and the outcome must carry no tool
+    evidence. Returns a RefutationVerdict-shaped object or None.
+    """
+    from .evidence_grade import is_tool_evidence
+    from .refutation import (
+        RefutationVerdict,
+        _receipt_matches_mechanism,
+    )
+
+    if is_tool_evidence(outcome.evidence_tool or ""):
+        return None
+    hypotheses = getattr(outcome, "hypotheses", None) or []
+    if not hypotheses and outcome.review_result:
+        hypotheses = outcome.review_result.get("hypotheses") or []
+
+    for receipt in receipts:
+        check_type = receipt.get("check_type", "")
+        called = set(
+            _RECEIPT_CALL_NAME_RE.findall(receipt.get("evidence", "")),
+        )
+        if not called:
+            continue
+        family_re = _RECEIPT_FAMILY_HYP_RES.get(check_type)
+        for h in hypotheses:
+            if not isinstance(h, dict):
+                continue
+            mechanism = h.get("mechanism", "") or ""
+            call_overlap = any(
+                re.search(rf"\b{re.escape(c)}\b", mechanism)
+                for c in called
+            )
+            # Two corroboration routes: the check-type's own token
+            # stems in the hypothesis (strong — reviewer used the
+            # receipt's vocabulary), or the concrete call-site overlap
+            # plus the family keyword bridge (natural phrasing).
+            strong_stem = _receipt_matches_mechanism(
+                check_type, mechanism,
+            )
+            if not (
+                strong_stem
+                or (call_overlap and family_re
+                    and family_re.search(mechanism))
+            ):
+                continue
+            return RefutationVerdict(
+                gate="receipt_corroborated_hypothesis",
+                reason=(
+                    f"reviewer raised the exact shape an active "
+                    f"{check_type} receipt flags (same call sites: "
+                    f"{', '.join(sorted(called & _mechanism_calls(mechanism, called)))}) "
+                    f"and dismissed it without tool evidence; the "
+                    f"structural receipt outranks the dismissal"
+                ),
+                demote_to="suspicious",
+            )
+    return None
+
+
+def _mechanism_calls(mechanism: str, called: set) -> set:
+    """Subset of *called* names the hypothesis mechanism mentions."""
+    return {
+        c for c in called
+        if re.search(rf"\b{re.escape(c)}\b", mechanism)
+    }
+
+
+def _post_loop_receipt_rescue(
+    result: OrchestratorResult,
+    post_loop_findings: list,
+    config: OrchestratorConfig,
+    mechanical_findings: dict | None = None,
+    gaps: list | None = None,
+) -> int:
+    """Re-run the anti-self-refutation gate with post-loop receipts.
+
+    For every clean outcome on a function that carries a structural
+    negative-space receipt from the post-loop pass, evaluate
+    :func:`rescue_self_refuted` with those receipts. The review-time
+    gate already saw ctx["negative_space"]; this pass is the durable
+    backstop for receipts that did not reach (or survive to) the
+    review-time gate. Fired rescues mutate the outcome in place; the
+    corrective journal/audit-log passes that run afterwards propagate
+    the new status to every last-row-wins consumer.
+
+    Returns the number of outcomes flipped.
+    """
+    receipts_by_fn: dict[tuple[str, str], list] = {}
+    for plf in post_loop_findings:
+        if not isinstance(plf, dict):
+            continue
+        if plf.get("check_type") not in _STRUCTURAL_RECEIPT_CHECKS:
+            continue
+        f, fn = plf.get("file", ""), plf.get("function", "")
+        if f and fn:
+            receipts_by_fn.setdefault((f, fn), []).append(plf)
+    pre_evidence_by_fn: dict[str, str] = {}
+    for g in gaps or []:
+        pe = g.get("_smt_pre_evidence")
+        if pe:
+            pre_evidence_by_fn[f"{g.get('file')}:{g.get('name')}"] = pe
+
+    if (
+        not receipts_by_fn
+        and not mechanical_findings
+        and not pre_evidence_by_fn
+    ):
+        return 0
+
+    from .refutation import rescue_self_refuted
+
+    spans_by_fn: dict[tuple[str, str], tuple[int, int]] = {}
+    for g in gaps or []:
+        gf, gn = g.get("file", ""), g.get("name", "")
+        if gf and gn and g.get("line_start"):
+            spans_by_fn.setdefault(
+                (gf, gn), (g["line_start"], g.get("line_end") or 0),
+            )
+
+    flipped = 0
+    for outcome in result.outcomes:
+        if outcome.status != "clean":
+            continue
+        receipts = receipts_by_fn.get((outcome.file, outcome.function))
+        fn_key = f"{outcome.file}:{outcome.function}"
+        detectors = (mechanical_findings or {}).get(fn_key)
+        pre_evidence = pre_evidence_by_fn.get(fn_key)
+        if not receipts and not detectors and not pre_evidence:
+            continue
+        # Raw disk span, same as the review-time gate: without it the
+        # gate's mechanical acceptance probes (race protection, safe
+        # teardown) cannot run, so this backstop RE-FLOORED exactly the
+        # self-refutations the mid-loop gate had accepted with source
+        # in hand.
+        _span = spans_by_fn.get((outcome.file, outcome.function))
+        _rescue_src = (
+            _read_raw_source(
+                config.target_path, outcome.file, _span[0],
+                _span[1] or None,
+            )
+            if _span
+            else None
+        )
+        try:
+            # Detector findings and screen receipts ride along: a
+            # mid-loop floor can be clobbered by a later re-review
+            # whose synthetic context lacks the injections — the
+            # receipts themselves are deterministic, so this pass
+            # re-applies them to whatever verdict is current.
+            rv = rescue_self_refuted(
+                outcome,
+                negative_space=receipts or [],
+                detector_findings=detectors or None,
+                pre_evidence=pre_evidence,
+                source=_rescue_src or None,
+            )
+        except Exception:
+            logger.debug(
+                "post-loop rescue failed for %s:%s",
+                outcome.file, outcome.function, exc_info=True,
+            )
+            continue
+        if rv is None and receipts:
+            rv = _receipt_corroborated_hypothesis(outcome, receipts)
+        if rv is None:
+            continue
+        append_audit_log(config.out_dir, {
+            "action": "refutation_gate",
+            "gate": rv.gate,
+            "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
+            "file": outcome.file,
+            "function": outcome.function,
+            "reason": rv.reason,
+            "demote_to": rv.demote_to,
+            "original_status": outcome.status,
+            "applied": True,
+            "stage": "post-loop",
+        })
+        logger.info(
+            "anti-self-refutation (post-loop) %s:%s — %s → %s",
+            outcome.file, outcome.function, rv.reason, rv.demote_to,
+        )
+        outcome.status = rv.demote_to
+        outcome.body = f"[{rv.gate}: {rv.reason}]\n\n" + (outcome.body or "")
+        flipped += 1
+    return flipped
 
 
 def _rejournal_final_statuses(
@@ -18481,6 +20542,85 @@ def _rejournal_final_statuses(
     return updated
 
 
+def _relog_final_statuses(
+    result: OrchestratorResult,
+    config: OrchestratorConfig,
+) -> int:
+    """Audit-log twin of ``_rejournal_final_statuses``.
+
+    ``orchestrator_review`` rows are written mid-loop, BEFORE the
+    post-loop passes (sweep promotion happens early enough to log its
+    own rows, but gate resolution, confidence propagation and dark
+    verification do not) — so the log's last review row said
+    "suspicious" for outcomes the run finally resolved to clean/dark.
+    The journal gets its corrective entries; every ``.audit-log.jsonl``
+    consumer that takes the last review row per key (corpus scoring,
+    resume dedup) kept reading the retracted verdict. Append one
+    corrective row per drifted outcome. Rows deliberately omit
+    ``strategies`` so strategy_stats never double-counts a function.
+    Must run AFTER the collector flush — the buffered mid-loop rows
+    have to land first for last-row-wins ordering to hold.
+    """
+    if not config.out_dir:
+        return 0
+    try:
+        last_status: dict[str, str] = {}
+        for entry in load_audit_log(config.out_dir):
+            if entry.get("action") not in (
+                "orchestrator_review", "sweep_promotion",
+            ):
+                continue
+            key = entry.get("key") or ""
+            if not key:
+                continue
+            head, _, tail = key.rpartition(":")
+            base = head if (head and tail.isdigit()) else key
+            last_status[base] = str(entry.get("status", ""))
+    except Exception:
+        logger.debug("re-log: audit log read failed", exc_info=True)
+        return 0
+
+    updated = 0
+    for outcome in result.outcomes:
+        if outcome.status == "error":
+            continue
+        base = f"{outcome.file}:{outcome.function}"
+        prior = last_status.get(base)
+        if prior is None or prior == outcome.status:
+            continue
+        entry = {
+            "action": "orchestrator_review",
+            "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
+            "status": outcome.status,
+            "prior_status": prior,
+            "final_status_correction": True,
+            "model": outcome.model or "",
+            "cost_usd": outcome.cost_usd,
+            "duration_s": outcome.duration_s,
+        }
+        if getattr(outcome, "function_qualified", ""):
+            entry["function_qualified"] = outcome.function_qualified
+        if outcome.hypothesis:
+            entry["hypothesis"] = outcome.hypothesis
+        if outcome.evidence_tool:
+            entry["evidence_tool"] = outcome.evidence_tool
+        try:
+            append_audit_log(config.out_dir, entry)
+            updated += 1
+        except Exception:
+            logger.debug(
+                "re-log failed for %s:%s",
+                outcome.file, outcome.function, exc_info=True,
+            )
+    if updated:
+        logger.info(
+            "re-log: %d post-resolution final statuses appended "
+            "to the audit log",
+            updated,
+        )
+    return updated
+
+
 _GATE_DEMOTED_PREFIXES = (
     "[gate violation:",
     "[self-contradiction:",
@@ -18533,6 +20673,73 @@ def _resolve_gate_demoted(
         if outcome.status != "suspicious":
             continue
         gate_demoted = outcome.body.startswith(_GATE_DEMOTED_PREFIXES)
+        if not gate_demoted and _is_machine_raised(outcome):
+            # Counter-escalation evidence floor. This suspicious was
+            # machine-raised off the review's own counter_hypothesis:
+            # the model's verdict was clean, with a completed
+            # hypothesis-refutation ladder behind it. The escalation
+            # exists so deepen/verification can convict a lead the
+            # model may have talked itself out of — by the time this
+            # end-of-run pass runs, they have had their chance. If no
+            # receipt materialised, shipping suspicious would mint an
+            # LLM-only verdict that even the LLM did not make.
+            #
+            # Retention requires a receipt: verification-role evidence
+            # or a fired probe (the demotion-referee floor — a tool
+            # observation is never erased by this pass). Pattern-prior
+            # corroboration (_has_mechanical_corroboration: pre-sweep
+            # detector hits, prefilter sink scans) deliberately does
+            # NOT retain here — those priors seeded the very review
+            # that adjudicated them clean, so recycling them re-arms
+            # the verdict off its own input (corpus case: a cocci
+            # missing_bounds_check lead on a correct strlcpy-shaped
+            # helper kept a receipt-less machine-escalated suspicious
+            # alive to export). Resolves to clean, never dark: the
+            # review completed and concluded clean, so "no channel
+            # ever looked" is false. Model-emitted suspicious verdicts
+            # never carry the flag and are untouched.
+            if _is_verification_evidence_for_gate(outcome):
+                continue
+            # A detection-role probe receipt does NOT retain a
+            # machine-raised row: the escalation was created to force
+            # verification, and a lexical/heuristic "confirmed" merely
+            # echoes the speculation the model already adjudicated
+            # clean (observed corpus family: anti-self-refutation +
+            # heuristic smt confirm shipped a cluster of kernel FPs
+            # that no lane could demote). Model-emitted suspicious
+            # keeps the demotion-referee floor unchanged — there the
+            # probe corroborates a conviction the model itself holds.
+            resolved = ReviewOutcome(
+                file=outcome.file,
+                function=outcome.function,
+                status="clean",
+                body=(
+                    "[machine-escalation resolution: machine-raised "
+                    "suspicious earned no verification-grade receipt "
+                    "— model verdict clean restored]\n\n" + outcome.body
+                ),
+                hypothesis=outcome.hypothesis,
+                hypotheses=outcome.hypotheses,
+                evidence_tool=outcome.evidence_tool,
+                cost_usd=outcome.cost_usd,
+                model=outcome.model,
+                duration_s=outcome.duration_s,
+                review_result=outcome.review_result,
+                line=outcome.line,
+            )
+            resolved.tools_dispatched = outcome.tools_dispatched
+            resolved.tools_errored = outcome.tools_errored
+            result.outcomes[i] = resolved
+            result.suspicious -= 1
+            result.clean += 1
+            logger.info(
+                "counter-escalation floor: %s:%s → clean "
+                "(machine-raised suspicious, no receipt survived "
+                "verification)",
+                outcome.file,
+                outcome.function,
+            )
+            continue
         if not gate_demoted:
             # Replacement for the removed in-loop suspicious-demotion
             # gate: evidence-free suspicious outcomes resolve here,
@@ -18564,6 +20771,23 @@ def _resolve_gate_demoted(
                     outcome.function,
                 )
                 continue
+        elif _probe_backed_suspicious(outcome):
+            # Demotion referee: no fresh corroboration turned up, but
+            # the verdict is backed by a probe that FIRED during the
+            # review (mid-loop SMT/cocci receipt, possibly recorded
+            # under llm-claimed: with the dispatch record as witness).
+            # Silence elsewhere is not a verification-role refuter —
+            # resolving this to clean/dark would let an LLM-only
+            # argument erase a tool observation. The trusted-provenance
+            # override above is unaffected: it only fires WITH
+            # corroboration.
+            logger.info(
+                "demotion referee: %s:%s stays suspicious — "
+                "probe-backed, no verification-role refuter",
+                outcome.file,
+                outcome.function,
+            )
+            continue
 
         # Determine if a tool covering the vulnerability class actually
         # RAN for this function. The dispatch record comes from
@@ -19072,6 +21296,129 @@ def _is_verification_evidence_for_gate(outcome: ReviewOutcome) -> bool:
     return False
 
 
+_COUNTER_ESCALATION_PREFIX = "[counter-hypothesis escalation:"
+_ANTI_SELF_REFUTATION_PREFIX = "[anti_self_refutation:"
+
+
+def _is_machine_raised(outcome: ReviewOutcome) -> bool:
+    """True when this suspicious verdict was machine-raised from a
+    model-clean verdict — by the counter-hypothesis escalation OR the
+    anti-self-refutation gate. Both lanes exist to force verification
+    of a claim the model talked itself out of; neither is a model
+    conviction, so end-of-run retention demands verification-grade
+    evidence (see the resolution pass)."""
+    if _is_counter_escalated(outcome):
+        return True
+    return (outcome.body or "").startswith(_ANTI_SELF_REFUTATION_PREFIX)
+
+
+def _is_counter_escalated(outcome: ReviewOutcome) -> bool:
+    """True when this suspicious verdict was machine-raised off the
+    review's own counter_hypothesis (the model's verdict was clean).
+
+    Reads the structured ``counter_escalated`` flag stamped by the
+    review path; the body-prefix check covers outcomes rebuilt from a
+    journal or checkpoint where ``review_result`` was dropped (the
+    escalation marker is always the first prefix written, and an
+    outcome that a later structured demotion re-prefixed is no longer
+    suspicious, so the startswith test cannot misfire on it).
+    """
+    rr = outcome.review_result or {}
+    if rr.get("counter_escalated"):
+        return True
+    return (outcome.body or "").startswith(_COUNTER_ESCALATION_PREFIX)
+
+
+def _deepen_demotion_refereed(
+    prior_outcome: ReviewOutcome,
+    outcome: ReviewOutcome,
+) -> bool:
+    """Demotion referee for the deepen pass.
+
+    True when a deepen re-review's clean may NOT supersede the prior
+    suspicious: the clean's only basis is the LLM's own refutation
+    (all-refuted / rationale-consistency structured demotion), the
+    prior verdict is backed by a fired probe, and the deepen outcome
+    carries no verification-role refuter. A fired probe's receipt is
+    a tool observation; overriding it takes a verification-role
+    receipt (an unsat counter-witness, a consistency counter-example),
+    not an argument — the same principle as the dark-verify
+    tool-backed floor.
+    """
+    _rr = outcome.review_result or {}
+    structured = bool(
+        _rr.get("all_refuted_demotion")
+        or _rr.get("rationale_consistency_demotion")
+    )
+    return (
+        outcome.status == "clean"
+        and structured
+        and prior_outcome.status == "suspicious"
+        and _probe_backed_suspicious(prior_outcome)
+        and not _is_verification_evidence_for_gate(outcome)
+    )
+
+
+def _probe_backed_suspicious(outcome: ReviewOutcome) -> bool:
+    """True when a suspicious verdict is backed by a fired probe/tool.
+
+    Detection-role receipts count here, unlike the verification-role
+    gate: a fired probe that flagged the mechanism is a tool
+    observation, and an LLM argument alone must not erase it (it may
+    only be answered by a verification-role refuter). ``llm-claimed:``
+    probe references qualify only when the orchestrator's own dispatch
+    record shows that tool family actually ran for this outcome — the
+    claim is then corroborated by the run's own records, not taken on
+    faith. ``prefilter:`` stamps never qualify: a pattern-scan prior
+    is not a fired probe.
+    """
+    from .evidence_grade import LLM_CLAIM_PREFIX, is_tool_evidence
+
+    ev = outcome.evidence_tool or ""
+    if not ev:
+        review = outcome.review_result or {}
+        raw = str(review.get("evidence_tool", "") or "")
+        ev = "+".join(
+            p
+            for p in (_sanitize_llm_et(part.strip()) for part in raw.split("+"))
+            if p
+        )
+    if not ev:
+        return False
+    dispatched = {
+        str(t).strip().lower()
+        for t in (outcome.tools_dispatched or set())
+        if str(t).strip()
+    }
+    detection_namespaces: set[str] = set()
+    for part in (p.strip() for p in ev.split("+")):
+        if not part:
+            continue
+        if part.lower().startswith(LLM_CLAIM_PREFIX):
+            claimed = part[len(LLM_CLAIM_PREFIX):].strip().lower()
+            fam = claimed.split(":", 1)[0].strip()
+            if fam and any(
+                d == fam or d.startswith(fam) for d in dispatched
+            ):
+                return True
+            continue
+        if part.startswith("prefilter:"):
+            continue
+        if _is_detection_only(part):
+            # A single detection-role receipt (inject-mode checker,
+            # -majority consistency variant) surfaces a candidate but
+            # is documented as too imprecise to convict alone; a
+            # deepen re-review that examined the mechanism and
+            # concluded clean may answer it. Two INDEPENDENT
+            # detection namespaces agreeing keep the floor — that is
+            # the aggregation-promotion shape.
+            detection_namespaces.add(part.split(":", 1)[0].lower())
+            continue
+        if is_tool_evidence(part):
+            return True
+    return len(detection_namespaces) >= 2
+
+
 def _stamp_evidence(outcome: ReviewOutcome, tool: str) -> ReviewOutcome:
     """Stamp evidence_tool onto an outcome."""
     outcome.evidence_tool = tool
@@ -19260,6 +21607,9 @@ def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
     demoted.tools_errored = outcome.tools_errored
     demoted.semantic_confidence = outcome.semantic_confidence
     demoted.provenance_all_trusted = outcome.provenance_all_trusted
+    demoted.function_qualified = getattr(
+        outcome, "function_qualified", "",
+    )
     return demoted
 
 

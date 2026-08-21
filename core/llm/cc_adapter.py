@@ -32,6 +32,16 @@ _CC_BACKEND_ENV_PREFIXES = (
     "CLAUDE_CODE_", "ANTHROPIC_", "RAPTOR_BEDROCK_", "RAPTOR_CC_",
 )
 
+# Interactivity marker for dispatched CLI children. Every claude child
+# RAPTOR spawns is unattended by definition — no operator will answer a
+# structured prompt it raises — so cc_subprocess_env stamps the
+# explicit non-interactive override the AskUserQuestion gate
+# (core/ux/interactivity.py, libexec/raptor-may-ask) checks first.
+# String literal rather than an import: this module must not grow a
+# core.ux import edge for one constant; the pinning test in
+# core/llm/tests/test_cc_adapter.py keeps the two in sync.
+_NONINTERACTIVE_ENV = "RAPTOR_NONINTERACTIVE"
+
 # AWS names a Bedrock-backed CLI child needs, passed ONLY when
 # CLAUDE_CODE_USE_BEDROCK is set. An explicit allowlist, NOT the AWS_*
 # prefix: the previous blanket copy swept every ambient AWS_* value —
@@ -185,7 +195,7 @@ def cc_subprocess_env(
     import os
 
     from core.config import RaptorConfig
-    from core.llm.egress import operator_proxy_env
+    from core.llm.egress import augment_child_no_proxy, operator_proxy_env
 
     if credential_mode not in ("env", "proxy"):
         raise ValueError(
@@ -193,7 +203,9 @@ def cc_subprocess_env(
             f"got {credential_mode!r}"
         )
     if credential_mode == "proxy":
-        return _cc_proxy_mode_env(proxy_base_url, proxy_auth_token)
+        env = _cc_proxy_mode_env(proxy_base_url, proxy_auth_token)
+        env[_NONINTERACTIVE_ENV] = "1"
+        return env
     if proxy_base_url or proxy_auth_token:
         raise ValueError(
             "proxy_base_url/proxy_auth_token are only valid with "
@@ -233,6 +245,22 @@ def cc_subprocess_env(
                 if key in os.environ:
                     env[key] = os.environ[key]
     env.update(operator_proxy_env())
+    # Children that resolve their own credential chain (unsandboxed
+    # substrate children) probe IMDS during resolution; on proxied
+    # hosts those link-local probes must never travel to the operator
+    # proxy, which denies them (observed as constant denied
+    # token/credential request pairs in the proxy's logs). Append the
+    # operational-only NO_PROXY entries — loopback semantics and the
+    # egress chokepoint bypass are untouched. Unproxied hosts stay
+    # mutation-free: no proxy pointer means nothing to exempt from.
+    if any(env.get(v) for v in ("HTTPS_PROXY", "https_proxy",
+                                "HTTP_PROXY", "http_proxy",
+                                "ALL_PROXY", "all_proxy")):
+        merged = augment_child_no_proxy(
+            env.get("NO_PROXY") or env.get("no_proxy") or "")
+        env["NO_PROXY"] = merged
+        env["no_proxy"] = merged
+    env[_NONINTERACTIVE_ENV] = "1"
     return env
 
 
@@ -1019,20 +1047,31 @@ def run_cc_streaming(
         cwd=cwd if cwd is not None else neutral_cwd(),
     )
 
-    if proc.stdin:
-        # A child that exits at startup (bad flag, missing backend)
-        # closes its end before consuming the prompt — the write then
-        # raises BrokenPipeError. Swallow it so control reaches the
-        # returncode path below, which reports "claude -p exited N"
-        # with the child's stderr instead of crashing the caller.
+    # Feed the prompt through the SAME deadline-governed select loop
+    # that drains stdout/stderr, in non-blocking chunks. Pre-fix the
+    # full prompt was written in ONE blocking call before the loop
+    # started: a prompt larger than the pipe buffer (64KB) sent to a
+    # child that is itself blocked writing to stdout/stderr — which
+    # nothing was draining yet — deadlocks both processes, and the
+    # write sat outside timeout coverage, so the call hung forever
+    # instead of raising TimeoutExpired. The stdin fd joins the
+    # writable select set until the prompt is fully drained, then
+    # closes (EOF for the child); the deadline covers every chunk.
+    stdin_data = prompt.encode("utf-8")
+    stdin_pos = 0
+    stdin_fd = proc.stdin.fileno() if proc.stdin else None
+    if stdin_fd is not None:
+        os.set_blocking(stdin_fd, False)
+
+    def _close_stdin() -> None:
+        nonlocal stdin_fd
+        if stdin_fd is None:
+            return
+        stdin_fd = None
         try:
-            proc.stdin.write(prompt)
             proc.stdin.close()
         except (BrokenPipeError, OSError):
-            try:
-                proc.stdin.close()
-            except (BrokenPipeError, OSError):
-                pass
+            pass
 
     collected: list[str] = []
     # Drain stderr WHILE the child runs. A child that writes more
@@ -1051,13 +1090,31 @@ def run_cc_streaming(
         if deadline is not None:
             remaining = deadline - _time.monotonic()
             if remaining <= 0:
+                _close_stdin()
                 proc.kill()
                 proc.wait()
                 raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
         read_set = [s for s in (proc.stdout, proc.stderr) if s]
-        ready, _, _ = select.select(
-            read_set, [], [], min(remaining or 1.0, 1.0),
+        write_set = [stdin_fd] if stdin_fd is not None else []
+        ready, writable, _ = select.select(
+            read_set, write_set, [], min(remaining or 1.0, 1.0),
         )
+        if stdin_fd is not None and stdin_fd in writable:
+            try:
+                stdin_pos += os.write(
+                    stdin_fd, stdin_data[stdin_pos:stdin_pos + 65536],
+                )
+            except BlockingIOError:
+                pass
+            except (BrokenPipeError, OSError):
+                # A child that exits at startup (bad flag, missing
+                # backend) closes its end before consuming the prompt.
+                # Swallow so control reaches the returncode path below,
+                # which reports "claude -p exited N" with the child's
+                # stderr instead of crashing the caller.
+                _close_stdin()
+            if stdin_fd is not None and stdin_pos >= len(stdin_data):
+                _close_stdin()
         if proc.stdout in ready:
             line = proc.stdout.readline()
             if line:
@@ -1066,6 +1123,10 @@ def run_cc_streaming(
             chunk = os.read(stderr_fd, 65536)
             if chunk:
                 stderr_chunks.append(chunk)
+
+    # Child exited — if it did so without consuming the whole prompt,
+    # release our end so nothing lingers.
+    _close_stdin()
 
     if proc.stdout:
         collected.extend(proc.stdout)

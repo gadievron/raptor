@@ -102,6 +102,10 @@ _SANITISERS = frozenset({
     "sanitise_string",
     "sanitise_code",
     # Per-module single-line / cell / prose helpers built on the above.
+    # exploitability_validation.report's shared helpers (sanitise_line
+    # wraps sanitise_string; sanitise_cell adds pipe-escaping on top).
+    "sanitise_line",
+    "sanitise_cell",
     "_line",
     "_cell",
     "_prose",

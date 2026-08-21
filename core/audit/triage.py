@@ -16,6 +16,11 @@ from typing import Any
 
 from ._util import safe_join
 from .prefilter import PrefilterResult
+from .vendored_detector import (
+    KIND_GENERATED,
+    VendorVerdict,
+    detect_vendored_files,
+)
 
 
 class TriageBucket(str, Enum):
@@ -118,6 +123,7 @@ def classify_function(
     prefilter: PrefilterResult | None = None,
     branch_count: int = 0,
     caller_count: int = 0,
+    vendor_verdict: VendorVerdict | None = None,
 ) -> TriageResult:
     """Classify a single function into a triage bucket.
 
@@ -191,6 +197,65 @@ def classify_function(
             priority_score=priority_score,
         )
 
+    # Vendored/generated tier (see core.audit.vendored_detector for
+    # the trust model). Boundary-adjacent functions never skip:
+    # generated ones demote to GLANCE, vendored ones keep their normal
+    # routing. The skip tier requires corroborated generator
+    # provenance — a bare in-file banner (target-controlled text) or a
+    # structural shape only ever earns GLANCE, so nothing becomes
+    # invisible on the target's say-so. Every decision leaves a
+    # suppressions.jsonl record (orchestrator side).
+    if vendor_verdict is not None:
+        boundary = (
+            is_entry_point or is_sink or is_trust_boundary
+            or has_joern_flows
+        )
+        if vendor_verdict.kind == KIND_GENERATED:
+            if boundary:
+                reasons.append(
+                    f"generated code ({vendor_verdict.signal}), "
+                    f"boundary-adjacent — glance: {vendor_verdict.detail}"
+                )
+                return TriageResult(
+                    bucket=TriageBucket.GLANCE,
+                    reasons=tuple(reasons),
+                    token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+                    priority_score=priority_score,
+                )
+            if vendor_verdict.corroborated:
+                reasons.append(
+                    f"generated code ({vendor_verdict.signal}): "
+                    f"{vendor_verdict.detail}"
+                )
+                return TriageResult(
+                    bucket=TriageBucket.SKIP,
+                    reasons=tuple(reasons),
+                    token_budget=TOKEN_BUDGETS[TriageBucket.SKIP],
+                    priority_score=priority_score,
+                )
+            reasons.append(
+                f"generated code ({vendor_verdict.signal}): "
+                f"{vendor_verdict.detail}"
+            )
+            return TriageResult(
+                bucket=TriageBucket.GLANCE,
+                reasons=tuple(reasons),
+                token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+                priority_score=priority_score,
+            )
+        if not boundary:
+            reasons.append(
+                f"vendored code ({vendor_verdict.signal}): "
+                f"{vendor_verdict.detail}"
+            )
+            return TriageResult(
+                bucket=TriageBucket.GLANCE,
+                reasons=tuple(reasons),
+                token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+                priority_score=priority_score,
+            )
+        # Boundary-adjacent vendored code: normal routing below.
+
     if is_entry_point:
         reasons.append("entry point")
     if is_sink:
@@ -261,6 +326,7 @@ def classify_all(
     priority_scores: dict[str, float] | None = None,
     prefilter_results: dict[str, PrefilterResult] | None = None,
     target_path: Path | None = None,
+    vendor_verdicts: dict[str, VendorVerdict] | None = None,
 ) -> dict[str, TriageResult]:
     """Classify all gap functions. Returns {file:function: TriageResult}.
 
@@ -274,6 +340,11 @@ def classify_all(
     sink-unreachable skip never fires for them. Names, not
     ``file:function`` keys — a registration site knows the handler's
     name, not its defining file.
+
+    ``vendor_verdicts`` are per-FILE vendored/generated verdicts (see
+    core.audit.vendored_detector). Pinned and force-review gaps are
+    exempt — an operator pin (or a corpus label pin) is an explicit
+    review order the vendored tier must never eat.
     """
     scores = priority_scores or {}
     prefilters = prefilter_results or {}
@@ -300,6 +371,14 @@ def classify_all(
         ):
             source = _read_function_source(gap, target_path)
 
+        vendor_verdict = None
+        if (
+            vendor_verdicts
+            and not gap.get("pinned")
+            and not gap.get("force_review")
+        ):
+            vendor_verdict = vendor_verdicts.get(gap["file"])
+
         results[key] = classify_function(
             file=gap["file"],
             function=gap["name"],
@@ -318,9 +397,30 @@ def classify_all(
             prefilter=prefilters.get(bare_key),
             branch_count=gap.get("branch_count", 0),
             caller_count=caller_count,
+            vendor_verdict=vendor_verdict,
         )
 
     return results
+
+
+_VENDOR_REASON_PREFIXES = ("generated code (", "vendored code (")
+
+
+def vendor_decision(tr: TriageResult) -> str | None:
+    """``"skip"`` / ``"glance"`` when the vendored/generated tier
+    routed this function; ``None`` when it did not fire (no verdict,
+    pinned, or boundary-adjacent vendored code on normal routing).
+    Consumed by the orchestrator's suppressions.jsonl recorder — every
+    decision this reports gets one audit record."""
+    if not any(
+        r.startswith(_VENDOR_REASON_PREFIXES) for r in tr.reasons
+    ):
+        return None
+    if tr.bucket == TriageBucket.SKIP:
+        return "skip"
+    if tr.bucket == TriageBucket.GLANCE:
+        return "glance"
+    return None
 
 
 def format_triage_summary(results: dict[str, TriageResult]) -> str:
@@ -341,50 +441,25 @@ def format_triage_summary(results: dict[str, TriageResult]) -> str:
 
 # ── Generated code detection ─────────────────────────────────────────
 
-_GENERATED_MARKERS = [
-    re.compile(r"DO NOT EDIT", re.IGNORECASE),
-    re.compile(r"@generated"),
-    re.compile(r"auto-generated", re.IGNORECASE),
-    re.compile(r"generated by\s+\w+", re.IGNORECASE),
-    re.compile(r"Code generated by\s+\w+", re.IGNORECASE),
-    re.compile(r"THIS FILE IS GENERATED", re.IGNORECASE),
-]
-
-_GENERATED_EXTENSIONS = frozenset({
-    "_pb2.py", "_pb2_grpc.py", ".pb.go", ".pb.h", ".pb.cc",
-    ".generated.go", ".gen.ts", ".gen.js",
-    "_generated.rs", ".g.dart",
-})
-
 
 def detect_generated_files(
     gaps: Sequence[dict[str, Any]],
     *,
     target_path: Path | None = None,
 ) -> list[str]:
-    """Identify generated files that should get reduced review depth."""
-    generated: list[str] = []
-    seen: set[str] = set()
+    """Files with explicit generator provenance (banner / filename).
 
-    for gap in gaps:
-        file_path = gap.get("file", "")
-        if not file_path or file_path in seen:
-            continue
-        seen.add(file_path)
-
-        if any(file_path.endswith(ext) for ext in _GENERATED_EXTENSIONS):
-            generated.append(file_path)
-            continue
-
-        source = gap.get("source", "")
-        if not source and target_path:
-            source = _read_file_header(file_path, target_path)
-        if source:
-            first_lines = source[:500]
-            if any(m.search(first_lines) for m in _GENERATED_MARKERS):
-                generated.append(file_path)
-
-    return generated
+    Thin view over :func:`core.audit.vendored_detector.
+    detect_vendored_files` kept for the post-loop reporting consumer;
+    the triage tier itself consumes the full per-file verdicts.
+    """
+    return [
+        file_path
+        for file_path, verdict in detect_vendored_files(
+            gaps, target_path=target_path,
+        ).items()
+        if verdict.kind == KIND_GENERATED
+    ]
 
 
 def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
@@ -408,13 +483,3 @@ def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
     return "".join(lines[start - 1:end])
 
 
-def _read_file_header(file_path: str, target_path: Path) -> str:
-    """Read the first 512 bytes of a file for generated-marker detection."""
-    resolved = safe_join(target_path, file_path)
-    if resolved is None:
-        return ""
-    try:
-        with open(resolved, "r", errors="replace") as f:
-            return f.read(512)
-    except OSError:
-        return ""

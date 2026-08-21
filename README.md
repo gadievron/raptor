@@ -82,13 +82,20 @@ npm install -g @anthropic-ai/claude-code
 # Install Semgrep (required for scanning)
 pip install semgrep
 
+# Add the launcher to your PATH -- put this in your shell profile to make it
+# permanent. Append rather than prepend, so system directories stay ahead of
+# the repo. (Alternatively, symlink bin/raptor into a directory already on PATH.)
+export PATH="$PATH:$PWD/bin"
+
 # Launch RAPTOR
-claude
+raptor
 ```
 
-If you add `bin/` to your PATH (or symlink `bin/raptor` somewhere on PATH), you can run `raptor` from any directory -- the launcher resolves the RAPTOR installation and sets up the working directory automatically.
+The `raptor` launcher is the recommended way to start a session, and it works from any directory -- it resolves the RAPTOR installation, remembers the directory you launched from (so commands like `/scan` default to it), runs the pre-flight trust and project checks, loads the coverage-tracking plugin, and sanitises the environment before handing off to Claude Code. It also takes an optional target path and flags like `--project`, `--continue`, and `--model` -- see `raptor --help`.
 
-**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from a different directory, you get plain Claude Code, not RAPTOR. Either `cd` into the repo first, or use the `raptor` launcher.
+Running plain `claude` from inside the repo directory also works -- Claude Code picks up RAPTOR's configuration from the checkout -- but you skip everything the launcher does above: no pre-flight checks, no coverage tracking, and commands that default to "the directory you ran this from" can't see it.
+
+**Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
 
 ### Option 2: Devcontainer (recommended)
 
@@ -120,7 +127,7 @@ The simplest thing you can do:
 /scan /path/to/code
 ```
 
-This runs Semgrep (and CodeQL if installed) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no API keys beyond Claude Code. Takes a few minutes on a typical repository.
+This runs Semgrep (plus Coccinelle when `spatch` is installed; add `--codeql` for CodeQL) against the target, deduplicates findings, and writes a SARIF report. No LLM analysis, no API keys beyond Claude Code. Takes a few minutes on a typical repository.
 
 To add LLM-powered validation:
 
@@ -152,19 +159,26 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
 | `/audit` | Hypothesis-driven, tool-grounded systematic code review | Beta |
 | `/review` | Query audit state: findings, gaps, coverage, operator notes | Stable |
+| `/annotate` | Attach free-form per-function prose annotations (operator review notes) | Stable |
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
+| `/diagram` | Mermaid visual maps from `/understand` and `/validate` JSON outputs | Beta |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
+| `/analyze` | Analyse existing SARIF findings with LLM, without re-scanning | Stable |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
 | `/cve-diff` | Discover and diff the fix commit for a CVE across OSV, NVD, GitHub, and GitLab | Beta |
 | `/cve-env` | Build and verify a Docker environment running a CVE's affected application at its pre-patch version | Experimental |
 | `/exploit` | Generate proof-of-concept exploit code | Beta |
 | `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
+| `/cve-diff` | Discover, acquire, and diff the fix commit for a CVE | Stable |
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
 | `/project` | Named workspaces to organise runs and track findings over time | Stable |
+| `/describe` | Describe a target: language mix, build system, tool gaps, cost estimate (read-only) | Stable |
 | `/threat-model` | Create, inspect, and maintain per-project threat models | Stable |
 | `/sage` | Persistent memory layer (store, recall, link, corroborate) | Stable |
+| `/ask` | Send a free-form prompt to any configured LLM model | Stable |
+| `/scorecard` | Inspect per-model reliability across decision classes | Stable |
 | `/frida` | Dynamic instrumentation via Frida | Alpha |
 | `/web` | Web application scanning | Alpha/stub |
 
@@ -306,13 +320,36 @@ CodeQL needs network access only during initial setup to download the CLI and qu
 
 ## Custom rules
 
-RAPTOR ships 192 custom static analysis rules, adversarially tested to eliminate false positives:
+RAPTOR ships over 200 custom static analysis rules, adversarially tested to eliminate false positives:
 
-- **Semgrep (123 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
-- **Coccinelle (61 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
+- **Semgrep (145 rules)** — taint-tracking and pattern rules for Python, Go, Java, and JS/TS. Covers SQLi, XSS, SSRF, SSTI, command injection, deserialisation, XXE, LDAP/NoSQL injection, path traversal, open redirect, log/header injection, eval injection, ReDoS, prototype pollution, JWT misconfiguration, weak crypto, insecure TLS, and hardcoded secrets.
+- **Coccinelle (63 rules)** — structural matching for C/C++. Memory safety (double free, use-after-free, free of non-base pointer, free of stack array, mmap'd memory, use-after-close), integer bugs (overflow, sign extension, double sizeof), resource leaks (popen/fclose mismatch, fdopendir double close), buffer handling (strncpy without NUL, copy_user size mismatch, malloc/strlen off-by-one), signal handler safety, API misuse (fcntl flag domain, SIGKILL/SIGSTOP, double byte-swap, inet_ntoa static buffer), compiler dead-store elimination, kernel IS_ERR/PTR_ERR confusion, format string injection, TOCTOU races, and more.
 - **CodeQL (8 queries)** — interprocedural taint tracking for C++ (format string injection, integer truncation, use-after-move, iterator invalidation) and Java (XXE, insecure deserialisation, log injection, Spring SSRF).
 
-Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the registry packs (`p/security-audit`, `p/owasp-top-ten`, `p/0xdea`, `p/trailofbits`) which provide ~950 additional rules — overlap is minimal.
+Browse the rules directly: `engine/semgrep/rules/`, `engine/coccinelle/rules/`, `engine/codeql/queries/`. These complement the Semgrep registry packs RAPTOR pulls in (`p/security-audit`, `p/owasp-top-ten`, `p/secrets` always; per-policy-group packs like `p/command-injection`, `p/jwt`, `p/xss` on top) — overlap is minimal.
+
+---
+
+## How RAPTOR checks itself
+
+RAPTOR dogfoods a fair bit of its own security tooling, but it is worth being honest about what actually blocks a PR and what just runs in the background to keep us honest. Some of this is a hard gate, some of it is a scheduled check, and some of it is just a benchmark we keep around so we can tell when we have made things worse. The fuller breakdown, including the actual parameters and how to reproduce the checks, is in `docs/ci-controls.md`.
+
+| Control | What it checks | Trigger | Config / evidence |
+|---|---|---|---|
+| Ruff | Python correctness linting (`F401`, `F811`, `F821`, `F841`) | PR diff gate, plus weekly full-tree audit | `pyproject.toml`, `.github/workflows/lint.yml` |
+| Pytest | Fast unit/integration boundaries, subsystem-specific tiers (via import-graph dispatch), prompt-envelope audit | PRs, pushes to `main`, merge queue, scheduled full suite | `pytest.ini`, `.github/workflows/tests.yml`, `.github/workflows/nightly.yml` |
+| CodeQL Advanced | Python, C/C++, and GitHub Actions code scanning with import-graph scope narrowing | PRs, pushes to `main`, merge queue, weekly schedule | `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml` |
+| Workflow hardening | SHA-pinned third-party Actions, least-privilege permissions, command metadata linting | Every workflow change and every lint run | `.github/workflows/`, `.github/scripts/check_command_metadata.py` |
+| Corpus label lint | Audit corpus label schema validation and upstream pin verification | PRs (changed labels), weekly full sweep | `.github/workflows/corpus-labels.yml` |
+| RAPTOR SCA PR gate | Dependency and supply-chain regressions introduced by a PR | Manifest / lockfile / workflow changes | `.github/workflows/sca-pr-gate.yml` |
+| RAPTOR SCA self-bump | Mechanical dependency hardening and safe upgrade proposals | Weekly schedule, manual run | `.github/workflows/sca-self-bump.yml` |
+| SCA compromise corpus | Whether known dependency compromises still trigger the expected signal | Weekly schedule, relevant PR changes | `test/data/sca-e2e/compromise-corpus/`, `.github/workflows/sca-compromise-check.yml` |
+| Miswiring scan | Dead-code / wrong-call detection, env-var documentation drift, vocabulary-list guardrails, optional-dep import lint | Daily schedule | `.github/workflows/miswiring-scan.yml`, `.github/scripts/*_baseline.json` |
+| SCA calibration + stress corpus | Whether risk scoring and parser coverage drift over time | Weekly / monthly scheduled jobs | `packages/sca/data/calibration/`, `.github/workflows/refresh-sca-calibration.yml`, `.github/workflows/sca-stress-sweep.yml` |
+| Dataflow corpus | Precision / recall / FP-category tracking for validator behaviour | Developer-run benchmark and corpus tests | `core/dataflow/corpus/`, `core/dataflow/scripts/corpus-metrics` |
+| CI controls doc guard | Documented paths exist, ruff config matches, README links to the doc | PRs | `.github/tests/test_ci_controls_docs.py` |
+
+Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
 
 ---
 
@@ -489,6 +526,7 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/sca.md` | Software composition analysis |
 | `docs/frida.md` | Dynamic instrumentation |
 | `docs/security.md` | RAPTOR's own security model |
+| `docs/ci-controls.md` | CI controls, workflows, and benchmark evidence |
 | `docs/threat-model.md` | Per-project threat model feature |
 | `docs/python-cli.md` | Python CLI reference for scripting and CI |
 | `docs/concepts.md` | Core concepts: two-layer model, finding lifecycle, choosing a command |

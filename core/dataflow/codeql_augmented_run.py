@@ -45,6 +45,12 @@ from pathlib import Path
 from typing import Any
 
 from core.config import RaptorConfig
+from core.dataflow.extension_pack import (
+    ExtensionPackResult,
+    ModelRow,
+    write_extension_pack,
+)
+from core.dataflow.finding_diff import FindingDiff, diff_sarif_files
 from packages.codeql.tunables import CodeQLTunables
 
 DEFAULT_TIMEOUT_SECONDS = 600
@@ -94,6 +100,26 @@ class AnalysisResult:
     queries: tuple[str, ...]
     extension_pack: Path | None
     elapsed_seconds: float
+
+
+def _pack_name(pack_dir: Path) -> str:
+    """The pack's declared name, from its codeql-pack.yml.
+
+    Strict single-line parse (the emitter writes ``name: <scope/name>``
+    as the first key); a pack without a parseable name refuses loudly —
+    silently analyzing WITHOUT the models is the vacuous-measurement
+    bug this exists to prevent.
+    """
+    manifest = pack_dir / "codeql-pack.yml"
+    try:
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            if line.startswith("name:"):
+                return line.split(":", 1)[1].strip()
+    except OSError as e:
+        raise CodeQLRunError(
+            f"extension pack manifest unreadable: {manifest}") from e
+    raise CodeQLRunError(
+        f"extension pack has no parseable name: {manifest}")
 
 
 def analyze(
@@ -154,7 +180,17 @@ def analyze(
     ]
     CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
     if extension_pack is not None:
-        cmd.extend(["--additional-packs", str(extension_pack)])
+        # --additional-packs only makes the pack RESOLVABLE; data
+        # extensions apply to the analysis only when the pack is also
+        # named via --model-packs, and cached query results would mask
+        # the row changes, so re-evaluation is forced. Verified live:
+        # without --model-packs the augmented run is byte-identical to
+        # the baseline (the historical zero-delta was vacuous).
+        cmd.extend([
+            "--additional-packs", str(extension_pack),
+            "--model-packs", _pack_name(Path(extension_pack)),
+            "--rerun",
+        ])
     cmd.extend(extra_args)
 
     run = runner or subprocess.run
@@ -232,3 +268,70 @@ def run_baseline_and_augmented(
         runner=runner,
     )
     return baseline, augmented
+
+
+@dataclass(frozen=True)
+class LearnedModelsMeasurement:
+    """End-to-end outcome: pack emission + baseline/augmented runs + diff."""
+
+    pack: ExtensionPackResult
+    baseline: AnalysisResult
+    augmented: AnalysisResult
+    diff: FindingDiff
+
+    def to_dict(self) -> dict:
+        return {
+            "pack": self.pack.to_dict(),
+            "baseline_sarif": str(self.baseline.sarif_path),
+            "augmented_sarif": str(self.augmented.sarif_path),
+            "diff": self.diff.to_dict(),
+        }
+
+
+def run_learned_models_measurement(
+    db_path: Path,
+    queries: Sequence[str],
+    rows: Sequence[ModelRow],
+    *,
+    language: str,
+    out_dir: Path,
+    pack_name: str | None = None,
+    codeql_bin: str = DEFAULT_CODEQL_BIN,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    runner: RunnerFn | None = None,
+) -> LearnedModelsMeasurement:
+    """Vocab → pack → baseline/augmented runs → finding diff, end to end.
+
+    Emits the learned-model extension pack under ``out_dir/pack``,
+    runs the baseline and augmented analyses, and returns the
+    :class:`FindingDiff` alongside the emission result (whose
+    ``rejected`` list callers must surface — rejected rows are the
+    difference between "the models found nothing" and "the models
+    were never emitted").
+
+    Raises :class:`ValueError` when every input row was rejected:
+    an augmented run with an empty pack would measure nothing while
+    looking like a clean zero-suppression result.
+    """
+    pack = write_extension_pack(
+        rows, language=language, out_dir=Path(out_dir) / "pack",
+        pack_name=pack_name,
+    )
+    if pack.rows_written == 0:
+        raise ValueError(
+            "no model rows survived validation; rejected: "
+            + "; ".join(f"{r.row} ({r.reason})" for r in pack.rejected[:10])
+        )
+    baseline, augmented = run_baseline_and_augmented(
+        db_path,
+        queries,
+        pack.pack_dir,
+        Path(out_dir),
+        codeql_bin=codeql_bin,
+        timeout_seconds=timeout_seconds,
+        runner=runner,
+    )
+    diff = diff_sarif_files(baseline.sarif_path, augmented.sarif_path)
+    return LearnedModelsMeasurement(
+        pack=pack, baseline=baseline, augmented=augmented, diff=diff,
+    )

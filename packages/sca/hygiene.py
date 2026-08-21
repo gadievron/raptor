@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 # Go projects without dependency-locking are normal).
 _EXPECTED_LOCKFILES: Dict[str, Tuple[str, ...]] = {
     "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "shrinkwrap.json"),
-    "PyPI": ("Pipfile.lock", "poetry.lock"),
+    "PyPI": ("Pipfile.lock", "poetry.lock", "uv.lock",
+             "requirements.txt", "requirements.lock"),
     "Cargo": ("Cargo.lock",),
     "Go": ("go.sum",),
     "RubyGems": ("Gemfile.lock",),
@@ -106,6 +107,10 @@ def check_lockfile_missing(
         if not expected:
             continue
         if (m.ecosystem, m.path.parent) in lockfile_dirs:
+            continue
+        # Some lockfile names (e.g. requirements.txt) are parsed with
+        # is_lockfile=False — check physical presence as a fallback.
+        if any((m.path.parent / lf).is_file() for lf in expected):
             continue
         # Use the first manifest dep for the finding's dep slot, to keep
         # the finding shape uniform. If no deps were parsed, synthesise

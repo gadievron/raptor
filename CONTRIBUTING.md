@@ -3,7 +3,9 @@
 RAPTOR is mostly built with AI under human direction. Contributions are
 welcome — whether you're writing code by hand, with an AI, or a mix of
 both. The conventions below keep the codebase consistent regardless of how
-the code was written.
+the code was written. For orientation on the internals — layering,
+package map, rule authoring, the sandbox model — see
+[docs/developers.md](docs/developers.md).
 
 
 ## Getting started

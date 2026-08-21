@@ -27,6 +27,7 @@ from core.audit.condition_cpg import (  # noqa: E402
     verify_guard_relevance_cpg,
 )
 from core.audit.condition_extraction import GuardCondition, SinkGuard  # noqa: E402
+from core.testing.treesitter import requires_ts  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +166,7 @@ class TestCheckInterproceduralGuards:
         )
         assert result.total_callers >= 1
 
+    @requires_ts("c")
     def test_all_callers_guarded(self):
         source_map = {
             "src/handler.c": "void do_copy(char *d, char *s, int n) {\n    memcpy(d, s, n);\n}",

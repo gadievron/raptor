@@ -223,6 +223,62 @@ def test_write_findings_json_empty_inputs(tmp_path: Path) -> None:
     assert json.loads(out.read_text()) == []
 
 
+def test_severity_fallback_label_used_over_medium_degrade() -> None:
+    """A CVSS_V4-only advisory whose vector couldn't be scored carries
+    the database-provided label; the finding gates at that severity
+    instead of the blanket medium."""
+    d = _dep()
+    adv = _adv()
+    adv.severity = None
+    adv.severity_fallback = "critical"
+    findings = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[adv])],
+    )
+    assert findings[0].severity == "critical"
+    assert findings[0].cvss_score is None   # no fabricated numeric score
+
+    adv_no_label = _adv()
+    adv_no_label.severity = None
+    adv_no_label.severity_fallback = None
+    findings2 = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[adv_no_label])],
+    )
+    assert findings2[0].severity == "medium"
+
+
+def test_write_findings_json_scan_health_row(tmp_path: Path) -> None:
+    """Scan-level degradation is recorded as an info-severity row so CI
+    consumers of findings.json can see incomplete advisory coverage."""
+    out = tmp_path / "findings.json"
+    n = write_findings_json(out, scan_health=[{
+        "kind": "osv_lookup_degraded",
+        "detail": "OSV lookups failed transiently for 3 query slot(s)",
+        "evidence": {"failed_lookups": 3, "total_deps": 10},
+    }])
+    assert n == 1
+    row = json.loads(out.read_text())[0]
+    assert row["vuln_type"] == "sca:scan_health:osv_lookup_degraded"
+    assert row["severity"] == "info"
+    assert row["suppressed"] is False
+    assert row["sca"]["kind"] == "osv_lookup_degraded"
+    assert row["sca"]["failed_lookups"] == 3
+    assert row["sca"]["total_deps"] == 10
+    assert "transiently" in row["description"]
+
+
+def test_scan_health_row_never_trips_thresholds(tmp_path: Path) -> None:
+    """The degradation marker must not fail existing severity gates —
+    it is informational; pipelines gate on it explicitly if desired."""
+    from packages.sca.thresholds import ThresholdConfig, evaluate
+    out = tmp_path / "findings.json"
+    write_findings_json(out, scan_health=[{
+        "kind": "osv_lookup_degraded", "detail": "d", "evidence": {},
+    }])
+    rows = json.loads(out.read_text())
+    passed, fails = evaluate(rows, ThresholdConfig(fail_on_severity="info"))
+    assert passed and fails == []
+
+
 def test_atomic_write_no_partial_file(tmp_path: Path) -> None:
     out = tmp_path / "findings.json"
     write_findings_json(out)

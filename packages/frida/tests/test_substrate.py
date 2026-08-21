@@ -393,7 +393,7 @@ class TestSandboxedMain:
 
         assert rc == 1
         mock_call.assert_not_called()
-        assert "FATAL" in stderr_capture.getvalue()
+        assert "Fatal" in stderr_capture.getvalue()
 
 
 class TestLibexecSandboxFlags:

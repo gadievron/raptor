@@ -208,9 +208,15 @@ def promote_spec_on_annotation(
     status: str,
     *,
     out_dir: Path | None = None,
-    human_grade: bool = True,
+    human_grade: bool = False,
 ) -> EvidenceTier | None:
     """Promote an IRIS spec when an annotation confirms it.
+
+    ``human_grade`` defaults to False — operator authority must be
+    asserted explicitly by the caller (fail closed). The interactive
+    entry point (``libexec/raptor-annotate``) passes the value derived
+    from the note's provenance stamp; any caller that forgets the
+    kwarg promotes to the hint tier, never to operator-confirmed.
 
     When a function is annotated with status ``sink``,
     ``entry_point``, or ``finding``, any matching IRIS spec is

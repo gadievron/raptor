@@ -12,8 +12,6 @@ pipeline component that feeds runtime evidence into
 [/binary](binary-analysis.md), [/validate](validation.md)
 and [/understand](commands.md#understand).
 
-Implementation: `packages/frida/`.
-
 See also: [commands](commands.md), [binary analysis](binary-analysis.md),
 [sandbox](sandbox.md).
 
@@ -234,45 +232,15 @@ raptor frida --target ./app --template bb-coverage --duration 30
 
 ## Pipeline Integration
 
-Beyond standalone use, the Frida subsystem integrates with several
-RAPTOR pipelines through programmatic APIs in `packages/frida/`.
-
-### Programmatic Launching (active.py)
-
-Three functions for pipeline-driven observation:
-
-- `observe_target(binary, ...)` -- spawn mode, single sandbox.
-- `observe_paired(target_cmd, ...)` -- netns coordinator for networked
-  targets.
-- `auto_observe()` -- pipeline integration: skips if fresh evidence
-  already exists for the target (staleness threshold: 1 hour).
-
-These are used internally by `/binary` and `/agentic` when dynamic
-evidence collection is warranted.
-
-### Observe Adapter (observe_adapter.py)
-
-Converts Frida session parameters into an `ObserveProfile` for the
-[sandbox](sandbox.md) layer, ensuring Frida sessions respect the same
-isolation constraints as other RAPTOR subprocess invocations.
-
-### Context Bridge (context_bridge.py)
-
-Enriches `/understand` context maps with Frida evidence. When a Frida
-run's output directory is associated with a binary investigation, the
-bridge imports observed callsites and parser boundaries into
-`context-map.json`.
-
-### Evidence Discovery (evidence.py)
-
-Discovers existing Frida evidence directories for a given target binary.
-Used by `auto_observe()` to avoid redundant re-observation and by
-`/binary map --runtime-dir` to locate evidence for ingestion.
-
-### Sandboxed Execution (sandboxed.py)
-
-Runs Frida sessions under RAPTOR's sandbox constraints. See
-[sandbox](sandbox.md) for the isolation model.
+Beyond standalone use, `/binary` and `/agentic` launch Frida
+observation themselves when dynamic evidence collection is warranted
+(programmatic entry points `observe_target` / `observe_paired` /
+`auto_observe` in `packages/frida/`; existing fresh evidence for a
+target is reused rather than re-collected). Frida sessions run under
+the same [sandbox](sandbox.md) constraints as every other RAPTOR
+subprocess, observed callsites and parser boundaries are folded back
+into `/understand` context maps, and `/binary map --runtime-dir`
+ingests evidence from prior runs.
 
 ---
 

@@ -125,6 +125,105 @@ def test_parse_handles_path_with_spaces():
     assert rec["path"] == "/Users/Bob/Library/Application Support/x"
 
 
+def test_parse_repeat_count_verdict_shape():
+    """The kernel coalesces repeated events as `deny(N) <action>`.
+    Pre-fix the regex required a bare verdict and dropped these
+    records entirely."""
+    entry = _kext_entry(
+        msg="Sandbox: ls(99) deny(12) file-read-data /etc/passwd"
+    )
+    rec = seatbelt_audit.parse_log_entry(entry)
+    assert rec is not None
+    assert rec["verdict"] == "deny"
+    assert rec["syscall"] == "file-read-data"
+    assert rec["path"] == "/etc/passwd"
+    assert rec["target_pid"] == 99
+
+
+def test_parse_process_name_with_spaces():
+    """Process names with spaces are common on macOS (helper apps).
+    Pre-fix the \\S+ name arm failed the match."""
+    entry = _kext_entry(
+        msg="Sandbox: Google Chrome Helper(4242) deny file-read-data /x"
+    )
+    rec = seatbelt_audit.parse_log_entry(entry)
+    assert rec is not None
+    assert rec["process_name"] == "Google Chrome Helper"
+    assert rec["target_pid"] == 4242
+
+
+def test_parse_process_name_with_parens():
+    """Names containing parentheses must not confuse the PID capture —
+    the LAST `(digits)` before the verdict is the PID."""
+    entry = _kext_entry(
+        msg="Sandbox: Helper (Renderer)(77) allow(3) file-write-create /tmp/y"
+    )
+    rec = seatbelt_audit.parse_log_entry(entry)
+    assert rec is not None
+    assert rec["process_name"] == "Helper (Renderer)"
+    assert rec["target_pid"] == 77
+    assert rec["verdict"] == "allow"
+    assert rec["path"] == "/tmp/y"
+
+
+class _FakeLogProc:
+    """Stand-in for the `log stream` Popen: stdout is a plain list of
+    ndjson lines; terminate/wait are no-ops."""
+
+    def __init__(self, lines):
+        self.stdout = list(lines)
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_parse_ratio_diagnostic_on_high_drop(tmp_path, caplog):
+    """When most kext-sender lines fail to parse (format drift), stop()
+    must emit a 'parsed M of N' warning and stamp the counters on the
+    audit_summary record."""
+    import logging
+
+    good = json.dumps(_kext_entry(
+        msg="Sandbox: foo(1) deny file-read-data /etc/passwd"))
+    bad = json.dumps(_kext_entry(msg="Sandbox format drifted entirely"))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer._proc = _FakeLogProc([good] + [bad] * 19)
+    streamer._read_loop()
+    with caplog.at_level(logging.WARNING,
+                         logger="core.sandbox.seatbelt_audit"):
+        streamer.stop()
+    assert any("parsed 1 of 20 kext log lines" in rec.message
+               for rec in caplog.records)
+    lines = (tmp_path / evidence_mod.AUDIT_SUBDIR
+             / seatbelt_audit.DENIALS_FILE).read_text().splitlines()
+    summary = next(json.loads(line) for line in lines
+                   if json.loads(line).get("type") == "audit_summary")
+    assert summary["kext_lines_seen"] == 20
+    assert summary["kext_lines_parsed"] == 1
+
+
+def test_parse_ratio_no_diagnostic_when_healthy(tmp_path, caplog):
+    """A healthy parse ratio must NOT trip the drift warning."""
+    import logging
+
+    good = json.dumps(_kext_entry(
+        msg="Sandbox: foo(1) deny file-read-data /etc/passwd"))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer._proc = _FakeLogProc([good] * 20)
+    streamer._read_loop()
+    with caplog.at_level(logging.WARNING,
+                         logger="core.sandbox.seatbelt_audit"):
+        streamer.stop()
+    assert not any("kext log lines" in rec.message
+                   for rec in caplog.records)
+
+
 def test_parse_uses_entry_timestamp():
     """The kernel-supplied timestamp is preserved when present —
     important for ordering against host-side events. Falls back to
@@ -224,6 +323,38 @@ def test_log_streamer_default_budget_is_cli_aware(tmp_path):
         assert streamer._budget.global_cap == 250
     finally:
         state._cli_sandbox_audit_budget = None
+
+
+def test_log_streamer_emits_global_cap_marker_once(tmp_path):
+    """When the GLOBAL cap fires, the streamer must append the
+    one-shot global_budget_exceeded marker in-band — pre-fix only the
+    Linux tracer polled the notice (stderr), so macOS global-cap
+    suppression was markerless."""
+    from core.sandbox import audit_budget
+    budget = audit_budget.AuditBudget(
+        global_cap=2,
+        pid_cap=1000,
+        category_caps={"file-write": 100},
+        refill_rates={"file-write": 0.0},
+        sampling_rates={},
+    )
+    streamer = seatbelt_audit.LogStreamer(tmp_path, budget=budget)
+    streamer._proc = _FakeLogProc([
+        json.dumps(_kext_entry(
+            msg=f"Sandbox: test(999) allow file-write-data /tmp/{i}"))
+        for i in range(6)
+    ])
+    streamer._read_loop()
+    streamer.stop()
+    records = [json.loads(line) for line in
+               (tmp_path / evidence_mod.AUDIT_SUBDIR
+                / seatbelt_audit.DENIALS_FILE)
+               .read_text().splitlines() if line.strip()]
+    markers = [r for r in records
+               if r.get("type") == "global_budget_exceeded"]
+    assert len(markers) == 1, f"records: {records!r}"
+    assert markers[0]["cap"] == 2
+    assert markers[0]["audit"] is True
 
 
 # --- LogStreamer PID scoping ------------------------------------------
@@ -382,3 +513,114 @@ def test_log_streamer_o_nofollow_blocks_symlink(tmp_path):
         assert e.errno in (40, 62), f"unexpected errno {e.errno}"
     # The symlink target must remain empty (no leak).
     assert target.read_text() == ""
+
+
+# --- Live stderr escalation: credential-path touches -------------------
+# _maybe_escalate_credential_path is pulled out of _read_loop precisely
+# so it's testable against a synthetic record without a real `log
+# stream` subprocess. See core.sandbox.tracer's mirror-image escalation
+# for escape-primitive syscalls (Linux-only, tested in
+# test_tracer_event_loop.py).
+
+def test_credential_path_touch_escalates_once(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "read", "path": "/Users/x/.ssh/id_rsa",
+              "target_pid": 4242}
+
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert writes[0][0] == 2
+    assert b".ssh/id_rsa" in writes[0][1]
+
+    # Same path again this run: no second banner.
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1, "dedup: one banner per path per run"
+
+
+def test_non_credential_path_does_not_escalate(tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "read", "path": "/tmp/ordinary-file.txt",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_ignores_non_read_write_types(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # "seccomp" bucket (mach-lookup, process-*, etc.) never carries the
+    # same "did the target actually see file content" implication a
+    # read/write does — see seatbelt_audit.py's comment on why no
+    # macOS escape-primitive-syscall equivalent is fabricated.
+    record = {"type": "seccomp", "path": "/Users/x/.ssh/id_rsa",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_disabled_by_env_var(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "write", "path": "/Users/x/.aws/credentials",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert writes == []
+
+
+def test_credential_path_escalation_survives_stderr_write_failure(
+        tmp_path, monkeypatch):
+    def raising_write(fd, data):
+        raise OSError("stderr closed")
+    monkeypatch.setattr(seatbelt_audit.os, "write", raising_write)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    record = {"type": "write", "path": "/Users/x/.netrc",
+              "target_pid": 4242}
+    # Must not raise — mirrors tracer.py's
+    # test_escalation_never_raises_out_of_hot_path.
+    streamer._maybe_escalate_credential_path(record)
+    assert record["path"] in streamer._escalated_paths
+
+
+def test_credential_path_banner_sanitises_control_chars(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # The path is attacker-controlled (the target chose what to touch);
+    # ESC/BEL are ASCII so ascii/replace encoding alone keeps them.
+    record = {"type": "read",
+              "path": "/Users/x/.ssh/\x1b]0;pwned\x07id_rsa",
+              "target_pid": 4242}
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert b"\x1b" not in writes[0][1]
+    assert b"\x07" not in writes[0][1]
+    assert b"\\x1b" in writes[0][1]
+
+
+def test_credential_path_escalation_tolerates_missing_target_pid(
+        tmp_path, monkeypatch):
+    writes = []
+    monkeypatch.setattr(seatbelt_audit.os, "write",
+                        lambda fd, data: writes.append((fd, data)))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    # never-raise-out-of-the-hot-path: a record shape without
+    # target_pid must not KeyError the read loop.
+    record = {"type": "read", "path": "/Users/x/.ssh/id_rsa"}
+    streamer._maybe_escalate_credential_path(record)
+    assert len(writes) == 1
+    assert b"pid=-1" in writes[0][1]

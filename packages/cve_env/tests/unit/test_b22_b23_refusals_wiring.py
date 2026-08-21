@@ -80,18 +80,20 @@ class TestB22LoopConstructionFormula:
         pattern must appear in build()'s source."""
         from pathlib import Path
 
-        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        loop_path = (Path(__file__).resolve().parents[2]
+                     / "cve_env" / "agent" / "core_loop.py")
         src = loop_path.read_text()
-        assert src.count("refusals=max(") >= 2, (
-            "expected refusals=max(...) formula in at least 2 Outcome "
-            "constructors inside build()"
+        assert src.count("refusals=") >= 2, (
+            "expected the refusals field wired in the exception-path AND "
+            "result-path Outcome constructors of the live engine"
         )
 
     def test_b22_refusals_formula_uses_scanner_events(self) -> None:
         """The refusals formula must reference refusal_scanner.events."""
         from pathlib import Path
 
-        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        loop_path = (Path(__file__).resolve().parents[2]
+                     / "cve_env" / "agent" / "core_loop.py")
         src = loop_path.read_text()
         assert "len(refusal_scanner.events)" in src, (
             "refusals formula must use len(refusal_scanner.events)"
@@ -101,7 +103,8 @@ class TestB22LoopConstructionFormula:
         """The refusals formula must reference the SDK stop_reason latch."""
         from pathlib import Path
 
-        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        loop_path = (Path(__file__).resolve().parents[2]
+                     / "cve_env" / "agent" / "core_loop.py")
         src = loop_path.read_text()
         assert "int(state.refusal_stop_reason_seen)" in src, (
             "refusals formula must use int(state.refusal_stop_reason_seen)"

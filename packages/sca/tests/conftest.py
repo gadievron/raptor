@@ -115,3 +115,17 @@ def unstub_check_tool_cache():
     yield
     _CHECK_TOOL_CACHE.clear()
     _CHECK_TOOL_CACHE.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _accept_degraded_egress_tier(monkeypatch):
+    """These tests exercise resolver/pipeline semantics, not sandbox
+    tier posture. CI runners block unprivileged user namespaces
+    (apparmor_restrict_unprivileged_userns=1), so the netns egress
+    tier is unavailable there and the require_proxy_netns fail-closed
+    guard (00015) would refuse every sandboxed call. Accept the
+    degraded tier for the tests via the guard's own documented opt-in;
+    the guard's behavior has its own dedicated tests in
+    core/sandbox/tests/test_proxy_netns_enforcement.py.
+    Subprocess-based e2e tests inherit it via os.environ."""
+    monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")

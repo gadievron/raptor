@@ -13,8 +13,9 @@ and how to report.
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, TextIO
+from typing import TextIO
 
 from .findings import severity_rank
 
@@ -29,13 +30,14 @@ class ThresholdConfig:
     CLI args. ``is_active`` returns False when nothing is set, in which
     case ``evaluate`` is a no-op (always passes).
     """
-    fail_on_severity: Optional[str] = None
+    fail_on_severity: str | None = None
     fail_on_kev: bool = False
-    fail_on_supply_chain: Optional[str] = None
-    fail_on_hygiene: Optional[str] = None
+    fail_on_supply_chain: str | None = None
+    fail_on_hygiene: str | None = None
+    fail_on_license: str | None = None
     include_suppressed: bool = False
     fail_on_capability_drift: bool = False
-    max_added_capability_buckets: Optional[int] = None
+    max_added_capability_buckets: int | None = None
 
     @property
     def is_active(self) -> bool:
@@ -43,13 +45,14 @@ class ThresholdConfig:
                 or self.fail_on_kev
                 or self.fail_on_supply_chain is not None
                 or self.fail_on_hygiene is not None
+                or self.fail_on_license is not None
                 or self.fail_on_capability_drift
                 or self.max_added_capability_buckets is not None)
 
 
 def evaluate(
     rows: Sequence[dict], cfg: ThresholdConfig,
-) -> "tuple[bool, List[str]]":
+) -> tuple[bool, list[str]]:
     """Evaluate findings against thresholds.
 
     Returns ``(passed, failure_messages)``. ``passed=True`` → caller
@@ -65,8 +68,10 @@ def evaluate(
                 if cfg.fail_on_supply_chain else None)
     hyg_floor = (severity_rank(cfg.fail_on_hygiene)
                  if cfg.fail_on_hygiene else None)
+    lic_floor = (severity_rank(cfg.fail_on_license)
+                 if cfg.fail_on_license else None)
 
-    fails: List[str] = []
+    fails: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             # Hand-edited or third-party-tool findings.json may contain
@@ -117,6 +122,14 @@ def evaluate(
         elif vuln_type.startswith("sca:hygiene:"):
             if hyg_floor is not None and rank >= hyg_floor:
                 fails.append(f"[hygiene {sev}] {desc}")
+        elif vuln_type.startswith("sca:license:"):
+            # License findings had no gate branch at all — a policy
+            # violation could never fail a build regardless of the
+            # configured floors. Same floor-per-class shape as the
+            # hygiene / supply-chain buckets (and the diff layer's
+            # canonical-key treatment of license rows).
+            if lic_floor is not None and rank >= lic_floor:
+                fails.append(f"[license {sev}] {desc}")
 
     return len(fails) == 0, fails
 
@@ -143,6 +156,11 @@ def add_threshold_args(parser) -> None:
         "--fail-on-hygiene",
         choices=_SEVERITY_CHOICES, default=None,
         help="exit 1 if any hygiene finding meets-or-exceeds this severity",
+    )
+    parser.add_argument(
+        "--fail-on-license",
+        choices=_SEVERITY_CHOICES, default=None,
+        help="exit 1 if any license finding meets-or-exceeds this severity",
     )
     parser.add_argument(
         "--include-suppressed", action="store_true",
@@ -176,6 +194,7 @@ def cfg_from_args(args) -> ThresholdConfig:
         fail_on_kev=getattr(args, "fail_on_kev", False),
         fail_on_supply_chain=getattr(args, "fail_on_supply_chain", None),
         fail_on_hygiene=getattr(args, "fail_on_hygiene", None),
+        fail_on_license=getattr(args, "fail_on_license", None),
         include_suppressed=getattr(args, "include_suppressed", False),
         fail_on_capability_drift=getattr(
             args, "fail_on_capability_drift", False,
@@ -187,10 +206,10 @@ def cfg_from_args(args) -> ThresholdConfig:
 
 
 def print_result(
-    passed: bool, fails: List[str], *,
+    passed: bool, fails: list[str], *,
     prog: str = "raptor-sca",
-    out: Optional[TextIO] = None,
-    err: Optional[TextIO] = None,
+    out: TextIO | None = None,
+    err: TextIO | None = None,
 ) -> None:
     """Print the pass/fail summary in the legacy gate's format."""
     if out is None:

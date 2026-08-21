@@ -338,6 +338,10 @@ class TestHardenedInvocation:
             assert call["block_network"] is True
             assert call["target"] == str(repo)
             assert "timeout" in call
+            # env is pre-filtered via get_safe_git_env(); the call
+            # must assert that so the sandbox's custom-env warning
+            # stays meaningful for genuinely unfiltered callers.
+            assert call["env_caller_filtered"] is True
             # Per-invocation hardening — the FULL shared strict
             # read-only posture from core.git (single source of
             # truth), asserted via the shared helper rather than

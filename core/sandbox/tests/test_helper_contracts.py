@@ -26,12 +26,10 @@ so the tests stay hermetic and don't race a developer's own build.
 
 from __future__ import annotations
 
-import ctypes
 import os
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -338,30 +336,40 @@ class TestGidmapAllowContract:
         """The RAPTOR call shape (one triple, own gid, self-created
         userns) must clear every contract check. Without CAP_SETGID the
         subsequent gid_map write fails with EPERM (exit 1) — the key
-        assertion is that the refusal exit (3) is NOT taken."""
-        libc = ctypes.CDLL(None, use_errno=True)
-        child = os.fork()
-        if child == 0:
-            # Child: create a user namespace this test's uid owns, then
-            # linger for the parent to inspect it.
-            rc = libc.unshare(CLONE_NEWUSER)
-            if rc != 0:
-                os._exit(42)
-            time.sleep(30)
-            os._exit(0)
+        assertion is that the refusal exit (3) is NOT taken.
+
+        The lingering namespace holder runs as a subprocess (fresh
+        single-threaded interpreter), not an ``os.fork()`` child: by
+        full-suite time this process carries daemon threads (the
+        egress-proxy singleton's, from any earlier sandbox test), so a
+        bare fork here draws Python's multi-threaded-fork
+        DeprecationWarning on every run. The holder only needs libc's
+        ``unshare`` plus a sleep, and the readiness line replaces the
+        old fixed 0.3s settle."""
+        holder_code = (
+            "import ctypes, sys, time\n"
+            "libc = ctypes.CDLL(None, use_errno=True)\n"
+            f"if libc.unshare({CLONE_NEWUSER}) != 0:\n"
+            "    sys.exit(42)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        child = subprocess.Popen(
+            [sys.executable, "-c", holder_code],
+            stdout=subprocess.PIPE, text=True,
+        )
         try:
-            time.sleep(0.3)
-            # Distinguish "child failed to unshare" from a live child.
-            done, status = os.waitpid(child, os.WNOHANG)
-            if done == child:
-                code = os.waitstatus_to_exitcode(status)
+            # Blocks until the holder owns its userns (or exits 42).
+            line = child.stdout.readline()
+            if "ready" not in line:
+                code = child.wait(timeout=10)
                 pytest.skip(
                     "host blocks unprivileged unshare(CLONE_NEWUSER) "
                     f"(child exit {code})"
                 )
             r = _run([
                 str(built / "raptor-gidmap-allow"),
-                str(child), "0", str(os.getgid()), "1",
+                str(child.pid), "0", str(os.getgid()), "1",
             ])
             assert r.returncode != 3, f"contract refusal: {r.stderr}"
             if r.returncode != 0:
@@ -369,14 +377,8 @@ class TestGidmapAllowContract:
                 # kernel then rejected the unprivileged gid_map write.
                 assert "gid_map" in r.stderr
         finally:
-            try:
-                os.kill(child, 9)
-            except ProcessLookupError:
-                pass
-            try:
-                os.waitpid(child, 0)
-            except ChildProcessError:
-                pass
+            child.kill()
+            child.wait(timeout=10)
 
 
 class TestApparmorProfileTemplate:

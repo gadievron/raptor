@@ -1463,6 +1463,22 @@ def _default_cache_ttl() -> float | None:
     return val if val > 0 else None
 
 
+def _default_enable_caching() -> bool:
+    """Default LLM response caching: on, env-overridable.
+
+    ``RAPTOR_LLM_CACHE`` set to ``off`` / ``none`` / ``0`` / ``false``
+    / ``no`` disables the response cache for every LLMConfig
+    constructed in (or inherited by) the process — no reads, no
+    writes.  The refire lane needs this: a cached completion replays
+    verbatim for any unchanged prompt, so a rerun meant to measure a
+    fix's effect (calibration prompts, gate changes) silently grades
+    frozen prior output wherever the prompt didn't change.  Any other
+    value (or unset) keeps caching on.
+    """
+    raw = os.environ.get("RAPTOR_LLM_CACHE", "").strip().lower()
+    return raw not in ("off", "none", "0", "false", "no")
+
+
 @dataclass
 class LLMConfig:
     """Main LLM configuration for RAPTOR."""
@@ -1481,7 +1497,7 @@ class LLMConfig:
     max_retries: int = 3
     retry_delay: float = 2.0
     retry_delay_remote: float = 5.0
-    enable_caching: bool = True
+    enable_caching: bool = field(default_factory=_default_enable_caching)
     cache_dir: Path = Path("out/llm_cache")
     # Drop cache entries older than this on read. Default 24h: repeat
     # queries within a working day stay free and deterministic, while a

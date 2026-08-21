@@ -74,6 +74,11 @@ would mean it.  Across separate ``check_path_feasibility`` calls the
 state resets; two batches that both mention ``strlen(input)`` allocate
 independent vars, preserving the conservative impure-call default for
 batch boundaries where the LLM has no way to express same-value intent.
+A conservative set of libc/POSIX calls additionally gets a *summary
+axiom* asserted on its placeholder (``strlen(...) >= 0`` at signed
+profiles, ``sizeof(...) != 0``, ``abs``-family with the INT_MIN corner,
+``min``/``max`` as ITE definitions) — see ``_CALL_SUMMARIES``; applied
+axioms are reported in ``PathSMTResult.summary_axioms``.
 
 This dedup contract assumes the conditions reflect an SSA view of the
 path: every appearance of an identifier denotes the same value.  A
@@ -226,6 +231,15 @@ class PathSMTResult:
     reasoning: str
     unknown_reasons: List[Rejection] = field(default_factory=list)
     anon_var_map: Dict[str, str] = field(default_factory=dict)
+
+    # Human-readable labels of the libc/POSIX call-summary axioms that
+    # were asserted alongside the path conditions (see
+    # ``_summarise_call``).  Empty when no recognised call appeared or
+    # every candidate axiom was vacuous under the active profile.
+    # Consumers treat these as the assumptions the verdict is
+    # conditional on; an axiom label can also appear in ``unsatisfied``
+    # when it participates in an unsat core.
+    summary_axioms: List[str] = field(default_factory=list)
 
     # --- Phase 8: weakest-precondition predicate (additive) ---
     # ``wp_predicate`` is the minimal sat-preserving subset of the pending
@@ -643,10 +657,141 @@ _ASSIGNMENT_SHAPED_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# Call summaries — axioms for recognised libc/POSIX calls
+# ---------------------------------------------------------------------------
+#
+# When _substitute_calls recovers ``strlen(input)`` as a free ``_anon_N``
+# variable, the fact that strlen can never be negative is lost, and paths
+# like ``strlen(x) < 0`` read as feasible.  For a small, conservative set
+# of libc/POSIX functions we assert a summary axiom on the placeholder.
+#
+# Doctrine note: libc/POSIX names are fine to hardcode here.  Summaries
+# for PROJECT APIs must come from learned vocabulary (study/IRIS), never
+# from this table.
+#
+# Signedness honesty: each builder decides per-profile whether its axiom
+# is meaningful.
+#   * ``result >= 0`` is vacuous at an unsigned profile — skipped, never
+#     asserted as junk.
+#   * ``abs``-family axioms model the two's-complement INT_MIN corner
+#     (``abs(INT_MIN) == INT_MIN`` at the same width) as a disjunct
+#     instead of pretending ``abs`` is always non-negative.
+#   * ``sizeof`` is modelled as ``!= 0`` (C guarantees sizeof >= 1); the
+#     form is signedness-neutral so it is asserted at every profile.
+# Like the call-dedup contract above, axioms model *writer intent* under
+# the SSA reading of the conditions — they are assumptions, surfaced to
+# consumers via ``PathSMTResult.summary_axioms``.
+
+_MAX_SUMMARY_ARGS_CHARS = 200
+
+
+def _nonneg_summary(var: Any, args_text: str, vars_: Dict[str, Any],
+                    profile: BVProfile) -> Optional[Any]:
+    """``result >= 0`` — meaningful only at signed profiles."""
+    if not profile.signed:
+        return None
+    return ge(var, _mk_val(0, profile.width), signed=True)
+
+
+def _abs_summary(var: Any, args_text: str, vars_: Dict[str, Any],
+                 profile: BVProfile) -> Optional[Any]:
+    """``result >= 0 OR result == INT_MIN`` at signed profiles.
+
+    ``abs(INT_MIN)`` is UB in C but evaluates to INT_MIN in
+    two's-complement practice; excluding that bit-pattern would
+    wrongly refute paths that reach it.
+    """
+    if not profile.signed:
+        return None
+    int_min = _mk_val(1 << (profile.width - 1), profile.width)
+    return z3.Or(ge(var, _mk_val(0, profile.width), signed=True),
+                 var == int_min)
+
+
+def _sizeof_summary(var: Any, args_text: str, vars_: Dict[str, Any],
+                    profile: BVProfile) -> Optional[Any]:
+    """``sizeof(...) != 0`` — signedness-neutral, always meaningful."""
+    return var != _mk_val(0, profile.width)
+
+
+def _split_two_args(args_text: str) -> Optional[Tuple[str, str]]:
+    """Split ``args_text`` on its single top-level comma, or None."""
+    depth = 0
+    split_at = None
+    for i, ch in enumerate(args_text):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        elif ch == ',' and depth == 0:
+            if split_at is not None:
+                return None  # more than two args
+            split_at = i
+    if split_at is None:
+        return None
+    return args_text[:split_at], args_text[split_at + 1:]
+
+
+def _minmax_summary(pick_smaller: bool):
+    """Build a min/max summary: ``var == ITE(a <= b, a, b)`` (or the
+    max mirror), applied only when BOTH arguments parse as plain
+    arithmetic expressions (nested calls or unsupported syntax mean no
+    axiom — the placeholder stays free, today's behaviour)."""
+    def _builder(var: Any, args_text: str, vars_: Dict[str, Any],
+                 profile: BVProfile) -> Optional[Any]:
+        parts = _split_two_args(args_text)
+        if parts is None:
+            return None
+        a = _parse_expr(parts[0].strip(), vars_, profile=profile)
+        if isinstance(a, Rejection):
+            return None
+        b = _parse_expr(parts[1].strip(), vars_, profile=profile)
+        if isinstance(b, Rejection):
+            return None
+        cond = le(a, b, signed=profile.signed)
+        return var == z3.If(cond, a, b) if pick_smaller \
+            else var == z3.If(cond, b, a)
+    return _builder
+
+
+# Callee name (case-sensitive, matching C) → axiom builder.  A builder
+# returns a Z3 expression or None (axiom not meaningful for this
+# profile / arguments) — None keeps today's free-variable behaviour.
+_CALL_SUMMARIES: Dict[str, Any] = {
+    "strlen": _nonneg_summary,
+    "strnlen": _nonneg_summary,
+    "wcslen": _nonneg_summary,
+    "abs": _abs_summary,
+    "labs": _abs_summary,
+    "llabs": _abs_summary,
+    "sizeof": _sizeof_summary,
+    "min": _minmax_summary(pick_smaller=True),
+    "max": _minmax_summary(pick_smaller=False),
+    "MIN": _minmax_summary(pick_smaller=True),
+    "MAX": _minmax_summary(pick_smaller=False),
+}
+
+
+def _summarise_call(
+    callee: str, args_text: str, call_text: str, var: Any,
+    vars_: Dict[str, Any], *, profile: BVProfile,
+) -> Optional[Tuple[str, Any]]:
+    """Return ``(label, axiom_expr)`` for a recognised call, else None."""
+    builder = _CALL_SUMMARIES.get(callee)
+    if builder is None or len(args_text) > _MAX_SUMMARY_ARGS_CHARS:
+        return None
+    expr = builder(var, args_text, vars_, profile)
+    if expr is None:
+        return None
+    return f"summary: {call_text}", expr
+
+
 def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
     dedup_window: Optional[Dict[str, str]] = None,
+    axiom_sink: Optional[List[Tuple[str, Any]]] = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with free Z3 variables.
 
@@ -761,6 +906,21 @@ def _substitute_calls(
                 if anon_map is not None:
                     anon_map[placeholder] = call_text
                 rev[call_text] = placeholder
+                # Summary axioms attach at allocation time only — a
+                # dedup reuse above re-references a var whose axiom is
+                # already recorded, and a fresh post-mutation-barrier
+                # placeholder gets its own assertion.
+                if axiom_sink is not None:
+                    summary = _summarise_call(
+                        text[i:m.end()],
+                        text[m.end() + 1:j - 1],
+                        call_text,
+                        vars_[placeholder],
+                        vars_,
+                        profile=profile,
+                    )
+                    if summary is not None:
+                        axiom_sink.append(summary)
                 out.append(placeholder)
                 i = j
                 continue
@@ -790,6 +950,7 @@ def _parse_condition(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
     dedup_window: Optional[Dict[str, str]] = None,
+    axiom_sink: Optional[List[Tuple[str, Any]]] = None,
 ) -> Union[Any, Rejection]:
     """Parse a single condition string into a Z3 boolean expression.
 
@@ -851,6 +1012,7 @@ def _parse_condition(
     t = _substitute_calls(
         canonicalised, vars_, profile=profile,
         anon_map=anon_map, dedup_window=dedup_window,
+        axiom_sink=axiom_sink,
     )
 
     # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
@@ -959,6 +1121,7 @@ def _classify_text_condition(
     profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
     dedup_window: Optional[Dict[str, str]] = None,
+    axiom_sink: Optional[List[Tuple[str, Any]]] = None,
 ) -> Tuple[Optional[str], Optional[Tuple[str, Any]], Optional[Rejection]]:
     """Parse one text condition and classify it.
 
@@ -979,6 +1142,7 @@ def _classify_text_condition(
     expr = _parse_condition(
         cond.text, vars_, profile=profile,
         anon_map=anon_map, dedup_window=dedup_window,
+        axiom_sink=axiom_sink,
     )
     if isinstance(expr, Rejection):
         _get_logger().debug(
@@ -1006,6 +1170,7 @@ def _extract_wp(
     pending: List[Tuple[str, Any]],
     *,
     cap: int = WP_MAX_SOLVER_CALLS,
+    axioms: Optional[List[Tuple[str, Any]]] = None,
 ) -> Tuple[Optional[str], List[str], bool]:
     """Extract the weakest-precondition predicate for a *sat* path.
 
@@ -1048,6 +1213,14 @@ def _extract_wp(
     if n == 0 or not _z3_available():
         return None, [], True
 
+    # Call-summary axioms are background theory for the redundancy
+    # tests: never deletable themselves, but a path conjunct implied by
+    # an axiom (e.g. ``strlen(x) >= 0`` under the strlen summary) is
+    # correctly dropped.  The serialised wp_predicate stays a
+    # conjunction over PATH conjuncts only — it is minimal modulo the
+    # applied summaries, which the result names in ``summary_axioms``.
+    _axioms = axioms or []
+
     order = sorted(range(n), key=lambda i: (_canonicalise(pending[i][0]), i))
     kept = [True] * n
     calls = 0
@@ -1058,6 +1231,8 @@ def _extract_wp(
             complete = False
             break
         with _scoped(solver):
+            for _, axiom_expr in _axioms:
+                solver.add(axiom_expr)
             for j in range(n):
                 if kept[j] and j != idx:
                     solver.add(pending[j][1])
@@ -1097,6 +1272,7 @@ def _solve_pending(
     anon_map: Optional[Dict[str, str]] = None,
     prefer_witness: Optional[Tuple[str, str]] = None,
     vars_: Optional[Dict[str, Any]] = None,
+    axioms: Optional[List[Tuple[str, Any]]] = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -1140,6 +1316,8 @@ def _solve_pending(
     # Default to empty dict so the field is always present on the
     # PathSMTResult — downstream consumers never need to None-check.
     _anon_map = anon_map or {}
+    _axioms = axioms or []
+    _axiom_labels = [label for label, _ in _axioms]
 
     if not pending:
         if unknown:
@@ -1153,6 +1331,7 @@ def _solve_pending(
                     f"{len(unknown)} unparseable — LLM analysis required"
                 ),
                 anon_var_map=_anon_map,
+                summary_axioms=_axiom_labels,
             )
         return PathSMTResult(
             feasible=True,
@@ -1161,9 +1340,14 @@ def _solve_pending(
             model={}, smt_available=True,
             reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
             anon_var_map=_anon_map,
+            summary_axioms=_axiom_labels,
         )
 
     label_map = _track(solver, pending)
+    if _axioms:
+        # Chain onto the same label map so an axiom participating in an
+        # unsat core surfaces by its human-readable "summary: ..." label.
+        _track(solver, _axioms, label_map)
     result = solver.check()
 
     if result == z3.sat:
@@ -1171,7 +1355,9 @@ def _solve_pending(
         # Phase 8: on sat, extract the weakest predicate over the path's
         # symbolic variables (minimal sat-preserving conjunct subset). Its
         # own fresh solver — the verdict above is unaffected.
-        wp_predicate, wp_conjuncts, wp_complete = _extract_wp(pending)
+        wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
+            pending, axioms=_axioms,
+        )
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
@@ -1181,8 +1367,12 @@ def _solve_pending(
                 f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
                 + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
                 + (f"; {len(unknown)} unparsed" if unknown else "")
+                + (f"; {len(_axioms)} call summar"
+                   f"{'y' if len(_axioms) == 1 else 'ies'} applied"
+                   if _axioms else "")
             ),
             anon_var_map=_anon_map,
+            summary_axioms=_axiom_labels,
             wp_predicate=wp_predicate,
             wp_conjuncts=wp_conjuncts,
             wp_complete=wp_complete,
@@ -1201,6 +1391,7 @@ def _solve_pending(
             model={}, smt_available=True,
             reasoning=reasoning,
             anon_var_map=_anon_map,
+            summary_axioms=_axiom_labels,
         )
 
     # z3.unknown — timeout or outside decidable fragment.
@@ -1227,6 +1418,7 @@ def _solve_pending(
         model={}, smt_available=True,
         reasoning=f"Z3 returned unknown ({mode}) — {detail}",
         anon_var_map=_anon_map,
+        summary_axioms=_axiom_labels,
     )
 
 
@@ -1466,6 +1658,11 @@ def check_path_feasibility(
     # consults this window instead; ASSIGNMENT_SHAPED rejections
     # clear it so post-mutation calls allocate fresh placeholders.
     dedup_window: Dict[str, str] = {}
+    # Call-summary axioms accumulated by _substitute_calls as it
+    # allocates placeholders for recognised libc/POSIX calls.  Asserted
+    # (tracked) alongside the pending conditions and carried as
+    # background theory through the WP pass — see _solve_pending.
+    axioms: List[Tuple[str, Any]] = []
 
     satisfied: List[str] = []
     unknown: List[str] = []
@@ -1476,6 +1673,7 @@ def check_path_feasibility(
         sat_display, pending_pair, rejection = _classify_text_condition(
             cond, vars_, tautology_solver, profile=profile,
             anon_map=anon_map, dedup_window=dedup_window,
+            axiom_sink=axioms,
         )
         if sat_display is not None:
             satisfied.append(sat_display)
@@ -1498,4 +1696,5 @@ def check_path_feasibility(
         pending, solver, satisfied, unknown, unknown_reasons,
         profile=profile, anon_map=anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
+        axioms=axioms,
     )

@@ -3,8 +3,10 @@
 Pre-fix each upstream failure produced 4 operator-visible lines
 (dispatcher request.error INFO + provider 'X completion failed'
 ERROR + client 'Attempt N/M failed' WARNING + client 'Retrying'
-INFO). Post-fix only the WARNING survives at operator-visible
-levels; the rest demote to DEBUG.
+INFO). Post-fix ONE operator-visible WARNING per retry SEQUENCE
+survives — the terminal per-model line carrying the attempt count
+and last error; per-attempt failures and the rest demote to DEBUG
+(a 429 storm printed ~370 near-identical per-attempt WARNINGs).
 
 These tests exercise the CLIENT path of the dedup — they patch
 the LLMClient's logger methods and count emissions per level
@@ -68,8 +70,8 @@ def _config(primary: ModelConfig, *, max_retries: int = 3) -> LLMConfig:
 
 
 class TestClientRetryLogCluster:
-    """One operator-visible WARNING per attempt; no 'Retrying' INFO
-    or other interstitial chatter."""
+    """One operator-visible WARNING per retry sequence; no
+    'Retrying' INFO or other interstitial chatter."""
 
     def test_three_attempts_emit_only_warnings(self, monkeypatch):
         # Setup: single model, 3 retries, every attempt fails with
@@ -97,20 +99,31 @@ class TestClientRetryLogCluster:
             with pytest.raises(Exception):  # noqa: B017 — wrapper re-raises the provider's own error
                 client.generate("test prompt")
 
-        # Operator-visible WARNINGs: 3 'Attempt N/3 failed' + 1
-        # 'All attempts failed' terminal. No fallback model, so
-        # no 'Falling back to:' line.
+        # ONE operator-visible WARNING for the whole sequence: the
+        # terminal per-model line with the attempt count and last
+        # error. Per-attempt failures live at DEBUG. No fallback
+        # model, so no 'Falling back to:' line.
         attempt_warnings = [
             m for m in cap["warning"]
             if "Attempt" in m and "failed for" in m
         ]
-        assert len(attempt_warnings) == 3, (
-            f"expected 3 'Attempt N/3 failed' warnings, got: "
+        assert attempt_warnings == [], (
+            f"per-attempt failures should be DEBUG, got WARNINGs: "
             f"{attempt_warnings}"
         )
-        assert any(
-            "All attempts failed" in m for m in cap["warning"]
-        ), f"expected 'All attempts failed' warning, got: {cap['warning']}"
+        terminal = [m for m in cap["warning"] if "giving up after" in m]
+        assert len(terminal) == 1, (
+            f"expected one terminal warning, got: {cap['warning']}"
+        )
+        assert "3 failed attempt(s)" in terminal[0]
+        assert "simulated 503" in terminal[0]
+        attempt_debugs = [
+            m for m in cap["debug"]
+            if "Attempt" in m and "failed for" in m
+        ]
+        assert len(attempt_debugs) == 3, (
+            f"expected 3 per-attempt DEBUG lines, got: {attempt_debugs}"
+        )
 
         # CRITICAL: no 'Retrying ...' INFO. Pre-fix this fired
         # twice (between attempts 1→2 and 2→3); post-fix it's DEBUG.
@@ -157,7 +170,10 @@ class TestClientRetryLogCluster:
             m for m in cap["warning"]
             if "Attempt" in m and "failed for" in m
         ]
-        assert len(attempt_warnings) == 1
+        assert attempt_warnings == []
+        terminal = [m for m in cap["warning"] if "giving up after" in m]
+        assert len(terminal) == 1
+        assert "1 failed attempt(s)" in terminal[0]
         # No 'Retrying' at any level (only one attempt).
         assert not any(
             "Retrying" in m

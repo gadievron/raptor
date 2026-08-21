@@ -1,10 +1,13 @@
 // paired_free.cocci — fire when an allocator return is freed within
 // the SAME function (alloc-then-free pairing).
 //
-// Pattern:
-//   E = alloc_fn(...);
-//   ... when != E = ...
-//   free_fn(E);
+// Pattern (two shapes per rule — spatch's decl_init isomorphism does
+// NOT let a bare `E = alloc(...)` expression pattern match a
+// declaration-with-init, verified on spatch 1.3, so the decl-init
+// shape is an explicit disjunction arm):
+//   T local = alloc_fn(...);   |   E = alloc_fn(...);
+//   ... when != local = ...    |   ... when != E = ...
+//   free_fn(local);            |   free_fn(E);
 //
 // Where the cocci `when != E = ...` excludes intervening
 // reassignment (which would make the free target a different
@@ -24,6 +27,8 @@
 // be ownership-transfer via return / out-param / global store).
 
 @paired_alloc_kfree@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = {
     kmalloc, kzalloc, kmalloc_array, kcalloc, krealloc,
@@ -33,9 +38,15 @@ identifier alloc_fn = {
 };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+kfree(local);
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 kfree(E);
+)
 
 @script:python@
 p << paired_alloc_kfree.p;
@@ -53,13 +64,21 @@ for _p in p:
 
 
 @paired_alloc_vfree@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = { vmalloc, vzalloc };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+vfree(local);
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 vfree(E);
+)
 
 @script:python@
 p << paired_alloc_vfree.p;
@@ -77,13 +96,21 @@ for _p in p:
 
 
 @paired_alloc_kvfree@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = { kvmalloc, kvzalloc };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+kvfree(local);
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 kvfree(E);
+)
 
 @script:python@
 p << paired_alloc_kvfree.p;
@@ -101,13 +128,21 @@ for _p in p:
 
 
 @paired_alloc_free@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = { malloc, calloc, realloc, strdup, strndup };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+free(local);
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 free(E);
+)
 
 @script:python@
 p << paired_alloc_free.p;
@@ -125,6 +160,8 @@ for _p in p:
 
 
 @paired_alloc_openssl@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = {
     OPENSSL_malloc, OPENSSL_zalloc, OPENSSL_realloc, OPENSSL_strdup,
@@ -134,9 +171,15 @@ identifier alloc_fn = {
 };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+\( OPENSSL_free(local); \| CRYPTO_free(local); \| OPENSSL_secure_free(local); \| CRYPTO_secure_free(local); \)
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 \( OPENSSL_free(E); \| CRYPTO_free(E); \| OPENSSL_secure_free(E); \| CRYPTO_secure_free(E); \)
+)
 
 @script:python@
 p << paired_alloc_openssl.p;
@@ -154,6 +197,8 @@ for _p in p:
 
 
 @paired_alloc_glib@
+type T;
+identifier local;
 expression E;
 identifier alloc_fn = {
     g_malloc, g_malloc0, g_realloc, g_strdup, g_strndup,
@@ -161,9 +206,15 @@ identifier alloc_fn = {
 };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+... when != local = ...
+g_free(local);
+|
 E = alloc_fn@p(...);
 ... when != E = ...
 g_free(E);
+)
 
 @script:python@
 p << paired_alloc_glib.p;

@@ -383,7 +383,13 @@ class TestAuditE2E:
               "--line-start", "8",
               "--reach-via", "called from main"])
 
-        # Write a fake /validate report that disproves it
+        # Write a fake /validate report that disproves it. The finding
+        # carries a semgrep receipt, so the downgrade referee only
+        # allows a clean downgrade when the ruling rests on a
+        # MECHANICAL disqualifier — an LLM-stage ruling (D-*) caps at
+        # suspicious (covered in test_feedback.py). Record the disproof
+        # the way /validate does when the dark-verify witness executed
+        # and refuted the prediction.
         validate_report = out_dir / "validate-findings.json"
         import json as _json
         validate_report.write_text(_json.dumps([{
@@ -391,9 +397,10 @@ class TestAuditE2E:
             "function": "vuln_fn",
             "ruling": {
                 "status": "ruled_out",
-                "disqualifier": "D-1",
-                "reason": "test-only code, not production",
+                "disqualifier": "witness_refuted",
+                "reason": "witness executed; prediction refuted",
             },
+            "witness_execution": {"verdict": "refuted"},
             "is_true_positive": False,
         }]))
 

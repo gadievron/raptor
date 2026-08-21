@@ -22,6 +22,8 @@ from core.llm.cc_adapter import (
     parse_cc_freeform,
     parse_cc_structured,
 )
+from core.security.log_sanitisation import escape_nonprintable
+from core.security.redaction import redact_secrets
 from packages.llm_analysis.dispatch import DispatchResult
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
 
@@ -32,10 +34,16 @@ CC_BUDGET_PER_FINDING = "1.00"  # string — passed as CLI arg to --max-budget-u
 
 
 def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
-                     timeout=CC_TIMEOUT):
+                     timeout=CC_TIMEOUT, system_prompt=None):
     """CC invocation with pre-built prompt. Returns DispatchResult.
 
     Used as a dispatch_fn callable by dispatch_task().
+
+    ``system_prompt`` routes through CCDispatchConfig.system_prompt
+    (the ``--system-prompt`` flag) — never fold it into ``prompt``:
+    concatenation sends operator instructions on the same channel as
+    finding-derived user content, dropping the role separation CC's
+    prompt-injection defences key off (see CCDispatchConfig).
     """
     # Use the caller's schema. Pre-fix this was
     # `build_schema() if schema else None`, which IGNORED the
@@ -60,6 +68,7 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         budget_usd=CC_BUDGET_PER_FINDING,
         timeout_s=timeout,
         json_schema=effective_schema,
+        system_prompt=system_prompt,
     )
     cmd = build_cc_command(config)
 
@@ -122,7 +131,17 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         return DispatchResult(result={"error": f"OS error invoking sandbox: {e!r}"})
 
     if proc.returncode != 0:
-        stderr_excerpt = (proc.stderr or "")[:500]
+        # Redact + defang stderr before embedding into the error
+        # message — the CC child's env carries minted AWS session
+        # credentials and SDK verbose output can echo bearer headers;
+        # stderr can also carry ANSI / BIDI / control bytes that forge
+        # log entries on operator TTYs. Same pattern as
+        # parse_cc_structured in core.llm.cc_adapter. Redact BEFORE
+        # truncating so a secret split at the cap can't survive as a
+        # partial credential.
+        stderr_excerpt = escape_nonprintable(
+            redact_secrets(proc.stderr or ""),
+        )[:500]
         result = {"error": f"exit code {proc.returncode}: {stderr_excerpt}"}
         write_debug(out_dir, "dispatch", proc.stdout, proc.stderr, result)
         return DispatchResult(result=result)
@@ -265,7 +284,15 @@ def write_debug(
     stderr: str,
     result: dict[str, Any],
 ) -> None:
-    """Write raw CC output to a debug file on failure."""
+    """Write CC output to a debug file on failure (secrets redacted).
+
+    The dump persists to disk in the run's output directory, which
+    operators share when reporting issues — the child's stderr can
+    carry the minted AWS session credentials from its env (SDK
+    verbose/error output echoes auth material), so both streams are
+    redacted and control bytes defanged (newlines preserved for
+    readability) before writing.
+    """
     try:
         # Coerce: invoke_cc_simple's callers pass str out_dirs; a bare
         # `str / str` TypeError here would turn a debug-artifact write
@@ -274,7 +301,16 @@ def write_debug(
         debug_dir.mkdir(parents=True, exist_ok=True)
         safe_id = _safe_id(finding_id)
         debug_file = debug_dir / f"cc_{safe_id}.txt"
-        debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}", encoding="utf-8")
+        safe_stdout = escape_nonprintable(
+            redact_secrets(stdout or "(empty)"), preserve_newlines=True,
+        )
+        safe_stderr = escape_nonprintable(
+            redact_secrets(stderr or "(empty)"), preserve_newlines=True,
+        )
+        debug_file.write_text(
+            f"STDOUT:\n{safe_stdout}\n\nSTDERR:\n{safe_stderr}",
+            encoding="utf-8",
+        )
         result["cc_debug_file"] = f"debug/cc_{safe_id}.txt"
     except OSError:
         pass

@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from core.paths import confine
 from core.run.scratch import scratch_dir
 
 from ._harness import (
@@ -70,6 +71,39 @@ _TYPE_RE = re.compile(
     r"^[a-zA-Z_][a-zA-Z0-9_*&\[\]<>, .:]*$"
 )
 
+# require_path is pasted into JS/TS require(), Ruby require, PHP
+# require_once and Lua require — a load path rooted at the target tree.
+# Keep it to plain path characters: anything outside this set (quotes,
+# backslashes, $, #, backticks, whitespace) has no business in a module
+# path and only shows up in injection attempts.
+_REQUIRE_PATH_RE = re.compile(r"^[a-zA-Z0-9_@./-]+$")
+
+
+def _module_ref_error(
+    field: str,
+    value: str,
+    target_root: Path | None,
+) -> str | None:
+    """Traversal/containment check for spec fields that become load paths.
+
+    require_path (JS/TS/Ruby/PHP/Lua), use_path (Rust), use_module
+    (Perl) and import_path (Go) all feed module resolution rooted at
+    the target tree; an absolute value or a ``..`` walks the load
+    outside it. The fields are separator-joined names, so a plain
+    ``..`` substring test covers every separator convention (``/``,
+    ``.``, ``::``) at once — legitimate module references never contain
+    consecutive dots. With a *target_root* the joined path must also
+    resolve inside the root (:func:`core.paths.confine`), which catches
+    a repo-planted symlink pointing out of the tree.
+    """
+    if value.startswith(("/", "\\")):
+        return f"{field} must be relative: {value!r}"
+    if ".." in value:
+        return f"{field} must not contain '..': {value!r}"
+    if target_root is not None and confine(target_root, value) is None:
+        return f"{field} escapes target root: {value!r}"
+    return None
+
 # arg_expressions are target-language literal expressions that the harness
 # generators paste verbatim into compiled/interpreted source (C: "NULL",
 # "buf", "256"; Go: "nil"; Rust: "0usize", '"x".to_string()'; Java: "null",
@@ -86,6 +120,13 @@ _TYPE_RE = re.compile(
 # statement separators (fail the parse), comments, newlines — is a
 # validation error.
 _SUFFIXED_NUMBER_RE = re.compile(r"^-?\d+(?:\.\d+)?[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# Return-value comparison is exact EXCEPT for cross-language boolean/nil
+# spellings (Python "True" vs Go/Ruby "true", "None" vs "nil"/"null"),
+# where only the casing differs by language convention. A blanket
+# case-insensitive compare would flip refuted to confirmed for any
+# case-differing string pair ("admin" vs "ADMIN").
+_BOOLEAN_SPELLINGS = frozenset({"true", "false", "nil", "none", "null"})
 
 _ALLOWED_EXPR_NODES = (
     ast.Expression, ast.Constant,
@@ -142,13 +183,17 @@ def _arg_expression_error(expr_s: str) -> str | None:
     return None
 
 
-def validate_spec(spec: DarkWitnessSpec) -> str | None:
+def validate_spec(
+    spec: DarkWitnessSpec,
+    target_root: Path | None = None,
+) -> str | None:
     """Pre-execution validation of LLM-generated spec fields.
 
     Returns an error string if the spec contains dangerous patterns,
     None if it passes validation. Defense-in-depth layer — the sandbox
     is the primary defense, this catches obvious injection attempts
-    before code generation.
+    before code generation. When *target_root* is given, the load-path
+    fields must also resolve inside it.
     """
     if not _IDENTIFIER_RE.match(spec.function):
         return f"invalid function name: {spec.function!r}"
@@ -178,16 +223,36 @@ def validate_spec(spec: DarkWitnessSpec) -> str | None:
         return f"invalid class_name: {cn!r}"
 
     up = lc.get("use_path", "")
-    if up and not _QUALIFIED_RE.match(up):
-        return f"invalid use_path: {up!r}"
+    if up:
+        if not _QUALIFIED_RE.match(up):
+            return f"invalid use_path: {up!r}"
+        err = _module_ref_error("use_path", up, target_root)
+        if err:
+            return err
 
     um = lc.get("use_module", "")
-    if um and not _QUALIFIED_RE.match(um):
-        return f"invalid use_module: {um!r}"
+    if um:
+        if not _QUALIFIED_RE.match(um):
+            return f"invalid use_module: {um!r}"
+        err = _module_ref_error("use_module", um, target_root)
+        if err:
+            return err
 
     ip = lc.get("import_path", "")
-    if ip and not re.match(r"^[a-zA-Z0-9_./-]+$", ip):
-        return f"invalid import_path: {ip!r}"
+    if ip:
+        if not re.match(r"^[a-zA-Z0-9_./-]+$", ip):
+            return f"invalid import_path: {ip!r}"
+        err = _module_ref_error("import_path", ip, target_root)
+        if err:
+            return err
+
+    rp = lc.get("require_path", "")
+    if rp:
+        if not _REQUIRE_PATH_RE.match(rp):
+            return f"invalid require_path: {rp!r}"
+        err = _module_ref_error("require_path", rp, target_root)
+        if err:
+            return err
 
     return None
 
@@ -242,7 +307,7 @@ def execute_witness(
             match_detail=f"source file not found: {spec.file}",
         )
 
-    spec_err = validate_spec(spec)
+    spec_err = validate_spec(spec, target_root)
     if spec_err:
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="error", language=lang,
@@ -365,7 +430,12 @@ def _classify_json_output(
                     and actual_repr[-1] == actual_repr[0]
                 ):
                     actual_repr = actual_repr[1:-1]
-            if actual_repr.lower() == expected_repr.lower():
+            folded = actual_repr.lower()
+            matches = actual_repr == expected_repr or (
+                folded == expected_repr.lower()
+                and folded in _BOOLEAN_SPELLINGS
+            )
+            if matches:
                 return DarkVerifyResult(
                     finding_key=spec.finding_key, verdict="confirmed",
                     language=language, actual_return=actual_repr,
@@ -1021,12 +1091,88 @@ def _execute_ts(
     )
 
 
+# Bound on proxy hops in _resolve_rustc: which() result -> wrapper ->
+# rustup proxy -> toolchain compiler is 3; one spare for exotic stacks.
+_RUSTC_RESOLVE_MAX_HOPS = 4
+
+
+def _resolve_rustc() -> str | None:
+    """Resolve the real rustc binary, seeing through proxy layers.
+
+    rustup installs ``rustc`` as a proxy (a hardlink of the multi-call
+    ``rustup`` binary): at run time it reads the ``$RUSTUP_HOME``
+    (default ``~/.rustup``) settings and re-execs the selected
+    toolchain's compiler from ``toolchains/<tc>/bin/rustc``. The
+    witness compile runs under ``restrict_reads`` with only the
+    *invoked* binary's own directories granted
+    (:func:`_toolchain_read_paths`), so the proxy's settings read and
+    toolchain exec are denied and every Rust witness collapses to
+    ``verdict="error"`` ("compilation failed") on rustup-managed hosts
+    — while system installs under /usr keep working. Ask the proxy
+    for its sysroot on the host (the operator's own toolchain — the
+    same trust as ``shutil.which``) and invoke the real compiler
+    directly; the sysroot then IS the granted read root, covering the
+    sibling lib/ tree the compile needs.
+
+    Resolution must reach a fixed point, not stop after one hop:
+    wrapper shims can layer (a site-local rustc wrapper dispatching to
+    a rustup-managed install), and then ``<sysroot>/bin/rustc`` from
+    the first probe is itself a proxy whose settings read the sandbox
+    denies. A candidate is the real compiler only when it lives inside
+    the sysroot it reports — a proxy always reports a sysroot
+    elsewhere — so keep probing until a candidate passes that check
+    (bounded by ``_RUSTC_RESOLVE_MAX_HOPS``).
+    """
+    rustc = shutil.which("rustc")
+    if not rustc:
+        return None
+    for _ in range(_RUSTC_RESOLVE_MAX_HOPS):
+        # System installs (/usr/bin/rustc etc.) are no rustup proxies
+        # and live inside the sandbox's default read allowlist — even a
+        # distro proxy under /usr can read its own settings there. Only
+        # probe when rustc resolves OUTSIDE the system prefixes
+        # (rustup's ~/.cargo/bin layout), keeping the host-side probe
+        # off the common path.
+        resolved = os.path.realpath(rustc)
+        if any(resolved.startswith(p) for p in _SYSTEM_TOOLCHAIN_PREFIXES):
+            return rustc
+        try:
+            proc = subprocess.run(
+                [rustc, "--print", "sysroot"],
+                capture_output=True, text=True, timeout=_COMPILE_TIMEOUT_S,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return rustc
+        sysroot = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not sysroot:
+            return rustc
+        real = Path(sysroot) / "bin" / "rustc"
+        if not real.is_file():
+            return rustc
+        # Real compiler: lives inside the sysroot it reports (rustup's
+        # toolchains/<tc>/bin/rustc under toolchains/<tc>). A proxy
+        # resolves elsewhere (~/.cargo/bin) — probe IT next.
+        if os.path.realpath(real).startswith(
+                os.path.realpath(sysroot) + os.sep):
+            return str(real)
+        if str(real) == rustc:
+            return rustc  # self-reporting proxy: no progress possible
+        rustc = str(real)
+    return rustc
+
+
 def _execute_rust(
     spec: DarkWitnessSpec,
     target_root: Path,
     timeout_s: int,
 ) -> DarkVerifyResult:
-    rustc = shutil.which("rustc")
+    # Fail closed BEFORE the host-side sysroot probe: with no sandbox
+    # nothing may execute — not even the trusted-toolchain probe.
+    sandbox_run = _import_sandbox_run()
+    if sandbox_run is None:
+        return _sandbox_refusal_result(spec, "rust")
+
+    rustc = _resolve_rustc()
     if not rustc:
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="error", language="rust",
@@ -1080,10 +1226,7 @@ def _execute_rust(
             # rustc executes target-derived code paths at compile time
             # (include_str!/include_bytes! read any operator-readable
             # file into the binary) — sandbox the compile like the run
-            # step and fail closed without one.
-            sandbox_run = _import_sandbox_run()
-            if sandbox_run is None:
-                return _sandbox_refusal_result(spec, "rust")
+            # step; the fail-closed check already ran up top.
             comp = _sandboxed_compile(
                 sandbox_run, compile_cmd,
                 target_root=target_root, work_dir=work_dir,

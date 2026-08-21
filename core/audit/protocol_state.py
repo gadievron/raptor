@@ -61,6 +61,7 @@ import json
 import logging
 import re
 import time
+from bisect import bisect_right
 # `field` is a receipt attribute name on StateEvidence (§4.2), so the
 # dataclasses helper is imported under an alias.
 from dataclasses import dataclass
@@ -322,10 +323,16 @@ def build_state_field_index(
     for fp, source in sorted(source_texts.items()):
         if not fp.endswith(_SOURCE_SUFFIXES):
             continue
+        # Spans are emitted in ascending start order and do not
+        # overlap, so a bisect on start lines replaces the linear
+        # scan the index used to run per field access.
         spans = _c_function_spans(source)
+        span_starts = [start for _name, start, _end in spans]
 
         def _function_at(line: int) -> tuple[str, tuple[str, ...]]:
-            for name, start, end in spans:
+            i = bisect_right(span_starts, line) - 1
+            if i >= 0:
+                name, start, end = spans[i]
                 if start <= line <= end:
                     return name, ()
             return "", ()
@@ -515,14 +522,81 @@ def _branch_guards(
 def _bare_fields(text: str, names: set[str]) -> str:
     """Normalise ``base->field`` / ``base.field`` chains to bare field
     names for every invariant identifier, so site code and guards
-    speak the invariant's vocabulary."""
+    speak the invariant's vocabulary.
+
+    Implemented as a manual backward walk over ``ident (->|.)``
+    prefixes. The previous ``(?:ident(?:->|.))+name`` regex carried an
+    ambiguous nested quantifier that backtracked superlinearly on long
+    access chains (tens of seconds on multi-kB guard-condition
+    strings), and the per-invariant budget is only checked between
+    sites — one pathological condition stalled the whole harness."""
     out = text
     for name in sorted(names, key=len, reverse=True):
-        out = re.sub(
-            rf"(?:[A-Za-z_]\w*\s*(?:->|\.)\s*)+({re.escape(name)})\b",
-            r"\1", out,
-        )
+        out = _strip_chain_prefixes(out, name)
     return out
+
+
+def _chain_prefix_start(text: str, pos: int,
+                        cache: dict[int, int]) -> int:
+    """Start offset of the longest ``ident (->|.)`` chain ending at
+    *pos* (*pos* itself when there is no prefix). *cache* memoises
+    chain starts for previously walked end positions so overlapping
+    chains (``name.name.name…``) stay linear overall."""
+    i = pos
+    while True:
+        hit = cache.get(i)
+        if hit is not None:
+            i = hit
+            break
+        j = i
+        while j > 0 and text[j - 1].isspace():
+            j -= 1
+        if j >= 2 and text[j - 2:j] == "->":
+            j -= 2
+        elif j >= 1 and text[j - 1] == ".":
+            j -= 1
+        else:
+            break
+        while j > 0 and text[j - 1].isspace():
+            j -= 1
+        k = j
+        while k > 0 and (text[k - 1].isalnum() or text[k - 1] == "_"):
+            k -= 1
+        # The identifier must start [A-Za-z_]; skip a leading digit
+        # run so ``9a.name`` still strips the valid ``a.`` prefix.
+        while k < j and text[k].isdigit():
+            k += 1
+        if k == j:
+            break
+        i = k
+    cache[pos] = i
+    return i
+
+
+def _strip_chain_prefixes(text: str, name: str) -> str:
+    """Delete every ``ident (->|.)`` chain immediately preceding a
+    whole-word occurrence of *name* (the manual, linear-time
+    equivalent of ``s/(?:ident(?:->|.))+name/name/``)."""
+    cuts: list[list[int]] = []
+    cache: dict[int, int] = {}
+    for m in re.finditer(rf"\b{re.escape(name)}\b", text):
+        start = _chain_prefix_start(text, m.start(), cache)
+        if start >= m.start():
+            continue
+        if cuts and start <= cuts[-1][1]:
+            cuts[-1][0] = min(cuts[-1][0], start)
+            cuts[-1][1] = max(cuts[-1][1], m.start())
+        else:
+            cuts.append([start, m.start()])
+    if not cuts:
+        return text
+    pieces: list[str] = []
+    prev = 0
+    for start, end in cuts:
+        pieces.append(text[prev:start])
+        prev = end
+    pieces.append(text[prev:])
+    return "".join(pieces)
 
 
 # ── leg 3: census-driven multi-site invariant harness ───────────────

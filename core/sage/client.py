@@ -14,6 +14,7 @@ the second hook call onwards.
 """
 
 import os
+import stat
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +24,69 @@ from core.logging import get_logger
 from .config import SageConfig, ensure_loopback_no_proxy
 
 logger = get_logger()
+
+
+def harden_identity_key_perms(identity_path=None) -> None:
+    """Clamp the SAGE agent identity key to owner-only permissions.
+
+    The SDK persists the Ed25519 seed with a plain ``open(path, "wb")``,
+    so the key file inherits the process umask — deployed keys have been
+    observed group-readable. Anyone who can read the seed can sign
+    requests as this agent. Until the SDK hardens its own write path,
+    every RAPTOR call site that loads or auto-provisions the identity
+    (this client, libexec/raptor-sage, and the install-time
+    register/seed scripts, which additionally clamp the umask to 0o077
+    across creation so a fresh key is never umask-wide even briefly)
+    calls this immediately after the ``AgentIdentity`` call: chmod the
+    key to 0600 (and its directory to 0700), warning when group/other
+    bits were set — the same posture ``core/sage/rowmac.py`` applies to
+    the row-MAC key.
+
+    ``identity_path=None`` resolves the SDK's own default
+    (``$SAGE_IDENTITY_PATH`` or ``~/.sage/agent.key``). Never raises;
+    a missing key (SDK not yet provisioned) is a no-op.
+    """
+    try:
+        if identity_path:
+            path = Path(identity_path).expanduser()
+        else:
+            custom = os.environ.get("SAGE_IDENTITY_PATH", "").strip()
+            path = (
+                Path(custom).expanduser()
+                if custom
+                else Path.home() / ".sage" / "agent.key"
+            )
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode):
+            # Symlink or odd object at the key path — never chase it
+            # (chmod through a planted symlink is an attacker-directed
+            # write). Same refusal posture as rowmac's key reads.
+            logger.warning(
+                "SAGE identity key %s is not a regular file — "
+                "leaving permissions untouched; investigate",
+                path,
+            )
+            return
+        if st.st_mode & 0o077:
+            logger.warning(
+                "SAGE identity key %s had mode %04o (group/other "
+                "access) — clamping to 0600",
+                path,
+                stat.S_IMODE(st.st_mode),
+            )
+            os.chmod(path, 0o600)
+        parent = path.parent
+        # Clamp the containing directory too, but never a shared root
+        # like $HOME (an operator pointing SAGE_IDENTITY_PATH at
+        # ~/mykey.key must not get their home directory chmodded).
+        if parent != Path.home():
+            pst = os.stat(parent)
+            if pst.st_mode & 0o077:
+                os.chmod(parent, 0o700)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.debug("could not harden SAGE identity key perms: %s", exc)
 
 _OLLAMA_EMBED_URL = os.getenv(
     "SAGE_OLLAMA_URL", "http://localhost:11435"
@@ -208,8 +272,13 @@ class SageClient:
             identity_path = self._config.identity_path
             if identity_path and Path(identity_path).exists():
                 identity = _AgentIdentity.from_file(identity_path)
+                harden_identity_key_perms(identity_path)
             else:
                 identity = _AgentIdentity.default()
+                # default() may have just auto-provisioned the key with
+                # a umask-wide write — clamp it (resolves the SDK's own
+                # default path).
+                harden_identity_key_perms(None)
 
             self._client = _SyncSageClient(
                 base_url=self._config.url,

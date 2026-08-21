@@ -352,13 +352,14 @@ def _load_source_lines(
         return cache[uri]
     lines: list[str] | None = None
     try:
-        rel = uri.lstrip("/")
-        candidate = (target_path / rel).resolve()
+        from core.paths import confine
+
         # Path-containment: SARIF uris are attacker-influenced text.
-        if (
-            str(candidate).startswith(str(Path(target_path).resolve()))
-            and candidate.is_file()
-        ):
+        # ``confine`` is separator-aware — the previous bare-prefix
+        # startswith accepted sibling directories like
+        # ``/repo-evil`` for target ``/repo``.
+        candidate = confine(target_path, uri.lstrip("/"))
+        if candidate is not None and candidate.is_file():
             lines = candidate.read_text(errors="replace").splitlines()
     except (OSError, ValueError):
         lines = None

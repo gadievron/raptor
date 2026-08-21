@@ -5,6 +5,7 @@ directory. Project files live in ~/.raptor/projects/<name>.json.
 Output directories live wherever the user specifies (default: out/projects/<name>/).
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -13,14 +14,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
+from core.config import RaptorConfig
 from core.json import load_json, save_json
 from core.logging import get_logger
+
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:                                    # pragma: no cover
+    _HAS_FCNTL = False
 
 logger = get_logger()
 
 # Default locations
 PROJECTS_DIR = Path.home() / ".raptor" / "projects"
-DEFAULT_OUTPUT_BASE = Path("out/projects")
+# Anchored to the repo-rooted out/ dir. Pre-fix this was the
+# cwd-relative Path("out/projects"): create() minted default output
+# dirs relative to whatever cwd the process happened to have, the
+# purge containment in delete() resolved against that same moving
+# target, and is_project_output_dir() misclassified real project
+# dirs whenever cwd != repo root.
+DEFAULT_OUTPUT_BASE = RaptorConfig.BASE_OUT_DIR / "projects"
 
 
 _PROJECT_SCHEMA_VERSION = 4
@@ -83,6 +97,21 @@ _LANG_SLOT_RE = re.compile(r"\A[a-zA-Z0-9_+#.-]{1,32}\Z")
 # project JSON unboundedly.
 _MAX_SETTING_LEN = 4096
 
+# Machine-generated project naming patterns eligible for auto-expiry.
+# Projects are operator artifacts: expiry NEVER applies to a name
+# outside these prefixes, and even for matching names it applies only
+# when the creating machinery ALSO stamped ``expires_at`` (both
+# conditions — belt and braces). Currently only the corpus runner's
+# throwaway ``corpus-<tag>`` projects (target /tmp) qualify: one left
+# active by a crashed run turned every subsequent no-path command into
+# an audit of /tmp under the default-target rules.
+MACHINE_PROJECT_PREFIXES = ("corpus-",)
+
+
+def is_machine_project_name(name: str) -> bool:
+    """True when *name* matches a machine-generated naming pattern."""
+    return any(name.startswith(p) for p in MACHINE_PROJECT_PREFIXES)
+
 
 def split_setting_key(key: str):
     """Split ``build-command.<lang>`` into ``("build-command", lang)``.
@@ -104,6 +133,44 @@ def split_setting_key(key: str):
         + ", ".join(sorted(SETTINGS_REGISTRY))
         + " (per-language: build-command.<lang>)"
     )
+
+
+@contextlib.contextmanager
+def project_file_lock(project_file: Path):
+    """Cross-process exclusive lock guarding a project-JSON
+    read-modify-write window.
+
+    Same idiom as ``core.run.metadata._metadata_lock``: flock a sibling
+    ``.lock`` file (not the JSON itself, which ``save_json`` atomically
+    replaces), hold it across the whole load → mutate → save window,
+    degrade to a no-op without fcntl. Without it, concurrent mutators
+    (``/project binary add`` racing ``/project trust``, two parallel
+    ``set`` invocations) last-writer-wins and one update is silently
+    dropped.
+
+    The ``.lock`` file is deliberately left behind — unlinking after
+    unlock races and can split lockers across two inodes.
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    path = Path(project_file)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    try:
+        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        # Lock file uncreatable (read-only dir, ENOSPC) — proceed
+        # unserialised rather than failing the mutation.
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _validate_trust_marker(marker: str) -> str:
@@ -158,6 +225,14 @@ class Project:
     # latter stored as a lang→cmd dict, bare sets use the ``default``
     # slot). See SETTINGS_REGISTRY.
     settings: dict = field(default_factory=dict)
+    # Creation-time auto-expiry marker (ISO timestamp), stamped ONLY by
+    # machine creators (corpus runner) on MACHINE_PROJECT_PREFIXES
+    # names, consumed at .active resolution (ProjectManager.get_active)
+    # — an expired machine project silently stops being the active
+    # default target. Empty = never expires (every operator-created
+    # project). Overridable: an explicit ``/project use <name>`` clears
+    # it — the operator choosing the project makes it operator-owned.
+    expires_at: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -176,6 +251,7 @@ class Project:
                 k: (dict(v) if isinstance(v, dict) else v)
                 for k, v in self.settings.items()
             },
+            "expires_at": self.expires_at,
         }
 
     @classmethod
@@ -210,6 +286,7 @@ class Project:
             threat_model_updated=str(data.get("threat_model_updated") or ""),
             trust=cls._parse_trust(data.get("trust")),
             settings=cls._parse_settings(data.get("settings")),
+            expires_at=str(data.get("expires_at") or ""),
         )
 
     @staticmethod
@@ -251,6 +328,28 @@ class Project:
             # canonical lang→cmd dict on the default slot.
             settings["build-command"] = {"default": build}
         return settings
+
+    def is_expired_machine_project(self, now: datetime | None = None) -> bool:
+        """True iff this is a machine-generated project whose
+        auto-expiry timestamp has passed.
+
+        Both conditions are required: the name must match a
+        MACHINE_PROJECT_PREFIXES pattern AND ``expires_at`` must be a
+        parseable ISO timestamp in the past. Operator-named projects
+        never expire regardless of the field; a malformed timestamp
+        fails open (no expiry) — projects are operator artifacts and
+        expiry must never surprise-delete a real one.
+        """
+        if not self.expires_at or not is_machine_project_name(self.name):
+            return False
+        try:
+            expiry = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            return False
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        return current >= expiry
 
     # ------------------------------------------------------------------
     # v4 trust markers — operator assertions. NEVER auto-set from
@@ -730,39 +829,48 @@ class ProjectManager:
             raise ValueError(f"Project '{name}' not found")
         return project
 
+    def _mutation_lock(self, name: str):
+        """Project-JSON RMW lock for the mutators below."""
+        return project_file_lock(self.projects_dir / f"{name}.json")
+
     def set_trust_marker(self, name: str, marker: str) -> str:
         """Set a trust marker on a project. Returns the timestamp.
         Raises ValueError for unknown projects or markers. NEVER call
         this from detection heuristics — operator intent only."""
-        project = self._load_or_raise(name)
-        ts = project.set_trust(marker)
-        self._save(project)
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            ts = project.set_trust(marker)
+            self._save(project)
         logger.info("Project '%s': trust marker '%s' set", name, marker)
         return ts
 
     def clear_trust_marker(self, name: str, marker: str) -> bool:
         """Remove a trust marker. Returns True if it was set."""
-        project = self._load_or_raise(name)
-        removed = project.clear_trust(marker)
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            removed = project.clear_trust(marker)
+            if removed:
+                self._save(project)
         if removed:
-            self._save(project)
             logger.info("Project '%s': trust marker '%s' removed",
                         name, marker)
         return removed
 
     def update_setting(self, name: str, key: str, value: str) -> Project:
         """Registry-validated setting write on a project."""
-        project = self._load_or_raise(name)
-        project.set_setting(key, value)
-        self._save(project)
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            project.set_setting(key, value)
+            self._save(project)
         return project
 
     def remove_setting(self, name: str, key: str) -> bool:
         """Remove a setting. Returns True if it was set."""
-        project = self._load_or_raise(name)
-        removed = project.unset_setting(key)
-        if removed:
-            self._save(project)
+        with self._mutation_lock(name):
+            project = self._load_or_raise(name)
+            removed = project.unset_setting(key)
+            if removed:
+                self._save(project)
         return removed
 
     def update_notes(self, name: str, notes: str) -> Project:
@@ -914,14 +1022,38 @@ class ProjectManager:
             active_link.unlink(missing_ok=True)
 
     def get_active(self) -> str | None:
-        """Get the active project name from the .active symlink."""
+        """Get the active project name from the .active symlink.
+
+        Consumes machine-project auto-expiry: when the linked project
+        is a MACHINE_PROJECT_PREFIXES name whose ``expires_at`` has
+        passed (stamped at creation by the corpus runner), the symlink
+        is cleared with a loud log line and None is returned — a
+        throwaway corpus project left active by a crashed run must not
+        keep steering no-path commands at /tmp. Operator projects are
+        never expired; ``/project use <name>`` clears the marker.
+        """
         active_link = self.projects_dir / ".active"
         if active_link.is_symlink():
             target = os.readlink(active_link)
             if target.endswith(".json") and "/" not in target and "\\" not in target:
                 project_file = self.projects_dir / target
                 if project_file.exists():
-                    return target[:-5]
+                    name = target[:-5]
+                    if is_machine_project_name(name):
+                        project = self.load(name)
+                        if (project is not None
+                                and project.is_expired_machine_project()):
+                            logger.warning(
+                                "Active project '%s' is a machine-"
+                                "generated project past its auto-expiry "
+                                "(%s) — deactivating. Re-activate "
+                                "explicitly with '/project use %s' to "
+                                "keep it (this clears the expiry).",
+                                name, project.expires_at, name,
+                            )
+                            active_link.unlink(missing_ok=True)
+                            return None
+                    return name
                 # Dangling — clean up
                 active_link.unlink(missing_ok=True)
         return None

@@ -110,9 +110,18 @@ def main() -> int:
         return 0
 
     # analyze() is skip-silent: spatch-missing / non-C / rules-missing all
-    # return an empty result rather than raising.
+    # return an empty result rather than raising. Progress goes to
+    # stderr (stdout stays reserved for the result line): one line per
+    # cocci rule as it starts plus a 30s idle heartbeat — a large C
+    # target used to sit >300s with zero output here.
     try:
-        si = analyze(Path(target_path))
+        from packages.source_intel.progress import RuleProgressPrinter
+        print(
+            f"raptor-enrich-context-map-sites: running source_intel "
+            f"(cocci) on {target_path} ...", file=sys.stderr, flush=True,
+        )
+        with RuleProgressPrinter(sys.stderr, label="cocci") as prog:
+            si = analyze(Path(target_path), progress=prog.on_rule)
     except Exception as e:  # noqa: BLE001 — never abort the run on this
         print(
             f"raptor-enrich-context-map-sites: source_intel analysis "

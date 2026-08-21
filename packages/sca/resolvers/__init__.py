@@ -274,6 +274,7 @@ def _run(
             sandbox_kwargs["block_network"] = True
         else:
             sandbox_kwargs["use_egress_proxy"] = True
+            sandbox_kwargs["require_proxy_netns"] = True  # 00015: untrusted egress must use the netns tier
             sandbox_kwargs["proxy_hosts"] = list(proxy_hosts)
 
         return sandbox_run(cmd, **sandbox_kwargs)

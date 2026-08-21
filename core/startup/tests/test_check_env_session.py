@@ -12,6 +12,7 @@ truth — banner picks them up automatically).
 
 from __future__ import annotations
 
+from unittest import mock
 
 import pytest
 
@@ -106,7 +107,7 @@ class TestPythonVersionCheck:
         # No version mock — we're running on a real Python.
         # Whatever version it is, the version should appear as a
         # part with the appropriate glyph.
-        parts, warnings = _run_check_env(monkeypatch)
+        parts, _warnings = _run_check_env(monkeypatch)
         version_parts = [p for p in parts if p.startswith("Python ")]
         assert version_parts, f"no python version in parts: {parts}"
 
@@ -152,6 +153,59 @@ class TestPythonVersionCheck:
         assert not any(
             "Python" in w and "3.10+" in w for w in warnings
         )
+
+
+class TestSandboxCapabilityTier:
+    """Linux sandbox line surfaces the host's Landlock ABI tier once
+    at startup — the per-run warnings (egress allowlist advisory on
+    ABI < 4) otherwise repeat per run with no single summary."""
+
+    def _run(self, monkeypatch, *, net=True, mount=True, landlock=True,
+             seccomp=True, abi=5):
+        monkeypatch.setattr("sys.platform", "linux")
+        with mock.patch("core.sandbox.check_net_available", return_value=net), \
+             mock.patch("core.sandbox.check_mount_available", return_value=mount), \
+             mock.patch("core.sandbox.check_landlock_available", return_value=landlock), \
+             mock.patch("core.sandbox.check_seccomp_available", return_value=seccomp), \
+             mock.patch("core.sandbox._get_landlock_abi", return_value=abi), \
+             mock.patch("core.startup.init._check_analyzer_capabilities",
+                        return_value=([], [])):
+            return _run_check_env(monkeypatch)
+
+    def test_abi_tier_shown_in_sandbox_part(self, fake_repo, monkeypatch):
+        parts, warnings = self._run(monkeypatch, abi=5)
+        sandbox = [p for p in parts if p.startswith("sandbox")]
+        assert sandbox and "landlock:abi5" in sandbox[0]
+        assert not any("Landlock ABI" in w for w in warnings)
+
+    def test_abi_below_4_warns_about_advisory_egress(
+        self, fake_repo, monkeypatch,
+    ):
+        parts, warnings = self._run(monkeypatch, abi=3)
+        sandbox = [p for p in parts if p.startswith("sandbox")]
+        assert sandbox and "landlock:abi3" in sandbox[0]
+        match = [w for w in warnings if "Landlock ABI 3 < 4" in w]
+        assert match, warnings
+        assert "advisory" in match[0]
+
+    def test_landlock_unavailable_no_abi_or_warning(
+        self, fake_repo, monkeypatch,
+    ):
+        parts, warnings = self._run(monkeypatch, landlock=False, abi=0)
+        sandbox = [p for p in parts if p.startswith("sandbox")]
+        assert sandbox and "landlock" not in sandbox[0]
+        # The pre-existing "Landlock filesystem restriction missing"
+        # warning covers total absence; no ABI-tier warning on top.
+        assert not any("Landlock ABI" in w for w in warnings)
+
+    def test_abi_probe_returning_zero_degrades_to_plain_feature(
+        self, fake_repo, monkeypatch,
+    ):
+        parts, warnings = self._run(monkeypatch, abi=0)
+        sandbox = [p for p in parts if p.startswith("sandbox")]
+        assert sandbox and "landlock" in sandbox[0]
+        assert "abi" not in sandbox[0]
+        assert not any("Landlock ABI" in w for w in warnings)
 
 
 class TestNoClaudeFileChecks:

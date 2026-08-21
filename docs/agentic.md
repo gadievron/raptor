@@ -41,7 +41,8 @@ The core flow is four steps, with optional passes layered on top:
 scan  →  dedup  →  prep  →  analyse (per finding)
 ```
 
-1. **Scan** -- Semgrep by default; CodeQL in parallel when enabled (`--codeql`).
+1. **Scan** -- Semgrep, with CodeQL in parallel by default (disable with
+   `--no-codeql`, or set `codeql_enabled: false` in tuning.json).
    C/C++ CodeQL databases build in buildless mode by default (no repo
    build scripts execute); pass `--traced-build` to opt into
    full-fidelity traced extraction on a repo you trust (see
@@ -87,6 +88,10 @@ marked *(flag)* only fire when explicitly requested:
 8. **Patches** -- secure fixes for exploitable findings (skip: `--no-patches`).
 9. **Cross-finding analysis** -- structural grouping, shared root causes, attack
    chaining.
+10. **Gap audit** *(`--gap-audit`)* -- audits the coverage residual as a
+    sibling `/audit` run (see [Enrichment flags](#enrichment-flags)).
+11. **Validation** *(`--validate`)* -- validates exploitable findings
+    (merged with the gap-audit findings when both flags are set).
 
 Cost is tracked in real time with an adaptive budget cutoff (default $10;
 override with `--max-cost-usd`).
@@ -104,21 +109,75 @@ override with `--max-cost-usd`).
 
 ## Enrichment flags
 
-By default `/agentic` scans and analyses findings in isolation.  Two opt-in
-flags add architectural context and a validation post-pass:
+By default `/agentic` scans and analyses findings in isolation.  Three opt-in
+flags add architectural context, a coverage audit, and a validation post-pass:
 
 | Flag | What it does |
 |------|--------------|
 | `--understand` | Runs `/understand --map` **before** scanning, producing `context-map.json` (entry points, trust boundaries, sinks).  Per-finding prompts carry the architectural role so the analyst knows whether a function is an entry point, a sink, or interior code. |
+| `--gap-audit` | **After** analysis, runs the [/audit](audit.md) orchestrator over the coverage residual -- functions no phase reviewed -- as a sibling audit run.  See below. |
 | `--validate` | **After** the pipeline completes, runs the full [validation pipeline](validation.md) on findings flagged exploitable or high-confidence.  Creates a sibling validate run that auto-discovers the `--understand` map. |
 
-Use either alone or together:
+Use them independently or together:
 
 ```bash
 /agentic --understand --validate     # pre-map, then validate exploitable findings
+/agentic --understand --gap-audit --validate  # full-coverage review
 /agentic --understand                # enrich this run's analysis only
 /agentic --validate                  # validate what looks exploitable
 ```
+
+### Gap-audit post-pass
+
+Runs without `--gap-audit` end with a coverage nudge when most of the
+inventory was never reviewed ("~N of M inventory functions have no review
+record").  `--gap-audit` is the answer: it hands the coverage residual to
+the audit orchestrator as a sibling run, reviewing the most promising
+functions first.  The audit inherits this run's checklist, every CodeQL
+database the scan phase built (dispatch routes per file language), the
+binary-oracle inputs, and the analysis models.  The run's own per-finding
+analyses ride in as prior claims (`--prior-journal`), never as coverage.
+See [audit.md](audit.md#agentic--audit) for the kind-aware journal
+semantics.
+
+Sub-flags: `--gap-audit-budget N` (max functions),
+`--gap-audit-strategy NAME`, `--gap-audit-scope DIR` (repeatable),
+`--gap-audit-share FRACTION` (slice of `--max-cost-usd` reserved up front
+for the audit; default 0.35, clamped to 0.05--0.95), and
+`--gap-audit-no-adversarial`.
+
+Notes on the moving parts:
+
+- **Adversarial reviewer** -- two or more analysis models auto-enable the
+  audit's adversarial reviewer; `--gap-audit-no-adversarial` suppresses
+  the auto-enable.  The decision is recorded in the report's phase block
+  (`adversarial`, plus `adversarial_opted_out` when suppressed).
+- **LLM transport** -- an explicit `--model` or a configured external LLM
+  carries the audit; otherwise Claude Code on PATH runs it via the
+  claudecode transport, gated on the target-repo trust check.  Only a
+  blocked repo or a truly LLM-less environment skips the pass (with a
+  reason).
+- **Map dependency** -- with no `--understand` and no context map (even a
+  stale one) discoverable for the target, the pre-map pass is enabled
+  automatically.
+- **Validation** -- with `--validate`, the audit findings join the same
+  validate pass and the verdicts feed back into the audit journal via
+  `raptor-audit feedback`; without it, the run ends with a loud
+  UNVALIDATED warning.
+- **Interrupted audits** -- if the audit is interrupted, `/agentic`
+  prints the `raptor-audit resume` command for the sibling run.  Because
+  the parent normally validates the merged findings, a resumed segment
+  that completes with findings also prints the deferred `/validate` and
+  `raptor-audit feedback` steps so its findings don't ship unvalidated.
+
+The final report inlines the audit outcome: the **Gap Audit Post-Pass**
+section of `agentic-report.md` carries the review counts, a severity
+roll-up, and a findings table (location, severity, tool evidence; capped
+at 10 rows, with the overflow pointed at the sibling run's
+`findings.json`).  The table reflects post-review corrections, and when
+the merged validate pass ran, each row also shows its validation
+outcome -- so the main report answers what the audit found and whether
+it survived validation without opening the sibling run.
 
 ### Threat-model integration
 
@@ -146,12 +205,11 @@ manual analysis.
 
 ### Persona injection
 
-The methodology loader (`core/llm/methodology.py`) automatically injects
-expert persona content from `tiers/personas/` into analysis system
-prompts.  The crash agent gets the crash analyst and binary exploitation
-specialist personas; the autonomous analyser gets the security researcher
-for analysis and the exploit developer for exploit generation.  This
-happens transparently -- no flags needed.
+Expert persona content from `tiers/personas/` is injected into analysis
+system prompts automatically.  The crash agent gets the crash analyst
+and binary exploitation specialist personas; the autonomous analyser
+gets the security researcher for analysis and the exploit developer for
+exploit generation.  This happens transparently -- no flags needed.
 
 
 ## Multi-model analysis
@@ -183,6 +241,11 @@ With 3+ analysis models, an auto-loaded consensus model is stripped as
 redundant (the analysis panel already provides independent opinions).  An
 explicit `--consensus` flag is still honoured.
 
+On multi-model runs each non-primary panel member's verdict is journaled
+under its own model (the primary is covered by the merged post-pipeline
+entry), so cross-model disagreement per function is a journal query --
+see `/review`.
+
 See [LLM providers](llm.md) for model configuration, roles, and the scorecard.
 
 
@@ -209,6 +272,24 @@ oracle runs unfiltered.
 Persistent per-project binaries set via `/project binary add` are picked up
 automatically.
 
+### Other pre-LLM checks
+
+The binary oracle is one of several mechanical checks that run before
+each finding's LLM call.  Each skip is recorded in `suppressions.jsonl`
+with a verdict naming the check, and per-check counters join the report:
+
+- **Guard dominance** -- findings whose claimed flow is dominated by a
+  refuting guard skip the LLM call (`guard_dominance_refuted`).
+- **Fail-open channel** -- findings whose reasoning makes a fail-open
+  (swallowed-error) claim are adjudicated mechanically first (see the
+  [audit tool menu](audit.md#tool-menu)).  A refuted claim skips the LLM
+  call (`fail_open_refuted`); a confirmed claim rides along as
+  corroboration and the LLM still rules on exploitability.
+- **SAGE prior verdicts** -- with SAGE installed, cross-run
+  false-positive verdicts for the same finding (source unchanged) skip
+  re-analysis (`sage_<verdict>`).  Set `manual_override` on a finding to
+  force it through to fresh review.
+
 
 ## Output
 
@@ -219,7 +300,7 @@ or the active project directory).
 |------|----------|
 | `agentic-report.md` | Human-readable summary |
 | `autonomous_analysis_report.json` | Structured data -- all findings with analysis, verdicts, and metadata |
-| `suppressions.jsonl` | Binary-oracle suppression audit trail |
+| `suppressions.jsonl` | Pre-LLM suppression audit trail (binary oracle, guard dominance, fail-open channel, SAGE prior verdicts) |
 
 The report carries one of three modes:
 

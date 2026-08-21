@@ -179,10 +179,29 @@ def _is_detection_variant(part: str) -> bool:
     return False
 
 
+# Provenance wrappers: prefixes that record HOW a tool receipt was
+# earned, wrapped around the receipt itself.  ``clean-refuted:smt`` is
+# _promote_clean_refuted's stamp for "the LLM refuted its own
+# hypothesis and SMT then confirmed it" — the inner stamp is the
+# evidence; the prefix is history.  Unwrapping keeps the promotion
+# alarm honest: before this, every clean-refuted promotion (a
+# policy-sanctioned, tool-confirmed lane) fired the
+# promotion_without_tool_evidence CRITICAL because the wrapper
+# namespace was unknown here, drowning the alarm channel that is
+# supposed to be EMPTY on legitimate runs.
+_PROVENANCE_WRAPPERS = ("clean-refuted:",)
+
+
 def _is_single_tool_evidence(part: str) -> bool:
     """Check one atomic stamp (no ``+`` separator)."""
     if not part or part == "none":
         return False
+    for wrapper in _PROVENANCE_WRAPPERS:
+        if part.startswith(wrapper):
+            # The wrapper records provenance; the wrapped stamp is the
+            # receipt and must qualify on its own merits (a wrapped
+            # detection-role variant still may not convict).
+            return _is_single_tool_evidence(part[len(wrapper):])
     if _is_detection_variant(part):
         return False
     root = part.split(":")[0] if ":" in part else part

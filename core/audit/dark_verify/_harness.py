@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,19 +23,77 @@ from ._types import DarkWitnessSpec
 # ---------------------------------------------------------------------------
 
 
-def _format_args_scripting(args: list[Any], *, nil_kw: str = "nil") -> str:
-    """Format args for Ruby/PHP/Lua — languages that use nil/null keywords."""
-    parts = []
-    for a in args:
-        if isinstance(a, str):
-            parts.append(json.dumps(a))
-        elif a is None:
-            parts.append(nil_kw)
-        elif isinstance(a, bool):
-            parts.append("true" if a else "false")
+def _single_quote(s: str) -> str:
+    """Render *s* as a single-quoted Ruby/Perl/PHP string literal.
+
+    Double-quoted strings interpolate in all three languages — Ruby
+    ``#{...}``, Perl ``@{[...]}``/``$var``, PHP ``$var`` — so a
+    ``json.dumps``-rendered witness argument is an eval sink.
+    Single-quoted strings recognise exactly two escape sequences
+    (``\\\\`` and ``\\'``) and interpolate nothing, so escaping those
+    two characters makes the value pure data in every one of them.
+    """
+    return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _lua_quote(s: str) -> str:
+    """Render *s* as a single-quoted Lua string literal.
+
+    Lua interpolates nothing, but backslash escapes are live in BOTH
+    quote styles and a raw newline ends the literal — and JSON's
+    ``\\uXXXX`` spelling is not valid Lua. Escape the backslash and
+    quote, and spell control bytes with Lua's decimal ``\\ddd`` form
+    (always three digits so a following digit cannot extend it).
+    """
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "'":
+            out.append("\\'")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\%03d" % ord(ch))
         else:
-            parts.append(str(a))
-    return ", ".join(parts)
+            out.append(ch)
+    return "'" + "".join(out) + "'"
+
+
+def _format_args_scripting(
+    args: list[Any],
+    *,
+    nil_kw: str = "nil",
+    quote: Callable[[str], str] = _single_quote,
+    seq_delims: tuple[str, str] = ("[", "]"),
+    map_delims: tuple[str, str] = ("{", "}"),
+    kv_fmt: str = "{k} => {v}",
+) -> str:
+    """Format args for Ruby/PHP/Lua/Perl — every string rendered as a
+    non-interpolating literal via *quote*, containers recursively (a
+    ``str()`` fallback would smuggle Python ``repr`` quoting — sometimes
+    double quotes — into the target language)."""
+
+    def render(a: Any) -> str:
+        if isinstance(a, str):
+            return quote(a)
+        if a is None:
+            return nil_kw
+        if isinstance(a, bool):
+            return "true" if a else "false"
+        if isinstance(a, (int, float)):
+            return str(a)
+        if isinstance(a, (list, tuple)):
+            inner = ", ".join(render(x) for x in a)
+            return f"{seq_delims[0]}{inner}{seq_delims[1]}"
+        if isinstance(a, dict):
+            inner = ", ".join(
+                kv_fmt.format(k=render(str(k)), v=render(v))
+                for k, v in a.items()
+            )
+            return f"{map_delims[0]}{inner}{map_delims[1]}"
+        # Unknown type: render as string DATA, never as code.
+        return quote(str(a))
+
+    return ", ".join(render(a) for a in args)
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +437,9 @@ def generate_ruby_harness(
 
     return textwrap.dedent(f"""\
         require 'json'
-        $LOAD_PATH.unshift({json.dumps(target_str)})
+        $LOAD_PATH.unshift({_single_quote(target_str)})
         begin
-          require {json.dumps(require_path)}
+          require {_single_quote(require_path)}
         rescue LoadError => e
           puts JSON.generate({{ status: 'import_error', message: e.message }})
           exit 0
@@ -411,12 +470,15 @@ def generate_php_harness(
     lc = spec.lang_config
     require_path = lc.get("require_path", spec.file)
     target_str = str(target_root.resolve())
-    args_str = _format_args_scripting(spec.args, nil_kw="null")
+    args_str = _format_args_scripting(
+        spec.args, nil_kw="null",
+        seq_delims=("[", "]"), map_delims=("[", "]"),
+    )
 
     return textwrap.dedent(f"""\
         <?php
         try {{
-            require_once({json.dumps(target_str + "/" + require_path)});
+            require_once({_single_quote(target_str + "/" + require_path)});
         }} catch (Throwable $e) {{
             echo json_encode([
                 'status' => 'import_error',
@@ -580,11 +642,15 @@ def generate_lua_harness(
         rel = rel.removesuffix(".lua")
         require_path = rel.replace("/", ".")
 
-    args_str = _format_args_scripting(spec.args, nil_kw="nil")
+    args_str = _format_args_scripting(
+        spec.args, nil_kw="nil", quote=_lua_quote,
+        seq_delims=("{", "}"), map_delims=("{", "}"),
+        kv_fmt="[{k}] = {v}",
+    )
     target_str = str(target_root.resolve())
 
     return textwrap.dedent(f"""\
-        package.path = {json.dumps(target_str)} .. '/?.lua;' .. package.path
+        package.path = {_lua_quote(target_str)} .. '/?.lua;' .. package.path
         local json_ok = true
         local function json_encode(t)
             local parts = {{}}
@@ -601,7 +667,7 @@ def generate_lua_harness(
             end
             return '{{' .. table.concat(parts, ',') .. '}}'
         end
-        local ok_req, mod = pcall(require, {json.dumps(require_path)})
+        local ok_req, mod = pcall(require, {_lua_quote(require_path)})
         if not ok_req then
             print(json_encode({{status="import_error", message=tostring(mod)}}))
             os.exit(0)
@@ -648,7 +714,7 @@ def generate_perl_harness(
         use strict;
         use warnings;
         use JSON::PP;
-        use lib {json.dumps(target_str)};
+        use lib {_single_quote(target_str)};
         eval {{ require {use_module}; {use_module}->import() if {use_module}->can('import'); }};
         if ($@) {{
             print encode_json({{status => 'import_error', message => "$@"}});

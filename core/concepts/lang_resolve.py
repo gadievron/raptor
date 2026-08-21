@@ -180,8 +180,10 @@ def has_study_sources(root: Path) -> bool:
 
 def _iter_source_files(
     root: Path, *, max_files: int = 4000,
+    suffixes: frozenset[str] | None = None,
 ) -> list[Path]:
     """Supported-language source files under *root*, vendor dirs skipped."""
+    wanted = STUDY_SUFFIXES if suffixes is None else suffixes
     out: list[Path] = []
     stack = [root]
     while stack and len(out) < max_files:
@@ -200,10 +202,131 @@ def _iter_source_files(
                     if entry.name not in _SKIP_DIRS and not entry.name.startswith("."):
                         stack.append(entry)
                     continue
-                if entry.suffix.lower() in STUDY_SUFFIXES and entry.is_file():
+                if entry.suffix.lower() in wanted and entry.is_file():
                     out.append(entry)
             except OSError:
                 continue
+    return out
+
+
+# ------------------------------------------------------------------
+# Include-chase scoping (C/C++)
+# ------------------------------------------------------------------
+
+# Bounds for the include-graph chase.  Depth 3 covers the observed
+# shared-header shape (source.c → local.h → <sub/umbrella.h> →
+# <sub/detail.h>); the file cap keeps a kernel-sized fan-out bounded.
+_INCLUDE_CHASE_MAX_DEPTH = 3
+_INCLUDE_CHASE_MAX_FILES = 400
+
+_INCLUDE_RE = re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]')
+
+
+def include_scope_files(
+    source_root: Path,
+    source_file: str,
+    *,
+    max_depth: int = _INCLUDE_CHASE_MAX_DEPTH,
+    max_files: int = _INCLUDE_CHASE_MAX_FILES,
+) -> list[Path]:
+    """Files reachable from *source_file*'s ``#include`` graph.
+
+    A study question's identifiers are overwhelmingly defined either
+    in the request's subsystem directory or in a header its source
+    file (transitively) includes.  The subsystem pass covers the
+    former; this chase supplies the latter — on a tree large enough
+    to defeat the flat root-scan cap, a definition sitting in a
+    shared header root (``include/linux/...``) is otherwise reported
+    as not-found even though it is plainly reachable from the
+    reviewed code.
+
+    Quoted includes resolve against the including file's directory
+    first; both forms then fall back to the tree root and its
+    conventional header roots (``include/``, ``include/uapi/``).
+    Every resolved header whose sibling directory shares its stem
+    (``linux/widget.h`` → ``linux/widget/``) pulls that directory's
+    headers in too — the umbrella-plus-directory split is standard
+    kernel layout.  Non-C/C++ source files return ``[]``: import
+    graphs for the other study languages don't map onto files this
+    way, and their trees are covered by the existing passes.
+
+    Containment: candidates must resolve inside the resolved root, so
+    a chase can never follow ``..`` or a symlink out of the pinned
+    tree.  Results are returned as paths under *source_root* as given
+    (unresolved), matching how the resolver derives relative paths.
+    """
+    root = Path(source_root)
+    start = root / source_file
+    if start.suffix.lower() not in _C_SUFFIXES:
+        return []
+    try:
+        root_res = root.resolve()
+    except OSError:
+        return []
+    if not start.is_file():
+        return []
+
+    def _contained(p: Path) -> bool:
+        try:
+            return p.resolve().is_relative_to(root_res)
+        except OSError:
+            return False
+
+    fallback_dirs = [root, root / "include", root / "include" / "uapi"]
+    out: list[Path] = []
+    seen: set[Path] = {start}
+
+    def _add(p: Path) -> bool:
+        if p in seen or len(out) >= max_files or not _contained(p):
+            return False
+        seen.add(p)
+        out.append(p)
+        return True
+
+    def _expand_stem_dir(header: Path) -> None:
+        sib = header.parent / header.stem
+        if not sib.is_dir() or sib.is_symlink():
+            return
+        try:
+            entries = sorted(sib.rglob("*"))
+        except OSError:
+            return
+        for e in entries:
+            if len(out) >= max_files:
+                return
+            try:
+                if e.is_file() and e.suffix.lower() in _C_SUFFIXES:
+                    _add(e)
+            except OSError:
+                continue
+
+    frontier = [start]
+    for _depth in range(max_depth):
+        if not frontier or len(out) >= max_files:
+            break
+        next_frontier: list[Path] = []
+        for f in frontier:
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for ref in _INCLUDE_RE.findall(text):
+                if len(out) >= max_files:
+                    break
+                for d in (f.parent, *fallback_dirs):
+                    cand = d / ref
+                    try:
+                        if not cand.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    if _add(cand):
+                        next_frontier.append(cand)
+                        _expand_stem_dir(cand)
+                    # First existing candidate satisfies the ref,
+                    # whether or not it was new/contained.
+                    break
+        frontier = next_frontier
     return out
 
 
@@ -442,10 +565,23 @@ def resolve_identifiers(
     identifiers: list[str],
     *,
     scope: Path | None = None,
+    files: list[Path] | None = None,
     max_files: int = 4000,
+    include_c: bool = False,
 ) -> LangResolution:
     """Resolve *identifiers* against non-C sources under *scope*
     (default: *source_root*).
+
+    With ``include_c`` True, C/C++ sources are resolved too — the
+    study consumer's per-batch splice for questions raised after the
+    one-shot C study-prep (which never re-runs, so the study corpus
+    otherwise never gains definitions for them).
+
+    With ``files`` set, exactly those files are scanned instead of
+    walking a directory — the include-chase pass hands the resolver a
+    targeted file set (a huge tree defeats both the flat cap and any
+    per-directory scope when the definition lives in a shared header
+    root such as ``include/``).
 
     Returns study items for every definition found, plus an
     ``unresolved`` record (with reason) for each identifier that has no
@@ -456,7 +592,21 @@ def resolve_identifiers(
         return result
 
     root = Path(source_root)
-    files = _iter_source_files(Path(scope) if scope else root, max_files=max_files)
+    suffixes = (
+        frozenset(STUDY_SUFFIXES | _C_SUFFIXES) if include_c else None
+    )
+    if files is not None:
+        wanted = STUDY_SUFFIXES if suffixes is None else suffixes
+        files = [
+            f for f in files
+            if f.suffix.lower() in wanted and f.is_file()
+        ][:max_files]
+    else:
+        files = _iter_source_files(
+            Path(scope) if scope else root,
+            max_files=max_files,
+            suffixes=suffixes,
+        )
     if not files:
         for name in identifiers:
             result.unresolved.append({
@@ -468,11 +618,19 @@ def resolve_identifiers(
 
     tails = {identifier_tail(n): n for n in identifiers}
 
+    def _lang_for(path: Path) -> str | None:
+        lang = language_for_path(path)
+        if lang is None and include_c:
+            candidate = LANGUAGE_MAP.get(path.suffix.lower())
+            if candidate in ("c", "cpp"):
+                return candidate
+        return lang
+
     # Read + language-tag every candidate file once; grep-scope to
     # files that mention at least one identifier tail.
     contents: dict[Path, tuple[str, str]] = {}
     for f in files:
-        lang = language_for_path(f)
+        lang = _lang_for(f)
         if lang is None:
             continue
         try:

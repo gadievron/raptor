@@ -102,7 +102,7 @@ def _verify_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(patch("cve_env.utils.run.subprocess.run", subproc))
+        stack.enter_context(patch("core.container.proc.subprocess.run", subproc))
 
         # stability_wait calls time.sleep — mock it so plans with 90-120s
         # waits don't hit the pytest 60s timeout.

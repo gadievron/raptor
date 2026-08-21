@@ -5,7 +5,10 @@ the journal-write or findings-export chokepoint without qualifying
 tool evidence (``is_tool_evidence``) is the signature of a successful
 injection or a verdict-gate bug.  It must be EMPTY on legitimate runs
 (tool-evidenced findings, LLM-guess suspicious entries, clean verdicts)
-and must fire — alarm-only, never blocking — on a forged promotion.
+and must fire on a forged promotion.  At the chokepoints the alarm
+also GATES: the violating finding is demoted to suspicious before the
+journal entry / export row is written (``enforce=True``) — a CRITICAL
+line followed by shipping the promotion anyway is not a gate.
 """
 
 from __future__ import annotations
@@ -103,6 +106,29 @@ class TestBuildAlarmRecord:
                 verdict=verdict, evidence_tool="",
             )
             assert rec is None
+
+    def test_clean_refuted_receipt_is_tool_evidence(self):
+        # ``clean-refuted:<tool>`` is _promote_clean_refuted's
+        # provenance-wrapped receipt for a policy-sanctioned,
+        # SMT-confirmed promotion.  It fired the alarm on every such
+        # promotion in a corpus run (6 CRITICALs, all legitimate)
+        # because the wrapper namespace was unknown to the evidence
+        # grader — the wrapped stamp is the receipt.
+        for tool in ("clean-refuted:smt", "clean-refuted:smt:check-uaf"):
+            rec = build_alarm_record(
+                stage="journal-write", file="a.c", function="f",
+                verdict="finding", evidence_tool=tool,
+            )
+            assert rec is None, f"alarm fired on {tool!r}"
+
+    def test_clean_refuted_wrapper_around_nothing_still_fires(self):
+        # The wrapper alone (or wrapping a non-tool) is not evidence.
+        for tool in ("clean-refuted:", "clean-refuted:llm-claimed:smt"):
+            rec = build_alarm_record(
+                stage="journal-write", file="a.c", function="f",
+                verdict="finding", evidence_tool=tool,
+            )
+            assert rec is not None, f"alarm silent on {tool!r}"
 
     def test_g2_invariant_bypass_is_designed_exception(self):
         rec = build_alarm_record(
@@ -207,11 +233,18 @@ class TestJournalChokepoint:
         lines = _alarm_lines(tmp_path)
         assert len(lines) == 1
         assert lines[0]["stage"] == "journal-write"
-        # The journal entry itself is still written — alarm never blocks.
+        assert lines[0]["blocked"] is True
+        # The journal entry itself is still written — but with the
+        # GATED status: the forged finding is demoted to suspicious
+        # before the entry is built.
         from core.coverage.journal import load_entries
         entries = load_entries(tmp_path)
         assert len(entries) == 1
-        assert entries[0].verdict == "finding"
+        assert entries[0].verdict == "suspicious"
+        assert outcome.status == "suspicious"
+        assert outcome.review_result is None or outcome.review_result.get(
+            "promotion_gate_demoted",
+        )
 
     def test_legitimate_run_shape_is_alarm_free(self, tmp_path):
         # A representative legitimate run: tool-evidenced finding,
@@ -270,13 +303,19 @@ class TestExportChokepoint:
                          evidence_tool=""),
         ]
         export = export_findings(outcomes, out_dir=tmp_path, run_id="run-y")
-        # Export output unchanged: all three claims exported
-        # (finding, finding, suspicious) — the alarm never drops.
+        # Nothing is dropped — but the forged finding ships demoted to
+        # suspicious (the gate acts at the export chokepoint too).
         assert export["stats"]["total"] == 3
+        by_fn = {
+            f["function"]: f["status"] for f in export["findings"]
+        }
+        assert by_fn["ok"] == "finding"
+        assert by_fn["forged"] == "suspicious"
         lines = _alarm_lines(tmp_path)
         assert len(lines) == 1
         assert lines[0]["function"] == "forged"
         assert lines[0]["stage"] == "findings-export"
+        assert lines[0]["blocked"] is True
 
     def test_export_without_out_dir_skips_sweep(self, tmp_path):
         from core.audit.findings_export import export_findings

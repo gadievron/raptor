@@ -681,16 +681,65 @@ def compute_finding_source_hash(
     file_path: Path,
     line: int,
     window: int = 10,
+    line_end: int | None = None,
 ) -> str:
-    """Hash the source lines around a finding for staleness detection.
+    """Hash a finding's source context for staleness detection.
 
-    Returns SHA-256[:12] via ``core.staleness.hash_span``, or ``""``
-    if the file is unreadable or ``line`` is invalid.
+    The span is the whole enclosing function when the caller knows its
+    bounds (pass ``line_end``; the audit path has line_start/line_end),
+    else ``line`` ±``window``. The span hash is folded together with a
+    hash of the FULL file content: a change that alters exploitability
+    outside the local window — a gutted callee, a changed macro, a
+    caller newly passing attacker data — invalidates prior verdicts
+    even when the span itself is byte-identical. Coarse by design: the
+    fail direction is re-test, never stale suppression.
+
+    Returns SHA-256[:12], or ``""`` if the file is unreadable or the
+    range is invalid. Rows stored under the previous span-only format
+    can no longer match — they demote to hint (re-test), which is the
+    intended migration.
     """
     from core.staleness import hash_span
-    start = max(1, line - window)
-    end = line + window
-    return hash_span(file_path, start, end)
+    if line_end is not None and 0 < line <= line_end:
+        start, end = line, line_end
+    else:
+        start = max(1, line - window)
+        end = line + window
+    span_hash = hash_span(file_path, start, end)
+    if not span_hash:
+        return ""
+    try:
+        file_text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    file_hash = sha256_string(file_text)[:12]
+    return sha256_string(f"{span_hash}:{file_hash}")[:12]
+
+
+# Client-side lifetime bound on suppressible verdicts. Even a verdict
+# whose source hash still matches goes stale eventually (build flags,
+# dependencies, and reachability drift without touching the file);
+# SAGE confidence decay alone keeps rows above the recall floor for
+# ~50-60 days. The store side stamps a ``ts`` field into the MAC'd
+# field set (so it cannot be forged fresh); the recall side rejects
+# rows older than the TTL — the finding simply re-tests.
+_SUPPRESS_TTL_DAYS = 30
+_SUPPRESS_TTL_S = _SUPPRESS_TTL_DAYS * 86400
+
+
+def _row_ts_fresh(hook: str, ts: str) -> bool:
+    """Whether a MAC-verified row timestamp is within the suppression TTL."""
+    try:
+        age = time.time() - int(ts)
+    except (TypeError, ValueError):
+        return False
+    if age > _SUPPRESS_TTL_S:
+        logger.debug(
+            "SAGE %s: prior verdict older than %d days — re-testing",
+            hook, _SUPPRESS_TTL_DAYS,
+        )
+        return False
+    return True
 
 
 def recall_prior_finding_verdict(
@@ -706,7 +755,21 @@ def recall_prior_finding_verdict(
     prior verdict exists AND the stored source_hash matches.  Returns
     ``None`` otherwise (no prior, hash mismatch, or non-suppressible
     verdict).
+
+    Operator override: set ``RAPTOR_SAGE_FP_SUPPRESS=0`` to disable
+    this suppression entirely (every finding re-tests). This is the
+    force gate for consumers with no ``--force`` flag of their own —
+    the /agentic analysis loop suppresses pre-LLM through this hook,
+    and without an override a wrong prior verdict would silently
+    persist for its whole TTL. (The audit orchestrator additionally
+    honours ``config.force`` upstream.)
     """
+    if not env_flag("RAPTOR_SAGE_FP_SUPPRESS", default=True):
+        logger.debug(
+            "SAGE finding_verdict: suppression disabled via "
+            "RAPTOR_SAGE_FP_SUPPRESS=0 — re-testing",
+        )
+        return None
     if not source_hash:
         return None
     client = _get_client()
@@ -727,6 +790,13 @@ def recall_prior_finding_verdict(
             content, token = rowmac.strip(str(row.get("content") or ""))
             if f"||src={source_hash}||" not in content:
                 continue
+            ts_match = re.search(r"\|\|ts=(\d+)\|\|", content)
+            if not ts_match:
+                # Pre-TTL row (no timestamp in the MAC'd set): demote
+                # to hint — the finding re-tests and re-earns a fresh,
+                # TTL-bounded verdict.
+                continue
+            ts = ts_match.group(1)
             for v in _SUPPRESS_VERDICTS:
                 if f"||verdict={v}||" in content:
                     fields = {
@@ -735,8 +805,11 @@ def recall_prior_finding_verdict(
                         "fp": _finding_fingerprint(rule_id, file_path, function),
                         "verdict": v,
                         "src": source_hash,
+                        "ts": ts,
                     }
                     if not _row_mac_ok("finding_verdict", fields, token):
+                        break
+                    if not _row_ts_fresh("finding_verdict", ts):
                         break
                     _metric_inc("recall_hits")
                     return {
@@ -772,10 +845,12 @@ def store_finding_verdict(
     try:
         fp = _finding_fingerprint(rule_id, file_path, function)
         _s = _sanitise_delim
+        ts = str(int(time.time()))
         content = (
             f"Finding verdict: fp={fp} rule={_s(rule_id)} "
             f"file={_s(file_path)} fn={_s(function)} "
-            f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}||"
+            f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}|| "
+            f"||ts={ts}||"
         )
         content = _stamp_row(
             "finding_verdict",
@@ -786,6 +861,7 @@ def store_finding_verdict(
                 "fp": fp,
                 "verdict": verdict,
                 "src": source_hash,
+                "ts": ts,
             },
         )
         return _propose_redacted(
@@ -1040,11 +1116,13 @@ def store_audit_hypothesis_verdict(
         hyp_hash = sha256_string(hypothesis)[:16]
         _s = _sanitise_delim
         confidence = 0.90 if evidence_tool else 0.75
+        ts = str(int(time.time()))
         content = (
             f"Audit hypothesis verdict: "
             f"||file={_s(file_path)}|| ||fn={_s(function)}|| "
             f"||hyp={_s(hyp_hash)}|| ||src={_s(source_hash)}|| "
             f"||status={_s(status)}|| ||tool={_s(evidence_tool)}|| "
+            f"||ts={ts}|| "
             f"hypothesis: {hypothesis[:300]}"
         )
         content = _stamp_row(
@@ -1058,6 +1136,7 @@ def store_audit_hypothesis_verdict(
                 "hyp": hyp_hash,
                 "src": source_hash,
                 "status": status,
+                "ts": ts,
             },
         )
         return _propose_redacted(
@@ -1117,6 +1196,13 @@ def recall_audit_hypothesis_verdict(
                 continue
             if hyp_hash and f"||hyp={hyp_hash}||" not in content:
                 continue
+            ts_match = re.search(r"\|\|ts=(\d+)\|\|", content)
+            if not ts_match:
+                # Pre-TTL row (no timestamp in the MAC'd set): demote
+                # to hint — the function re-reviews and re-earns a
+                # fresh, TTL-bounded verdict.
+                continue
+            ts = ts_match.group(1)
             for s in _AUDIT_SKIP_STATUSES:
                 if f"||status={s}||" in content:
                     row_hyp = re.search(r"\|\|hyp=([^|]*)\|\|", content)
@@ -1128,8 +1214,11 @@ def recall_audit_hypothesis_verdict(
                         "hyp": row_hyp.group(1) if row_hyp else "",
                         "src": source_hash,
                         "status": s,
+                        "ts": ts,
                     }
                     if not _row_mac_ok("audit_hypothesis", fields, token):
+                        break
+                    if not _row_ts_fresh("audit_hypothesis", ts):
                         break
                     tool = ""
                     tool_match = re.search(r"\|\|tool=([^|]*)\|\|", content)
@@ -1279,20 +1368,23 @@ def recall_context_for_sca(
         return []
 
 
-def _sca_row_mechanically_usable(row: dict[str, Any]) -> bool:
-    """Gate rows that would trigger the confirmed-malicious short-circuit.
+def parse_verified_sca_fields(row: dict[str, Any]) -> dict[str, str] | None:
+    """Return the authenticated SCA decision fields for *row*, or ``None``.
 
-    The SCA pipeline short-circuits packages whose recalled content
-    contains ``malicious_confirmed`` — the FAIL direction here is a
-    false positive, not a miss, but it is still a mechanical decision.
-    Such rows are only returned when their MAC token verifies over the
-    decision fields (kind, ecosystem, name, version, verdict) written by
-    ``store_sca_outcomes`` on this install. Rows without the trigger
-    pass through unchanged as ordinary context.
+    Parses the ``||sca_eco/sca_name/sca_ver/sca_verdict||`` markers from
+    the row content and verifies the row MAC over exactly those fields.
+    Mechanical consumers (the slopsquat short-circuit in
+    ``packages/sca/pipeline.py``) must act on THIS dict — specifically
+    ``verdict == "malicious_confirmed"`` plus exact name/ecosystem
+    equality — never on substring matches over the prose: the prose
+    embeds LLM-generated summary text (prompt-injectable via hostile
+    package metadata) and detail strings that legitimately NAME the
+    imitated package.
+
+    ``None`` means the row is hint-only (unstamped, foreign, or
+    tampered).
     """
     clean, token = rowmac.strip(str(row.get("content") or ""))
-    if "malicious_confirmed" not in clean:
-        return True
 
     def _field(key: str) -> str:
         match = re.search(rf"\|\|{key}=([^|]*)\|\|", clean)
@@ -1305,7 +1397,27 @@ def _sca_row_mechanically_usable(row: dict[str, Any]) -> bool:
         "version": _field("sca_ver"),
         "verdict": _field("sca_verdict"),
     }
-    return _row_mac_ok("sca_outcomes", fields, token)
+    if not _row_mac_ok("sca_outcomes", fields, token):
+        return None
+    return fields
+
+
+def _sca_row_mechanically_usable(row: dict[str, Any]) -> bool:
+    """Gate rows that would trigger the confirmed-malicious short-circuit.
+
+    The SCA pipeline short-circuits packages recalled as confirmed
+    malicious — the FAIL direction here is a false positive, not a
+    miss, but it is still a mechanical decision. Rows whose content
+    mentions ``malicious_confirmed`` anywhere are only returned when
+    their MAC token verifies over the decision fields (kind, ecosystem,
+    name, version, verdict) written by ``store_sca_outcomes`` on this
+    install. Rows without the trigger pass through unchanged as
+    ordinary context.
+    """
+    clean, _token = rowmac.strip(str(row.get("content") or ""))
+    if "malicious_confirmed" not in clean:
+        return True
+    return parse_verified_sca_fields(row) is not None
 
 
 def store_sca_outcomes(
@@ -1341,24 +1453,32 @@ def store_sca_outcomes(
             cve_ids = outcome.get("cve_ids") or []
             llm_summary = outcome.get("llm_summary", "")
 
-            parts = [f"SCA: {pkg}"]
-            if eco:
-                parts.append(f"({eco})")
-            if version:
-                parts.append(f"v{version}")
-            parts.append(f"in {repo_name} — verdict: {verdict}.")
-            if kind:
-                parts.append(f"Kind: {kind}.")
-            if cve_ids:
-                parts.append(f"CVEs: {', '.join(cve_ids[:5])}.")
-            if severity:
-                parts.append(f"Severity: {severity}.")
-            if detail:
-                parts.append(detail[:200])
-            if llm_summary:
-                parts.append(f"LLM: {llm_summary[:150]}")
-
             _s = _sanitise_delim
+            # Sanitise EVERY prose component, not just the trailing
+            # decision fields: detail and llm_summary embed registry
+            # metadata and LLM output (injectable via a hostile package
+            # README), and a '|' smuggled into the prose could plant
+            # counterfeit ||key=value|| markers ahead of the genuine
+            # ones for any parser that regex-scans the content.
+            parts = [f"SCA: {_s(pkg)}"]
+            if eco:
+                parts.append(f"({_s(eco)})")
+            if version:
+                parts.append(f"v{_s(version)}")
+            parts.append(f"in {_s(repo_name)} — verdict: {_s(verdict)}.")
+            if kind:
+                parts.append(f"Kind: {_s(kind)}.")
+            if cve_ids:
+                parts.append(
+                    f"CVEs: {', '.join(_s(c) for c in cve_ids[:5])}.",
+                )
+            if severity:
+                parts.append(f"Severity: {_s(severity)}.")
+            if detail:
+                parts.append(_s(detail[:200]))
+            if llm_summary:
+                parts.append(f"LLM: {_s(llm_summary[:150])}")
+
             parts.append(
                 f"||sca_eco={_s(eco)}|| ||sca_name={_s(pkg)}|| "
                 f"||sca_ver={_s(version)}|| ||sca_verdict={_s(verdict)}||"
@@ -2254,3 +2374,135 @@ def recall_context_for_validation(
     except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE validation recall failed: %s", e)
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CVE fix pointers — /cve-diff discovery short-circuit
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Global domain (not repo-scoped): a fix pointer is a public fact about
+# the CVE itself, transferable to any project that meets it — same
+# rationale as raptor-rule-library.
+_CVE_DOMAIN = "raptor-cve"
+_CVE_HOOK = "cve_fix_pointer"
+
+
+def store_cve_fix_pointer(
+    cve_id: str,
+    repository_url: str,
+    fix_commit: str,
+    parent_commit: str = "",
+    *,
+    consensus_count: int = 0,
+    shape: str = "",
+) -> bool:
+    """Store a pipeline-verified CVE → fix-commit pointer.
+
+    Callers must only store pointers that survived /cve-diff's
+    mechanical verification (acquire → resolve → diff → shape check);
+    the row is MAC-stamped over the decision fields so recall can hand
+    it a mechanical effect.
+    """
+    client = _get_client()
+    if client is None or not (cve_id and repository_url and fix_commit):
+        return False
+    try:
+        _s = _sanitise_delim
+        cve = _s(cve_id.strip().upper())
+        repo = _s(repository_url.strip())
+        sha = _s(fix_commit.strip().lower())
+        parent = _s((parent_commit or "").strip().lower())
+
+        parts = [f"CVE fix pointer: {cve} is fixed by {repo} @ {sha}."]
+        if parent:
+            parts.append(f"Parent (pre-fix) commit: {parent}.")
+        if consensus_count >= 2:
+            parts.append("OSV+NVD pointer consensus agreed.")
+        if shape:
+            # Caller-supplied prose component: sanitise like every
+            # embedded value so it can't forge a ||key=value|| field.
+            parts.append(f"Diff shape: {_s(shape)}.")
+        parts.append(
+            f"||cve_id={cve}|| ||cve_repo={repo}|| "
+            f"||cve_fix={sha}|| ||cve_parent={parent}||"
+        )
+        content = _stamp_row(_CVE_HOOK, " ".join(parts), {
+            "kind": _CVE_HOOK,
+            "cve": cve,
+            "repo": repo,
+            "fix": sha,
+            "parent": parent,
+        })
+        # Consensus-confirmed pointers are double-verified (pipeline +
+        # OSV/NVD agreement); pipeline-only ones still earned their
+        # verdict mechanically.
+        confidence = 0.95 if consensus_count >= 2 else 0.9
+        return _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="fact",
+            domain_tag=_CVE_DOMAIN,
+            confidence=confidence,
+            tags=["cve-diff", cve],
+        )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE cve fix pointer store failed: %s", e)
+        return False
+
+
+def recall_cve_fix_pointer(cve_id: str) -> dict[str, str] | None:
+    """Recall a MAC-verified fix pointer for *cve_id*, or None.
+
+    Mechanical consumer: /cve-diff skips its discovery agent loop when
+    this returns a pointer — the pipeline still re-verifies the pointer
+    by actually cloning and diffing it, and falls back to the agent when
+    that verification fails, so a stale row costs one clone, not a wrong
+    answer. Because the effect is mechanical, the MAC gate is hard: rows
+    without a verifying token are ignored entirely, not demoted to
+    hints. Kill-switch: ``RAPTOR_SAGE_CVE_PRIOR=0``.
+    """
+    if not env_flag("RAPTOR_SAGE_CVE_PRIOR", default=True):
+        return None
+    client = _get_client()
+    if client is None or not cve_id:
+        return None
+    try:
+        _metric_inc("recall_attempted")
+        cve = cve_id.strip().upper()
+        rows = client.query(
+            text=f"CVE fix pointer for {cve}: repository and fix commit",
+            domain_tag=_CVE_DOMAIN,
+            top_k=5,
+            min_confidence=0.85,
+        )
+        for row in rows:
+            clean, token = rowmac.strip(str(row.get("content") or ""))
+
+            def _field(key: str, _clean: str = clean) -> str:
+                match = re.search(rf"\|\|{key}=([^|]*)\|\|", _clean)
+                return match.group(1) if match else ""
+
+            if _field("cve_id") != cve:
+                continue
+            fields = {
+                "kind": _CVE_HOOK,
+                "cve": cve,
+                "repo": _field("cve_repo"),
+                "fix": _field("cve_fix"),
+                "parent": _field("cve_parent"),
+            }
+            if not fields["repo"] or not fields["fix"]:
+                continue
+            if not _row_mac_ok(_CVE_HOOK, fields, token):
+                continue
+            _metric_inc("recall_hits")
+            return {
+                "cve_id": cve,
+                "repository_url": fields["repo"],
+                "fix_commit": fields["fix"],
+                "parent_commit": fields["parent"],
+            }
+        return None
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE cve fix pointer recall failed: %s", e)
+        return None

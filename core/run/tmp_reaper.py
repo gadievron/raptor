@@ -95,6 +95,14 @@ _DIR_PREFIXES = (
     # CPython multiprocessing's own resource dir — leaks when a process
     # (e.g. a sandboxed child we SIGKILL) dies without cleanup.
     "pymp-",
+    # Joern CPG build scratch (packages/joern/runner.py mkdtemp);
+    # rmtree'd on the runner's exit path, so hard-killed Joern builds
+    # leak one per invocation — observed accumulating by the hundreds.
+    "raptor-joern-cpg-",
+    # cve-diff working dirs (packages/cve_diff cli TemporaryDirectory
+    # and the bench harness's cve-diff-bench- mkdtemp — both match
+    # this prefix); cleaned on exit, leaked on SIGKILL/OOM.
+    "cve-diff-",
 )
 
 # Prefixes registered at runtime by core.run.scratch.scratch_dir for

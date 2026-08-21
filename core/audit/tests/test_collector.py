@@ -21,7 +21,10 @@ class _FakeOutcome:
     duration_s: float = 1.5
     hypothesis: str = ""
     hypotheses: list[str] = field(default_factory=list)
-    evidence_tool: str = ""
+    # A legitimate finding carries a tool receipt — the journal-write
+    # promotion gate demotes an evidence-less finding to suspicious
+    # (that path is exercised in test_promotion_alarm.py).
+    evidence_tool: str = "semgrep:sql-injection"
     review_result: dict[str, Any] | None = None
 
 

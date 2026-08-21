@@ -37,6 +37,10 @@ class ExecutorStats:
     dispatched: int = 0
     completed: int = 0
     repass_completed: int = 0
+    #: Tasks whose review raised an unexpected exception. They are
+    #: recorded as ``error`` outcomes and marked complete (so
+    #: dependents unblock); ``completed`` includes them.
+    failed: int = 0
     budget_stopped: bool = False
     wall_time_s: float = 0.0
 
@@ -45,9 +49,91 @@ class ExecutorStats:
             "dispatched": self.dispatched,
             "completed": self.completed,
             "repass_completed": self.repass_completed,
+            "failed": self.failed,
             "budget_stopped": self.budget_stopped,
             "wall_time_s": round(self.wall_time_s, 1),
         }
+
+
+def _is_budget_stop(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and is_budget_exceeded_error(exc)
+
+
+def _record_task_failure(
+    task: Any,
+    exc: Exception,
+    config: Any,
+    result: Any,
+    collector: Any,
+    graph: Any,
+    stats: ExecutorStats,
+) -> None:
+    """Record an unexpected review exception as an ``error`` outcome.
+
+    Pre-fix a raised exception stranded the task's dependents (the
+    task was never marked complete) and — on the async path — the run
+    then reported success with the pending work silently dropped.
+    The failure is journalled as an ``error`` verdict instead
+    (``reviewed_set`` excludes error verdicts, so the function is
+    retried next run), the graph node completes so dependents
+    proceed, and the failure counts into the stats. This aligns the
+    serial and async paths on one per-task failure semantic.
+    """
+    from .orchestrator import ReviewOutcome, _commit_outcome, _tally_outcome
+
+    file = task.gap.get("file", "")
+    function = task.gap.get("name", "")
+    logger.warning(
+        "review task failed for %s:%s (%s: %s) — recording error "
+        "outcome and unblocking dependents",
+        file or "?", function or "?", type(exc).__name__, exc,
+        exc_info=exc,
+    )
+    outcome = ReviewOutcome(
+        file=file,
+        function=function,
+        status="error",
+        body=f"review failed: {type(exc).__name__}: {exc}",
+        line=task.gap.get("line_start", 0),
+        # Distinct class, deliberately NOT in the end-of-run
+        # recoverable set: a deterministic bug in the review path
+        # would re-fail on immediate re-dispatch; the next run (which
+        # excludes error verdicts from its reviewed set) retries it.
+        error_class="task_exception",
+    )
+    try:
+        if collector is not None:
+            collector.submit(outcome, task.gap)
+        else:
+            _commit_outcome(config, outcome, task.gap, batch=True)
+    except Exception:
+        logger.warning(
+            "error-outcome commit failed for %s:%s",
+            file, function, exc_info=True,
+        )
+    try:
+        _tally_outcome(result, outcome)
+    except Exception:
+        logger.debug("error-outcome tally failed", exc_info=True)
+    graph.mark_complete(task.key)
+    stats.failed += 1
+    stats.completed += 1
+
+
+def _check_drain_complete(graph: Any, stats: ExecutorStats) -> None:
+    """Loud discrepancy check at loop exit.
+
+    A clean (non-stopped) exit with pending tasks means a dependency
+    deadlock or a dropped completion — previously silent, and the run
+    reported success.
+    """
+    if not stats.budget_stopped and graph.pending > 0:
+        logger.error(
+            "executor: exited with %d task(s) still pending — "
+            "dependency deadlock or dropped completion; the remaining "
+            "tasks stay unreviewed gaps",
+            graph.pending,
+        )
 
 
 def run_executor_sync(
@@ -175,12 +261,16 @@ def run_executor_sync(
 
     while graph.pending > 0:
         if budget_check and budget_check():
-            _flush_glance_batch()
+            # Stop path: do NOT dispatch a fresh glance LLM batch
+            # after the budget stop — queued glance tasks are dropped
+            # and stay unreviewed gaps (they were never marked
+            # complete), matching the async stop path.
+            glance_batch.clear()
             stats.budget_stopped = True
             break
 
         if is_shutdown_requested():
-            _flush_glance_batch()
+            glance_batch.clear()
             stats.budget_stopped = True
             break
 
@@ -232,12 +322,16 @@ def run_executor_sync(
                 graph=graph,
                 reviewed_outcomes=reviewed_outcomes,
             )
-        except RuntimeError as exc:
-            if is_budget_exceeded_error(exc):
+        except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
+            if _is_budget_stop(exc):
                 stats.budget_stopped = True
                 result.terminated_by = "llm_budget_exceeded"
                 break
-            raise
+            _record_task_failure(
+                task, exc, config, result, collector, graph, stats,
+            )
+            review_idx += 1
+            continue
 
         graph.mark_complete(task.key)
         stats.completed += 1
@@ -248,7 +342,13 @@ def run_executor_sync(
             _update_run_progress(config.out_dir, result)
             last_checkpoint = now
 
-    _flush_glance_batch()
+    if stats.budget_stopped:
+        # Budget stop from inside the loop (direct review raised the
+        # budget error) — same policy as the pre-loop checks: no fresh
+        # LLM batch after the stop.
+        glance_batch.clear()
+    else:
+        _flush_glance_batch()
 
     repass = graph.repass_tasks()
     if repass and not stats.budget_stopped:
@@ -281,15 +381,25 @@ def run_executor_sync(
                     graph=graph,
                     reviewed_outcomes=reviewed_outcomes,
                 )
-            except RuntimeError as exc:
-                if is_budget_exceeded_error(exc):
+            except Exception as exc:  # noqa: BLE001 — budget stop or logged per-task failure
+                if _is_budget_stop(exc):
                     stats.budget_stopped = True
                     result.terminated_by = "llm_budget_exceeded"
                     break
-                raise
+                # Repass tasks are already complete in the graph —
+                # nothing to unblock; log and move on.
+                logger.warning(
+                    "repass review failed for %s:%s (%s: %s)",
+                    task.gap.get("file", "?"), task.gap.get("name", "?"),
+                    type(exc).__name__, exc, exc_info=exc,
+                )
+                stats.failed += 1
+                review_idx += 1
+                continue
             stats.repass_completed += 1
             review_idx += 1
 
+    _check_drain_complete(graph, stats)
     stats.wall_time_s = time.monotonic() - wall_start
     return stats
 
@@ -542,12 +652,21 @@ async def _run_async_body(
                         reviewed_outcomes=reviewed_outcomes,
                     ),
                 )
-            except RuntimeError as exc:
-                if is_budget_exceeded_error(exc):
+            except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
+                if _is_budget_stop(exc):
                     stats.budget_stopped = True
                     result.terminated_by = "llm_budget_exceeded"
                     return
-                raise
+                # Unexpected batch failure (per-item fallbacks are
+                # handled inside _process_glance_batch): record every
+                # batch member as an error so dependents unblock
+                # instead of stranding.
+                for t in batch_tasks:
+                    _record_task_failure(
+                        t, exc, config, result, collector, graph, stats,
+                    )
+                await _after_completion()
+                return
             for t in batch_tasks:
                 graph.mark_complete(t.key)
                 async with review_idx_lock:
@@ -588,12 +707,16 @@ async def _run_async_body(
                         reviewed_outcomes=reviewed_outcomes,
                     ),
                 )
-            except RuntimeError as exc:
-                if is_budget_exceeded_error(exc):
+            except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
+                if _is_budget_stop(exc):
                     stats.budget_stopped = True
                     result.terminated_by = "llm_budget_exceeded"
                     return
-                raise
+                _record_task_failure(
+                    task, exc, config, result, collector, graph, stats,
+                )
+                await _after_completion()
+                return
 
             graph.mark_complete(task.key)
             async with review_idx_lock:
@@ -646,10 +769,15 @@ async def _run_async_body(
         inflight -= done
         for t in done:
             if not t.cancelled() and t.exception() is not None:
+                # Backstop only: _run_task/_run_batch record per-task
+                # failures internally, so anything landing here is a
+                # bug in the executor scaffolding itself.
                 logger.warning(
                     "unhandled task exception: %s",
                     t.exception(), exc_info=t.exception(),
                 )
+
+    _check_drain_complete(graph, stats)
 
     repass = graph.repass_tasks()
     if repass and not _should_stop():
@@ -689,12 +817,20 @@ async def _run_async_body(
                             reviewed_outcomes=reviewed_outcomes,
                         ),
                     )
-                except RuntimeError as exc:
-                    if is_budget_exceeded_error(exc):
+                except Exception as exc:  # noqa: BLE001 — budget stop or logged per-task failure
+                    if _is_budget_stop(exc):
                         stats.budget_stopped = True
                         result.terminated_by = "llm_budget_exceeded"
                         return
-                    raise
+                    logger.warning(
+                        "repass review failed for %s:%s (%s: %s)",
+                        task.gap.get("file", "?"),
+                        task.gap.get("name", "?"),
+                        type(exc).__name__, exc, exc_info=exc,
+                    )
+                    async with review_idx_lock:
+                        stats.failed += 1
+                    return
                 async with review_idx_lock:
                     stats.repass_completed += 1
 

@@ -71,7 +71,11 @@ def save_rule(
         raise ValueError(
             f"invalid rule_id {rule_id!r}: resolved path escapes rules directory"
         )
-    rule_path.write_text(content)
+    # Atomic like the manifest write below: rules are cross-run
+    # artifacts consumed by future /scan runs — a torn write would
+    # ship a half-rule to every later scan.
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(rule_path, content)
 
     manifest = _load_manifest(out_dir)
     manifest[rule_id] = {
@@ -148,6 +152,32 @@ def run_rule_sweep(
         return {"error": f"unknown tool {tool!r}"}
 
 
+def _finding_to_match(finding: Any) -> Dict[str, Any]:
+    """Flatten one semgrep finding to ``{file, line, message}``.
+
+    ``SemgrepResult.findings`` holds ``SemgrepFinding`` dataclasses
+    (attributes, not dict keys); tolerate raw dicts too, defensively
+    like the sweep engine's serializer.
+    """
+    if isinstance(finding, dict):
+        return {
+            "file": finding.get("file", "") or finding.get("path", ""),
+            "line": (
+                finding.get("line", 0)
+                or finding.get("start", {}).get("line", 0)
+            ),
+            "message": (
+                finding.get("message", "")
+                or finding.get("extra", {}).get("message", "")
+            ),
+        }
+    return {
+        "file": getattr(finding, "file", ""),
+        "line": getattr(finding, "line", 0),
+        "message": getattr(finding, "message", ""),
+    }
+
+
 def _run_semgrep_rule(rule_path: Path, target_path: Path) -> Dict[str, Any]:
     try:
         from packages.semgrep.runner import run_rule, is_available
@@ -159,15 +189,8 @@ def _run_semgrep_rule(rule_path: Path, target_path: Path) -> Dict[str, Any]:
         return {
             "tool": "semgrep",
             "match_count": len(result.findings),
-            "matches": [
-                {
-                    "file": f.get("path", ""),
-                    "line": f.get("start", {}).get("line", 0),
-                    "message": f.get("extra", {}).get("message", ""),
-                }
-                for f in result.findings
-            ],
-            "errors": result.errors,
+            "matches": [_finding_to_match(f) for f in result.findings],
+            "errors": list(getattr(result, "errors", []) or []),
         }
     except Exception as exc:
         return {"error": str(exc)}
@@ -181,19 +204,23 @@ def _run_coccinelle_rule(rule_path: Path, target_path: Path) -> Dict[str, Any]:
             return {"error": "coccinelle (spatch) not installed"}
 
         result = run_rule(target_path, str(rule_path), timeout=300)
+        # ``SpatchResult`` carries ``matches`` (SpatchMatch dataclasses),
+        # not ``findings`` — the old attribute raised AttributeError on
+        # every sweep of a saved coccinelle rule.
+        raw_matches = getattr(result, "matches", []) or []
         matches = []
-        for f in result.findings:
-            entry = {"raw": str(f)}
-            if hasattr(f, "file"):
-                entry["file"] = f.file
-            if hasattr(f, "line"):
-                entry["line"] = f.line
-            matches.append(entry)
+        for m in raw_matches:
+            if hasattr(m, "to_dict"):
+                matches.append(m.to_dict())
+            elif isinstance(m, dict):
+                matches.append(m)
+            else:
+                matches.append({"raw": str(m)})
         return {
             "tool": "coccinelle",
-            "match_count": len(result.findings),
+            "match_count": len(matches),
             "matches": matches,
-            "errors": result.errors if hasattr(result, "errors") else [],
+            "errors": list(getattr(result, "errors", []) or []),
         }
     except Exception as exc:
         return {"error": str(exc)}

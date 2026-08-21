@@ -9,6 +9,15 @@ import os
 from pathlib import Path
 from typing import ClassVar
 
+# Imported at module level DELIBERATELY (stdlib-only leaf module, no
+# cycle risk): get_safe_env() runs inside post-fork sandbox children
+# (_spawn.run_sandboxed's env=None default), where a lazy first-time
+# import would need filesystem reads the child's Landlock read
+# allowlist does not grant — the child died ModuleNotFoundError
+# whenever the parent process had not already imported the module.
+from core.security.env_sanitisation import normalise_proxy_url, strip_env_vars
+from core.security.rule_of_two import is_ci
+
 
 class classproperty:
     """Descriptor that works like @property but on the class itself."""
@@ -91,6 +100,20 @@ class RaptorConfig:
     # Tool dependencies for startup checks
     # severity: "required" = feature unavailable, "degrades" = feature limited
     # group: tools in same group need at least one present
+    #
+    # Version-display convention (startup banner + doctor): a tool's
+    # version is shown IF AND ONLY IF RAPTOR gates behaviour on that
+    # version; presence-only otherwise. The version-gated set today:
+    #   * python  — 3.10+ floor (PEP 604 unions at import time)
+    #   * z3      — SMT feature coverage varies by release
+    #   * semgrep — rule semantics vary across releases; CI pins one
+    #   * joern   — MIN_JOERN_VERSION floor (packages/joern/prereqs.py)
+    #   * gcc     — -fanalyzer corroboration needs gcc >= 10
+    # Do NOT add versions for anything else — the probes cost startup
+    # time and the number carries no decision weight without a gate.
+    # Probe implementations live in core/startup/init.py
+    # (check_tools / _check_analyzer_capabilities); keep that module
+    # and this list in sync when a new version gate lands.
     TOOL_DEPS: ClassVar[dict] = {
         "afl++":        {"binary": "afl-fuzz",  "severity": "required", "affects": "/fuzz"},
         "codeql":       {"binary": "codeql",    "group": "scanner",     "affects": "/codeql, /agentic"},
@@ -110,7 +133,15 @@ class RaptorConfig:
         # Dynamic analysis tools
         "frida":        {"binary": "frida",       "severity": "degrades", "affects": "/frida, dynamic analysis, /fuzz harness probe"},
         "frida-trace":  {"binary": "frida-trace", "severity": "degrades", "affects": "dynamic tracing"},
-        "jadx":         {"binary": "jadx",        "severity": "degrades", "affects": "Android/APK reverse engineering"},
+        # Binary-oracle reachability and /audit's binary-evidence
+        # channel read ELF symbols/DWARF via binutils (readelf, nm,
+        # objdump, c++filt). readelf is the presence proxy — the
+        # suite ships as one package on every distro.
+        "binutils":     {"binary": "readelf",     "severity": "degrades", "affects": "/agentic, /codeql, /validate (binary-oracle reachability)"},
+        # r2 drives --binary-edges call-graph extraction
+        # (core/analysis/binary_oracle_edges.py) and /audit's binary
+        # corroboration (core/audit/capabilities.py).
+        "radare2":      {"binary": "r2",          "severity": "degrades", "affects": "/agentic, /codeql (--binary-edges), /audit (binary evidence)"},
         # Perlasm generated-asm inventory (core/inventory/perlasm.py):
         # without perl, detected generators become loud coverage gaps
         # instead of enumerable generated kernels.
@@ -178,6 +209,72 @@ class RaptorConfig:
     #   /agentic --no-validate-dataflow      (existing flag, broader)
     # /exploit and /validate inherit through `tier1_check_finding`.
     IRIS_TIER1_ENABLED: bool = True
+
+    # Curated in-repo CodeQL query packs (CODEQL_QUERIES_DIR/<lang>/)
+    # kill-switch. When False, `QueryRunner.analyze_curated_packs`
+    # skips the curated pass entirely. Defaults to True so the
+    # hand-written queries run alongside the standard suites.
+    # Per-run CLI override: `/codeql --no-curated-queries`.
+    CODEQL_CURATED_ENABLED: bool = True
+
+    # Learned-models measurement pass on the /codeql agent: emit the
+    # project's tool-corroborated IRIS taint specs as a models-as-data
+    # extension pack and run the baseline-vs-augmented measurement over
+    # a small per-language query set. Augmented-only findings join the
+    # report as candidates (provenance=learned-model); suppression is
+    # measurement-only — nothing is dropped. Per-run CLI override:
+    # `/codeql --no-learned-models`.
+    CODEQL_LEARNED_MODELS_ENABLED: bool = True
+
+    # Mechanical Java source-wrapper summaries: same-tree helper
+    # methods whose return provably carries servlet-request data
+    # (core/analysis/java_source_summaries) are emitted as
+    # models-as-data sourceModel rows and threaded into the standard
+    # java suite via --additional-packs. Additive detection only.
+    CODEQL_SOURCE_SUMMARIES_ENABLED: bool = True
+
+    # Record-only sanitizer-cut post-pass over scan SARIF findings
+    # (core/analysis/sanitizer_cut_postpass.py): value-bound gate
+    # verdicts are written to suppressions.jsonl as evidence
+    # (dropped: false) so the recall harness's warm scorer can measure
+    # the projected FP rate. Never mutates, demotes, or drops a
+    # finding. Per-run CLI override: `--no-sanitizer-cut-postpass`.
+    SANITIZER_CUT_POSTPASS_ENABLED: bool = True
+
+    # Sanitizer-cut ENFORCEMENT (corpus-earned 2026-08-19, operator-
+    # approved — see the attested sanitizer_dominated entry in
+    # core/analysis/reach_witness.py and
+    # measured enforcement evidence): full-proof suppress
+    # verdicts drop their findings from the combined SARIF, with
+    # dropped: true records in suppressions.jsonl. Per-tool SARIFs stay
+    # unfiltered (forensic record). Per-run CLI override:
+    # `--no-sanitizer-cut-enforce` (reverts to record-only evidence).
+    SANITIZER_CUT_ENFORCE_ENABLED: bool = True
+
+    # Config-resolved additive findings (scan stage, Java): selector
+    # calls (MessageDigest/Cipher/SecureRandom.getInstance) whose
+    # argument resolves through the strict properties-file resolver to
+    # a known-weak algorithm emit a NEW finding with
+    # provenance=config-resolved. Detection only — the stage never
+    # suppresses, and a resolution failure emits nothing. Per-run CLI
+    # override: `--no-config-resolved`.
+    CONFIG_RESOLVED_ENABLED: bool = True
+
+    # Threat models passed to `codeql database analyze` on the STANDARD
+    # suite pass (`--threat-model=<name>` per entry, additive to the
+    # always-on `default`/remote model). `local` enables the
+    # environment / commandargs / stdin / file / database source kinds
+    # on stock queries — the same source classes RAPTOR's in-repo IRIS
+    # packs model by hand (the IRIS pass stays: its verdicts feed the
+    # refute-downgrade path). Version-gated in the runner: CLIs older
+    # than CODEQL_THREAT_MODEL_MIN_VERSION never see the flag. The flag
+    # is a no-op for query packs / languages without threat-model
+    # support (CLI-documented behavior), so passing it is safe.
+    # Kill-switch: CODEQL_THREAT_MODELS_ENABLED = False.
+    # Per-run CLI overrides: `/codeql --threat-models <csv>` and
+    # `/codeql --no-threat-models`.
+    CODEQL_THREAT_MODELS_ENABLED: bool = True
+    CODEQL_THREAT_MODELS: ClassVar[tuple] = ("local",)
 
     # Timeout Configuration (seconds)
     DEFAULT_TIMEOUT = 1800          # 30 minutes
@@ -249,13 +346,23 @@ class RaptorConfig:
         # Only packs that exist on semgrep.dev and are cached in registry-cache/
         # deserialisation, filesystem, logging: no registry pack exists, local rules only
         # crypto: p/crypto and category/crypto both 404 — local rules only
-        # ssrf: p/ssrf 404 and no local rules dir — no coverage until custom rules are added
+        # ssrf: p/ssrf 404; local coverage via POLICY_GROUP_RULE_FILES
         "secrets": ("semgrep_secrets", "p/secrets"),
         "injection": ("semgrep_injection", "p/command-injection"),
         "auth": ("semgrep_auth", "p/jwt"),
         "flows": ("semgrep_dataflow", "p/default"),
         "sinks": ("semgrep_sinks", "p/xss"),
         "best-practices": ("semgrep_best_practices", "p/default"),
+    }
+
+    # Policy groups whose in-repo rules live in a single file inside
+    # another group's directory rather than a directory of their own.
+    # Selecting the group scans exactly that file; the emitted rule ids
+    # are identical to a directory scan of the parent group (semgrep
+    # derives ids from the rule FILE's path), so `--policy-groups
+    # ssrf,sinks` dedups cleanly. No registry pack exists for these.
+    POLICY_GROUP_RULE_FILES: ClassVar[dict[str, Path]] = {
+        "ssrf": SEMGREP_RULES_DIR / "sinks" / "ssrf.yaml",
     }
 
     # Default Policy Configuration
@@ -524,9 +631,14 @@ class RaptorConfig:
         "HOSTALIASES",     # Static hostname→IP file — redirects DNS resolution
         "RES_OPTIONS",     # Resolver options — can influence DNS behaviour
         "LOCALDOMAIN",     # DNS search domain — name-resolution hijack
-        # malloc tuning — MALLOC_CHECK_ can make valgrind-style bugs crash,
-        # MALLOC_PERTURB_ can alter free()'d memory content, MALLOC_ARENA_MAX
-        # can destabilise threaded allocators. Not escapes, but unexpected.
+        # malloc tuning — MALLOC_CHECK_ can make valgrind-style bugs crash
+        # (and high values write to stderr → log injection),
+        # MALLOC_PERTURB_ can alter free()'d memory content (letting an
+        # attacker influence uninitialised-memory disclosure ABI),
+        # MALLOC_ARENA_MAX can destabilise threaded allocators. Not
+        # escapes, but unexpected. Sole entries — keep the allocator
+        # family together here (the jemalloc pair lives with the other
+        # allocator-config vars below).
         "MALLOC_CHECK_",
         "MALLOC_PERTURB_",
         "MALLOC_ARENA_MAX",
@@ -668,20 +780,16 @@ class RaptorConfig:
         "CURL_CA_BUNDLE",      # curl trust anchor override.
         "SSL_CERT_FILE",       # OpenSSL-based tools' trust anchor override.
         "SSL_CERT_DIR",        # OpenSSL-based tools' trust anchor dir.
-        # Allocator config — both glibc and jemalloc honour these env
-        # vars. They can enable allocator features (verbose stats,
-        # core dumps on detected corruption, profiling output paths)
-        # that an attacker can use to (a) leak memory contents into
-        # log files at predictable paths, (b) cause core dumps that
-        # may contain credentials, (c) redirect heap profile output
-        # to attacker-writable paths.
+        # Allocator config — jemalloc honours these env vars. They can
+        # enable allocator features (verbose stats, core dumps on
+        # detected corruption, profiling output paths) that an
+        # attacker can use to (a) leak memory contents into log files
+        # at predictable paths, (b) cause core dumps that may contain
+        # credentials, (c) redirect heap profile output to attacker-
+        # writable paths. The glibc MALLOC_* family is listed once,
+        # with the malloc-tuning group above.
         "MALLOC_CONF",         # jemalloc configuration string.
         "JE_MALLOC_CONF",      # alternate jemalloc env var (some builds).
-        "MALLOC_CHECK_",       # glibc heap consistency check; high values
-                               # write to stderr → log injection.
-        "MALLOC_PERTURB_",     # glibc fill-pattern; not security-critical
-                               # alone but lets an attacker influence
-                               # uninitialised-memory disclosure ABI.
         # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
         # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
     ])
@@ -835,7 +943,6 @@ class RaptorConfig:
         explicitly after calling get_safe_env(), or pass their own env=
         to subprocess.run() to bypass this filter entirely.
         """
-        from core.security.env_sanitisation import strip_env_vars
         allowlist = RaptorConfig.SAFE_ENV_ALLOWLIST
         prefixes = RaptorConfig.SAFE_ENV_PREFIXES
         env = {}
@@ -850,11 +957,9 @@ class RaptorConfig:
         # scrub (allowlist churn must not be able to reopen the
         # CI-with-pseudo-TTY bypass). RAPTOR_CI is itself a recognised
         # marker in core.security.rule_of_two.
-        from core.security.rule_of_two import is_ci
         if is_ci():
             env["RAPTOR_CI"] = "1"
         if preserve_proxy:
-            from core.security.env_sanitisation import normalise_proxy_url
             for pv in RaptorConfig.PROXY_ENV_VARS:
                 val = os.environ.get(pv)
                 if val is not None:
@@ -1109,15 +1214,19 @@ class RaptorConfig:
 
     @staticmethod
     def get_git_env() -> dict:
-        """
-        Create environment for safe git operations.
+        """Environment for safe git operations — thin alias.
+
+        ``get_safe_env()`` already applies ``GIT_ENV_VARS`` for every
+        subprocess (git-config isolation is part of the baseline), so
+        this is deliberately a pure passthrough with no second overlay:
+        one source of truth, nothing to diverge. Kept as a named entry
+        point because call sites read better as "give me the git env"
+        and predate the chokepoint.
 
         Returns:
             dict: Environment configured for secure git operations
         """
-        env = RaptorConfig.get_safe_env()
-        env.update(RaptorConfig.GIT_ENV_VARS)
-        return env
+        return RaptorConfig.get_safe_env()
 
     @staticmethod
     def ensure_directories() -> None:

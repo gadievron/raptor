@@ -125,7 +125,7 @@ class TestExplicitLanguagesNormalised:
         # database_manager returns empty so workflow exits cleanly;
         # buildless probe reports a modern CLI.
         agent.database_manager.create_databases_parallel.return_value = {}
-        agent.database_manager.supports_buildless_cpp.return_value = (
+        agent.database_manager.supports_buildless.return_value = (
             True, "2.26.0",
         )
 

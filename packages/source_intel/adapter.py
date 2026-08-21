@@ -46,6 +46,7 @@ from packages.source_intel.analyze import (
     KIND_RETURNS_NONNULL,
     KIND_WUR,
     SourceIntelResult,
+    _is_word_present,
     analyze,
 )
 from packages.source_intel.cache import SourceIntelCache
@@ -284,7 +285,11 @@ class SourceIntelValidator:
         for ev in result.attributes:
             if not ev.function_name:
                 continue
-            if ev.function_name not in snippet:
+            # Word-boundary match, not substring: a plain `in` check
+            # let an annotated function named `free` fire EXPLOITABLE
+            # against a snippet mentioning `freelist`, `pfree`, or
+            # `free_slot` — a prefix/suffix collision, not evidence.
+            if not _is_word_present(snippet, ev.function_name):
                 continue
             if not _rule_id_is_relevant_for_kind(finding.rule_id, ev.kind):
                 continue

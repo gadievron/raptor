@@ -526,6 +526,67 @@ def _cleanup_stub(root_dir: str) -> None:
         pass
 
 
+def _subid_range(path: str, user: str, numeric_id: str) -> tuple[int, int] | None:
+    """First /etc/subuid|/etc/subgid entry for the user (matched by name
+    or numeric id), as ``(start, count)``. None when absent/unreadable —
+    the caller degrades to the single-id mapping with a warning."""
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            parts = line.strip().split(":")
+            if len(parts) == 3 and parts[0] in (user, numeric_id):
+                return int(parts[1]), min(int(parts[2]), 65536)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _pid1_split_for_waiter() -> None:
+    """Fork so the exec target becomes PID 2 of the pid-ns; PID 1 (this
+    process) stays as a minimal in-process init that reaps children and
+    mirrors the target's exit.
+
+    Rationale (rootfs mode): a container-image entrypoint running as
+    pid-ns PID 1 has kill(2)-delivered signals silently filtered by the
+    kernel (abort(), raise(SIGFPE), self-kill test harnesses) — the
+    same problem libexec/raptor-pid1-shim solves for the subprocess
+    path, solved here in-process because the shim's interpreter isn't
+    guaranteed to exist inside a foreign image rootfs. PID 1 cannot
+    re-raise the death signal on itself (same filter), so a signalled
+    target is mirrored as exit ``128 + signum`` — the shim convention
+    ``observe._interpret_result`` already decodes. SIGTERM / SIGINT /
+    SIGHUP / SIGQUIT arriving at PID 1 are forwarded to the target;
+    orphans are reaped and their statuses discarded.
+
+    Returns in the CHILD (the exec path). The PID 1 side never returns
+    (``os._exit``).
+    """
+    child = os.fork()
+    if child == 0:
+        return  # exec path continues as PID 2
+
+    def _forward(signum, _frame, _child=child):
+        with contextlib.suppress(OSError):
+            os.kill(_child, signum)
+
+    for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        with contextlib.suppress(OSError, ValueError):
+            signal.signal(_sig, _forward)
+    while True:
+        try:
+            pid_, status = os.wait()
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            os._exit(0)
+        if pid_ != child:
+            continue  # reap orphans; only the target's status mirrors
+        if os.WIFEXITED(status):
+            os._exit(os.WEXITSTATUS(status))
+        if os.WIFSIGNALED(status):
+            os._exit(128 + os.WTERMSIG(status))
+        # stopped/continued — keep waiting
+
+
 def run_sandboxed(
     cmd: Sequence[str],
     *,
@@ -548,6 +609,7 @@ def run_sandboxed(
     start_new_session: bool = True,
     audit_mode: bool = False,
     audit_run_dir: str | None = None,
+    audit_required: bool = False,
     audit_verbose: bool = False,
     observe_mode: bool = False,
     observe_nonce: str | None = None,
@@ -562,6 +624,7 @@ def run_sandboxed(
     proxy_forwarder_port: int | None = None,
     extra_unix_bridges: Sequence[tuple[int, str]] | None = None,
     exec_pid_callback: Callable[[int], None] | None = None,
+    rootfs: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -607,7 +670,26 @@ def run_sandboxed(
     the function logs a warning and degrades — runs the workflow
     WITHOUT seccomp audit and WITHOUT a tracer. b1 (egress proxy
     audit) is configured separately and is unaffected.
+
+    audit_required: when True, the three in-spawn audit degradations
+    above (no seccomp profile / no libseccomp / ptrace blocked —
+    F063a/b/c) raise SandboxSetupError after writing the per-run
+    degrade marker, instead of running the command without a tracer.
+    The raise happens before the fork, so the target never executes.
     """
+    if rootfs is not None:
+        # Rootfs mode is mount-ns-or-nothing: without the pivot there is
+        # no image filesystem to run against — the command would execute
+        # on the HOST fs while the caller believes it's containerised.
+        if skip_mount_ns:
+            raise ValueError(
+                "rootfs= requires the mount namespace; skip_mount_ns=True "
+                "would run the command against the host filesystem"
+            )
+        rootfs = os.path.abspath(rootfs)
+        if not os.path.isdir(rootfs):
+            raise ValueError(f"rootfs is not a directory: {rootfs}")
+
     # Sandbox root directory. Created by the parent via tempfile.mkdtemp
     # so the path is random-suffixed (mode 0700) — a same-UID attacker
     # can't pre-plant the stub as a symlink pointing at /etc or another
@@ -677,6 +759,22 @@ def run_sandboxed(
                     "audit_mode if seccomp is intentionally disabled"
                 ),
             )
+            if audit_required:
+                # Fail closed BEFORE the fork: the caller demanded
+                # audit evidence; running the target without a tracer
+                # would return a successful-looking result with no
+                # observe record. Marker above is kept — it documents
+                # the refused degradation for run-dir readers.
+                _cleanup_stub(_root_dir)
+                from .errors import SandboxSetupError
+                raise SandboxSetupError(
+                    "audit_required=True but no seccomp filter is "
+                    "active — b2/b3 audit cannot engage; refusing to "
+                    "run the target unaudited.",
+                    "pass seccomp_profile= (e.g. \"full\") or drop "
+                    "audit_required= to accept marker-recorded "
+                    "degradation.",
+                )
         elif not check_seccomp_available():
             # libseccomp missing — tracer would attach but never
             # receive events (no filter installed). Skip the
@@ -698,6 +796,18 @@ def run_sandboxed(
                     "intentionally absent"
                 ),
             )
+            if audit_required:
+                _cleanup_stub(_root_dir)
+                from .errors import SandboxSetupError
+                raise SandboxSetupError(
+                    "audit_required=True but libseccomp is "
+                    "unavailable on this host — the tracer would "
+                    "receive no events; refusing to run the target "
+                    "unaudited.",
+                    "install libseccomp (Debian/Ubuntu: apt install "
+                    "libseccomp2), or drop audit_required= to accept "
+                    "marker-recorded degradation.",
+                )
         elif check_ptrace_available():
             _audit_engaged = True
             # Sweep stale config tempfiles from prior crashed runs
@@ -878,6 +988,18 @@ def run_sandboxed(
                     "without audit_mode"
                 ),
             )
+            if audit_required:
+                _cleanup_stub(_root_dir)
+                from .errors import SandboxSetupError
+                raise SandboxSetupError(
+                    "audit_required=True but ptrace is blocked on "
+                    "this host — the tracer cannot attach; refusing "
+                    "to run the target unaudited.",
+                    "lower Yama scope (sysctl kernel.yama."
+                    "ptrace_scope=1) or grant CAP_SYS_PTRACE, or "
+                    "drop audit_required= to accept marker-recorded "
+                    "degradation.",
+                )
 
     # Track every fd we hold in the parent so a failure ANYWHERE from
     # pipe()/fork() through the newuidmap handshake closes the lot.
@@ -1005,6 +1127,21 @@ def run_sandboxed(
         landlock_fn = None
         if writable_paths or allowed_tcp_ports:
             effective_paths = list(writable_paths) if writable_paths else []
+            if rootfs is not None:
+                # Landlock rule paths are opened POST-pivot (the child
+                # applies landlock_fn at step 10, after setup_mount_ns),
+                # where the image rootfs IS "/". Grant the pivoted root
+                # wholesale: in rootfs mode the mount namespace is the
+                # write boundary (host dirs simply are not bound in),
+                # and the image's own tree must stay writable for the
+                # environment to function. This does NOT reopen the
+                # target bind — its MS_RDONLY remount wins at the VFS
+                # layer regardless of Landlock's grant. Host-side paths
+                # in writable_paths keep working where they are bound
+                # at their original paths inside the new root (output);
+                # ones with no post-pivot presence degrade to the
+                # existing could-not-open stderr note.
+                effective_paths.append("/")
             # readable_paths serves two consumers with different
             # semantics: the mount-ns bind list (always) and Landlock's
             # read allowlist (ONLY under restrict_reads — Landlock
@@ -1419,14 +1556,15 @@ def run_sandboxed(
             # their original paths so they exist inside the pivoted
             # root — otherwise Landlock's allowlist would cover a path
             # the child can't reach (ENOENT before EACCES).
-            if (target or output) and not skip_mount_ns:
+            if (target or output or rootfs) and not skip_mount_ns:
                 _status_step = b"M"
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
                                root_path=_root_dir,
                                persona=persona,
                                etc_overlay=etc_overlay,
-                               rw_submounts_ok=_rw_submounts_ok)
+                               rw_submounts_ok=_rw_submounts_ok,
+                               rootfs=rootfs)
 
             # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
             # to a mask of size persona.cpu_count. The persona's
@@ -1537,6 +1675,13 @@ def run_sandboxed(
                         b"_spawn: grandchild fresh proc mount failed; "
                         b"/proc/<ns-pid>/* will ENOENT for gdb/ptrace\n"
                     )
+                if rootfs is not None and not skip_pid_ns:
+                    # Rootfs mode: split so the image entrypoint is PID 2
+                    # (a PID-1 entrypoint has kill(2)-delivered signals
+                    # filtered — abort()/raise() deaths would vanish).
+                    # Returns in the exec-path child; PID 1 stays behind
+                    # as the in-process init mirroring exit statuses.
+                    _pid1_split_for_waiter()
                 if env is not None:
                     exec_env = env
                     # Defense-in-depth: context.py:run() already strips
@@ -1756,16 +1901,53 @@ def run_sandboxed(
                 "newuidmap/newgidmap required for mount-ns sandbox — install "
                 "the uidmap package"
             )
+        uid_lines = ["0", str(host_uid), "1"]
+        gid_lines = ["0", str(host_gid), "1"]
+        gidmap_binary = newgidmap
+        if rootfs is not None:
+            # Rootfs mode wants a RANGE map: container-image entrypoints
+            # chown to and setuid/initgroups as non-root uids (www-data,
+            # postgres, uid 101, ...). A single-id map makes those fail
+            # with EINVAL/EPERM. Map ns-ids 1..N onto the operator's
+            # /etc/subuid+/etc/subgid allotment; ns-root stays mapped to
+            # the caller so rootfs files created by ns-root remain
+            # owned (and cleanable) by the operator on the host side.
+            try:
+                import pwd
+                _user = pwd.getpwuid(host_uid).pw_name
+            except (KeyError, OSError):
+                _user = str(host_uid)
+            _urange = _subid_range("/etc/subuid", _user, str(host_uid))
+            _grange = _subid_range("/etc/subgid", _user, str(host_gid))
+            # raptor-gidmap-allow accepts EXACTLY one triple by
+            # contract; a range map must go through plain newgidmap
+            # (setuid — no setgroups-deny involved, so setgroups to
+            # mapped gids keeps working).
+            _plain_newgidmap = shutil.which("newgidmap")
+            if _urange and _grange and _plain_newgidmap:
+                _ucount = max(1, min(_urange[1], 65535))
+                _gcount = max(1, min(_grange[1], 65535))
+                uid_lines += ["1", str(_urange[0]), str(_ucount)]
+                gid_lines += ["1", str(_grange[0]), str(_gcount)]
+                gidmap_binary = _plain_newgidmap
+            else:
+                logger.warning(
+                    "rootfs sandbox: no usable /etc/subuid+/etc/subgid "
+                    "allotment (or plain newgidmap missing) — running "
+                    "with the single-id map; image entrypoints that "
+                    "chown/setuid to other uids will fail (EINVAL)"
+                )
         try:
-            _run_newuidmap(child_pid, newuidmap, ["0", str(host_uid), "1"])
+            _run_newuidmap(child_pid, newuidmap, uid_lines)
             # Argument contract with raptor-gidmap-allow (see the header
-            # comment in helpers/raptor-gidmap-allow.c): exactly this
-            # shape — one strictly-numeric triple mapping gid 0 inside
-            # the namespace to the invoker's own gid, on a namespace the
-            # invoker just created. The helper refuses foreign gids,
-            # namespaces owned by other uids, and non-numeric or
-            # oversized mappings (exit 3).
-            _run_newuidmap(child_pid, newgidmap, ["0", str(host_gid), "1"])
+            # comment in helpers/raptor-gidmap-allow.c): exactly ONE
+            # strictly-numeric triple mapping gid 0 inside the namespace
+            # to the invoker's own gid, on a namespace the invoker just
+            # created. The helper refuses foreign gids, namespaces owned
+            # by other uids, and non-numeric or oversized mappings
+            # (exit 3) — which is why the rootfs range map above swaps
+            # to plain newgidmap.
+            _run_newuidmap(child_pid, gidmap_binary, gid_lines)
         except Exception:
             _kill_and_reap(child_pid)
             raise

@@ -1,0 +1,73 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet request data -> session / application-scope writes
+  #
+  # CWE-501 trust boundary violation: data from the untrusted request zone
+  # stored where downstream consumers assume it has been validated (session
+  # and servlet-context attributes). Both the attribute key and value count —
+  # a tainted key poisons the trusted namespace just as a tainted value does,
+  # so no focus-metavariable is used.
+  #
+  # No pattern-sanitizers on purpose: the idioms that genuinely establish
+  # trust (allowlist validation, canonicalisation-then-check) are
+  # branch-shaped and cannot be soundly expressed as taint-mode sanitizers
+  # without name-guessing false-negative risk. Guard adequacy is adjudicated
+  # downstream (Z3 prescreen / LLM validation), matching the SSRF rules'
+  # posture.
+  # ---------------------------------------------------------------------------
+  - id: raptor.java.trust-boundary-session-write
+    message: >-
+      Untrusted request data is stored in the session or servlet context
+      without validation — code reading these attributes typically treats
+      them as trusted (CWE-501 trust boundary violation). Validate against
+      an allowlist before crossing the boundary.
+    languages: [java]
+    severity: MEDIUM
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+          - pattern: (HttpServletRequest $REQ).getParameterMap()
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getCookies()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          # Header/parameter enumerations are request data; taint
+          # reaches values via nextElement(). Names are attacker-chosen.
+          - pattern: (HttpServletRequest $REQ).getHeaders(...)
+          - pattern: (HttpServletRequest $REQ).getHeaderNames()
+          - pattern: (HttpServletRequest $REQ).getParameterNames()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-propagators:
+      # Collection round-trips (measured FN class: same-method
+      # map.put(k, tainted) -> get(k) -> sink). put/add taint the
+      # receiver; semgrep then propagates receiver taint through get.
+      # Key-insensitive by engine design — recall-side over-taint on a
+      # different key is adjudicated downstream (gate/validation), the
+      # honest asymmetry for a detector.
+      - pattern: $M.put($K, $V)
+        from: $V
+        to: $M
+      - pattern: $M.add($V)
+        from: $V
+        to: $M
+    pattern-sinks:
+      - pattern-either:
+          # Session writes, including the chained request.getSession() form
+          # (type inference cannot always resolve the chain's return type).
+          - pattern: (HttpSession $SESS).setAttribute(...)
+          - pattern: (HttpSession $SESS).putValue(...)
+          - pattern: (HttpServletRequest $REQ).getSession().setAttribute(...)
+          - pattern: (HttpServletRequest $REQ).getSession(...).setAttribute(...)
+          - pattern: (HttpServletRequest $REQ).getSession().putValue(...)
+          - pattern: (HttpServletRequest $REQ).getSession(...).putValue(...)
+          # Application scope, including the chained accessor form
+          - pattern: (ServletContext $CTX).setAttribute(...)
+          - pattern: getServletContext().setAttribute(...)
+    metadata:
+      cwe: ["CWE-501"]
+      owasp_top_10: ["A4:2021-Insecure Design"]
+      tags: ["security", "java", "trust-boundary", "taint"]

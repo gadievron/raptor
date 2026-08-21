@@ -183,6 +183,15 @@ class SharedState:
     # Synthesis hits discovered mid-loop; drained into a second executor pass.
     synthesis_queue: list[dict[str, Any]] = field(default_factory=list)
 
+    # In-run precision feedback for synthesized/library rules:
+    # rule_id -> [tp_count, fp_count] from triaged matches, and the
+    # rules quarantined for the rest of the run (all matches triaged
+    # false-positive after enough evidence).  See
+    # orchestrator._note_rule_triage.
+    rule_triage: dict[str, list[int]] = field(default_factory=dict)
+    quarantined_rules: set[str] = field(default_factory=set)
+    _rule_triage_lock: threading.Lock = field(default_factory=threading.Lock)
+
     # Incremental study consumer queue; set at runtime when C/C++ files
     # are present.  Typed as Any to avoid circular import.
     study_queue: Any = None

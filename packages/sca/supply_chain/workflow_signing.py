@@ -248,12 +248,16 @@ def _git_log_signatures(
     # gpg programs to a no-op so the target repo's config can't choose
     # one. The probe overrides re-enable verification through the
     # PATH-resolved system binaries (appended last, so they win).
+    # NUL between fields (same convention as commit_provenance) so an
+    # author name or subject containing ``|`` can't shift the columns.
+    # Records stay one-per-line: none of the fields can carry a
+    # newline (``%s`` is the subject LINE).
     cmd = safe_git_command(
         *signature_probe_overrides(),
         "-C", str(target), "log",
         f"--max-count={_MAX_COMMITS_WALKED}",
         "--no-merges",
-        "--format=%H|%G?|%an|%ae|%s",
+        "--format=%H%x00%G?%x00%an%x00%ae%x00%s",
         "--",
     )
     cmd.extend(paths)
@@ -280,7 +284,7 @@ def _git_log_signatures(
     for line in proc.stdout.splitlines():
         if not line.strip():
             continue
-        parts = line.split("|", 4)
+        parts = line.split("\x00", 4)
         if len(parts) < 5:
             continue
         out.append(tuple(parts))

@@ -11,8 +11,6 @@ strategy routing.
 
 from __future__ import annotations
 
-import os
-
 from core.orchestration.context_map_crypto import (
     enrich_with_crypto_inventory,
 )
@@ -100,7 +98,13 @@ class TestBootstrap:
         checklist = _fixture(tmp_path)
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
-        monkeypatch.setattr(os, "getcwd", lambda: str(elsewhere))
+        # chdir alone is the faithful simulation: the real os.getcwd()
+        # and Path.cwd() both follow it. Do NOT stub os.getcwd before
+        # this line — monkeypatch.chdir records the pre-test cwd via
+        # os.getcwd() for its teardown, so a prior getcwd stub made
+        # the undo restore INTO the stubbed tmp dir: the session's cwd
+        # drifted for every later test and cwd-relative subprocess
+        # probes broke under shuffled order.
         monkeypatch.chdir(elsewhere)
         context_map: dict = {}
         assert enrich_with_crypto_inventory(

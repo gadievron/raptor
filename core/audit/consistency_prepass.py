@@ -289,6 +289,10 @@ def run_consistency_prepass(
         "dimensions": {},
         "contract_sources": {},
         "inconclusive_reasons": {},
+        # Dimension-level failure counter: a dimension whose detector
+        # raised is recorded here so "0 deviations" is distinguishable
+        # from "dimension failed" in the run telemetry.
+        "dimension_failures": {},
         "leads_seeded": 0,
         "promotions": 0,
         "budget_exceeded": False,
@@ -298,6 +302,11 @@ def run_consistency_prepass(
         return telemetry["dimensions"].setdefault(
             dimension,
             {"confirmed": 0, "refuted": 0, "inconclusive": 0},
+        )
+
+    def _dim_failed(dimension: str) -> None:
+        telemetry["dimension_failures"][dimension] = (
+            telemetry["dimension_failures"].get(dimension, 0) + 1
         )
 
     def _over_budget() -> bool:
@@ -334,6 +343,7 @@ def run_consistency_prepass(
             source_texts, joern_server=joern_server,
         )
     except Exception:
+        _dim_failed("census")
         logger.debug("consistency prepass: census build failed",
                      exc_info=True)
 
@@ -469,6 +479,7 @@ def run_consistency_prepass(
                 source_texts, constants=constants,
             )
         except Exception:
+            _dim_failed("flag-mode")
             logger.debug("consistency prepass: flag/mode failed",
                          exc_info=True)
             flag_devs = []
@@ -523,6 +534,7 @@ def run_consistency_prepass(
             from .consistency_verify import argument_shape_verdict
             shape_devs = detect_argument_shape_deviations(source_texts)
         except Exception:
+            _dim_failed("argument-shape")
             logger.debug("consistency prepass: argument shape failed",
                          exc_info=True)
             shape_devs = []
@@ -605,6 +617,7 @@ def run_consistency_prepass(
             domain_model, function_names,
         )
     except Exception:
+        _dim_failed("learned-pairs")
         logger.debug("consistency prepass: learned pairs failed",
                      exc_info=True)
 
@@ -617,6 +630,7 @@ def run_consistency_prepass(
                 if learned_pairs else []
             )
         except Exception:
+            _dim_failed(DIMENSION_CLEANUP)
             logger.debug("consistency prepass: cleanup failed",
                          exc_info=True)
             cleanup_devs = []
@@ -707,6 +721,7 @@ def run_consistency_prepass(
                 source_texts, pairs=learned_pairs,
             )
         except Exception:
+            _dim_failed(DIMENSION_ORDERING)
             logger.debug("consistency prepass: ordering failed",
                          exc_info=True)
             order_devs = []
@@ -772,6 +787,7 @@ def run_consistency_prepass(
                 source_texts, peer_groups,
             )
         except Exception:
+            _dim_failed("interface")
             logger.debug("consistency prepass: interface parity "
                          "failed", exc_info=True)
             iface_devs = []
@@ -835,6 +851,7 @@ def run_consistency_prepass(
                 telemetry=counts,
             )
         except Exception:
+            _dim_failed(DIMENSION_CLONE_DRIFT)
             logger.debug("consistency prepass: fix-anchored clone "
                          "drift failed", exc_info=True)
             anchored = []
@@ -903,6 +920,7 @@ def run_consistency_prepass(
             from .clone_drift import detect_clone_drift
             generic = detect_clone_drift(source_texts, telemetry=counts)
         except Exception:
+            _dim_failed(DIMENSION_CLONE_DRIFT)
             logger.debug("consistency prepass: clone winnowing "
                          "failed", exc_info=True)
             generic = []
@@ -968,6 +986,7 @@ def run_consistency_prepass(
                 if sink_vocab and sanitizer_vocab else []
             )
         except Exception:
+            _dim_failed("sanitize-sink")
             logger.debug("consistency prepass: sanitize-sink failed",
                          exc_info=True)
             sanitize_devs = []
@@ -1044,8 +1063,14 @@ def run_consistency_prepass(
                 detect_guard_presence_deviations,
             )
             from .consistency_verify import guard_presence_verdict
-            guard_devs = detect_guard_presence_deviations(source_texts)
+            guard_devs = detect_guard_presence_deviations(
+                source_texts,
+                budget_s=max(
+                    0.0, budget_s - (time.monotonic() - t0),
+                ),
+            )
         except Exception:
+            _dim_failed("guard-presence")
             logger.debug("consistency prepass: guard presence failed",
                          exc_info=True)
             guard_devs = []

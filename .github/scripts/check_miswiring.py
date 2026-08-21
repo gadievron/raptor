@@ -877,8 +877,22 @@ def find_dead(idx: RepoIndex):
         for cname, ci in mod.classes.items():
             if cname.startswith("Test") and mod_is_test:
                 continue        # pytest-collected
-            if mod_is_test and any("unittest" in (b or "") or b == "TestCase"
-                                   for b in ci.bases):
+            def _is_testcase_base(name, _seen=None):
+                # transitive: a same-module base that is itself a test
+                # class makes the subclass one (local shared-fixture
+                # bases like RunContentionBase are the common case)
+                if name is None:
+                    return False
+                if "unittest" in name or name.endswith("TestCase"):
+                    return True
+                _seen = _seen or set()
+                if name in _seen:
+                    return False
+                _seen.add(name)
+                parent = mod.classes.get(name)
+                return parent is not None and any(
+                    _is_testcase_base(b, _seen) for b in parent.bases)
+            if mod_is_test and any(_is_testcase_base(b) for b in ci.bases):
                 continue
             uses = name_use[cname] + attr_use[cname] + str_use[cname] + import_use[cname]
             # subtract own-module self refs inside the class (e.g., factory

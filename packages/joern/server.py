@@ -82,6 +82,34 @@ _RESTARTING_ERROR = (
 _RELAUNCH_COOLDOWN_S = 300.0
 
 
+def _reap_in_background(proc) -> None:
+    """Reap a SIGKILLed child whose exit outlived the foreground grace.
+
+    A killed multi-GB JVM can spend >5s in kernel-side address-space
+    teardown before it becomes reapable; ``stop()`` must not block a
+    restart on that, but abandoning the handle leaks a zombie for the
+    rest of the run. A daemon thread holds the ``wait()`` instead.
+    """
+    pid = getattr(proc, "pid", None)
+    started = time.monotonic()
+
+    def _wait() -> None:
+        try:
+            proc.wait()
+        except Exception:  # noqa: BLE001 — reaper must never raise
+            logger.debug("background reap failed for pid %s", pid,
+                         exc_info=True)
+            return
+        logger.info(
+            "Joern server (pid %s) reaped %.1fs after SIGKILL",
+            pid, time.monotonic() - started,
+        )
+
+    threading.Thread(
+        target=_wait, name=f"joern-reaper-{pid}", daemon=True,
+    ).start()
+
+
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
@@ -240,6 +268,11 @@ class JoernServer:
         self._workdir: str | None = None
         self._auth_user: str | None = None
         self._auth_password: str | None = None
+        # Learned FlowSemantic rows (packages.joern.semantics), applied
+        # to the dataflow EngineContext of the tiered sweep and batch
+        # taint queries. Instance-level: semantics describe the loaded
+        # CPG's project.
+        self._flow_semantics: list[Any] = []
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
@@ -436,20 +469,29 @@ class JoernServer:
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                # SIGKILL is delivered but a huge-heap JVM's kernel-side
-                # teardown can outlive this grace. The process cannot
-                # execute further — proceed to cleanup regardless.
-                # Pre-fix this second TimeoutExpired escaped stop():
-                # ``_proc`` stayed set on a dead process, the workdir
-                # leaked, and a restart() that hit it aborted mid-way,
-                # leaving the server permanently in the
-                # "server process exited" fail-fast state for the rest
-                # of the run.
+                # SIGKILL is delivered but the process may legitimately
+                # take longer than 5s to reach the zombie state: a
+                # multi-GB JVM's exit path tears down its whole address
+                # space (page tables + anonymous heap pages) BEFORE the
+                # parent can reap it, and uninterruptible (D-state)
+                # I/O — e.g. CPG pages being written back — pins it
+                # further. The process cannot execute anything after
+                # SIGKILL, so cleanup proceeds; blocking a restart on
+                # kernel teardown would just serialise the recovery
+                # behind memory unmapping.
+                #
+                # But the child must still be wait()ed eventually:
+                # pre-fix nothing ever reaped it, so every slow-exit
+                # kill leaked a zombie (and its pid) until interpreter
+                # exit. Hand the handle to a background reaper.
                 logger.warning(
                     "Joern server (pid %d) did not reap within 5s of "
-                    "SIGKILL — proceeding with cleanup",
+                    "SIGKILL — proceeding with cleanup (multi-GB JVM "
+                    "address-space teardown can exceed the grace); "
+                    "background reaper attached",
                     pid,
                 )
+                _reap_in_background(self._proc)
         except OSError:
             pass
 
@@ -1061,6 +1103,31 @@ class JoernServer:
             elapsed_ms=elapsed_ms,
         )
 
+    def set_flow_semantics(self, rows: list[Any]) -> int:
+        """Install learned FlowSemantic rows for subsequent taint queries.
+
+        *rows* are ``packages.joern.semantics.SemanticRow`` items (or
+        vocabulary-shaped strings/dicts, converted via
+        ``rows_from_vocab``). Invalid rows and ``llm_prior``-provenance
+        rows are dropped loudly by the semantics module. Returns the
+        number of rows retained. Passing an empty list clears the
+        installed semantics.
+        """
+        from .semantics import SemanticRow, filter_valid_rows, rows_from_vocab
+
+        if rows and not isinstance(rows[0], SemanticRow):
+            valid = rows_from_vocab(rows)
+        else:
+            valid, _rejected = filter_valid_rows(rows)
+        self._flow_semantics = valid
+        if valid:
+            logger.info(
+                "flow semantics installed: %d row(s) (%s)",
+                len(valid),
+                ", ".join(r.method for r in valid[:8]),
+            )
+        return len(valid)
+
     def close_workspace(self) -> None:
         """Close the active CPG and free memory."""
         resp = self._post_sync("workspace.reset", timeout=30)
@@ -1170,21 +1237,45 @@ class JoernServer:
         if not valid_pairs:
             return []
 
+        from .semantics import render_context_arg, render_semantics_decl
+        sem_decl = render_semantics_decl(self._flow_semantics)
+        sem_arg = render_context_arg(self._flow_semantics)
         lines = [
             "import io.joern.dataflowengineoss.queryengine._",
             "import io.joern.dataflowengineoss.language._",
             "import io.shiftleft.semanticcpg.language._",
             "import io.shiftleft.codepropertygraph.generated.nodes.CfgNode",
             "import scala.util.Try",
+        ]
+        if sem_decl:
+            lines.append(sem_decl.rstrip("\n"))
+        lines += [
             f"val batchConfig = EngineConfig(maxCallDepth = {max_call_depth})",
             (
                 "implicit val batchContext: EngineContext = "
-                "EngineContext(config = batchConfig)"
+                f"EngineContext({sem_arg}config = batchConfig)"
             ),
         ]
 
+        # Transport and echo discipline (three interacting REPL facts,
+        # all observed on the supported joern line):
+        # * println output does NOT come back through /query-sync —
+        #   flows must ride the FINAL EXPRESSION's string echo, exactly
+        #   like tiered_taint.sc / _build_taint_query do.
+        # * a bare `val flowsN = ....l` at top level echoes the fully
+        #   pretty-printed node list, flooding (and truncating) the
+        #   response — each pair runs inside locally{} so intermediate
+        #   vals never echo.
+        # * interpolator dollars are single ($ln): a doubled $$ is
+        #   Scala's ESCAPED literal dollar and would emit the JSON
+        #   un-interpolated.
+        lines.append(
+            "val raptorBatchLines = "
+            "scala.collection.mutable.ListBuffer.empty[String]"
+        )
         for i, (src, sink) in enumerate(valid_pairs):
             lines.append(
+                f'locally {{\n'
                 f'val src{i} = cpg.method.name("{src}").parameter\n'
                 f'val snk{i} = cpg.call.name("{sink}").argument\n'
                 f'val flows{i} = snk{i}.reachableByFlows(src{i}).take(50).l\n'
@@ -1199,13 +1290,17 @@ class JoernServer:
                 f'    }}\n'
                 f'    val fnEsc = fn.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"").replace("\\n", " ")\n'
                 f'    val flEsc = fl.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"").replace("\\n", " ")\n'
-                f'    s"""{{"line":$$ln,"code":"$$cd","function":"$$fnEsc","file":"$$flEsc"}}"""\n'
+                f'    s"""{{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}}"""\n'
                 f'  }}.mkString(",")\n'
-                f'  println("JOERN_FLOW:[" + steps + "]")\n'
+                f'  raptorBatchLines += ("JOERN_FLOW:[" + steps + "]")\n'
+                f'}}\n'
                 f'}}'
             )
 
-        lines.append('"batch-done"')
+        lines.append(
+            '"JOERN_FLOWS_START\\n" + raptorBatchLines.mkString("\\n") '
+            '+ "\\nJOERN_FLOWS_END"'
+        )
         query = "\n".join(lines)
 
         result = self.query(query, timeout=timeout, validate=True, check_length=False)
@@ -1269,6 +1364,14 @@ class JoernServer:
         )
         content = content.replace(
             "__MAX_OUTPUT_ARGS__", str(lang_profile.max_output_args_expansion),
+        )
+
+        from .semantics import render_context_arg, render_semantics_decl
+        content = content.replace(
+            "__SEMANTICS_DECL__\n", render_semantics_decl(self._flow_semantics),
+        )
+        content = content.replace(
+            "__CTX_SEMANTICS__", render_context_arg(self._flow_semantics),
         )
 
         return self._submit_query(

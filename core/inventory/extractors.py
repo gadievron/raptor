@@ -2069,6 +2069,18 @@ class TreeSitterExtractor:
             return None
 
         visibility, class_name = self._extract_visibility(node, name, class_name, attrs)
+        # C++ out-of-line definitions (``Scanner::parseBody(...)`` in a
+        # .cpp, ``inline T Reader::getElement(...)`` in a header) sit at
+        # translation-unit level, so the enclosing-class walk never sets
+        # class_name and receiver-qualified pins / ``--functions`` specs
+        # (``Class.method``) could never match; with same-named overloads
+        # in one file the unambiguous-bare-name fallback refuses too, and
+        # the function was silently never scheduled for review. Recover
+        # the rightmost scope component from the declarator's
+        # qualified_identifier (``ns::detail::Reader::getElement``
+        # → ``Reader``).
+        if class_name is None and self.language in ("c", "cpp"):
+            class_name = self._cpp_scope_qualifier(node)
         parameters = self._extract_parameters(node)
         return_type = self._extract_return_type(node)
 
@@ -2091,6 +2103,61 @@ class TreeSitterExtractor:
                 class_attributes=list(class_attributes),
             ),
         )
+
+    # Declarator wrappers between a C/C++ function_definition node and
+    # its function_declarator (pointer/reference returns).
+    _CPP_DECL_WRAPPERS = ("pointer_declarator", "reference_declarator")
+
+    def _cpp_scope_qualifier(self, node) -> str | None:
+        """Rightmost scope component of an out-of-line C/C++ definition.
+
+        ``void Scanner::parseBody(...)`` parses with the name
+        wrapped in a ``qualified_identifier`` under the
+        ``function_declarator``; nested qualifications
+        (``ns::detail::Reader::f``) nest further
+        ``qualified_identifier`` nodes on the name side. The component
+        immediately left of the trailing name is the receiver/class
+        spelling that pins and labels use (a namespace-qualified free
+        function yields its namespace — the same rightmost-qualifier
+        rule). None when the definition is unqualified.
+        """
+        decl = node
+        for _ in range(3):  # function_definition → (pointer/ref)* → declarator
+            found = None
+            for child in decl.children:
+                if child.type == "function_declarator":
+                    found = child
+                    break
+                if child.type in self._CPP_DECL_WRAPPERS:
+                    found = child
+                    break
+            if found is None:
+                return None
+            decl = found
+            if decl.type == "function_declarator":
+                break
+        if decl.type != "function_declarator":
+            return None
+        qual = next(
+            (c for c in decl.children if c.type == "qualified_identifier"),
+            None,
+        )
+        if qual is None:
+            return None
+        scope = None
+        cur = qual
+        while cur is not None:
+            nested = None
+            for c in cur.children:
+                if c.type in ("namespace_identifier", "template_type"):
+                    text = c.text.decode()
+                    scope = text.split("<")[0].strip() or scope
+                elif c.type == "qualified_identifier":
+                    nested = c
+            if nested is None:
+                break
+            cur = nested
+        return scope or None
 
     def _ts_member_visibility(self, node) -> str | None:
         """TS/JS class-member visibility from an ``accessibility_modifier``

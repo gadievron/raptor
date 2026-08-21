@@ -487,7 +487,7 @@ def test_payload_rejects_missing_compose_file(tmp_path: Path) -> None:
     assert "not found" in result["reason"]
 
 
-@patch("cve_env.tools.docker_compose_up._run_compose")
+@patch("core.container.compose.run_compose")
 def test_payload_up_success_returns_primary(mock_run: Any, tmp_path: Path) -> None:
     # Two compose invocations happen in up_stack: `up -d` (empty stdout ok) + `ps --format json`.
     def run_compose_side_effect(args: list[str], **kwargs: Any) -> str:
@@ -530,7 +530,7 @@ def test_payload_up_success_returns_primary(mock_run: Any, tmp_path: Path) -> No
         reset_active_stacks()
 
 
-@patch("cve_env.tools.docker_compose_up._run_compose")
+@patch("core.container.compose.run_compose")
 def test_payload_up_failure_cleans_up(mock_run: Any, tmp_path: Path) -> None:
     mock_run.side_effect = ComposeError("boom", stderr="image not found")
     compose = tmp_path / "docker-compose.yml"
@@ -546,7 +546,7 @@ def test_payload_up_failure_cleans_up(mock_run: Any, tmp_path: Path) -> None:
     assert "image not found" in result["stderr"]
 
 
-@patch("cve_env.tools.docker_compose_up._run_compose")
+@patch("core.container.compose.run_compose")
 def test_reset_active_stacks_idempotent(mock_run: Any, tmp_path: Path) -> None:
     reset_active_stacks()  # clean slate
     assert _ACTIVE_STACKS == {}, "registry must start empty"
@@ -762,7 +762,7 @@ def test_compose_allows_all_devices_with_param(tmp_path: Path) -> None:
 # --pull missing still fetches registry images that aren't cached locally.
 
 
-@patch("cve_env.tools.docker_compose_up._run_compose")
+@patch("core.container.compose.run_compose")
 def test_up_stack_appends_pull_always(mock_run: MagicMock, tmp_path: Path) -> None:
     """`docker compose up -d` must include `--pull missing`."""
     compose_file = tmp_path / "docker-compose.yml"

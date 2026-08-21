@@ -7,6 +7,7 @@ import inspect
 import json
 import shutil
 import sys
+import subprocess
 import textwrap
 
 import pytest
@@ -18,6 +19,7 @@ from core.audit.dark_verify._execute import (
     _sandboxed_compile,
     _toolchain_read_paths,
 )
+from core.audit.dark_verify import _harness as hy
 from core.audit.dark_verify import (
     DarkVerifyResult,
     DarkWitnessSpec,
@@ -873,7 +875,7 @@ class TestGenerateRubyHarness:
         )
         harness = generate_ruby_harness(spec, tmp_path)
         assert "require 'json'" in harness
-        assert '"lib/auth"' in harness
+        assert "'lib/auth'" in harness
         assert "validate" in harness
         assert "nil" in harness
 
@@ -1625,6 +1627,119 @@ class TestToDict:
         assert d["lang_config"]["param_types"] == ["int"]
 
 
+# -- _resolve_rustc: rustup-proxy indirection ---------------------------------
+
+
+class TestResolveRustc:
+    """The witness compile invokes the binary _toolchain_read_paths
+    grants; a rustup proxy re-execs the real compiler from
+    ``$RUSTUP_HOME`` — unreadable under restrict_reads. The resolver
+    must see through the proxy via ``--print sysroot``."""
+
+    @staticmethod
+    def _fake_proxy(tmp_path, sysroot_reply: str, rc: int = 0):
+        proxy_dir = tmp_path / "cargo-bin"
+        proxy_dir.mkdir()
+        proxy = proxy_dir / "rustc"
+        proxy.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--print" ] && [ "$2" = "sysroot" ]; then\n'
+            f"  echo '{sysroot_reply}'\n"
+            f"  exit {rc}\n"
+            "fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        proxy.chmod(0o755)
+        return proxy_dir, proxy
+
+    def test_resolves_through_proxy_to_sysroot_binary(
+        self, tmp_path, monkeypatch,
+    ):
+        sysroot = tmp_path / "rustup" / "toolchains" / "dev"
+        (sysroot / "bin").mkdir(parents=True)
+        real = sysroot / "bin" / "rustc"
+        real.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        real.chmod(0o755)
+        proxy_dir, _ = self._fake_proxy(tmp_path, str(sysroot))
+        monkeypatch.setenv("PATH", str(proxy_dir))
+        assert ex._resolve_rustc() == str(real)
+
+    def test_resolves_through_chained_proxies(self, tmp_path, monkeypatch):
+        """A wrapper shim can dispatch to a rustup-managed rustc: the
+        first sysroot probe then yields ANOTHER proxy — its bin/rustc
+        resolves outside the sysroot it reports — whose settings read
+        the witness sandbox would deny (the Nightly runner shape:
+        "could not read settings file ... Permission denied").
+        Resolution must keep probing until the candidate lives inside
+        its own reported sysroot: the real compiler."""
+        real_root = tmp_path / "rustup" / "toolchains" / "dev"
+        (real_root / "bin").mkdir(parents=True)
+        real = real_root / "bin" / "rustc"
+        real.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        real.chmod(0o755)
+
+        # Inner proxy (the rustup shim shape): lives outside any
+        # toolchain, reports the real toolchain's sysroot.
+        inner_dir = tmp_path / "cargo-bin-inner"
+        inner_dir.mkdir()
+        inner = inner_dir / "rustc"
+        inner.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--print" ] && [ "$2" = "sysroot" ]; then\n'
+            f"  echo '{real_root}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        inner.chmod(0o755)
+
+        # Outer wrapper on PATH: reports a "toolchain" whose rustc is
+        # the inner proxy (resolves outside that toolchain).
+        outer_root = tmp_path / "site" / "toolchains" / "wrapped"
+        (outer_root / "bin").mkdir(parents=True)
+        (outer_root / "bin" / "rustc").symlink_to(inner)
+        proxy_dir, _ = self._fake_proxy(tmp_path, str(outer_root))
+        monkeypatch.setenv("PATH", str(proxy_dir))
+        assert ex._resolve_rustc() == str(real)
+
+    def test_self_reporting_proxy_terminates(self, tmp_path, monkeypatch):
+        """A proxy chain that never reaches a real compiler (the
+        reported sysroot's rustc points back at the proxy) must
+        terminate on the no-progress fixed point, not loop."""
+        root = tmp_path / "loop" / "toolchains" / "dev"
+        (root / "bin").mkdir(parents=True)
+        proxy_dir, proxy = self._fake_proxy(tmp_path, str(root))
+        (root / "bin" / "rustc").symlink_to(proxy)
+        monkeypatch.setenv("PATH", str(proxy_dir))
+        assert ex._resolve_rustc() == str(root / "bin" / "rustc")
+
+    def test_keeps_which_result_when_probe_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        proxy_dir, proxy = self._fake_proxy(tmp_path, "", rc=1)
+        monkeypatch.setenv("PATH", str(proxy_dir))
+        assert ex._resolve_rustc() == str(proxy)
+
+    def test_keeps_which_result_when_sysroot_has_no_rustc(
+        self, tmp_path, monkeypatch,
+    ):
+        # A system rustc prints a sysroot too; when <sysroot>/bin/rustc
+        # is not a distinct real file (or missing), the which() result
+        # stands.
+        proxy_dir, proxy = self._fake_proxy(
+            tmp_path, str(tmp_path / "no-such-sysroot"))
+        monkeypatch.setenv("PATH", str(proxy_dir))
+        assert ex._resolve_rustc() == str(proxy)
+
+    def test_none_when_rustc_absent(self, tmp_path, monkeypatch):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv("PATH", str(empty))
+        assert ex._resolve_rustc() is None
+
+
 # ============================================================================
 # Real execution tests per language — skip when runtime unavailable
 # ============================================================================
@@ -1778,6 +1893,55 @@ class TestRealExecutionRust:
         r = execute_witness(spec, tmp_path)
         assert r.verdict == "confirmed"
         assert r.actual_exception.startswith("signal: SIG")
+
+    def test_confirms_through_rustup_proxy_layout(self, tmp_path, monkeypatch):
+        """rustup-managed hosts reach rustc through a proxy that reads
+        $RUSTUP_HOME settings and re-execs the toolchain compiler —
+        both outside the sandbox's granted read roots, so invoking the
+        proxy inside the witness sandbox fails every compile. The
+        executor must resolve the real compiler via the sysroot probe
+        (_resolve_rustc) before entering the sandbox."""
+        rustup_home = tmp_path / "rustup"
+        tc_bin = rustup_home / "toolchains" / "dev" / "bin"
+        tc_bin.mkdir(parents=True)
+        real = tc_bin / "rustc"
+        real.symlink_to(shutil.which("rustc"))
+        (rustup_home / "settings.toml").write_text(
+            'default_toolchain = "dev"\n', encoding="utf-8")
+        proxy_dir = tmp_path / "cargo" / "bin"
+        proxy_dir.mkdir(parents=True)
+        proxy = proxy_dir / "rustc"
+        proxy.write_text(
+            "#!/bin/sh\n"
+            f"cat '{rustup_home}/settings.toml' >/dev/null 2>&1 || exit 3\n"
+            'if [ "$1" = "--print" ] && [ "$2" = "sysroot" ]; then\n'
+            f"  echo '{tc_bin.parent}'\n"
+            "  exit 0\n"
+            "fi\n"
+            f"exec '{real}' \"$@\"\n",
+            encoding="utf-8",
+        )
+        proxy.chmod(0o755)
+        import os as _os
+        monkeypatch.setenv(
+            "PATH", f"{proxy_dir}:{_os.environ.get('PATH', '')}")
+
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "lib.rs").write_text(
+            "pub fn double_it(x: i32) -> i32 { x * 2 }\n", encoding="utf-8",
+        )
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib.rs", function="double_it",
+            language="rust",
+            expected_return="84",
+            lang_config={
+                "arg_expressions": ["42"], "return_type": "i32",
+                "use_path": "", "setup_lines": [],
+            },
+        )
+        r = execute_witness(spec, target)
+        assert r.verdict == "confirmed", r.match_detail
 
     def test_target_with_own_main(self, tmp_path):
         """A bin-crate target's fn main is renamed before the include!
@@ -3014,3 +3178,354 @@ class TestValidateSpecLanguageFallback:
         err = validate_spec(spec)
         assert err is not None
         assert "dangerous builtin" in err
+# -- return-value comparison ----------------------------------------------------
+
+
+class TestReturnValueComparison:
+    """Return comparison is exact except for cross-language boolean/nil
+    spellings — a blanket case-fold flipped refuted to confirmed for any
+    case-differing string pair."""
+
+    def _returned(self, value):
+        return json.dumps({"status": "returned", "value": value})
+
+    def _spec(self, expected, file="a.go", language="go"):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="F",
+            language=language, expected_return=expected,
+        )
+
+    def test_case_differing_strings_refute(self):
+        r = _classify_output(
+            self._spec("Admin"), self._returned("admin"), "go")
+        assert r.verdict == "refuted"
+
+    def test_case_differing_quoted_strings_refute(self):
+        r = _classify_output(
+            self._spec("admin"), self._returned('"ADMIN"'), "ruby")
+        assert r.verdict == "refuted"
+
+    def test_exact_string_confirms(self):
+        r = _classify_output(
+            self._spec("admin"), self._returned("admin"), "go")
+        assert r.verdict == "confirmed"
+
+    @pytest.mark.parametrize("expected,actual", [
+        ("True", "true"),    # Python-style prediction vs Go %v
+        ("False", "false"),
+        ("Nil", "nil"),
+        ("Null", "null"),
+        ("None", "none"),
+    ])
+    def test_boolean_spellings_fold_case(self, expected, actual):
+        r = _classify_output(
+            self._spec(expected), self._returned(actual), "go")
+        assert r.verdict == "confirmed"
+
+    def test_different_boolean_words_still_refute(self):
+        r = _classify_output(
+            self._spec("None"), self._returned("nil"), "go")
+        assert r.verdict == "refuted"
+
+    def test_python_repr_comparison_is_case_sensitive(self):
+        r = _classify_output(
+            self._spec("abc", file="a.py", language="python"),
+            self._returned("'ABC'"), "python")
+        assert r.verdict == "refuted"
+
+
+# -- execute_witness source-path containment -----------------------------------
+
+
+class TestExecuteWitnessSourcePathContainment:
+    """spec.file joins the target root and is later read UNSANDBOXED by
+    the Go/Rust executors — absolute values, traversal and repo-planted
+    symlinks pointing out of the tree must be rejected up front."""
+
+    def _spec(self, file, language=""):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language=language,
+        )
+
+    def test_absolute_path_rejected(self, tmp_path):
+        r = execute_witness(self._spec("/etc/hostname", "ruby"), tmp_path)
+        assert r.verdict == "error"
+        assert "escapes target root" in r.match_detail
+
+    def test_traversal_rejected(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        secret = tmp_path / "secret.rb"
+        secret.write_text("def check; end\n", encoding="utf-8")
+        r = execute_witness(self._spec("../secret.rb"), root)
+        assert r.verdict == "error"
+        assert "escapes target root" in r.match_detail
+
+    def test_symlink_escape_rejected(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        secret = tmp_path / "secret.rb"
+        secret.write_text("def check; end\n", encoding="utf-8")
+        (root / "link.rb").symlink_to(secret)
+        r = execute_witness(self._spec("link.rb"), root)
+        assert r.verdict == "error"
+        assert "escapes target root" in r.match_detail
+
+    def test_in_root_symlink_not_rejected(self, tmp_path):
+        real = tmp_path / "real.rb"
+        real.write_text("def check; end\n", encoding="utf-8")
+        (tmp_path / "link.rb").symlink_to(real)
+        r = execute_witness(self._spec("link.rb"), tmp_path)
+        assert "escapes target root" not in r.match_detail
+
+    def test_missing_file_still_reported_as_not_found(self, tmp_path):
+        r = execute_witness(self._spec("nope.rb"), tmp_path)
+        assert r.verdict == "error"
+        assert "not found" in r.match_detail
+
+
+# -- validate_spec load-path fields --------------------------------------------
+
+
+class TestValidateSpecLoadPaths:
+    """require_path / use_path / use_module / import_path feed module
+    resolution rooted at the target tree — absolute values, '..' and
+    (with a target_root) symlinked escapes must all be rejected."""
+
+    def _spec(self, lang_config, language="ruby", file="a.rb"):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language=language, lang_config=lang_config,
+        )
+
+    @pytest.mark.parametrize("field,language,file,value", [
+        ("require_path", "ruby", "a.rb", "../../etc/evil"),
+        ("require_path", "javascript", "a.js", "./../evil"),
+        ("use_path", "rust", "a.rs", "lib/../../evil"),
+        ("use_module", "perl", "A.pm", "Foo::..::Bar"),
+        ("import_path", "go", "a.go", "pkg/../../evil"),
+    ])
+    def test_traversal_rejected(self, field, language, file, value):
+        err = validate_spec(self._spec({field: value}, language, file))
+        assert err is not None
+        assert field in err
+
+    @pytest.mark.parametrize("field,language,file", [
+        ("require_path", "ruby", "a.rb"),
+        ("import_path", "go", "a.go"),
+    ])
+    def test_absolute_rejected(self, field, language, file):
+        err = validate_spec(
+            self._spec({field: "/etc/passwd"}, language, file))
+        assert err is not None
+        assert field in err
+
+    @pytest.mark.parametrize("hostile", [
+        "#{`touch /tmp/x`}",        # Ruby interpolation
+        "$injected",                # PHP interpolation
+        "lib'; system('x'); '",     # quote breakout
+        "a b",                      # whitespace
+        "x\ny",                     # newline
+    ])
+    def test_require_path_charset_rejected(self, hostile):
+        err = validate_spec(self._spec({"require_path": hostile}))
+        assert err is not None
+        assert "require_path" in err
+
+    @pytest.mark.parametrize("field,language,file,value", [
+        ("require_path", "ruby", "a.rb", "lib/auth"),
+        ("require_path", "javascript", "a.js", "./parser"),
+        ("require_path", "lua", "a.lua", "lib.auth"),
+        ("use_path", "rust", "a.rs", "std::collections::HashMap"),
+        ("use_module", "perl", "A.pm", "MathUtil"),
+        ("import_path", "go", "a.go", "github.com/user/repo/pkg"),
+    ])
+    def test_legitimate_values_pass(self, field, language, file, value):
+        assert validate_spec(self._spec({field: value}, language, file)) is None
+
+    def test_require_path_symlink_escape_rejected(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "esc").symlink_to(outside)
+        spec = self._spec({"require_path": "esc/mod"})
+        assert validate_spec(spec) is None  # lexically clean
+        err = validate_spec(spec, root)
+        assert err is not None
+        assert "escapes target root" in err
+
+    def test_confined_require_path_passes_with_root(self, tmp_path):
+        spec = self._spec({"require_path": "lib/auth"})
+        assert validate_spec(spec, tmp_path) is None
+
+    def test_execute_witness_rejects_traversal_require_path(self, tmp_path):
+        src = tmp_path / "a.rb"
+        src.write_text("def check; end\n", encoding="utf-8")
+        spec = self._spec({"require_path": "../../evil"})
+        r = execute_witness(spec, tmp_path)
+        assert r.verdict == "error"
+        assert "spec validation failed" in r.match_detail
+
+
+# -- scripting-language string args render as data, never code ----------------
+
+
+_HOSTILE_STRINGS = [
+    "#{1+1}",                             # Ruby interpolation
+    "@{[system('x')]}",                   # Perl block interpolation
+    "$injected",                          # Perl/PHP scalar interpolation
+    "{$var}",                             # PHP curly interpolation
+    "`id`",                               # backticks
+    'double "quotes" inside',
+    "single 'quotes' inside",
+    "trailing backslash \\",
+    "escape-looking \\' \\\\ \\n",
+    "hash # and #{nested '\\' mix}",
+]
+
+
+def _sq_roundtrip(literal: str) -> str:
+    """Decode a single-quoted literal under Ruby/Perl/PHP semantics.
+
+    In all three languages a single-quoted string recognises exactly two
+    escapes (``\\\\`` and ``\\'``) and interpolates nothing. Walking the
+    literal with those rules proves it is well-formed pure data: any
+    unescaped quote (early termination) or dangling backslash asserts.
+    """
+    assert literal.startswith("'") and literal.endswith("'"), literal
+    body = literal[1:-1]
+    out = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\":
+            assert i + 1 < len(body), f"dangling backslash: {literal!r}"
+            nxt = body[i + 1]
+            assert nxt in ("\\", "'"), f"unexpected escape: {literal!r}"
+            out.append(nxt)
+            i += 2
+        else:
+            assert ch != "'", f"unescaped quote ends literal early: {literal!r}"
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _run_stdout(argv: list[str]) -> str:
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+class TestScriptingStringArgsAreData:
+    """LLM-supplied string args are pasted into Ruby/Perl/PHP/Lua harness
+    source. Rendered double-quoted they are an eval sink (#{...}, @{[...]},
+    $var); rendered single-quoted they are pure data. Interpreter round-trips
+    run when the interpreter is installed; the quote-closure asserts always
+    run."""
+
+    @pytest.mark.parametrize("hostile", _HOSTILE_STRINGS)
+    def test_single_quote_closure(self, hostile):
+        assert _sq_roundtrip(hy._single_quote(hostile)) == hostile
+
+    @pytest.mark.parametrize("hostile", _HOSTILE_STRINGS)
+    def test_ruby_roundtrips_as_data(self, hostile):
+        lit = hy._format_args_scripting([hostile], nil_kw="nil")
+        assert _sq_roundtrip(lit) == hostile
+        ruby = shutil.which("ruby")
+        if ruby:
+            assert _run_stdout([ruby, "-e", f"print({lit})"]) == hostile
+
+    @pytest.mark.parametrize("hostile", _HOSTILE_STRINGS)
+    def test_perl_roundtrips_as_data(self, hostile):
+        lit = hy._format_args_scripting([hostile], nil_kw="undef")
+        assert _sq_roundtrip(lit) == hostile
+        perl = shutil.which("perl")
+        if perl:
+            assert _run_stdout([perl, "-e", f"print({lit});"]) == hostile
+
+    @pytest.mark.parametrize("hostile", _HOSTILE_STRINGS)
+    def test_php_roundtrips_as_data(self, hostile):
+        lit = hy._format_args_scripting([hostile], nil_kw="null")
+        assert _sq_roundtrip(lit) == hostile
+        php = shutil.which("php")
+        if php:
+            assert _run_stdout([php, "-r", f"echo {lit};"]) == hostile
+
+    @pytest.mark.parametrize("hostile", _HOSTILE_STRINGS)
+    def test_lua_roundtrips_as_data(self, hostile):
+        lit = hy._format_args_scripting(
+            [hostile], nil_kw="nil", quote=hy._lua_quote,
+        )
+        assert lit.startswith("'") and lit.endswith("'")
+        lua = shutil.which("lua") or shutil.which("lua5.4") \
+            or shutil.which("lua5.3") or shutil.which("luajit")
+        if lua:
+            assert _run_stdout([lua, "-e", f"io.write({lit})"]) == hostile
+
+    def test_lua_control_chars_use_decimal_escapes(self):
+        lit = hy._lua_quote("a\nb\tc")
+        assert lit == "'a\\010b\\009c'"
+
+    def test_perl_backtick_block_interpolation_stays_data(self, tmp_path):
+        """Regression for the live repro: a Perl @{[ `cmd` ]} arg executed
+        under the double-quoted rendering. Single-quoted it must print
+        verbatim and the command must not run."""
+        probe_file = tmp_path / "pwned"
+        hostile = f"@{{[ `touch {probe_file}` ]}}"
+        lit = hy._format_args_scripting([hostile], nil_kw="undef")
+        assert _sq_roundtrip(lit) == hostile
+        perl = shutil.which("perl")
+        if perl:
+            assert _run_stdout([perl, "-e", f"print({lit});"]) == hostile
+        assert not probe_file.exists()
+
+    def test_ruby_harness_renders_args_single_quoted(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.rb", function="check",
+            language="ruby",
+            args=["#{1+1}"],
+            lang_config={"require_path": "a"},
+        )
+        harness = generate_ruby_harness(spec, tmp_path)
+        assert "check('#{1+1}')" in harness
+        assert '"#{1+1}"' not in harness
+
+    def test_ruby_harness_require_path_not_interpolable(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.rb", function="check",
+            language="ruby",
+            lang_config={"require_path": "#{`touch /tmp/x`}"},
+        )
+        harness = generate_ruby_harness(spec, tmp_path)
+        assert 'require "#{' not in harness
+        assert "require '#{`touch /tmp/x`}'" in harness
+
+    def test_perl_harness_renders_args_single_quoted(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="A.pm", function="check",
+            language="perl",
+            args=["@{[system('x')]}"],
+            lang_config={"use_module": "A"},
+        )
+        harness = generate_perl_harness(spec, tmp_path)
+        assert "'@{[system(\\'x\\')]}'" in harness
+        assert '"@{[system' not in harness
+
+    def test_php_harness_renders_args_single_quoted(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.php", function="check",
+            language="php",
+            args=["$HOME"],
+        )
+        harness = generate_php_harness(spec, tmp_path)
+        assert "check('$HOME')" in harness
+        assert '"$HOME"' not in harness
+
+    def test_nested_containers_render_strings_as_data(self):
+        lit = hy._format_args_scripting(
+            [["#{1+1}"], {"k": "$v"}], nil_kw="nil",
+        )
+        assert lit == "['#{1+1}'], {'k' => '$v'}"

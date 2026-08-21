@@ -1,10 +1,9 @@
 name: Nightly (shuffled fast)
 
-# Re-runs the default-tier tests (not slow, not integration) multiple
-# times with distinct random seeds to flush out order-dependent failures.
-# The fast suite completes in seconds per iteration, so many passes are
-# cheap. Aborts on first failure so the failing seed is immediately
-# visible at the bottom of the log.
+# Re-runs the default-tier tests multiple times with distinct random
+# seeds to flush out order-dependent failures.  Each seed gets its own
+# runner via the matrix so the iterations run in parallel — wall-clock
+# is one iteration, not three.
 
 on:
   schedule:
@@ -24,12 +23,15 @@ env:
   PYTHON_VERSION: '3.14'
   VENV_PATH: .venv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  FAST_ITERATIONS: '3'
 
 jobs:
   shuffled-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        iteration: [1, 2, 3]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -52,33 +54,26 @@ jobs:
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
+          # Grammar wheels: same rationale as the slow nightly — the
+          # shuffled fast tier is where grammar-dependent suites run
+          # at volume, and without the wheels they all skip.
+          uv pip install -r requirements-grammars.txt
 
-      - name: Shuffled default-tier tests (${{ env.FAST_ITERATIONS }} iterations)
+      - name: Shuffled default-tier tests (seed ${{ matrix.iteration }})
         run: |
           source $VENV_PATH/bin/activate
-          for i in $(seq 1 "$FAST_ITERATIONS"); do
-            seed="${{ github.run_id }}-${i}"
-            echo "::group::Iteration ${i}/${FAST_ITERATIONS} (seed=${seed})"
-            rc=0
-            RAPTOR_RANDOMISE_TESTS="$seed" \
-              python -m pytest core packages \
-              -q --durations=25 --tb=short \
-              --junitxml="$RUNNER_TEMP/fast-iter-${i}.xml" \
-              || rc=$?
-            echo "::endgroup::"
-            if [ "$rc" -ne 0 ]; then
-              echo "::error::Iteration ${i} failed (seed=${seed}, exit ${rc})"
-              exit "$rc"
-            fi
-          done
-          echo ""
-          echo "All ${FAST_ITERATIONS} iterations passed."
+          seed="${{ github.run_id }}-${{ matrix.iteration }}"
+          echo "seed=${seed}"
+          RAPTOR_RANDOMISE_TESTS="$seed" \
+            python -m pytest core packages \
+            -q --durations=25 --tb=short \
+            --junitxml="$RUNNER_TEMP/fast-iter-${{ matrix.iteration }}.xml"
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          name: nightly-shuffled-fast-results
-          path: ${{ runner.temp }}/fast-iter-*.xml
+          name: nightly-shuffled-fast-iter-${{ matrix.iteration }}
+          path: ${{ runner.temp }}/fast-iter-${{ matrix.iteration }}.xml
           retention-days: 14
           if-no-files-found: ignore

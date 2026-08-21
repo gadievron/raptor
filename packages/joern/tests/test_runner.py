@@ -410,6 +410,78 @@ class TestCleanupCpg:
         assert not f.exists()
         assert cpg_dir.exists()
 
+    def test_removes_importcpg_workspace_copy(self, tmp_path: Path):
+        """importCpg copies the CPG into workspace/ under the query
+        cwd (the CPG dir) — cleanup must remove it, then the now-empty
+        dir."""
+        cpg_dir = tmp_path / "cpg_dir"
+        ws = cpg_dir / "workspace" / "cpg.bin" / "overlays"
+        ws.mkdir(parents=True)
+        (cpg_dir / "workspace" / "cpg.bin" / "cpg.bin").write_bytes(b"copy")
+        f = cpg_dir / "cpg.bin"
+        f.write_bytes(b"data")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cleanup_cpg(cpg)
+        assert not f.exists()
+        assert not (cpg_dir / "workspace").exists()
+        assert not cpg_dir.exists()
+
+    def test_workspace_symlink_not_followed(self, tmp_path: Path):
+        """A symlink squatting at workspace/ must not be traversed —
+        its target survives; only the CPG artifacts go."""
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "precious.txt").write_text("keep")
+        cpg_dir = tmp_path / "cpg_dir"
+        cpg_dir.mkdir()
+        (cpg_dir / "workspace").symlink_to(victim)
+        f = cpg_dir / "cpg.bin"
+        f.write_bytes(b"data")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cleanup_cpg(cpg)
+        assert (victim / "precious.txt").exists()
+
+
+class TestRunQueryScratchCwd:
+    def test_fallback_runner_gets_cpg_dir_cwd(self, tmp_path: Path):
+        """The TypeError fallback (runner without sandbox kwargs) must
+        still pin cwd to the CPG dir — importCpg drops a workspace/
+        copy under the process cwd, which pre-fix was whatever
+        directory the CALLER ran from."""
+        f = tmp_path / "cpg.bin"
+        f.write_bytes(b"fake")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        seen: dict = {}
+
+        def bare_runner(cmd, capture_output, text, timeout, cwd):
+            seen["cwd"] = cwd
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        result = run_query(
+            cpg, "cpg.method.l", subprocess_runner=bare_runner,
+        )
+        assert result.ok
+        assert seen["cwd"] == str(tmp_path)
+
+    def test_default_tempdir_prefix_is_reaper_registered(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """build_cpg's own mkdtemp scratch must be visible to the tmp
+        reaper so orphans from crashed runs get reclaimed."""
+        from core.run import tmp_reaper
+
+        target = tmp_path / "src"
+        target.mkdir()
+        cpg = build_cpg(target, subprocess_runner=_mock_runner())
+        try:
+            assert cpg.path.parent.name.startswith("raptor-joern-cpg-")
+            assert "raptor-joern-cpg-" in tmp_reaper._dir_prefixes()
+        finally:
+            cleanup_cpg(cpg)
+
 
 # ── Template slot injection defense ─────────────────────────────────
 

@@ -28,35 +28,32 @@ class UnsafeDocumentBuilderFactory extends MethodCall {
 }
 
 /**
- * A call to `factory.setFeature(DISALLOW_DTD, true)` that hardens
- * the factory against XXE.
+ * A `factory.setFeature(feature, value)` call setting the named XXE
+ * feature to the given boolean value.
  */
-class SafeFeatureCall extends MethodCall {
-  SafeFeatureCall() {
-    this.getMethod().hasName("setFeature") and
-    this.getMethod().getDeclaringType().hasQualifiedName("javax.xml.parsers", "DocumentBuilderFactory") and
-    (
-      // Disallow DOCTYPE declarations entirely (strongest defence)
-      this.getArgument(0).(StringLiteral).getValue() =
-        "http://apache.org/xml/features/disallow-doctype-decl" and
-      this.getArgument(1).(BooleanLiteral).getBooleanValue() = true
-      or
-      // Disable external general entities
-      this.getArgument(0).(StringLiteral).getValue() =
-        "http://xml.org/sax/features/external-general-entities" and
-      this.getArgument(1).(BooleanLiteral).getBooleanValue() = false
-    )
-  }
+predicate setsFeature(MethodCall mc, Variable factory, string feature, boolean value) {
+  mc.getMethod().hasName("setFeature") and
+  mc.getMethod().getDeclaringType().hasQualifiedName("javax.xml.parsers", "DocumentBuilderFactory") and
+  mc.getQualifier().(VarAccess).getVariable() = factory and
+  mc.getArgument(0).(StringLiteral).getValue() = feature and
+  mc.getArgument(1).(BooleanLiteral).getBooleanValue() = value
 }
 
 /**
  * Holds when `factory` (a variable holding the DocumentBuilderFactory)
- * has been hardened with a safe setFeature call.
+ * has been hardened against XXE. Disabling external-general-entities
+ * alone is NOT sufficient — parameter entities still allow blind XXE /
+ * SSRF via a crafted DTD. The factory must either disallow DOCTYPE
+ * declarations entirely, or disable BOTH the general and parameter
+ * external-entity features.
  */
 predicate isFactoryHardened(Variable factory) {
-  exists(SafeFeatureCall sfc |
-    sfc.getQualifier().(VarAccess).getVariable() = factory
-  )
+  // Disallow DOCTYPE declarations entirely (strongest defence)
+  setsFeature(_, factory, "http://apache.org/xml/features/disallow-doctype-decl", true)
+  or
+  // Both external entity classes disabled
+  setsFeature(_, factory, "http://xml.org/sax/features/external-general-entities", false) and
+  setsFeature(_, factory, "http://xml.org/sax/features/external-parameter-entities", false)
 }
 
 /**

@@ -207,7 +207,11 @@ def _run_git(
                 target=str(repo),
                 output=str(workdir),
                 cwd=str(workdir),
+                # env comes from get_safe_git_env() — already the
+                # sanitised allowlist env, so assert that to the
+                # sandbox instead of drawing the custom-env warning.
                 env=_git_env(),
+                env_caller_filtered=True,
                 capture_output=True,
                 text=True,
                 timeout=_GIT_TIMEOUT_S,

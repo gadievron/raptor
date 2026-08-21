@@ -30,7 +30,9 @@ import json
 import os
 import platform
 import signal
+import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -423,62 +425,67 @@ class TestAuditModeTracerDeath:
         # Yama scope 1 requires the SEIZE'r to be an ancestor of the
         # tracee. Layout:
         #   test process (us)
-        #     └── seizer (forked from us)
+        #     └── seizer (spawned from us as a fresh interpreter)
         #             └── sleeper (forked from seizer)
         # The seizer SEIZEs the sleeper (its own descendant — Yama
         # permitted). Then we SIGKILL the seizer, and EXITKILL should
         # cascade SIGKILL to the sleeper. The test process's role is
         # just to coordinate — it never attaches to anyone.
         #
+        # The seizer is a subprocess, not an ``os.fork()`` child: by
+        # full-suite time this process carries daemon threads (the
+        # egress-proxy singleton's, from any earlier sandbox test), so
+        # a bare fork here draws Python's multi-threaded-fork
+        # DeprecationWarning on every run. The seizer forks its OWN
+        # sleeper inside the fresh interpreter, where the process is
+        # single-threaded and fork is safe — the required ancestry is
+        # unchanged.
+        #
         # Communication: sleeper PID is reported back to test process
-        # via a pipe so we know what to watch for.
-
-        pipe_r, pipe_w = os.pipe()
-        seizer_pid = os.fork()
-        if seizer_pid == 0:
-            # === seizer ===
-            os.close(pipe_r)
-            try:
-                # Fork the sleeper as our descendant.
-                sleeper_pid = os.fork()
-                if sleeper_pid == 0:
-                    # === sleeper (grandchild of test process) ===
-                    os.close(pipe_w)
-                    try:
-                        time.sleep(60)
-                    finally:
-                        os._exit(0)
-                # === seizer parent ===
-                # Brief settle so the sleeper is actually running.
-                time.sleep(0.05)
-                # Attach with the production option set (TRACESECCOMP +
-                # TRACEEXIT + TRACEFORK/VFORK/CLONE + EXITKILL).
-                if not tracer_mod._ptrace_seize(sleeper_pid):
-                    os._exit(2)
-                # Tell test process the sleeper PID.
-                os.write(pipe_w, f"{sleeper_pid}\n".encode())
-                os.close(pipe_w)
-                # Block forever — test process will SIGKILL us to
-                # exercise EXITKILL.
-                while True:
-                    time.sleep(1)
-            except BaseException:  # noqa: BLE001 — post-fork guard: everything must become an exit code
-                os._exit(3)
-
-        # === test process ===
-        os.close(pipe_w)
+        # via the seizer's stdout so we know what to watch for.
+        seizer_code = (
+            "import os, sys, time\n"
+            "sleeper_pid = os.fork()\n"
+            "if sleeper_pid == 0:\n"
+            "    # === sleeper (grandchild of test process) ===\n"
+            "    try:\n"
+            "        time.sleep(60)\n"
+            "    finally:\n"
+            "        os._exit(0)\n"
+            "# Brief settle so the sleeper is actually running.\n"
+            "time.sleep(0.05)\n"
+            "# Attach with the production option set (TRACESECCOMP +\n"
+            "# TRACEEXIT + TRACEFORK/VFORK/CLONE + EXITKILL).\n"
+            "from core.sandbox import tracer as tracer_mod\n"
+            "if not tracer_mod._ptrace_seize(sleeper_pid):\n"
+            "    sys.exit(2)\n"
+            "# Tell the test process the sleeper PID.\n"
+            "print(sleeper_pid, flush=True)\n"
+            "# Block forever — the test process will SIGKILL us to\n"
+            "# exercise EXITKILL.\n"
+            "while True:\n"
+            "    time.sleep(1)\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = (str(Path(__file__).resolve().parents[3])
+                             + os.pathsep + env.get("PYTHONPATH", ""))
+        seizer = subprocess.Popen(
+            [_sys.executable, "-c", seizer_code],
+            stdout=subprocess.PIPE, env=env,
+        )
+        seizer_pid = seizer.pid
         sleeper_pid = None
         try:
             # Read sleeper PID from seizer (with timeout).
             import select
-            r, _, _ = select.select([pipe_r], [], [], 5.0)
+            r, _, _ = select.select([seizer.stdout], [], [], 5.0)
             if not r:
                 pytest.fail("seizer didn't report sleeper PID — SEIZE "
                             "may have failed (Yama scope 3?)")
-            data = os.read(pipe_r, 64).decode().strip()
+            data = seizer.stdout.readline().decode().strip()
             sleeper_pid = int(data)
         finally:
-            os.close(pipe_r)
+            seizer.stdout.close()
 
         try:
             # Verify sleeper IS being traced by our seizer.

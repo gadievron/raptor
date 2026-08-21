@@ -1336,7 +1336,7 @@ class TestAttackPaths:
                 }
             ],
         }, 0)
-        assert "OBSERVED x0" in out
+        assert "Observed x0" in out
         assert "evil" not in out
         assert_no_mermaid_directive_injection(out)
 
@@ -1354,7 +1354,7 @@ class TestAttackPaths:
                 }
             ],
         }, 0)
-        assert "OBSERVED x17" in out
+        assert "Observed x17" in out
 
     def test_step_type_and_location_are_sanitized(self):
         payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
@@ -1399,6 +1399,51 @@ class TestAttackPaths:
         }, 0)
         assert_no_mermaid_directive_injection(out)
         assert_usable_mermaid_flowchart(out)
+
+    def test_non_dict_runtime_evidence_does_not_crash(self):
+        # runtime_evidence comes raw from attack-paths.json; a string
+        # or list value must degrade to "no runtime evidence", not
+        # crash the whole section.
+        for bad in ("frida saw it", ["e1", "e2"], 7, None):
+            out = generate_single({
+                "id": "PATH-X",
+                "name": "path",
+                "status": "confirmed",
+                "steps": [
+                    {
+                        "step": 1,
+                        "type": "entry",
+                        "description": "e",
+                        "runtime_evidence": bad,
+                    }
+                ],
+            }, 0)
+            assert "Observed x" not in out
+            assert_usable_mermaid_flowchart(out)
+
+    def test_runtime_labels_are_title_case(self):
+        out = generate_single({
+            "id": "PATH-X",
+            "name": "path",
+            "status": "confirmed",
+            "runtime_evidence_available": True,
+            "steps": [
+                {
+                    "step": 1,
+                    "type": "entry",
+                    "description": "e",
+                    "runtime_evidence": {
+                        "function_observed": True,
+                        "call_count": 3,
+                    },
+                }
+            ],
+        }, 0)
+        assert "[Runtime Confirmed]" in out
+        assert "Observed x3" in out
+        # Never ALL-CAPS status text in human-readable output.
+        assert "RUNTIME CONFIRMED" not in out
+        assert "OBSERVED" not in out
 
 
 # ---------------------------------------------------------------------------

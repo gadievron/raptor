@@ -13,6 +13,21 @@ from core.llm.throttle import (
 )
 
 
+class _FakeMonotonic:
+    """Deterministic clock for cooldown choreography — the real-time
+    version flaked on loaded CI runners whenever scheduling delay
+    between a signal and its assert exceeded the 100ms cooldown."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, dt: float) -> None:
+        self.now += dt
+
+
 class TestAdaptiveThrottle:
     def test_initial_state(self):
         t = AdaptiveThrottle(8, auto_register=False)
@@ -55,25 +70,66 @@ class TestAdaptiveThrottle:
         t.signal_rate_limit()
         assert t.effective_workers == 1
 
-    def test_restore_after_cooldown(self):
+    def test_restore_after_cooldown(self, monkeypatch):
+        clk = _FakeMonotonic()
+        monkeypatch.setattr(time, "monotonic", clk)
         t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
         t.signal_rate_limit()
+        assert t.effective_workers == 4
+        clk.advance(0.06)
+        assert t.effective_workers == 8
+        assert not t.is_throttled
+
+    def test_signal_resets_cooldown(self, monkeypatch):
+        clk = _FakeMonotonic()
+        monkeypatch.setattr(time, "monotonic", clk)
+        t = AdaptiveThrottle(8, cooldown_s=0.1, auto_register=False)
+        t.signal_rate_limit()
+        assert t.effective_workers == 4
+        clk.advance(0.06)
+        t.signal_rate_limit()
+        assert t.effective_workers == 2
+        clk.advance(0.06)
+        assert t.effective_workers == 2
+        clk.advance(0.06)
+        # One quiet interval elapsed -> ONE doubling (2 -> 4), not a
+        # snap to 8: the snap restore re-tripped real 429 storms.
+        assert t.effective_workers == 4
+        clk.advance(0.11)
+        assert t.effective_workers == 8
+
+    def test_recovery_ramps_one_doubling_per_interval(self):
+        t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
+        for _ in range(3):
+            t.signal_rate_limit()
+        assert t.effective_workers == 1
+        time.sleep(0.06)
+        assert t.effective_workers == 2
+        time.sleep(0.06)
         assert t.effective_workers == 4
         time.sleep(0.06)
         assert t.effective_workers == 8
         assert not t.is_throttled
 
-    def test_signal_resets_cooldown(self):
-        t = AdaptiveThrottle(8, cooldown_s=0.1, auto_register=False)
-        t.signal_rate_limit()
-        assert t.effective_workers == 4
-        time.sleep(0.06)
-        t.signal_rate_limit()
-        assert t.effective_workers == 2
-        time.sleep(0.06)
-        assert t.effective_workers == 2
-        time.sleep(0.06)
+    def test_long_idle_credits_every_quiet_interval(self):
+        t = AdaptiveThrottle(8, cooldown_s=0.02, auto_register=False)
+        for _ in range(3):
+            t.signal_rate_limit()
+        assert t._effective == 1
+        # Three full quiet intervals in one wake-up: 1 -> 2 -> 4 -> 8.
+        time.sleep(0.07)
         assert t.effective_workers == 8
+
+    def test_signal_during_ramp_restarts_the_window(self):
+        t = AdaptiveThrottle(8, cooldown_s=0.05, auto_register=False)
+        for _ in range(3):
+            t.signal_rate_limit()
+        time.sleep(0.06)
+        assert t.effective_workers == 2  # first ramp step
+        t.signal_rate_limit()            # re-trip mid-ramp
+        assert t.effective_workers == 1
+        time.sleep(0.03)
+        assert t.effective_workers == 1  # window restarted, not stale
 
     def test_max_workers_clamped_to_one(self):
         t = AdaptiveThrottle(0, auto_register=False)

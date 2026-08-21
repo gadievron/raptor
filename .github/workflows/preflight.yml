@@ -1,0 +1,219 @@
+name: PR preflight
+
+# CI-reality preflight over the PR's CHANGED test files. The main suite
+# (tests.yml) runs the affected tests in a fully provisioned
+# environment; this workflow re-runs just the test files the PR itself
+# touches under the environment hazards a provisioned host hides:
+#
+#   hidden-optional-deps  — anthropic / botocore / instructor / h2 /
+#                           sage_sdk stubbed to raise
+#                           ModuleNotFoundError
+#                           (.github/scripts/hide_modules.py). A changed
+#                           test touching them must SKIP, not fail.
+#   hidden-tree-sitter    — tree-sitter core + every grammar wheel
+#                           pinned in requirements-grammars.txt, same
+#                           mechanism (the set derives from the pin
+#                           file, so new wheels are hidden
+#                           automatically).
+#   duration-guard        — RAPTOR_MAX_TEST_SECONDS over the changed
+#                           files (root conftest.py flag-not-kill
+#                           guard), single-process so durations are
+#                           honest.
+#   tree-hygiene          — git status --porcelain must be empty after
+#                           the run: tests must not dirty the checkout.
+#   shuffle-a / shuffle-b — two seeded random orders (root conftest.py
+#                           RAPTOR_RANDOMISE_TESTS) to surface
+#                           order-dependence inside the changed files.
+#
+# check_optional_dep_imports.py lints the optional-dep import shapes
+# statically; the hidden-deps legs are its dynamic counterpart. Scope
+# comes from .github/scripts/preflight_scope.py (reuses test_scope.py's
+# is_test_file); a PR with no changed test files skips every leg
+# cleanly. All legs use the _tier.yml "runner" path shape (uv --system)
+# so fork PRs — which cannot pull the private GHCR deps image — get
+# identical coverage.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.14'
+  # Same CI hang net as tests.yml: dump every Python stack if a single
+  # test runs >120s, then let it continue.
+  PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
+  # See tests.yml: several pinned JS actions still declare node20.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  # The changes job's ``gh api repos/.../pulls/.../files`` query.
+  pull-requests: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      test_files: ${{ steps.scope.outputs.test_files }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: changed_files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          out=/tmp/changed_files.txt
+          # ``?`` + ``// []`` suppress jq's null-iteration error on
+          # truncated or error-object responses (same defence as
+          # tests.yml). "No list" leaves the file empty and the scope
+          # step reports run=false: unlike the main suite there is no
+          # full-dispatch fallback, because running the entire suite
+          # under six simulations is exactly the latency this
+          # workflow's changed-file bound exists to avoid.
+          gh api --paginate \
+            "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '(. // [])[]?.filename' > "$out" || : > "$out"
+          echo "Changed files ($(wc -l < "$out")):"
+          cat "$out"
+
+      - id: scope
+        run: |
+          python3 .github/scripts/preflight_scope.py \
+            --changed-files /tmp/changed_files.txt \
+            --repo .
+
+  preflight:
+    name: preflight (${{ matrix.sim }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One simulation per leg, all over the same changed-file set.
+          # ``hide`` legs name a hide_modules.py set; the guard env
+          # knobs are exported conditionally inside the run step.
+          - sim: hidden-optional-deps
+            hide: optional-deps
+          - sim: hidden-tree-sitter
+            hide: tree-sitter
+          - sim: duration-guard
+            max_test_seconds: "10"
+          - sim: tree-hygiene
+            tree_check: "true"
+          # Two distinct seeds per run, both reproducible from the run
+          # id (the root conftest prints the seed in the pytest
+          # header).
+          - sim: shuffle-a
+            shuffle_seed: "1${{ github.run_id }}"
+          - sim: shuffle-b
+            shuffle_seed: "2${{ github.run_id }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Install deps
+        # --system matches _tier.yml's runner path: deps land in the
+        # setup-python interpreter, no venv activation needed.
+        run: uv pip install --system -r requirements-dev.txt
+
+      - name: Run changed tests under simulation
+        env:
+          TEST_FILES: ${{ needs.changes.outputs.test_files }}
+          HIDE_SET: ${{ matrix.hide }}
+          MAX_TEST_SECONDS: ${{ matrix.max_test_seconds }}
+          SHUFFLE_SEED: ${{ matrix.shuffle_seed }}
+        run: |
+          set -euo pipefail
+          set -f  # word-split $TEST_FILES without glob expansion
+          if [ -n "${HIDE_SET:-}" ]; then
+            stub_dir=$(python3 .github/scripts/hide_modules.py \
+              --dest "$RUNNER_TEMP/preflight-stubs" --set "$HIDE_SET")
+            export PYTHONPATH="${stub_dir}${PYTHONPATH:+:$PYTHONPATH}"
+            echo "Hidden module set '$HIDE_SET' via $stub_dir"
+          fi
+          # Guard knobs are exported conditionally: the root conftest
+          # treats ANY set value of RAPTOR_RANDOMISE_TESTS (even the
+          # empty string) as "shuffle", so legs that don't use a knob
+          # must leave it unset rather than set-but-empty.
+          if [ -n "${MAX_TEST_SECONDS:-}" ]; then
+            export RAPTOR_MAX_TEST_SECONDS="$MAX_TEST_SECONDS"
+          fi
+          if [ -n "${SHUFFLE_SEED:-}" ]; then
+            export RAPTOR_RANDOMISE_TESTS="$SHUFFLE_SEED"
+          fi
+          rc=0
+          # Single process (no -n auto): honest per-test durations for
+          # the duration-guard leg and one deterministic order for the
+          # shuffle legs; the changed-file bound keeps this cheap.
+          python -m pytest $TEST_FILES || rc=$?
+          # Exit 5 = "no tests collected" — legitimate when every
+          # changed test file is deselected by the default markers
+          # (slow / integration).
+          if [ "$rc" -eq 5 ]; then exit 0; fi
+          exit "$rc"
+
+      - name: Verify the run left the checkout clean
+        if: matrix.tree_check == 'true'
+        run: |
+          set -euo pipefail
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "::error::changed tests left the working tree dirty" \
+              "(tests must write only under tmp_path / the run dir):"
+            echo "$status"
+            exit 1
+          fi
+          echo "Working tree clean after the run."
+
+  # Aggregate gate, tests.yml convention: needs both jobs, always runs,
+  # skipped-is-pass (no changed test files), failure or cancellation
+  # blocks. Pin this check in branch protection, not the matrix legs.
+  preflight-passed:
+    name: preflight-passed
+    if: always()
+    needs: [changes, preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all simulations passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Job results: ${RESULTS}"
+          ok=1
+          for r in ${RESULTS}; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A preflight job reported '${r}'"; ok=0 ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || exit 1
+          echo "Preflight passed or was legitimately skipped."

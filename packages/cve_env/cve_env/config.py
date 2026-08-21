@@ -3,7 +3,7 @@
 Cost is reported by claude-agent-sdk's ResultMessage.total_cost_usd, but on
 certain stop_reasons (max_turns_reached, end_turn after low-turn give_up)
 the SDK emits cost=0.0 even after multiple LLM rounds.
-``MODEL_TOKEN_RATES_PER_M_USD`` provides a token-based fallback so
+``get_token_rates`` (shared model table) provides a token-based fallback so
 cost-loss never leaves Outcome.total_cost_usd=0 when actual LLM tokens
 were consumed. Tune caps here; everything else derives.
 """
@@ -253,156 +253,32 @@ def get_recovery_gap_turns() -> int:
     return _DEFAULT_RECOVERY_GAP_TURNS
 
 
-# Python-side internal wall-budget (sleep-resilient backstop).
-# External wall-guards (gtimeout/perl-alarm in bench50.sh) silently pause
-# during macOS host sleep — kernel alarm timers don't advance while
-# suspended (a build can run for hours past its intended wall). Internal
-# check uses time.time() which DOES advance during sleep (unlike
-# time.monotonic()).
-#
-# Default 0.0 = OFF for back-compat. Users who want overnight-sleep-resilient
-# wall-guard set ``CVE_ENV_INTERNAL_WALL_S=1800`` (30min) or higher.
-_DEFAULT_INTERNAL_WALL_BUDGET_S: float = 0.0
 
 
-def get_internal_wall_budget_s() -> float:
-    """Return the internal wall-budget seconds. 0.0 = disabled."""
-    env_val = os.environ.get("CVE_ENV_INTERNAL_WALL_S")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            logger.warning("Malformed env var CVE_ENV_INTERNAL_WALL_S=%r, using default %.1f", env_val, _DEFAULT_INTERNAL_WALL_BUDGET_S)
-    return _DEFAULT_INTERNAL_WALL_BUDGET_S
 
 
-# Resolved once at import for branch-free hot path. Tests must reassign
-# this constant, not env vars.
-INTERNAL_WALL_BUDGET_S: float = get_internal_wall_budget_s()
 
 
-# Anti-thrash no-progress give-up. The turn_cap/budget loss is dominated by
-# cheap CHURN, not expensive builds: many capped CVEs never built and made
-# zero productive progress for the final 80+ turns (research Bash/github
-# loops). A budget RESERVE would buy more churn; instead, terminate early once
-# the agent has gone this many turns with NO productive progress (no
-# PRODUCTIVE_TOOLS ok + no post-build verify/run_in_container), reusing
-# ``last_productive_turn`` (already tracked for should_extend_turn_cap).
-# Efficiency only; default 0 = OFF so the default build path is unchanged.
-_DEFAULT_NO_PROGRESS_GIVEUP_TURNS: int = 0
 
 
-def get_no_progress_giveup_turns() -> int:
-    """Return the anti-thrash no-progress give-up threshold (turns). 0 = OFF.
-
-    DATA-DERIVED safe floor: across observed SUCCESS CVEs, the largest gap
-    between consecutive productive events in a CVE that *eventually succeeded*
-    was 71 turns (CVE-2020-15308) — so any threshold ≤ 71 would kill an
-    observed winner. Safe floor is ≥ 72; 80 is recommended for margin (catches
-    capped CVEs with 80+ turn no-progress tails, kills 0 observed winners).
-    Negative / non-int env values fall back to OFF.
-    """
-    env_val = os.environ.get("CVE_ENV_NO_PROGRESS_GIVEUP_TURNS")
-    if env_val is not None:
-        try:
-            v = int(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            logger.warning("Malformed env var CVE_ENV_NO_PROGRESS_GIVEUP_TURNS=%r, using default %d", env_val, _DEFAULT_NO_PROGRESS_GIVEUP_TURNS)
-    return _DEFAULT_NO_PROGRESS_GIVEUP_TURNS
 
 
-# Resolved once at import time so on_message stays branch-free when disabled.
-NO_PROGRESS_GIVEUP_TURNS: int = get_no_progress_giveup_turns()
 
 
-# Connectivity circuit-breaker idle-timeout. The SDK is silent during long
-# in-process MCP tool calls, so this is a TOOL-AWARE inter-message idle bound
-# (see agent/_activity.py): max seconds with no SDK message AND no tool in
-# flight before _run_query_once aborts the query as api_unreachable. Bounds
-# the zombie-at-wall hang where the API goes unreachable mid-run. Default 300s
-# only bounds API-wait gaps (model generation latency, typically <60s); 3×300
-# < the 1440s external wall even if all SDK retries fire. Set 0 to disable.
-# Resolved at call time so tests / per-run env overrides take effect.
-_DEFAULT_SDK_IDLE_TIMEOUT_S: float = 300.0
 
 
-def get_sdk_idle_timeout_s() -> float:
-    """Return the connectivity-breaker idle-timeout seconds. 0 = off."""
-    env_val = os.environ.get("CVE_ENV_SDK_IDLE_TIMEOUT_S")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            logger.warning("Malformed env var CVE_ENV_SDK_IDLE_TIMEOUT_S=%r, using default %.1f", env_val, _DEFAULT_SDK_IDLE_TIMEOUT_S)
-    return _DEFAULT_SDK_IDLE_TIMEOUT_S
 
 
-# Tool-in-flight MAX backstop. The connectivity breaker EXEMPTS an in-flight
-# tool indefinitely (legit builds are silent), so a WEDGED tool handler (a
-# docker subprocess stuck on a dead VM socket that run_with_timeout could not
-# reap) would otherwise ride to the 1440s wall. This bounds a single tool's
-# in-flight time. Default 900s > docker_build (600) + compose + margin, so it
-# never clips a legit build. 0 = off. Resolved at call time.
-_DEFAULT_TOOL_MAX_INFLIGHT_S: float = 900.0
 
 
-def get_tool_max_inflight_s() -> float:
-    """Return the max seconds a single tool may stay in-flight before the
-    connectivity breaker trips it as wedged. 0 = off."""
-    env_val = os.environ.get("CVE_ENV_TOOL_MAX_INFLIGHT_S")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_TOOL_MAX_INFLIGHT_S
 
 
-# The remaining two connectivity-breaker knobs (poll cadence + idle-retry cap)
-# are exposed here so the breaker is FULLY config-driven, like the idle (5-min
-# default) and inflight (900s, build-safe) bounds above. Resolved at call time
-# so per-run/test env overrides take effect.
-_DEFAULT_SDK_IDLE_POLL_S: float = 5.0
 
 
-def get_sdk_idle_poll_s() -> float:
-    """Watchdog poll cadence for the connectivity breaker (seconds).
-    Smaller = more responsive but more wakeups. Must be > 0; default 5.0."""
-    env_val = os.environ.get("CVE_ENV_SDK_IDLE_POLL_S")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if v > 0:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_SDK_IDLE_POLL_S
 
 
-_DEFAULT_SDK_IDLE_MAX_ATTEMPTS: int = 2
 
 
-def get_sdk_idle_max_attempts() -> int:
-    """Cap on consecutive ``SdkIdleTimeout`` retries before giving up. Default 2
-    (1 try + 1 retry): a truly unreachable API won't recover within the 2s/4s
-    backoff, and 3×idle could approach the 1440s external wall. Must be >= 1."""
-    env_val = os.environ.get("CVE_ENV_SDK_IDLE_MAX_ATTEMPTS")
-    if env_val is not None:
-        try:
-            v = int(env_val)
-            if v >= 1:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_SDK_IDLE_MAX_ATTEMPTS
 
 
 # force-resolve-before-giveup knobs: make the cascade-skip re-query
@@ -412,128 +288,27 @@ def get_sdk_idle_max_attempts() -> int:
 _DEFAULT_FORCE_RESOLVE_MAX: int = 1
 
 
-def get_force_resolve_max() -> int:
-    """Max force-resolve-before-giveup continuations per CVE. 0 = disabled
-    (cost-control dial). Default 1. Resolved at call time for per-run override."""
-    env_val = os.environ.get("CVE_ENV_FORCE_RESOLVE_MAX")
-    if env_val is not None:
-        try:
-            v = int(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_FORCE_RESOLVE_MAX
 
 
 _DEFAULT_FORCE_RESOLVE_BUDGET_FRACTION: float = 0.50
 
 
-def get_force_resolve_budget_fraction() -> float:
-    """Cost-cap fraction below which a force-resolve continuation may start
-    (leaves headroom for the verify gate at 0.70). Default 0.50;
-    must be in (0, 1]."""
-    env_val = os.environ.get("CVE_ENV_FORCE_RESOLVE_BUDGET_FRACTION")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if 0 < v <= 1:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_FORCE_RESOLVE_BUDGET_FRACTION
 
 
 _DEFAULT_BENIGN_VERIFY_CONTINUATION_MAX: int = 1
 
 
-def get_enable_benign_verify_continuation() -> bool:
-    """On a POST-LAUNCH refusal that blocked verify (env up, verify never
-    reached), RESUME the session with a benign-only verify prompt
-    (container_status + a version exec_check + http_check on base paths — NO CVE
-    payloads / exploit checks). An agentic recovery that can convert
-    refused→verified, complementing the structural launched_no_verify floor.
-
-    DEFAULT OFF (``CVE_ENV_ENABLE_BENIGN_VERIFY_CONTINUATION``) — promote on
-    bench A/B (the M-rule that gates the ``_PER_TOOL_DEFAULT_CAPS`` /
-    force-resolve dials). Distinct from run_agent's de-escalation retry (fresh
-    session, generic preamble, ~10% follow-through): this RESUMES so the model
-    keeps the env it built and only runs safe health checks."""
-    return _env_bool("CVE_ENV_ENABLE_BENIGN_VERIFY_CONTINUATION", default=False)
 
 
-def get_benign_verify_continuation_max() -> int:
-    """Max benign-verify continuations per CVE. 0 = disabled. Default 1.
-    Resolved at call time for per-run override."""
-    env_val = os.environ.get("CVE_ENV_BENIGN_VERIFY_CONTINUATION_MAX")
-    if env_val is not None:
-        try:
-            v = int(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_BENIGN_VERIFY_CONTINUATION_MAX
 
 
 _DEFAULT_PROPRIETARY_VERIFY_CONTINUATION_MAX: int = 1
 
 
-def get_enable_proprietary_verify_continuation() -> bool:
-    """Proprietary-verify continuation (agentic, default-ON): when the agent
-    gives up ``proprietary`` WITHOUT having probed ``image_resolve`` (a
-    name-only give-up by agent reasoning), RESUME the session ONCE to run a
-    single image_resolve before the give-up is final. If an image resolves, the
-    proprietary give-up is rejected and the build continues; otherwise it
-    stands. This is the runtime "verify-the-negative" guard against the
-    open-source-by-proprietary-vendor false-positive class that the
-    OSS-reference override only partially covers (it needs an OSS host in the
-    NVD refs).
-
-    DEFAULT ON (``CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION``): this gate
-    is the SOLE runtime backstop for proprietary detection, so it is on by
-    default. Cost is negligible (~$0.0007/probe). It SKIPS proprietary CVEs that
-    already probed image_resolve (confirmed-negative class), so a
-    genuinely-proprietary target costs ≤1 extra probe. Explicitly DISABLE with
-    ``CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION`` in {0, false, no, off}."""
-    return _env_bool("CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION", default=True)
 
 
-def get_enable_halt_on_verified_success() -> bool:
-    """Halt-on-verified-success (agentic, default-OFF): when a ResultMessage's
-    terminal status is ``final_success`` (a NON-cap stop_reason — clean end_turn
-    — AND verify_passed), raise ``SuccessReached`` to halt SDK iteration
-    immediately, symmetric to the ``give_up`` -> ``GiveUpReceived`` failure
-    halt. Prevents a verified run from over-running into ``max_turns`` (where
-    the cap-overrides-verify invariant mis-grades the real build ``turn_cap``):
-    a run can verify, emit a clean end_turn, then burn further research turns
-    into max_turns and be graded turn_cap despite verify_passed=True.
-
-    DEFAULT OFF (``CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS``) — promote on bench A/B
-    (M-rule). SAFETY: the halt only fires on ``final_success``; cap signals
-    (max_turns / budget) yield ``final_turn_cap`` / ``budget_exhausted`` instead
-    (cap branch precedes the verify branch in ``_terminal_status_for_result``), so
-    it can NEVER weaken the BUG-007/008 cap-overrides-verify lock. TRADE-OFF: in the
-    rare case where an agent emits a clean end_turn after only a PARTIAL verify and
-    intended further checks, halting may grade ``verified_partial`` instead of full
-    ``success`` — both are BUILT, so build-rate is unaffected (only the
-    success/partial split)."""
-    return _env_bool("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", default=False)
 
 
-def get_proprietary_verify_max() -> int:
-    """Max proprietary-verify continuations per CVE. 0 = disabled. Default 1.
-    Resolved at call time for per-run override
-    (``CVE_ENV_PROPRIETARY_VERIFY_CONTINUATION_MAX``)."""
-    env_val = os.environ.get("CVE_ENV_PROPRIETARY_VERIFY_CONTINUATION_MAX")
-    if env_val is not None:
-        try:
-            v = int(env_val)
-            if v >= 0:
-                return v
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    return _DEFAULT_PROPRIETARY_VERIFY_CONTINUATION_MAX
 
 
 # image_resolve aggregate per-call budget. A single image_resolve call can run
@@ -648,30 +423,8 @@ def over_budget_stages(stage_costs: dict[str, float]) -> list[str]:
 _VALID_BUDGET_MODES: frozenset[str] = frozenset({"soft", "hard", "off"})
 
 
-def get_stage_budget_mode(stage: str) -> str:
-    """Return enforcement mode for ``stage``.
-
-    Precedence: env var ``CVE_ENV_BUDGET_<STAGE>_MODE`` (lowercased) >
-    default ``soft``. Invalid values fall back to ``soft``.
-    """
-    env_key = f"CVE_ENV_BUDGET_{stage}_MODE"
-    val = os.environ.get(env_key, "soft").lower()
-    if val not in _VALID_BUDGET_MODES:
-        return "soft"
-    return val
 
 
-def stage_hard_budget_breach(stage_costs: dict[str, float]) -> str | None:
-    """If any stage in HARD mode has exceeded its budget, return that
-    stage name. None otherwise. First-triggered wins for determinism.
-    """
-    for stage, cost in stage_costs.items():
-        if get_stage_budget_mode(stage) != "hard":
-            continue
-        budget = get_stage_budget(stage)
-        if budget > 0 and cost > budget:
-            return stage
-    return None
 
 
 # Adaptive cost extension constants. Mirrors the productive-extension for the
@@ -706,63 +459,10 @@ _PER_TOOL_DEFAULT_CAPS: dict[str, int] = {
 }
 
 
-def get_tool_attempt_cap(tool_name: str) -> int:
-    """Return per-tool attempts cap for ``tool_name``.
-
-    Env var ``CVE_ENV_MAX_<TOOL_NAME_UPPER>_ATTEMPTS`` (e.g.,
-    ``CVE_ENV_MAX_IMAGE_RESOLVE_ATTEMPTS=4``) overrides the per-tool
-    default. When the env var is absent or unparseable, falls back to
-    ``_PER_TOOL_DEFAULT_CAPS[tool_name]`` (0 / unbounded if not listed).
-
-    Per-tool defaults are only added when ≥3 benches confirm the spiral
-    (M-class evidence) AND pre-flight shows zero regression risk against
-    historical successes.
-    """
-    env_key = f"CVE_ENV_MAX_{tool_name.upper()}_ATTEMPTS"
-    val = os.environ.get(env_key)
-    default = _PER_TOOL_DEFAULT_CAPS.get(tool_name, 0)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "ignoring malformed %s=%r (not an integer); using default %d",
-            env_key,
-            val,
-            default,
-        )
-        return default
 
 
-def get_disallowed_tools() -> list[str]:
-    """SDK/builtin tool names to disallow, from ``CVE_ENV_DISALLOWED_TOOLS``
-    (comma-separated). Wired into ``ClaudeAgentOptions.disallowed_tools``.
-
-    The operator dial to curb the research-spiral — e.g.
-    ``CVE_ENV_DISALLOWED_TOOLS=Agent`` disables sub-agent spawning. DEFAULT is
-    empty → NO behavior change. A default-disable waits for bench A/B evidence
-    (the 3-bench M-rule that governs ``_PER_TOOL_DEFAULT_CAPS``).
-
-    NOTE: default-disabling the built-in ``WebFetch`` / ``WebSearch`` here is
-    NOT a no-op: a bench audit shows those tools fire in a meaningful fraction
-    of CVE runs, so disabling them removes real research capability the agent
-    uses (the MCP ``web_fetch`` handler was removed, leaving built-in
-    ``WebFetch`` as the agent's only general fetch). Operators who want the SSRF
-    attack-surface reduction can still set
-    ``CVE_ENV_DISALLOWED_TOOLS=WebFetch,WebSearch`` explicitly."""
-    raw = os.environ.get("CVE_ENV_DISALLOWED_TOOLS", "")
-    return [t.strip() for t in raw.split(",") if t.strip()]
 
 
-MAX_TOOL_ATTEMPT_EXTENSIONS: int = _env_parse(
-    "CVE_ENV_MAX_TOOL_ATTEMPT_EXTENSIONS", int, 2
-)
-"""Max progress-aware extensions of a per-tool attempt cap.
-When a per-tool cap is exceeded BUT the agent made recent productive progress,
-the cap is extended (by ×base each time) up to this many times before firing.
-Mirrors MAX_TURN_EXTENSIONS / MAX_COST_EXTENSIONS.
-0 = flat cap. Env: CVE_ENV_MAX_TOOL_ATTEMPT_EXTENSIONS."""
 
 
 def productive_extension_allowed(
@@ -830,79 +530,16 @@ def should_extend_cost_cap(
 
 # The SDK can emit ResultMessage.total_cost_usd=0 even when input/output
 # tokens were consumed. Token-based fallback provides a conservative cost
-# estimate so cost-loss never zeros out the per-CVE total. Rates are USD per
-# 1,000,000 tokens; (input_rate, output_rate). Sources: anthropic.com/pricing
-# as of 2026-01.
-MODEL_TOKEN_RATES_PER_M_USD: dict[str, tuple[float, float]] = {
-    "claude-opus-4-7": (15.0, 75.0),
-    "claude-opus-4-6": (15.0, 75.0),
-    "claude-opus-4-5": (15.0, 75.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-sonnet-4-5": (3.0, 15.0),
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-}
+# estimate so cost-loss never zeros out the per-CVE total. Rates are USD
+# per 1,000,000 tokens; (input_rate, output_rate), resolved from the
+# shared model table (core.llm.model_data.price_for) — the package's
+# own copy had drifted to 3x the real Opus rates, silently tripling
+# every cost estimate, stage-budget attribution, and budget-cap check.
 
 
-def get_token_rates(model: str = MODEL) -> tuple[float, float]:
-    """Return ``(input_per_M_USD, output_per_M_USD)`` for ``model``.
-
-    Env override: ``CVE_ENV_INPUT_RATE_PER_M`` + ``CVE_ENV_OUTPUT_RATE_PER_M``
-    (both must be set; partial-override is ignored).
-
-    Unknown models fall back to Sonnet rates (mid-tier conservative);
-    a fallback estimate is better than $0.00.
-    """
-    env_in = os.environ.get("CVE_ENV_INPUT_RATE_PER_M")
-    env_out = os.environ.get("CVE_ENV_OUTPUT_RATE_PER_M")
-    if env_in is not None and env_out is not None:
-        # A malformed override must not crash the cost path — fall through to
-        # the per-model defaults, matching the parse-with-fallback idiom used
-        # by the other config getters.
-        try:
-            return float(env_in), float(env_out)
-        except ValueError:
-            pass  # malformed env override -> fall back to the default below
-    if model not in MODEL_TOKEN_RATES_PER_M_USD:
-        logger.warning("No token rates for model %r, falling back to Sonnet rates", model)
-    return MODEL_TOKEN_RATES_PER_M_USD.get(model, (3.0, 15.0))
 
 
-def estimate_cost_from_tokens(
-    input_tokens: int, output_tokens: int, model: str = MODEL
-) -> float:
-    """Conservative cost estimate from token counts.
 
-    Used as a fallback: ``max(reported_cost, estimate)`` so cost data is never
-    lost when the SDK reports $0 but tokens > 0.
-    """
-    in_rate, out_rate = get_token_rates(model)
-    return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000.0
-
-
-# Conservative per-turn token volume for the turns-based cost floor. Sized from
-# observed agentic rounds (cf. tests/unit/test_b19_b20_cost_extension.py:
-# "~5K in, ~500 out per LLM round").
-_TURN_COST_INPUT_TOKENS = 5000
-_TURN_COST_OUTPUT_TOKENS = 500
-
-
-def estimate_cost_from_turns(num_turns: int, model: str = MODEL) -> float:
-    """Lower-bound cost estimate from the engine turn count.
-
-    For interrupted runs (turn_cap / budget) where the SDK reports neither a
-    usable ``total_cost_usd`` nor token ``usage`` — the Claude Code session-auth
-    case — both ``estimate_cost_from_tokens`` (tokens are 0) and the SDK cost
-    collapse, leaving a multi-turn run logged as ~$0. This recovers a defensible
-    floor from ``num_turns``. Returns 0.0 for non-positive ``num_turns``.
-    """
-    if num_turns <= 0:
-        return 0.0
-    return estimate_cost_from_tokens(
-        num_turns * _TURN_COST_INPUT_TOKENS,
-        num_turns * _TURN_COST_OUTPUT_TOKENS,
-        model,
-    )
 
 
 # Opt-in lifecycle hooks. After ``cve-env build`` exits (success OR failure),

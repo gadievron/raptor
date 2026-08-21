@@ -59,6 +59,7 @@ to compliance ship a tighter policy.
 from __future__ import annotations
 
 import logging
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -70,6 +71,15 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _quote_seg(value: str, *, safe: str = "") -> str:
+    """Percent-encode one URL-path / cache-key segment. Dep names and
+    versions come from scanned manifests - raw interpolation lets a
+    hostile name containing ``/``, ``?``, ``#`` or ``..`` redirect the
+    registry request (or alias / abort the cache path). Same encoding
+    the registries/ clients use."""
+    return urllib.parse.quote(value, safe=safe)
 
 
 # ---------------------------------------------------------------------------
@@ -605,13 +615,13 @@ def _fetch_crates_license(
     per-version differences are rare for Rust and not worth the
     extra round-trip.
     """
-    cache_key = f"crates-license:{name.lower()}"
+    cache_key = f"crates-license:{_quote_seg(name.lower())}"
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=24 * 3600)
         if cached is not None:
             return cached or None
     try:
-        url = f"https://crates.io/api/v1/crates/{name}"
+        url = f"https://crates.io/api/v1/crates/{_quote_seg(name)}"
         data = http.get_json(url)
     except Exception:                                   # noqa: BLE001
         return None
@@ -647,18 +657,26 @@ def _fetch_maven_license(
     """
     if ":" not in coord:
         return None
-    cache_key = f"maven-license:{coord}@{version}"
+    cache_key = (f"maven-license:{_quote_seg(coord)}@"
+                 f"{_quote_seg(version)}")
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=24 * 3600)
         if cached is not None:
             return cached or None
 
     group_id, artifact_id = coord.split(":", 1)
-    group_path = group_id.replace(".", "/")
+    # Group dots become path separators by Maven-repo convention;
+    # each resulting segment (and the artifact / version) is encoded
+    # individually so hostile coordinates can't traverse the path.
+    group_path = "/".join(
+        _quote_seg(seg) for seg in group_id.split(".")
+    )
+    artifact_q = _quote_seg(artifact_id)
+    version_q = _quote_seg(version)
     pom_url = (
         f"https://repo.maven.apache.org/maven2/"
-        f"{group_path}/{artifact_id}/{version}/"
-        f"{artifact_id}-{version}.pom"
+        f"{group_path}/{artifact_q}/{version_q}/"
+        f"{artifact_q}-{version_q}.pom"
     )
     try:
         body = http.get_bytes(pom_url, max_bytes=2 * 1024 * 1024)
@@ -740,13 +758,13 @@ def _fetch_rubygems_license(
     are uncommon for Ruby gems and the policy can resolve via OR
     semantics if the operator constructs one.
     """
-    cache_key = f"rubygems-license:{name.lower()}"
+    cache_key = f"rubygems-license:{_quote_seg(name.lower())}"
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=24 * 3600)
         if cached is not None:
             return cached or None
     try:
-        url = f"https://rubygems.org/api/v1/gems/{name}.json"
+        url = f"https://rubygems.org/api/v1/gems/{_quote_seg(name)}.json"
         data = http.get_json(url)
     except Exception:                                   # noqa: BLE001
         return None
@@ -779,7 +797,8 @@ def _fetch_nuget_license(
     SPDX; older ones only have the URL. We use SPDX when present
     and skip the URL (no SPDX mapping for arbitrary URLs).
     """
-    cache_key = f"nuget-license:{name.lower()}@{version}"
+    cache_key = (f"nuget-license:{_quote_seg(name.lower())}@"
+                 f"{_quote_seg(version)}")
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=24 * 3600)
         if cached is not None:
@@ -787,7 +806,7 @@ def _fetch_nuget_license(
     try:
         url = (
             f"https://api.nuget.org/v3/registration5-semver1/"
-            f"{name.lower()}/{version}.json"
+            f"{_quote_seg(name.lower())}/{_quote_seg(version)}.json"
         )
         data = http.get_json(url)
     except Exception:                                   # noqa: BLE001
@@ -827,13 +846,15 @@ def _fetch_packagist_license(
     """
     if "/" not in name:
         return None
-    cache_key = f"packagist-license:{name}@{version or '*'}"
+    cache_key = (f"packagist-license:{_quote_seg(name)}@"
+                 f"{_quote_seg(version or '*')}")
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=24 * 3600)
         if cached is not None:
             return cached or None
     try:
-        url = f"https://repo.packagist.org/p2/{name}.json"
+        url = (f"https://repo.packagist.org/p2/"
+               f"{_quote_seg(name, safe='/')}.json")
         data = http.get_json(url)
     except Exception:                                   # noqa: BLE001
         if cache is not None:

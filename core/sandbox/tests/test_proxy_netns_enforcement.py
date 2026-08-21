@@ -131,9 +131,6 @@ class TestProxyUnixSocket:
 # _proxy_bridge.py: bring_up_loopback + _run_forwarder
 # ---------------------------------------------------------------------------
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning:multiprocessing")
-@pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
-
 def _free_loopback_port() -> int:
     """Ephemeral free port on 127.0.0.1.
 
@@ -152,10 +149,10 @@ def _free_loopback_port() -> int:
 
 
 def _connect_with_retry(port: int, deadline_s: float = 5.0) -> socket.socket:
-    """Connect to a just-forked forwarder, retrying while it binds.
+    """Connect to a just-spawned forwarder, retrying while it binds.
 
     A fixed pre-connect sleep is not hermetic: under full-suite load
-    the forked forwarder can take longer than the sleep to import and
+    the spawned forwarder can take longer than the sleep to import and
     bind, and the parent's connect() then fails with ECONNREFUSED.
     Retry until the deadline instead.
     """
@@ -171,6 +168,35 @@ def _connect_with_retry(port: int, deadline_s: float = 5.0) -> socket.socket:
             if time.monotonic() >= end:
                 raise
             time.sleep(0.05)
+
+
+def _spawn_forwarder(port, sock_path, death_r):
+    """Run ``_run_forwarder`` in a FRESH single-threaded interpreter.
+
+    These tests used to ``os.fork()`` the forwarder, but the test
+    process is legitimately multi-threaded by the time they run under
+    a full-suite order: the egress-proxy singleton's daemon thread
+    (``raptor-egress-proxy``), started by any earlier sandbox test,
+    lives for the whole process, and two of the tests below start
+    their own echo threads before launching the forwarder. Forking
+    there draws Python's multi-threaded-fork DeprecationWarning on
+    every run. The forwarder only needs importable module code plus
+    one inherited fd, so a subprocess (fork+exec into a fresh,
+    single-threaded interpreter) preserves the semantics without the
+    fork hazard. ``pass_fds`` keeps ``death_r``'s descriptor number
+    intact in the child; the caller still closes its own copy.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(RAPTOR_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    code = (
+        "import sys\n"
+        "from core.sandbox._proxy_bridge import _run_forwarder\n"
+        "_run_forwarder(int(sys.argv[1]), sys.argv[2], int(sys.argv[3]))\n"
+    )
+    return subprocess.Popen(
+        [sys.executable, "-c", code, str(port), sock_path, str(death_r)],
+        pass_fds=(death_r,), env=env,
+    )
 
 
 class TestProxyBridge:
@@ -242,22 +268,14 @@ class TestProxyBridge:
         echo_thread = threading.Thread(target=_echo, daemon=True)
         echo_thread.start()
 
-        # Fork a forwarder.
+        # Launch a forwarder in a fresh interpreter.
         death_r, death_w = os.pipe()
-        from core.sandbox._proxy_bridge import _run_forwarder
-
-        fwd_pid = os.fork()
-        if fwd_pid == 0:
-            os.close(death_w)
-            try:
-                _run_forwarder(port, sock_path, death_r)
-            finally:
-                os._exit(0)
+        fwd = _spawn_forwarder(port, sock_path, death_r)
         os.close(death_r)
 
         try:
             # Connect via TCP → forwarder → unix → echo server → back.
-            # Retries while the forked forwarder starts up and binds — a
+            # Retries while the spawned forwarder starts up and binds — a
             # fixed sleep is not hermetic under full-suite load.
             s = _connect_with_retry(port)
             s.sendall(b"hello-bridge")
@@ -268,7 +286,7 @@ class TestProxyBridge:
             assert got == b"hello-bridge"
         finally:
             os.close(death_w)
-            os.waitpid(fwd_pid, 0)
+            fwd.wait(timeout=10)
 
     def test_forwarder_concurrent_connections_with_churn(self):
         """Multiple simultaneous relays with interleaved teardown must
@@ -322,15 +340,7 @@ class TestProxyBridge:
 
         port = _free_loopback_port()
         death_r, death_w = os.pipe()
-        from core.sandbox._proxy_bridge import _run_forwarder
-
-        fwd_pid = os.fork()
-        if fwd_pid == 0:
-            os.close(death_w)
-            try:
-                _run_forwarder(port, sock_path, death_r)
-            finally:
-                os._exit(0)
+        fwd = _spawn_forwarder(port, sock_path, death_r)
         os.close(death_r)
 
         try:
@@ -369,7 +379,7 @@ class TestProxyBridge:
         finally:
             stop.set()
             os.close(death_w)
-            os.waitpid(fwd_pid, 0)
+            fwd.wait(timeout=10)
             echo_thread.join(timeout=5)
 
     def test_forwarder_exits_on_death_pipe(self):
@@ -382,22 +392,12 @@ class TestProxyBridge:
         noop_srv.listen(1)
 
         death_r, death_w = os.pipe()
-        from core.sandbox._proxy_bridge import _run_forwarder
-
-        fwd_pid = os.fork()
-        if fwd_pid == 0:
-            os.close(death_w)
-            try:
-                _run_forwarder(_free_loopback_port(), sock_path, death_r)
-            finally:
-                os._exit(0)
+        fwd = _spawn_forwarder(_free_loopback_port(), sock_path, death_r)
         os.close(death_r)
 
         # Close write end → forwarder should exit promptly.
         os.close(death_w)
-        _, status = os.waitpid(fwd_pid, 0)
-        assert os.WIFEXITED(status)
-        assert os.WEXITSTATUS(status) == 0
+        assert fwd.wait(timeout=10) == 0
         noop_srv.close()
 
 
@@ -433,6 +433,22 @@ class TestProxyNetnsContextWiring:
     def _tmpdir(self, tmp_path):
         self.out = str(tmp_path / "out")
         os.makedirs(self.out, exist_ok=True)
+
+    @pytest.fixture
+    def _fresh_tier2_latch(self):
+        """Give the test an unfired tier-2 warn-once latch.
+
+        The warning is once-per-PROCESS; under shuffled full-suite
+        order any earlier egress-proxy sandbox that lands on the
+        Landlock tier — including tests OUTSIDE this directory, which
+        this dir's ``_sandbox_state_guard`` conftest cannot restore —
+        consumes the once and the assertions below see zero WARNING
+        records. Resetting up front makes each tier-2 test own its
+        latch state; the conftest guard still restores the pre-test
+        value afterwards, so process-global semantics are preserved
+        for everything else."""
+        from core.sandbox import state
+        state.reset_warn_once("_proxy_tier2_port_pin_warned")
 
     def _enforcement_with(self, *, abi: int, net: bool, mount: bool):
         """Run a trivial child with the probe surface pinned; return
@@ -498,6 +514,68 @@ class TestProxyNetnsContextWiring:
         assert (self._enforcement_with(abi=3, net=True, mount=False)
                 == "landlock_tcp")
 
+    def _enter_egress(self, *, platform, net, mount, require, env=None, monkeypatch=None):
+        """Enter sandbox() with the probe/platform surface pinned and exit
+        WITHOUT running a child — exercises the 00015 setup-time guard,
+        which fires (or not) at __enter__ before any child executes."""
+        import core.sandbox.context as ctx
+        from core.sandbox import sandbox
+        if env and monkeypatch:
+            monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", env)
+        with mock.patch.object(ctx.sys, "platform", platform), mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=4,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available", return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available", return_value=net,
+        ), mock.patch(
+            "core.sandbox.context.check_mount_available", return_value=mount,
+        ):
+            with sandbox(
+                target=self.out, output=self.out, use_egress_proxy=True,
+                proxy_hosts=["example.com"], require_proxy_netns=require,
+            ):
+                pass
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_fails_closed_on_linux_degraded(self):
+        """00015: on a Linux net-yes/mount-no host, an untrusted-egress
+        caller requiring the netns tier is REFUSED (not silently port-pinned)."""
+        from core.sandbox.errors import SandboxSetupError
+        with pytest.raises(SandboxSetupError, match="netns egress tier"):
+            self._enter_egress(platform="linux", net=True, mount=False, require=True)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_override_bypasses_guard_on_linux(self, monkeypatch):
+        """The operator override lets the degraded tier through explicitly
+        (the setup-time guard does not fire)."""
+        # No SandboxSetupError('netns egress tier') should be raised.
+        self._enter_egress(platform="linux", net=True, mount=False, require=True,
+                           env="1", monkeypatch=monkeypatch)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_falsey_override_keeps_guard(self, monkeypatch):
+        """A falsey override value (0/false/off) must NOT bypass the guard —
+        the guard uses strict truthiness, matching _require_userns_or_optin."""
+        from core.sandbox.errors import SandboxSetupError
+        for val in ("0", "false", "off", "no", ""):
+            with pytest.raises(SandboxSetupError, match="netns egress tier"):
+                self._enter_egress(platform="linux", net=True, mount=False,
+                                   require=True, env=val, monkeypatch=monkeypatch)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_not_enforced_on_darwin(self):
+        """Regression (macOS blocker): macOS uses seatbelt (a different
+        enforcement path) where _use_proxy_netns is always False; the guard
+        must NOT fire there, or every macOS untrusted-egress caller breaks."""
+        # net/mount irrelevant on darwin; the guard is scoped out entirely.
+        self._enter_egress(platform="darwin", net=True, mount=False, require=True)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_flag_off_does_not_fire_on_linux(self):
+        """Without the flag (trusted egress callers), the guard never fires."""
+        self._enter_egress(platform="linux", net=True, mount=False, require=False)
+
     def test_tcp_path_when_netns_unavailable(self):
         """Without netns capability, ABI >= 4 falls back to the
         Landlock TCP pin tier — the pre-generalisation posture."""
@@ -524,6 +602,80 @@ class TestProxyNetnsContextWiring:
             )
             assert result.returncode == 0
             assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_tier2_port_pin_warns_and_records_evidence(self, caplog):
+        """Tier-2 engagement (Landlock TCP port pin) must be
+        operator-visible — a WARNING naming the weaker port-scoped
+        guarantee (pre-fix it was DEBUG-silent) — and the reduced
+        guarantee must land in the per-run sandbox_info evidence."""
+        import logging
+
+        from core.sandbox import sandbox
+
+        abi = 4
+        with mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=abi,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available",
+            return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=False,
+        ), caplog.at_level(logging.WARNING, logger="core.sandbox.context"):
+            with sandbox(
+                target=self.out,
+                output=self.out,
+                use_egress_proxy=True,
+                proxy_hosts=["example.com"],
+            ) as run:
+                result = run(
+                    ["echo", "tier2-warn-test"],
+                    capture_output=True, text=True, timeout=15,
+                )
+        assert result.returncode == 0
+        assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
+        tier2_warnings = [
+            r for r in caplog.records
+            if "Landlock TCP port pin" in r.getMessage()
+            and "ANY address" in r.getMessage()
+        ]
+        assert tier2_warnings, (
+            "tier-2 engagement must emit an operator-visible WARNING "
+            "naming the any-address-on-port weakening")
+        evidence = result.sandbox_info.get("evidence", "")
+        assert "landlock_tcp port pin" in evidence
+        assert "any address on the proxy port" in evidence
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_tier2_warning_is_once_per_process(self, caplog):
+        """Two tier-2 contexts → exactly one WARNING (warn_once)."""
+        import logging
+
+        from core.sandbox import sandbox
+
+        with mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=4,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available",
+            return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=False,
+        ), caplog.at_level(logging.WARNING, logger="core.sandbox.context"):
+            for _ in range(2):
+                with sandbox(
+                    target=self.out,
+                    output=self.out,
+                    use_egress_proxy=True,
+                    proxy_hosts=["example.com"],
+                ):
+                    pass
+        tier2_warnings = [
+            r for r in caplog.records
+            if "Landlock TCP port pin" in r.getMessage()
+        ]
+        assert len(tier2_warnings) == 1
 
     def test_fallback_on_unix_bind_failure(self):
         """If bind_unix fails, falls back to TCP-only without crash."""

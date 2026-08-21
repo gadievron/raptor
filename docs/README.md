@@ -46,7 +46,9 @@ overview:
 | `/sage` | Persistent memory (store, recall, link, corroborate) |
 | `/threat-model` | Project threat model management |
 | `/cve-diff` | CVE patch discovery |
+| `/cve-env` | Pre-patch CVE environment build + verify |
 | `/analyze` | LLM analysis of existing SARIF |
+| `/ask` | Free-form prompt to any configured model |
 | `/version` | Show version |
 
 
@@ -61,11 +63,12 @@ overview:
 | [CodeQL](codeql.md) | CodeQL integration and autonomous analysis |
 | [Fuzzing](fuzzing.md) | AFL++ and libFuzzer |
 | [Crash Analysis](crash-analysis.md) | Autonomous crash root-cause analysis |
-| [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates |
-| [Long Runs](long-runs.md) | External supervisors: shell caps, self-bounding, SIGTERM, `raptor-audit resume` |
-| [Validation](validation.md) | Exploitability validation pipeline (stages 0--1) |
+| [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates, long runs and resume |
+| [Validation](validation.md) | Exploitability validation pipeline (stages 0, A--F, 1) |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |
+| [CVE Patch Discovery](cve-diff.md) | Find, acquire, and diff the fix commit for a CVE |
+| [CVE Environment Builder](cve-env.md) | Agentic pre-patch environment build + verify; core/env provisioning API |
 | [Frida](frida.md) | Dynamic instrumentation |
 | [Sandbox](sandbox.md) | Process isolation and sandboxing |
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |
@@ -77,3 +80,7 @@ overview:
 | [Dependencies](dependencies.md) | Tool requirements and licensing |
 | [Troubleshooting](troubleshooting.md) | Common failures and fixes by subsystem |
 | [Python CLI](python-cli.md) | Direct `raptor.py` usage for CI and scripting |
+
+Working on RAPTOR itself? [developers.md](developers.md) is the
+developer-facing entry point; every other page here documents the
+operator surface.

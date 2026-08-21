@@ -148,6 +148,17 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
     ``partialFingerprints`` — that lives in :func:`_result_key`, the
     raw-result dedup used by :func:`merge_sarif`.
 
+    Identity key: (file, startLine, endLine, rule_id, finding_id).
+    Pre-fix the key stopped at rule_id, which was COARSER than the
+    raw-result discipline in :func:`_result_key` — two distinct
+    same-line findings (different column, different tool
+    fingerprint) survived ``merge_sarif`` only to be collapsed here.
+    ``finding_id`` (parse-time identity: tool fingerprint or the
+    location/fingerprint hash) carries exactly the column +
+    fingerprint distinction, so including it aligns the two dedup
+    layers. Findings from producers that set no finding_id key
+    degrade to the legacy behaviour (None in that slot).
+
     Args:
         findings: List of finding dictionaries
 
@@ -158,12 +169,13 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
     unique: list[dict[str, Any]] = []
 
     for finding in findings:
-        # Identity key from location + rule
+        # Create fingerprint from location + rule + parse identity
         fp = (
             finding.get("file"),
             finding.get("startLine"),
             finding.get("endLine"),
             finding.get("rule_id"),
+            finding.get("finding_id"),
         )
 
         if fp not in seen:
@@ -288,8 +300,28 @@ def merge_sarif(sarif_paths: list[str]) -> dict[str, Any]:
             # latest-occurrence-wins semantic the result dedup uses).
             tool_runs[tool_name]["rules_by_id"].update(get_rules(run))
             # Merge originalUriBaseIds — keyed dict, later wins.
+            # Same-tool runs from different working trees can define
+            # the SAME base id (e.g. %SRCROOT%) with DIFFERENT uris;
+            # the merged run keeps only one, so relative URIs from the
+            # other run(s) resolve against the wrong root. SARIF has
+            # no per-result base table, so keeping per-run bases would
+            # mean keeping the runs separate — not worth breaking the
+            # one-run-per-tool merge shape. Detect the conflict and
+            # warn the operator instead of silently mis-resolving.
             for base_id, base in _as_dict(run.get("originalUriBaseIds")).items():
                 if isinstance(base, dict):
+                    existing = tool_runs[tool_name]["uri_bases"].get(base_id)
+                    if existing is not None and existing != base:
+                        logger.warning(
+                            "SARIF merge: conflicting originalUriBaseIds "
+                            "definition for %r while merging %s "
+                            "(%r vs %r); later definition wins — "
+                            "relative URIs from earlier runs of tool "
+                            "%r may resolve against the wrong root",
+                            base_id, sarif_path,
+                            existing.get("uri"), base.get("uri"),
+                            tool_name,
+                        )
                     tool_runs[tool_name]["uri_bases"][base_id] = base
             # Append invocations — each input run is its own
             # invocation record; multiple legitimately coexist.
@@ -629,23 +661,28 @@ def parse_sarif_findings(
             # finding_id resolution:
             #   1. SARIF tool-supplied fingerprint (best — survives
             #      reformatting / line-shifts that the tool tracked).
-            #   2. ruleId (cheap, but collides across multiple findings
-            #      of the same rule type — only useful when the run has
-            #      one finding per rule).
+            #      Semgrep emits `fingerprints["matchBasedId/v1"]`, so
+            #      semgrep finding_ids are unchanged by this logic.
+            #   2. Deterministic hash of the same identity material
+            #      `_result_key` uses (ruleId, uri, startLine, endLine,
+            #      startColumn, partialFingerprints) — stable across
+            #      runs, distinct per location.
             #   3. Deterministic hash of the canonicalised result.
             #
-            # Pre-fix the fallback was `str(hash(json.dumps(result)))`.
-            # Two problems:
-            #   * Python's `hash()` is randomised per-process by default
-            #     (PYTHONHASHSEED) for security against hash-flooding,
-            #     so the SAME finding produced a DIFFERENT finding_id
-            #     on every invocation. Downstream consumers tracking
-            #     findings across runs (deduplication, regression
-            #     detection, fix verification) couldn't correlate.
-            #   * `json.dumps` without `sort_keys=True` is also non-
-            #     deterministic across dict insertion orders.
-            # `hashlib.sha256(json.dumps(..., sort_keys=True))` fixes
-            # both: identical input always yields the same hex digest.
+            # NEVER bare ruleId. Pre-fix the chain was
+            # `fingerprint or ruleId or sha` — CodeQL results carry no
+            # `fingerprints` member (they use `partialFingerprints`),
+            # so EVERY CodeQL finding of one rule fell back to the
+            # ruleId and shared a single finding_id. Downstream that
+            # collided per-finding artifact files (later findings
+            # overwrote earlier ones), misrouted dispatch keyed on
+            # finding_id, and dropped findings from by_id maps.
+            #
+            # The content-sha fallback uses
+            # `hashlib.sha256(json.dumps(..., sort_keys=True))`:
+            # `hash()` is randomised per-process (PYTHONHASHSEED) and
+            # unsorted dumps depend on dict insertion order, so
+            # neither is stable across invocations.
             try:
                 canonical = json.dumps(result, sort_keys=True, default=str)
             except (TypeError, ValueError):
@@ -655,9 +692,21 @@ def parse_sarif_findings(
             if not isinstance(rule_id, str):
                 rule_id = None
             fingerprint = _as_dict(result.get("fingerprints")).get("matchBasedId/v1")
-            if not isinstance(fingerprint, str):
-                fingerprint = None
-            finding_id = fingerprint or rule_id or sha
+            if isinstance(fingerprint, str) and fingerprint:
+                finding_id = fingerprint
+            else:
+                key = _result_key(result)
+                # Use the key-derived hash only when it carries
+                # distinguishing material beyond the ruleId (a
+                # location or a partialFingerprint). A bare
+                # rule-only key would re-introduce the collision,
+                # so fall through to the content sha instead.
+                if any(key[1:]):
+                    finding_id = hashlib.sha256(
+                        "\x1f".join(str(part) for part in key).encode("utf-8")
+                    ).hexdigest()
+                else:
+                    finding_id = sha
 
             locs = result.get("locations")
             first_loc = _as_dict(locs[0]) if isinstance(locs, list) and locs else {}

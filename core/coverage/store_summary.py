@@ -14,6 +14,7 @@ shown alongside.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -56,6 +57,9 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
                 "status": md.get("status"),
                 "timestamp": run_timestamp(md),
                 "target": run_target(md),
+                # The resolved path — the acquisition stamp above only
+                # says HOW the code arrived ({"source": "directory"}…).
+                "target_path": md.get("target_path"),
             })
         for rec in load_records(rd):
             tool = rec.get("tool")
@@ -83,6 +87,98 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
         },
         "runs": runs,
     }
+
+
+def read_tracking_status(run_dirs) -> Dict[str, Any]:
+    """Health of the LLM read-tracking leg across these runs.
+
+    The capture chain has several silent failure points (plugin loads
+    only via the launcher, needs an active project AND a running run,
+    only Read-tool reads fire the hook) — when it never engages, the
+    summary's llm numbers quietly understate and nothing says why.
+    Mechanical check: does ANY run carry a ``coverage-read.json``
+    record or a raw ``.reads-manifest``?
+    """
+    latest_record = None
+    pending_manifests = 0
+    for rd in run_dirs:
+        rd = Path(rd)
+        rec = rd / "coverage-read.json"
+        if rec.is_file():
+            try:
+                ts = rec.stat().st_mtime
+            except OSError:
+                continue
+            if latest_record is None or ts > latest_record:
+                latest_record = ts
+        if (rd / ".reads-manifest").is_file():
+            pending_manifests += 1
+    return {
+        "runs": len(list(run_dirs)),
+        "latest_record_mtime": latest_record,
+        "pending_manifests": pending_manifests,
+    }
+
+
+def format_read_tracking(status: Dict[str, Any]) -> "str | None":
+    """One operator-facing line; None when there is nothing to say."""
+    if not status.get("runs"):
+        return None
+    if status.get("latest_record_mtime") is not None:
+        from datetime import datetime, timezone
+        stamp = datetime.fromtimestamp(
+            status["latest_record_mtime"], tz=timezone.utc,
+        ).isoformat(timespec="seconds")
+        extra = (f"; {status['pending_manifests']} manifest(s) pending"
+                 if status.get("pending_manifests") else "")
+        return f"  Read tracking: active (last record {stamp}{extra})"
+    if status.get("pending_manifests"):
+        return ("  Read tracking: manifests captured but not yet converted "
+                f"({status['pending_manifests']} run(s))")
+    return ("  Read tracking: no LLM reads recorded in any run — reads are "
+            "captured only in launcher sessions with an active project and "
+            "a running run")
+
+
+def format_progress_trend(store_path) -> "str | None":
+    """Reviewed-count movement across the last completed runs.
+
+    Reads the sibling ``coverage-progress.jsonl`` the run lifecycle
+    appends at completion. One line — the operator-facing answer to
+    "is the gap actually shrinking?". None when there is no history.
+    """
+    if not store_path:
+        return None
+    progress = Path(store_path).parent / "coverage-progress.jsonl"
+    if not progress.is_file():
+        return None
+    rows = []
+    try:
+        with open(progress, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+    if not rows:
+        return None
+    last = rows[-1]
+    reviewed = last.get("llm_reviewed", 0)
+    reviewable = last.get("llm_reviewable", 0)
+    if len(rows) == 1:
+        return (f"  Progress: {reviewed}/{reviewable} reviewed "
+                f"after {last.get('run', '?')} (1 run recorded)")
+    prev = rows[-2]
+    delta = reviewed - prev.get("llm_reviewed", 0)
+    sign = "+" if delta >= 0 else ""
+    return (f"  Progress: {reviewed}/{reviewable} reviewed "
+            f"({sign}{delta} in {last.get('run', '?')}; "
+            f"{len(rows)} runs recorded)")
 
 
 def render_coverage(
@@ -116,11 +212,21 @@ def render_coverage(
         exec_section = format_execution_detail(execution_detail(run_dirs, checklist))
         if exec_section:
             parts.append(exec_section)
+        health = format_read_tracking(read_tracking_status(run_dirs))
+        if health:
+            parts.append(health)
+        trend = format_progress_trend(store_path)
+        if trend:
+            parts.append(trend)
         return "\n".join(parts)
 
     fv = file_level_view(run_dirs)
     if fv.get("tools") or fv.get("runs"):
-        return format_file_level_view(fv)
+        out = [format_file_level_view(fv)]
+        health = format_read_tracking(read_tracking_status(run_dirs))
+        if health:
+            out.append(health)
+        return "\n".join(out)
     return None
 
 
@@ -248,7 +354,10 @@ def format_file_level_view(view: Dict[str, Any], max_files: int = 20) -> str:
     if runs:
         lines.append(f"  Runs: {len(runs)}")
         for r in runs:
-            tgt = r.get("target")
+            # Prefer the resolved path; the acquisition stamp's "source"
+            # is the acquisition KIND ("directory", "git"…), which read
+            # as a nonsense target in the listing.
+            tgt = r.get("target_path") or r.get("target")
             tgt = tgt.get("source") if isinstance(tgt, dict) else tgt
             lines.append(
                 f"    {r.get('command')} / {r.get('status')} / "
@@ -383,10 +492,16 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
     v = view.get("verdicts")
     if v:
         lines.append("  Verdict:")
-        lines.append(f"    clean:           {v.get('clean', 0)}")
-        lines.append(f"    open findings:   {v.get('open', 0)}")
-        lines.append(f"    found-then-lost: {v.get('found_then_lost', 0)}  (re-examine)")
-        lines.append(f"    unexamined:      {v.get('unexamined', 0)}")
+        # "clean" the enum value = examined by SOME tool with no finding
+        # linked — a semgrep parse counts. Label it for what it is
+        # rather than implying a completed review.
+        lines.append(
+            f"    examined, no findings: {v.get('clean', 0)}")
+        lines.append(f"    open findings:         {v.get('open', 0)}")
+        lines.append(
+            f"    found-then-lost:       {v.get('found_then_lost', 0)}"
+            "  (re-examine)")
+        lines.append(f"    unexamined:            {v.get('unexamined', 0)}")
 
     lines.append("  Gaps:")
     lines.append(f"    no tool at all: {view['gap_no_tool']}")

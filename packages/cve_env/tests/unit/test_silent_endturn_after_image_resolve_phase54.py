@@ -28,9 +28,6 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 """
 
 from __future__ import annotations
-import pytest
-pytest.importorskip("claude_agent_sdk")
-
 from cve_env.agent.loop import _map_status, _StreamState
 
 def _make_state(**kw) -> _StreamState:

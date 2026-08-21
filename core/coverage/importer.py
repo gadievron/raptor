@@ -182,7 +182,7 @@ def import_journal(
 
     Returns the number of function-level marks applied.
     """
-    from .journal import load_index
+    from .journal import entry_producer, load_index
 
     try:
         entries = load_index(project_dir)
@@ -227,21 +227,12 @@ def import_journal(
                 continue
             rng = (lo, hi)
         lo, hi = rng
-        # Tool label priority:
-        #   1. Explicit ``producer`` field on the entry — set by the
-        #      write path per amendment §1 A2, always accurate.
-        #   2. ``run_id`` prefix heuristic for legacy entries without
-        #      ``producer`` — any run_id starting with ``agentic`` or
-        #      ``scan`` (no underscore required) labels as agentic;
-        #      everything else defaults to ``audit`` (historical
-        #      checked_by convention).
-        tool = getattr(entry, "producer", None)
-        if not tool:
-            tool = "audit"
-            run_id = entry.run_id or ""
-            if run_id.startswith(("agentic", "scan")):
-                tool = "agentic"
-        store.mark(entry.file, lo, hi, tool)
+        # Tool label: explicit ``producer`` field when stamped (write
+        # path per amendment §1 A2), else the legacy run_id prefix
+        # heuristic — both live in ``journal.entry_producer`` so the
+        # coverage importer and the audit gap fold agree on which
+        # producer an entry belongs to.
+        store.mark(entry.file, lo, hi, entry_producer(entry))
         marks += 1
     return marks
 

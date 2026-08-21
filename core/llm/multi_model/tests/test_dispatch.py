@@ -1066,3 +1066,40 @@ class TestEndToEnd:
         )
         assert result.items == [{"id": "single", "from_model": "only"}]
         assert result.failed_models == []
+
+
+class TestTimeoutUnblocksCaller:
+    def test_timeout_returns_without_joining_hung_worker(self):
+        """The timeout must actually unblock the caller — pre-fix the
+        failure was recorded but ThreadPoolExecutor.__exit__ then
+        re-joined the hung worker, blocking the caller for the very
+        hang the timeout had just recorded. The worker thread may
+        linger (documented); the caller returns now."""
+        import time
+
+        from core.llm.multi_model.dispatch import _dispatch_parallel
+
+        release = threading.Event()
+
+        def hung_task(model):
+            # Simulates a wedged provider call; released by the test
+            # teardown so the lingering worker doesn't stall pytest's
+            # interpreter-exit thread join.
+            release.wait(30)
+            return []
+
+        try:
+            start = time.monotonic()
+            per_model, failed = _dispatch_parallel(
+                hung_task, [FakeModel("wedged")], max_parallel=1,
+                timeout=0.5,
+            )
+            elapsed = time.monotonic() - start
+            assert elapsed < 10, (
+                f"caller stayed blocked {elapsed:.1f}s — executor "
+                "re-joined the hung worker"
+            )
+            assert failed == ["wedged"]
+            assert per_model == {"wedged": []}
+        finally:
+            release.set()

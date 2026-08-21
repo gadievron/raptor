@@ -68,6 +68,12 @@ jobs:
           # tests can only skip. Installed here so the nightly keeps
           # covering the sweep → record → report → feedback chain.
           uv pip install semgrep==1.172.0
+          # Grammar wheels: grammar-dependent tests skip-with-reason
+          # where these are absent (every PR tier), which means the
+          # span-accurate detection paths were never exercised in CI
+          # at all. The nightly installs them so that family runs
+          # somewhere, same rationale as semgrep above.
+          uv pip install -r requirements-grammars.txt
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         continue-on-error: true

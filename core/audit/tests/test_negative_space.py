@@ -58,6 +58,19 @@ class TestDetectFramework:
         ]
         assert detect_framework(gaps) == "go"
 
+    def test_go_handler_func_signal(self):
+        """The matcher is substring-based; the old regex-shaped entry
+        (func.*http.HandlerFunc) could never fire. Real Go handler
+        source must count."""
+        gaps = [
+            {"name": "v1",
+             "source": "mux.Handle(\"/\", http.HandlerFunc(serve))"},
+            {"name": "v2",
+             "source": "func serve(w http.ResponseWriter, "
+                       "r *http.Request) {}"},
+        ]
+        assert detect_framework(gaps) == "go"
+
     def test_no_framework(self):
         gaps = [
             {"name": "f", "source": "int main() { return 0; }"},
@@ -772,6 +785,24 @@ class TestCheckDeploymentAssumptions:
                  "source": "x = 1 + 2\nreturn x"}]
         assert check_deployment_assumptions(gaps) == []
 
+    def test_allowlist_spelling_recognised(self):
+        # The matcher vocabulary must recognise the allowlist
+        # spelling, not just the legacy whitelist token.
+        gaps = [{"name": "gate", "file": "a.py",
+                 "source": 'ip_allowlist = ["127.0.0.1"]'}]
+        results = check_deployment_assumptions(gaps)
+        assert any(
+            r.check_type == "deployment_assumption" for r in results
+        )
+
+    def test_blocklist_spelling_recognised(self):
+        gaps = [{"name": "gate", "file": "a.py",
+                 "source": 'blocklist_skip = host == "localhost"'}]
+        results = check_deployment_assumptions(gaps)
+        assert any(
+            r.check_type == "deployment_assumption" for r in results
+        )
+
 
 class TestCheckLockOrdering:
     def test_detects_multiple_locks(self):
@@ -1053,3 +1084,327 @@ class TestProtocolEvidenceGate:
         }]
         findings = check_protocol_ambiguity(gaps)
         assert any("CL vs TE" in f.title for f in findings)
+
+
+class TestAuthModeRegistration:
+    """Registrations reachable regardless of the auth mode."""
+
+    def _gap(self, source, name="setup_views", file="app/registry.py"):
+        return {"name": name, "file": file, "source": source}
+
+    _GATED_SOURCE = (
+        "def setup_views(self):\n"
+        "    self.registry.mount_view(PwResetView, 'x')\n"
+        "    self.registry.mount_view(PwResetSelfView, 'y')\n"
+        "    if self.auth_mode == MODE_LOCAL:\n"
+        "        self.registry.mount_view(LoginLocalView, 'l')\n"
+        "        self.registry.mount_view(SignupLocalView, 'r')\n"
+        "    elif self.auth_mode == MODE_SSO:\n"
+        "        self.registry.mount_view(LoginSSOView, 'l')\n"
+        "        self.registry.mount_view(SignupSSOView, 'r')\n"
+        "    self.registry.mount_hidden(ProfileView)\n"
+    )
+
+    def test_ungated_peer_of_gated_registrations_flagged(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        findings = check_auth_mode_registration(self._gap(self._GATED_SOURCE))
+        assert findings, "expected the ungated mount_view calls flagged"
+        f = findings[0]
+        assert f.check_type == "auth_mode_registration"
+        assert "mount_view" in f.title
+        assert "REGARDLESS" in f.evidence
+        assert f.strategy == "protocol_checklist"
+
+    def test_fully_gated_function_silent(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        src = (
+            "def setup_views(self):\n"
+            "    if self.auth_mode == MODE_LOCAL:\n"
+            "        self.mount_view(LoginLocalView)\n"
+            "        self.mount_view(SignupLocalView)\n"
+            "    elif self.auth_mode == MODE_DIR:\n"
+            "        self.mount_view(LoginDirView)\n"
+        )
+        assert check_auth_mode_registration(self._gap(src)) == []
+
+    def test_no_auth_conditional_silent(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        src = (
+            "def setup_views(self):\n"
+            "    if self.debug_mode:\n"
+            "        self.mount_view(DebugView)\n"
+            "        self.mount_view(TraceView)\n"
+            "    self.mount_view(HomeView)\n"
+        )
+        assert check_auth_mode_registration(self._gap(src)) == []
+
+    def test_learned_vocab_extends_seed(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        src = (
+            "def register(self):\n"
+            "    if self.credential_mode == MODE_DB:\n"
+            "        self.mount(LoginPage)\n"
+            "        self.mount(SignupPage)\n"
+            "    self.mount(ResetPage)\n"
+            "    self.mount(ResetDonePage)\n"
+        )
+        # Without the learned term nothing references the seed vocab.
+        assert check_auth_mode_registration(self._gap(src)) == []
+        dm = {"auth_predicates": [{"name": "credential_mode"}]}
+        findings = check_auth_mode_registration(
+            self._gap(src), domain_model=dm,
+        )
+        assert findings and "mount" in findings[0].title
+
+    def test_non_registration_callees_silent(self):
+        """Telemetry/config-default calls gated on an auth mode are
+        housekeeping, not capability wiring — no asymmetry receipt."""
+        from core.audit.negative_space import check_auth_mode_registration
+
+        src = (
+            "def __init__(self, cfg):\n"
+            "    cfg.setdefault('X', 1)\n"
+            "    cfg.setdefault('Y', 2)\n"
+            "    if self.auth_mode == MODE_DIR:\n"
+            "        cfg.setdefault('DIR_SERVER', 'a')\n"
+            "        cfg.setdefault('DIR_PORT', 1)\n"
+            "        log.info('dir mode')\n"
+            "        log.info('dir extras')\n"
+            "    log.info('ready')\n"
+        )
+        assert check_auth_mode_registration(self._gap(src)) == []
+
+    def test_single_gated_call_not_enough(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        src = (
+            "def register(self):\n"
+            "    if self.auth_mode == MODE_LOCAL:\n"
+            "        self.mount_view(LoginLocalView)\n"
+            "    self.mount_view(HomeView)\n"
+        )
+        assert check_auth_mode_registration(self._gap(src)) == []
+
+
+class TestSharedWriterRace:
+    """Go non-atomic multi-write to a shared writer field."""
+
+    _SRC = (
+        "package streamformatter\n"
+        "type statusOutput struct {\n"
+        "\tsf formatDetail\n"
+        "\tout io.Writer\n"
+        "\tnewLines bool\n"
+        "}\n"
+        "func (out *statusOutput) WriteStatus(st status.Status) error {\n"
+        "\tformatted := out.sf.formatLine(st.ID, st.Message)\n"
+        "\t_, err := out.out.Write(formatted)\n"
+        "\tif err != nil {\n"
+        "\t\treturn err\n"
+        "\t}\n"
+        "\tif out.newLines && st.LastUpdate {\n"
+        "\t\t_, err = out.out.Write(out.sf.formatLine(\"\", \"\"))\n"
+        "\t\treturn err\n"
+        "\t}\n"
+        "\treturn nil\n"
+        "}\n"
+        "type MetaFormatter struct {\n"
+        "\tio.Writer\n"
+        "}\n"
+        "func (sf *MetaFormatter) Emit(id string, aux interface{}) error {\n"
+        "\tmsgJSON, err := json.Marshal(aux)\n"
+        "\t_, err = sf.Writer.Write(msgJSON)\n"
+        "\treturn err\n"
+        "}\n"
+    )
+
+    def _gap(self, name, source=None):
+        return {
+            "file": "pkg/statusfmt/statusfmt.go",
+            "name": name,
+            "source": source or self._SRC,
+        }
+
+    def test_multi_write_no_lock_flagged(self):
+        from core.audit.negative_space import check_shared_writer_race
+
+        f = check_shared_writer_race(self._gap("WriteStatus"))
+        assert f and f[0].check_type == "shared_writer_race"
+        assert "caller set" in f[0].evidence
+
+    def test_single_write_peer_silent(self):
+        from core.audit.negative_space import check_shared_writer_race
+
+        assert check_shared_writer_race(self._gap("Emit")) == []
+
+    def test_mutex_on_receiver_silences(self):
+        from core.audit.negative_space import check_shared_writer_race
+
+        src = self._SRC.replace(
+            "\tsf formatDetail\n",
+            "\tsf formatDetail\n\tmu sync.Mutex\n",
+        )
+        assert check_shared_writer_race(
+            self._gap("WriteStatus", src),
+        ) == []
+
+    def test_lock_in_body_silences(self):
+        from core.audit.negative_space import check_shared_writer_race
+
+        src = self._SRC.replace(
+            "\tformatted := out.sf.formatLine",
+            "\tout.mu.Lock()\n\tdefer out.mu.Unlock()\n"
+            "\tformatted := out.sf.formatLine",
+        )
+        assert check_shared_writer_race(
+            self._gap("WriteStatus", src),
+        ) == []
+
+    def test_non_go_file_silent(self):
+        from core.audit.negative_space import check_shared_writer_race
+
+        gap = self._gap("WriteStatus")
+        gap["file"] = "a.c"
+        assert check_shared_writer_race(gap) == []
+
+
+class TestUrlBoundaryComposition:
+    """Header value interpolated after :// in a composed URL."""
+
+    _VULN = (
+        "def __init__(self, scope):\n"
+        "    scheme = scope.get('scheme', 'http')\n"
+        "    path = scope['path']\n"
+        "    for key, value in scope['headers']:\n"
+        "        if key == b'host':\n"
+        "            host_header = value.decode('latin-1')\n"
+        "    if host_header is not None:\n"
+        "        url = f\"{scheme}://{host_header}{path}\"\n"
+        "    self._url = url\n"
+        "    self._components = urlsplit(self._url)\n"
+    )
+
+    def _gap(self, source, name="Link.__init__"):
+        return {
+            "file": "web/urlobj.py",
+            "name": name,
+            "source": source,
+        }
+
+    def test_header_after_scheme_flagged(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        f = check_url_boundary_composition(self._gap(self._VULN))
+        assert len(f) == 1
+        assert "host_header" in f[0].title
+        assert f[0].confidence == "medium"  # re-parsed in-function
+        assert "boundaries" in f[0].evidence
+
+    def test_server_derived_host_not_flagged(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        src = (
+            "def build(self, scope):\n"
+            "    host, port = scope['server']\n"
+            "    return f\"{scheme}://{host}:{port}{path}\"\n"
+        )
+        assert check_url_boundary_composition(self._gap(src)) == []
+
+    def test_validated_host_not_flagged(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        src = self._VULN.replace(
+            "    if host_header is not None:\n",
+            "    if '/' in host_header or '?' in host_header:\n"
+            "        raise ValueError\n"
+            "    if host_header is not None:\n",
+        )
+        assert check_url_boundary_composition(self._gap(src)) == []
+
+    def test_placeholder_not_after_scheme_ignored(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        src = (
+            "def build(self, header_val):\n"
+            "    return f\"https://example.com/{header_val}\"\n"
+        )
+        assert check_url_boundary_composition(self._gap(src)) == []
+
+    def test_concat_shape_flagged(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        src = (
+            "def build(self, request):\n"
+            "    fwd_header = request.headers['x-forwarded-host']\n"
+            "    url = 'https://' + fwd_header\n"
+            "    return urlparse(url)\n"
+        )
+        f = check_url_boundary_composition(self._gap(src))
+        assert f and "fwd_header" in f[0].title
+
+    def test_non_python_silent(self):
+        from core.audit.negative_space import check_url_boundary_composition
+
+        gap = self._gap(self._VULN)
+        gap["file"] = "a.go"
+        assert check_url_boundary_composition(gap) == []
+
+
+class TestStructuralCheckersRejectRenderedSource:
+    """The prompt rendering of a function body carries '{n:4d}  '
+    line-number prefixes (context._read_source). The structural
+    checkers match indentation from line start, so feeding them the
+    rendered source silently disables them — the injection site must
+    hand them raw disk spans instead. These tests pin both halves."""
+
+    _RAW = (
+        "def mount_endpoints(self):\n"
+        "    if self.login_mode == MODE_DB:\n"
+        "        self.add_view(DbLoginView())\n"
+        "        self.add_view(SignupView())\n"
+        "    elif self.login_mode == MODE_SSO:\n"
+        "        self.add_view(SsoLoginView())\n"
+        "    self.add_view(ResetView())\n"
+        "    self.add_view(InfoView())\n"
+    )
+
+    def _rendered(self) -> str:
+        return "\n".join(
+            f"{i + 1:4d}  {line}"
+            for i, line in enumerate(self._RAW.splitlines())
+        )
+
+    def test_raw_source_fires(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        gap = {
+            "file": "app/wiring.py", "name": "mount_endpoints",
+            "source": self._RAW,
+        }
+        assert check_auth_mode_registration(gap)
+
+    def test_rendered_source_is_blind(self):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        gap = {
+            "file": "app/wiring.py", "name": "mount_endpoints",
+            "source": self._rendered(),
+        }
+        assert not check_auth_mode_registration(gap)
+
+    def test_disk_fallback_fires_without_source(self, tmp_path):
+        from core.audit.negative_space import check_auth_mode_registration
+
+        d = tmp_path / "app"
+        d.mkdir()
+        (d / "wiring.py").write_text(self._RAW)
+        raw_lines = self._RAW.count("\n")
+        gap = {
+            "file": "app/wiring.py", "name": "mount_endpoints",
+            "line_start": 1, "line_end": raw_lines,
+        }
+        assert check_auth_mode_registration(gap, target_path=tmp_path)

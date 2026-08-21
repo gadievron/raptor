@@ -41,6 +41,12 @@ class ReadObjectCall extends MethodCall {
 /**
  * An ObjectInputStream that has been hardened with a
  * `setObjectInputFilter` call (Java 9+ / JEP 290).
+ *
+ * Limitation: this is flow-insensitive — a setObjectInputFilter call
+ * anywhere on the variable counts, even if it happens after the
+ * readObject() or on a path that does not reach it. Acceptable for a
+ * suppression predicate: it can cause FNs on contorted filter
+ * placement, never FPs.
  */
 predicate hasInputFilter(Variable oisVar) {
   exists(MethodCall mc |
@@ -66,14 +72,23 @@ module DeserFlow = TaintTracking::Global<DeserConfig>;
 
 from
   DeserFlow::PathNode source, DeserFlow::PathNode sink,
-  ObjectInputStreamCreation oisCreation, Variable oisVar,
-  ReadObjectCall readCall
+  ObjectInputStreamCreation oisCreation, ReadObjectCall readCall
 where
   DeserFlow::flowPath(source, sink) and
   sink.getNode().asExpr() = oisCreation.getArgument(0) and
-  oisVar.getAnAssignedValue() = oisCreation and
-  readCall.getQualifier().(VarAccess).getVariable() = oisVar and
-  not hasInputFilter(oisVar)
+  (
+    // Stored: ObjectInputStream ois = new ObjectInputStream(x);
+    //         ois.readObject();
+    exists(Variable oisVar |
+      oisVar.getAnAssignedValue() = oisCreation and
+      readCall.getQualifier().(VarAccess).getVariable() = oisVar and
+      not hasInputFilter(oisVar)
+    )
+    or
+    // Chained: new ObjectInputStream(x).readObject() — no variable
+    // exists, so no setObjectInputFilter call can have hardened it.
+    readCall.getQualifier() = oisCreation
+  )
 select readCall, source, sink,
   "Untrusted data from $@ is deserialized via ObjectInputStream.readObject() " +
     "without a type filter — arbitrary code execution via gadget chains (CWE-502).",

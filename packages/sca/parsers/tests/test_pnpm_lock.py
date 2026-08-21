@@ -86,6 +86,103 @@ packages:
     assert deps[0].version == "29.0.3"
 
 
+_V9_BODY = """\
+lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+    devDependencies:
+      jest:
+        specifier: ~29.0.0
+        version: 29.0.3(typescript@5.0.4)
+
+packages:
+  lodash@4.17.21:
+    resolution: {integrity: sha512-x}
+  jest@29.0.3:
+    resolution: {integrity: sha512-y}
+  '@types/node@20.10.5':
+    resolution: {integrity: sha512-z}
+
+snapshots:
+  lodash@4.17.21: {}
+  jest@29.0.3(typescript@5.0.4):
+    dependencies:
+      '@types/node': 20.10.5
+  '@types/node@20.10.5': {}
+"""
+
+
+def test_v9_no_slash_keys(tmp_path: Path) -> None:
+    """lockfileVersion 9 drops the leading slash from packages keys and
+    moves the resolved graph to ``snapshots``."""
+    deps = {d.name: d for d in parse(_write(tmp_path, _V9_BODY))}
+    assert deps["lodash"].version == "4.17.21"
+    assert deps["lodash"].direct is True
+    assert deps["jest"].version == "29.0.3"
+    assert deps["jest"].direct is True
+    # Scoped name, only reachable transitively.
+    assert deps["@types/node"].version == "20.10.5"
+    assert deps["@types/node"].direct is False
+
+
+def test_v9_snapshot_only_entry_and_peer_suffix(tmp_path: Path) -> None:
+    """Snapshot keys carry the peer suffix; an entry present only under
+    ``snapshots`` still produces a row (transitive resolution)."""
+    body = """\
+lockfileVersion: '9.0'
+packages:
+  jest@29.0.3:
+    resolution: {integrity: sha512-y}
+snapshots:
+  jest@29.0.3(typescript@5.0.4): {}
+  '@scope/only-in-snapshots@1.2.3(react@18.2.0)': {}
+"""
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert deps["jest"].version == "29.0.3"
+    assert deps["@scope/only-in-snapshots"].version == "1.2.3"
+    # Peer-suffixed snapshot of the same (name, version) dedupes.
+    assert len([d for d in parse(_write(tmp_path, body))
+                if d.name == "jest"]) == 1
+
+
+def test_v9_non_registry_version_token(tmp_path: Path) -> None:
+    """``file:`` / ``link:`` version tokens are not registry versions —
+    no fake OSV match key is recorded."""
+    body = """\
+lockfileVersion: '9.0'
+packages:
+  mylocal@file:packages/mylocal:
+    resolution: {directory: packages/mylocal, type: directory}
+"""
+    deps = parse(_write(tmp_path, body))
+    assert deps[0].name == "mylocal"
+    assert deps[0].version is None
+
+
+def test_zero_parse_with_nonempty_packages_warns(
+    tmp_path: Path, caplog,
+) -> None:
+    """A packages map that yields no rows is a parse failure, not a
+    clean project — the operator must see why."""
+    import logging
+    body = """\
+lockfileVersion: '99.0'
+packages:
+  '???unrecognised-key-shape???':
+    resolution: {integrity: sha512-x}
+"""
+    with caplog.at_level(logging.WARNING,
+                         logger="packages.sca.parsers.pnpm_lock"):
+        deps = parse(_write(tmp_path, body))
+    assert deps == []
+    assert any("none parsed" in r.getMessage() for r in caplog.records)
+
+
 def test_git_resolution(tmp_path: Path) -> None:
     body = """\
 lockfileVersion: '6.0'

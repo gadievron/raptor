@@ -12,7 +12,6 @@ import io
 import json
 import subprocess
 import tarfile
-import urllib.error
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -338,6 +337,26 @@ def test_find_devcontainer_image_none_when_absent(tmp_path: Path) -> None:
 
 # -- SourceBuilder.build() with subprocess mocks ---------------------------
 
+def _plain_git(args: list) -> list:
+    """Strip the core.git safety layer (-c overrides / --no-pager)
+    inserted by SourceBuilder._run_git so dispatch matching can keep
+    reading plain ["git", <op>, ...] argv."""
+    if not args or args[0] != "git":
+        return list(args)
+    out = ["git"]
+    i = 1
+    while i < len(args):
+        if args[i] == "-c" and i + 1 < len(args):
+            i += 2
+            continue
+        if args[i] == "--no-pager":
+            i += 1
+            continue
+        out.extend(args[i:])
+        break
+    return out
+
+
 def _fake_completed(
     returncode: int = 0, stdout: str = "", stderr: str = ""
 ) -> subprocess.CompletedProcess[str]:
@@ -405,12 +424,12 @@ def test_build_with_commit_sha_clone_failure_returns_clean_error(
     sha = "a" * 40
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             return _fake_completed(128, stderr="fatal: Repository not found")
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_run):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -425,16 +444,16 @@ def test_build_with_commit_sha_checkout_failure(tmp_path: Path) -> None:
     sha = "b" * 40
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             target = Path(args[-1])
             target.mkdir(parents=True, exist_ok=True)
             return _fake_completed(0)
-        if args[:2] == ["git", "checkout"]:
+        if _plain_git(args)[:2] == ["git", "checkout"]:
             return _fake_completed(128, stderr="fatal: reference is not a tree")
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_run):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -450,12 +469,12 @@ def test_build_with_commit_sha_clone_timeout(tmp_path: Path) -> None:
     sha = "c" * 40
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             raise subprocess.TimeoutExpired(cmd="git clone", timeout=60)
         msg = f"unexpected git args after timeout: {args}"
         raise AssertionError(msg)
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_run):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar", product="bar", version=sha
@@ -474,18 +493,18 @@ def test_build_with_commit_sha_skips_tag_listing(tmp_path: Path) -> None:
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         seen_args.append(args)
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             target = Path(args[-1])
             target.mkdir(parents=True, exist_ok=True)
             (target / "package.json").write_text('{"name": "vuln-plugin"}')
             return _fake_completed(0)
-        if args[:2] == ["git", "checkout"]:
+        if _plain_git(args)[:2] == ["git", "checkout"]:
             return _fake_completed(0)
         # If anything else fires (tag list, fetch --tags), the SHA path is broken.
         msg = f"unexpected git args during SHA path: {args}"
         raise AssertionError(msg)
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_run):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/wp-plugins/foo",
@@ -497,18 +516,18 @@ def test_build_with_commit_sha_skips_tag_listing(tmp_path: Path) -> None:
     assert result.checked_out_tag == sha
     assert result.build_config == "npm"
     # Verify the checkout used the SHA verbatim.
-    checkout_calls = [a for a in seen_args if a[:2] == ["git", "checkout"]]
+    checkout_calls = [a for a in seen_args if _plain_git(a)[:2] == ["git", "checkout"]]
     assert len(checkout_calls) == 1
-    assert checkout_calls[0][2] == sha
+    assert _plain_git(checkout_calls[0])[2] == sha
     # Verify NO tag operations.
-    assert not any(a[:3] == ["git", "tag", "--list"] for a in seen_args)
+    assert not any(_plain_git(a)[:3] == ["git", "tag", "--list"] for a in seen_args)
     assert not any("--tags" in a for a in seen_args)
 
 def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
     """Happy path: shallow clone finds the tag on first try."""
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             # Simulate `git clone` by creating the target dir + pom.xml +
             # Dockerfile so downstream discovery has something to find.
             target = Path(args[-1])
@@ -516,16 +535,16 @@ def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
             (target / "Dockerfile").write_text("FROM alpine")
             (target / "pom.xml").write_text("<project/>")
             return _fake_completed(0)
-        if args[:3] == ["git", "fetch", "--tags"]:
+        if _plain_git(args)[:3] == ["git", "fetch", "--tags"]:
             return _fake_completed(0)
-        if args[:2] == ["git", "tag"]:
+        if _plain_git(args)[:2] == ["git", "tag"]:
             return _fake_completed(0, stdout="v1.0\nv1.5\nv2.0\n")
-        if args[:2] == ["git", "checkout"]:
+        if _plain_git(args)[:2] == ["git", "checkout"]:
             return _fake_completed(0)
         msg = f"unexpected git args: {args}"
         raise AssertionError(msg)
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=fake_run):
+    with patch("core.container.proc.subprocess.run", side_effect=fake_run):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         result = builder.build(
             source_url="https://github.com/foo/bar",
@@ -540,13 +559,13 @@ def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
 
 def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             target = Path(args[-1])
             target.mkdir(parents=True, exist_ok=True)
             return _fake_completed(0)
-        if args[:3] == ["git", "fetch", "--tags"]:
+        if _plain_git(args)[:3] == ["git", "fetch", "--tags"]:
             return _fake_completed(0)
-        if args[:3] == ["git", "tag", "--list"]:
+        if _plain_git(args)[:3] == ["git", "tag", "--list"]:
             return _fake_completed(0, stdout="v3.0\nv4.0\n")
         if len(args) >= 2 and args[1] == "fetch":
             # Any deepen operation succeeds but still no matching tag.
@@ -555,7 +574,7 @@ def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
         raise AssertionError(msg)
 
     with (
-        patch("cve_env.utils.run.subprocess.run", side_effect=fake_run),
+        patch("core.container.proc.subprocess.run", side_effect=fake_run),
         # Disable archive fallback for this test to isolate the clone path.
         patch.object(SourceBuilder, "_archive_fallback", lambda *a, **k: None),
         # Disable adaptive depth probe so we don't hit urllib.
@@ -577,7 +596,7 @@ def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
     call_log: list[str] = []
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             call_log.append("clone_failed")
             return _fake_completed(128, stderr="rate limited")
         if args[:3] == ["gh", "auth", "token"]:
@@ -587,20 +606,19 @@ def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
 
     tarball = _make_fake_tarball({"Dockerfile": "FROM alpine", "go.mod": "module x"})
 
-    def fake_urlopen(req: Any, **_: Any) -> Any:
-        url = req.full_url if hasattr(req, "full_url") else str(req)
+    def fake_core_get(url: str, **_: Any) -> Any:
         if "api.github.com/repos/foo/bar/tags" in url:
-            return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
+            return _core_resp(json.dumps([{"name": "v1.5"}]).encode())
         if urllib.parse.urlparse(url).hostname == "codeload.github.com":
-            return _FakeResp(tarball)
+            return _core_resp(tarball)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)
 
     with (
-        patch("cve_env.utils.run.subprocess.run", side_effect=fake_run),
+        patch("core.container.proc.subprocess.run", side_effect=fake_run),
         patch(
-            "cve_env.tools.source_build._urlopen",
-            side_effect=fake_urlopen,
+            "cve_env.tools.source_build._core_get",
+            side_effect=fake_core_get,
         ),
     ):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
@@ -739,8 +757,6 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
     one-call-short here: source_build returned ok=true w/ a Dockerfile + repo_dir
     + 'call docker_build' hint, but the agent did image_resolve+Bash then end_turn
     without building. After the fix the build runs in the same call (under `build`)."""
-    pytest.importorskip("claude_agent_sdk")
-    import asyncio
     import json
     from unittest.mock import MagicMock
 
@@ -763,22 +779,20 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
             "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
         ),
         patch(
-            "cve_env.utils.run.subprocess.run",
+            "core.container.proc.subprocess.run",
             return_value=MagicMock(
                 returncode=0, stdout="Successfully built abc123\n", stderr=""
             ),
         ),
     ):
-        env = asyncio.run(
-            tools.source_build.handler(
-                {
-                    "source_url": "https://github.com/yogeshojha/rengine",
-                    "product": "rengine",
-                    "version": "1.1.0",
-                }
-            )
+        env = tools.source_build(
+            {
+                "source_url": "https://github.com/yogeshojha/rengine",
+                "product": "rengine",
+                "version": "1.1.0",
+            }
         )
-    out = json.loads(env["content"][0]["text"])
+    out = json.loads(env)
     assert "build" in out, (
         "source_build with a Dockerfile must fuse docker_build (close the seam)"
     )
@@ -789,8 +803,6 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
 def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None:
     """Guard: a build_config-only payload (no dockerfile_text) must NOT fuse —
     the agent dockerfile_gen's against the clone (then b1 fuses that)."""
-    pytest.importorskip("claude_agent_sdk")
-    import asyncio
     import json
     from unittest.mock import MagicMock
 
@@ -813,19 +825,17 @@ def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None
             "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
         ),
         patch(
-            "cve_env.utils.run.subprocess.run", return_value=MagicMock(returncode=0)
+            "core.container.proc.subprocess.run", return_value=MagicMock(returncode=0)
         ) as mock_run,
     ):
-        env = asyncio.run(
-            tools.source_build.handler(
-                {
-                    "source_url": "https://github.com/o/r",
-                    "product": "r",
-                    "version": "1.0",
-                }
-            )
+        env = tools.source_build(
+            {
+                "source_url": "https://github.com/o/r",
+                "product": "r",
+                "version": "1.0",
+            }
         )
-    out = json.loads(env["content"][0]["text"])
+    out = json.loads(env)
     assert "build" not in out, (
         "build_config-only payload must not auto-build (no Dockerfile)"
     )
@@ -952,27 +962,26 @@ def test_phase61_tarball_filter_blocks_absolute_symlink(tmp_path: Path) -> None:
     malicious = _make_malicious_tarball_with_symlink("/etc/passwd")
 
     def fake_run(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             return _fake_completed(128, stderr="rate limited")
         if args[:3] == ["gh", "auth", "token"]:
             return _fake_completed(1, stderr="not authenticated")
         msg = f"unexpected: {args}"
         raise AssertionError(msg)
 
-    def fake_urlopen(req: Any, **_: Any) -> Any:
-        url = req.full_url if hasattr(req, "full_url") else str(req)
+    def fake_core_get(url: str, **_: Any) -> Any:
         if "api.github.com/repos/foo/bar/tags" in url:
-            return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
+            return _core_resp(json.dumps([{"name": "v1.5"}]).encode())
         if urllib.parse.urlparse(url).hostname == "codeload.github.com":
-            return _FakeResp(malicious)
+            return _core_resp(malicious)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)
 
     with (
-        patch("cve_env.utils.run.subprocess.run", side_effect=fake_run),
+        patch("core.container.proc.subprocess.run", side_effect=fake_run),
         patch(
-            "cve_env.tools.source_build._urlopen",
-            side_effect=fake_urlopen,
+            "cve_env.tools.source_build._core_get",
+            side_effect=fake_core_get,
         ),
     ):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
@@ -999,27 +1008,26 @@ def test_phase61_tarball_filter_blocks_relative_escape_symlink(
     malicious = _make_malicious_tarball_with_symlink("../../../etc/passwd")
 
     def fake_run(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-        if args[:2] == ["git", "clone"]:
+        if _plain_git(args)[:2] == ["git", "clone"]:
             return _fake_completed(128, stderr="rate limited")
         if args[:3] == ["gh", "auth", "token"]:
             return _fake_completed(1, stderr="not authenticated")
         msg = f"unexpected: {args}"
         raise AssertionError(msg)
 
-    def fake_urlopen(req: Any, **_: Any) -> Any:
-        url = req.full_url if hasattr(req, "full_url") else str(req)
+    def fake_core_get(url: str, **_: Any) -> Any:
         if "api.github.com/repos/foo/bar/tags" in url:
-            return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
+            return _core_resp(json.dumps([{"name": "v1.5"}]).encode())
         if urllib.parse.urlparse(url).hostname == "codeload.github.com":
-            return _FakeResp(malicious)
+            return _core_resp(malicious)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)
 
     with (
-        patch("cve_env.utils.run.subprocess.run", side_effect=fake_run),
+        patch("core.container.proc.subprocess.run", side_effect=fake_run),
         patch(
-            "cve_env.tools.source_build._urlopen",
-            side_effect=fake_urlopen,
+            "cve_env.tools.source_build._core_get",
+            side_effect=fake_core_get,
         ),
     ):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
@@ -1040,6 +1048,15 @@ class _FakeHeaders:
 
     def get(self, name: str, default: str = "") -> str:
         return self._headers.get(name, default)
+
+def _core_resp(body: bytes, status: int = 200,
+               headers: dict[str, str] | None = None,
+               url: str = "https://fetch.example/x"):
+    """Build a core.http Response for faking the _core_get seam."""
+    from core.http import Response
+    hdrs = {k.lower(): v for k, v in (headers or {}).items()}
+    return Response(status=status, headers=hdrs, body=body, url=url)
+
 
 class _FakeResp:
     """Tiny stand-in for urllib.request's context-manager response."""
@@ -1090,13 +1107,11 @@ def test_build_product_cannot_rmtree_outside_workdir(tmp_path: Path) -> None:
     victim.mkdir()
     (victim / "keep.txt").write_text("important")
 
-    def boom(req: Any, **_: Any) -> Any:
-        raise urllib.error.URLError("no network in test")
-
     with (
-        patch("cve_env.tools.source_build._urlopen", side_effect=boom),
+        patch("cve_env.tools.source_build._core_get",
+              side_effect=lambda url, **_: None),
         patch(
-            "cve_env.utils.run.subprocess.run",
+            "core.container.proc.subprocess.run",
             side_effect=lambda *a, **k: _fake_completed(128, stderr="clone disabled"),
         ),
     ):
@@ -1120,8 +1135,8 @@ def test_download_tarball_refuses_oversized_extraction(
     tarball = _make_fake_tarball({"Dockerfile": "FROM alpine", "go.mod": "module x"})
 
     with patch(
-        "cve_env.tools.source_build._urlopen",
-        side_effect=lambda req, **_: _FakeResp(tarball),
+        "cve_env.tools.source_build._core_get",
+        side_effect=lambda url, **_: _core_resp(tarball),
     ):
         builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
         target = tmp_path / "out"
@@ -1131,29 +1146,13 @@ def test_download_tarball_refuses_oversized_extraction(
     assert not (target / "Dockerfile").exists(), "nothing should be extracted"
 
 def test_http_get_json_on_404_returns_none() -> None:
-    def raise_404(req: Any, **_: Any) -> Any:
-        raise urllib.error.HTTPError(
-            url=req.full_url,
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,  # type: ignore[arg-type]
-        )
-
-    with patch("cve_env.tools.source_build._urlopen", side_effect=raise_404):
+    with patch.object(sb, "_core_get",
+                      return_value=_core_resp(b"nf", status=404)):
         assert sb._http_get_json("https://api.github.com/repos/x/y", timeout=5) is None
 
 def test_http_get_bytes_on_404_returns_none() -> None:
-    def raise_404(req: Any, **_: Any) -> Any:
-        raise urllib.error.HTTPError(
-            url=req.full_url,
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,  # type: ignore[arg-type]
-        )
-
-    with patch("cve_env.tools.source_build._urlopen", side_effect=raise_404):
+    with patch.object(sb, "_core_get",
+                      return_value=_core_resp(b"nf", status=404)):
         assert (
             sb._http_get_bytes(
                 "https://codeload.github.com/x/y/tar.gz/refs/tags/v1", timeout=5
@@ -1267,48 +1266,20 @@ def test_no_tag_matched_hint_suggests_dockerfile_gen() -> None:
 
 # ─── B-1: urllib env-based proxy injection defense ─────────────────────────
 
-def test_BUG004b_urllib_disables_env_proxy() -> None:
-    """B-1 (companion to BUG-004b for requests): source_build's _urlopen
-    helper MUST install a ProxyHandler({}) on its opener to defeat env-based
-    proxy injection. Unlike `requests`'s proxies={} (a no-op — env vars
-    still merge), urllib's ProxyHandler({}) IS sufficient to disable
-    proxy lookup.
+def test_operator_proxy_honoured_via_core_http() -> None:
+    """Design inversion vs the urllib-era B-1 lock: the GitHub API and
+    codeload tarball fetches ride core.http's UrllibClient, which
+    snapshots the OPERATOR's proxy env at construction — on proxy-only
+    hosts these fetches must work, not fail closed. Hostile-child proxy
+    hygiene is a subprocess concern (safe env / core.git), not an
+    in-process transport one."""
+    from core.http.urllib_backend import UrllibClient
 
-    bafb's bugs937.md::BUG-004b claimed urllib hardening was added but
-    diff vs cve-env-working showed source_build.py was untouched (revert
-    wiped it). This test ports the protection.
-    """
-    import urllib.request
-    from unittest.mock import MagicMock
-
-    captured_handlers: list = []
-
-    def fake_build_opener(*handlers: object) -> MagicMock:
-        captured_handlers.extend(handlers)
-        opener = MagicMock()
-        opener.open.return_value = MagicMock(status=200, read=lambda: b"")
-        return opener
-
-    with patch(
-        "cve_env.tools.source_build.urllib.request.build_opener",
-        side_effect=fake_build_opener,
-    ):
-        req = urllib.request.Request("https://api.github.com/repos/x/y")
-        sb._urlopen(req, timeout=5)
-
-    proxy_handlers = [
-        h for h in captured_handlers if isinstance(h, urllib.request.ProxyHandler)
-    ]
-    assert proxy_handlers, (
-        "B-1: _urlopen must install a ProxyHandler on its opener; "
-        f"got handlers: {[type(h).__name__ for h in captured_handlers]}"
-    )
-    # ProxyHandler({}) disables env-based proxy lookup; any populated dict
-    # would re-enable some proxy. Empty dict is the documented disable.
-    assert proxy_handlers[0].proxies == {}, (
-        f"B-1: ProxyHandler must have empty proxies={{}}; "
-        f"got {proxy_handlers[0].proxies}"
-    )
+    sb._http_client_singleton = None
+    try:
+        assert isinstance(sb._http_client(), UrllibClient)
+    finally:
+        sb._http_client_singleton = None
 
 # ─── Pure-logic coverage gaps (no network / git / docker) ──────────────────
 #
@@ -1694,70 +1665,61 @@ def test_find_devcontainer_image_no_image_key_returns_none(tmp_path: Path) -> No
 # -- _http_get_json branches (747, 750-755, 760, 764-765) ------------------
 
 def test_http_get_json_non_200_status_returns_none() -> None:
-    """Line 746-747: a non-200 status (e.g. 500) → None."""
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(b"{}", status=500)):
+    with patch.object(sb, "_core_get", return_value=_core_resp(b"{}", status=500)):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
 
-def test_http_get_json_over_cap_returns_none(monkeypatch: Any) -> None:
-    """Lines 748-755 (DOS-1): a JSON body over the cap is ignored → None."""
-    monkeypatch.setattr(sb, "_MAX_JSON_BYTES", 4)
-    big = b'{"size": 1234567}'  # well over 4 bytes
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(big)):
-        assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
+def test_core_get_size_cap_returns_none() -> None:
+    """DOS-1 cap now enforced by core.http: SizeLimitExceeded mid-read
+    → None, and the cascade falls back to git clone."""
+    from core.http import SizeLimitExceeded
 
-def test_http_get_json_urlerror_with_oserror_reason_reraises() -> None:
-    """Lines 758-760: a URLError whose ``reason`` is an OSError is re-raised as
-    that OSError (callers convert it to a benign None/[] up the stack)."""
-    err = urllib.error.URLError(OSError("network down"))
-    with patch.object(sb, "_urlopen", side_effect=err):
-        with pytest.raises(OSError, match="network down"):
-            sb._http_get_json("https://api.github.com/x", timeout=5)
+    class _CappingClient:
+        def request(self, *a: Any, **kw: Any) -> Any:
+            raise SizeLimitExceeded("body exceeded max_bytes")
 
-def test_http_get_json_urlerror_non_oserror_reason_returns_none() -> None:
-    """Line 761: a URLError with a non-OSError reason (a bare string) → None."""
-    err = urllib.error.URLError("dns weirdness")
-    with patch.object(sb, "_urlopen", side_effect=err):
-        assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
+    with patch.object(sb, "_http_client", lambda: _CappingClient()):
+        assert sb._core_get("https://api.github.com/x", headers={},
+                            timeout=5, max_bytes=4) is None
+
+def test_core_get_transport_failure_returns_none() -> None:
+    """Contract change vs the urllib era (recorded): transport failures
+    no longer re-raise OSError up the stack — _core_get maps every
+    HttpError to None and the callers' clone-cascade fallback fires."""
+    from core.http import HttpError
+
+    class _FailingClient:
+        def request(self, *a: Any, **kw: Any) -> Any:
+            raise HttpError("network down")
+
+    with patch.object(sb, "_http_client", lambda: _FailingClient()):
+        assert sb._core_get("https://api.github.com/x", headers={},
+                            timeout=5, max_bytes=64) is None
 
 def test_http_get_json_undecodable_body_returns_none() -> None:
-    """Lines 764-765: a body that isn't valid UTF-8 JSON → None (no raise)."""
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(b"\xff\xfe not json")):
+    """A body that isn't valid UTF-8 JSON → None (no raise)."""
+    with patch.object(sb, "_core_get",
+                      return_value=_core_resp(b"\xff\xfe not json")):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
 
 # -- _http_get_bytes branches (774, 777-782, 785-788) ----------------------
 
 def test_http_get_bytes_non_200_status_returns_none() -> None:
-    """Lines 773-774: a non-200 status → None."""
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(b"data", status=403)):
-        assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
-
-def test_http_get_bytes_over_cap_returns_none(monkeypatch: Any) -> None:
-    """Lines 775-782 (DOS-1): a tarball body over the cap → None (cascade falls
-    back to git clone)."""
-    monkeypatch.setattr(sb, "_MAX_TARBALL_BYTES", 4)
-    big = b"a much larger than four byte body"
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(big)):
+    with patch.object(sb, "_core_get",
+                      return_value=_core_resp(b"data", status=403)):
         assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
 def test_http_get_bytes_under_cap_returns_body() -> None:
     """Happy path: a small body is returned verbatim as bytes."""
-    with patch.object(sb, "_urlopen", return_value=_FakeResp(b"tarbytes")):
+    with patch.object(sb, "_core_get", return_value=_core_resp(b"tarbytes")):
         assert (
             sb._http_get_bytes("https://codeload.github.com/x", timeout=5)
             == b"tarbytes"
         )
 
-def test_http_get_bytes_urlerror_with_oserror_reason_reraises() -> None:
-    """Lines 785-787: URLError wrapping an OSError → re-raised as that OSError."""
-    err = urllib.error.URLError(OSError("reset"))
-    with patch.object(sb, "_urlopen", side_effect=err):
-        with pytest.raises(OSError, match="reset"):
-            sb._http_get_bytes("https://codeload.github.com/x", timeout=5)
-
-def test_http_get_bytes_urlerror_non_oserror_reason_returns_none() -> None:
-    """Line 788: URLError with a non-OSError reason → None."""
-    err = urllib.error.URLError("weird")
-    with patch.object(sb, "_urlopen", side_effect=err):
+def test_http_get_bytes_transport_failure_returns_none() -> None:
+    """Transport trouble → None (clone-cascade fallback), matching the
+    _core_get contract pinned above."""
+    with patch.object(sb, "_core_get", return_value=None):
         assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
 # -- _classify_failure branches (918-922) ----------------------------------

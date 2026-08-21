@@ -9,7 +9,7 @@ classification + exit code.
 
 from __future__ import annotations
 
-
+import typing
 
 from core.startup import doctor
 from core.startup.doctor import _render, main
@@ -67,14 +67,14 @@ class TestRenderClassification:
         assert "rr not found" in text
 
     def test_llm_warnings_are_warnings(self):
-        text, n_fail, n_warn = _render(
+        _text, _n_fail, n_warn = _render(
             *_gather_stub(llm_warnings=["No API keys configured"]),
             verbose=False,
         )
         assert n_warn == 1
 
     def test_env_warnings_are_warnings(self):
-        text, n_fail, n_warn = _render(
+        _text, _n_fail, n_warn = _render(
             *_gather_stub(env_warnings=["RAPTOR_DIR not set"]),
             verbose=False,
         )
@@ -97,7 +97,7 @@ class TestRenderClassification:
         assert "PASSED:" not in text
 
     def test_pass_lines_shown_with_verbose(self):
-        text, n_fail, n_warn = _render(
+        text, _n_fail, _n_warn = _render(
             *_gather_stub(
                 tool_results=[("semgrep", True)],
                 env_parts=["out/ ✓"],
@@ -112,6 +112,31 @@ class TestRenderClassification:
         text, _, _ = _render(*_gather_stub(), verbose=False)
         assert "Summary:" in text
         assert "0 failure(s)" in text
+
+    def test_lang_cross_line_not_listed_as_pass(self):
+        """A ✗ tree-sitter line must not appear under PASSED — the
+        degradation warning check_lang emits covers the signal."""
+        text, n_fail, n_warn = _render(
+            *_gather_stub(
+                lang_line="  lang: tree-sitter ✗",
+                env_warnings=[
+                    ("no tree-sitter grammars installed — inventory "
+                     "degrades to regex extraction"),
+                ],
+            ),
+            verbose=True,
+        )
+        assert n_fail == 0
+        assert n_warn == 1
+        passed_section = text.split("PASSED:")[1] if "PASSED:" in text else ""
+        assert "tree-sitter ✗" not in passed_section
+
+    def test_lang_check_line_still_listed_as_pass(self):
+        text, _, _ = _render(
+            *_gather_stub(lang_line="  lang: tree-sitter ✓ (python, c)"),
+            verbose=True,
+        )
+        assert "tree-sitter ✓ (python, c)" in text
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +244,72 @@ class TestUsage:
         # Short flag triggers verbose rendering.
         out = capsys.readouterr().out
         assert "PASSED:" in out
+
+
+# ---------------------------------------------------------------------------
+# Module-dep import verification (doctor-only depth)
+# ---------------------------------------------------------------------------
+
+
+class TestModuleDepVerification:
+    """The banner's find_spec probe deliberately never imports; doctor
+    spends a subprocess to catch the present-but-broken-wheel state
+    (Python upgraded under the venv, half-completed install)."""
+
+    _DEPS: typing.ClassVar[dict] = {
+        "z3": {
+            "module": "z3", "pip": "z3-solver",
+            "severity": "degrades", "affects": "/audit (SMT)",
+        },
+        "semgrep": {"binary": "semgrep", "affects": "/scan"},
+    }
+
+    def _run(self, monkeypatch, *, spec_found=True, returncode=0,
+             run_side_effect=None):
+        from unittest import mock
+
+        from core.config import RaptorConfig
+
+        proc = mock.Mock(returncode=returncode, stdout="", stderr="boom")
+        run_mock = mock.Mock(
+            return_value=proc, side_effect=run_side_effect,
+        )
+        with mock.patch.object(RaptorConfig, "TOOL_DEPS", self._DEPS), \
+             mock.patch(
+                 "importlib.util.find_spec",
+                 return_value=object() if spec_found else None,
+             ), mock.patch("subprocess.run", run_mock):
+            warnings = doctor._module_dep_warnings()
+        return warnings, run_mock
+
+    def test_broken_module_warns_with_reinstall_hint(self, monkeypatch):
+        warnings, _ = self._run(monkeypatch, returncode=1)
+        assert len(warnings) == 1
+        assert "z3 is installed but failed to import" in warnings[0]
+        assert "z3-solver" in warnings[0]
+
+    def test_healthy_module_stays_quiet(self, monkeypatch):
+        warnings, _ = self._run(monkeypatch, returncode=0)
+        assert warnings == []
+
+    def test_absent_module_skipped_without_subprocess(self, monkeypatch):
+        # Absent is check_tools' territory — no duplicate warning,
+        # and no subprocess spent.
+        warnings, run_mock = self._run(monkeypatch, spec_found=False)
+        assert warnings == []
+        run_mock.assert_not_called()
+
+    def test_binary_deps_never_probed(self, monkeypatch):
+        # Only module deps are import-verified; one subprocess for z3,
+        # none for semgrep.
+        _, run_mock = self._run(monkeypatch, returncode=0)
+        assert run_mock.call_count == 1
+
+    def test_probe_failure_never_raises(self, monkeypatch):
+        warnings, _ = self._run(
+            monkeypatch, run_side_effect=OSError("spawn failed"),
+        )
+        assert warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -344,9 +435,9 @@ class TestOutputShape:
             doctor, "_gather",
             lambda: _gather_stub(
                 env_warnings=[
-                    "RAPTOR_DIR not set in this process; "
-                    "expected /home/op/raptor based on checkout "
-                    "location.",
+                    ("RAPTOR_DIR not set in this process; "
+                     "expected /home/op/raptor based on checkout "
+                     "location."),
                 ],
             ),
         )

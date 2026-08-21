@@ -50,6 +50,34 @@ class TestExtractConstantValue:
     def test_no_value(self) -> None:
         assert extract_constant_value("f", "def f():\n    pass") is None
 
+    def test_comparison_is_not_an_assignment(self) -> None:
+        # Regression: [^=\n]* filler crossed '!=' so assert(NAME != 0)
+        # read as NAME = 0 — a fabricated mechanical value.
+        assert extract_constant_value(
+            "MAX_FRAME", "assert(MAX_FRAME != 0);",
+        ) is None
+        assert extract_constant_value(
+            "MAX_FRAME", "if (len >= MAX_FRAME) return -1;",
+        ) is None
+        assert extract_constant_value(
+            "MAX_FRAME", "if (MAX_FRAME == 4096) {}",
+        ) is None
+
+    def test_statement_boundary_not_crossed(self) -> None:
+        # Regression: an unrelated same-line assignment was picked up
+        # as the constant's value.
+        assert extract_constant_value(
+            "MAX_FRAME", "buf[MAX_FRAME]; int other = 42;",
+        ) is None
+
+    def test_annotated_and_plain_assignments_still_extract(self) -> None:
+        assert extract_constant_value(
+            "MAX_FRAME", "static const size_t MAX_FRAME = 4096;",
+        ) == "4096"
+        assert extract_constant_value(
+            "MAX_FRAME", "const MAX_FRAME: usize = 0x1000;",
+        ) == "0x1000"
+
 
 class TestSpotCheckQuestion:
     def test_value_question_matches(self) -> None:
@@ -249,6 +277,36 @@ class TestAgreementGate:
         )
         assert out["agreed"]
         assert "gate skipped" in out["reason"]
+
+    def test_contradicting_mechanical_answer_does_not_skip_gate(
+        self, tmp_path: Path,
+    ) -> None:
+        """A mechanical answer that CONTRADICTS an LLM answer loses
+        the deterministic exemption: the extractor repeats itself, but
+        determinism does not prove it read the right statement.  With
+        no verified receipt the gate fails closed."""
+        out = verify_flip_answer(
+            "q?", [], None, None, tmp_path,
+            tier=TIER_MECHANICAL, contradicts_llm=True,
+        )
+        assert not out["agreed"]
+
+    def test_contradicting_mechanical_answer_can_still_agree(
+        self, tmp_path: Path,
+    ) -> None:
+        root = _tree(tmp_path)
+        client = _client({
+            "answerable": True,
+            "answer": "yes, it delegates to validate_schema",
+            "file": "m.py", "line": 2,
+            "quote": "return validate_schema(open(path).read())",
+        })
+        out = verify_flip_answer(
+            "Does `parse_config` validate its input?",
+            _snippets(), _first_receipt(), client, root,
+            tier=TIER_MECHANICAL, contradicts_llm=True,
+        )
+        assert out["agreed"]
 
     def test_unverified_first_receipt_fails(self, tmp_path: Path) -> None:
         out = verify_flip_answer(

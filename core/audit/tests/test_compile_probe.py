@@ -741,3 +741,94 @@ class TestIncludePathSpliceSafety:
         assert "#include" in (r.reason or "")
         # No TU was ever generated with the hostile path.
         assert not fake.sources
+
+
+# ------------------------------------------------------------------
+# Symlinked source roots (shared fixture farms)
+# ------------------------------------------------------------------
+
+
+class RecordingCompiler(FakeCompiler):
+    """FakeCompiler that also records the sandbox kwargs per call."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.kwargs: list[dict] = []
+
+    def __call__(self, cmd, **kwargs):
+        self.kwargs.append(dict(kwargs))
+        return super().__call__(cmd, **kwargs)
+
+
+class TestSymlinkedSourceRoot:
+    """The #include path and the sandbox mount target must agree.
+
+    A run whose fixture directory is a symlink into another tree used
+    to build the include path via ``.resolve()`` (following the link)
+    while handing the UNRESOLVED root to the sandbox as its mount
+    target — inside the mount namespace the resolved path does not
+    exist, so every baseline compile failed "defining file does not
+    compile standalone" on a file that plainly exists.
+    """
+
+    @pytest.fixture()
+    def linked(self, tmp_path: Path) -> Path:
+        real = tmp_path / "real"
+        (real / "inc").mkdir(parents=True)
+        (real / "inc" / "limits.h").write_text(
+            "#define BASE 1024\n"
+            "#define SLOT 768\n"
+            "#define MAX_BUF (BASE + 4*SLOT)\n",
+        )
+        farm = tmp_path / "farm"
+        farm.mkdir()
+        link = farm / "root"
+        link.symlink_to(real)
+        return link
+
+    def test_probe_paths_agree_under_symlinked_root(
+        self, monkeypatch, linked: Path,
+    ) -> None:
+        fake = RecordingCompiler()
+        _install(monkeypatch, fake)
+        items = [{
+            "name": "MAX_BUF", "kind": "macro", "file": "inc/limits.h",
+            "line": 3, "definition": "#define MAX_BUF (BASE + 4*SLOT)",
+        }]
+        r = compile_probe_question("Is MAX_BUF 4096?", items, linked)
+        assert r is not None
+        assert r.status in ("verified", "contradicted")
+        resolved_root = str(linked.resolve())
+        for tu in fake.sources:
+            for line in tu.splitlines():
+                if line.startswith('#include "'):
+                    inc = line.split('"')[1]
+                    assert inc.startswith(resolved_root), (
+                        f"include path {inc} not under the resolved "
+                        f"root {resolved_root}"
+                    )
+        for kw in fake.kwargs:
+            assert kw.get("target") == resolved_root, (
+                "sandbox mount target must be the SAME canonical root "
+                "the #include path was built from"
+            )
+
+    def test_determine_paths_agree_under_symlinked_root(
+        self, monkeypatch, linked: Path,
+    ) -> None:
+        # determine mode shares the path plumbing; a lightweight probe
+        # that dies at the sign check still exercises baseline +
+        # tautology with the resolved pair.
+        fake = RecordingCompiler(claim_ok=False)
+        _install(monkeypatch, fake)
+        items = [{
+            "name": "MAX_BUF", "kind": "macro", "file": "inc/limits.h",
+            "line": 3, "definition": "#define MAX_BUF (BASE + 4*SLOT)",
+        }]
+        cp.determine_probe_question(
+            "What is the value of MAX_BUF?", items, linked,
+        )
+        resolved_root = str(linked.resolve())
+        assert fake.kwargs, "probe never reached a sandboxed compile"
+        for kw in fake.kwargs:
+            assert kw.get("target") == resolved_root

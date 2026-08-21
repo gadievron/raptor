@@ -51,8 +51,10 @@ from core.dataflow.smt_barrier import (
     Tier0Result,
     Tier0Status,
     ValidatorSpec,
+    _crosses_function_boundary,
     _function_containing,
     _python_chain_reaches_sink,
+    _lexical_var_reaches_sink,
     _same_function_in_order,
     prove_neutralizes,
     substitution_dominates_sink,
@@ -258,6 +260,54 @@ def _validator_in_branch(tree, validator_line: int, sink_line: int) -> bool:
     return _in_branch(body, validator_line)
 
 
+def _line_invokes_library_call(
+    line: str, library_call: str, variable: str,
+) -> bool:
+    """Verify the LLM-claimed ``library_call`` actually appears on the
+    claimed line as a call, applied to (or assigned from) the claimed
+    variable.
+
+    Gate 1 only proves the line EXISTS in the diff — an LLM can point
+    at any real added line (a log statement, a comment-adjacent
+    assignment) and claim it is ``shlex.quote``.  Without this check
+    the curated-table lookup adjudicates a call that never happens.
+    """
+    tail = library_call.split(".")[-1]
+    lib_parts = library_call.split(".")
+    for m in _re.finditer(r"([A-Za-z_][\w.]*)\s*\(", line):
+        name_parts = m.group(1).split(".")
+        if name_parts[-1] != tail:
+            continue
+        # The dotted name on the line must be a suffix of the claimed
+        # library call (``quote(``, ``shlex.quote(`` both match
+        # ``shlex.quote``; ``os.quote(`` does not).
+        if name_parts != lib_parts[-len(name_parts):]:
+            continue
+        # Argument span of this call.
+        depth = 0
+        arg_start = m.end() - 1
+        arg_end = len(line)
+        for k in range(arg_start, len(line)):
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    arg_end = k
+                    break
+        args = line[arg_start + 1:arg_end]
+        if not variable:
+            # No variable claim to bind — the later chain check
+            # rejects the empty variable anyway; call presence is all
+            # this gate can verify.
+            return True
+        if _re.search(rf"\b{_re.escape(variable)}\b", args):
+            return True
+        if _re.match(rf"\s*{_re.escape(variable)}\s*=", line):
+            return True
+    return False
+
+
 def _try_known_safe_call(
     spec: _LLMSpec, source_text: str, sink_uri: str, sink_line: int,
     sink_class: str, language: str,
@@ -271,6 +321,15 @@ def _try_known_safe_call(
             f"library_call {spec.library_call!r} not in curated "
             f"known-safe table for sink_class={sink_class!r} / "
             f"language={language!r}",
+        )
+    if not _line_invokes_library_call(
+            spec.validator_source_line, spec.library_call,
+            spec.variable_name):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"Tier 1B: claimed library call {spec.library_call!r} does "
+            f"not appear on the claimed source line applied to "
+            f"{spec.variable_name!r} (possible hallucination)",
         )
     # Find the best occurrence of the LLM-claimed line (closest to the
     # sink, preferring same-function for Python).
@@ -297,6 +356,16 @@ def _try_known_safe_call(
             f"safe-call at line {validator_line} not in same function "
             f"as sink at line {sink_line}",
         )
+    if language != "python" and _crosses_function_boundary(
+            source_text, validator_line, sink_line, language):
+        # Same gate try_tier0 applies: without a per-language AST a
+        # source-order check alone would let a safe-call in helper A
+        # "dominate" a sink in helper B.
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"safe-call at line {validator_line} is separated from the "
+            f"sink at line {sink_line} by a function boundary",
+        )
     # Chain check — only Python has an AST chain tracker for now.  For
     # non-Python we conservatively require the LLM's variable_name to
     # appear textually at the sink line.
@@ -307,9 +376,10 @@ def _try_known_safe_call(
             tree, spec.variable_name, validator_line, sink_line, sink_line_text,
         )
     elif spec.variable_name:
-        chain_ok = bool(_re.search(
-            rf"\b{_re.escape(spec.variable_name)}\b", sink_line_text,
-        ))
+        chain_ok = _lexical_var_reaches_sink(
+            spec.variable_name, source_text, validator_line, sink_line,
+            sink_line_text,
+        )
     else:
         chain_ok = False
     if not chain_ok:
@@ -428,6 +498,20 @@ def try_tier1b(
                 "Tier 1B: no occurrence of the LLM-named line found "
                 "before the sink",
             )
+        if language != "python" and _crosses_function_boundary(
+                source_text, validator_line, sink_line, language):
+            # Same gate try_tier0 applies to its non-Python path: the
+            # source-order check alone would let a validator in helper
+            # A "dominate" a sink in helper B when both live in the
+            # same file — the validator's exit-on-fail returns from A,
+            # not B.
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                f"Tier 1B: validator at line {validator_line} is "
+                f"separated from the sink at line {sink_line} by a "
+                f"function boundary",
+                spec=mech,
+            )
         sink_lines = source_text.splitlines()
         sink_line_text = (sink_lines[sink_line - 1]
                           if 0 < sink_line <= len(sink_lines) else "")
@@ -444,9 +528,10 @@ def try_tier1b(
                 tree, mech.var_name, validator_line, sink_line, sink_line_text,
             )
         else:
-            chain_ok = bool(_re.search(
-                rf"\b{_re.escape(mech.var_name)}\b", sink_line_text,
-            ))
+            chain_ok = _lexical_var_reaches_sink(
+                mech.var_name, source_text, validator_line, sink_line,
+                sink_line_text,
+            )
         if not chain_ok:
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,

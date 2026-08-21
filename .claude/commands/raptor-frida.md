@@ -67,7 +67,7 @@ List dynamically: `raptor frida --list-templates`.
 
 Resolved by `libexec/raptor-run-lifecycle`:
 - Active project: `out/projects/<name>/frida-<timestamp>/`
-- Otherwise: `out/frida_<timestamp>/`
+- Otherwise: `out/frida_<timestamp>_pid<N>_<tail>/` (uniquified)
 
 Artefacts:
 - `events.jsonl` - one JSON object per `send(...)`.
@@ -99,6 +99,6 @@ Read `metadata.json` first. Common patterns:
 
 Alpha. Four templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
 
-The runner currently does **not** wrap frida in `core/sandbox/`; the `--unsafe-attach` flag is forward-looking and logged into `metadata.json` for when the sandbox envelope lands.
+The runner wraps frida in `core/sandbox/` by default (spawn-mode runs execute inside the sandbox envelope). `--unsafe-attach` opts out with a "running WITHOUT sandbox" warning — required for templates and attach modes that need `PTRACE_ATTACH` / `task_for_pid`.
 
 ---

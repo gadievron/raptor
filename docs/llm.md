@@ -6,8 +6,9 @@ model selection, multi-model workflows, and cost management.
 
 ## Supported Providers
 
-Seven providers are supported. RAPTOR probes for configured providers in this order
-and uses the first one found:
+Eight providers are supported. RAPTOR probes for configured providers in this order
+and uses the first one found (the resumable Claude Code variant is never
+auto-selected — pick it explicitly in `models.json`):
 
 | Provider | Auth | SDK | Default Model |
 |----------|------|-----|---------------|
@@ -18,6 +19,12 @@ and uses the first one found:
 | AWS Bedrock | `AWS_BEARER_TOKEN_BEDROCK` or SigV4 chain | `anthropic` + dispatcher | (per config) |
 | Ollama | None (local) | `openai` | auto-detected |
 | Claude Code | None (`claude` CLI on PATH) | None | (session model) |
+| Claude Code (resumable) | None (`claude` CLI on PATH) | None | (session model) |
+
+`claudecode-resumable` (`"provider": "claudecode-resumable"` in
+`models.json`) reuses one Claude Code session across calls via
+`--resume`, so turn 2+ pays near-zero input cost on long multi-turn
+workloads; a stale session resets and retries as fresh.
 
 See [dependencies](dependencies.md) for SDK installation.
 
@@ -62,14 +69,13 @@ disposition lands in `llm-telemetry.jsonl` with its `call_class`.
 The transport pins children to the backend-resolved model identity
 from the pre-flight probe cache, passing it as `--model` explicitly.
 This makes the transport deterministic (a mid-run `settings.json`
-edit can no longer switch models silently), gives the scorecard and
-cost tracking a real model name, and lets worker derivation resolve
-actual capacity limits — the old `session-default` sentinel resolved
-to 0 RPM and serialised every review loop to one worker. Pinning is
-backend-safe because the id comes from the backend's own result
-envelope. Resolution order: `RAPTOR_CC_MODEL` (explicit operator
-pin) → cached probe result → sentinel (probe cache cold, `--model`
-omitted). `RAPTOR_CC_PIN_MODEL=0` disables probe pinning.
+edit cannot switch models silently), gives the scorecard and cost
+tracking a real model name, and lets worker derivation resolve actual
+capacity limits. Pinning is backend-safe because the id comes from the
+backend's own result envelope. Resolution order: `RAPTOR_CC_MODEL`
+(explicit operator pin) → cached probe result → the session default
+(probe cache cold, `--model` omitted). `RAPTOR_CC_PIN_MODEL=0`
+disables probe pinning.
 
 #### Concurrency
 
@@ -83,15 +89,13 @@ and N−1 reading. `tuning.json`'s `max_llm_workers` still beats both.
 #### Prompt caching
 
 Server-side prompt caching works ACROSS separate `claude -p`
-children: measured on a Bedrock-backed install, the second call with
-an identical prefix read all ~19k boot-prompt tokens from cache
-(~13x cheaper; a same-system-prompt call with a different user
-prompt measured ~4x cheaper). Dispatches pass
-`--exclude-dynamic-system-prompt-sections` so the CLI's default
-system prompt is byte-stable across working directories and
-machines, maximising those hits. Practical implication: batches of
-similar calls (audit review loops) should share one system prompt
-verbatim and run temporally clustered (the cache TTL is minutes).
+children: a second call with an identical prefix reads the shared
+boot-prompt tokens from cache at a fraction of the cost. Dispatches
+keep the CLI's default system prompt byte-stable across working
+directories and machines, maximising those hits. Practical
+implication: batches of similar calls (audit review loops) should
+share one system prompt verbatim and run temporally clustered (the
+cache TTL is minutes).
 
 #### Operator knobs (env)
 
@@ -351,9 +355,10 @@ Certain task types (`verdict_binary`, `classify`) automatically use cheaper mode
 
 ## Multi-Model Workflows
 
-The [/agentic](commands.md#agentic), [/codeql](commands.md#codeql), and
-[/analyze](commands.md#analyze) commands support multi-model configurations
-via repeatable flags:
+The [/agentic](commands.md#agentic) and [/analyze](commands.md#analyze)
+commands support multi-model configurations via repeatable flags (for
+multi-model verdicts on CodeQL findings, run `/agentic` or `/analyze`
+over the CodeQL SARIF):
 
 | Flag | Role | Description |
 |------|------|-------------|
@@ -570,8 +575,9 @@ the two transports with real failure modes need a deliberate one:
   connections under the client's proxy *mounts* (not the default
   transport pool); their `info()` strings report `HTTP/2` once a
   request has flowed.
-- **Benchmarking pitfalls:** vary prompts with a per-run nonce or the
-  LLM response cache serves repeats in ~1 ms and fakes a win; and
+- **Benchmarking pitfalls:** vary prompts with a per-run nonce — or set
+  `RAPTOR_LLM_CACHE=off` — otherwise the LLM response cache serves
+  repeats in ~1 ms and fakes a win; and
   give thinking-tier models an adequate `max_tokens` — a tiny budget
   is consumed by the thinking block and returns zero text with
   `stop_reason=max_tokens`.
@@ -602,6 +608,7 @@ behavior, and credential-isolation details — is
 | `RAPTOR_CC_MAX_WORKERS` | Claude Code subprocess concurrency cap (default 4) |
 | `RAPTOR_CC_EFFORT` / `RAPTOR_CC_FALLBACK_MODEL` | Claude Code child effort / fallback model |
 | `RAPTOR_CC_PROBE_WARM` | `0` skips the run-start probe warm |
+| `RAPTOR_LLM_CACHE` | `off` disables the LLM response cache entirely |
 | `RAPTOR_LLM_CACHE_TTL_S` | LLM response cache TTL override (default 24 h) |
 | `RAPTOR_HTTP_KEEPALIVE_S` | SDK transport idle keepalive expiry (default 60) |
 | `RAPTOR_HTTP_MAX_KEEPALIVE` | SDK transport pooled idle connections (default 20) |

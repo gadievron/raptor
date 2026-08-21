@@ -119,28 +119,73 @@ def test_regression_verdict_when_proposed_does_not_clear(tmp_path: Path) -> None
         [str(target), "--proposed", str(proposed), "--out", str(out)],
         http=StubHttp(), cache=cache,
     )
-    # Same advisory hits both versions → persistent (pre-existing).
-    # No *new* advisories introduced, so the exit code is 0.
-    assert rc == 0
+    # Same advisory hits both versions → persistent — in a file the
+    # patch rewrote, so the advisory the operator expected to clear
+    # didn't. Documented contract: exit 1.
+    assert rc == 1
     delta_md = (out / "delta.md").read_text()
+    assert "Verdict: not cleared" in delta_md
     assert "Resolved: **0**" in delta_md
     assert "New: **0**" in delta_md
 
 
-def test_verdict_persistent_only_is_clean() -> None:
-    """Pre-existing findings that persist across versions must not gate
-    the exit code — only genuinely *new* advisories are regressions."""
+def test_verdict_persistent_outside_patched_files_is_clean() -> None:
+    """Pre-existing findings persisting in files the patch never
+    touched must not gate the exit code — a targeted fix isn't
+    responsible for the unrelated backlog."""
     from types import SimpleNamespace
     delta = SimpleNamespace(
         new=[],
         resolved=[],
-        persistent=[{"severity": "critical", "id": "OLD-001"}],
+        persistent=[{"severity": "critical", "id": "OLD-001",
+                     "file": "/overlay/other/requirements.txt"}],
         suppression_added=[],
         suppression_lifted=[],
     )
-    summary, exit_code = verify._verdict(delta, severity_floor="low")
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="low", applied=[Path("package.json")],
+    )
     assert exit_code == 0
     assert summary["persistent_above_threshold"] == 1
+    assert summary["not_cleared_above_threshold"] == 0
+
+
+def test_verdict_persistent_in_patched_file_exits_nonzero() -> None:
+    """An advisory persisting in a manifest the proposed/ patch rewrote
+    means the patch failed to clear it — documented exit-1 contract."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[{"severity": "high", "id": "OLD-001",
+                     "file": "/overlay/requirements.txt"}],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high", applied=[Path("requirements.txt")],
+    )
+    assert exit_code == 1
+    assert summary["not_cleared_above_threshold"] == 1
+
+
+def test_verdict_persistent_below_threshold_does_not_gate() -> None:
+    """A low-severity advisory persisting in a patched file stays below
+    the operator's --fail-on-severity floor."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[{"severity": "low", "id": "OLD-001",
+                     "file": "/overlay/requirements.txt"}],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high", applied=[Path("requirements.txt")],
+    )
+    assert exit_code == 0
+    assert summary["not_cleared_above_threshold"] == 0
 
 
 @pytest.mark.slow

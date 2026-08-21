@@ -4,6 +4,12 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
+      # MD2 (RFC 6149) and MD4 (RFC 6150) are strictly weaker than the
+      # MD5 already listed; MD2 is a standard JCA algorithm name and
+      # MD4 is provider-registered (e.g. BouncyCastle). Set kept
+      # consistent with the config-resolved channel's weak-hash set.
+      - pattern: MessageDigest.getInstance("MD2")
+      - pattern: MessageDigest.getInstance("MD4")
       - pattern: MessageDigest.getInstance("MD5")
       - pattern: MessageDigest.getInstance("SHA1")
       - pattern: MessageDigest.getInstance("SHA-1")
@@ -15,9 +21,22 @@ rules:
     message: Weak hash function detected. Use SHA-256 or better. Verify migration and test vectors.
     languages: [python]
     severity: HIGH
-    pattern-either:
-      - pattern: hashlib.md5(...)
-      - pattern: hashlib.sha1(...)
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          # hashlib.new with a weak algorithm name (case-insensitive,
+          # matching hashlib's own name handling)
+          - patterns:
+              - pattern: hashlib.new($ALG, ...)
+              - metavariable-regex:
+                  metavariable: $ALG
+                  regex: '(?i)^["''](md2|md4|md5|sha-?1)["'']$'
+      # usedforsecurity=False is the documented non-cryptographic
+      # escape hatch (checksums, caching keys) — not a weak-hash use.
+      - pattern-not: hashlib.md5(..., usedforsecurity=False, ...)
+      - pattern-not: hashlib.sha1(..., usedforsecurity=False, ...)
+      - pattern-not: hashlib.new(..., usedforsecurity=False, ...)
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V3.9"]

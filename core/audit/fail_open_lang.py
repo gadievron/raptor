@@ -31,6 +31,16 @@ assignment, err bound-then-never-checked, bare call statements — and
 rule as Java: whether an ``if err != nil`` check dominates the
 continuation is not honestly decidable from line shapes.
 
+Phase 3 adds JS/TS (catch-clause outcomes on the shared census
+vocabulary, promise ``.catch(() => {})`` swallows, and floating-
+promise call sites for the unawaited leg) and Rust (ignored ``Result``
+shapes — ``let _ =`` discards, ``.ok()`` drops, ``unwrap_or_default``
+error-erasure — where ``unwrap``/``expect``/``?`` are *fail-closed*
+consumptions: Rust's idiom for "ignored error" is not Go's). Both
+follow the Java/Go no-regex-fallback rule: a missing grammar reports
+``None`` and the channel returns ``inconclusive("language-
+unsupported")`` rather than guessing.
+
 Suffix→language mapping is strictly
 ``core.inventory.languages.LANGUAGE_MAP`` — no new extension list
 (dedup wave-3 rule). Unsupported languages are the caller's problem:
@@ -48,9 +58,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Languages with an analyzer. Grows per phase (JS/TS/Rust in
-# phase 3).
-SUPPORTED_LANGUAGES = frozenset({"python", "c", "cpp", "java", "go"})
+# Languages with an analyzer. Phase 3 added JS/TS and Rust.
+SUPPORTED_LANGUAGES = frozenset({
+    "python", "c", "cpp", "java", "go",
+    "javascript", "typescript", "tsx", "rust",
+})
+
+# The JS analyzer family shares one grammar-node vocabulary; the
+# language id is passed through to the parser so .ts/.tsx files use
+# their own grammars.
+JS_LANGUAGES = frozenset({"javascript", "typescript", "tsx"})
 
 # Handler outcome kinds (permissive unless noted).
 OUTCOME_PASS = "pass"
@@ -286,21 +303,24 @@ def _enclosing_function_names(tree: ast.Module) -> dict[int, str]:
     methods), for attributing handlers to reviewed functions."""
     spans: list[tuple[int, int, str]] = []
 
-    def visit(node: ast.AST, prefix: str) -> None:
+    # Explicit-stack walk — recursion depth would track the AST
+    # nesting depth and overflow on deeply nested (possibly
+    # adversarial) inputs the parser itself still accepts.
+    stack: list[tuple[ast.AST, str]] = [(tree, "")]
+    while stack:
+        node, prefix = stack.pop()
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 name = f"{prefix}.{child.name}" if prefix else child.name
                 spans.append(
                     (child.lineno, child.end_lineno or child.lineno, name),
                 )
-                visit(child, name)
+                stack.append((child, name))
             elif isinstance(child, ast.ClassDef):
-                visit(child, f"{prefix}.{child.name}" if prefix
-                      else child.name)
+                stack.append((child, f"{prefix}.{child.name}" if prefix
+                              else child.name))
             else:
-                visit(child, prefix)
-
-    visit(tree, "")
+                stack.append((child, prefix))
     # Innermost span wins: sort by size, smallest last.
     spans.sort(key=lambda s: s[1] - s[0], reverse=True)
     result: dict[int, str] = {}
@@ -1570,6 +1590,889 @@ def go_function_span(
                 and _go_function_name(node, src) == tail:
             return (node.start_point[0] + 1, node.end_point[0] + 1)
     return None
+
+
+# ── JS/TS legs: catch-clause outcomes + promise swallows ────────────
+# The handler-outcome vocabulary on the javascript/typescript
+# grammars. Two handler families: syntactic ``catch`` clauses (always
+# broad — JS catch carries no type filter) and promise ``.catch(fn)``
+# callbacks with an inline function/arrow handler. The unawaited leg
+# (RULE_UNAWAITED) classifies call sites of a hypothesis-named callee
+# for the floating-promise shape. No regex fallback for any of them
+# (the Java rule: brace-delimited handler bodies are not honestly
+# classifiable from line shapes).
+
+_JS_FUNC_TYPES = (
+    "function_declaration", "function_expression", "method_definition",
+    "arrow_function", "generator_function_declaration",
+)
+_JS_LOUD_LOG_RE = re.compile(r"\.(?:error|warn)\s*\(")
+_JS_QUIET_LOG_RE = re.compile(r"\.(?:debug|trace|info|log)\s*\(")
+_JS_ABORT_RE = re.compile(r"\bprocess\.(?:exit|abort)\s*\(")
+_JS_RESTRICTIVE_RETURNS = frozenset({
+    "false", "null", "undefined", "0", "-1", '""', "''", "``",
+})
+_JS_COMMENT_TYPES = ("comment", "{", "}")
+# Promise combinator properties: ``catch`` receives the rejection;
+# ``then``'s second argument would too but the inline-``.catch`` shape
+# is the swallow idiom the channel adjudicates.
+_JS_HANDLER_FN_TYPES = ("arrow_function", "function_expression")
+
+
+def _js_stmts(block) -> list:
+    if block is None:
+        return []
+    return [
+        c for c in block.children
+        if c.is_named and c.type not in _JS_COMMENT_TYPES
+    ]
+
+
+def _js_calls_in(node, src: bytes) -> list[str]:
+    """Dotted call names inside a node (chained-call receivers whose
+    text is not name-shaped are skipped; their inner calls are still
+    visited)."""
+    calls: list[str] = []
+    stack = list(node.children) if node is not None else []
+    while stack:
+        cur = stack.pop()
+        if cur.type in ("call_expression", "new_expression"):
+            fn = cur.child_by_field_name(
+                "function") or cur.child_by_field_name("constructor")
+            if fn is not None:
+                name = _ts_node_text(fn, src)
+                if re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*",
+                                name):
+                    calls.append(name)
+        stack.extend(cur.children)
+    return calls
+
+
+def _js_has_descendant(node, node_type: str) -> bool:
+    """Descendant search that does not cross nested function bodies
+    (a throw inside a callback does not abort this handler)."""
+    stack = list(node.children) if node is not None else []
+    while stack:
+        cur = stack.pop()
+        if cur.type == node_type:
+            return True
+        if cur.type not in _JS_FUNC_TYPES:
+            stack.extend(cur.children)
+    return False
+
+
+def _js_return_value_class(value_text: str, value_node) -> tuple[str, str]:
+    """(outcome_kind, value_repr) for a returned/expression value."""
+    text = value_text.strip()
+    if text == "" or text in _JS_RESTRICTIVE_RETURNS:
+        return OUTCOME_FAIL_CLOSED, f"returns {text or '<void>'}"
+    if text == "true":
+        return OUTCOME_RETURN_PERMISSIVE, text
+    if value_node is not None and value_node.type in (
+            "number", "string", "template_string", "object", "array"):
+        return OUTCOME_RETURN_PERMISSIVE, text
+    return OUTCOME_FALLBACK_ACTION, text
+
+
+def _classify_js_handler_body(body, src: bytes) -> tuple[str, str]:
+    """(outcome_kind, permissive_value) for a catch-clause body or a
+    ``.catch`` callback body — the census classification vocabulary on
+    the JS grammar. ``body`` may be a statement_block or an arrow
+    function's bare expression body."""
+    if body is None:
+        return OUTCOME_PASS, ""
+    text = _ts_node_text(body, src)
+
+    if body.type != "statement_block":
+        # Arrow expression body: () => null / () => defaultValue.
+        if _js_has_descendant(body, "call_expression") \
+                or body.type == "call_expression":
+            return OUTCOME_FALLBACK_ACTION, "handler calls fallback code"
+        return _js_return_value_class(text, body)
+
+    if _js_has_descendant(body, "throw_statement"):
+        return OUTCOME_FAIL_CLOSED, "re-throws"
+    if _JS_ABORT_RE.search(text):
+        return OUTCOME_FAIL_CLOSED, "aborts"
+
+    stmts = _js_stmts(body)
+    if not stmts:
+        return OUTCOME_PASS, ""
+
+    returns = [s for s in stmts if s.type == "return_statement"]
+    if returns and all(s.type == "return_statement" for s in stmts):
+        exprs = [c for c in returns[0].children if c.is_named]
+        value_node = exprs[0] if exprs else None
+        value = _ts_node_text(value_node, src) if value_node else ""
+        return _js_return_value_class(value, value_node)
+
+    if _JS_LOUD_LOG_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "loud-log-and-continue"
+
+    if all(s.type in ("continue_statement", "break_statement")
+           for s in stmts):
+        return OUTCOME_CONTINUE, ""
+    if _JS_QUIET_LOG_RE.search(text) and all(
+        s.type in ("expression_statement", "return_statement")
+        for s in stmts
+    ):
+        non_return = [s for s in stmts if s.type == "expression_statement"]
+        if all(
+            _JS_QUIET_LOG_RE.search(_ts_node_text(s, src))
+            for s in non_return
+        ):
+            return OUTCOME_QUIET_LOG_ONLY, ""
+
+    assigns = [
+        s for s in stmts
+        if s.type in ("lexical_declaration", "variable_declaration")
+        or (s.type == "expression_statement" and s.children
+            and s.children[0].type in ("assignment_expression",
+                                       "augmented_assignment_expression"))
+    ]
+    if assigns and all(
+        s.type in ("expression_statement", "lexical_declaration",
+                   "variable_declaration") for s in stmts
+    ):
+        calls = [
+            s for s in stmts
+            if s.type == "expression_statement" and s.children
+            and s.children[0].type == "call_expression"
+        ]
+        if calls:
+            return OUTCOME_FALLBACK_ACTION, "handler calls fallback code"
+        first = assigns[0]
+        value = ""
+        if first.type == "expression_statement" and first.children:
+            rhs = first.children[0].child_by_field_name("right")
+            value = _ts_node_text(rhs, src) if rhs is not None else ""
+        else:
+            decl = next(
+                (c for c in first.children
+                 if c.type == "variable_declarator"), None,
+            )
+            rhs = (decl.child_by_field_name("value")
+                   if decl is not None else None)
+            value = _ts_node_text(rhs, src) if rhs is not None else ""
+        return OUTCOME_ASSIGN_DEFAULT, value
+    return OUTCOME_FALLBACK_ACTION, "substantial handler body"
+
+
+def _js_enclosing_function(node, src: bytes) -> str:
+    """Nearest named enclosing function: declaration/method name, or
+    the variable/property an anonymous function is bound to."""
+    cur = node.parent
+    while cur is not None:
+        if cur.type in _JS_FUNC_TYPES:
+            name_node = cur.child_by_field_name("name")
+            if name_node is not None:
+                return _ts_node_text(name_node, src)
+            parent = cur.parent
+            if parent is not None and parent.type == "variable_declarator":
+                bound = parent.child_by_field_name("name")
+                if bound is not None:
+                    return _ts_node_text(bound, src)
+            if parent is not None and parent.type == "pair":
+                key = parent.child_by_field_name("key")
+                if key is not None:
+                    return _ts_node_text(key, src)
+            if parent is not None and parent.type in (
+                    "assignment_expression",):
+                lhs = parent.child_by_field_name("left")
+                if lhs is not None:
+                    return _ts_node_text(lhs, src)
+        cur = cur.parent
+    return ""
+
+
+def _js_promise_catch_handler(node, src: bytes):
+    """(receiver, callback_body) when *node* is a promise
+    ``.catch(fn)`` call with an inline handler, else None."""
+    if node.type != "call_expression":
+        return None
+    fn = node.child_by_field_name("function")
+    if fn is None or fn.type != "member_expression":
+        return None
+    prop = fn.child_by_field_name("property")
+    if prop is None or _ts_node_text(prop, src) != "catch":
+        return None
+    args = node.child_by_field_name("arguments")
+    handler = next(
+        (a for a in (args.children if args is not None else [])
+         if a.type in _JS_HANDLER_FN_TYPES),
+        None,
+    )
+    if handler is None:
+        return None
+    receiver = fn.child_by_field_name("object")
+    return receiver, handler.child_by_field_name("body")
+
+
+def js_handlers(
+    source: str, file_path: str, *, language: str = "javascript",
+) -> list[HandlerOutcome] | None:
+    """All classified error handlers in a JS/TS source file: syntactic
+    catch clauses and inline promise ``.catch`` callbacks.
+
+    ``None`` when no tree-sitter grammar for *language* is available
+    (the channel reports ``language-unsupported`` — no regex fallback
+    for brace-delimited handler bodies); empty list when the file has
+    no handlers.
+    """
+    parser = _ts_parser(language)
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        logger.debug("fail_open_lang: %s parse failed for %s",
+                     language, file_path, exc_info=True)
+        return None
+    lines = source.splitlines()
+    out: list[HandlerOutcome] = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+
+        if node.type == "try_statement":
+            body = node.child_by_field_name("body")
+            try_calls = _js_calls_in(body, src)
+            try_span = (
+                (body.start_point[0] + 1, body.end_point[0] + 1)
+                if body is not None else (_line_of(node), _line_of(node))
+            )
+            handler = node.child_by_field_name("handler")
+            if handler is None:
+                continue
+            outcome_kind, value = _classify_js_handler_body(
+                handler.child_by_field_name("body"), src,
+            )
+            line = _line_of(handler)
+            snippet_end = min(handler.end_point[0] + 1, line + 2)
+            out.append(HandlerOutcome(
+                idiom=f"catch_{outcome_kind}",
+                file=file_path,
+                line=line,
+                caught=["<any>"],   # JS catch has no type filter
+                broad=True,
+                outcome_kind=outcome_kind,
+                permissive_value=value,
+                evidence_snippet=" ".join(
+                    ln.strip() for ln in lines[line - 1:snippet_end]
+                ),
+                parser="tree-sitter",
+                enclosing_function=_js_enclosing_function(node, src),
+                try_calls=try_calls,
+                try_span=try_span,
+            ))
+            continue
+
+        promise = _js_promise_catch_handler(node, src)
+        if promise is None:
+            continue
+        receiver, callback_body = promise
+        outcome_kind, value = _classify_js_handler_body(
+            callback_body, src,
+        )
+        receiver_calls = _js_calls_in(receiver, src) if receiver else []
+        if receiver is not None and receiver.type == "call_expression":
+            fn = receiver.child_by_field_name("function")
+            if fn is not None:
+                name = _ts_node_text(fn, src)
+                if re.fullmatch(
+                        r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", name):
+                    receiver_calls.insert(0, name)
+        line = _line_of(node)
+        span = (
+            (receiver.start_point[0] + 1, receiver.end_point[0] + 1)
+            if receiver is not None else (line, line)
+        )
+        out.append(HandlerOutcome(
+            idiom=f"promise_catch_{outcome_kind}",
+            file=file_path,
+            line=line,
+            caught=["<rejection>"],
+            broad=True,
+            outcome_kind=outcome_kind,
+            permissive_value=value,
+            evidence_snippet=" ".join(
+                ln.strip()
+                for ln in lines[line - 1:min(len(lines), line + 2)]
+            ),
+            parser="tree-sitter",
+            enclosing_function=_js_enclosing_function(node, src),
+            try_calls=receiver_calls,
+            try_span=span,
+        ))
+    return out
+
+
+def _js_named_function_node(tree, src: bytes, function_name: str):
+    """The named function's node: declaration/method name match, or an
+    anonymous function bound to a matching variable/property."""
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type not in _JS_FUNC_TYPES:
+            continue
+        name_node = node.child_by_field_name("name")
+        if name_node is not None and _ts_node_text(name_node, src) == tail:
+            return node
+        parent = node.parent
+        if parent is not None and parent.type == "variable_declarator":
+            bound = parent.child_by_field_name("name")
+            if bound is not None and _ts_node_text(bound, src) == tail:
+                return node
+        if parent is not None and parent.type == "pair":
+            key = parent.child_by_field_name("key")
+            if key is not None and _ts_node_text(key, src) == tail:
+                return node
+    return None
+
+
+def js_function_span(
+    source: str, function_name: str, *, language: str = "javascript",
+) -> tuple[int, int] | None:
+    """(start_line, end_line) of a JS/TS function, or None."""
+    parser = _ts_parser(language)
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return None
+    node = _js_named_function_node(tree, src, function_name)
+    if node is None:
+        return None
+    return (node.start_point[0] + 1, node.end_point[0] + 1)
+
+
+def js_function_throws(
+    source: str, function_name: str, *, language: str = "javascript",
+) -> list[str]:
+    """Exception/type names a same-file JS/TS function ``throw``s —
+    leg-2b fallibility evidence for the handler-outcome leg."""
+    parser = _ts_parser(language)
+    if parser is None:
+        return []
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return []
+    node = _js_named_function_node(tree, src, function_name)
+    if node is None:
+        return []
+    thrown: list[str] = []
+    stack = list(node.children)
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type != "throw_statement":
+            continue
+        new_expr = next(
+            (c for c in cur.children if c.type == "new_expression"), None,
+        )
+        if new_expr is not None:
+            ctor = new_expr.child_by_field_name("constructor")
+            thrown.append(
+                _ts_node_text(ctor, src).rsplit(".", 1)[-1]
+                if ctor is not None else "<expr>",
+            )
+        else:
+            thrown.append("<expr>")
+    return list(dict.fromkeys(thrown))
+
+
+def js_function_returns_promise(
+    source: str, function_name: str, *, language: str = "javascript",
+) -> bool:
+    """True when a same-file JS/TS function demonstrably returns a
+    promise: declared ``async``, or its body constructs
+    ``new Promise`` — the unawaited leg's fallibility witness."""
+    parser = _ts_parser(language)
+    if parser is None:
+        return False
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return False
+    node = _js_named_function_node(tree, src, function_name)
+    if node is None:
+        return False
+    if any(c.type == "async" or (not c.is_named
+                                 and _ts_node_text(c, src) == "async")
+           for c in node.children):
+        return True
+    return bool(re.search(r"\bnew\s+Promise\s*\(",
+                          _ts_node_text(node, src)))
+
+
+def _js_call_tail(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
+def _iter_js_calls(tree, src: bytes, callee: str,
+                   span: tuple[int, int] | None):
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "call_expression":
+            continue
+        fn = node.child_by_field_name("function")
+        if fn is None:
+            continue
+        name = _ts_node_text(fn, src)
+        if "(" in name:            # chained receiver, not a name
+            continue
+        if _js_call_tail(name) != callee:
+            continue
+        line = _line_of(node)
+        if span is None or span[0] <= line <= span[1]:
+            yield node
+
+
+def _classify_js_unawaited_site(
+    node, src: bytes, lines: list[str],
+) -> CallSiteOutcome:
+    """One JS call node → guarded/unguarded/undecided for the
+    floating-promise (unawaited) leg."""
+    line = _line_of(node)
+    code = lines[line - 1].strip() if line <= len(lines) else ""
+    site = CallSiteOutcome(
+        file="", line=line, code=code, verdict="undecided",
+        parser="tree-sitter",
+    )
+    cur = node.parent
+    prev = node
+    while cur is not None:
+        t = cur.type
+        if t == "await_expression":
+            site.verdict = "guarded"
+            site.shape = "awaited"
+            site.evidence = "call is awaited — a rejection propagates"
+            return site
+        if t == "member_expression" \
+                and cur.child_by_field_name("object") == prev:
+            prop = cur.child_by_field_name("property")
+            prop_name = _ts_node_text(prop, src) if prop else ""
+            if prop_name in ("then", "catch"):
+                site.verdict = "guarded"
+                site.shape = f".{prop_name}-chained"
+                site.evidence = (
+                    f"a .{prop_name} handler is attached to the "
+                    "returned promise"
+                )
+                return site
+            # .finally / other chaining does not receive the
+            # rejection — keep walking from the outer call.
+            prev, cur = cur, cur.parent
+            continue
+        if t == "unary_expression" and _ts_node_text(
+                cur, src).lstrip().startswith("void"):
+            site.verdict = "unguarded"
+            site.shape = "void-discard"
+            site.evidence = (
+                "promise explicitly discarded with `void` — the "
+                "author saw the result but any rejection is swallowed"
+            )
+            return site
+        if t == "expression_statement":
+            site.verdict = "unguarded"
+            site.shape = "floating-promise"
+            site.evidence = (
+                "promise neither awaited nor given a handler — a "
+                "rejection is silently unobserved"
+            )
+            return site
+        if t in ("variable_declarator", "assignment_expression"):
+            site.evidence = (
+                "promise captured in a binding; its consumption is "
+                "not traced"
+            )
+            return site
+        if t == "return_statement" or (
+                t in _JS_FUNC_TYPES
+                and cur.child_by_field_name("body") == prev):
+            site.verdict = "guarded"
+            site.shape = "propagated"
+            site.evidence = "promise propagated to the caller"
+            return site
+        if t == "arguments":
+            site.verdict = "guarded"
+            site.shape = "consumed-as-argument"
+            site.evidence = "promise consumed by an enclosing call"
+            return site
+        prev, cur = cur, cur.parent
+    site.evidence = "could not classify the call's consumption context"
+    return site
+
+
+def js_unawaited_sites(
+    source: str,
+    file_path: str,
+    callee: str,
+    *,
+    language: str = "javascript",
+    function_span: tuple[int, int] | None = None,
+) -> list[CallSiteOutcome] | None:
+    """Call sites of ``callee`` classified for the unawaited /
+    floating-promise leg. ``None`` when no tree-sitter grammar for
+    *language* is available."""
+    parser = _ts_parser(language)
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+        lines = source.splitlines()
+    except Exception:
+        logger.debug("fail_open_lang: js unawaited scan failed for %s",
+                     file_path, exc_info=True)
+        return None
+    sites = []
+    for node in _iter_js_calls(tree, src, callee, function_span):
+        site = _classify_js_unawaited_site(node, src, lines)
+        site.file = file_path
+        sites.append(site)
+    return sites
+
+
+# ── Rust leg: ignored Result shapes ─────────────────────────────────
+# Rust's idiom for "ignored error" differs from Go's: `unwrap()` /
+# `expect()` / `?` all CONSUME the Result fail-closed (panic or
+# propagate), while `let _ =`, a bare statement, `.ok()` dropped on
+# the floor, and `unwrap_or_default()` erase the error branch — the
+# failure becomes indistinguishable from success. The census sweep
+# over ALL callees stays with the consistency programme (CWE-252
+# premise split); this leg adjudicates role-bound hypotheses only.
+
+_RUST_FUNC_TYPES = ("function_item",)
+# Result-consuming method vocabulary (each set stays under the seed
+# cap; these are stdlib method names — properties of the platform).
+_RUST_PANIC_METHODS = frozenset({"unwrap", "expect"})
+_RUST_DEFAULT_METHODS = frozenset({
+    "unwrap_or", "unwrap_or_default", "unwrap_or_else",
+})
+_RUST_TEST_METHODS = frozenset({"is_ok", "is_err"})
+_RUST_PASSTHROUGH_METHODS = frozenset({
+    "ok", "err", "map", "map_err", "inspect_err", "and_then",
+})
+
+
+def _rust_call_tail(name: str) -> str:
+    return name.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _iter_rust_calls(tree, src: bytes, callee: str,
+                     span: tuple[int, int] | None):
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "call_expression":
+            continue
+        fn = node.child_by_field_name("function")
+        if fn is None:
+            continue
+        name = _ts_node_text(fn, src)
+        if "(" in name:            # method on a chained receiver
+            continue
+        if _rust_call_tail(name) != callee:
+            continue
+        line = _line_of(node)
+        if span is None or span[0] <= line <= span[1]:
+            yield node
+
+
+def _rust_enclosing_function(node):
+    cur = node.parent
+    while cur is not None:
+        if cur.type in _RUST_FUNC_TYPES:
+            return cur
+        cur = cur.parent
+    return None
+
+
+def _rust_next_use(func_node, src: bytes, var: str, after_byte: int):
+    if func_node is None:
+        return None
+    best = None
+    stack = [func_node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "identifier" and cur.start_byte > after_byte \
+                and _ts_node_text(cur, src) == var:
+            if best is None or cur.start_byte < best.start_byte:
+                best = cur
+        stack.extend(cur.children)
+    return best
+
+
+def _classify_rust_let(cur, node, src: bytes, site, line: int,
+                       through: list[str]):
+    """Classify a ``let`` binding of the call result."""
+    pattern = cur.child_by_field_name("pattern")
+    if pattern is None:
+        pattern = next(
+            (c for c in cur.children if c.is_named
+             or c.type == "_"), None,
+        )
+    ptype = pattern.type if pattern is not None else ""
+    if ptype == "_":
+        site.verdict = "unguarded"
+        site.shape = "let-underscore-discard"
+        site.evidence = (
+            "Result explicitly discarded with `let _ =` — the author "
+            "saw the return but the error branch cannot alter control"
+        )
+        return site
+    if ptype == "identifier":
+        var = _ts_node_text(pattern, src)
+        if var.startswith("_"):
+            site.verdict = "unguarded"
+            site.shape = "let-underscore-discard"
+            site.evidence = (
+                f"Result bound to the deliberately-unused `{var}` — "
+                "the error branch cannot alter control"
+            )
+            return site
+        func_node = _rust_enclosing_function(cur)
+        use = _rust_next_use(func_node, src, var, cur.end_byte)
+        if use is None:
+            site.verdict = "unguarded"
+            site.shape = "result-never-checked"
+            site.evidence = (
+                f"`{var}` bound at line {line} is never read "
+                "afterwards in this function"
+            )
+            return site
+        site.verdict = "guarded"
+        site.shape = "captured"
+        site.evidence = f"`{var}` consumed at line {_line_of(use)}"
+        return site
+    # Destructuring patterns (let-else, tuple structs) consume the
+    # variants explicitly.
+    site.verdict = "guarded"
+    site.shape = "destructured"
+    site.evidence = "Result destructured by a pattern"
+    return site
+
+
+def _classify_rust_call_site(
+    node, src: bytes, lines: list[str],
+) -> CallSiteOutcome:
+    """One Rust call node → guarded/unguarded/undecided for the
+    ignored-Result leg."""
+    line = _line_of(node)
+    code = lines[line - 1].strip() if line <= len(lines) else ""
+    site = CallSiteOutcome(
+        file="", line=line, code=code, verdict="undecided",
+        parser="tree-sitter",
+    )
+    cur = node.parent
+    prev = node
+    through: list[str] = []
+    while cur is not None:
+        t = cur.type
+        if t == "field_expression" \
+                and cur.child_by_field_name("value") == prev:
+            field = cur.child_by_field_name("field")
+            method = _ts_node_text(field, src) if field else ""
+            outer = cur.parent
+            if outer is None or outer.type != "call_expression":
+                # Plain field access on the result — not a Result
+                # consumption we can classify.
+                site.evidence = (
+                    f"field `{method}` accessed on the result; "
+                    "consumption shape unrecognised"
+                )
+                return site
+            if method in _RUST_PANIC_METHODS:
+                site.verdict = "guarded"
+                site.shape = f".{method}()-panics-on-error"
+                site.evidence = (
+                    f".{method}() aborts on the error branch — "
+                    "fail-closed at this site"
+                )
+                return site
+            if method in _RUST_TEST_METHODS:
+                site.verdict = "guarded"
+                site.shape = "tested"
+                site.evidence = (
+                    f".{method}() result consumed as a condition"
+                )
+                return site
+            if method in _RUST_DEFAULT_METHODS:
+                site.verdict = "unguarded"
+                site.shape = f".{method}()-erases-error"
+                site.evidence = (
+                    f".{method}() replaces the error branch with a "
+                    "default — failure is indistinguishable from "
+                    "success"
+                )
+                return site
+            if method in _RUST_PASSTHROUGH_METHODS:
+                through.append(method)
+                prev, cur = outer, outer.parent
+                continue
+            site.evidence = (
+                f"method `.{method}()` applied to the result; its "
+                "contract is not traced"
+            )
+            return site
+        if t == "try_expression":
+            site.verdict = "guarded"
+            site.shape = "propagated"
+            site.evidence = "`?` propagates the error to the caller"
+            return site
+        if t == "await_expression":
+            prev, cur = cur, cur.parent
+            continue
+        if t == "let_declaration":
+            return _classify_rust_let(cur, node, src, site, line, through)
+        if t == "let_condition" or t in (
+                "if_expression", "while_expression", "match_expression",
+                "binary_expression", "unary_expression",
+                "parenthesized_expression"):
+            site.verdict = "guarded"
+            site.shape = "tested"
+            site.evidence = "call result consumed by a control condition"
+            return site
+        if t == "return_expression":
+            site.verdict = "guarded"
+            site.shape = "propagated"
+            site.evidence = "call result propagated to the caller"
+            return site
+        if t == "arguments":
+            site.verdict = "guarded"
+            site.shape = "consumed-as-argument"
+            site.evidence = "call result consumed by an enclosing call"
+            return site
+        if t == "expression_statement":
+            site.verdict = "unguarded"
+            if "ok" in through:
+                site.shape = "ok-discarded"
+                site.evidence = (
+                    ".ok() converts the Result and the Option is "
+                    "dropped on the floor — the error branch cannot "
+                    "alter control"
+                )
+            else:
+                site.shape = "bare-statement"
+                site.evidence = (
+                    "call result neither bound nor tested"
+                )
+            return site
+        if t == "block":
+            site.verdict = "guarded"
+            site.shape = "propagated"
+            site.evidence = (
+                "trailing expression — the result is the block's value"
+            )
+            return site
+        prev, cur = cur, cur.parent
+    site.evidence = "could not classify the call's consumption context"
+    return site
+
+
+def rust_discard_sites(
+    source: str,
+    file_path: str,
+    callee: str,
+    *,
+    function_span: tuple[int, int] | None = None,
+) -> list[CallSiteOutcome] | None:
+    """Call sites of ``callee`` classified for the Rust ignored-Result
+    leg. ``None`` when no tree-sitter rust parser is available
+    (binding consumption and `?`/match shapes are not honestly
+    decidable from line shapes)."""
+    parser = _ts_parser("rust")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+        lines = source.splitlines()
+    except Exception:
+        logger.debug("fail_open_lang: rust discard scan failed for %s",
+                     file_path, exc_info=True)
+        return None
+    sites = []
+    for node in _iter_rust_calls(tree, src, callee, function_span):
+        site = _classify_rust_call_site(node, src, lines)
+        site.file = file_path
+        sites.append(site)
+    return sites
+
+
+def _rust_function_node(tree, src: bytes, function_name: str):
+    tail = function_name.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type not in _RUST_FUNC_TYPES:
+            continue
+        name_node = node.child_by_field_name("name")
+        if name_node is not None and _ts_node_text(name_node, src) == tail:
+            return node
+    return None
+
+
+def rust_function_returns_result(
+    source: str, function_name: str,
+) -> bool:
+    """True when a same-file Rust function's return type is a
+    ``Result`` — the leg-2b fallibility witness for the discard leg."""
+    parser = _ts_parser("rust")
+    tail = function_name.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+    if parser is not None:
+        try:
+            src = source.encode("utf-8", errors="replace")
+            tree = parser.parse(src)
+            node = _rust_function_node(tree, src, tail)
+            if node is None:
+                return False
+            ret = node.child_by_field_name("return_type")
+            if ret is None:
+                return False
+            return bool(re.search(r"\bResult\b", _ts_node_text(ret, src)))
+        except Exception:
+            logger.debug("fail_open_lang: rust signature scan failed",
+                         exc_info=True)
+    # Line-regex fallback: signature shapes only (never handler
+    # bodies): `fn name(...) -> Result<...>`.
+    return bool(re.search(
+        rf"fn\s+{re.escape(tail)}\s*(?:<[^>]*>)?\s*\([^)]*\)\s*->\s*"
+        rf"[\w:]*Result\b",
+        source,
+    ))
+
+
+def rust_function_span(
+    source: str, function_name: str,
+) -> tuple[int, int] | None:
+    """(start_line, end_line) of a Rust function, or None."""
+    parser = _ts_parser("rust")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return None
+    node = _rust_function_node(tree, src, function_name)
+    if node is None:
+        return None
+    return (node.start_point[0] + 1, node.end_point[0] + 1)
 
 
 def function_parameters(

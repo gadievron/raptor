@@ -147,6 +147,31 @@ class TestBashExtraction:
         inv = det.scan_tree(root)
         assert "FILE_LOCAL" not in inv.vars
 
+    def test_chained_env_prefix_assignments(self, det, tmp_path):
+        """``A=1 B=1 cmd`` records a child-write for EVERY prefix
+        assignment — the first match's trailing context must not
+        consume the second assignment's leading whitespace (which
+        left B read-only in the inventory and misclassified pure
+        child plumbing as an operator knob)."""
+        root = _tree(tmp_path, {
+            "libexec/raptor-setup": (
+                "#!/bin/bash\n"
+                'cat payload | RAPTOR_FIRST=1 RAPTOR_SECOND=1 '
+                '$timeout_cmd "$W"\n'
+            ),
+            "libexec/raptor-consumer": (
+                "#!/bin/bash\n"
+                'if [ "${RAPTOR_SECOND:-}" = "1" ]; then exit 0; fi\n'
+            ),
+        })
+        inv = det.scan_tree(root)
+        assert "child-write" in _kinds(inv, "RAPTOR_FIRST")
+        assert "child-write" in _kinds(inv, "RAPTOR_SECOND")
+        # Set by one script, read by another → internal plumbing.
+        assert det.classify(
+            "RAPTOR_SECOND", inv.vars["RAPTOR_SECOND"],
+        ) == "internal"
+
     def test_python_shebang_not_scanned_as_bash(self, det, tmp_path):
         root = _tree(tmp_path, {"libexec/raptor-z": (
             "#!/usr/bin/env python3\n"

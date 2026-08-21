@@ -7,7 +7,7 @@ PYTHONSTARTUP, ...) BEFORE the Python interpreter boots. The strip
 list is maintained once, in core/security/_dangerous_env_strip.sh;
 launchers must SOURCE it, not carry their own copy. The drift this
 guards against is real: bin/raptor-sca hand-rolled its own list and
-silently missed the batch-581 additions (LD_DEBUG / LD_PROFILE*,
+silently missed the newer additions (LD_DEBUG / LD_PROFILE*,
 MALLOC_*, NODE_*, DYLD_FALLBACK_LIBRARY_PATH), and
 libexec/raptor-llm-scorecard exec'd python3 with the caller's full
 environment.
@@ -42,7 +42,7 @@ _BASH_ENTRY_POINTS = (
 )
 
 # One representative from each family the shared fragment strips,
-# including the batch-581 additions that drifted out of the hand-rolled
+# including the newer additions that drifted out of the hand-rolled
 # copies.
 _POISON = {
     "LD_PRELOAD": "/tmp/evil.so",

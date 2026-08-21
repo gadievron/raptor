@@ -55,24 +55,35 @@ def load_variants(out_dir: Path) -> set[str]:
 
 
 def load_coverage_records(out_dir: Path) -> list[dict[str, Any]]:
-    """Load legacy coverage-record.json if present.
+    """Load the run's coverage records: per-tool + legacy.
 
-    Back-compat: modern coverage uses per-tool records (coverage-*.json)
-    imported into CoverageStore, and the review journal is the primary
-    source of function-level coverage (see gaps._fold_journal_into_covered).
-    This loader exists for runs that pre-date the per-tool split.
+    Modern per-tool records (``coverage-*.json`` via
+    ``core.coverage.record.load_records`` — the same loader the
+    ``raptor-audit gaps`` CLI uses) feed the gap computation's covered
+    set and file-tool priority tiers. Pre-fix only the legacy
+    single-file ``coverage-record.json`` was loaded here, so the
+    orchestrator path saw an empty list on every modern run — record
+    priority tiers and ``--mark`` suppression were silently inert.
+    ``load_records`` still serves the legacy single file as a fallback
+    for runs that pre-date the per-tool split (list-shaped legacy
+    files, which this loader always accepted, are spliced flat).
     """
-    path = out_dir / "coverage-record.json"
-    if not path.exists():
-        return []
+    records: list[dict[str, Any]] = []
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-        return [data]
-    except (json.JSONDecodeError, OSError):
-        return []
+        from core.coverage.record import load_records
+        loaded = load_records(out_dir)
+    except Exception:
+        logger.debug("coverage record load failed", exc_info=True)
+        return records
+    for rec in loaded:
+        # A list-shaped legacy coverage-record.json comes back as one
+        # list element from load_records' fallback; this loader always
+        # accepted list-shaped legacy files, so splice it flat.
+        if isinstance(rec, list):
+            records.extend(r for r in rec if isinstance(r, dict))
+        elif isinstance(rec, dict):
+            records.append(rec)
+    return records
 
 
 def load_exploit_feedback(out_dir: Path, load_feedback_state, FeedbackState):
@@ -199,9 +210,15 @@ def _build_taint_approx(
         if scope else None
     )
 
+    # Same per-file size ceiling as the inventory builder — a multi-MB
+    # generated/vendored source file costs seconds of parse time for
+    # approximations nobody reads.
+    from core.inventory.builder import MAX_FILE_BYTES
+
     results: dict[str, Any] = {}
     c_exts = {".c", ".h"}
     cpp_exts = {".cc", ".cpp", ".cxx", ".hpp"}
+    skipped_large = 0
 
     for path in target_path.rglob("*"):
         if not path.is_file():
@@ -213,20 +230,36 @@ def _build_taint_approx(
             continue
 
         try:
+            if path.stat().st_size > MAX_FILE_BYTES:
+                skipped_large += 1
+                continue
             content = path.read_text(errors="replace")
         except OSError:
             continue
 
         rel = str(path.relative_to(target_path))
 
-        if suffix in c_exts:
-            approxes = extract_taint_approx_c(content)
-        else:
-            approxes = extract_taint_approx_cpp(content)
+        # Per-file guard: one pathological file (parser crash, walker
+        # bug, RecursionError from an extreme tree) must not sink the
+        # taint pass for the whole target — log and move on.
+        try:
+            if suffix in c_exts:
+                approxes = extract_taint_approx_c(content)
+            else:
+                approxes = extract_taint_approx_cpp(content)
+        except Exception as e:  # noqa: BLE001 — skip one file, keep the pass
+            logger.warning(
+                "taint_approx: extraction failed for %s; skipping file "
+                "(%s: %s)", rel, e.__class__.__name__, e)
+            continue
 
         for func_name, approx in approxes.items():
             results[f"{rel}:{func_name}"] = approx
 
+    if skipped_large:
+        logger.info(
+            "taint_approx: %d file(s) skipped (larger than %d bytes)",
+            skipped_large, MAX_FILE_BYTES)
     if results:
         logger.info("taint_approx: %d functions analysed", len(results))
     return results or None

@@ -757,8 +757,9 @@ def run_release_order_prepass(
             continue
         if not (fin_re.search(source) and rel_re.search(source)):
             continue
+        lines = source.splitlines()  # once per file, not per span
         for name, start, end in _c_function_spans(source):
-            segment = "\n".join(source.splitlines()[start - 1:end])
+            segment = "\n".join(lines[start - 1:end])
             if fin_re.search(segment) and rel_re.search(segment):
                 candidates.append((fp, name))
             if len(candidates) >= MAX_PREPASS_CANDIDATES:
@@ -771,8 +772,16 @@ def run_release_order_prepass(
         if time.monotonic() - t0 > budget_s:
             telemetry["budget_exceeded"] = True
             break
+        # Language from the file's extension, not a hardcoded "c":
+        # the suffix filter admits C++ files, and the C guard walk on
+        # a .cpp file fails into cfg-unavailable inconclusive.
+        try:
+            from .fail_open_lang import language_for_path
+            lang = language_for_path(fp) or "c"
+        except Exception:
+            lang = "c"
         res = _adjudicate_function(
-            source_texts[fp], fp, name, "c",
+            source_texts[fp], fp, name, lang,
             domain_model=domain_model,
             context=context,
             inventory=inventory,

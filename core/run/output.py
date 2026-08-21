@@ -4,8 +4,12 @@ Centralises the logic for choosing where a command writes its output.
 Checks (in order): explicit --out argument, active project, default out/ dir.
 """
 
+import contextlib
 import logging
 import os
+import re
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -83,6 +87,42 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
     return None
 
 
+def volatile_target_reason(target: str | None) -> str | None:
+    """Reason string when *target* is a scratch/volatile path, else None.
+
+    Flags exactly three shapes (a stale machine-generated project once
+    left ``/tmp`` as the active default target, and only an interactive
+    ask caught it):
+
+    * the system temp root itself (``/tmp``, ``/var/tmp``,
+      ``tempfile.gettempdir()``) — subdirectories are legitimate
+      checkouts and do NOT flag;
+    * a nonexistent path;
+    * an empty directory.
+    """
+    if not target:
+        return None
+    try:
+        resolved = Path(target).resolve()
+    except (OSError, ValueError):
+        return "cannot be resolved"
+    temp_roots = {Path("/tmp"), Path("/var/tmp")}
+    with contextlib.suppress(OSError, ValueError):
+        temp_roots.add(Path(tempfile.gettempdir()).resolve())
+    if resolved in temp_roots:
+        return "is the system temp directory"
+    if not resolved.exists():
+        return "does not exist"
+    if resolved.is_dir():
+        try:
+            next(resolved.iterdir())
+        except StopIteration:
+            return "is an empty directory"
+        except OSError:
+            return "cannot be read"
+    return None
+
+
 def resolve_default_target() -> str | None:
     """CLAUDE.md DEFAULT TARGET DIRECTORY resolution: (1) active project,
     (2) ``RAPTOR_CALLER_DIR``, (3) None (caller asks the user).
@@ -94,10 +134,35 @@ def resolve_default_target() -> str | None:
     inherit the same behaviour without re-implementing it. Returns the
     resolved target path or None if neither signal is present — the
     caller is expected to error or prompt.
+
+    Sanity gate: when the active project's target is scratch/volatile
+    (the system temp dir itself, nonexistent, or an empty directory —
+    e.g. a stale machine-generated corpus project pointing at /tmp),
+    the DEFAULT resolution refuses with a loud banner and returns None
+    instead of silently steering the run at scratch space. The caller
+    then asks the operator (interactive sessions confirm via the
+    documented structured prompt; non-interactive sessions stop). An
+    EXPLICIT target path always bypasses this gate — it only guards
+    the implicit default.
     """
     active = _resolve_active_project()
     if active is not None:
-        return active[2]
+        _out, project_name, project_target = active
+        reason = volatile_target_reason(project_target)
+        if reason:
+            banner = (
+                f"REFUSING default target: active project "
+                f"'{project_name}' points at {project_target}, which "
+                f"{reason}. Not steering a no-path command at scratch "
+                f"space.\n"
+                f"  To proceed anyway: pass the target path explicitly.\n"
+                f"  To fix the session: /project use <real-project> "
+                f"or /project use none"
+            )
+            logger.warning("%s", banner)
+            print(banner, file=sys.stderr)
+            return None
+        return project_target
     env = os.environ.get("RAPTOR_CALLER_DIR")
     return env or None
 
@@ -159,7 +224,8 @@ def get_output_dir(command: str, target_name: str = "",
         # Validate target matches the project
         effective_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
         if effective_target and project_target:
-            _check_target_mismatch(effective_target, project_name, project_target)
+            _check_target_mismatch(effective_target, project_name,
+                                   project_target, command=command)
 
         # Project mode: command-YYYYMMDD-HHMMSS-pidNNNNN (hyphens throughout).
         # See unique_run_suffix() for the collision-prevention rationale.
@@ -177,9 +243,24 @@ def get_output_dir(command: str, target_name: str = "",
     return RaptorConfig.get_out_dir() / dirname
 
 
+_URL_SCHEME_RE = re.compile(r"\A[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
 def _check_target_mismatch(target_path: str, project_name: str,
-                           project_target: str) -> None:
-    """Raise TargetMismatchError if target is outside the active project's target."""
+                           project_target: str, command: str = "") -> None:
+    """Raise TargetMismatchError if target is outside the active project's target.
+
+    URL-shaped targets (``/web`` scans) are not filesystem paths —
+    resolving ``https://example.com`` against the cwd and comparing it
+    to a project directory is meaningless, so they skip the check.
+
+    ``fuzz`` targets are binaries that routinely live OUTSIDE the
+    project source tree (build dirs, installed paths, fuzzing
+    harnesses); an out-of-tree binary warns instead of raising.
+    """
+    if _URL_SCHEME_RE.match(target_path):
+        return
+
     resolved = Path(target_path).resolve()
     project_resolved = Path(project_target).resolve()
 
@@ -189,6 +270,15 @@ def _check_target_mismatch(target_path: str, project_name: str,
         return
     except ValueError:
         pass
+
+    if command == "fuzz":
+        logger.warning(
+            "fuzz target %s is outside project %s (%s) — binaries often "
+            "live out-of-tree; proceeding, but check the active project "
+            "if this is unexpected",
+            target_path, project_name, project_target,
+        )
+        return
 
     # Operator-facing error: show the paths the operator actually
     # typed, not the resolved forms. Pre-fix the message printed
@@ -202,9 +292,14 @@ def _check_target_mismatch(target_path: str, project_name: str,
     # the rewritten path, which works but reads as cargo-cult.
     # Echo the operator's strings instead; the resolved forms only
     # exist for the comparison.
+    #
+    # Remediation: pre-fix the hint said create-then-'/project use
+    # none', which leaves the just-created project inactive AND the
+    # mismatching one active — following it verbatim changed nothing.
     raise TargetMismatchError(
         f"target {target_path} is outside project {project_name} ({project_target})\n"
         f"  A project tracks one target. To analyze a different codebase:\n"
         f"    /project create <name> --target {target_path}\n"
-        f"    /project use none"
+        f"    /project use <name>\n"
+        f"  Or run without a project: /project use none"
     )

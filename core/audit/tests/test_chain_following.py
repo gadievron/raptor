@@ -177,12 +177,31 @@ class TestInjectChainTargets:
         graph = TaskGraph.from_workqueue(
             [_gap("a.py", "caller"), _gap("a.py", "vulnerable")], [],
         )
-        graph.pop_ready(10)
+        # The finding's own review completes while the (pending,
+        # not-yet-dispatched) caller waits in the ready queue.
         graph.mark_complete("a.py:vulnerable:0")
         count = _inject_chain_targets(outcome, graph, edges, checklist, finding_priority=10.0)
         assert count == 1
         ready = graph.pop_ready(1)
         assert ready[0].key == "a.py:caller:0"
+
+    def test_in_flight_caller_not_double_dispatched(self) -> None:
+        """A caller already handed to a worker must not be re-issued
+        by chain injection — the elevated priority still counts as an
+        injection, but pop_ready hands the task out once."""
+        outcome = _outcome("a.py", "vulnerable")
+        edges = [_edge("a.py", "caller", "a.py", "vulnerable")]
+        checklist = _checklist(_gap("a.py", "caller"), _gap("a.py", "vulnerable"))
+        graph = TaskGraph.from_workqueue(
+            [_gap("a.py", "caller"), _gap("a.py", "vulnerable")], [],
+        )
+        graph.pop_ready(10)  # both tasks now held by workers
+        graph.mark_complete("a.py:vulnerable:0")
+        count = _inject_chain_targets(
+            outcome, graph, edges, checklist, finding_priority=10.0,
+        )
+        assert count == 1
+        assert graph.pop_ready(1) == []  # caller is already in flight
 
     def test_injects_callee_of_finding(self) -> None:
         outcome = _outcome("a.py", "vulnerable")

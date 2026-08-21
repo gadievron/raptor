@@ -453,6 +453,21 @@ class TestPythonHandlerAnalyzer:
         h = python_handlers(src, "a.py")[0]
         assert h.outcome_kind == "fail_closed"
 
+    def test_deeply_nested_expression_survives(self):
+        # AST depth tracks source nesting; the enclosing-function
+        # walker must not recurse per level (regression: a 20k-deep
+        # attribute chain raised RecursionError).
+        src = (
+            "def f(t):\n"
+            "    try:\n"
+            "        x = a" + ".b" * 20000 + "\n"
+            "    except Exception:\n"
+            "        pass\n"
+        )
+        handlers = python_handlers(src, "deep.py")
+        assert len(handlers) == 1
+        assert handlers[0].enclosing_function == "f"
+
     def test_contextlib_suppress_classified(self):
         src = (
             "import contextlib\n"

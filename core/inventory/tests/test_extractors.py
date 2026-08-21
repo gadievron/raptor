@@ -8,6 +8,7 @@ from core.inventory.extractors import (
     JavaScriptExtractor, LuaExtractor, TreeSitterExtractor,
     extract_functions, extract_items, _TS_AVAILABLE, _get_ts_languages,
 )
+from core.testing.treesitter import requires_ts
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +342,7 @@ class TestTreeSitter:
         funcs = extract_functions("t.py", "python", code)
         assert any("app.route" in (a or "") for a in funcs[0].metadata.attributes)
 
+    @requires_ts("java")
     def test_java_annotations(self):
         code = "public class T {\n    @GetMapping\n    public void get() {\n    }\n}"
         funcs = extract_functions("T.java", "java", code)
@@ -551,6 +553,7 @@ class TestTopLevelItems:
         assert not any(i.kind == "top_level" for i in items)
 
 
+@requires_ts("c")
 class TestCGlobalDeclarators:
     """C/C++ globals through declarator wrappers (array/pointer)."""
 

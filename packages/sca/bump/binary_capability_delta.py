@@ -15,8 +15,6 @@ current didn't have:
 The verdict ladder then:
   * high alone → Block
   * two mediums → Block (compound red flag)
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations

@@ -705,3 +705,42 @@ def test_post_submit_exhaustion_keeps_typed_exceptions_unwrapped(tmp_path):
     with pytest.raises(AcquisitionError) as ei:
         pipeline.run("CVE-X", work)
     assert ei.value is original
+
+
+def test_pipeline_threads_model_id_into_agent_config(tmp_path):
+    """Pipeline.model_id must reach every AgentConfig the pipeline
+    builds (primary run here; the focused-retry shape shares
+    _model_kw). The entry points resolve the operator's configured
+    primary and pass it through this field."""
+    captured = {}
+
+    @dataclass
+    class _CapturingAgent:
+        def run(self, config, ctx):
+            captured["model_id"] = config.model_id
+            return AgentSurrender(reason="unsupported_source", detail="stub")
+
+    pipeline = Pipeline(
+        agent=_CapturingAgent(), disk_limit_pct=99.9,
+        model_id="test-model-x",
+    )
+    with pytest.raises(UnsupportedSource):
+        pipeline.run("CVE-2099-0001", tmp_path)
+    assert captured["model_id"] == "test-model-x"
+
+
+def test_pipeline_without_model_id_keeps_agent_config_default(tmp_path):
+    from cve_diff.agent.loop import AgentConfig
+
+    captured = {}
+
+    @dataclass
+    class _CapturingAgent:
+        def run(self, config, ctx):
+            captured["model_id"] = config.model_id
+            return AgentSurrender(reason="unsupported_source", detail="stub")
+
+    pipeline = Pipeline(agent=_CapturingAgent(), disk_limit_pct=99.9)
+    with pytest.raises(UnsupportedSource):
+        pipeline.run("CVE-2099-0002", tmp_path)
+    assert captured["model_id"] == AgentConfig.__dataclass_fields__["model_id"].default

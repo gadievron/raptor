@@ -147,8 +147,19 @@ def _load_cached_index(
     # real bug — earns_suppression=False on this witness prevents
     # finding-suppression, but censorship via misattribution is still
     # within reach without this check).
+    # The field must be PRESENT and match. Accepting a record that
+    # merely omits ``binary_path`` (or carries a non-string) would let
+    # a pre-poisoned cache file bypass the collision check entirely —
+    # missing/None is a cache miss, not a pass.
     cached_path = payload.get("binary_path")
-    if isinstance(cached_path, str) and cached_path != binary_path:
+    if not isinstance(cached_path, str):
+        logger.warning(
+            "binary_oracle_edges: cache entry for %s lacks a valid "
+            "binary_path field; treating as cache miss",
+            binary_path,
+        )
+        return None
+    if cached_path != binary_path:
         logger.warning(
             "binary_oracle_edges: cache build_id collision; cached "
             "path=%s wanted=%s; treating as cache miss",
@@ -403,38 +414,38 @@ def extract_direct_call_edges(
         addr = _fn_addr(f)
         script_lines.append(f"echo BATCH {addr}")
         script_lines.append(f"axffj @ {addr}")
-    with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".r2", delete=False,
-            dir=str(binary_path.parent),
-    ) as script_file:
-        script_path = script_file.name
-        script_file.write("\n".join(script_lines) + "\n")
+    # The r2 script lives in its OWN scratch directory, never in the
+    # target build dir: writing RAPTOR-controlled files into the tree
+    # being analysed both litters it and hands an attacker-writable
+    # location influence over what we execute. The scratch dir is
+    # passed as the sandbox ``output`` so it is bind-mounted (readable
+    # + writable) inside mount-ns — the per-sandbox /tmp would
+    # otherwise hide it from r2. TemporaryDirectory guarantees the
+    # script is removed however the block exits.
     try:
-        proc = _sandbox_run(
-            ["r2", "-q", "-i", script_path, str(binary_path)],
-            target=str(binary_path.parent), block_network=True,
-            capture_output=True, text=True, check=False, timeout=timeout,
-            errors="replace",
-        )
-        _parse_axffj_batch(proc.stdout, addr_to_name, index)
+        with tempfile.TemporaryDirectory(
+                prefix="raptor-bo-edges-") as scratch:
+            script_path = os.path.join(scratch, "axffj.r2")
+            with open(script_path, "w", encoding="utf-8") as script_file:
+                script_file.write("\n".join(script_lines) + "\n")
+            proc = _sandbox_run(
+                ["r2", "-q", "-i", script_path, str(binary_path)],
+                target=str(binary_path.parent), output=scratch,
+                block_network=True,
+                capture_output=True, text=True, check=False,
+                timeout=timeout, errors="replace",
+            )
+            _parse_axffj_batch(proc.stdout, addr_to_name, index)
     except (subprocess.TimeoutExpired, subprocess.SubprocessError,
             OSError) as e:
+        # OSError also covers scratch-dir / script creation failure —
+        # the module's contract is must-not-crash: degrade to "no
+        # binary evidence" (and never cache a partial result).
         logger.warning(
             "binary_oracle_edges: axffj script aborted for %s: %s",
             binary_path, e,
         )
-        # Do NOT cache a partial / failed result — bail out and
-        # return what we have without persisting.
-        try:
-            os.unlink(script_path)
-        except OSError:
-            pass
         return index
-    finally:
-        try:
-            os.unlink(script_path)
-        except OSError:
-            pass
 
     # Tier 2: vtable resolution. C++ virtual dispatch is the dominant
     # share of source-graph "indirect" edges on real codebases (leveldb

@@ -102,3 +102,32 @@ def test_import_runtime_skips_non_inventory_files(tmp_path):
     assert import_runtime(s, g, _C_CHECKLIST) == 0
     assert "/usr/include/sys.h" not in s.files()      # non-inventory file not added
     assert s.who_checked("src/foo.c", 1) == []        # nothing mis-attributed
+
+
+def test_fuzz_record_reaches_store_as_runtime(tmp_path):
+    """coverage-fuzz.json (post tool-field fix) imports like any per-tool
+    record: reached functions land as function-precise runtime marks."""
+    import json
+
+    from core.coverage.importer import import_run_dir
+    from core.coverage.store import CoverageStore
+
+    run = tmp_path / "fuzz-1"
+    run.mkdir()
+    (run / "coverage-fuzz.json").write_text(json.dumps({
+        "tool": "fuzz",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "files_examined": ["a.c"],
+        "functions_analysed": [{"file": "a.c", "function": "f1"}],
+        "files": {"a.c": {"functions": {"f1": {"reached": True}}}},
+    }))
+    checklist = {"files": [{"path": "a.c", "lines": 30, "items": [
+        {"name": "f1", "line_start": 1, "line_end": 10},
+        {"name": "f2", "line_start": 12, "line_end": 20},
+    ]}]}
+    store = CoverageStore(tmp_path / "coverage.json")
+    import_run_dir(store, run, checklist)
+    assert "fuzz" in store.who_checked("a.c", 5)
+    # runtime category, runtime-tested depth — never counts as LLM review
+    from core.coverage.registry import classify
+    assert classify("fuzz") == ("runtime", "runtime-tested")

@@ -5,6 +5,7 @@ Analyses crashes from fuzzing to extract exploitability information.
 This is so much of a WIP, it's not even funny. However, you can see what we are trying to do and how it could be useful. 
 """
 
+import os
 import platform
 import re
 import subprocess
@@ -526,6 +527,39 @@ class CrashAnalyser:
         else:
             return self._run_gdb_analysis_internal(input_file)
 
+    def _write_debugger_script(self, commands: list[str], prefix: str) -> Path:
+        """Write a debugger command script NEXT TO the binary, not /tmp.
+
+        The debugger runs under the mount-namespace sandbox, which
+        gives the child a FRESH tmpfs at /tmp — a script written to the
+        host /tmp is invisible inside the sandbox, and gdb -batch exits
+        0 after silently failing to read it, so the analysis returned
+        empty output with no error signal. The binary's parent dir is
+        bind-mounted into the sandbox at its original path (it is the
+        Landlock target/output), so a script placed there is visible.
+        Mirrors debugger.py's mkstemp(dir=binary_dir) convention,
+        including the random name (defeats symlink pre-plant on shared
+        systems) and the explicit 0o600.
+        """
+        binary_dir = self.binary.parent
+        fd, script_name = tempfile.mkstemp(
+            prefix=prefix, suffix=".txt", dir=str(binary_dir),
+        )
+        script_file = Path(script_name)
+        os.close(fd)
+        try:
+            os.chmod(script_file, 0o600)
+        except OSError:
+            # Non-POSIX filesystem — mkstemp's own 0600 default is the
+            # best available; not fatal.
+            pass
+        try:
+            script_file.write_text("\n".join(commands), encoding="utf-8")
+        except BaseException:
+            script_file.unlink(missing_ok=True)
+            raise
+        return script_file
+
     def _run_gdb_analysis_internal(self, input_file: Path) -> str:
         """Run GDB to analyze crash."""
         # GDB commands to extract crash information
@@ -547,17 +581,14 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file (delete=False to keep it during execution).
-        # cmd_f.write runs inside the `with`, BEFORE the try/finally below. A
-        # failing write (ENOSPC, I/O error) would leak the stub. Do the create
-        # + write + name-capture inside the try so finally always catches.
+        # Write commands next to the binary so the mount-ns sandbox can
+        # see them (see _write_debugger_script — host /tmp is invisible
+        # inside the sandbox's fresh tmpfs). Cleanup in finally.
         cmd_file = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_gdb_commands.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(gdb_commands))
+            cmd_file = self._write_debugger_script(
+                gdb_commands, prefix=".raptor_gdb_crash_",
+            )
 
             # Run GDB with input file via stdin (not in GDB script — avoids path injection)
             # profile='debug' permits ptrace; all other seccomp blocks remain.
@@ -600,6 +631,19 @@ class CrashAnalyser:
         if result.stderr:
             logger.debug("GDB stderr length: %d chars", len(result.stderr))
 
+        # gdb -batch exits 0 even when the script produced nothing
+        # (unreadable script, target exited before any handler fired).
+        # Empty output means the analysis has no registers/backtrace to
+        # parse — surface it instead of silently returning nothing.
+        if not (result.stdout or "").strip():
+            logger.warning(
+                "GDB produced no output for %s (rc=%s) — the command "
+                "script produced no sections; crash context will be "
+                "empty. stderr tail: %s",
+                input_file, result.returncode,
+                (result.stderr or "")[-300:],
+            )
+
         return result.stdout
 
     def _run_lldb_analysis(self, input_file: Path) -> str:
@@ -608,18 +652,27 @@ class CrashAnalyser:
         # these even when an exception fires between mkstemp and the
         # inner try. Pre-fix mkstemp ran outside the try, leaving the
         # two _lldb_*.txt files behind on any early raise.
+        # Both redirect stubs live NEXT TO the binary (mkstemp
+        # dir=binary_dir) for the same reason as the command script:
+        # host-/tmp paths do not exist inside the mount-ns sandbox, so
+        # `process launch -o/-e <host-tmp-path>` would fail there.
         lldb_out = None
         lldb_err = None
         cmd_file = None
+        binary_dir_path = self.binary.parent
         try:
-            lldb_out = tempfile.NamedTemporaryFile(  # noqa: SIM115 — delete=False handle, closed below; cleanup in finally
-                mode='w', suffix='_lldb_out.txt', delete=False,
+            out_fd, out_name = tempfile.mkstemp(
+                prefix=".raptor_lldb_out_", suffix=".txt",
+                dir=str(binary_dir_path),
             )
-            lldb_err = tempfile.NamedTemporaryFile(  # noqa: SIM115 — delete=False handle, closed below; cleanup in finally
-                mode='w', suffix='_lldb_err.txt', delete=False,
+            os.close(out_fd)
+            lldb_out = Path(out_name)
+            err_fd, err_name = tempfile.mkstemp(
+                prefix=".raptor_lldb_err_", suffix=".txt",
+                dir=str(binary_dir_path),
             )
-            lldb_out.close()
-            lldb_err.close()
+            os.close(err_fd)
+            lldb_err = Path(err_name)
 
             # LLDB commands - different syntax from GDB
             lldb_commands = [
@@ -630,7 +683,7 @@ class CrashAnalyser:
                 "process handle SIGBUS -s true -n true",   # Stop on bus errors
                 "process handle SIGILL -s true -n true",   # Stop on illegal instructions
                 "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
-                f"process launch -o {lldb_out.name} -e {lldb_err.name}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
+                f"process launch -o {lldb_out} -e {lldb_err}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
                 "register read",                   # Get register state
                 "thread backtrace --extended true", # Get full backtrace
                 "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
@@ -639,13 +692,13 @@ class CrashAnalyser:
                 "quit",
             ]
 
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_commands.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(lldb_commands))
+            # Script next to the binary — see _write_debugger_script
+            # (host /tmp is invisible inside the mount-ns sandbox).
+            cmd_file = self._write_debugger_script(
+                lldb_commands, prefix=".raptor_lldb_crash_",
+            )
 
-            # Run LLDB with longer timeout — debugger needs ptrace. 
+            # Run LLDB with longer timeout — debugger needs ptrace.
             try:
                 binary_dir = str(self.binary.parent.resolve())
                 with open(input_file, "rb") as stdin_f:
@@ -663,8 +716,8 @@ class CrashAnalyser:
                 logger.warning("LLDB analysis timed out - trying fallback approach")
                 # Clean up temp files before fallback
                 try:
-                    Path(lldb_out.name).unlink()
-                    Path(lldb_err.name).unlink()
+                    lldb_out.unlink()
+                    lldb_err.unlink()
                 except OSError:
                     pass
                 return self._run_lldb_fallback(input_file)
@@ -691,17 +744,16 @@ class CrashAnalyser:
                 except OSError:
                     pass
             # lldb_out / lldb_err may be None if the very first
-            # NamedTemporaryFile constructor raised before
-            # assignment. Guard each unlink individually so a stub
-            # failure on _err doesn't leak _out.
+            # mkstemp raised before assignment. Guard each unlink
+            # individually so a stub failure on _err doesn't leak _out.
             if lldb_out is not None:
                 try:
-                    Path(lldb_out.name).unlink()
+                    lldb_out.unlink()
                 except OSError:
                     pass
             if lldb_err is not None:
                 try:
-                    Path(lldb_err.name).unlink()
+                    lldb_err.unlink()
                 except OSError:
                     pass
 
@@ -729,16 +781,14 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file. Same hazard as the other two
-        # spots in this module: pull the create+write inside the try so a
-        # failing write doesn't leak the stub before reaching the finally.
+        # Script next to the binary — see _write_debugger_script (host
+        # /tmp is invisible inside the mount-ns sandbox). Cleanup in
+        # finally; cmd_file stays None if the write itself raised.
         cmd_file = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_fallback.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(lldb_commands))
+            cmd_file = self._write_debugger_script(
+                lldb_commands, prefix=".raptor_lldb_fallback_",
+            )
 
             # LLDB fallback — also a debugger, needs ptrace (profile='debug').
             binary_dir = str(self.binary.parent.resolve())

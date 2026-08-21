@@ -91,18 +91,24 @@ class NarrowingCastSink extends DataFlow::Node {
  */
 
 /**
- * Holds if `node` is guarded by a relational comparison that
- * upper-bounds the value (e.g. `if (len > INT_MAX) return;`).
+ * Holds if `node` is guarded by an upper-bound comparison that
+ * controls the block containing the use (e.g. `if (len > INT_MAX)
+ * return;` or `if (len < limit) { ...use... }`).
+ *
+ * GuardCondition.ensuresLt holds only when the guard's constraining
+ * edge dominates `block`, so the bound is guaranteed at the use. The
+ * previous formulation compared the ancestor-statement SETS of the
+ * comparison and the use (`getParentStmt*()` equality) — both sets
+ * always contain the function body block, so ANY comparison against a
+ * positive constant anywhere in the function suppressed the flow.
  */
 predicate hasRangeGuard(DataFlow::Node node) {
-  exists(Variable v, RelationalOperation cmp, VariableAccess va |
+  exists(GuardCondition guard, Variable v, VariableAccess guardedVa, Expr bound, int k |
     node.asExpr().(VariableAccess).getTarget() = v and
-    cmp.getAnOperand() = va and
-    va.getTarget() = v and
-    // The comparison is against a non-zero constant (a real bound).
-    cmp.getAnOperand().getValue().toInt() > 0 and
-    // And it dominates the use.
-    cmp.getEnclosingStmt().getParentStmt*() = node.asExpr().getEnclosingStmt().getParentStmt*()
+    guardedVa.getTarget() = v and
+    // The guard ensures `v < bound + k` in the block containing the
+    // guarded use — an upper bound that strictly dominates the cast.
+    guard.ensuresLt(guardedVa, bound, k, node.asExpr().getBasicBlock(), true)
   )
 }
 

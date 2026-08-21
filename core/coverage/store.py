@@ -23,9 +23,10 @@ callers -- coverage does not embed it, and keys on file *content* SHA
 git clone or a zip extraction. See the design memo.
 
 Intervals are inclusive ``[lo, hi]`` line ranges, kept sorted and
-coalesced per tool. (Bitmap fallback for files with very many intervals
--- sparse runtime/gcov data -- is a later optimisation; the public API
-does not change when it lands.)
+coalesced per tool. Above ``_BITMAP_THRESHOLD`` intervals the in-memory
+representation switches to a line-number set ("bitmap" — sparse
+runtime/gcov data); the public API is identical and the on-disk form is
+always intervals.
 """
 
 from __future__ import annotations

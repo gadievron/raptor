@@ -912,6 +912,7 @@ def synthesise_with_refinement(
     max_matches: int = 50,
     max_triage_calls: int = 50,
     model_id: str = "",
+    ground_truth_fixtures: tuple[str, str | None] | None = None,
 ) -> CheckerSynthesisResult:
     """Iterative checker synthesis with FP-elimination.
 
@@ -948,6 +949,11 @@ def synthesise_with_refinement(
     The first iteration is identical to a vanilla
     ``synthesise_and_run(triage_each=True)`` call. Operators who
     don't want refinement should call ``synthesise_and_run`` directly.
+
+    ``ground_truth_fixtures`` rides through unchanged to every
+    iteration's ``synthesise_and_run`` call — external seeds (e.g.
+    CVE fix commits, see :mod:`.cve_bridge`) refine against the same
+    known-vulnerable / known-fixed pair each round.
     """
     if max_iterations <= 0:
         return CheckerSynthesisResult(
@@ -967,6 +973,7 @@ def synthesise_with_refinement(
             max_triage_calls=max_triage_calls,
             prior_fps=tuple(prior_fps),
             model_id=model_id,
+            ground_truth_fixtures=ground_truth_fixtures,
         )
 
         # If synthesis failed entirely, bump to next iteration.

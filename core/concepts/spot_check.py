@@ -26,9 +26,15 @@ def _value_patterns(name: str) -> list[re.Pattern]:
     return [
         # #define NAME value
         re.compile(rf"#\s*define\s+{esc}\s+\(?\s*{_VALUE}"),
-        # NAME = value  (C/Go/Python/Rust/TS const forms all reduce
-        # to this once the definition line is isolated)
-        re.compile(rf"\b{esc}\b[^=\n]*=\s*{_VALUE}"),
+        # NAME [: type] = value  (C/Go/Python/Rust/TS const forms all
+        # reduce to this once the definition line is isolated).  The
+        # '=' must directly follow the identifier or a ': type'
+        # annotation — the previous [^=\n]* filler crossed comparison
+        # operators and statement boundaries, so ``assert(NAME != 0)``
+        # read as NAME=0 and ``buf[NAME]; int other = 42;`` read as
+        # NAME=42, and those wrong values were trusted unconditionally
+        # as mechanical answers.
+        re.compile(rf"\b{esc}\b\s*(?::[^=;\n]*)?=(?!=)\s*{_VALUE}"),
         # enum member: NAME = value or bare position not decidable
         re.compile(rf"\b{esc}\s*=\s*{_VALUE}\s*[,;}}]"),
     ]

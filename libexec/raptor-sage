@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
 import argparse  # noqa: E402
+import json  # noqa: E402
 import logging  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from typing import Any, Dict  # noqa: E402
@@ -48,6 +49,22 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from core.sage.config import SageConfig  # noqa: E402
+from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
+
+
+def _safe(text, *, preserve_newlines: bool = False) -> str:
+    """Escape non-printable bytes in store-derived text before printing.
+
+    Memory content, tags, domains, and statuses come back from the SAGE
+    store, which accepts writes derived from scanned (hostile) repos and
+    LLM output. Raw ESC/CSI/OSC bytes in a poisoned row could erase or
+    redraw the interactive listing (hiding the row from the operator's
+    audit) or fire OSC 52 clipboard writes. This display path is exactly
+    where unverified rows are surfaced as hints, so the terminal-safe
+    form is the load-bearing control — same pattern as
+    core/sage/scripts/register_agents.py.
+    """
+    return escape_nonprintable(str(text), preserve_newlines=preserve_newlines)
 
 
 def _get_client(timeout: float = 0):
@@ -68,14 +85,19 @@ def _get_client(timeout: float = 0):
     # The SDK's httpx client honours proxy env but does not special-case
     # loopback — without this, a proxied shell routes the localhost SAGE
     # call to the proxy and every subcommand reports "not reachable".
+    from core.sage.client import harden_identity_key_perms
     from core.sage.config import ensure_loopback_no_proxy
     ensure_loopback_no_proxy()
     cfg = SageConfig.from_env()
     identity_path = cfg.identity_path
     if identity_path and Path(identity_path).exists():
         identity = AgentIdentity.from_file(identity_path)
+        harden_identity_key_perms(identity_path)
     else:
         identity = AgentIdentity.default()
+        # default() may have just auto-provisioned the key with a
+        # umask-wide write — clamp it (resolves the SDK's default path).
+        harden_identity_key_perms(None)
     return SageClient(
         base_url=cfg.url,
         identity=identity,
@@ -117,8 +139,12 @@ def _relative_time(ts_str: str) -> str:
 
 
 def _trunc(text: str, width: int = 80) -> str:
-    """Truncate text to width, adding ellipsis if needed."""
-    text = text.replace("\n", " ").strip()
+    """Truncate text to width, adding ellipsis if needed.
+
+    Escapes non-printable bytes first (see ``_safe``) so the width
+    applies to the inert, reviewable form.
+    """
+    text = _safe(str(text).replace("\n", " ").strip())
     if len(text) <= width:
         return text
     return text[:width - 1] + "…"
@@ -144,7 +170,9 @@ def _print_table(headers, rows, col_gap=2):
     widths = [len(h) for h in headers]
     str_rows = []
     for row in rows:
-        sr = [str(c) for c in row]
+        # Belt-and-braces: cells are store-derived (domain, status,
+        # content); escape here so no caller can forget.
+        sr = [_safe(c) for c in row]
         str_rows.append(sr)
         for i, c in enumerate(sr):
             if i < len(widths):
@@ -161,19 +189,98 @@ def _print_table(headers, rows, col_gap=2):
 
 # ── Subcommands ──────────────────────────────────────────────
 
+# Hard bounds on the paginate-everything walk. ``total`` is re-read
+# from every response and is entirely server-controlled, and the plain
+# HTTP transport authenticates nothing about the server (client→server
+# signing only; /health is spoofable) — an impostor bound to the SAGE
+# port while the container is down could otherwise stream pages until
+# the CLI OOMs. 50k rows is far beyond any legitimate store on this
+# surface; the page cap bounds iteration even when every page is tiny.
+_FETCH_MAX_ROWS = 50_000
+_FETCH_MAX_PAGES = 1_000
+
+
 def _fetch_all_memories(client, batch=200):
-    """Fetch all memories from SAGE, paginating if needed."""
+    """Fetch all memories from SAGE, paginating if needed.
+
+    Bounded (see the caps above). A ``total`` that exceeds the row cap
+    or changes between pages is treated as a protocol error and aborts
+    the fetch with a clear message; hitting the row/page cap ends the
+    walk with a truncation notice instead of looping forever.
+    """
     all_mems = []
     offset = 0
-    while True:
+    total = None
+    truncated = False
+    for _ in range(_FETCH_MAX_PAGES):
         resp = client.list_memories(limit=batch, offset=offset)
         memories = resp.memories if hasattr(resp, "memories") else []
         all_mems.extend(memories)
-        total = getattr(resp, "total", len(all_mems))
-        if len(all_mems) >= total or not memories:
+        page_total = getattr(resp, "total", None)
+        if page_total is not None:
+            page_total = int(page_total)
+            if page_total > _FETCH_MAX_ROWS:
+                raise RuntimeError(
+                    f"SAGE protocol error: server reports {page_total} "
+                    f"memories (cap {_FETCH_MAX_ROWS}) — refusing "
+                    "unbounded fetch"
+                )
+            if total is not None and page_total != total:
+                raise RuntimeError(
+                    "SAGE protocol error: reported total changed "
+                    f"between pages ({total} -> {page_total}) — "
+                    "aborting fetch"
+                )
+            total = page_total
+        if len(all_mems) >= _FETCH_MAX_ROWS:
+            truncated = True
+            break
+        if not memories or len(all_mems) >= (
+            total if total is not None else len(all_mems)
+        ):
             break
         offset += len(memories)
-    return all_mems, total
+    else:
+        truncated = True
+    if truncated:
+        del all_mems[_FETCH_MAX_ROWS:]
+        print(
+            f"  (truncated: fetch capped at {len(all_mems)} rows)",
+            file=sys.stderr,
+        )
+    return all_mems, (total if total is not None else len(all_mems))
+
+
+def _resolve_memory_id(client, id_or_prefix):
+    """Resolve a possibly-truncated memory id to the full id.
+
+    ``list`` and ``backlog`` display ids truncated to 12 characters,
+    but every id-taking server call (get / forget / task --id / link /
+    corroborate) requires the full id and 404s on a prefix — so the
+    operator could not round-trip an id from the listing back into a
+    command. Resolve client-side: a full-length id passes through
+    without a fetch; anything shorter is prefix-matched against the
+    bounded memory walk. Exactly one match resolves; zero or several
+    raise with a clear message — never guess between candidates.
+    """
+    candidate = str(id_or_prefix).strip()
+    if len(candidate) >= 36:
+        return candidate
+    memories, _ = _fetch_all_memories(client)
+    matches = sorted({
+        getattr(m, "memory_id", "")
+        for m in memories
+        if getattr(m, "memory_id", "").startswith(candidate)
+    })
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"no memory id starts with '{candidate}'")
+    shown = ", ".join(m[:12] for m in matches[:5])
+    raise ValueError(
+        f"memory id prefix '{candidate}' is ambiguous "
+        f"({len(matches)} matches: {shown}, ...)"
+    )
 
 
 def cmd_status(client, args):
@@ -181,7 +288,7 @@ def cmd_status(client, args):
     try:
         memories, total = _fetch_all_memories(client)
     except Exception as e:
-        print(f"SAGE unreachable: {e}")
+        print(f"SAGE unreachable: {_safe(str(e))}")
         return 1
 
     domains = Counter()
@@ -197,10 +304,10 @@ def cmd_status(client, args):
 
     print(f"Total memories:  {total}")
     if statuses:
-        parts = [f"{k}: {v}" for k, v in sorted(statuses.items())]
+        parts = [f"{_safe(k)}: {v}" for k, v in sorted(statuses.items())]
         print(f"By status:       {', '.join(parts)}")
     if latest:
-        print(f"Last activity:   {_relative_time(latest)}")
+        print(f"Last activity:   {_safe(_relative_time(latest))}")
     print()
 
     if domains:
@@ -236,7 +343,7 @@ def cmd_recall(client, args):
             query_kwargs["min_confidence"] = args.min_confidence
         response = client.query(**query_kwargs)
     except Exception as e:
-        print(f"Recall failed: {e}", file=sys.stderr)
+        print(f"Recall failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     results = response.results if hasattr(response, "results") else []
@@ -246,8 +353,8 @@ def cmd_recall(client, args):
 
     for i, r in enumerate(results, 1):
         conf = _confidence_pct(getattr(r, "confidence_score", None))
-        domain = _strip_domain_prefix(getattr(r, "domain_tag", ""))
-        content = getattr(r, "content", "")
+        domain = _safe(_strip_domain_prefix(getattr(r, "domain_tag", "")))
+        content = _safe(getattr(r, "content", ""))
         print(f"  {i}. [{conf}] ({domain}) {content}")
     return 0
 
@@ -267,17 +374,46 @@ def cmd_list(client, args):
     try:
         response = client.list_memories(**kwargs)
     except Exception as e:
-        print(f"List failed: {e}", file=sys.stderr)
+        print(f"List failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     memories = response.memories if hasattr(response, "memories") else []
+
+    if getattr(args, "json", False):
+        # Machine-readable path: full (untruncated) IDs and content so
+        # downstream commands (get/forget/task --id) can consume the
+        # output. json.dumps with the default ensure_ascii=True renders
+        # every non-ASCII and control byte as an inert \uXXXX escape,
+        # so hostile store content cannot reach the terminal raw.
+        records = []
+        for m in memories:
+            st = getattr(m, "status", "")
+            mt = getattr(m, "memory_type", "")
+            created = getattr(m, "created_at", None)
+            records.append({
+                "memory_id": str(getattr(m, "memory_id", "")),
+                "domain_tag": str(getattr(m, "domain_tag", "")),
+                "memory_type": mt.value if hasattr(mt, "value") else str(mt),
+                "status": st.value if hasattr(st, "value") else str(st),
+                "task_status": getattr(m, "task_status", None),
+                "confidence_score": getattr(m, "confidence_score", None),
+                "content": str(getattr(m, "content", "")),
+                "tags": [str(t) for t in (getattr(m, "tags", []) or [])],
+                "created_at": str(created) if created is not None else None,
+            })
+        print(json.dumps(records, indent=2))
+        return 0
+
     if not memories:
         print("No memories found.")
         return 0
 
+    full_ids = getattr(args, "full", False)
     rows = []
     for m in memories:
-        mid = getattr(m, "memory_id", "")[:12]
+        mid = getattr(m, "memory_id", "")
+        if not full_ids:
+            mid = mid[:12]
         domain = _strip_domain_prefix(getattr(m, "domain_tag", ""))
         st = getattr(m, "status", "")
         status = st.value if hasattr(st, "value") else str(st)
@@ -333,17 +469,18 @@ def cmd_remember(client, args):
         print(f"Stored ({memory_type}) in {_strip_domain_prefix(domain)} "
               f"at {_confidence_pct(confidence)} confidence.")
     except Exception as e:
-        print(f"Remember failed: {e}", file=sys.stderr)
+        print(f"Remember failed: {_safe(str(e))}", file=sys.stderr)
         return 1
     return 0
 
 
 def cmd_forget(client, args):
     try:
-        client.forget(args.memory_id, reason=args.reason)
-        print(f"Deprecated {args.memory_id[:12]}.")
+        memory_id = _resolve_memory_id(client, args.memory_id)
+        client.forget(memory_id, reason=args.reason)
+        print(f"Deprecated {memory_id[:12]}.")
     except Exception as e:
-        print(f"Forget failed: {e}", file=sys.stderr)
+        print(f"Forget failed: {_safe(str(e))}", file=sys.stderr)
         return 1
     return 0
 
@@ -353,7 +490,7 @@ def cmd_domains(client, args):
     try:
         memories, total = _fetch_all_memories(client)
     except Exception as e:
-        print(f"Failed: {e}", file=sys.stderr)
+        print(f"Failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     domains = Counter()
@@ -367,7 +504,10 @@ def cmd_domains(client, args):
     sorted_domains = sorted(domains.items(), key=lambda x: -x[1])
     _print_table(
         ["Domain", "Count", "%"],
-        [(_strip_domain_prefix(d), str(c), f"{c * 100 // total}%")
+        # max(total, 1): a misbehaving/impostor server can return
+        # total=0 alongside non-empty rows — that must render oddly,
+        # not crash the listing with ZeroDivisionError.
+        [(_strip_domain_prefix(d), str(c), f"{c * 100 // max(total, 1)}%")
          for d, c in sorted_domains],
     )
     print(f"\n  Total: {total}")
@@ -388,7 +528,7 @@ def cmd_timeline(client, args):
     try:
         response = client.timeline(**kwargs)
     except Exception as e:
-        print(f"Timeline failed: {e}", file=sys.stderr)
+        print(f"Timeline failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     buckets = getattr(response, "buckets", [])
@@ -397,7 +537,7 @@ def cmd_timeline(client, args):
         return 0
 
     for b in buckets:
-        period = getattr(b, "period", "?")
+        period = _safe(getattr(b, "period", "?"))
         count = getattr(b, "count", 0)
         bar = "█" * min(count, 40)
         print(f"  {period:20s} {count:4d} {bar}")
@@ -412,7 +552,7 @@ def cmd_backlog(client, args):
     try:
         response = client.list_tasks(**kwargs)
     except Exception as e:
-        print(f"Backlog failed: {e}", file=sys.stderr)
+        print(f"Backlog failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
     tasks = getattr(response, "tasks", [])
@@ -422,8 +562,8 @@ def cmd_backlog(client, args):
 
     for i, t in enumerate(tasks, 1):
         st = getattr(t, "task_status", "?")
-        status = st.value if hasattr(st, "value") else str(st)
-        domain = _strip_domain_prefix(getattr(t, "domain_tag", ""))
+        status = _safe(st.value if hasattr(st, "value") else str(st))
+        domain = _safe(_strip_domain_prefix(getattr(t, "domain_tag", "")))
         content = _trunc(getattr(t, "content", ""), 100)
         print(f"  {i}. [{status}] ({domain}) {content}")
     return 0
@@ -437,10 +577,11 @@ def cmd_task(client, args):
             print("--status required when updating a task", file=sys.stderr)
             return 1
         try:
-            client.update_task_status(args.id, args.task_status)
-            print(f"Task {args.id[:12]} -> {args.task_status}")
+            task_id = _resolve_memory_id(client, args.id)
+            client.update_task_status(task_id, args.task_status)
+            print(f"Task {task_id[:12]} -> {args.task_status}")
         except Exception as e:
-            print(f"Task update failed: {e}", file=sys.stderr)
+            print(f"Task update failed: {_safe(str(e))}", file=sys.stderr)
             return 1
         return 0
 
@@ -449,60 +590,118 @@ def cmd_task(client, args):
               file=sys.stderr)
         return 1
 
-    domain = args.domain or "general"
+    # sage_sdk is an optional dependency: an injected client (tests,
+    # shims) accepts the plain string, so its absence must not abort
+    # the command before the client is even consulted.
     try:
         from sage_sdk.models import MemoryType
+        task_type = MemoryType.task
+    except ImportError:
+        task_type = "task"
+
+    try:
         embedding = client.embed(content)
-        client.propose(
+        # No --domain: pass domain_tag=None so the server routes the
+        # task to the caller's owned home domain (app-v23) — the same
+        # mapping the MCP layer uses. The old hardcoded "general"
+        # default committed tasks into a domain this identity often
+        # cannot read back: the CLI printed success while the row was
+        # unreachable from every read surface (backlog/list/get 403).
+        resp = client.propose(
             content=content,
-            memory_type=MemoryType.task,
-            domain_tag=domain,
+            memory_type=task_type,
+            domain_tag=args.domain,
             confidence=0.8,
             embedding=embedding,
         )
-        print(f"Task created in {_strip_domain_prefix(domain)}.")
     except Exception as e:
-        print(f"Task creation failed: {e}", file=sys.stderr)
+        print(f"Task creation failed: {_safe(str(e))}", file=sys.stderr)
         return 1
+    memory_id = str(getattr(resp, "memory_id", "") or "")
+    return _report_task_created(client, memory_id, args.domain)
+
+
+def _print_readable_domains(client) -> None:
+    """Best-effort list of domains this identity can read, to stderr."""
+    try:
+        sample = client.domain_access_sample()
+        readable = list(getattr(sample, "readable_domains", []) or [])
+    except Exception:
+        readable = []
+    if readable:
+        names = ", ".join(sorted(_safe(d) for d in readable))
+        print(f"  Readable domains: {names}", file=sys.stderr)
+    else:
+        print("  (could not list readable domains)", file=sys.stderr)
+
+
+def _report_task_created(client, memory_id: str, requested_domain) -> int:
+    """Read a just-committed task back before reporting success.
+
+    Success is only claimed once the row is fetched with this same
+    identity. If the read-back is refused (task committed into a
+    domain the caller cannot read), fail loudly with the full memory
+    id, the target domain, and the caller's readable-domain list so
+    the operator can recover the row instead of losing it.
+    """
+    try:
+        m = client.get_memory(memory_id)
+    except Exception as e:
+        target = requested_domain if requested_domain else "<home domain>"
+        print(
+            f"Task {_safe(memory_id)} committed to {_safe(target)} but "
+            f"cannot be read back by this identity: {_safe(str(e))}",
+            file=sys.stderr,
+        )
+        _print_readable_domains(client)
+        print("  Re-run with --domain <readable-domain>.", file=sys.stderr)
+        return 1
+    domain = _strip_domain_prefix(str(getattr(m, "domain_tag", "") or ""))
+    print(f"Task {_safe(memory_id)} created in {_safe(domain)}.")
     return 0
 
 
 def cmd_link(client, args):
     link_type = args.link_type or "related"
     try:
-        client.link_memories(args.source, args.target, link_type=link_type)
-        print(f"Linked {args.source[:12]} -> {args.target[:12]} ({link_type})")
+        source = _resolve_memory_id(client, args.source)
+        target = _resolve_memory_id(client, args.target)
+        client.link_memories(source, target, link_type=link_type)
+        print(f"Linked {source[:12]} -> {target[:12]} ({link_type})")
     except Exception as e:
-        print(f"Link failed: {e}", file=sys.stderr)
+        print(f"Link failed: {_safe(str(e))}", file=sys.stderr)
         return 1
     return 0
 
 
 def cmd_corroborate(client, args):
     try:
-        client.corroborate(args.memory_id, evidence=args.evidence)
-        print(f"Corroborated {args.memory_id[:12]}.")
+        memory_id = _resolve_memory_id(client, args.memory_id)
+        client.corroborate(memory_id, evidence=args.evidence)
+        print(f"Corroborated {memory_id[:12]}.")
     except Exception as e:
-        print(f"Corroborate failed: {e}", file=sys.stderr)
+        print(f"Corroborate failed: {_safe(str(e))}", file=sys.stderr)
         return 1
     return 0
 
 
 def cmd_get(client, args):
     try:
-        m = client.get_memory(args.memory_id)
+        m = client.get_memory(_resolve_memory_id(client, args.memory_id))
     except Exception as e:
-        print(f"Get failed: {e}", file=sys.stderr)
+        print(f"Get failed: {_safe(str(e))}", file=sys.stderr)
         return 1
 
-    mid = getattr(m, "memory_id", args.memory_id)
-    domain = _strip_domain_prefix(getattr(m, "domain_tag", ""))
+    mid = _safe(getattr(m, "memory_id", args.memory_id))
+    domain = _safe(_strip_domain_prefix(getattr(m, "domain_tag", "")))
     st = getattr(m, "status", "")
-    status = st.value if hasattr(st, "value") else str(st)
+    status = _safe(st.value if hasattr(st, "value") else str(st))
     conf = _confidence_pct(getattr(m, "confidence_score", None))
     mt = getattr(m, "memory_type", "")
-    mtype = mt.value if hasattr(mt, "value") else str(mt)
-    content = getattr(m, "content", "")
+    mtype = _safe(mt.value if hasattr(mt, "value") else str(mt))
+    # Full-content view: newlines are structural in multi-line prose,
+    # everything else non-printable is escaped.
+    content = _safe(getattr(m, "content", ""), preserve_newlines=True)
     created = getattr(m, "created_at", "")
     tags = getattr(m, "tags", []) or []
 
@@ -512,9 +711,9 @@ def cmd_get(client, args):
     print(f"  Status:     {status}")
     print(f"  Confidence: {conf}")
     if tags:
-        print(f"  Tags:       {', '.join(tags)}")
+        print(f"  Tags:       {', '.join(_safe(t) for t in tags)}")
     if created:
-        print(f"  Created:    {_relative_time(str(created))}")
+        print(f"  Created:    {_safe(_relative_time(str(created)))}")
     print()
     print(content)
     return 0
@@ -552,6 +751,10 @@ def build_parser():
     p.add_argument("--status", "-s")
     p.add_argument("--sort", choices=["newest", "oldest", "confidence"])
     p.add_argument("--limit", "-n", type=int, default=25)
+    p.add_argument("--full", action="store_true",
+                   help="Show full memory IDs (table view)")
+    p.add_argument("--json", action="store_true",
+                   help="Emit full records as JSON (machine use)")
 
     # remember
     p = sub.add_parser("remember", help="Store a new memory")
@@ -621,13 +824,14 @@ def main(argv=None) -> int:
         print("SAGE persistent memory\n")
         print("  status                 Show memory store status")
         print("  recall <query>         Semantic recall (--domain, --top, --min-confidence)")
-        print("  list                   List memories (--domain, --tag, --status, --limit)")
+        print("  list                   List memories (--domain, --tag, --status, --limit, --full, --json)")
         print("  remember <text>        Store a memory (--domain, --type, --confidence, --tags)")
         print("  forget <id>            Deprecate a memory (--reason)")
         print("  domains                Per-domain breakdown")
         print("  timeline               Time-bucketed activity (--domain, --bucket, --from, --to)")
         print("  backlog                Open tasks (--domain)")
-        print("  task <text>            Create/update a task (--domain, --id, --status)")
+        print("  task <text>            Create/update a task (--domain, --id, --status;")
+        print("                         no --domain = your home domain)")
         print("  link <src> <dst>       Link two memories (--type)")
         print("  corroborate <id>       Independently back a memory (--evidence)")
         print("  get <id>               Show a single memory in full")

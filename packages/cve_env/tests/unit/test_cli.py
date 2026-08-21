@@ -16,11 +16,9 @@ import json
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
-
 from cve_env import cli
 from cve_env.models import Outcome
 
@@ -182,7 +180,7 @@ def test_cmd_build_returns_0_on_success(tmp_path: Path) -> None:
 
     stdout = io.StringIO()
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -217,7 +215,7 @@ def test_cmd_build_returns_1_on_unresolvable(tmp_path: Path) -> None:
     args.silent = True
 
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -244,7 +242,7 @@ def test_cmd_build_silent_suppresses_human_report(tmp_path: Path) -> None:
 
     stderr = io.StringIO()
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -272,7 +270,7 @@ def test_cmd_build_default_emits_human_report(tmp_path: Path) -> None:
 
     stderr = io.StringIO()
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -308,7 +306,7 @@ def test_cmd_build_auto_cleanup_removes_this_cves_result_images(tmp_path: Path) 
     args.auto_stop_colima = False
 
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -345,7 +343,7 @@ def test_cmd_build_no_cleanup_when_gate_off(tmp_path: Path) -> None:
 
     with (
         patch.object(_cfg, "AUTO_CLEANUP_CONTAINERS", False),
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -711,7 +709,7 @@ def test_report_flag_is_removed() -> None:
     Removing it tightens the CLI surface. Argparse should now reject --report
     with SystemExit (unrecognized argument). cli.build is mocked so that even
     at HEAD where the flag is still accepted, we don't trigger a real LLM run."""
-    with patch("cve_env.cli.build", AsyncMock(return_value=_outcome())):
+    with patch("cve_env.cli.build_core", MagicMock(return_value=_outcome())):
         with pytest.raises(SystemExit):
             cli.main(["build", "CVE-2014-0160", "--report"])
 
@@ -1012,7 +1010,7 @@ def test_cmd_build_writes_sidecar_before_stdout(tmp_path: Path) -> None:
 
     stdout = io.StringIO()
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),
@@ -1047,7 +1045,7 @@ def test_cmd_build_sidecar_written_on_failure_too(tmp_path: Path) -> None:
 
     stdout = io.StringIO()
     with (
-        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch("cve_env.cli.build_core", MagicMock(return_value=fake_outcome)),
         patch(
             "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
         ),

@@ -19,26 +19,17 @@ automatically.
 
 The primary engine on Linux.  RAPTOR wraps `afl-fuzz` with support for:
 
-- **CmpLog** (`AFLRunner(cmplog_binary=...)`): input-to-state correspondence
-  for bypassing multi-byte comparisons.  Requires a separate
-  CmpLog-instrumented binary compiled with `AFL_LLVM_CMPLOG=1`.
-  API-level only — no CLI flag.
-- **Power schedules** (`AFLRunner(power_schedule=...)`): `fast` (default),
-  `explore`, `exploit`, `coe`, `lin`, `quad`, `rare`, `seek`.
-  API-level only.
-- **Custom mutators** (`AFLRunner(custom_mutator=...)`): path to a shared
-  library loaded by AFL++ for domain-specific mutation.  API-level only.
 - **Dictionaries** (`--dict`): AFL dictionary files for structured input
   formats (JSON tokens, HTTP keywords, etc.).  When `--dict` is not passed,
   `/fuzz` auto-discovers an audit-generated `fuzz.dict` (own run directory
   first, then the newest sibling run directory) -- see
   [Dictionary auto-discovery](#dictionary-auto-discovery).
-- **Deterministic mode** (`AFLRunner(deterministic=True)`): enables AFL++'s
-  deterministic mutation stage.  Off by default for faster startup.
-  API-level only.
 - **Parallel instances** (`--parallel N`): runs N AFL++ instances (one main,
   N-1 secondary) for faster coverage.  N is clamped to the `tuning.json`
   `max_fuzz_parallel` ceiling with a warning.
+- **CmpLog, power schedules, custom mutators, deterministic mode**:
+  available through the Python API (`AFLRunner` in `packages/fuzzing/`)
+  for pipeline callers; no CLI flags.
 
 For best results, compile the target with AFL instrumentation
 (`afl-clang-fast` or `afl-clang-lto`) and AddressSanitizer
@@ -62,8 +53,7 @@ The orchestrator detects libFuzzer-instrumented binaries by scanning for the
 ## Target Detection
 
 Before any campaign starts, RAPTOR identifies the target and recommends the
-appropriate approach.  The detector (`packages/fuzzing/target_detector.py`)
-recognises:
+appropriate approach.  The detector recognises:
 
 | Kind | Description | Recommended Fuzzer |
 |------|-------------|--------------------|
@@ -92,8 +82,7 @@ suggestions).
 
 ## Prerequisites
 
-The capability probe (`packages/fuzzing/capability.py`) runs before every
-campaign, checking for:
+A capability probe runs before every campaign, checking for:
 
 **Fuzzing engines:**
 
@@ -119,9 +108,8 @@ campaign, checking for:
 - `gdb`, `rr`.
 - `radare2` with `r2pipe` and `r2ghidra` (for binary pre-analysis).
 
-The probe result is a `CapabilityReport` dataclass that the orchestrator and
-runner consult when building commands.  Use `--plan-only` to see the probe
-output and campaign plan without actually starting a run.
+Use `--plan-only` to see the probe output and campaign plan without
+actually starting a run.
 
 ## Usage
 
@@ -178,6 +166,8 @@ python3 raptor.py fuzz --binary <path> [flags]
 | `--use-showmap` | Run `afl-showmap` after fuzzing for coverage analysis |
 | `--export-seed-corpus <dir>` | Export RAPTOR's built-in seed corpus to a directory and exit |
 | `--seed-profile <name>` | Select a built-in seed corpus profile (default: `default`) |
+| `--from-smt-witness <dir>` | Synthesize AFL seeds and dictionary tokens from an audit/validate run's SMT witnesses |
+| `--prepare-corpus` / `--seed-out <dir>` / `--seed-max-size <n>` / `--seed-include-lockfiles` | Build a seed corpus from the target repo without fuzzing |
 
 ### Goal options
 
@@ -250,8 +240,7 @@ dictionary simply means no `-x` flag, exactly as before.
 
 ## Crash Triage and Replay
 
-The `CrashCollector` (`packages/fuzzing/crash_collector.py`) processes the
-`crashes/` directory from AFL++ output:
+Crash triage processes the `crashes/` directory from AFL++ output:
 
 1. **Deduplication** -- crashes are deduplicated by SHA-256 hash of the input
    file (first 16 hex characters).
@@ -262,9 +251,8 @@ The `CrashCollector` (`packages/fuzzing/crash_collector.py`) processes the
    - SIGABRT (06) -- assertion failure / heap corruption.
    - SIGILL (04) -- invalid instruction.
    - SIGFPE (08) -- floating point exception.
-4. **Witness wrapping** -- each crash is wrapped into a `core.witness.Witness`
-   object via the witness adapter (`packages/fuzzing/witness_adapter.py`).
-   Witnesses are stored under `<out>/witnesses/` and can be consumed by
+4. **Witness wrapping** -- each crash is wrapped into a Witness object,
+   stored under `<out>/witnesses/`, and can be consumed by
    [/validate](validation.md) and [/crash-analysis](crash-analysis.md).
 
 After triage, the top N crashes (controlled by `--max-crashes`) are sent to the
@@ -280,12 +268,10 @@ into the recorded Witness.
 
 ## Harness Generation
 
-For source code targets that do not have a fuzzable binary, RAPTOR can scaffold
-a libFuzzer harness via `packages/fuzzing/harness_generator.py`.
-
-The `HarnessGenerator` class takes a function specification (header file,
-function name, parameter types) and produces a self-contained `.c` or `.cc`
-file containing:
+For source code targets that do not have a fuzzable binary, RAPTOR can
+scaffold a libFuzzer harness from a function specification (header
+file, function name, parameter types), producing a self-contained `.c`
+or `.cc` file containing:
 
 - A `LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)` entry point.
 - Input decomposition logic that maps the fuzz input buffer to the target
@@ -370,5 +356,9 @@ out/fuzz_<binary>_<timestamp>/
       crash_*_exploit.c       -- Generated exploit PoCs
   witnesses/                  -- Crash Witness objects
   binary-context-map.json     -- radare2 binary analysis (when enabled)
+  coverage-fuzz.json          -- Function-precise runtime coverage record
+                                 (gcov-instrumented targets; reaches the
+                                 durable coverage store as reachability
+                                 evidence — never counts as review)
   fuzzing_report.json         -- Campaign summary report
 ```

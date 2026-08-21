@@ -114,7 +114,12 @@ _MAX_PACK_FILES = 200
 # U+2028/U+2029 line-separators slip past Cc/Cf categories but
 # render as newlines in terminals — strip them so output can't be
 # split by an attacker-supplied label.
-_EXTRA_STRIP = frozenset({" ", " "})
+# Escaped spellings (matching cc_trust._EXTRA_STRIP): the literal
+# characters are invisible in an editor, so a reviewer cannot tell
+# the set from a pair of ordinary quoted blanks — and an accidental
+# "cleanup" to real spaces would silently disable the defence while
+# corrupting every space in sanitised output.
+_EXTRA_STRIP = frozenset({"\u2028", "\u2029"})
 
 # CodeQL's canonical (Microsoft-authored) pack namespace. Anything
 # outside this namespace is third-party and may carry custom

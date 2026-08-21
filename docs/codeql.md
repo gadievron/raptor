@@ -56,6 +56,10 @@ autonomous analysis pipeline.
 | `--sanitizer-cut <mode>` | off | Sanitiser-cut value-bound suppression mode (`off` / `on` / `strict` / `shadow`) |
 | `--sanitizer-cut-parity-log <path>` | auto | Parity-log path for `--sanitizer-cut shadow` (default: `<run_dir>/sanitizer_cut_parity.jsonl`) |
 | `--no-iris-tier1` | off | Skip IRIS Tier 1 in-repo LocalFlowSource pack analysis |
+| `--no-curated-queries` | off | Skip the curated in-repo query pass (`engine/codeql/queries/<lang>/`) |
+| `--no-learned-models` | off | Skip the learned-models measurement pass (IRIS taint specs emitted as a models-as-data pack; baseline vs augmented diff) |
+| `--threat-models <csv>` | `local` | Threat models enabled on the standard suite (`--threat-model=<name>` per entry) |
+| `--no-threat-models` | off | Pass no `--threat-model` flag (stock remote-only source models) |
 | `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
 | `--no-sandbox` | off | Alias for `--sandbox none` |
 | `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
@@ -71,26 +75,12 @@ LLM-powered analysis on top of the SARIF output.
 
 ### Phase 1 -- Language Detection
 
-Implemented in `packages/codeql/language_detector.py`.
-
 The detector walks the repository, classifying files by extension,
-build manifests, and structural indicators (e.g. `src/main/java/`).
-Each language receives a confidence score between 0.0 and 1.0:
-
-- Base 0.3 for any matching source files
-- Up to +0.4 for recognised build files
-- Up to +0.3 for structural indicators
-- Up to +0.3 based on file-count ratio
-
-Languages below their per-language minimum confidence threshold are
-filtered out. Detection uses a three-tier retry strategy:
-
-1. **Tier 1** -- `min_files=3`, confidence gate active. Catches most
-   real projects.
-2. **Tier 2** -- `min_files=1`, same confidence gate. Fires when
-   Tier 1 finds nothing (single-file fixtures, minimal repros).
-3. **Tier 3** -- `floor=2` files, confidence gate bypassed. Fires
-   when both prior tiers found nothing; logs a WARNING.
+build manifests, and structural indicators (e.g. `src/main/java/`),
+and scores each language's confidence. Low-confidence languages are
+filtered out; if nothing survives, progressively looser retries handle
+single-file fixtures and minimal repros (the loosest tier logs a
+WARNING). `--min-files` and `--languages` override the detection.
 
 Operator-friendly aliases are normalised at the entry point:
 `c`/`c++`/`cxx`/`cc` become `cpp`, `js` becomes `javascript`,
@@ -98,8 +88,6 @@ Operator-friendly aliases are normalised at the entry point:
 `kotlin`, `py` becomes `python`.
 
 ### Phase 2 -- Build Detection
-
-Implemented in `core/build/build_detector.py`.
 
 For each detected language the detector identifies the build system
 and generates the appropriate command:
@@ -116,9 +104,9 @@ and generates the appropriate command:
 | Ruby | bundler, rake |
 
 **Fallback chain:** auto-detect the build system, validate that the
-tool is installed, try `synthesise_build_command` (generates a Python
-shim to compile individual files; C++ and Java only), then fall back to
-no-build mode (interpreted languages or when nothing else works).
+tool is installed, try synthesising a minimal per-file build (C++ and
+Java only), then fall back to no-build mode (interpreted languages or
+when nothing else works).
 
 [SAGE](sage.md) build-recall context is threaded into the detection
 when available, providing hints from previous successful builds of the
@@ -126,15 +114,24 @@ same repository.
 
 ### Phase 3 -- Database Creation
 
-Implemented in `packages/codeql/database_manager.py`.
-
-**Buildless C/C++ (default).** C/C++ databases are created with
-`--build-mode=none`: the extractor parses source without invoking any
-build system, so no repo-controlled code executes during
+**Buildless C/C++, Java, and C# (default).** These databases are
+created with `--build-mode=none`: the extractor parses source without
+invoking any build system, so no repo-controlled code executes during
 `database create`. This is the untrusted-repo posture — a build
 system is repo code, and there is no mechanical signal that running
-it is safe. Requires CodeQL CLI >= 2.16; older CLIs get a clear skip,
-never a silent fallback to a traced build.
+it is safe. For Java it is also the only mode that works by
+construction: `database create` runs with the sandbox network
+blocked, so an autobuild that needs to fetch dependencies always
+fails, while buildless extraction proceeds with unresolved
+dependencies at reduced type fidelity. Version floors: CLI >= 2.16
+for C/C++, >= 2.16.4 for Java, >= 2.17.1 for C#; older CLIs get a
+clear skip, never a silent fallback to a traced build. When an
+operator's explicit traced build (`--traced-build` /
+`--build-command`) fails for a buildless-capable language, one
+buildless retry runs with a loud degradation warning and a
+provenance note on the result. Languages with no buildless mode
+(Go, Swift, Kotlin) run the extractor's autobuild, disclosed with a
+loud untrusted-traced-build banner and a run-metadata record.
 
 The trade-off is accuracy: buildless extraction cannot see
 build-generated headers (`config.h`, yacc/protobuf output), so TUs
@@ -166,29 +163,12 @@ every subsequent `/codeql` and `/agentic` run on that project behave
 as if `--traced-build` was passed (per-run `--no-traced-build`
 overrides; the `config` marker for `--trust-repo` stays independent).
 
-Databases are created via `codeql database create` and cached by a
-content hash:
-
-- **Git repositories (fast path):** `SHA256(repo_path + ":" +
-  HEAD_hash)` truncated to 16 hex characters.
-- **Non-git targets (fallback):** walks up to 1000 files, hashes
-  `(relative_path, file_size)` tuples.
-
-Cache lookup validates existence, a success flag in metadata, age
-(7-day maximum), and integrity (presence of `codeql-database.yml`
-plus a `db-*` subdirectory above 100 KB).
-
-Multi-language targets build databases in parallel via
-`ThreadPoolExecutor`. Concurrent writes are handled with atomic
-staging directories (`.staging-<lang>-<pid>-<random>` renamed on
-completion). Stale staging markers older than one hour are
-garbage-collected automatically.
-
-Pass `--force` to bypass the cache and recreate from scratch.
+Databases are cached by a content hash of the tree (git HEAD when
+available), validated for integrity, and expire after 7 days.
+Multi-language targets build databases in parallel. Pass `--force` to
+bypass the cache and recreate from scratch.
 
 ### Phase 4 -- Query Execution
-
-Implemented in `packages/codeql/query_runner.py`.
 
 Each database is analysed against an upstream CodeQL suite:
 
@@ -203,43 +183,55 @@ TypeScript reuses the JavaScript suite; Kotlin reuses the Java suite.
 
 If a required query pack is not installed locally, the runner
 automatically downloads it via `codeql pack download` with up to
-three retries and exponential backoff.
+three attempts and exponential backoff (1s, 2s).
 
 **IRIS LocalFlowSource pass:** After the standard suite, RAPTOR runs
-in-repo query packs (`packages/llm_analysis/codeql_packs/`) that
-extend source coverage to CLI arguments, environment variables, stdin,
-file reads, and database inputs. IRIS packs exist for Python, Java,
-JavaScript, and Go (29 queries across 8 CWEs). C++ is excluded because
-the upstream stdlib already covers local flow sources. Disable with
-`--no-iris-tier1` (the master kill-switch is
-`RaptorConfig.IRIS_TIER1_ENABLED`).
+bundled query packs that extend source coverage to CLI arguments,
+environment variables, stdin, file reads, and database inputs. IRIS
+packs exist for Python, Java, JavaScript, and Go; C++ is excluded
+because the upstream stdlib already covers local flow sources. Disable
+with `--no-iris-tier1`.
 
 Per-language SARIF files are written to the output directory. IRIS
 findings produce a separate `codeql_<lang>_iris.sarif` file.
+
+**Threat models on the standard suite:** The standard-suite pass runs
+with `--threat-model=local` by default (CLI ≥ 2.15.3; older CLIs never
+see the flag). This enables the environment / commandargs / stdin /
+file / database source kinds on stock queries for languages whose
+packs support threat models — the same source classes the IRIS packs
+model by hand. The flag is a documented no-op for packs without
+threat-model support. Override the set per run with
+`--threat-models <csv>` (e.g. `local,!environment` — entries are
+processed in order, `!` disables) or disable with `--no-threat-models`.
+When both the IRIS pass and threat models ran, a per-(language, CWE)
+standard-vs-IRIS finding-count comparison is recorded as
+`threat_model_overlap` in `codeql_report.json`.
+
+**Learned-models measurement pass:** IRIS taint specs learned for the
+target are emitted as a CodeQL models-as-data extension pack and the
+suite is re-run with it, recording a baseline-vs-augmented finding
+diff -- data for whether learned specs widen real coverage. Disable
+with `--no-learned-models`.
 
 ### Phase 5 -- Reporting
 
 The agent writes `codeql_report.json` containing language detection
 results, database creation status, per-language finding counts, SARIF
-file paths, timing, and any errors.
-
-A two-stage serialisation strategy ensures that a report file always
-lands on disk: if the full `to_dict()` raises, a minimal report with
-high-level stats and an explicit error field is written instead.
+file paths, timing, and any errors. A report file always lands on
+disk, even when full serialisation fails.
 
 
 ## Autonomous Analysis (`--analyze`)
 
-When `--analyze` is passed, the pipeline continues into a second
-phase powered by `packages/codeql/autonomous_analyzer.py`. Each
-SARIF finding is processed through a seven-stage pipeline.
+When `--analyze` is passed, each SARIF finding continues into a
+second, LLM-powered phase.
 
 ### Reachability Prefilter
 
 Before spending LLM tokens, the analyser consults a source-level
-call graph (`core/analysis/reach_audit.py`) to determine whether the
-function containing the finding's sink is reachable from any entry
-point.
+call graph to determine whether the function containing the finding's
+sink is reachable from any entry point.
 
 The classifier runs a 10-stage precedence chain:
 
@@ -258,8 +250,8 @@ The classifier runs a 10-stage precedence chain:
 9. **Entry reachability** -- graph walk from known entry points.
 10. **One-hop caller** -- at least one direct caller exists.
 
-The reachability chokepoint (`core/analysis/reach_chokepoint.py`)
-enforces policy: only SOUND witnesses (module-aborts, lexical-dead,
+The reachability chokepoint enforces policy: only SOUND witnesses
+(module-aborts, lexical-dead,
 binary-oracle-absent) can authorise hard suppression. Heuristic
 verdicts (not-called, no-path-from-entry) are recorded but never
 cause suppression. Suppressed findings are logged to
@@ -271,8 +263,6 @@ CTF targets, vendor snippets, or intentional dead-code audits).
 
 ### Dataflow Validation
 
-Implemented in `packages/codeql/dataflow_validator.py`.
-
 The validator parses SARIF `codeFlows` to reconstruct the taint path
 from source to sink, then identifies potential sanitisers along the
 path. Evidence collection is CWE-dispatched: injection-class findings
@@ -281,9 +271,8 @@ source-intel structural evidence.
 
 ### SMT Path Feasibility
 
-Implemented in `core/smt_solver/path_feasibility.py`. Requires
-`z3-solver` (`pip install z3-solver`); degrades gracefully when
-absent.
+Requires `z3-solver` (`pip install z3-solver`); degrades gracefully
+when absent.
 
 After the LLM extracts branch conditions from each dataflow step as
 structured predicates (`"size > 0"`, `"offset + length <=
@@ -312,50 +301,34 @@ injection) fall through to LLM analysis.
 
 Two-tier architecture:
 
-1. **Fast FP prefilter** -- a cheap model (`TaskType.VERDICT_BINARY`)
-   with a `CONSERVATIVE` prompt envelope is asked whether the finding
+1. **Fast FP prefilter** -- a cheap model is asked whether the finding
    is a confident false positive. The framing is deliberately
-   asymmetric: only `clear_fp` verdicts short-circuit; `needs_analysis`
-   falls through. A scorecard policy gate
-   (`core/llm/scorecard/prefilter.py`) decides whether to honour the
-   cheap model's verdict based on historical agreement with the full
-   analyser.
+   asymmetric: only confident-FP verdicts short-circuit; anything else
+   falls through to full analysis. A scorecard policy gate decides
+   whether to honour the cheap model's verdict based on its historical
+   agreement with the full analyser.
 
 2. **Full analysis** -- the finding, source context, dataflow path,
    and any SMT-derived input values are sent to the primary analysis
-   model with a Mark Dowd security researcher persona. The prompt
-   requests the 10-field `VULNERABILITY_ANALYSIS_SCHEMA` covering
-   true-positive determination, exploitability score, severity,
-   reasoning, attack scenario, prerequisites, impact, CVSS estimate,
-   and mitigation.
+   model, which returns a structured assessment: true-positive
+   determination, exploitability score, severity, reasoning, attack
+   scenario, prerequisites, impact, CVSS estimate, and mitigation.
 
-All untrusted content is wrapped in `UntrustedBlock` objects and
-`TaintedString` slots before prompt construction.
+All untrusted content is wrapped in untrusted-content envelopes before
+prompt construction.
 
 ### Exploit Generation
 
 When a finding is assessed as exploitable, the analyser generates a
-proof-of-concept exploit via an LLM call (`TaskType.GENERATE_CODE`,
-temperature 0.8).
-
-The generated code is then passed through an iterative
-compile-test-fix loop:
-
-1. Compile via `ExploitValidator.validate_exploit` (sandboxed, network
-   blocked).
-2. If compilation fails, send errors to
-   `MultiTurnAnalyser.refine_exploit_iteratively`.
-3. Loop terminates on: compile success, LLM returns identical or empty
-   code, or maximum refinement iterations exhausted (default 3).
-
-Source-scan rejection (`poc_source_scan.scan`) checks for
-exfiltration patterns before the exploit is written to disk.
+proof-of-concept exploit and runs it through an iterative
+compile-test-fix loop (sandboxed, network blocked; up to 3 refinement
+iterations). A source scan checks for exfiltration patterns before the
+exploit is written to disk.
 
 ### Visualisation
 
 When `--no-visualizations` is not set, four output formats are
-generated per dataflow path via
-`packages/codeql/dataflow_visualizer.py`:
+generated per dataflow path:
 
 | Format | Extension | Description |
 |--------|-----------|-------------|
@@ -367,27 +340,18 @@ generated per dataflow path via
 
 ## Custom Queries
 
-RAPTOR ships 8 hand-written queries under `engine/codeql/queries/`,
-complementing the upstream suites with patterns that CodeQL's standard
-packs do not cover.
-
-### C++ (`engine/codeql/queries/cpp/`)
-
-| Query | CWEs | Severity | Description |
-|-------|------|----------|-------------|
-| `FormatStringFromUntrusted.ql` | CWE-134 | 9.3 | Printf-family format string from untrusted source (file, network, env, argv). Taint-tracking path-problem. |
-| `IntegerTruncationInCast.ql` | CWE-681, 190, 122 | 8.0 | Explicit cast from wider to narrower integer flowing to allocation or buffer operation without prior range check. |
-| `IteratorInvalidation.ql` | CWE-416, 825 | 7.5 | Container mutation (erase, insert, push_back, resize, clear) during active iteration. Excludes safe `it = container.erase(it)`. |
-| `UseAfterMove.ql` | CWE-416 | 6.0 | Access to variable after `std::move()` without intervening reassignment. Excludes safe post-move operations (clear, reset, swap). |
-
-### Java (`engine/codeql/queries/java/`)
-
-| Query | CWEs | Severity | Description |
-|-------|------|----------|-------------|
-| `InsecureDeserialization.ql` | CWE-502 | 9.8 | `ObjectInputStream` from untrusted input calling `readObject()` without a JEP 290 type filter. Taint-tracking path-problem. |
-| `SpringSSRFAnnotationSource.ql` | CWE-918 | 9.1 | SSRF via Spring MVC annotation-injected parameters (`@RequestParam`, `@PathVariable`, `@RequestBody`) flowing to HTTP client calls. |
-| `XXEDocumentBuilder.ql` | CWE-611 | 9.0 | `DocumentBuilder` parsing XML without disabling external entity resolution. |
-| `LogInjection.ql` | CWE-117 | 5.0 | User-controlled data to logging methods (java.util.logging, SLF4J, Log4j2, Commons Logging) without CRLF sanitisation. |
+RAPTOR ships hand-written C++ and Java queries under
+`engine/codeql/queries/` (format string, integer truncation, iterator
+invalidation, use-after-move; insecure deserialisation, Spring SSRF,
+XXE, log injection), complementing the upstream suites with patterns
+their standard packs do not cover. Run
+`ls engine/codeql/queries/*/` for the current list. They run
+automatically after the standard suite for every language that has a
+curated pack, writing `codeql_<lang>_curated.sarif` alongside the
+suite SARIF. Opt out per run with `--no-curated-queries`. Import
+resolution prefers packs already on disk (no network needed); a
+failure degrades to a warning without affecting the standard-suite
+results.
 
 
 ## Supported Languages
@@ -408,18 +372,20 @@ CodeQL suite coverage across both suite tiers:
 | Kotlin | yes | yes | Reuses Java suite |
 | Rust | yes | yes | |
 
-Language auto-detection covers 10 languages (all except Rust, which
-has no detection pattern but can be specified via `--languages rust`).
+Language auto-detection covers all 11 languages. Rust is additionally
+extractor-probed (`codeql resolve languages`), so CLIs without the
+Rust extractor get a clear skip.
 
 
 ## Prerequisites
 
 - **CodeQL CLI** -- must be on `PATH` or specified via `--codeql-cli`.
   Query packs are auto-downloaded on first use.
-- **Build toolchain** -- for compiled languages (C/C++, Java, C#, Go,
-  Swift, Kotlin), the appropriate compiler or build tool must be
-  installed. Interpreted languages (Python, JavaScript, TypeScript,
-  Ruby) use no-build extraction.
+- **Build toolchain** -- only for traced builds (`--traced-build` /
+  `--build-command`) and for the autobuild languages (Go, Swift,
+  Kotlin). C/C++, Java, and C# default to buildless extraction, and
+  interpreted languages (Python, JavaScript, TypeScript, Ruby) use
+  no-build extraction -- neither needs a compiler.
 - **z3-solver** (optional) -- `pip install z3-solver` to enable SMT
   path feasibility checks. Without it, the SMT stage is silently
   skipped and all findings proceed to full LLM analysis.

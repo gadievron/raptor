@@ -78,9 +78,18 @@ class ResilientLLMClient:
     backoff_factor: float = 2.0
     timeout_s: float = 120.0
     max_cost_usd: float = 0.10
+    # call_class labels this client's records in the run-local
+    # llm-telemetry.jsonl (see core.llm.telemetry). Callers with a
+    # distinct spend class set their own (the root-cause analyzer uses
+    # "cve-diff:root-cause"); records are no-ops unless the
+    # orchestrator installed a sink.
+    call_class: str = "cve-diff:llm"
     cumulative_cost_usd: float = field(default=0.0, init=False)
 
     _provider_cache: dict[str, LLMProvider] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _provider_names: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
 
@@ -89,6 +98,13 @@ class ResilientLLMClient:
             self._provider_cache[model_id] = _provider_for_model(
                 model_id, self.timeout_s
             )
+            # Telemetry label only — never let auth-resolution quirks
+            # break the call path.
+            try:
+                from .auth import resolve_auth
+                self._provider_names[model_id] = resolve_auth(model_id).provider
+            except Exception:  # noqa: BLE001
+                self._provider_names[model_id] = ""
         return self._provider_cache[model_id]
 
     def complete(
@@ -118,14 +134,27 @@ class ResilientLLMClient:
         # full backoff schedule. Classify first; non-retryable errors
         # raise immediately. (Classifier shared with core.llm's own
         # retry loop — same policy, one implementation.)
-        from core.llm.client import _is_retryable_error
+        from core.llm import telemetry
+        from core.llm.client import _failure_disposition, _is_retryable_error
+        from core.security.log_sanitisation import escape_nonprintable
 
         attempt = 0
         while True:
+            attempt_start = time.monotonic()
             try:
                 resp = provider.generate(prompt, system_prompt=system, **kwargs)
                 break
             except Exception as exc:
+                telemetry.emit(
+                    event="attempt_failed",
+                    disposition=_failure_disposition(exc),
+                    call_class=self.call_class,
+                    provider=self._provider_names.get(model_id, ""),
+                    model=model_id,
+                    attempt=attempt + 1,
+                    duration_s=round(time.monotonic() - attempt_start, 3),
+                    error=escape_nonprintable(str(exc))[:200],
+                )
                 if attempt >= self.max_retries or not _is_retryable_error(exc):
                     raise LLMCallFailed(
                         f"LLM call ({model_id}) failed after "
@@ -140,6 +169,18 @@ class ResilientLLMClient:
         out_t = resp.output_tokens
         cost = resp.cost
         self.cumulative_cost_usd += cost
+        telemetry.emit(
+            event="call",
+            disposition="ok",
+            call_class=self.call_class,
+            provider=self._provider_names.get(model_id, ""),
+            model=model_id,
+            attempt=attempt + 1,
+            duration_s=round(time.monotonic() - attempt_start, 3),
+            cost_usd=cost,
+            tokens_in=in_t,
+            tokens_out=out_t,
+        )
         return LLMResponse(
             text=text,
             model_id=model_id,

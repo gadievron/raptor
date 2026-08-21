@@ -72,6 +72,32 @@ def _load_security_context(out_dir: Path) -> str:
         return ""
 
 
+# Shared calibration rules — every phase-2 style security-impact
+# classification (the in-run classifier below AND the corpus runner's
+# merged-row pass) must carry these, or the two deciders drift: the
+# CWE-362 stream-race rule exists because unsynchronized writes to a
+# parsed stream or a check-then-create map are the mechanism behind
+# real CVEs (moby CVE-2024-36623 and CVE-2024-36621), and an
+# uncalibrated prompt reliably rules them
+# "quality".
+CALIBRATION_RULES = (
+    "Two calibration rules:\n"
+    "- Data races and unsynchronized concurrent writes that can "
+    "interleave or corrupt shared state another component relies on "
+    "— a stream another component parses (wire protocols, "
+    "API/progress streams, structured logs) or a shared registry/"
+    "refcount map mutated by a check-then-create sequence — are "
+    "integrity/availability defects for that state's consumers "
+    "— security_finding, not cosmetic output error. The trigger "
+    "is ordinary concurrent operation, not a contrived input.\n"
+    "- Do not infer impact from the bug class or CWE alone. A "
+    "security_finding needs a concrete mechanism connecting a "
+    "reachable trigger to the violated property. A hypothesis of "
+    "the form 'could mishandle X' or 'might produce invalid "
+    "output', with no stated path from attacker-influenced or "
+    "concurrent execution to that failure, is a quality_finding."
+)
+
 _CLASSIFICATION_SYSTEM = with_audit_framing(
     "You are a security impact classifier.  Given a "
     "verified code defect, decide whether it has security "
@@ -89,7 +115,8 @@ _CLASSIFICATION_SYSTEM = with_audit_framing(
     "A defect that only affects correctness (wrong output, "
     "resource leak with no security consequence, cosmetic error) "
     "is a quality_finding.  A defect that an attacker can use "
-    "to violate a security property is a security_finding.",
+    "to violate a security property is a security_finding.\n\n"
+    + CALIBRATION_RULES,
 )
 
 
@@ -268,13 +295,21 @@ def classify_security_impact(
                 }
         except Exception:
             logger.warning(
-                "security classification failed for %s — defaulting to quality",
+                "security classification failed for %s — recording error",
                 key, exc_info=True,
             )
+            # FAIL CLOSED: a transport/auth failure is an error cell,
+            # not a quality ruling. Downstream consumers that demote
+            # on ``classification == "quality_finding"`` must never
+            # act on a call that did not happen. (The preflight and
+            # envelope-echo defaults above are different: those are
+            # deliberate fail-safe RULINGS on suspect inputs, and can
+            # only prevent promotion, so they keep the quality
+            # default.)
             result = {
                 "is_security": False,
-                "classification": "quality_finding",
-                "rationale": "classification failed — defaulted to quality",
+                "classification": "error",
+                "rationale": "classification call failed — not a ruling",
             }
 
         results[key] = result

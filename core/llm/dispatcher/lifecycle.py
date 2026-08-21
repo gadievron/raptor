@@ -26,6 +26,19 @@ from .server import LLMDispatcher
 
 _AUDIT_FILENAME = "audit-llm-dispatcher.jsonl"
 
+# Worker-token TTL for the in-process self-serve route. The default
+# worker TTL (8 h) bounds a SPAWNED worker that could outlive its
+# intended span while the credential-holding parent keeps running.
+# On the in-process route there is no such boundary: the token store,
+# the socket, and the credentials all live in THIS process and die
+# with it, so the token cannot outlive the run by construction. An
+# 8 h TTL here only decapitates the trailing phases of a long run
+# (observed: every classification call after hour 8 of an 8.2 h
+# audit 401'd against a dead token). Size the TTL to out-last any
+# realistic single run instead; ``RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S``
+# still wins when the operator sets it.
+_INPROCESS_TOKEN_TTL_S = 7 * 24 * 60 * 60
+
 
 # Explicit pass-through signature, replacing an earlier ``**kwargs``
 # fan-out. Pre-fix the wildcard accepted anything — typos like
@@ -122,8 +135,13 @@ def ensure_inprocess_dispatcher_env(
 
     creds = CredentialStore()
     seed_from_config(creds)
+    kwargs: dict = {}
+    if not os.environ.get("RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S"):
+        # Only when the operator hasn't pinned a TTL — an explicit
+        # constructor arg would otherwise shadow the env override.
+        kwargs["token_ttl_s"] = _INPROCESS_TOKEN_TTL_S
     d = LLMDispatcher(
-        run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds,
+        run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds, **kwargs,
     )
     try:
         socket_path, token_fd = d.allocate_worker(label)

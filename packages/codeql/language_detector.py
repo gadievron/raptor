@@ -124,13 +124,31 @@ class LanguageDetector:
             "indicators": {"src/main/kotlin/", "src/test/kotlin/"},
             "min_confidence": 0.6,
         },
+        "rust": {
+            "extensions": {".rs"},
+            "build_files": {"Cargo.toml", "Cargo.lock"},
+            "build_file_suffixes": (),
+            "indicators": {"src/main.rs", "src/lib.rs"},
+            "min_confidence": 0.6,
+        },
     }
 
-    # CodeQL supported languages (as of 2024)
+    # CodeQL supported languages (as of 2024; rust extraction landed
+    # later and is additionally extractor-probed — see
+    # EXTRACTOR_PROBED)
     CODEQL_SUPPORTED: ClassVar[set[str]] = {
         "java", "python", "javascript", "typescript", "go",
-        "cpp", "csharp", "ruby", "swift", "kotlin"
+        "cpp", "csharp", "ruby", "swift", "kotlin", "rust"
     }
+
+    # Languages whose extractor is new enough that older installed
+    # CLIs lack it entirely. filter_codeql_supported() confirms the
+    # extractor via `codeql resolve languages` before routing the
+    # language to database creation; a CLI without it gets a clear
+    # skip instead of a doomed `database create` attempt. (Rust
+    # extraction is buildless by design — the extractor never runs
+    # the repo's build, verified on CLI 2.26.3.)
+    EXTRACTOR_PROBED: ClassVar[set[str]] = {"rust"}
 
     # Directories to ignore during scanning
     IGNORE_DIRS: ClassVar[set[str]] = {
@@ -543,6 +561,12 @@ class LanguageDetector:
         """
         Filter detected languages to only CodeQL-supported ones.
 
+        Languages in :data:`EXTRACTOR_PROBED` are additionally checked
+        against the installed CLI's extractor list — a detected
+        language whose extractor the CLI lacks is dropped with a clear
+        upgrade hint rather than routed into a doomed
+        ``database create``.
+
         Args:
             detected: Dictionary of detected languages
 
@@ -554,14 +578,68 @@ class LanguageDetector:
             if lang in self.CODEQL_SUPPORTED
         }
 
+        for lang in sorted(set(supported) & self.EXTRACTOR_PROBED):
+            if not self._extractor_available(lang):
+                del supported[lang]
+                logger.warning(
+                    "%s detected but the installed CodeQL CLI has no %s "
+                    "extractor (`codeql resolve languages`) — skipping; "
+                    "upgrade the CLI to scan %s",
+                    lang, lang, lang,
+                )
+
         # Log unsupported languages
-        unsupported = set(detected.keys()) - set(supported.keys())
+        unsupported = set(detected.keys()) - set(supported.keys()) - self.EXTRACTOR_PROBED
         if unsupported:
             logger.warning(
                 "Languages detected but not supported by CodeQL: %s", ', '.join(unsupported)
             )
 
         return supported
+
+    # Class-level cache: the installed CLI's extractor set doesn't
+    # change mid-process. None = not probed yet; frozenset() = probe
+    # failed (conservative: probed languages read as unavailable, the
+    # statically-supported set is unaffected).
+    _extractor_langs: "frozenset[str] | None" = None
+
+    def _extractor_available(self, language: str) -> bool:
+        """True when `codeql resolve languages` lists *language*.
+
+        Never raises: an absent/failed CLI reads as unavailable so
+        callers degrade with a clear skip instead of a crash. Same
+        env-hygiene posture as DatabaseManager's version probe (the
+        codeql launcher is a JVM that honours JAVA_TOOL_OPTIONS-class
+        env vars).
+        """
+        cls = type(self)
+        if cls._extractor_langs is None:
+            langs: set[str] = set()
+            try:
+                import re
+                import shutil
+                import subprocess
+
+                from core.config import RaptorConfig
+
+                cli = shutil.which("codeql")
+                if cli:
+                    result = subprocess.run(
+                        [cli, "resolve", "languages"],
+                        capture_output=True, text=True, timeout=60,
+                        check=False, env=RaptorConfig.get_safe_env(),
+                    )
+                    if result.returncode == 0:
+                        # Lines look like: "rust (/path/to/extractor)"
+                        for line in result.stdout.splitlines():
+                            m = re.match(r"^\s*([a-z][\w+-]*)\s*\(", line)
+                            if m:
+                                langs.add(m.group(1))
+            except Exception as e:  # noqa: BLE001 — probe must never crash detection
+                logger.debug("codeql extractor probe failed: %s", e)
+                langs = set()
+            cls._extractor_langs = frozenset(langs)
+        return language in cls._extractor_langs
 
 
 def main():

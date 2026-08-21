@@ -271,6 +271,51 @@ class TestPassAndGaps:
         assert res.generators == [] and res.gaps == []
 
 
+class TestPlKernelItems:
+    """Generated kernels map back to their on-disk generator spans."""
+
+    PL = (
+        '$prefix="aes_v8";\n'
+        'my $mode = "gcm";\n'
+        '$code=<<___;\n'
+        '.globl\t${prefix}_${mode}_encrypt\n'
+        '${prefix}_${mode}_encrypt:\n'
+        '\tret\n'
+        '.size\t${prefix}_${mode}_encrypt,.-${prefix}_${mode}_encrypt\n'
+        '___\n'
+        '$code.=<<___;\n'
+        '${prefix}_${unknown}_thing:\n'
+        '\tret\n'
+        '.Llocal_label:\n'
+        'literal_kernel:\n'
+        '\tret\n'
+        '___\n'
+    )
+
+    def test_interpolated_and_literal_kernels_mapped(self):
+        items = perlasm.pl_kernel_items(
+            self.PL,
+            {"aes_v8_gcm_encrypt", "literal_kernel", "other"},
+        )
+        by_name = {i.name: i for i in items}
+        # Interpolated spelling keeps the on-disk literal name.
+        ker = by_name["${prefix}_${mode}_encrypt"]
+        assert ker.line_start == 5
+        assert ker.line_end == 7          # its .size directive
+        assert "perlasm_kernel:aes_v8_gcm_encrypt" in (
+            ker.metadata.attributes
+        )
+        # Plain literal label maps too.
+        assert "literal_kernel" in by_name
+        # Unresolvable interpolation and .L locals are skipped.
+        assert "${prefix}_${unknown}_thing" not in by_name
+        assert not any(i.name.startswith(".L") for i in items)
+
+    def test_no_kernels_no_items(self):
+        assert perlasm.pl_kernel_items(self.PL, set()) == []
+        assert perlasm.pl_kernel_items("sub f { 1; }\n", {"k"}) == []
+
+
 class TestEnrichment:
     def _inventory(self):
         return {
@@ -301,9 +346,19 @@ class TestEnrichment:
         # The emitted kernel is an enumerable, reviewable unit.
         assert [i["name"] for i in rec["items"]] == ["demo_kernel"]
         assert rec["items"][0]["metadata"]["visibility"] == "exported"
-        # Totals were bumped.
+        # The generator's OWN record gains the source-span kernel item
+        # (on-disk spelling), so a pin on the .pl resolves to a gap.
+        pl_rec = next(f for f in inv["files"]
+                      if f["path"] == "crypto/aes/asm/aes-demo-armv8.pl")
+        (src_item,) = pl_rec["items"]
+        assert src_item["name"] == "demo_kernel"
+        assert src_item["line_start"] > 0
+        assert "perlasm_kernel:demo_kernel" in (
+            src_item["metadata"]["attributes"]
+        )
+        # Totals were bumped (generated kernel + source-span item).
         assert inv["total_files"] == 2
-        assert inv["total_functions"] == 3
+        assert inv["total_functions"] == 4
         assert inv["perlasm"]["generators_detected"] == 1
         assert inv["perlasm"]["analysed"] == 1
 

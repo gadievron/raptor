@@ -206,7 +206,7 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 /understand ./src --map --trace EP-001
 
 # Hunt for variants, write output for validator to consume
-/understand ./src --hunt "cursor.execute with f-string" --out .out/my-validation/
+/understand ./src --hunt "cursor.execute with f-string" --out out/my-validation/
 ```
 
 ## Integration with Validation Pipeline

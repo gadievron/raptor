@@ -24,12 +24,14 @@ LABEL org.opencontainers.image.source="https://github.com/gadievron/raptor" \
 # git is required by actions/checkout when this image is used as a
 # container-job base — the slim base ships none, and checkout fails
 # without it. coccinelle provides /usr/bin/spatch for the source_intel
-# tier's real-spatch E2E tests. ca-certificates is already present in
-# the slim image. Tiers that require heavier system tooling (sandbox
-# namespaces, radare2/gcc) stay on the runner rather than bloating
-# this image.
+# tier's real-spatch E2E tests. jq is required by the sage tier's
+# boot-payload capture roundtrip tests (libexec/raptor-sage-setup's
+# capture_boot_payload extracts the payload with jq; the tests skip
+# without it). ca-certificates is already present in the slim image.
+# Tiers that require heavier system tooling (sandbox namespaces,
+# radare2/gcc) stay on the runner rather than bloating this image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git coccinelle \
+    && apt-get install -y --no-install-recommends git coccinelle jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/raptor-ci

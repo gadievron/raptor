@@ -1001,6 +1001,61 @@ class TestHypothesisDisproof:
         assert m is not None
         assert "count" in m.group(1)
 
+    def test_unconstrained_model_is_inconclusive_not_sat_evidence(self):
+        # Regression (verdict soundness): the old model asserted only
+        # UGT(product, max) with no guard constraints — SAT was
+        # guaranteed and got stamped as smt:disproof:sat evidence,
+        # while the disproved=True suppression branch was unreachable.
+        pytest.importorskip("z3")
+        from core.audit.condition_smt import disprove_integer_overflow
+
+        r = disprove_integer_overflow(
+            "integer overflow in the multiplication `count * element_size`",
+            "uint32_t count; uint32_t element_size;\n"
+            "void f(void) { p = malloc(count * element_size); }",
+        )
+        assert r.disproved is None
+        assert "vacuous" in r.reasoning or "inconclusive" in r.reasoning
+
+    def test_guarded_unsat_disproves(self):
+        # The suppression branch is now reachable: guards that
+        # genuinely rule out the wrap produce disproved=True.
+        pytest.importorskip("z3")
+        from core.audit.condition_smt import disprove_integer_overflow
+
+        r = disprove_integer_overflow(
+            "integer overflow in the multiplication `count * element_size`",
+            "uint32_t count; uint32_t element_size;\n"
+            "if (count < 1000) { if (element_size < 1000) {\n"
+            "    p = malloc(count * element_size); } }",
+        )
+        assert r.disproved is True
+
+    def test_guarded_sat_within_value_space(self):
+        pytest.importorskip("z3")
+        from core.audit.condition_smt import disprove_integer_overflow
+
+        r = disprove_integer_overflow(
+            "integer overflow in the multiplication `count * element_size`",
+            "uint32_t count; uint32_t element_size;\n"
+            "if (count < 100000000) { if (element_size < 100000) {\n"
+            "    p = malloc(count * element_size); } }",
+        )
+        assert r.disproved is False
+
+    def test_mixed_operators_inconclusive(self):
+        # Regression: the first operator used to be applied to the
+        # whole chain, modeling a different expression.
+        pytest.importorskip("z3")
+        from core.audit.condition_smt import disprove_integer_overflow
+
+        r = disprove_integer_overflow(
+            "integer overflow in the calculation `a + b * c`",
+            "uint32_t a; uint32_t b; uint32_t c; if (a < 10) {}",
+        )
+        assert r.disproved is None
+        assert "mixed" in r.reasoning
+
 
 # ── Fix A: callee-contract evidence gate (orchestrator) ────────────
 
@@ -1315,8 +1370,9 @@ err:
         assert "double fetch" in result.reasoning
 
     def test_sweep_dispatch(self):
-        from core.audit.sweep import _SMT_VERBS
-        assert "check-toctou" in _SMT_VERBS
+        from core.audit.sweep import _SMT_DIRECT_ONLY_VERBS, _SMT_VERB_ROLES
+        assert "check-toctou" in _SMT_DIRECT_ONLY_VERBS
+        assert "check-toctou" in _SMT_VERB_ROLES
 
 
 # ── W8: Dual code path unification ──────────────────────────────────
@@ -1459,6 +1515,93 @@ class TestBuildOrchestratorConfig:
         assert cfg.mode is ReviewMode.SECURITY
         assert cfg.llm_client is client
         assert cfg.llm_budget_client is client
+
+    def test_threads_force(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(
+            target_path=tmp_path, out_dir=tmp_path, force=True,
+        )
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.force is True
+
+    def test_force_default_off(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path)
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.force is False
+
+    def test_threads_triage(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(
+            target_path=tmp_path, out_dir=tmp_path, triage=False,
+        )
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.triage is False
+
+    def test_triage_default_on(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path)
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.triage is True
+
+    def test_threads_prefilter_skip(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(
+            target_path=tmp_path, out_dir=tmp_path, prefilter_skip=False,
+        )
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.prefilter_skip is False
+        # The prefilter itself stays enabled — only its skip verdict
+        # is neutered (hits still feed review context).
+        assert cfg.prefilter is True
+
+    def test_prefilter_skip_default_on(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            ReviewMode,
+            _build_orchestrator_config,
+        )
+
+        opts = AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path)
+        cfg = _build_orchestrator_config(
+            opts, object(), ["default"], ReviewMode.SECURITY,
+        )
+        assert cfg.prefilter_skip is True
 
     def test_batch_sloc_default_preserved(self, tmp_path):
         from core.audit.orchestrator import OrchestratorConfig

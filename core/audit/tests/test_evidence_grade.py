@@ -460,3 +460,27 @@ class TestSanitizeLlmEvidenceTool:
 
     def test_whitespace_stripped(self):
         assert sanitize_llm_evidence_tool("  semgrep  ").startswith("llm-claimed:")
+
+
+class TestProvenanceWrappers:
+    """``clean-refuted:<tool>`` wraps a real receipt in promotion
+    provenance — the inner stamp decides, on its own merits."""
+
+    def test_wrapped_tool_qualifies(self):
+        assert is_tool_evidence("clean-refuted:smt")
+        assert is_tool_evidence("clean-refuted:smt:check-overflow")
+        assert is_tool_evidence("clean-refuted:semgrep+joern")
+
+    def test_wrapper_alone_is_not_evidence(self):
+        assert not is_tool_evidence("clean-refuted:")
+        assert not is_tool_evidence("clean-refuted:llm-claimed:smt")
+
+    def test_wrapped_detection_variant_still_may_not_convict(self):
+        # Wrapping must not launder a detection-role stamp into
+        # promoting evidence.
+        assert not is_tool_evidence("clean-refuted:consistency:x-majority")
+
+    def test_llm_claimed_namespacing_survives_wrapping(self):
+        assert not is_tool_evidence(
+            sanitize_llm_evidence_tool("clean-refuted:smt"),
+        )

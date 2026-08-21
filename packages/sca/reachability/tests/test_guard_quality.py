@@ -243,4 +243,9 @@ class TestAnalyzeCallSiteGuards:
         if "PyPI:foo@1.0" in result:
             r = result["PyPI:foo@1.0"]
             assert not r.any_unguarded
-            assert r.call_sites[0].adequacy_verdict == "sufficient"
+            # Eval-class sinks cap at "partial": a guard that LOOKS
+            # like an auth gate proves nothing about what it authorises
+            # (condition_adequacy category_cap_partial). "partial" still
+            # counts as adequately guarded here — only insufficient /
+            # irrelevant verdicts mark a call site unguarded.
+            assert r.call_sites[0].adequacy_verdict == "partial"

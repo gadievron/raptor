@@ -15,6 +15,7 @@ from core.audit.fail_open_detector import (  # noqa: E402
     FailOpenPattern,
     detect_fail_open_patterns,
 )
+from core.testing.treesitter import requires_ts  # noqa: E402
 
 
 # ---------------------------------------------------------------
@@ -240,6 +241,7 @@ def search(query, max_results=20):
         assert len(hits) == 1
         assert hits[0].pattern_type == "truncation_not_signaled"
 
+    @requires_ts("go")
     def test_go_truncation_detected(self):
         """Go function with loop cap using len()."""
         source = '''\

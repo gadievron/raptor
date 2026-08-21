@@ -49,6 +49,11 @@ Semgrep pass (`--expanded-semgrep`).
 | `--no-compiler-scan` | -- | Explicitly disable the compiler-analyzer channel |
 | `--compiler-scan-max-tus <n>` | 2000 | Cap on translation units analysed by `--compiler-scan` (skipped TUs are reported) |
 | `--expanded-semgrep` | off | Re-run the loaded ruleset over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ TUs, line-mapped back to the originals |
+| `--no-sanitizer-cut-postpass` | on by default | Disable the sanitizer-cut post-pass over scan findings (see [Sanitizer-cut post-pass](#sanitizer-cut-post-pass)) |
+| `--no-sanitizer-cut-enforce` | enforcement on | Record sanitizer-cut verdicts but keep suppressed findings in `combined.sarif` |
+| `--no-config-resolved` | on by default | Disable the Java config-resolved weak-algorithm stage (additive findings when a `getInstance(...)` argument resolves to a weak algorithm through configuration) |
+| `--no-source-wrappers` | on by default | Disable the Java taint-source wrapper projection stage (project source-wrapper summaries into taint rules) |
+| `--no-graduated-rules` / `--graduated-rules-dir <dir>` | on by default | Disable (or point elsewhere) the project's graduated synthesized-rules stage — proven rules from checker synthesis run as a standard scan stage |
 | `--keep` | off | Keep temporary working directory after completion |
 | `--sequential` | off | Fully serial run: packs one at a time and stages in order (no Semgrep/CodeQL overlap) |
 | `--out <dir>` | auto | Output directory override |
@@ -250,6 +255,16 @@ into a single `combined.sarif`:
 SARIFs remain unfiltered as a forensic record; only `combined.sarif`
 and downstream metrics reflect the exclusion.
 
+### Sanitizer-cut post-pass
+
+After the merge, the sanitizer-cut gate re-checks taint findings whose
+every source-to-sink path crosses a full-proof sanitizer.  Enforcement
+is the default: suppress-verdict findings are removed from
+`combined.sarif`, with one evidence record per suppression in
+`suppressions.jsonl`.  Per-tool SARIFs are never filtered in any mode.
+`--no-sanitizer-cut-enforce` keeps the verdicts record-only;
+`--no-sanitizer-cut-postpass` skips the pass entirely.
+
 ### Metrics
 
 `scan_metrics.json` contains timing data, per-pack finding counts,
@@ -292,14 +307,11 @@ a false-pass "0 findings" result.
 
 ### Parallel Execution
 
-By default, packs run in parallel via `ThreadPoolExecutor` with
-`max_workers` from `tuning.json` (`max_semgrep_workers`, default
-`auto` = half the available CPUs). Each pack's semgrep process gets a
-`--jobs` share of the cores divided by the number of packs actually
-running at once, so concurrent packs cannot each claim every core. A
-post-completion check verifies that every submitted pack's SARIF file
-actually exists on disk -- missing files (filesystem error, sandbox
-teardown race) are added to the `failed_scans` list.
+By default, packs run in parallel (`max_semgrep_workers` in
+`tuning.json`, default `auto` = half the available CPUs). Concurrent
+packs share the cores instead of each claiming every one, and a
+post-completion check adds any pack whose SARIF never landed on disk
+to the `failed_scans` list.
 
 With `--codeql`, the CodeQL stage (database build + analyze) runs
 concurrently with the Semgrep packs; its console lines are tagged

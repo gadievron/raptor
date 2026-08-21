@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
-
 
 from packages.sca import render, thresholds
-
 
 # ---------------------------------------------------------------------------
 # Pure-function tests of evaluate()
@@ -116,6 +113,55 @@ def test_hygiene_threshold_independent() -> None:
     assert "hygiene" in fails[0]
 
 
+def _license(severity="high", desc="GPL-3.0-only violates policy") -> dict:
+    return {
+        "vuln_type": "sca:license:policy_violation",
+        "severity": severity,
+        "description": desc,
+    }
+
+
+def test_license_threshold_independent() -> None:
+    """License findings gate through their own floor — they used to
+    have no branch at all and could never fail a build."""
+    rows = [_license("high")]
+    cfg_off = thresholds.ThresholdConfig(fail_on_severity="critical")
+    cfg_on = thresholds.ThresholdConfig(
+        fail_on_severity="critical", fail_on_license="high",
+    )
+    assert thresholds.evaluate(rows, cfg_off) == (True, [])
+    passed, fails = thresholds.evaluate(rows, cfg_on)
+    assert passed is False
+    assert "license" in fails[0]
+
+
+def test_license_threshold_respects_floor() -> None:
+    rows = [_license("low")]
+    cfg = thresholds.ThresholdConfig(fail_on_license="high")
+    assert thresholds.evaluate(rows, cfg) == (True, [])
+
+
+def test_license_flag_wiring() -> None:
+    """--fail-on-license flows through add_threshold_args + cfg_from_args
+    and activates the config."""
+    import argparse
+    parser = argparse.ArgumentParser()
+    thresholds.add_threshold_args(parser)
+    args = parser.parse_args(["--fail-on-license", "medium"])
+    cfg = thresholds.cfg_from_args(args)
+    assert cfg.fail_on_license == "medium"
+    assert cfg.is_active is True
+    passed, _fails = thresholds.evaluate([_license("medium")], cfg)
+    assert passed is False
+
+
+def test_license_suppressed_skipped() -> None:
+    row = _license("high")
+    row["suppressed"] = True
+    cfg = thresholds.ThresholdConfig(fail_on_license="low")
+    assert thresholds.evaluate([row], cfg) == (True, [])
+
+
 def test_unknown_vuln_type_ignored() -> None:
     """Findings from other tools (vuln_type not starting with sca:) skipped."""
     cfg = thresholds.ThresholdConfig(fail_on_severity="info")
@@ -129,7 +175,7 @@ def test_unknown_vuln_type_ignored() -> None:
 def test_suppressed_skipped_by_default() -> None:
     cfg = thresholds.ThresholdConfig(fail_on_severity="high")
     rows = [_vuln("critical", suppressed=True)]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is True
 
 
@@ -138,7 +184,7 @@ def test_suppressed_evaluated_with_include_suppressed() -> None:
         fail_on_severity="high", include_suppressed=True,
     )
     rows = [_vuln("critical", suppressed=True)]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is False
 
 
@@ -146,7 +192,7 @@ def test_suppressed_evaluated_with_include_suppressed() -> None:
 # Integration tests — render path with --fail-on-* flags
 # ---------------------------------------------------------------------------
 
-def _write_findings(tmp_path: Path, rows: List[dict]) -> Path:
+def _write_findings(tmp_path: Path, rows: list[dict]) -> Path:
     p = tmp_path / "findings.json"
     p.write_text(json.dumps(rows), encoding="utf-8")
     return p
@@ -253,7 +299,7 @@ def test_max_added_capability_buckets_passes_at_threshold() -> None:
     """Strictly-greater semantics — N=2, 2 added buckets is at limit."""
     cfg = thresholds.ThresholdConfig(max_added_capability_buckets=2)
     rows = [_drift_finding(added_buckets=["alloc", "exec"])]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is True
 
 
@@ -261,7 +307,7 @@ def test_max_added_capability_buckets_zero_means_any_drift_fails() -> None:
     """N=0 → any added bucket fails."""
     cfg = thresholds.ThresholdConfig(max_added_capability_buckets=0)
     rows = [_drift_finding(added_buckets=["alloc"])]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is False
 
 
@@ -270,7 +316,7 @@ def test_max_added_capability_buckets_zero_passes_when_no_added() -> None:
     changes) → N=0 still passes."""
     cfg = thresholds.ThresholdConfig(max_added_capability_buckets=0)
     rows = [_drift_finding(added_buckets=[])]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is True
 
 
@@ -320,7 +366,7 @@ def test_drift_evidence_missing_added_buckets_field_treated_as_empty() -> None:
         "severity": "medium",
         "description": "no evidence field at all",
     }]
-    passed, fails = thresholds.evaluate(rows, cfg)
+    passed, _fails = thresholds.evaluate(rows, cfg)
     assert passed is True
 
 

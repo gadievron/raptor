@@ -320,6 +320,35 @@ def test_cache_rejects_cross_target_collision(
     assert len(loaded.edges) == 1
 
 
+def test_cache_rejects_entry_missing_binary_path(
+    tmp_path, monkeypatch,
+) -> None:
+    """The cross-target collision check must not be bypassable by
+    OMITTING binary_path: a hand-crafted cache entry without the field
+    (or with a non-string value) is a miss, never a hit."""
+    import json
+
+    from core.analysis.binary_oracle_edges import (
+        _cache_path_for, _load_cached_index, _EDGE_CACHE_VERSION,
+    )
+    from core.config import RaptorConfig
+    monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
+
+    cache_file = _cache_path_for("abcdef" * 7)
+    assert cache_file is not None
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    for bad_payload in (
+        {"version": _EDGE_CACHE_VERSION,
+         "edges": [{"caller": "main", "callee": "evil_free_pass"}]},
+        {"version": _EDGE_CACHE_VERSION, "binary_path": None,
+         "edges": [{"caller": "main", "callee": "evil_free_pass"}]},
+    ):
+        cache_file.write_text(json.dumps(bad_payload), encoding="utf-8")
+        assert _load_cached_index(cache_file, "/bin/binA") is None, (
+            "cache entry without a valid binary_path must be a miss"
+        )
+
+
 def test_binary_call_edge_precedes_entry_stage(monkeypatch) -> None:
     """Adversarial review P0-118: ``_stage_binary_call_edge`` MUST run
     BEFORE ``_stage_entry`` in PRECEDENCE — affirmative binary evidence

@@ -8,7 +8,7 @@ rules:
       the enclosing function returns, causing resource exhaustion. Close
       explicitly or extract the loop body into a separate function.
     languages: [go]
-    severity: WARNING
+    severity: MEDIUM
     patterns:
       - pattern: defer $X.Close()
       - pattern-inside: |
@@ -37,22 +37,47 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches db.Query(...), which self-taints the
+          # Query sinks below (any hardcoded db.Query(fmt.Sprintf(..)))
+          # would flag itself with no attacker data involved).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
     pattern-sinks:
+      # Query/Exec are generic method names shared with non-SQL types,
+      # so they only qualify with an inline fmt.Sprintf whose format
+      # string opens with SQL text — the keyword guard is the FP
+      # control. This closes the gap where db.Query(fmt.Sprintf(...))
+      # fell between this rule (which excluded Query/Exec) and
+      # sql-taint.yaml (which requires + concatenation).
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Query(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.Exec(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryRow(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryRowContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.ExecContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+          - metavariable-regex:
+              metavariable: $FMT
+              regex: '(?i)^"\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
       # Single-argument calls to SQL-unique methods only.
-      # Query/Exec excluded — generic names shared with non-SQL types
-      # (those are caught by sql-taint.yaml's concat + SQL keyword rule).
-      # pattern-not excludes string-literal $Q to prevent FPs on
-      # hardcoded queries.
+      # Bare-variable Query/Exec excluded — generic names shared with
+      # non-SQL types (concat spellings are caught by sql-taint.yaml's
+      # concat + SQL keyword rule; Sprintf spellings by the guard
+      # above). pattern-not excludes string-literal $Q to prevent FPs
+      # on hardcoded queries.
       - patterns:
           - pattern: $DB.QueryRow($Q)
           - pattern-not: $DB.QueryRow("...")
@@ -121,13 +146,20 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
@@ -147,9 +179,61 @@ rules:
       - patterns:
           - pattern: filepath.Join($BASE, $PATH)
           - focus-metavariable: $PATH
+    # No filepath.Clean sanitizer: Clean("../..") returns "../.." and
+    # Clean("/srv/"+f) resolves the escape rather than preventing it —
+    # it normalises, it does not confine. filepath.Base does confine
+    # (strips every directory component, "../" included).
     pattern-sanitizers:
-      - pattern: filepath.Clean(...)
+      - pattern: filepath.Base(...)
     metadata:
       cwe: ["CWE-22"]
       owasp_top_10: ["A1:2021-Broken Access Control"]
       tags: ["security", "go", "path-traversal", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — pattern: strconv result cast to a narrower int without a range check
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.parsed-int-narrowing-cast
+    message: >-
+      A strconv.Atoi/ParseInt result is cast to a narrower integer type with
+      no range check between the parse and the cast. Values outside the
+      narrow type wrap silently (e.g. uid 4294967296 becomes 0, granting
+      root); negative parses wrap to huge unsigned values. Range-check the
+      parsed value against the destination type's bounds first.
+    languages: [go]
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: uint32($V)
+          - pattern: uint16($V)
+          - pattern: uint8($V)
+          - pattern: int32($V)
+          - pattern: int16($V)
+          - pattern: int8($V)
+      - pattern-inside: |
+          func $F(...) {
+            ...
+            $V, $ERR := strconv.Atoi(...)
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $V > $MAX { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $V < $MIN { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $A <= $V && $V <= $B { ... }
+            ...
+          }
+    metadata:
+      cwe: ["CWE-190", "CWE-681"]
+      tags: ["security", "go", "integer", "truncation"]

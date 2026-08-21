@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add core/config/__init__.py README.md CITATION.cff
+          git add core/config/__init__.py pyproject.toml README.md CITATION.cff
           if ! git diff --cached --quiet; then
             git commit -m "release: stamp ${TAG}"
             git tag -a -f "${TAG}" -m "Release ${TAG}"

@@ -120,6 +120,13 @@ def _pack_tuple_for_id(pack_id: str) -> tuple[str, str]:
     return (f"semgrep_{safe}", full_id)
 
 
+# Registry packs dropped by the reachability probe this run.
+# Accumulated across dispatcher calls (parallel/sequential dispatch and
+# the expanded-semgrep stage all probe independently) so main() can
+# record the full loss in scan_metrics.json.
+_dropped_registry_packs: list[str] = []
+
+
 def _drop_unreachable_registry_packs(
     configs: list[tuple[str, str]],
 ) -> list[tuple[str, str]]:
@@ -128,6 +135,11 @@ def _drop_unreachable_registry_packs(
     A 3-second TCP probe distinguishes "airgapped" from "slow link".
     Cached packs (resolved to local paths by ``get_semgrep_config``)
     and local rule directories pass through unchanged.
+
+    Dropping is loud: with an unpopulated local registry cache an
+    offline run loses EVERY baseline pack, which pre-fix read as a
+    clean-but-quiet scan. Each drop prints an operator banner and is
+    accumulated in ``_dropped_registry_packs`` for scan_metrics.json.
     """
     needs_network = [
         (n, c) for n, c in configs
@@ -175,6 +187,17 @@ def _drop_unreachable_registry_packs(
             "semgrep.dev unreachable (3 s probe failed) — "
             "dropping %d uncached registry pack(s): %s",
             len(dropped), ", ".join(dropped),
+        )
+        for name in dropped:
+            if name not in _dropped_registry_packs:
+                _dropped_registry_packs.append(name)
+        print(
+            f"⚠️  semgrep: {len(dropped)} registry pack(s) dropped "
+            f"({', '.join(dropped)}) — semgrep.dev unreachable and no "
+            "local cache for them. Coverage is reduced for this run; "
+            "populate engine/semgrep/rules/registry-cache/ with "
+            "engine/semgrep/tools/cache-packs.py to scan offline.",
+            file=sys.stderr,
         )
         drop_set = {c for _, c in needs_network}
         return [(n, c) for n, c in configs if c not in drop_set]
@@ -632,7 +655,11 @@ def _resolve_rules_applied(
     # names so the coverage record still has SOME identity
     # (preserves pre-fix shape for the genuinely-empty case).
     _ = groups  # accepted for API symmetry; unused — see docstring.
-    return [str(Path(r).name) for r in rules_dirs]
+    # Single-file groups record by stem ("ssrf"), dirs by name.
+    return [
+        Path(r).stem if Path(r).is_file() else Path(r).name
+        for r in rules_dirs
+    ]
 
 
 def _sanitize_pack_name(name: str) -> str:
@@ -1181,7 +1208,10 @@ def semgrep_scan_parallel(
     for rd in rules_dirs:
         rd_path = Path(rd)
         if rd_path.exists():
-            category_name = rd_path.name
+            # Files (single-file policy groups like ssrf) name the
+            # category by stem so the pack name is 'category_ssrf',
+            # not 'category_ssrf.yaml'.
+            category_name = rd_path.stem if rd_path.is_file() else rd_path.name
 
             # Add local rules for this category
             configs.append((f"category_{category_name}", str(rd_path)))
@@ -1368,7 +1398,10 @@ def semgrep_scan_sequential(
     for rd in rules_dirs:
         rd_path = Path(rd)
         if rd_path.exists():
-            category_name = rd_path.name
+            # Files (single-file policy groups like ssrf) name the
+            # category by stem so the pack name is 'category_ssrf',
+            # not 'category_ssrf.yaml'.
+            category_name = rd_path.stem if rd_path.is_file() else rd_path.name
 
             # Add local rules for this category
             configs.append((f"category_{category_name}", str(rd_path)))
@@ -1868,7 +1901,8 @@ def run_expanded_semgrep_stage(
         for rd in rules_dirs:
             rd_path = Path(rd)
             if rd_path.exists():
-                configs.append((f"category_{rd_path.name}", str(rd_path)))
+                _cat = rd_path.stem if rd_path.is_file() else rd_path.name
+                configs.append((f"category_{_cat}", str(rd_path)))
         for pack_name, pack_id in baseline_packs:
             if pack_id not in added_packs:
                 configs.append(
@@ -2116,6 +2150,171 @@ def run_graduated_rules_stage(
             file=sys.stderr,
         )
     return [str(sarif_path)]
+
+
+def run_source_wrapper_stage(
+    repo_path: Path,
+    out_dir: Path,
+) -> tuple[list[str], list[str]]:
+    """Project mechanically-derived Java source-wrapper summaries into
+    additional taint-source rules and run them as a scan stage.
+
+    Sources are proofs from ``core.analysis.java_source_summaries``
+    (a helper method whose return provably carries servlet-request
+    data); sinks/sanitizers mirror the in-repo java rules. The
+    generated YAML lives under the run output directory — never in
+    the rules tree. Additive findings only, emitted as
+    ``source-wrappers.sarif`` under the ``raptor-source-wrappers``
+    tool name with rule ids prefixed ``source-wrapper:``. Auto-skips
+    silently when the tree yields no summaries or tree-sitter java
+    is unavailable.
+    """
+    try:
+        from core.analysis.java_source_summaries import scan_tree
+        from packages.semgrep.source_wrapper_rules import generate_rules_yaml
+    except ImportError:
+        return [], []
+    try:
+        summaries, refusals, scanned = scan_tree(Path(repo_path))
+    except Exception as exc:  # noqa: BLE001 — stage must not kill the scan
+        logger.warning("source-wrappers: scan failed: %s", exc)
+        return [], []
+    if not summaries:
+        logger.debug(
+            "source-wrappers: no qualifying wrappers "
+            "(%d files scanned)", scanned)
+        return [], []
+    yaml_text = generate_rules_yaml(summaries)
+    if not yaml_text:
+        return [], []
+    stage_dir = Path(out_dir) / "source-wrappers"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    rules_file = stage_dir / "rules.yaml"
+    rules_file.write_text(yaml_text, encoding="utf-8")
+
+    try:
+        from packages.semgrep.runner import is_available as semgrep_available
+        from packages.semgrep.runner import run_rule as semgrep_run_rule
+    except ImportError:
+        return [], []
+    if not semgrep_available():
+        print(
+            "⚠️  source-wrapper stage did not run: semgrep not installed",
+            file=sys.stderr,
+        )
+        return [], []
+    try:
+        res = semgrep_run_rule(
+            Path(repo_path), str(rules_file),
+            name="source_wrappers",
+            timeout=RaptorConfig.SEMGREP_PACK_TIMEOUT,
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("source-wrappers: run failed: %s", exc)
+        return [], []
+
+    findings = [("wrapper", f.to_dict()) for f in res.findings]
+    sarif_path = Path(out_dir) / "source-wrappers.sarif"
+    doc = _stage_findings_to_sarif(
+        findings,
+        tool_name="raptor-source-wrappers",
+        rule_prefix="source-wrapper",
+        # CWE rides the SARIF rule properties — the recall matcher
+        # never credits CWE-less findings (by doctrine), and the
+        # downstream CWE dispatch keys off it too.
+        cwe_by_suffix={
+            ".xss": "CWE-79",
+            ".trust-boundary": "CWE-501",
+            ".sqli": "CWE-89",
+            ".xpath": "CWE-643",
+        },
+    )
+    save_json(sarif_path, doc)
+    # The qualified wrapper names are run-scoped learned vocabulary:
+    # the sanitizer-cut post-pass's source locator only knows the
+    # direct servlet getters, so a finding whose taint enters via
+    # scr.getTheParameter(...) has no locatable source without them.
+    wrapper_names = sorted({s.name for s in summaries})
+    save_json(stage_dir / "wrappers.json", {
+        "wrapper_methods": wrapper_names,
+        "provenance": "mechanical-summary",
+    })
+    logger.info(
+        "source-wrappers: %d wrapper(s) projected, %d finding(s); "
+        "SARIF at %s (refusal top: %s)",
+        len(summaries), len(findings), sarif_path,
+        sorted(refusals.items(), key=lambda kv: -kv[1])[:3],
+    )
+    return [str(sarif_path)], wrapper_names
+
+
+def _stage_findings_to_sarif(
+    findings: list[tuple[str, dict]],
+    *,
+    tool_name: str,
+    rule_prefix: str,
+    cwe_by_suffix: dict[str, str] | None = None,
+) -> dict:
+    """SARIF doc for a generated-rule stage; same shape discipline as
+    the graduated stage (distinct tool name, provenance in ruleId)."""
+    rule_defs: list[dict] = []
+    seen_rules: set = set()
+    results: list[dict] = []
+    for rule_id, f in findings:
+        sarif_rule_id = (
+            f.get("rule_id") or f"{rule_prefix}:{rule_id}"
+        )
+        if not str(sarif_rule_id).startswith(rule_prefix):
+            sarif_rule_id = f"{rule_prefix}:{sarif_rule_id}"
+        if sarif_rule_id not in seen_rules:
+            rule_def = {
+                "id": sarif_rule_id,
+                "name": sarif_rule_id,
+                "shortDescription": {"text": sarif_rule_id},
+                "defaultConfiguration": {"level": "warning"},
+            }
+            for suffix, cwe in (cwe_by_suffix or {}).items():
+                if str(sarif_rule_id).endswith(suffix):
+                    rule_def["properties"] = {"cwe": cwe}
+                    break
+            rule_defs.append(rule_def)
+            seen_rules.add(sarif_rule_id)
+        results.append({
+            "ruleId": sarif_rule_id,
+            "level": f.get("level") or "warning",
+            "message": {
+                "text": f.get("message") or f"{rule_prefix} rule matched",
+            },
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {
+                        "uri": f.get("file") or f.get("path") or "",
+                    },
+                    "region": {
+                        "startLine": f.get("line")
+                                     or f.get("start_line") or 1,
+                        "endLine": f.get("line_end")
+                                   or f.get("end_line")
+                                   or f.get("line")
+                                   or f.get("start_line") or 1,
+                    },
+                },
+            }],
+            "properties": {"provenance": "mechanical-source-summary"},
+        })
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": tool_name,
+                "informationUri": "https://github.com/anthropics",
+                "rules": rule_defs,
+            }},
+            "results": results,
+        }],
+    }
 
 
 def _graduated_findings_to_sarif(
@@ -2415,6 +2614,30 @@ def _compose_verification_manifest(
     }
 
 
+def _validate_policy_groups(
+    ap: argparse.ArgumentParser, policy_groups: str,
+) -> None:
+    """Hard-fail (argparse exit 2) on unknown or reserved policy
+    groups, naming the valid ones. ``all`` is always accepted."""
+    groups = [g.strip() for g in policy_groups.split(",") if g.strip()]
+    excluded = {"registry-cache"}
+    try:
+        valid = sorted(
+            p.name for p in RaptorConfig.SEMGREP_RULES_DIR.iterdir()
+            if p.is_dir() and p.name not in excluded
+        )
+    except OSError:
+        # Rules dir unreadable — the scan itself will surface that;
+        # don't turn every invocation into a usage error here.
+        return
+    bad = [g for g in groups if g != "all" and g not in valid]
+    if bad:
+        ap.error(
+            f"unknown policy group(s): {', '.join(sorted(set(bad)))}. "
+            f"Valid groups: all, {', '.join(valid)}"
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
     ap.add_argument("--repo", required=True, help="Path or Git URL")
@@ -2492,6 +2715,44 @@ def main():
              "sinks hidden behind macros (LIST_FOREACH wrappers, allocator "
              "macros). Budget-bounded; preprocessing is sandboxed and no "
              "repo code executes. Off by default (operator opt-in).",
+    )
+    ap.add_argument(
+        "--no-sanitizer-cut-postpass", action="store_true",
+        dest="no_sanitizer_cut_postpass",
+        help="Disable the record-only sanitizer-cut post-pass. By "
+             "default eligible findings (CWE with catalog sanitizers, "
+             "supported language) are evaluated by the value-bound "
+             "gate and suppress/candidate verdicts are recorded to "
+             "suppressions.jsonl as evidence (dropped: false). The "
+             "post-pass never drops or demotes a finding in any mode; "
+             "this flag skips it entirely.",
+    )
+    ap.add_argument(
+        "--no-sanitizer-cut-enforce", action="store_true",
+        dest="no_sanitizer_cut_enforce",
+        help="Run the sanitizer-cut post-pass in record-only mode: "
+             "full-proof suppress verdicts are written as evidence "
+             "(dropped: false) but no finding is removed from the "
+             "combined SARIF. Default is enforcement (corpus-earned, "
+             "operator-approved 2026-08-19; per-tool SARIFs are never "
+             "filtered in any mode).",
+    )
+    ap.add_argument(
+        "--no-config-resolved", action="store_true",
+        dest="no_config_resolved",
+        help="Disable the config-resolved additive findings stage. By "
+             "default Java getInstance-family selector calls whose "
+             "argument resolves through the strict .properties-file "
+             "resolver to a known-weak algorithm emit an additional "
+             "finding (provenance=config-resolved). Detection only — "
+             "the stage never suppresses anything.",
+    )
+    ap.add_argument(
+        "--no-source-wrappers", action="store_true",
+        dest="no_source_wrappers",
+        help="Skip the source-wrapper projection stage (mechanically "
+             "derived Java taint-source rules for helper classes whose "
+             "methods return servlet-request data).",
     )
     ap.add_argument(
         "--no-graduated-rules", action="store_true",
@@ -2578,6 +2839,13 @@ def main():
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
 
+    # Unknown policy groups are an argparse-level HARD error. Pre-fix
+    # they only logged a warning mid-scan — an operator copying a bad
+    # example (`--policy-groups injction`) got a scan that silently
+    # ran without the intended rules and never found out. Fail fast,
+    # before any clone / output-dir work, listing the valid groups.
+    _validate_policy_groups(ap, args.policy_groups)
+
     # Explicit negative beats positive (per-run escape hatch; project
     # trust-marker consumption lives in the /agentic and /codeql entry
     # points which resolve markers before forwarding --traced-build).
@@ -2641,10 +2909,15 @@ def main():
             valid, unknown = [], []
             for g in groups:
                 p = rules_base / g
+                rule_file = RaptorConfig.POLICY_GROUP_RULE_FILES.get(g)
                 if g in _EXCLUDED_RULE_DIRS:
                     logger.warning("Policy group '%s' is reserved and cannot be used directly", g)
                 elif p.is_dir():
                     valid.append(str(p))
+                elif rule_file is not None and rule_file.is_file():
+                    # Single-file group (e.g. ssrf → sinks/ssrf.yaml) —
+                    # the rules live inside another group's directory.
+                    valid.append(str(rule_file))
                 else:
                     unknown.append(g)
             if unknown:
@@ -2901,10 +3174,44 @@ def main():
                 ),
             )
 
+        # Source-wrapper projection (default-on, opt-out): helper
+        # methods that provably return servlet-request data become
+        # additional taint sources for the in-repo java sink profiles.
+        source_wrapper_sarifs = []
+        source_wrapper_names: list[str] = []
+        if not args.no_source_wrappers:
+            source_wrapper_sarifs, source_wrapper_names = (
+                run_source_wrapper_stage(repo_path, out_dir)
+            )
+
+        # Config-resolved additive findings (default-on, opt-out):
+        # weak algorithms selected via bundled .properties files are
+        # invisible to pattern detectors — the strict resolver proves
+        # the file value and emits provenance=config-resolved findings
+        # as a separate SARIF run. Detection only; never suppresses.
+        config_resolved_sarifs = []
+        config_resolved_stats = None
+        if (
+            RaptorConfig.CONFIG_RESOLVED_ENABLED
+            and not args.no_config_resolved
+        ):
+            try:
+                from core.analysis.config_resolved_findings import (
+                    run_config_resolved_stage,
+                )
+                _cr_sarif, config_resolved_stats = (
+                    run_config_resolved_stage(repo_path, out_dir)
+                )
+                if _cr_sarif is not None:
+                    config_resolved_sarifs = [_cr_sarif]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("config-resolved stage failed: %s", e)
+
         # Merge SARIFs if more than one
         sarif_inputs = (
             semgrep_sarifs + codeql_sarifs + cocci_sarifs
             + compiler_sarifs + expanded_sarifs + graduated_sarifs
+            + config_resolved_sarifs + source_wrapper_sarifs
         )
         merged = out_dir / "combined.sarif"
         exclude_globs = args.exclude_dir
@@ -2941,12 +3248,80 @@ def main():
                 logger.warning("SARIF merge failed, using individual files: %s", e)
                 (out_dir / "sarif_merge.stderr.log").write_text(str(e), encoding="utf-8")
 
+        # Sanitizer-cut post-pass: value-bound gate verdicts land in
+        # suppressions.jsonl. Candidate verdicts are always evidence
+        # (dropped: false); full-proof suppress verdicts ENFORCE by
+        # default (corpus-earned, operator-approved 2026-08-19) — their
+        # findings are filtered from the combined SARIF below, while
+        # per-tool SARIFs stay unfiltered as the forensic record.
+        # Enforcement only runs when the combined SARIF exists (the
+        # per-tool fallback has no drop surface, so it stays
+        # record-only). Reads the filtered combined SARIF when it
+        # exists so --exclude-dir is honored. Failure degrades to a
+        # warning — the post-pass can never fail a scan.
+        sanitizer_cut_postpass_stats = None
+        if (
+            RaptorConfig.SANITIZER_CUT_POSTPASS_ENABLED
+            and not args.no_sanitizer_cut_postpass
+            and sarif_inputs
+        ):
+            try:
+                from core.analysis.sanitizer_cut_postpass import (
+                    filter_enforced_from_sarif,
+                    run_postpass,
+                )
+                merged_exists = merged.exists()
+                postpass_inputs = (
+                    [merged] if merged_exists else list(sarif_inputs)
+                )
+                enforce_on = (
+                    RaptorConfig.SANITIZER_CUT_ENFORCE_ENABLED
+                    and not args.no_sanitizer_cut_enforce
+                    and merged_exists
+                )
+                sanitizer_cut_postpass_stats = run_postpass(
+                    postpass_inputs, repo_path, out_dir,
+                    extra_source_patterns=source_wrapper_names,
+                    enforce=enforce_on,
+                )
+                enforced = (
+                    (sanitizer_cut_postpass_stats or {})
+                    .get("enforced_findings") or []
+                )
+                if enforce_on and enforced:
+                    removed = filter_enforced_from_sarif(merged, enforced)
+                    sanitizer_cut_postpass_stats["enforced_removed"] = removed
+                    if removed != len(enforced):
+                        logger.warning(
+                            "sanitizer-cut enforcement: %d verdicts enforced "
+                            "but %d results removed from the combined SARIF "
+                            "— identities that matched no result stayed "
+                            "recorded (dropped: true) without a drop; "
+                            "investigate before trusting this run's counts",
+                            len(enforced), removed,
+                        )
+                    else:
+                        logger.info(
+                            "sanitizer-cut enforcement: %d proven-safe "
+                            "finding(s) removed from the combined SARIF "
+                            "(per-tool SARIFs unfiltered; records in "
+                            "suppressions.jsonl)", removed,
+                        )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("sanitizer-cut post-pass failed: %s", e)
+
         # Generate metrics. When --exclude-dir filtered the combined
         # SARIF, metrics should reflect the filtered set — read from
         # the just-written combined.sarif rather than the unfiltered
         # individual inputs.
         logger.info("Generating scan metrics...")
-        if excluded_count and merged.exists():
+        _enforced_removed = int(
+            (sanitizer_cut_postpass_stats or {}).get("enforced_removed") or 0
+        )
+        if (excluded_count or _enforced_removed) and merged.exists():
+            # The combined SARIF reflects --exclude-dir filtering and/or
+            # sanitizer-cut enforcement drops; metrics must read it, not
+            # the unfiltered per-tool forensic SARIFs.
             metrics = generate_scan_metrics([str(merged)])
         else:
             metrics = generate_scan_metrics(sarif_inputs)
@@ -2956,7 +3331,19 @@ def main():
         # tracked this, nothing failed") rather than absent-key
         # (couldn't-be-bothered).
         metrics["semgrep_failed_packs"] = semgrep_failed
+        # Registry packs the reachability probe dropped before dispatch
+        # (see _drop_unreachable_registry_packs) — distinct from
+        # semgrep_failed_packs, which records packs that DISPATCHED and
+        # then failed. Empty list means every requested pack ran.
+        metrics["dropped_registry_packs"] = sorted(_dropped_registry_packs)
         metrics["nosemgrep_suppressed_count"] = nosemgrep_count
+        # Record-only post-pass stats (None when disabled or no SARIFs)
+        # — verdict counts, refusal reasons, budget skips. The verdicts
+        # themselves live in suppressions.jsonl.
+        metrics["sanitizer_cut_postpass"] = sanitizer_cut_postpass_stats
+        # Additive config-resolved stage stats (None when disabled) —
+        # files scanned, emissions, per-refusal resolver counts.
+        metrics["config_resolved"] = config_resolved_stats
         metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         save_json(out_dir / "scan_metrics.json", metrics)
 

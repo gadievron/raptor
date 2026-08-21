@@ -163,6 +163,19 @@ Examples:
     ap.add_argument("--timeout", type=int, default=1000, help="Timeout per execution in ms (default: 1000)")
     ap.add_argument("--out", help="Output directory (default: fuzz_<binary>_<timestamp>_pid<N>_<tail> under the configured output root)")
     ap.add_argument("--dict", help="Path to AFL dictionary file for structured input fuzzing")
+    ap.add_argument(
+        "--from-smt-witness",
+        metavar="DIR",
+        help=(
+            "Scan a /validate or /agentic run output directory for SMT "
+            "sat witnesses (attack-paths.json smt_model, "
+            "autonomous_analysis_report.json smt_witness) and synthesize "
+            "AFL seeds + dictionary tokens from them. Without --corpus, "
+            "the built-in seed corpus plus the witness seeds become the "
+            "run corpus; with --corpus, witness seeds land in "
+            "<out>/smt-seeds and only the dictionary merge applies."
+        ),
+    )
     ap.add_argument("--input-mode", choices=["stdin", "file"], default="stdin", help="Input mode: stdin (default) or file (uses @@)")
     ap.add_argument("--check-sanitizers", action="store_true", help="Check if binary is compiled with sanitizers (ASAN, etc.)")
     ap.add_argument("--recompile-guide", action="store_true", help="Show guide for recompiling binary with AFL instrumentation and sanitizers")
@@ -348,6 +361,49 @@ Examples:
         out_dir = RaptorConfig.get_out_dir() / f"fuzz_{binary_path.stem}_{unique_run_suffix()}"
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
+
+    if args.from_smt_witness:
+        from packages.fuzzing.smt_seed import (
+            SEED_DIR_NAME,
+            synthesize_from_run_dir,
+        )
+        source_dir = Path(args.from_smt_witness)
+        if not source_dir.is_dir():
+            logger.error("--from-smt-witness dir not found: %s", source_dir)
+            sys.exit(1)
+        seed_dir = out_dir / SEED_DIR_NAME
+        builtin_ok = False
+        if corpus_dir is None:
+            # Baseline variety first, witness seeds on top, and the
+            # combined directory becomes the run corpus. With an
+            # operator --corpus we never mutate their directory —
+            # witness seeds stay in <out>/smt-seeds and reach AFL
+            # via the merged dictionary only.
+            try:
+                from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
+                prepare_builtin_seed_corpus(seed_dir, profile=args.seed_profile)
+                builtin_ok = True
+            except Exception as e:  # noqa: BLE001 — witness seeds alone still work
+                logger.warning("built-in corpus materialisation failed: %s", e)
+        manifest = synthesize_from_run_dir(source_dir, out_dir)
+        print(
+            f"SMT witness seeds: {manifest['witnesses']} witnesses -> "
+            f"{manifest['seed_count']} seeds, {manifest['dict_entries']} "
+            f"dict entries, {len(manifest['skipped'])} skipped"
+        )
+        if manifest["seed_count"] == 0 and manifest["dict_entries"] == 0:
+            logger.warning(
+                "--from-smt-witness produced nothing usable from %s "
+                "(see %s/%s)", source_dir, seed_dir, "smt-seeds-manifest.json",
+            )
+        if corpus_dir is None and (builtin_ok or manifest["seed_count"]):
+            corpus_dir = seed_dir
+        if args.dict and manifest["dict_entries"]:
+            logger.warning(
+                "operator --dict wins over the merged fuzz.dict; witness "
+                "tokens are in %s/smt-witness.dict if you want to merge them",
+                seed_dir,
+            )
 
     # ========================================================================
     # ORCHESTRATOR PATH (new): capability detection + libFuzzer/AFL++ + telemetry
@@ -594,7 +650,7 @@ Examples:
         print("\n✓ Fuzzing complete:")
         print(f"  - Duration: {args.duration}s")
         print(f"  - Unique crashes: {num_crashes}")
-        print(f"  - Crashes dir: {crashes_dir}")
+        print(f"  - Crashes dir: {crashes_dir if crashes_dir else '(none)'}")
 
         if num_crashes == 0:
             print("\nNo crashes found. Try:")
@@ -669,11 +725,35 @@ Examples:
             from core.witness import WitnessStore
             from packages.fuzzing.witness_adapter import witness_from_crash
             witness_store = WitnessStore(out_dir / "witnesses")
+
+            # When this run was seeded from SMT witnesses, attribute
+            # crashes back to the producing findings via the recorded
+            # AFL mutation lineage (exact chains only — see
+            # crash_attribution). Attribution failure is never fatal:
+            # crashes record without a finding_id.
+            attribution = None
+            try:
+                from packages.fuzzing.crash_attribution import (
+                    attribute_crashes,
+                    manifest_path_for_run,
+                )
+                smt_manifest = manifest_path_for_run(out_dir)
+                if smt_manifest.is_file():
+                    attribution = attribute_crashes(crashes, smt_manifest)
+            except Exception as e:  # noqa: BLE001 — best-effort
+                logger.warning(
+                    f"SMT crash attribution failed: {type(e).__name__}: {e}"
+                )
+
             recorded = 0
             for crash in crashes:
                 try:
                     witness, data = witness_from_crash(
                         crash, target_binary_path=binary_path,
+                        smt_attribution=(
+                            attribution.attributed.get(crash.crash_id)
+                            if attribution else None
+                        ),
                     )
                     witness_store.put(witness, data)
                     recorded += 1
@@ -687,6 +767,17 @@ Examples:
                     f"   Recorded {recorded}/{len(crashes)} crashes "
                     f"as Witnesses → {out_dir / 'witnesses'}"
                 )
+            if attribution is not None:
+                print(
+                    f"   SMT-seed attribution: "
+                    f"{len(attribution.attributed)}/{attribution.total_crashes} "
+                    f"crashes trace to SMT-witness seeds"
+                )
+                for origin_id, crash_ids in attribution.by_finding().items():
+                    print(
+                        f"     finding {origin_id}: crash(es) "
+                        f"{', '.join(crash_ids)}"
+                    )
         except Exception as e:  # noqa: BLE001 — best-effort
             logger.warning(
                 f"Witness-store setup failed: {type(e).__name__}: {e}; "

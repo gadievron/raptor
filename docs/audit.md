@@ -13,7 +13,7 @@ records that accumulate across runs, and a findings file compatible with
 **Related documentation:**
 [commands](commands.md#audit) |
 [validation](validation.md) |
-[understand](concepts.md#understand) |
+[understand](commands.md#understand) |
 [annotations](commands.md#annotate) |
 [coverage](commands.md#review)
 
@@ -40,15 +40,18 @@ full flag table.
 
 | Flag | Description |
 |------|-------------|
-| `--strategy <name>` | Filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing |
+| `--strategy <name>` | Filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing, integer |
 | `--budget <N>` | Maximum functions to review (default: all gaps) |
 | `--scope <dir>` | Restrict to a subdirectory (repeatable; successive scoped runs accumulate) |
+| `--pin <file:function>` | Guarantee a review slot for this function ahead of the `--budget` cut (repeatable) |
+| `--scope-floor` / `--no-scope-floor` | Every in-scope file keeps at least one review slot under `--budget` (default: on) |
+| `--pre-scan` | Bounded Semgrep baseline when the run has no scan SARIF (feeds the SARIF-corroboration channels) |
 | `--out <dir>` | Output directory |
-| `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep |
+| `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep (repeatable — one per language; dispatch routes by file language) |
 | `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
 | `--deepen-reserve <fraction>` | Slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables) |
 | `--max-time <seconds>` | Wall-clock time limit |
-| `--no-supervisor-bound` | Do not default a wall budget under a capped Claude subagent shell (see [long-runs.md](long-runs.md)) |
+| `--no-supervisor-bound` | Do not default a wall budget under a capped Claude subagent shell (see [Running long audits](#running-long-audits)) |
 | `--review-passes <N>` | Independent review passes per function for self-consistency (default: 1) |
 | `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
 | `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated p90+2, floor 5, cap 15) |
@@ -59,8 +62,11 @@ full flag table.
 | `--batch-sloc-threshold <N>` | Batch functions at or under this SLOC per file into combined reviews (default: 15; 0 disables) |
 | `--no-verdict-reuse` | Disable cross-run verdict reuse (importing prior-run journal verdicts for unchanged functions) |
 | `--schedule {cost,priority}` | Parallel review ordering: `cost` packs predicted-longest reviews first, `priority` reviews most promising first |
+| `--prior-journal <run-dir>` | Run dir whose review journal feeds prior finding-grade claims into review context (repeatable; used by `/agentic --gap-audit`) |
+| `--prior-claims <N>` | Max prior finding-grade claims injected per function (default 3; 0 disables) |
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
+| `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
 | `--annotations-dir <dir>` | Annotations directory (default: project-level `annotations/`, falling back to `<out>/annotations`) |
 
 
@@ -104,10 +110,9 @@ go through:
 3. **Verdict** -- tool output confirms or refutes.  If refuted, the
    hypothesis is discarded with no "but I still think..."
 
-This achieves substantially higher precision than self-critique loops.
-The IEEE-ISTAS 2025 result: 37.6% MORE false positives after 5 iterations
-of LLM self-refinement without tool feedback.  Tool grounding eliminates
-the regression.
+This achieves substantially higher precision than self-critique loops:
+LLM self-refinement without tool feedback is known to *increase* false
+positives, which is why gate G3 below prohibits it.
 
 
 ## Strategies
@@ -124,6 +129,7 @@ and return types.  Multiple strategies can apply to the same function.
 | **Auth/privilege** | Permission checks, ACLs, credentials | Check bypass?  Error path security?  Unvalidated transitions? |
 | **Crypto** | Crypto APIs, key material, RNG | Correct algorithm usage?  Timing side channels?  Key lifecycle? |
 | **Aliasing** | splice, zero-copy, scatterlist, sk_buff | Alias assumptions?  Who owns backing pages?  Concurrent writes? |
+| **Integer** | Arithmetic feeding sizes, indices, or allocations | Overflow?  Truncation?  Sign confusion before a bounds check? |
 
 Each strategy includes CVE-backed exemplars showing the hypothesis →
 tool → verdict chain that found the bug, injected into the LLM context
@@ -146,20 +152,21 @@ channels.
 | **Semgrep** | Pattern matching, missing checks | "Return value of `read()` is used without checking for -1" |
 | **Coccinelle** | Inconsistency detection, variant sweep; flow-sensitive per-hypothesis rules | "Other call sites check error, this one doesn't" |
 | **CodeQL** | Dataflow reachability | "Tainted input reaches `execv()` without sanitisation" |
-| **SMT** | Arithmetic/bounds/path feasibility | "Integer overflow when `len * size > UINT32_MAX`" |
+| **SMT** | Arithmetic/bounds/path feasibility.  A solver or detector model-miss reads as inconclusive, never a refutation | "Integer overflow when `len * size > UINT32_MAX`" |
+| **Dark verify** | Witness execution for tool-blind findings: the LLM supplies a structured witness (function, args, expected result), the harness generates and runs the test mechanically -- the LLM cannot fake a pass.  Eligible CWE classes: 287/862/863/134/190/416/457.  Verdicts land as `dark_verify:confirmed` / `dark_verify:refuted` evidence | "Calling `check_token('')` returns True -- the witness confirms the auth bypass" |
 | **Joern** | Complex dataflow, indirect calls; guard-dominance and flow-reachability channels | "Callback registered at A reaches sink at B" |
 | **Compiler analyzers** | Mechanical verification sweep (gcc `-fanalyzer` / clang `--analyze`) over hypothesis TUs | "Analyzer confirms the null-deref path the hypothesis names" |
 | **Expanded-view Semgrep** | Re-runs rules over fidelity-3 preprocessor-expanded views of macro-heavy C/C++ | "Sink hidden behind a macro expansion" |
 | **Git history** | Corroboration only -- prior security fixes touching the function (never a verdict by itself) | "This function was patched for the same bug class before" |
-| **Fail-open channel** | Swallowed-error hypotheses (CWE-703/636/391/390/252/345, plus CWE-248 routed but never confirmed): security role x permissive handler outcome x fallibility, all mechanical with receipts. Handler shapes: Python broad handlers and suppress blocks; C ignored-return + tri-state; Java catch clauses (empty catch, swallowed checked exceptions via declared-throws or the compilability witness, quiet-log-only); Go discarded errors (blank discard, err never checked, bare calls) and recover-and-continue; JS/TS unawaited promises are phase 3. A prep-phase census seeds `fail_open_leads` onto gaps (hypothesize-or-discharge prompts; undischarged leads journaled), and a confirmed Joern flow from a hypothesis-named parameter to the fallible callee escalates the receipt to `tainted`/`joern:flow` | "The broad `except` around token verification swallows signature errors and the request proceeds" |
-| **Consistency channel** | Peer-majority deviations with PeerEvidence receipts: the return-usage census (six-value enum, `return-census.json`), contract witnesses (warn_unused_result, learned contracts, the shared Tier-A registry), flag/mode and error-path-cleanup comparators. Registry-grade contract witness = promote-capable LLM-free finding, stamped `consistency:<dimension>`; majority-only = detection grade, stamped `consistency:<dimension>-majority` and never promotable alone (one shared namespace -- two consistency statistics never self-corroborate to promotion) | "9/10 call sites check `do_auth()`'s return and it is declared `warn_unused_result`; this site discards it" |
-| **API-boundary channel** | Caller-contract hypotheses about exported functions, adjudicated mechanically (`api_boundary:caller-contract`): every in-repo call site guarded = refuted; a concrete unguarded call site = confirmed; external-only callers or environment contracts = inconclusive.  Only literal violations confirm | "Every caller of `resolve_path()` must reject `..` first; `handle_upload()` doesn't" |
-| **SMT invariant channel** | Invariant-preservation checks (`smt:invariant-preservation`): per mutation site, is `invariant(pre) AND transition AND NOT invariant(post)` satisfiable?  All-unsat = preserved; sat = violable.  Linear integer arithmetic, inductive step only; degrades gracefully without z3 | "`buf_len <= buf_cap` survives every append path except the realloc-failure branch" |
-| **Ptr-lifecycle channel** | Stale-alias adjudication on the field-access census (`field-census.json`, CWE-825/672/416): alias edge + lifecycle event + live-alias invalidation search + post-event read, all four receipts (`ptr_lifecycle:stale-alias`; naming-stem event vocabulary or a degraded census = `-naming` detection variant).  The field-assignment-parity leg is a majority statistic and deliberately emits under the consistency namespace (`consistency:field-parity-majority`) so the single-namespace firewall applies to it | "`c->cached` aliases `b->pool`; the error path frees `b` without invalidating the alias and the accessor still returns it" |
-| **Lock-region channel** | Callback invoked while a lock is held (CWE-833/667): learned/pack/seed lock pairs x indirect-call or registered-name invocation, with the exported-setter registrability witness (`lock_region:callback-under-lock`; naming-stem pair or internal-only setter = `-naming`).  Confirmations cap at `suspicious` unless entry-reachable AND setter-exported (both escalators); a parametric Coccinelle rule (`callback_under_lock.cocci`, `-D lock -D unlock`) corroborates as an independent namespace | "`ctx->remove_cb(...)` fires inside the `CRYPTO_THREAD_write_lock` region and the setter is exported API" |
-| **Resource-bounds channel** | Unbounded-accumulation hypotheses (CWE-770/400/772): insert/alloc-in-loop site with no dominating bound witness (guard comparing a count against a constant/named limit/min-clamp), locally or in a depth-3 caller walk -- the receipt names how far the search went.  Registry vocabulary (learned `collection` pair / pack) AND entry-reachability = promote-capable `resource_bounds:unbounded-accumulation`; seed-only or unknown reachability = `-naming` detection variant | "Each accepted connection is appended to `incoming_channel_list`; no cap in the function or its callers" |
-| **Release-order channel** | Release-before-verify hypotheses (CWE-354/347, joining the CWE-345 chain; the EFAIL class): every release site handing data to an escaping destination (out-param/stream/callback) must be dominated by a condition consuming the integrity finalizer's status.  Fresh-call destinations refute as buffered-then-flush; unresolved aliases are `sink-alias-unresolved`; no finalizer vocabulary is `finalizer-unresolved` (unauthenticated pipelines are not claimed).  Optional Joern cross-check: agreement = `engine: cfg+joern`, disagreement = `engines-disagree`.  Learned `verify_release` pair = registry grade; seed-only = `-naming` | "The loop `BIO_write`s each decrypted chunk to `out`; `BIO_get_cipher_status` is consulted only at end-of-stream" |
-| **Protocol-state channel** | Protocol-invariant hypotheses (CWE-372; state-field invariants take precedence over the single-function SMT invariant channel and run census-driven multi-site with dominating guards encoded).  Promote-capable `protocol_state:invariant-violated` ONLY when the invariant premise is study-receipted (provenance != `llm_prior` + receipt) AND SMT finds a model at a peer-writable site -- the machine checks consequences, never the premise.  LLM-stated premises confirm under `-unreceipted`; the two lead legs (`dead-state-field`, `unvalidated-peer-write`) are permanently detection-grade and share the channel's single namespace (two of them never self-corroborate to promotion) | "`largest_acked_pkt` is set from the decoded ACK with no guard referencing `highest_sent` -- which is written twice and read never" |
+| **Fail-open channel** | Swallowed-error hypotheses (CWE-703/636/391/390/252/345): does a permissive error handler let a security decision proceed?  Language legs for Python, C, Java, Go, JS/TS, and Rust handler shapes (Rust `unwrap`/`expect`/`?` count as fail-closed).  A prep-phase census seeds leads the reviewer must discharge; legs without a parser report `language-unsupported` rather than guess | "The broad `except` around token verification swallows signature errors and the request proceeds" |
+| **Consistency channel** | Peer-majority deviations: how do this function's peers treat the same return value, flag, or error path?  Registry-grade contract witnesses (e.g. `warn_unused_result`) are promote-capable LLM-free findings (`consistency:<dimension>`); majority-only statistics are detection-grade (`consistency:<dimension>-majority`) and never promote alone | "9/10 call sites check `do_auth()`'s return and it is declared `warn_unused_result`; this site discards it" |
+| **API-boundary channel** | Caller-contract hypotheses about exported functions (`api_boundary:caller-contract`): every in-repo call site guarded = refuted; a concrete unguarded call site = confirmed; external-only callers = inconclusive | "Every caller of `resolve_path()` must reject `..` first; `handle_upload()` doesn't" |
+| **SMT invariant channel** | Invariant-preservation checks (`smt:invariant-preservation`): can any mutation path leave the stated invariant false?  Degrades gracefully without z3 | "`buf_len <= buf_cap` survives every append path except the realloc-failure branch" |
+| **Ptr-lifecycle channel** | Stale-alias hypotheses (CWE-825/672/416) adjudicated on the field-access census (`ptr_lifecycle:stale-alias`; naming-only vocabulary downgrades to a `-naming` detection variant) | "`c->cached` aliases `b->pool`; the error path frees `b` without invalidating the alias and the accessor still returns it" |
+| **Lock-region channel** | Callback invoked while a lock is held (CWE-833/667) (`lock_region:callback-under-lock`).  Confirmations cap at `suspicious` unless the region is entry-reachable and the callback setter is exported API | "`ctx->remove_cb(...)` fires inside the `CRYPTO_THREAD_write_lock` region and the setter is exported API" |
+| **Resource-bounds channel** | Unbounded-accumulation hypotheses (CWE-770/400/772): insert/alloc in a loop with no bound check locally or in nearby callers (`resource_bounds:unbounded-accumulation`; seed-only vocabulary = `-naming` detection variant) | "Each accepted connection is appended to `incoming_channel_list`; no cap in the function or its callers" |
+| **Release-order channel** | Release-before-verify hypotheses (CWE-354/347, the EFAIL class): data handed to an escaping destination before the integrity finalizer's status is consulted (`release_order:*`) | "The loop `BIO_write`s each decrypted chunk to `out`; `BIO_get_cipher_status` is consulted only at end-of-stream" |
+| **Protocol-state channel** | Protocol-invariant hypotheses (CWE-372): promote-capable (`protocol_state:invariant-violated`) only when the invariant premise is study-receipted and SMT finds a violating write site; LLM-stated premises stay detection-grade | "`largest_acked_pkt` is set from the decoded ACK with no guard referencing `highest_sent`" |
 
 ### SMT verbs
 
@@ -240,15 +247,41 @@ never the code.
 | Crypto API packs | `engine/coccinelle/source_intel/crypto/packs/` (`openssl.json`, `kernel-crypto.json`, `libsodium.json`) | The `crypto_calls` Coccinelle rule and `/understand --map`'s crypto inventory |
 
 Adding a library is a data change: drop a new JSON pack in the family's
-directory (crypto packs are picked up automatically; a new checker-vocab
-target kind additionally needs a `pack_for_target()` branch).  The parser
-and crypto pack directories carry a `README.md` documenting their schema;
-the audit pack schemas are documented in `core/audit/vocab_packs.py` and
-`core/audit/strategy.py`.  Malformed packs are skipped with a warning --
-checkers then run on seeds + learned vocabulary alone.
+directory.  Each pack directory carries (or points at) its schema
+documentation.  Malformed packs are skipped with a warning -- checkers
+then run on seeds + learned vocabulary alone.
 
 
-## Post-run Workflows
+## Running long audits
+
+Long audit runs can outlive the environment that launched them.  The
+one supervisor RAPTOR detects and defends against automatically is the
+Claude Code **subagent** background-shell cap
+(`CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`, harness default 1 hour): a shell
+backgrounded inside a subagent is killed at the cap regardless of what
+it is doing, with a `[killed]` marker in the task output.  Main-thread
+background shells are uncapped.
+
+In order of preference when a run may exceed an hour:
+
+1. **Launch from the main thread**, not from a subagent.
+2. **Raise the cap**: export a larger `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`
+   before launching the harness.
+3. **Let self-bounding handle it** (the default): when the run detects
+   it is under a capped subagent shell and no explicit `--max-time` is
+   set, it defaults its wall budget to the cap minus a 300 s drain
+   margin and concludes **gracefully** inside it — in-flight reviews
+   harvested, journal and report written, lifecycle `completed` with a
+   note stating how many gaps remain.  Continue in a new run: cross-run
+   verdict reuse imports the completed verdicts at $0 and reviews only
+   the remainder.  `--no-supervisor-bound` opts out; misdetection is
+   safe in both directions (a false positive self-bounds gracefully; a
+   false negative dies at the cap and `resume` recovers it).
+
+When a supervisor stops the run with SIGTERM, the first TERM concludes
+the run in bounded time (in-flight completions harvested, everything
+flushed, report written, lifecycle `interrupted` with a resume hint,
+exit 130); a second TERM exits immediately after a best-effort flush.
 
 ### Resuming an interrupted run
 
@@ -257,16 +290,24 @@ SIGKILL, OOM) leaves coherent artifacts and can be re-entered **as the
 same run**:
 
 ```bash
-libexec/raptor-audit resume "$OUTPUT_DIR" [--allow-drift]
+libexec/raptor-audit resume "$OUTPUT_DIR" [--allow-drift] [--max-time <s>] [--no-supervisor-bound]
 ```
 
 Prior verdicts are re-imported at $0 (hash-verified), the remaining
 gaps are recomputed against the original checklist/scope/pins, the
 remaining budget is the original cap minus booked spend, and one final
-report covers all segments. Completed runs are refused — continue those
-in a new run (cross-run verdict reuse imports the verdicts at $0). See
-[long-runs.md](long-runs.md) for the supervisor caps, self-bounding,
-and SIGTERM semantics.
+report covers all segments (segment provenance noted in the report and
+run metadata).
+
+Guards: a **completed** run is refused — continue those in a new run
+(cross-run verdict reuse imports the verdicts at $0); a run whose
+recorded worker is still alive is refused (it is actually in flight);
+and the **staleness gate** re-verifies every hashed journal verdict
+against the target tree — any drift refuses the resume with the drifted
+functions named, or `--allow-drift` proceeds and re-reviews those
+functions instead of reusing them.
+
+## Post-run Workflows
 
 ### Feedback loop
 
@@ -285,6 +326,22 @@ annotations (`source=human` with an interactive-TTY provenance stamp, or
 legacy pre-stamp notes) veto feedback for their function entirely; agent
 notes and human claims stamped non-interactive only serve as the prior
 claim when no journal entry exists.
+
+Downgrades are refereed: a `ruled_out` may take a **tool-evidenced**
+finding to `clean` only when the ruling carries a mechanical
+disqualifier — dark-verify witness refutation (`witness_refuted`), an
+IRIS Tier-1 CodeQL refutation (`disproven.json`), the Stage-B SMT sweep
+proving every linked attack path infeasible, or a Stage-C sanity failure
+corroborated by a structural fact (Coccinelle `function_exists=False` /
+checklist miss).  An LLM-only ruling demotes a tool-evidenced `finding`
+to `suspicious` (evidence preserved, flagged for re-review) and leaves a
+tool-evidenced `suspicious` unchanged; findings whose prior verdict had
+no tool receipt keep the historical clean downgrade.  The audit-log
+`feedback` event records the referee outcome (`referee: <disqualifier>`
+or `referee: llm_only_ruling`), and referee-blocked disprovals are
+excluded from the model scorecard (an LLM-vs-LLM disagreement is not
+ground truth).  This mirrors G2 in the demotion direction: tool output
+is the verdict; LLM-only signals neither promote nor fully demote.
 
 ### Staleness check
 
@@ -331,12 +388,12 @@ Query audit state across all four layers:
 | `return-census.json` | Return-usage census from the consistency pre-pass (six-value usage enum per call site) |
 | `field-census.json` | Field-access census from the lifecycle channel pre-pass (per-field write sites with rhs provenance, read sites with use context) |
 | `prefilter-kills.jsonl` | One record per prefilter/triage kill (summary row first, then `file`, `function`, `gate`, `reason`, plus spot-audit corroboration fields on sampled rows) |
-| `suppressions.jsonl` | Oracle-earned triage-skip audit trail (same record shape as `/agentic`/`/codeql`) |
+| `suppressions.jsonl` | Triage-decision audit trail: oracle-earned skips plus vendored/generated skip/glance routings (same record shape as `/agentic`/`/codeql`) |
 | `tier-diagnostics.json` | Per-channel outcome counters (prefilter, semgrep, smt, fail_open, consistency, ...) |
 | `fuzz-dict.json` / `fuzz.dict` | Fuzz handoff: dictionary tokens mined from constants, parse-shape literals, and dispatch keys; `fuzz.dict` is AFL format and is auto-discovered by [/fuzz](fuzzing.md#dictionary-auto-discovery) |
 | `cost-breakdown.json` | Per-phase cost ledger reconciliation (completed + failed-attempt + unattributed spend always sum to the authoritative total; the pre-loop summary pass books as the `summary` phase) |
 | `llm-telemetry.jsonl` | Per-call LLM telemetry |
-| `promotion-alarms.jsonl` | Promotion-without-tool-evidence alarms — a `finding` that reached the journal or export without qualifying tool evidence. Empty on every legitimate run; any record means the mechanical-verdict gate was bypassed (possible injection or policy bug). Alarm-only, never blocks |
+| `promotion-alarms.jsonl` | Promotion-without-tool-evidence alarms — a `finding` that reached the journal or export without qualifying tool evidence. Empty on every legitimate run; any record means the mechanical-verdict gate was bypassed (possible injection or policy bug). The gate also enforces: a violating `finding` is demoted to `suspicious` before it ships, and the record is the alarm trail |
 | `audit-report.json` | Summary report |
 
 
@@ -347,6 +404,41 @@ Query audit state across all four layers:
 `/audit` requires `context-map.json` from `/understand --map`.  If
 missing, it runs the map automatically.  The context map provides
 entry points, sinks, and trust boundaries that drive priority ordering.
+
+### /agentic → /audit
+
+`/agentic --gap-audit` runs the audit orchestrator over the coverage
+residual after the analysis phase, as a sibling audit run.  The
+composition is kind-aware: journal entries record their producer, and
+only function-grade entries (audit reviews) suppress gaps or qualify
+for verdict reuse.  A finding-grade entry (/agentic's analysis of one
+scanner finding) never counts as a function review — instead it
+reaches the audit reviewer as a prior claim in the context slice
+(`--prior-journal`, or the project index for prior runs), framed as a
+claim to verify, never a verdict to inherit.  The same semantics apply
+whether the audit runs standalone after an agentic run or via the
+post-pass flag.
+
+The post-pass inherits the agentic run's checklist, every CodeQL
+database the scan phase built (dispatch routes per file language),
+binary-oracle inputs, and analysis models (two or more enable
+`--adversarial`; `--gap-audit-no-adversarial` suppresses the
+auto-enable, and the decision is recorded in the report's phase
+block).  With `--validate`, audit findings join the agentic validate
+selection and the verdicts feed back through `raptor-audit feedback`.
+`--gap-audit-share` reserves a slice of `--max-cost-usd` for the
+audit up front (default 0.35).
+
+The agentic report inlines the outcome: its **Gap Audit Post-Pass**
+section renders the sibling run's journal-verdict-corrected findings
+(severity roll-up plus a capped table with tool evidence and, when
+the merged validate pass ran, per-finding validation outcomes).
+
+Because the parent validates the merged findings, the sibling audit
+runs with `--no-validate` and stages a `pipeline-tail.json` marker;
+`raptor-audit resume` on an interrupted gap audit prints the deferred
+`/validate` + `feedback` steps when a resumed segment completes with
+findings (see [Resuming an interrupted run](#resuming-an-interrupted-run)).
 
 ### /audit → /validate
 
@@ -364,4 +456,6 @@ annotations to present a unified per-function view.
 Coverage records persist across runs.  Each run reviews only the
 remaining gaps, so successive runs progressively cover the codebase.
 Scoped runs (`--scope <dir>`) write to the same project-level output
-directory, so they accumulate into one audit trail.
+directory, so they accumulate into one audit trail.  In project mode,
+`libexec/raptor-coverage-summary` shows the accumulation as a
+`Progress:` trend line (reviewed counts per completed run).

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("claude_agent_sdk")
-
 import ast
 from pathlib import Path
 
@@ -266,7 +264,7 @@ def test_connection_reset_pattern_consistent_across_modules() -> None:
     _failure_class used r"\bconnection reset\b". Both now use word-boundary form.
     If either module reverts or a new copy is introduced, this test fails.
     """
-    from cve_env.tools._failure_class import _TRANSPORT_PATTERNS
+    from core.container.failures import _TRANSPORT_PATTERNS
     from cve_env.tools.image_resolve import _TRANSIENT_PATTERNS
 
     canonical = [
@@ -279,7 +277,7 @@ def test_connection_reset_pattern_consistent_across_modules() -> None:
             f"image_resolve._TRANSIENT_PATTERNS missed: {text!r}"
         )
         assert any(p.search(text) for p in _TRANSPORT_PATTERNS), (
-            f"_failure_class._TRANSPORT_PATTERNS missed: {text!r}"
+            f"core.container.failures._TRANSPORT_PATTERNS missed: {text!r}"
         )
 
 def test_v_tag_behavioral_equivalence_pre_post_merge() -> None:

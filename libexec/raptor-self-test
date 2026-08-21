@@ -1592,14 +1592,15 @@ _ALLOW_NO_HELP = {
     "raptor-seatbelt-shim": "macOS sandbox-exec watcher; execs its argv",
     # bash gates / installers with usage-on-misuse only
     "raptor-cc-trust-check": "trust gate; usage on unknown flag, exit 3",
-    "raptor-sage-setup": "installer; usage on unknown flag, exit 2",
+    "raptor-sage-setup": "installer; usage on unknown flag, exit 3; "
+                         "--help exits 0",
     # positional-only CLIs that print usage (or a clear error) on misuse
     "raptor-clone-repo": "usage on missing positionals, exit 2",
     "raptor-fetch-attachment": "usage on missing positionals, exit 2",
     "raptor-lifecycle-hook": "prints action list on unknown action",
     "raptor-run-feasibility": "usage on missing positionals, exit 1",
     "raptor-run-lifecycle": "prints action list on unknown action",
-    "raptor-validate-schema": "usage + type list on misuse, exit 2",
+    "raptor-validate-schema": "usage + type list on misuse, exit 3",
     "raptor-validation-helper": "stage usage on unknown stage, exit 1",
     "raptor-enrich-context-map-taint": "positional workdir; errors on "
                                        "missing context-map.json",

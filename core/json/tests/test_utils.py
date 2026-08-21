@@ -293,6 +293,57 @@ class TestOrjsonBackend(unittest.TestCase):
             result = load_json(p, allow_non_finite=True)
             self.assertIsNotNone(result)
 
+    def test_save_rejects_non_finite_floats_both_backends(self):
+        """NaN/Infinity must raise ValueError on BOTH encoder paths.
+        The stdlib branch already had allow_nan=False; orjson would
+        silently serialise them as null — behaviour depended on which
+        library was installed."""
+        import core.json.utils as u
+        payloads = [
+            {"val": float("nan")},
+            {"val": float("inf")},
+            {"val": float("-inf")},
+            {"nested": [1, {"deep": (float("nan"),)}]},
+            {float("inf"): "non-finite key"},
+        ]
+        backends = [("stdlib", None)]
+        if u._orjson is not None:
+            backends.append(("orjson", u._orjson))
+        for backend_name, override in backends:
+            saved = u._orjson
+            try:
+                u._orjson = override
+                with TemporaryDirectory() as d:
+                    for i, payload in enumerate(payloads):
+                        p = Path(d) / f"bad-{i}.json"
+                        with self.assertRaises(
+                            ValueError,
+                            msg=f"{backend_name}: {payload!r}",
+                        ):
+                            save_json(p, payload)
+                        self.assertFalse(
+                            p.exists(),
+                            f"{backend_name}: no partial file on reject",
+                        )
+            finally:
+                u._orjson = saved
+
+    def test_save_accepts_finite_floats_both_backends(self):
+        import core.json.utils as u
+        for override in [None, u._orjson]:
+            saved = u._orjson
+            try:
+                u._orjson = override
+                with TemporaryDirectory() as d:
+                    p = Path(d) / "ok.json"
+                    save_json(p, {"val": 1.5, "list": [0.0, -2.25]})
+                    self.assertEqual(
+                        json.loads(p.read_text()),
+                        {"val": 1.5, "list": [0.0, -2.25]},
+                    )
+            finally:
+                u._orjson = saved
+
     def test_save_datetime_both_backends(self):
         import core.json.utils as u
         dt = datetime(2026, 1, 15, 12, 0, 0)

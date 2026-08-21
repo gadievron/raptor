@@ -194,3 +194,73 @@ def test_transient_error_exhausts_retries(monkeypatch):
             pytest.raises(LLMCallFailed):
         client.complete("claude-opus-4-7", "hello")
     assert provider.generate.call_count == 3  # initial + 2 retries
+
+
+# ---------- telemetry ----------
+
+
+def _sink_records(path):
+    import json
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_successful_call_emits_telemetry_record(tmp_path):
+    from core.llm.telemetry import TelemetrySink, set_sink
+
+    provider = _mock_provider(_FakeLLMResponse(
+        input_tokens=12, output_tokens=3, cost=0.001,
+    ))
+    client = ResilientLLMClient(call_class="cve-diff:root-cause")
+    sink = TelemetrySink(tmp_path / "llm-telemetry.jsonl")
+    set_sink(sink)
+    try:
+        with patch.object(client, "_get_provider", return_value=provider):
+            client.complete("claude-opus-4-7", "hello")
+    finally:
+        set_sink(None)
+
+    recs = _sink_records(tmp_path / "llm-telemetry.jsonl")
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["event"] == "call"
+    assert rec["disposition"] == "ok"
+    assert rec["call_class"] == "cve-diff:root-cause"
+    assert rec["model"] == "claude-opus-4-7"
+    assert rec["tokens_in"] == 12
+    assert rec["tokens_out"] == 3
+    assert rec["cost_usd"] == pytest.approx(0.001)
+
+
+def test_failed_attempt_emits_attempt_failed_record(tmp_path):
+    from core.llm.telemetry import TelemetrySink, set_sink
+
+    provider = _mock_provider()
+    provider.generate.side_effect = RuntimeError("API down")
+    client = ResilientLLMClient()
+    sink = TelemetrySink(tmp_path / "llm-telemetry.jsonl")
+    set_sink(sink)
+    try:
+        with patch.object(client, "_get_provider", return_value=provider), \
+                pytest.raises(LLMCallFailed):
+            client.complete("m", "p")
+    finally:
+        set_sink(None)
+
+    recs = _sink_records(tmp_path / "llm-telemetry.jsonl")
+    assert recs, "no attempt_failed record written"
+    assert all(r["event"] == "attempt_failed" for r in recs)
+    assert recs[0]["call_class"] == "cve-diff:llm"
+    assert "API down" in recs[0]["error"]
+
+
+def test_no_sink_means_no_emission_side_effects():
+    """Without an installed sink the emits must be pure no-ops — the
+    default state for library consumers and the bench."""
+    from core.llm.telemetry import current_sink
+
+    assert current_sink() is None
+    provider = _mock_provider()
+    client = ResilientLLMClient()
+    with patch.object(client, "_get_provider", return_value=provider):
+        result = client.complete("m", "p")
+    assert result.text == "ok"

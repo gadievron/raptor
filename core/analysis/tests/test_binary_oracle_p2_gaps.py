@@ -273,9 +273,15 @@ def test_has_dwarf_returns_false_on_readelf_timeout(
     binary = tmp_path / "hostile"
     binary.write_bytes(b"\x7fELF")
     import subprocess as _sp
-    def _hang(*args, **kwargs):
-        raise _sp.TimeoutExpired(cmd=args[0] if args else [], timeout=1)
-    monkeypatch.setattr(_sp, "run", _hang)
+
+    import core.sandbox as _sb
+
+    def _hang(cmd, **kwargs):
+        raise _sp.TimeoutExpired(cmd=cmd, timeout=1)
+
+    # _has_dwarf now routes readelf through the sandboxed oracle
+    # wrapper — stub that seam, not the subprocess module.
+    monkeypatch.setattr(_sb, "run", _hang, raising=False)
     assert ad._has_dwarf(binary) is False
 
 
@@ -288,11 +294,16 @@ def test_has_dwarf_recognises_split_dwarf_dwo(
     from core.analysis import binary_oracle_autodetect as ad
     binary = tmp_path / "split"
     binary.write_bytes(b"\x7fELF")
-    import subprocess as _sp
+
+    import core.sandbox as _sb
+
     class _FakeProc:
         returncode = 0
         stdout = "  [12] .debug_info.dwo    PROGBITS  ...\n"
-    monkeypatch.setattr(_sp, "run", lambda *a, **kw: _FakeProc())
+        stderr = ""
+
+    monkeypatch.setattr(_sb, "run", lambda *a, **kw: _FakeProc(),
+                        raising=False)
     assert ad._has_dwarf(binary) is True
 
 

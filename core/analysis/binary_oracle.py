@@ -107,6 +107,16 @@ def _run(argv: list[str], timeout: int = 60,
     ``binary`` scopes the read side: its parent directory becomes the
     sandbox ``target`` so the tool can read the file under mount-ns.
     """
+    return _run_status(argv, timeout=timeout, binary=binary)[0]
+
+
+def _run_status(argv: list[str], timeout: int = 60,
+                binary: Path | str | None = None) -> tuple[str, bool]:
+    """Like :func:`_run` but also reports whether the tool COMPLETED
+    cleanly: ``(stdout, ok)``. ``ok=False`` means the tool errored,
+    timed out, or died on a signal — callers that would otherwise
+    treat empty output as legitimately-empty evidence (e.g. the
+    plain-``nm`` fallback) can distinguish the two."""
     # Lazy import — keep the classifier independently importable in
     # unit tests that stub the sandbox module.
     from core.sandbox import run as _sandbox_run
@@ -117,11 +127,27 @@ def _run(argv: list[str], timeout: int = 60,
                             timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle: %s failed: %s", argv[0], e)
-        return ""
+        return "", False
     if proc.returncode != 0:
-        logger.debug("binary_oracle: %s rc=%s stderr=%s",
-                     argv[0], proc.returncode, (proc.stderr or "")[:200])
-    return proc.stdout or ""
+        # GNU nm exits 1 for a present-but-empty symbol table
+        # ("no symbols") — that's complete evidence of emptiness,
+        # not a tool failure.
+        if argv[0] == "nm" and "no symbols" in (proc.stderr or ""):
+            return "", True
+        # Anything else non-zero (malformed-ELF parse error, OOM /
+        # sandbox rlimit kill, signal death) may have truncated
+        # stdout mid-stream. Consuming the partial output as complete
+        # would mint verdicts from a partial symbol table / DWARF
+        # dump — a function past the cut-off point looks ``absent``.
+        # Treat as no evidence for this tool, matching the
+        # TimeoutExpired path above.
+        logger.warning(
+            "binary_oracle: %s rc=%s on %s — discarding partial output "
+            "(stderr=%s)",
+            argv[0], proc.returncode, argv[-1],
+            (proc.stderr or "")[:200])
+        return "", False
+    return proc.stdout or "", True
 
 
 def _stream(argv: list[str], timeout: int,
@@ -163,8 +189,17 @@ def _stream(argv: list[str], timeout: int,
                            argv[0], e)
             return
         if proc.returncode != 0:
-            logger.debug("binary_oracle: %s rc=%s stderr=%s",
-                         argv[0], proc.returncode, (proc.stderr or "")[:200])
+            # Same contract as ``_run_status``: a non-zero exit means
+            # the redirected output file may be truncated mid-stream —
+            # a DWARF dump cut off halfway would silently classify
+            # every function past the cut as ``absent``. Yield nothing
+            # so the caller degrades to the no-DWARF tier instead.
+            logger.warning(
+                "binary_oracle: %s rc=%s on %s — discarding partial "
+                "output (stderr=%s)",
+                argv[0], proc.returncode, argv[-1],
+                (proc.stderr or "")[:200])
+            return
         if not os.path.exists(out_path):
             return
         with open(out_path, encoding="utf-8", errors="replace") as fh:
@@ -231,8 +266,18 @@ def _strip_params(full: str) -> str:
 
 
 def _nm_symbols(binary_path: Path) -> dict[str, int]:
+    """Back-compat wrapper around :func:`_nm_symbols_status` for callers
+    that only want the symbol table."""
+    return _nm_symbols_status(binary_path)[0]
+
+
+def _nm_symbols_status(binary_path: Path) -> tuple[dict[str, int], bool]:
     """Name → address for every text symbol (local + global) defined in the
-    binary. Missing tools / non-ELF input return ``{}``.
+    binary, plus an ``ok`` flag. Missing tools / non-ELF input return
+    ``({}, False)``: ``ok=False`` means no nm invocation completed
+    cleanly, so the symbol table is UNKNOWN (not known-empty) — the
+    classifier must not mint suppression-grade ``absent`` verdicts
+    from the failed tool's silence.
 
     Uses ``nm -C`` so C++ source function names (which DWARF
     ``DW_AT_name`` emits unmangled) match the symbol table entries (which
@@ -242,9 +287,16 @@ def _nm_symbols(binary_path: Path) -> dict[str, int]:
     scenario B). Also indexes by *bare* name so source ``live_method``
     matches demangled ``Widget::live_method() const``, and so source
     ``gz_skip`` matches the GCC-cloned ``gz_skip.constprop.0``."""
-    out = _run(["nm", "-C", str(binary_path)], binary=binary_path)
-    if not out:
-        out = _run(["nm", str(binary_path)], binary=binary_path)   # fall back if -C unavailable
+    out, ok = _run_status(["nm", "-C", str(binary_path)],
+                          binary=binary_path)
+    if not ok:
+        # Fall back to plain nm only when ``nm -C`` FAILED (-C
+        # unavailable on an exotic nm build, tool crash). A clean run
+        # with legitimately-empty output is complete evidence of an
+        # empty symbol table — rerunning without -C would just repeat
+        # the answer at the cost of another subprocess.
+        out, ok = _run_status(["nm", str(binary_path)],
+                              binary=binary_path)
     syms: dict[str, int] = {}
     for line in out.splitlines():
         # ``<addr> <type> <demangled name (may contain spaces)>``
@@ -273,7 +325,7 @@ def _nm_symbols(binary_path: Path) -> dict[str, int]:
                     if "::" in qualified else qualified)
             if bare and bare not in (full, qualified):
                 syms.setdefault(bare, addr)
-    return syms
+    return syms, ok
 
 
 @dataclass
@@ -731,9 +783,12 @@ def _dynamic_nm_symbols(binary_path: Path) -> dict[str, int]:
     NO plain-nm symbols (the ``.symtab`` section is removed), but
     ``.dynsym`` survives (the dynamic linker needs it). For a shared
     library, this exposes the entire public API. Same demangle +
-    bare-name + qualified-no-args indexing as ``_nm_symbols``."""
-    out = _run(["nm", "-D", "-C", str(binary_path)], binary=binary_path)
-    if not out:
+    bare-name + qualified-no-args indexing as ``_nm_symbols``; same
+    rerun policy — plain ``nm -D`` only when ``nm -D -C`` failed
+    (clean-but-empty output is complete evidence)."""
+    out, ok = _run_status(["nm", "-D", "-C", str(binary_path)],
+                          binary=binary_path)
+    if not ok:
         out = _run(["nm", "-D", str(binary_path)], binary=binary_path)
     syms: dict[str, int] = {}
     for line in out.splitlines():
@@ -831,7 +886,7 @@ def classify_binary_evidence(
         return {}
 
     build_id = read_build_id(binary_path) or ""
-    nm_syms = _nm_symbols(binary_path)
+    nm_syms, nm_ok = _nm_symbols_status(binary_path)
     subs, inline_origins = _parse_dwarf(binary_path)
 
     if not subs:
@@ -921,6 +976,19 @@ def classify_binary_evidence(
     folded_names = {n for names in by_addr.values() if len(names) > 1
                     for n in names}
 
+    if not nm_ok:
+        # nm errored / was killed (NOT merely empty output — that
+        # reads ok=True). The DWARF side may still be complete, but a
+        # function whose only evidence is an nm symbol (hand-written
+        # assembly, a CU compiled without -g) would classify ``absent``
+        # purely because the failed tool's evidence is missing.
+        # ``absent`` verdicts below are downgraded out of the
+        # suppression-grade ``full`` tier.
+        logger.warning(
+            "binary_oracle: nm produced no usable output for %s; "
+            "absent verdicts downgraded to symbol_only tier "
+            "(no suppression licensed)", binary_path)
+
     out: dict[str, BinaryOracleWitness] = {}
     bp = str(binary_path)
     for name in source_function_names:
@@ -950,7 +1018,11 @@ def classify_binary_evidence(
             build_id=build_id,
             binary_path=bp,
             address=addr if addr is not None else nm_syms.get(name),
-            tier="full",
+            # A partial-nm + full-DWARF combination must not mint
+            # suppression-grade absent verdicts from the failed
+            # tool's silence (see the nm_ok warning above).
+            tier=("symbol_only" if cls == "absent" and not nm_ok
+                  else "full"),
         )
     return out
 
@@ -1105,7 +1177,12 @@ def enrich_inventory_with_binary_oracle(
     per_binary: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
     for bp in binary_paths:
         verdicts = classify_binary_evidence(names, bp)
-        build_id = read_build_id(bp) or ""
+        # Every witness already carries the build_id the classifier
+        # read — reuse it instead of re-running readelf on the binary.
+        if verdicts:
+            build_id = next(iter(verdicts.values())).build_id
+        else:
+            build_id = read_build_id(bp) or ""
         per_binary.append((bp, build_id, verdicts))
 
     if not any(verdicts for _, _, verdicts in per_binary):

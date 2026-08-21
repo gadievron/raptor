@@ -585,6 +585,21 @@ class TestCliDispatch:
         result = _positional_to_target_flag(["--allow-major", "--out", "."])
         assert "--target" not in result
 
+    def test_positional_to_target_flag_format_value_not_target(self):
+        """``--format``'s value must not be mistaken for the positional
+        target."""
+        from packages.sca.cli import _positional_to_target_flag
+        result = _positional_to_target_flag(
+            ["--format", "pr-comment", "/path"])
+        assert result == ["--format", "pr-comment", "--target", "/path"]
+
+    def test_positional_to_target_flag_validate_against_value_not_target(self):
+        from packages.sca.cli import _positional_to_target_flag
+        result = _positional_to_target_flag(
+            ["--validate-against", "pkg.json", "/path"])
+        assert result == ["--validate-against", "pkg.json",
+                          "--target", "/path"]
+
     def test_fix_harden_routes_to_harden(self):
         from packages.sca.cli import _dispatch_fix
         from unittest.mock import patch

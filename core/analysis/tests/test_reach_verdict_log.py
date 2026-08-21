@@ -264,6 +264,10 @@ def _run_script(*args, sidecar: Path) -> tuple[int, str]:
     env = dict(os.environ)
     env["RAPTOR_REACH_VERDICT_LOG"] = str(sidecar)
     env.pop("RAPTOR_REACH_VERDICT_LOG_DISABLED", None)
+    # The script's sys.path bootstrap is the RAPTOR_DIR hard lookup
+    # (launcher contract) — provide it the way the launcher would,
+    # pointing at THIS checkout so the test exercises this tree.
+    env["RAPTOR_DIR"] = str(_SCRIPT.parents[3])
     result = subprocess.run(
         [sys.executable, str(_SCRIPT), *args],
         capture_output=True, text=True, env=env, timeout=30,

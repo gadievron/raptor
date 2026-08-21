@@ -76,19 +76,32 @@ def _resolve_project_dir(explicit: str | None = None) -> Path | None:
     """Find the active project directory.
 
     When *explicit* is given (from ``--project``), use it directly.
-    Otherwise fall back to the ``.active`` symlink.
+    Otherwise derive it from the active project's registry JSON.
     """
     if explicit:
         p = Path(explicit)
         if p.is_dir():
             return p
         return None
-    raptor_dir = Path(__file__).resolve().parents[1]
-    active = raptor_dir / ".active"
-    if active.is_symlink() or active.exists():
-        target = active.resolve()
-        if target.is_dir():
-            return target
+    # The active-project pointer lives at ~/.raptor/projects/.active and
+    # is a symlink to the project's <name>.json FILE; the project
+    # directory is that JSON's output_dir (the same derivation the run
+    # lifecycle's journal merge uses). Pre-fix this looked for a
+    # <repo-root>/.active path nothing creates, so without --project
+    # every project-level layer (coverage store, journal index)
+    # silently read as absent.
+    try:
+        from core.json import load_json
+        from core.startup import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if name:
+            data = load_json(PROJECTS_DIR / f"{name}.json")
+            if isinstance(data, dict) and data.get("output_dir"):
+                candidate = Path(data["output_dir"])
+                if candidate.is_dir():
+                    return candidate
+    except Exception:  # noqa: BLE001 — no active project is a normal state
+        pass
     return None
 
 
@@ -661,6 +674,36 @@ def cmd_compact(args):
 
 # ── Argument parsing ─────────────────────────────────────────────────
 
+# Flags that consume a following value. The default-subcommand sniffer
+# must skip those values — pre-fix `raptor-review --project /x stats`
+# picked `/x` (a flag VALUE) as the first positional, decided it wasn't
+# a known subcommand, and prepended "show", so `stats` was parsed as
+# show's <file> argument.
+_VALUE_FLAGS = frozenset({
+    "--out", "--project", "--target", "--status", "--base",
+    "--source", "-m", "--body",
+})
+
+
+def _first_positional(argv_rest: list) -> str | None:
+    """First true positional, skipping values consumed by flags.
+
+    ``--flag value`` consumes the next token; ``--flag=value`` carries
+    its value inline and consumes nothing.
+    """
+    skip = False
+    for a in argv_rest:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("-") and a != "-":
+            if a in _VALUE_FLAGS:
+                skip = True
+            continue
+        return a
+    return None
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--out", default=None, help="Output directory")
@@ -728,7 +771,7 @@ def main():
         "note", "edit", "stale", "compact", "coverage",
     }
     argv_rest = sys.argv[1:]
-    first_positional = next((a for a in argv_rest if not a.startswith("-")), None)
+    first_positional = _first_positional(argv_rest)
 
     if first_positional and first_positional not in known_commands:
         argv_rest = ["show"] + argv_rest

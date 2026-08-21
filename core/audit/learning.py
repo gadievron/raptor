@@ -169,7 +169,10 @@ def save_corrections(
             for p in patterns
         ],
     }
-    corrections_path.write_text(json.dumps(data, indent=2))
+    # Atomic write — prompt corrections feed future runs; a torn write
+    # dropped the accumulated FP lessons on the floor.
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(corrections_path, json.dumps(data, indent=2))
     logger.info(
         "saved %d prompt corrections to %s",
         len(patterns), corrections_path,

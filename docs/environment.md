@@ -45,8 +45,12 @@ Conventions used below:
 | `RAPTOR_REACH_VERDICT_LOG` | `$RAPTOR_DIR/out/reach_verdict_log.json` | Path override for the privacy-bounded reachability-verdict telemetry sidecar (`core.analysis.reach_verdict_log`; only language/verdict counts). |
 | `RAPTOR_REACH_VERDICT_LOG_DISABLED` | unset | Any non-empty value disables reach-verdict telemetry recording (checked per call). The test suite sets it globally in `conftest.py`. Telemetry failures never affect analysis. |
 | `RAPTOR_BINARY_CACHE_DIR` | `<repo>/.cache/binary` | Location of the build-ID binary cache (`core.audit.build_id_cache`). Explicit `cache_dir` argument > env > default. Set to share the cache across hosts/tools. |
+| `RAPTOR_HITL_TTY_MAX_AGE_S` | `86400` (24 h) | Recency threshold for the human-attended probe (`core.security.rule_of_two`): the controlling TTY must show read activity (atime) within this many seconds for the session to count as human-attended. `<= 0` disables the recency check (pure TTY-presence, the pre-fix behaviour); non-numeric falls back to the default with a warning. |
 | `RAPTOR_SELFTEST_MODEL` | unset | Default for `raptor-self-test --model` (budget-capped LLM cases). Flag > env > RAPTOR's own model resolution. |
+| `RAPTOR_NONINTERACTIVE` | unset | Explicit non-interactive override for the AskUserQuestion interactivity gate (`core.ux.interactivity`, consulted via `libexec/raptor-may-ask`). Any truthy value forces the `non-interactive` verdict, so sessions apply the documented default behaviour instead of presenting structured operator prompts. Stamped `=1` into every `claude` CLI child RAPTOR spawns (`core.llm.cc_adapter.cc_subprocess_env`) — dispatched sub-agents are unattended by definition. Falsy spellings (`0`, `false`, `no`, `off`) are ignored; without the override the gate falls through to `rule_of_two.is_ci()`, the std-fd TTY predicate, and the rule-of-two human-attendance probe, failing closed. |
 | `RAPTOR_CI` | auto-detected | CI-posture marker for the rule-of-two interactivity gate (`core.security.rule_of_two`). Normally parent-stamped: `get_safe_env()` writes `RAPTOR_CI=1` into every sanitised child env whenever the parent judged itself in CI, so the gate keeps working in children whose scrubbed env lost the vendor markers (`CI`, `GITHUB_ACTIONS`, ...). It is also the first — authoritative — entry in the recognised-marker list, so an operator may set `RAPTOR_CI=1` to force CI posture on any host. The whole marker set is unioned into `SAFE_ENV_ALLOWLIST`, so the verdict survives further spawns. |
+| `RAPTOR_NO_LAUNCHER_HARDENING` | unset | Any non-empty value skips the `bin/raptor` exec-boundary hardening block entirely: the soft core-dump cap, the umask floor (current \| `022`), the PATH scrub (empty / relative / world-writable entries), the world-writable-ancestor warning on the resolved `claude`, and the per-session TMPDIR (creation and stale-sibling sweep). Single opt-out for environments that legitimately violate one of the checks. Fail-closed: unset means hardening runs. |
+| `RAPTOR_ALLOW_UNSAFE_PATH` | unset | Any non-empty value makes the launcher PATH scrub KEEP entries it would otherwise drop (empty, relative, world-writable dirs), each with a stderr warning naming the entry and reason. Escape hatch for hosts where a required tool lives under a loose directory. Only consulted while the hardening block runs (no effect under `RAPTOR_NO_LAUNCHER_HARDENING`). |
 
 ### `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`
 
@@ -100,9 +104,10 @@ deleting).
 
 ## LLM model selection and transport
 
-Prose: [LLM Providers](llm.md) — Claude Code transport, Bedrock
-opt-in/authentication/region, cost management. models.json entries
-beat every env knob for model selection.
+These knobs are covered in narrative form in [LLM Providers](llm.md)
+— Claude Code transport, Bedrock opt-in/authentication/region, and
+cost management. `models.json` entries beat every env knob for model
+selection.
 
 ### Claude Code transport (`RAPTOR_CC_*`)
 
@@ -138,6 +143,7 @@ AWS credentials alone never select Bedrock.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `RAPTOR_LLM_CACHE` | on | LLM response cache kill-switch: `off`/`none`/`0`/`false`/`no` disables the cache entirely (no reads, no writes). Use when re-measuring model behaviour — cached completions replay verbatim. The corpus runner's `--no-llm-cache` sets this for the whole run. |
 | `RAPTOR_LLM_CACHE_TTL_S` | `86400` (24 h) | TTL of the on-disk LLM response cache (guards against same-name model drift). `none`/`off`/`0`/non-positive disables expiry entirely; garbled values fall back to 24 h. |
 | `RAPTOR_SCORECARD_PATH` | `out/llm_scorecard.json` | Per-model reliability scorecard location (feeds `/scorecard` and cross-model merge weights). Set by tests/sandboxed runs for isolation. |
 | `RAPTOR_SCORECARD_TEST_FLUSH` | unset | Test-harness escape hatch. Under pytest the process-exit scorecard flush is suppressed (per-test isolation is torn down before atexit; flushing would corrupt real reliability data with mock usage). Any non-empty value opts the atexit flush back in — for tests exercising that path against an isolated `RAPTOR_SCORECARD_PATH`. No effect outside pytest. |
@@ -148,21 +154,17 @@ Three integer knobs on the dispatcher server
 (`core/llm/dispatcher/server.py`). All resolve caller argument > env
 > default; non-numeric or below-minimum (1) values fall back to the
 default with a debug log — a typo never breaks dispatcher startup.
-They are read by helper, not by `os.environ.get` at the call site, so
-the machine inventory currently sees only the first one (its test
-monkeypatches it); listed here as prose until the extractor learns
-that seam:
 
-- `RAPTOR_LLM_DISPATCHER_UPSTREAM_TIMEOUT_S` (default `600`) —
-  read/write/pool timeout in seconds on the dispatcher→provider
-  forwarding leg, re-read per request. The connect timeout stays
-  fixed at 10 s: a provider that cannot finish the TCP/TLS handshake
-  in 10 s is down, and a long connect timeout only delays failover.
-- `RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S` (default `28800` = 8 h) —
-  lifetime of a worker's one-shot auth token; bump for kernel-scale
-  runs that outlive the default.
-- `RAPTOR_LLM_DISPATCHER_TOKEN_BUDGET` (default `10000`) — requests
-  allowed per worker token.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RAPTOR_LLM_DISPATCHER_UPSTREAM_TIMEOUT_S` | `600` | Read/write/pool timeout in seconds on the dispatcher→provider forwarding leg, re-read per request. The connect timeout stays fixed at 10 s: a provider that cannot finish the TCP/TLS handshake in 10 s is down, and a long connect timeout only delays failover. |
+| `RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S` | `28800` (8 h) | Lifetime of a worker's one-shot auth token; bump for kernel-scale runs that outlive the default. The in-process self-serve route (`core/llm/dispatcher/lifecycle.py`) sizes its own token to 7 days when this is unset — an explicit value pins both. |
+
+The third knob, `RAPTOR_LLM_DISPATCHER_TOKEN_BUDGET` (default
+`10000`) — requests allowed per worker token — is read only through
+the server's `_env_int` helper, which the machine inventory does not
+see; it stays in prose until the extractor learns that seam (a table
+row would trip the stale-entry check).
 
 Not to be confused with the dispatcher *route pair*
 (`RAPTOR_LLM_SOCKET` / `RAPTOR_LLM_TOKEN_FD`) — that is per-child
@@ -181,7 +183,8 @@ does not count as local.
 
 ## LLM HTTP transport
 
-Prose: [LLM Providers](llm.md), "HTTP Transport Tuning". Pooled
+See "HTTP Transport Tuning" in [LLM Providers](llm.md) for the
+narrative version. Pooled
 `httpx` transports for the in-process SDK clients
 (`core.llm.http_pool`); all numeric knobs must be strictly positive —
 absent, unparseable, or non-positive values warn and fall back.
@@ -198,8 +201,8 @@ absent, unparseable, or non-positive values warn and fall back.
 
 ## Egress proxy
 
-Prose: [Sandbox](sandbox.md), "Egress proxy" / "Upstream proxy
-support".
+See "Egress proxy" and "Upstream proxy support" in
+[Sandbox](sandbox.md) for the narrative version.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -214,10 +217,12 @@ support".
 | `RAPTOR_SANITIZER_CUT` | off | Legacy env interface for the sanitizer vertex-cut gate; truthy `1`/`true`/`on`/`yes`. **Prefer the `--sanitizer-cut off\|on\|strict\|shadow` flag** on `/agentic`, `/validate`, `/codeql`; the flag always wins. The pipeline also re-exports the resolved value to its own workers (internal transport). |
 | `RAPTOR_SANITIZER_CUT_NO_LEXICAL` | off | Disables the lexical fallback (strict mode). Footgun-guarded: set without `RAPTOR_SANITIZER_CUT` it warns on stderr and is ignored — suppression never silently turns off. |
 | `RAPTOR_SANITIZER_CUT_PARITY_LOG` | off | Parity-telemetry log path; boolean-style values resolve to the default filename `sanitizer_cut_parity.jsonl` rather than creating a file named `1`. |
+| `RAPTOR_SANITIZER_CUT_AUDIT_DIR` | unset | Run directory where the value-bound gate writes its `suppressions.jsonl` audit records. Set by the pipeline for its own workers (internal transport, like the resolved `RAPTOR_SANITIZER_CUT` re-export); ignored when the gate is off. |
 | `RAPTOR_NO_PERLASM` | unset | Any non-empty value (including `0`) disables the perlasm generated-asm inventory enrichment pass (`core.inventory.perlasm`); the `PERLASM_INVENTORY` config gate disables it too. Enrichment is best-effort — failures never break the inventory build. |
 | `RAPTOR_PERLASM_CACHE_DIR` | `<repo>/.cache/perlasm` | Generated-asm cache root for the perlasm pass (build-ID-cache resolution precedent: env > default). Set to share or relocate the cache. |
 | `RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD` | `25` | Minimum unique applicable Semgrep rule count below which the thin-coverage hint fires (`packages/static-analysis`). `0` disables the hint; non-integer/negative warns and uses 25. |
 | `RAPTOR_PATCH_GATE_SCOPE_SLACK` | `40` | Hunk slack (lines around the finding span) the patch gate tolerates (`packages/llm_analysis.patch_gate`). Per-call argument > env > default; malformed/negative values warn and use 40. |
+| `RAPTOR_CORPUS_HISTORY` | `~/.local/share/raptor/corpus-history.jsonl` | Path of the append-only corpus run-history store (`core.audit.corpus.history`). Each corpus run appends a run header plus per-label verdict records after results.json is finalized; a write failure warns and never fails the run. Run headers record the run's profile (`cold`/`deployed`); `compare` warns across differing profiles. Reporting-only: the read side is the `python3 -m core.audit.corpus.history` CLI (`runs`/`compare`/`trend`/`stability`/`import`) plus one post-run operator report — nothing reads it to alter behavior. Tests must point this at a temporary path. |
 
 One more knob lives in `core/build/build_detector.py` (a directory the
 inventory scanner currently skips, so prose rather than a row):
@@ -248,6 +253,9 @@ to 120. Raise it only for unusually slow toolchains.
 | `RAPTOR_SCA_NPM_AUTH` | unset | Same, for the npm mirror (`NPM_CONFIG_REGISTRY`). |
 | `RAPTOR_SCA_MAVEN_AUTH` | unset | Same, for the Maven mirror (`RAPTOR_SCA_MAVEN_REGISTRY`). |
 | `RAPTOR_SAGE_AFL_PRIOR` | `1` | Falsy disables mechanical AFL flag injection from high-confidence SAGE cross-run priors. Shared toggle spellings (`off` now works); unrecognised values warn and leave it enabled. |
+| `RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED` | unset | Truthy (`1/true/yes/on`) silences the live stderr escalation banners for HIGH-severity sandbox telemetry (escape-primitive syscalls, credential-path touches, blocked-resolved-IP CONNECTs). Alerting only — enforcement and the run-end `sandbox-triage.json` classification are unaffected. See [Sandbox](sandbox.md) triage section. |
+| `RAPTOR_SAGE_FP_SUPPRESS` | `1` | Falsy disables SAGE cross-run false-positive suppression entirely (every finding re-tests). The force gate for consumers without a `--force` flag of their own — /agentic's analysis loop suppresses pre-LLM through this hook. |
+| `RAPTOR_SAGE_CVE_PRIOR` | `1` | Falsy disables mechanical reuse of SAGE-remembered verified CVE fix pointers in /cve-diff discovery. MAC-gated: rows without a verifying token are ignored regardless. |
 | `RAPTOR_EF_CONFIG` | unset | Path to `packages/exploit_feasibility`'s analysis-settings JSON (chain: explicit arg > `RAPTOR_EF_CONFIG` > `./.raptor.json` > `~/.config/raptor/config.json`). Not to be confused with `RAPTOR_CONFIG` (core.llm models config) — this reader historically shared that name; each side's schema guard names the right variable on mismatch. See "Exploit-feasibility analysis settings" below for the rest of the `RAPTOR_EF_*` family. |
 
 ### OCI registry credentials
@@ -296,6 +304,11 @@ is listed as prose:
 
 Config-file path: `RAPTOR_EF_CONFIG` (chain: explicit arg >
 `RAPTOR_EF_CONFIG` > `./.raptor.json` > `~/.config/raptor/config.json`).
+
+The numeric/boolean knobs above pass through `get_safe_env()` into
+sandboxed subprocesses; the exec-path-class variables
+(`RAPTOR_EF_*_PATH`, `RAPTOR_EF_CONFIG`, `RAPTOR_EF_CACHE_DIR`) are
+deliberately scrubbed and only apply in the direct session environment.
 Historically this package read `RAPTOR_CONFIG` for the same purpose —
 that name now belongs exclusively to `core.llm`'s models config (see
 Core runtime); pointing `RAPTOR_CONFIG` at analysis settings is a
@@ -312,7 +325,7 @@ Prose and the container-side variables: [SAGE](sage.md),
 | `SAGE_URL` | `http://localhost:8090` | SAGE node base URL. |
 | `SAGE_TIMEOUT` | `30.0` | API request timeout in seconds (float); non-float or non-positive warns and uses the default. |
 | `SAGE_OLLAMA_URL` | `http://localhost:11435` | Ollama URL for the direct-embed path (CPU hosts bypassing the Go-side embed timeout). Read once at module import. |
-| `SAGE_EMBED_MODEL` | auto-detected by setup | Embedding model override — set **before running `raptor-sage-setup`** (GPU hosts auto-select `snowflake-arctic-embed:m`, CPU `nomic-embed-text`); changing it later without re-running setup desyncs client and container. |
+| `SAGE_EMBED_MODEL` | auto-detected by setup | Embedding model override — set **before running `raptor-sage-setup`** (GPU hosts auto-select `nomic-embed-text`, CPU `snowflake-arctic-embed:m`); changing it later without re-running setup desyncs client and container. |
 | `SAGE_FORCE_CPU` | unset | Pipeline hooks are disabled on CPU-only Ollama by default (fail-closed for latency); truthy forces them on. Shared toggle spellings — `0`/`false`/`no`/`off` no longer force; unrecognised values warn and leave them disabled. |
 | `SAGE_PROPOSE_DELAY_MS` | `0` | Safety-valve delay between SAGE proposes, capped at 300 000 ms; invalid values silently mean 0. Rarely needed. |
 | `SAGE_RECALL_WORKERS` | auto (4 GPU / 2 CPU) | Recall concurrency, clamped 1–8; malformed falls back to auto. |
@@ -452,9 +465,10 @@ the JVM-installer caveat.
 | `GITHUB_TOKEN` | Used by cve-diff/forensics tooling to raise GitHub API limits; forwarded to the relevant children only. |
 | `CLAUDE_ENV_FILE` | Claude Code harness contract (set in `.claude/settings.json` to `.claude/raptor.env`): the SessionStart hook writes `RAPTOR_DIR` and a `PATH` extension into that file so every session Bash call inherits them. Not operator-set. |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | `bin/raptor` bridges it from `ANTHROPIC_MODEL` when unset (Bedrock roles entitled for only one model would otherwise 403 on subagents). An explicit operator export is never overridden. |
-| `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` | Claude Code harness knob: per-SUBAGENT background-shell kill cap in ms (harness default 3,600,000). Read by `core.run.supervisor` so `/audit` can self-bound its wall budget to conclude gracefully inside the cap (cap − 300s, default 3300s; `--no-supervisor-bound` opts out). Non-numeric/non-positive values fall back to the default. See [long-runs.md](long-runs.md). |
+| `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` | Claude Code harness knob: per-SUBAGENT background-shell kill cap in ms (harness default 3,600,000). Read by `core.run.supervisor` so `/audit` can self-bound its wall budget to conclude gracefully inside the cap (cap − 300s, default 3300s; `--no-supervisor-bound` opts out). Non-numeric/non-positive values fall back to the default. See "Running long audits" in [audit.md](audit.md). |
 | `AI_AGENT`, `CLAUDE_CODE_CHILD_SESSION` | Claude Code harness stamps on subagent shells; read (never set) by `core.run.supervisor.is_subagent_shell` — an `AI_AGENT` value ending `_agent` or a set `CLAUDE_CODE_CHILD_SESSION` marks a subagent background shell (main-thread shells are uncapped and never self-bounded). |
 | `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` | Claude Code backend selection; members of the routing family above. Also gate `AWS_*` forwarding to CLI children, pick Bedrock hosts for the proxy allowlist, and count as auth signals for the calibration probe. Foundry set without an endpoint URL results in proxy-denied Foundry traffic with a clear log. |
+| `AWS_EC2_METADATA_DISABLED` | Standard AWS SDK switch that disables EC2 IMDS lookups. RAPTOR never sets it; `raptor doctor` (`core.startup.aws_imds`) cross-checks it against the effective AWS credential chain and warns when a truthy value would break an IMDS-dependent chain (`credential_source = Ec2InstanceMetadata`, or no other credential source so SDKs fall through to IMDS). On proxied hosts whose chain does not depend on IMDS, doctor suggests it as *optional* probe-noise hygiene — never set it on instance-role hosts. |
 | `AWS_ENDPOINT_URL_BEDROCK` | Honoured when deriving Bedrock hosts for the egress proxy allowlist (custom/VPC endpoints). |
 | `VERTEX_LOCATION`, `CLOUD_ML_REGION` | Read when deriving Vertex hosts for the egress proxy allowlist. |
 | `XDG_DATA_HOME` | Allowlisted through to children; RAPTOR stores the SAGE row-HMAC key at `$XDG_DATA_HOME/raptor/rowmac.key` (default `~/.local/share/raptor/rowmac.key`). |
@@ -490,11 +504,13 @@ setting them manually either does nothing or weakens a boundary.
 | `RAPTOR_COORD_REEXEC_GUARD` | netns coordinator | Breaks infinite re-exec loops; re-entry with the guard but without the launcher marker exits 2 with a structured error. |
 | `RAPTOR_TRAJECTORY_DIR` | `raptor-cve-diff`, `raptor-understand` shims | Enables trajectory persistence into the run's output dir; the shims deliberately override any pre-set value. Unset → no-op; write failures warn only. |
 | `RAPTOR_BO_OUT` | binary-oracle streaming helper | Temp-file path where a sandboxed tool's large stdout is redirected (bounded by the sandbox file-size rlimit). |
+| `RAPTOR_SAGE_BOOT_CAPTURE` | `raptor-sage-setup` (capture pipeline only) | Sanctioned guard bypass in `libexec/raptor-sage-mcp`: `=1` makes the wrapper exec the SAGE server directly, skipping `raptor-sage-mcp-guard`, so the setup probe that CREATES the boot-payload stamp doesn't record the guard's own no-stamp warning text (which would make every real session mismatch forever). Agent sessions can never take this branch — Claude Code spawns the wrapper with its own environment. Setting it manually runs SAGE unguarded. |
 | `OUTPUT_DIR`, `R2_TARGET_DIR` | callers of the sandboxed wrappers | Env contract of `libexec/raptor-run-sandboxed` (writable dir, required, fail-closed validation) and `libexec/raptor-r2-sandboxed` (scratch dir + read-only binary parent, set by `packages/binary_analysis/radare2_understand`). |
 | `TARGET` | `packages/llm_analysis/exploit_verify` | Path of the binary under attack, exported to compiled/generated PoC scripts — PoCs must reference `$TARGET`, not hard-coded paths. |
 | `SAGE_ENABLED` | `raptor-sage-setup` | Written as `true` into `.claude/settings.local.json` so sessions enable SAGE; default `false`, truthy `true`/`1`/`yes` (fail-closed). Removed by teardown. |
 | `SAGE_IDENTITY_PATH`, `SAGE_PROJECT`, `SAGE_PROVIDER` | `raptor-sage-setup` → `.mcp.json` | Agent identity/namespace for the SAGE MCP wrapper (container-internal defaults). |
 | `SAGE_EMBED_DIM` | `raptor-sage-setup` | Compose-time embedding dimension (default 768); no Python reads it at runtime — pairs with `SAGE_EMBED_MODEL` before setup. |
+| `RAPTOR_SAGE_BOOT_CAPTURE` | `raptor-sage-setup` (boot-payload capture) | Setup-only bypass letting the capture probe talk to the SAGE MCP process directly instead of through the boot-payload guard shim. Setting it manually disables the guard's instruction-surface verification for that session. |
 
 Namespace look-alikes that are **not** environment variables: grep
 also surfaces `RAPTOR_GD_*` / `RAPTOR_FLOW_*` (Joern guard-dominance

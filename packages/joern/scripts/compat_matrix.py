@@ -60,8 +60,9 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 # Hard-SET (never setdefault): children of this tree must import this
 # tree even when the launching shell exported RAPTOR_DIR for another
-# checkout (see core.config.pin_raptor_dir).
-from core.config import pin_raptor_dir_in_environ
+# checkout (see core.config.pin_raptor_dir). Import must follow the
+# sys.path insert above.
+from core.config import pin_raptor_dir_in_environ  # noqa: E402
 
 pin_raptor_dir_in_environ()
 
@@ -206,6 +207,24 @@ def run_e2e(joern_dir: str) -> dict:
             results["sweep"] = "FAIL(0 flows)"
         else:
             results["sweep"] = f"ok({len(sweep.flows)})"
+
+        # Learned flow semantics: a kill row on the pass-through
+        # function must suppress the inter-procedural main→strcpy
+        # flow that the baseline finds. Exercises the FullNameSemantics
+        # / DefaultSemantics().after API this joern release ships —
+        # the exact drift surface this matrix exists to catch.
+        baseline = srv.run_taint_queries_batch([("main", "strcpy")])
+        srv.set_flow_semantics(["process"])
+        killed = srv.run_taint_queries_batch([("main", "strcpy")])
+        srv.set_flow_semantics([])
+        if not baseline:
+            results["semantics_kill"] = "FAIL(0 baseline flows)"
+        elif killed:
+            results["semantics_kill"] = (
+                f"FAIL({len(killed)} flows survived kill)"
+            )
+        else:
+            results["semantics_kill"] = f"ok(0 vs {len(baseline)})"
     except Exception as e:  # noqa: BLE001 — report, don't crash the matrix
         results["exception"] = f"{type(e).__name__}: {e}"[:200]
     finally:

@@ -31,6 +31,23 @@ logger = get_logger()
 _HISTORY_MAX_MESSAGES = 4
 _HISTORY_MAX_CHARS_PER_MESSAGE = 300
 
+# Explicit verdict parsing for _parse_crash_analysis. Two anchored
+# shapes: "exploitability: high" / "exploitable? low" (anchor first)
+# and "high exploitability" (level first, tightly adjacent). The gap
+# class deliberately excludes letters/digits so an echo of the
+# question ("how exploitable is this? (high/medium/low/none)") does
+# not match.
+_VERDICT_ANCHOR_FIRST_RE = re.compile(
+    r"exploit(?:ability|able)\b[^a-z0-9\n]{0,40}?\b(high|medium|low|none)\b",
+)
+_VERDICT_LEVEL_FIRST_RE = re.compile(
+    r"\b(high|medium|low|none)\b[^a-z0-9\n]{0,10}exploit(?:ability|able)\b",
+)
+_VERDICT_CONFIDENCE = {"high": 0.8, "medium": 0.7, "low": 0.6, "none": 0.7}
+# Whole-response keyword co-occurrence is weak evidence — verdicts
+# recovered that way carry less confidence than an explicit line.
+_FALLBACK_CONFIDENCE_PENALTY = 0.15
+
 
 def _extract_roles(bundle: PromptBundle) -> tuple:
     """Extract (user_prompt, system_prompt) from a PromptBundle."""
@@ -157,10 +174,19 @@ class MultiTurnAnalyser:
                 "response": response[:200] + "...",
             })
 
-            # Update analysis with clarifications
+            # Update analysis with clarifications. The confidence boost
+            # is earned only when the clarification AGREES with the
+            # initial verdict — pre-fix the +0.2 was unconditional, so
+            # a turn that reversed the verdict still raised confidence.
             refined = self._parse_crash_analysis(response)
-            analysis_result["exploitability"] = refined.get("exploitability", analysis_result["exploitability"])
-            analysis_result["confidence"] = min(1.0, analysis_result["confidence"] + 0.2)
+            refined_level = refined.get("exploitability", "unknown")
+            initial_level = analysis_result["exploitability"]
+            if refined_level != "unknown":
+                analysis_result["exploitability"] = refined_level
+                if refined_level == initial_level:
+                    analysis_result["confidence"] = min(
+                        1.0, analysis_result["confidence"] + 0.2,
+                    )
             turns_used += 1
 
         # Turn 3: Validate with memory
@@ -250,7 +276,11 @@ class MultiTurnAnalyser:
 
         logger.warning("Max iterations reached without successful refinement")
         self.dialogue_history.append(messages)
-        return current_code  # Return best attempt
+        # Contract: "Refined exploit code or None if refinement failed."
+        # Pre-fix this returned the last attempt, so callers testing
+        # `if refined_code` treated known-broken code as a successful
+        # refinement.
+        return None
 
     def ask_strategic_question(self, question: str, context_data: dict | None = None) -> str:
         """
@@ -497,19 +527,39 @@ class MultiTurnAnalyser:
         elif "null pointer" in response_lower:
             analysis["vulnerability_type"] = "null_deref"
 
-        # Detect exploitability
-        if re.search(r'\bhigh\b', response_lower) and re.search(r'\bexploit', response_lower):
-            analysis["exploitability"] = "high"
-            analysis["confidence"] = 0.8
-        elif re.search(r'\bmedium\b', response_lower) and re.search(r'\bexploit', response_lower):
-            analysis["exploitability"] = "medium"
-            analysis["confidence"] = 0.7
-        elif re.search(r'\blow\b', response_lower) and re.search(r'\bexploit', response_lower):
-            analysis["exploitability"] = "low"
-            analysis["confidence"] = 0.6
-        elif "not exploitable" in response_lower or re.search(r'\bnone\b', response_lower):
+        # Detect exploitability. Explicit verdict line first — pre-fix
+        # the whole response was scanned for keyword co-occurrence with
+        # 'high' checked first, so "Exploitability: LOW ... the heap
+        # address is high" parsed as high@0.8.
+        if "not exploitable" in response_lower:
             analysis["exploitability"] = "none"
-            analysis["confidence"] = 0.7
+            analysis["confidence"] = _VERDICT_CONFIDENCE["none"]
+            return analysis
+        m = (_VERDICT_ANCHOR_FIRST_RE.search(response_lower)
+             or _VERDICT_LEVEL_FIRST_RE.search(response_lower))
+        if m:
+            level = m.group(1)
+            analysis["exploitability"] = level
+            analysis["confidence"] = _VERDICT_CONFIDENCE[level]
+            return analysis
+
+        # Fallback: whole-response keyword co-occurrence. Weak evidence
+        # — check the conservative levels first and reduce confidence.
+        has_exploit_kw = re.search(r'\bexploit', response_lower) is not None
+        fallback = None
+        if re.search(r'\bnone\b', response_lower):
+            fallback = "none"
+        elif has_exploit_kw and re.search(r'\blow\b', response_lower):
+            fallback = "low"
+        elif has_exploit_kw and re.search(r'\bmedium\b', response_lower):
+            fallback = "medium"
+        elif has_exploit_kw and re.search(r'\bhigh\b', response_lower):
+            fallback = "high"
+        if fallback:
+            analysis["exploitability"] = fallback
+            analysis["confidence"] = round(max(
+                0.0, _VERDICT_CONFIDENCE[fallback] - _FALLBACK_CONFIDENCE_PENALTY,
+            ), 2)
 
         return analysis
 

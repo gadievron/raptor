@@ -141,7 +141,9 @@ def _get_parser(lang: str) -> Optional[Any]:
             return None
         parser = TSParser(ts_lang)
         return parser
-    except (ImportError, Exception):
+    except Exception:
+        logger.debug("condition_extraction: parser setup failed for "
+                     "%s", lang, exc_info=True)
         return None
 
 
@@ -619,19 +621,21 @@ def _block_statements(block_node, exit_types: tuple) -> list:
 
 
 def _find_node_at_line(root, target_row: int):
-    """Find the deepest node that starts at or contains the target line."""
+    """Find the deepest node that starts at or contains the target line.
+
+    Iterative descent (CST depth tracks source nesting depth — plain
+    recursion overflowed on deeply nested inputs)."""
     best = None
-
-    def _walk(node):
-        nonlocal best
-        if node.start_point[0] <= target_row <= node.end_point[0]:
-            best = node
-            for child in node.children:
-                if child.start_point[0] <= target_row <= child.end_point[0]:
-                    _walk(child)
-                    return
-
-    _walk(root)
+    node = root
+    while node is not None and \
+            node.start_point[0] <= target_row <= node.end_point[0]:
+        best = node
+        nxt = None
+        for child in node.children:
+            if child.start_point[0] <= target_row <= child.end_point[0]:
+                nxt = child
+                break
+        node = nxt
     return best
 
 
@@ -700,7 +704,11 @@ def find_sink_calls(
     call_types = _CALL_TYPES.get(lang, ())
     results: List[Tuple[int, str]] = []
 
-    def _walk(node):
+    # Explicit-stack pre-order walk — recursion depth would track the
+    # source nesting depth and overflow on deeply nested inputs.
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
         if node.type in call_types:
             name = _extract_call_name(node, source_bytes)
             # Match against sink names: exact match or suffix match
@@ -708,10 +716,7 @@ def find_sink_calls(
             matched = _match_sink(name, sink_names)
             if matched:
                 results.append((_node_line(node), matched))
-        for child in node.children:
-            _walk(child)
-
-    _walk(root_node)
+        stack.extend(reversed(node.children))
     return results
 
 
@@ -844,23 +849,21 @@ def extract_sink_guards(
 
 
 def _find_call_at_line(root, target_row: int, lang: str):
-    """Find a call expression node at the given line."""
+    """Find a call expression node at the given line.
+
+    Explicit-stack pre-order walk pruned to line-containing subtrees
+    (plain recursion overflowed on deeply nested inputs)."""
     call_types = _CALL_TYPES.get(lang, ())
-    result = None
-
-    def _walk(node):
-        nonlocal result
-        if result is not None:
-            return
+    stack = [root]
+    while stack:
+        node = stack.pop()
         if node.start_point[0] == target_row and node.type in call_types:
-            result = node
-            return
-        for child in node.children:
-            if child.start_point[0] <= target_row <= child.end_point[0]:
-                _walk(child)
-
-    _walk(root)
-    return result
+            return node
+        stack.extend(reversed([
+            child for child in node.children
+            if child.start_point[0] <= target_row <= child.end_point[0]
+        ]))
+    return None
 
 
 # ---------------------------------------------------------------------------

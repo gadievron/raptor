@@ -8,8 +8,10 @@ Cache key composition:
   rules_hash :  sha256 of the contents of every ``.cocci`` file under
                 the rules dir, sorted by name. Captures rule-corpus
                 version.
-  target_hash : sha256 of the target's source-file tree (file names +
-                content hashes), bounded for cost.
+  target_hash : sha256 of the target's source-file tree. Every file's
+                name + (mtime, size) participates; content hashes are
+                bounded to a deterministic (sorted-path) subset for
+                cost, so any edit still flips the key.
   schema_version : module-level constant, bumped when the result shape
                 changes meaningfully.
 
@@ -92,15 +94,35 @@ _C_CPP_EXTS: tuple[str, ...] = (
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
 )
 
+# Content-hash budget for `_hash_target_tree`. Every matching file's
+# path + (mtime, size) always participates in the hash; only the first
+# `_CONTENT_HASH_CAP` files IN SORTED-PATH ORDER additionally get their
+# contents hashed. Pre-fix the cap was applied in rglob() enumeration
+# order BEFORE sorting — a nondeterministic subset, and edits to any
+# file past the cap never invalidated the cache.
+_CONTENT_HASH_CAP = 5000
+
+
+def _sorted_source_files(target: Path) -> list[Path]:
+    """Every C/C++ source file under ``target``, sorted by path."""
+    return sorted(
+        (
+            entry for entry in target.rglob("*")
+            if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS
+        ),
+        key=lambda p: str(p),
+    )
+
 
 def compute_target_signature(target: Path) -> str:
     """Fast change-detection signature for a target dir or file.
 
     Used as a cache-staleness marker — *not* a security-relevant
-    fingerprint. Walks up to 5000 C/C++ files under ``target`` and
-    combines each file's (mtime_ns, size) into a single sha256.
-    Two invocations on an unchanged tree return the same signature;
-    any source edit, file add/remove, or build-marker change flips it.
+    fingerprint. Walks every C/C++ file under ``target`` and combines
+    each file's (mtime_ns, size) into a single sha256 — stat only, no
+    content reads, no file cap. Two invocations on an unchanged tree
+    return the same signature; any source edit, file add/remove, or
+    build-marker change flips it.
 
     Cheaper than ``_hash_target_tree`` (no content reads) so it's
     affordable to recompute on every cache lookup. Sub-second on
@@ -126,16 +148,10 @@ def compute_target_signature(target: Path) -> str:
         return h.hexdigest()
 
     h.update(b"DIR\x00")
-    files = []
-    for entry in target.rglob("*"):
-        if not entry.is_file():
-            continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
-            continue
-        files.append(entry)
-        if len(files) >= 5000:
-            break
-    for path in sorted(files, key=lambda p: str(p)):
+    # No file cap: the stat-only walk is cheap, and any cap would
+    # exclude some files from the signature — edits to them would
+    # never invalidate downstream caches.
+    for path in _sorted_source_files(target):
         try:
             st = path.stat()
         except OSError:
@@ -171,7 +187,11 @@ def _hash_target_tree(target: Path) -> str:
     targets, returns a constant sentinel hash so cache misses are
     deterministic.
 
-    Bounded: walks up to 5000 files (kernel-scale safety).
+    Bounded for cost, complete for change detection: every file's
+    path and (mtime_ns, size) participate; only the first
+    ``_CONTENT_HASH_CAP`` files in sorted-path order are additionally
+    content-hashed (kernel-scale safety). Any edit — including to
+    files past the cap — flips the hash via the stat line.
     """
     if not target.exists():
         return "missing"
@@ -185,19 +205,20 @@ def _hash_target_tree(target: Path) -> str:
         return h.hexdigest()
 
     h.update(b"DIR\x00")
-    files = []
-    for entry in target.rglob("*"):
-        if not entry.is_file():
-            continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
-            continue
-        files.append(entry)
-        if len(files) >= 5000:
-            break
-    for path in sorted(files, key=lambda p: str(p)):
+    for idx, path in enumerate(_sorted_source_files(target)):
         h.update(str(path.relative_to(target)).encode("utf-8"))
         h.update(b"\x00")
-        h.update(_file_hash(path).encode("utf-8"))
+        if idx < _CONTENT_HASH_CAP:
+            h.update(_file_hash(path).encode("utf-8"))
+        else:
+            # Past the content budget: the (mtime_ns, size) stat line
+            # still participates so an edit here flips the hash.
+            try:
+                st = path.stat()
+            except OSError:
+                h.update(b"stat-error")
+            else:
+                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
         h.update(b"\x00")
 
     # Build markers meaningfully affect analyze()'s build_flags output;

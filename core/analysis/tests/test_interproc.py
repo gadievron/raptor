@@ -208,6 +208,49 @@ class TestBindingGeneration:
         assert len(bindings) == 1
         assert next(iter(bindings)).input_symbols == frozenset({"p"})
 
+    def test_keyword_dirty_flow_same_symbol_no_binding(self):
+        # x flows clean through positional ``a`` AND dirty through
+        # keyword ``b=x``. Pre-fix the keyword flow was invisible
+        # (only node.args were inspected), so the binding claimed x
+        # sanitized and the gate suppressed a real finding.
+        src = (
+            "def _mix(a, b):\n"
+            "    return html.escape(a) + b\n"
+            "def handle(x):\n"
+            "    y = _mix(x, b=x)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_keyword_dirty_flow_distinct_symbol_keeps_binding(self):
+        # A DIFFERENT symbol through the dirty keyword must not poison
+        # the sanitized one — x stays bound, z never appears.
+        src = (
+            "def _mix(a, b):\n"
+            "    return html.escape(a) + b\n"
+            "def handle(x, z):\n"
+            "    y = _mix(x, b=z)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert len(bindings) == 1
+        b = next(iter(bindings))
+        assert b.input_symbols == frozenset({"x"})
+
+    def test_unknown_keyword_is_uncertainty_no_binding(self):
+        # A keyword that matches no known parameter of the helper is
+        # uncertainty about where the symbol flows — decline to bind.
+        src = (
+            "def _sanitize(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = _sanitize(x, extra=x)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
     def test_two_same_callee_calls_one_line_bind_by_column(self):
         # Review #3: two calls to the SAME helper on one source line.
         # Each synthetic binding must attach to its own call's args —

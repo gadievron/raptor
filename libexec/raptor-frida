@@ -18,6 +18,9 @@
 #
 # If --out is omitted, an output dir is resolved via
 # raptor-run-lifecycle (active project or out/frida_<ts>/).
+#
+# Exit codes: 2 is reserved for the trust-marker refusal below
+# (cc-trust-check convention); usage errors exit 3.
 
 set -euo pipefail
 
@@ -116,7 +119,7 @@ done
 
 if [ -z "$TARGET" ]; then
     echo "raptor-frida: --target is required" >&2
-    exit 2
+    exit 3
 fi
 
 # ─── detect sandbox-relevant flags ────────────────────────────────

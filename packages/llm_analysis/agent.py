@@ -14,6 +14,7 @@ This agent provides TRUE agentic behaviour with NO templates:
 import argparse
 import contextlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,8 +22,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Also run as standalone subprocess: python3 packages/llm_analysis/agent.py
-sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
+if __name__ == "__main__":
+    # Standalone subprocess (python3 packages/llm_analysis/agent.py,
+    # spawned by raptor.py which pins RAPTOR_DIR into the child env).
+    # Hard lookup by policy — KeyError if unset; never a guessed
+    # fallback path (see CLAUDE.md: Python path safety).
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.inventory.lookup import lookup_function as _lookup_function
@@ -577,6 +582,16 @@ class VulnerabilityContext:
             }
         else:
             result["has_dataflow"] = False
+
+        # Mechanical evidence tier — derived from the receipts already
+        # in this dict (SMT witness, mechanical dataflow validation,
+        # execution oracle). Only stamped once an analysis verdict
+        # exists: in prep-only mode there is no verdict to tier.
+        if self.analysis is not None:
+            from packages.llm_analysis.verification_tier import (
+                derive_verification_tier,
+            )
+            result["verification_tier"] = derive_verification_tier(result)
 
         return result
 
@@ -1316,7 +1331,7 @@ class AutonomousSecurityAgentV2:
                         if validation.get('false_positive'):
                             logger.info(
                                 "⚠️  Validation marked as "
-                                "FALSE POSITIVE:"
+                                "False Positive:"
                             )
                             logger.info(
                                 "    Reason: %s",
@@ -1329,7 +1344,7 @@ class AutonomousSecurityAgentV2:
                         elif not validation.get('is_exploitable'):
                             logger.info(
                                 "⚠️  Validation determined "
-                                "NOT EXPLOITABLE:"
+                                "Not Exploitable:"
                             )
                             reason = (
                                 validation.get(
@@ -1349,7 +1364,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info("✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms Exploitable")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
@@ -1880,6 +1895,23 @@ class AutonomousSecurityAgentV2:
         self._gd_server = None
         self._gd_server_probed = False
 
+    def _fail_open_adjudicate(self, finding: dict) -> dict | None:
+        """Fail-open channel receipt for one finding, or ``None``.
+
+        The channel adjudicates role × handler outcome × fallibility
+        mechanically (no server, no subprocess) and returns a receipt
+        dict only for a ``refuted`` or ``confirmed`` verdict; the
+        caller decides skip-vs-corroborate. Claim-shape binding and
+        the per-run cap are the caller's (they gate whether this is
+        called at all).
+        """
+        from core.orchestration.fail_open_channel import (
+            adjudicate_finding,
+        )
+        return adjudicate_finding(
+            finding, Path(self.repo_path), out_dir=self.out_dir,
+        )
+
     _SYNTHESIZED_RULE_PREFIX = "synthesized:"
 
     def _record_graduated_rule_feedback(self, vuln) -> None:
@@ -2222,70 +2254,38 @@ class AutonomousSecurityAgentV2:
     ) -> bool:
         """Emit a ``ReviewJournalEntry`` for ``vuln`` after analysis.
 
-        Best-effort — any exception is logged and swallowed so journal
-        failures cannot break the analysis loop.
+        Delegates to ``packages.llm_analysis.journal_emit`` (the shared
+        finding-grade emitter, also used by the Phase-4 orchestration
+        tail). Best-effort — any exception is logged and swallowed so
+        journal failures cannot break the analysis loop.
 
         Returns True if an entry was written, False otherwise.
         """
         try:
-            from core.annotations import compute_function_hash
-            from core.coverage.journal import (
-                ReviewJournalEntry,
-                append_entry,
-                now_iso,
+            from packages.llm_analysis.journal_emit import (
+                emit_finding_journal_entry,
             )
-            from core.inventory.lookup import lookup_function
-
-            file_path = getattr(vuln, "file_path", None)
-            start_line = getattr(vuln, "start_line", None)
-            if not file_path or not start_line or not checklist:
-                return False
-
-            func = lookup_function(
-                checklist, file_path, int(start_line),
-                repo_root=str(self.repo_path),
-            )
-            if not func or not func.get("name"):
-                return False
-
-            name = func["name"]
-            vuln.function_name = name
-            line_start = func.get("line_start")
-            line_end = func.get("line_end")
-
-            analysis = getattr(vuln, "analysis", None) or {}
-            verdict = self._derive_verdict(analysis)
-            body = self._build_journal_body(vuln)
-
-            source_hash = ""
-            if file_path and line_start and line_end:
-                src = (Path(self.repo_path) / file_path).resolve()
-                if src.is_relative_to(Path(self.repo_path).resolve()):
-                    source_hash = compute_function_hash(
-                        src, line_start, line_end,
-                    ) or ""
 
             model_name = None
             if self.llm_config and self.llm_config.primary_model:
                 model_name = self.llm_config.primary_model.model_name
 
-            run_id = self.out_dir.name
-
-            entry = ReviewJournalEntry(
-                ts=now_iso(),
-                run_id=run_id,
-                file=file_path,
-                function=name,
-                verdict=verdict,
-                source_hash=source_hash,
-                line_start=line_start or 0,
-                line_end=line_end,
-                cwe=getattr(vuln, "cwe_id", None),
-                body=body,
+            name = emit_finding_journal_entry(
+                out_dir=self.out_dir,
+                repo_path=Path(self.repo_path),
+                checklist=checklist,
+                file_path=getattr(vuln, "file_path", None),
+                start_line=getattr(vuln, "start_line", None),
+                analysis=getattr(vuln, "analysis", None) or {},
+                cwe_id=getattr(vuln, "cwe_id", None),
+                tool=getattr(vuln, "tool", None),
+                message=getattr(vuln, "message", None),
                 model=model_name,
-                evidence_tools=[getattr(vuln, "tool", None) or "unknown"],
+                has_dataflow=getattr(vuln, "has_dataflow", False),
             )
-            append_entry(self.out_dir, entry)
+            if name is None:
+                return False
+            vuln.function_name = name
             return True
         except Exception:
             logger.debug("journal entry emit error", exc_info=True)
@@ -2294,43 +2294,9 @@ class AutonomousSecurityAgentV2:
     @staticmethod
     def _derive_verdict(analysis: dict[str, Any] | None) -> str:
         """Map the analysis dict's verdict bools to the journal
-        verdict enum."""
-        if not analysis:
-            return "error"
-        is_tp = analysis.get("is_true_positive")
-        if is_tp is False:
-            return "clean"
-        if is_tp is True:
-            return "finding" if analysis.get("is_exploitable") else "suspicious"
-        return "error"
-
-    @staticmethod
-    def _build_journal_body(vuln) -> str:
-        """Compose the journal entry body from the LLM's reasoning."""
-        parts: list[str] = []
-        analysis = getattr(vuln, "analysis", None) or {}
-
-        reasoning = analysis.get("reasoning") or analysis.get("explanation")
-        if reasoning:
-            parts.append(str(reasoning).strip())
-
-        severity = analysis.get("severity_assessment")
-        if severity:
-            parts.append(f"Severity: {severity}")
-
-        if getattr(vuln, "has_dataflow", False):
-            dv = analysis.get("dataflow_validation") or {}
-            if dv:
-                fp = dv.get("false_positive")
-                if fp is not None:
-                    parts.append(f"Dataflow validation: false_positive={fp}")
-
-        if not parts:
-            message = getattr(vuln, "message", None)
-            if message:
-                parts.append(f"Scanner message: {message}")
-
-        return "\n\n".join(parts)
+        verdict enum (delegates to the shared emitter)."""
+        from packages.llm_analysis.journal_emit import derive_verdict
+        return derive_verdict(analysis)
 
     def _resolve_prefer_globs(
         self, operator_globs: list[str] | None,
@@ -2620,6 +2586,12 @@ class AutonomousSecurityAgentV2:
         sage_fp_skipped_llm_calls = 0
         # Guard-dominance chokepoint (P23) LLM-call skips.
         guard_dominance_skipped_llm_calls = 0
+        # Fail-open channel chokepoint: refutation skips + confirmed
+        # corroboration receipts attached, and the dispatch count that
+        # enforces the per-run cap.
+        fail_open_skipped_llm_calls = 0
+        fail_open_corroborated = 0
+        fail_open_checked = 0
         sage_fp_stored = 0
         idx = 0  # prevent UnboundLocalError when empty
 
@@ -2849,6 +2821,9 @@ class AutonomousSecurityAgentV2:
                 # the LLM call entirely.
                 sage_fp_skipped_this = False
                 try:
+                    from core.analysis.reach_chokepoint import (
+                        coerce_manual_override,
+                    )
                     from core.sage.hooks import (
                         compute_finding_source_hash,
                         recall_prior_finding_verdict,
@@ -2861,6 +2836,13 @@ class AutonomousSecurityAgentV2:
                     _rule = (finding.get("rule_id")
                              or finding.get("check_id") or "")
                     _line = int(finding.get("line") or 0)
+                    # Per-finding operator opt-out — the same
+                    # manual_override the sibling chokepoints honour
+                    # (reachability suppression); previously only the
+                    # run-wide env kill switch applied here.
+                    if coerce_manual_override(
+                            finding.get("manual_override")):
+                        _rel = ""
                     if _rel and _fn and _rule and _line > 0:
                         _src_hash = compute_finding_source_hash(
                             Path(self.repo_path) / _rel, _line)
@@ -2965,6 +2947,82 @@ class AutonomousSecurityAgentV2:
                 if gd_skipped_this:
                     analyzed += 1
                     guard_dominance_skipped_llm_calls += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
+                # 0e. Fail-open channel chokepoint — for findings whose
+                # claim reads as a fail-open / swallowed-error shape:
+                # the mechanical channel adjudicates role x handler
+                # outcome x fallibility with receipts (no server, no
+                # subprocess — one parse per checked finding). A
+                # refuted claim skips the LLM call with the receipt in
+                # the analysis record (explicit disqualifier, never a
+                # silent drop); a confirmed one rides onto the finding
+                # as tool corroboration — evidence, never a verdict.
+                # Mirrors the guard-dominance (P23) consumption shape.
+                fo_skipped_this = False
+                if not finding.get("manual_override"):
+                    try:
+                        from core.orchestration.fail_open_channel import (
+                            FAIL_OPEN_CHANNEL_CAP,
+                            fail_open_binding,
+                        )
+                        fo_receipt = None
+                        if fail_open_binding(finding) is not None \
+                                and fail_open_checked \
+                                < FAIL_OPEN_CHANNEL_CAP:
+                            fail_open_checked += 1
+                            fo_receipt = self._fail_open_adjudicate(
+                                finding,
+                            )
+                        if fo_receipt \
+                                and fo_receipt.get("outcome") == "refuted":
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": (
+                                    "Fail-open channel refutation: "
+                                    + fo_receipt.get("reason", "")
+                                    + " (mechanical handler/site "
+                                    "receipts — see fail_open). To "
+                                    "override, set ``manual_override:"
+                                    " true`` on the finding and "
+                                    "re-run."
+                                ),
+                                "fail_open_refutation": True,
+                                "fail_open": fo_receipt,
+                            }
+                            fo_skipped_this = True
+                            # Best-effort on IO only; the callee
+                            # already swallows its own OSErrors.
+                            with contextlib.suppress(OSError):
+                                from core.analysis.reach_chokepoint import (
+                                    record_suppression,
+                                )
+                                record_suppression(
+                                    self.out_dir,
+                                    finding=finding,
+                                    verdict="fail_open_refuted",
+                                    reason=fo_receipt.get("reason", ""),
+                                )
+                        elif fo_receipt and fo_receipt.get(
+                                "outcome") == "confirmed":
+                            # Corroboration receipt: the LLM still
+                            # rules; verification_tier grades the
+                            # reported verdict tool_backed.
+                            finding["fail_open"] = fo_receipt
+                            fail_open_corroborated += 1
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "fail-open pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if fo_skipped_this:
+                    analyzed += 1
+                    fail_open_skipped_llm_calls += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
                     continue  # skip LLM analyze + exploit + patch
@@ -3148,6 +3206,17 @@ class AutonomousSecurityAgentV2:
         # manual review handles reasoning)
         is_prep_only = isinstance(self.llm, ClaudeCodeProvider)
 
+        # Evidence tiering: mechanically corroborated verdicts surface
+        # first (stable within tier); untiered prep-only entries keep
+        # their order at the end. Labeling/ordering only — nothing is
+        # dropped or demoted by tier.
+        from packages.llm_analysis.verification_tier import (
+            sort_results_by_tier,
+            tier_counts,
+        )
+        results = sort_results_by_tier(results)
+        verification_tiers = tier_counts(results)
+
         report = {
             "mode": "prep_only" if is_prep_only else "full",
             "processed": len(unique_findings),
@@ -3176,6 +3245,12 @@ class AutonomousSecurityAgentV2:
             "guard_dominance": {
                 "skipped_llm_calls": guard_dominance_skipped_llm_calls,
             },
+            "fail_open_channel": {
+                "checked": fail_open_checked,
+                "skipped_llm_calls": fail_open_skipped_llm_calls,
+                "corroborated": fail_open_corroborated,
+            },
+            "verification_tiers": verification_tiers,
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -3210,6 +3285,14 @@ class AutonomousSecurityAgentV2:
             logger.info("✓ Processed: %d findings", len(unique_findings))
             logger.info("✓ Analyzed: %d with LLM", analyzed)
             logger.info("✓ Exploitable: %d vulnerabilities", exploitable)
+            if verification_tiers:
+                logger.info(
+                    "✓ Evidence tiers: %d confirmed / %d tool_backed "
+                    "/ %d llm_only",
+                    verification_tiers.get("confirmed", 0),
+                    verification_tiers.get("tool_backed", 0),
+                    verification_tiers.get("llm_only", 0),
+                )
             logger.info("✓ Exploits generated: %d", exploits_generated)
             logger.info("✓ Patches generated: %d", patches_generated)
             if journal_entries_emitted > 0:
@@ -3253,6 +3336,14 @@ class AutonomousSecurityAgentV2:
                     "✓ Guard-dominance refutation: "
                     "%d LLM call(s) skipped (dominating check found)",
                     guard_dominance_skipped_llm_calls,
+                )
+            if fail_open_skipped_llm_calls > 0 or fail_open_corroborated > 0:
+                logger.info(
+                    "✓ Fail-open channel: %d LLM call(s) skipped "
+                    "(claim mechanically refuted), %d finding(s) "
+                    "corroborated with receipts",
+                    fail_open_skipped_llm_calls,
+                    fail_open_corroborated,
                 )
             logger.info("")
             if dataflow_validated > 0:

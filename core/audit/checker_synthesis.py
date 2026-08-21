@@ -59,6 +59,85 @@ class SynthesisResult:
     rule_tier: str = "sweep_once"
 
 
+def is_self_match_synth_receipt(
+    tool_id: str,
+    file_path: str,
+    function: str,
+) -> bool:
+    """True when *tool_id* is an ``<engine>:synth-<rule_id>`` receipt
+    whose rule was synthesized from this very function.
+
+    A rule distilled from function F's own code shape necessarily
+    matches F — the match is circular and can never disconfirm, so it
+    may not serve as promoting evidence ON F. It still counts on other
+    functions (variant discovery). Detection is structural: rule ids
+    are ``<slug(file)>.<slug(function)>.<slug(cwe)>.<attempt>``.
+    """
+    tid = tool_id or ""
+    if ":synth-" not in tid:
+        return False
+    rule_id = tid.split(":synth-", 1)[1]
+    try:
+        from packages.checker_synthesis.synthesise import _slugify
+    except ImportError:
+        return False
+    if not file_path or not function:
+        return False
+    prefix = f"{_slugify(file_path)}.{_slugify(function)}."
+    if rule_id.startswith(prefix):
+        return True
+    # The seed file may have been recorded basename-only or with a
+    # different root prefix; the function+cwe tail is the stable part.
+    from pathlib import PurePosixPath
+    base_prefix = (
+        f"{_slugify(PurePosixPath(file_path).name)}.{_slugify(function)}."
+    )
+    return f".{base_prefix}" in f".{rule_id}" and rule_id.split(".")[-1].isdigit()
+
+
+def _hypothesis_self_classified_refuted(
+    outcome: Any,
+    hypothesis: str,
+) -> bool:
+    """True when the review STRUCTURALLY classified *hypothesis* as
+    refuted (no plausible defect).
+
+    The review schema carries the verdict field: each ``hypotheses[]``
+    entry has ``confidence`` with the enum value ``"refuted"``. A rule
+    synthesized from a hypothesis whose own review says "no defect
+    here" can only ever mint circular confirmations — one such rule
+    "confirmed" a no-plausible-defect hypothesis, promoted the outcome
+    suspicious -> finding (a false positive), and then ran at 0%
+    precision for the rest of the run. The check is structural (the
+    confidence field), never text matching on the prose.
+
+    Resolution mirrors the orchestrator's primary-entry matching:
+    the entry whose mechanism text backs the primary hypothesis
+    decides; when the primary matches no entry, an all-refuted array
+    is still a no-defect self-classification.
+    """
+    hyps = getattr(outcome, "hypotheses", None) or []
+    if not hyps:
+        review = getattr(outcome, "review_result", None) or {}
+        hyps = review.get("hypotheses") or []
+    entries = [h for h in hyps if isinstance(h, dict)]
+    if not entries:
+        return False
+
+    def _refuted(entry: dict[str, Any]) -> bool:
+        return (entry.get("confidence") or "").strip().lower() == "refuted"
+
+    head = (hypothesis or "").strip()[:120]
+    if head:
+        for h in entries:
+            mech = (h.get("mechanism") or "").strip()
+            if mech and (
+                mech.startswith(head) or head.startswith(mech[:120])
+            ):
+                return _refuted(h)
+    return all(_refuted(h) for h in entries)
+
+
 def _synthesis_class_cost(client: Any) -> float:
     """Completed-call spend recorded for the checker_synthesis class.
 
@@ -260,6 +339,7 @@ def synthesize_and_sweep(
     *,
     synthesis_count: int = 0,
     max_per_run: int = MAX_SYNTHESIS_PER_RUN,
+    quarantined_rules: set[str] | None = None,
 ) -> SynthesisResult | None:
     """Synthesise a checker from a confirmed finding and sweep the codebase.
 
@@ -288,6 +368,15 @@ def synthesize_and_sweep(
     if seed is None:
         return None
 
+    if _hypothesis_self_classified_refuted(outcome, seed.reasoning):
+        logger.info(
+            "synthesis refused for %s:%s — the review structurally "
+            "classified the seed hypothesis as refuted (no plausible "
+            "defect)",
+            seed.file, seed.function,
+        )
+        return None
+
     llm_pair = _build_llm_callable(config)
     if llm_pair is None:
         return None
@@ -310,8 +399,18 @@ def synthesize_and_sweep(
 
     lib = RuleLibrary()
     engine = detect_engine(seed.file)
-    if engine and seed.cwe:
+    # Graduated-rule replay is an accumulated-knowledge read: gated
+    # off in cold-profile corpus runs (library writes and the fresh
+    # synthesis below stay on).
+    if engine and seed.cwe and getattr(config, "library_replay", True):
         candidates = lib.find_replayable(seed.cwe, engine)
+        if quarantined_rules:
+            # Run-scoped quarantine: a rule whose matches this run has
+            # already triaged all-FP may not be replayed this run.
+            candidates = [
+                c for c in candidates
+                if c.rule_id not in quarantined_rules
+            ]
         if candidates:
             try:
                 from packages.checker_synthesis.synthesise import _run_engine
@@ -359,7 +458,14 @@ def synthesize_and_sweep(
     # per operator policy); the rule body on disk must still match the
     # stamped body hash.
     sage_provenance = ""
-    if cs_result is None and engine and seed.cwe:
+    if (
+        cs_result is None
+        and engine
+        and seed.cwe
+        # SAGE rule replay is a recall read — same gate as the other
+        # SAGE recall surfaces (cold-profile corpus runs).
+        and getattr(config, "sage_recall", True)
+    ):
         replay = _sage_replay_rule(engine, seed.cwe, seed, Path(target_path))
         if replay is not None:
             cs_result, sage_provenance = replay
@@ -417,6 +523,9 @@ def synthesize_and_sweep(
             "snippet": m.snippet or "",
             "origin_file": file_path,
             "origin_function": function,
+            # Producing rule — the in-run quarantine joins triage
+            # verdicts back to the rule through this.
+            "rule_id": cs_result.rule.rule_id,
         }
         if sage_provenance:
             hit["provenance"] = sage_provenance
@@ -523,6 +632,7 @@ def synthesize_from_external_seed(
             "origin_file": seed.file,
             "origin_function": seed.function,
             "provenance": provenance,
+            "rule_id": cs_result.rule.rule_id,
         }
         for m in cs_result.matches
     ]
@@ -614,6 +724,16 @@ def synthesize_verification_rule(
     review = getattr(outcome, "review_result", None) or {}
     hypothesis = review.get("hypothesis") or getattr(outcome, "hypothesis", "") or ""
     if not hypothesis:
+        return None
+
+    if _hypothesis_self_classified_refuted(outcome, hypothesis):
+        logger.info(
+            "on-demand synthesis refused for %s:%s — the review "
+            "structurally classified the hypothesis as refuted "
+            "(no plausible defect); a rule distilled from it could "
+            "only confirm circularly",
+            getattr(outcome, "file", ""), getattr(outcome, "function", ""),
+        )
         return None
 
     file_path = getattr(outcome, "file", "")

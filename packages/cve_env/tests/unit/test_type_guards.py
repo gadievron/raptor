@@ -11,11 +11,7 @@ check_logs(), check_exec(), dockerfile_gen().
 """
 
 from __future__ import annotations
-import pytest
 
-pytest.importorskip("claude_agent_sdk")
-
-import asyncio
 import json
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -30,15 +26,12 @@ from cve_env.tools.verify import (
 )
 
 def _mk_resp(*, status: int, body: bytes) -> MagicMock:
-    r = MagicMock()
-    r.status_code = status
-    r.content = body
-    r.text = body.decode("utf-8", errors="replace")
-    return r
+    # The engine's transport seam returns (status_code, content_bytes).
+    return (status, body)
 
 # ── verify.py: check_http ────────────────────────────────────────────────
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_normalizes_single_str_content_check(mock_req: Any) -> None:
     """content_check as a single string → normalized to [str], works correctly.
 
@@ -53,7 +46,7 @@ def test_check_http_normalizes_single_str_content_check(mock_req: Any) -> None:
     )
     assert result["passed"] is True
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_json_string_no_false_positive(mock_req: Any) -> None:
     """content_check as JSON-encoded string → no false positive via char-search.
 
@@ -71,7 +64,7 @@ def test_check_http_json_string_no_false_positive(mock_req: Any) -> None:
     )
     assert result["passed"] is False
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_rejects_nonlist_nonstr_content_check(mock_req: Any) -> None:
     """content_check of a completely wrong type (int, dict) → type error."""
     mock_req.return_value = _mk_resp(status=200, body=b"hello world")
@@ -101,7 +94,7 @@ def test_check_http_rejects_string_expected_status() -> None:
 
 # ── verify.py: check_http_request ────────────────────────────────────────
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_rejects_list_method(mock_req: Any) -> None:
     """method as list → clear error, not AttributeError on .upper()."""
     mock_req.return_value = _mk_resp(status=200, body=b"ok")
@@ -204,10 +197,10 @@ def test_check_http_request_rejects_string_expected_status() -> None:
 def _call_dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
     from cve_env.agent.tools import dockerfile_gen
 
-    return asyncio.run(dockerfile_gen.handler(args))
+    return dockerfile_gen(args)
 
 def _payload(result: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(result["content"][0]["text"])
+    return json.loads(result)
 
 def test_dockerfile_gen_rejects_string_install_steps() -> None:
     """install_steps as JSON string → clear error, not garbage Dockerfile.
@@ -366,7 +359,7 @@ def test_verify_rejects_string_plan() -> None:
 
 # ── Regression: None is allowed for optional parameters ──────────────────
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_none_content_check_allowed(mock_req: Any) -> None:
     """content_check=None passes through guard — normal 200 check still works.
 
@@ -380,7 +373,7 @@ def test_check_http_none_content_check_allowed(mock_req: Any) -> None:
         result.get("reason", "")
     )
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_check_http_request_none_headers_allowed(mock_req: Any) -> None:
     """headers=None passes through guard — request is made without extra headers.
 

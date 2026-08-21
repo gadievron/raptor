@@ -391,26 +391,32 @@ def collect_external_seeds(
     Sources: journal (current run + project index), crash contexts
     (own run + project siblings), cvefix corpus
     (``<out_dir>/cvefix/corpus`` or ``config.cvefix_corpus_dir``).
+
+    ``config.cross_run_import=False`` (cold-profile corpus runs)
+    restricts the journal and crash sources to THIS run's out_dir:
+    no project-index fold, no sibling-run discovery.
     """
     out_dir = getattr(config, "out_dir", None)
     target_path = getattr(config, "target_path", None)
     if not target_path:
         return []
 
+    cross_run = getattr(config, "cross_run_import", True)
     project_dir = None
     run_dirs: list[Path] = []
     if out_dir:
         run_dirs.append(Path(out_dir))
-        try:
-            if (Path(out_dir) / ".raptor-run.json").exists():
-                project_dir = Path(out_dir).parent
-            from .joern_backend import sibling_run_dirs
+        if cross_run:
+            try:
+                if (Path(out_dir) / ".raptor-run.json").exists():
+                    project_dir = Path(out_dir).parent
+                from .joern_backend import sibling_run_dirs
 
-            run_dirs.extend(
-                sibling_run_dirs(out_dir, target_path=target_path)
-            )
-        except Exception:
-            logger.debug("sibling discovery failed", exc_info=True)
+                run_dirs.extend(
+                    sibling_run_dirs(out_dir, target_path=target_path)
+                )
+            except Exception:
+                logger.debug("sibling discovery failed", exc_info=True)
 
     seeds: list[ExternalSeed] = []
     try:

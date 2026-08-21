@@ -6,19 +6,80 @@ rules:
     pattern-either:
       - pattern: new IvParameterSpec(new byte[] { ... })
       - pattern: new GCMParameterSpec($T, new byte[] { ... })
+      - pattern: new IvParameterSpec("...".getBytes())
+      - pattern: new IvParameterSpec("...".getBytes(...))
+      - pattern: new GCMParameterSpec($T, "...".getBytes())
+      - pattern: new GCMParameterSpec($T, "...".getBytes(...))
     metadata:
       cwe: ["CWE-330"]
       asvs: ["V7.3"]
 
+  # cryptography.hazmat AEAD classes: inline `AESGCM(k).encrypt(b"...", ...)`
+  # and the two-step variable-instance shape `a = AESGCM(k)` ... `a.encrypt(b"...", ...)`.
   - id: raptor.crypto.nonce.literal.python
     message: Nonce is a constant literal. Use os.urandom() or library defaults. Verify randomness.
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern: AESGCM($K).encrypt($NONCE, $PT, $AD)
+      - pattern-either:
+          - pattern: $AEAD($K).encrypt($NONCE, ...)
+          - pattern: |
+              $A = $AEAD($K)
+              ...
+              $A.encrypt($NONCE, ...)
+      - metavariable-regex:
+          metavariable: $AEAD
+          regex: "^(AESGCM|ChaCha20Poly1305|AESCCM|AESOCB3)$"
       - metavariable-pattern:
           metavariable: $NONCE
-          pattern: b"..."
+          patterns:
+            - pattern-either:
+                - pattern: b"..."
+                - pattern: b"..." * $N
+    metadata:
+      cwe: ["CWE-330"]
+      asvs: ["V7.3"]
+
+  # pycryptodome: literal nonce / IV passed to AES.new
+  - id: raptor.crypto.iv.literal.pycryptodome.python
+    message: IV or nonce is a constant literal. Use get_random_bytes() or let the library generate it. Verify randomness.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: AES.new($K, AES.MODE_GCM, ..., nonce=$IV, ...)
+          - pattern: AES.new($K, AES.MODE_CCM, ..., nonce=$IV, ...)
+          - pattern: AES.new($K, AES.MODE_CTR, ..., nonce=$IV, ...)
+          - pattern: AES.new($K, AES.MODE_CBC, $IV, ...)
+          - pattern: AES.new($K, AES.MODE_CFB, $IV, ...)
+          - pattern: AES.new($K, AES.MODE_OFB, $IV, ...)
+          - pattern: AES.new($K, $MODE, ..., iv=$IV, ...)
+      - metavariable-pattern:
+          metavariable: $IV
+          patterns:
+            - pattern-either:
+                - pattern: b"..."
+                - pattern: b"..." * $N
+    metadata:
+      cwe: ["CWE-330"]
+      asvs: ["V7.3"]
+
+  # cryptography.hazmat block modes: literal IV / nonce in the mode constructor
+  - id: raptor.crypto.iv.literal.hazmat-modes.python
+    message: IV or nonce is a constant literal. Use os.urandom() for the mode IV/nonce. Verify randomness.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern: modes.$MODE($IV, ...)
+      - metavariable-regex:
+          metavariable: $MODE
+          regex: "^(CBC|GCM|CTR|CFB|CFB8|OFB|XTS)$"
+      - metavariable-pattern:
+          metavariable: $IV
+          patterns:
+            - pattern-either:
+                - pattern: b"..."
+                - pattern: b"..." * $N
     metadata:
       cwe: ["CWE-330"]
       asvs: ["V7.3"]

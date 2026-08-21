@@ -80,7 +80,7 @@ and function inventory that every subsequent stage checks against.  It:
   changed.
 
 Stage 0 also imports `/understand` output when available.  The bridge
-(`core/orchestration/understand_bridge.py`) searches three locations in order:
+searches three locations in order:
 (1) co-located files in the same output directory, (2) sibling runs within the
 same [project](commands.md#project), (3) global `out/` directories matched by
 target path and SHA-256 freshness.  When found, it pre-populates
@@ -154,17 +154,17 @@ paths.  Tools include `raptor-smt-validate-path` (general-purpose path
 condition checking), `raptor-smt-check-overflow` (CWE-190), `raptor-smt-check-oob`
 (CWE-125/787), and `raptor-smt-check-null-deref` (CWE-476).  An `unsat`
 verdict caps PROXIMITY at 1 and moves the hypothesis to `disproven.json`; a
-`sat` verdict with a concrete witness model floors PROXIMITY at 6 and provides
-PoC input values directly.
+`sat` verdict with a concrete witness model binding named locals floors
+PROXIMITY at 6 and provides PoC input values directly (a model containing
+`_anon_N` free variables is a soft signal only and does not floor).
 
 Stage B also annotates attack paths with [Frida](frida.md) runtime evidence
 when available.  If a function was observed executing at runtime, reachability
 is empirically confirmed and PROXIMITY is floored at 6.
 
 When a Joern CPG is available, Stage B additionally enriches the attack
-surface with taint reachability (`core/orchestration/validate_joern.py`)
-and can confirm a per-finding source-to-sink flow; a Joern-confirmed
-flow floors PROXIMITY at 2.
+surface with taint reachability and can confirm a per-finding
+source-to-sink flow; a Joern-confirmed flow floors PROXIMITY at 2.
 
 **Output:** `stage-b.json`, `attack-tree.json`, `hypotheses.json`,
 `disproven.json`, `attack-paths.json`, `attack-surface.json`.
@@ -242,12 +242,11 @@ finding (`exploitable`, `confirmed`, or `ruled_out`).
 
 ### Stage E -- Binary Feasibility (Mechanical + LLM)
 
-Applies **only** to memory corruption vulnerability types.  The canonical set
-of 13 applicable types lives in `core/schema_constants/` as
-`MEMORY_CORRUPTION_TYPES` and includes buffer overflow, format string,
-use-after-free, heap overflow, double free, integer overflow, out-of-bounds
-read/write, null dereference, and type confusion.  Non-memory-corruption
-findings receive `feasibility.status: "not_applicable"` and skip this stage.
+Applies **only** to memory corruption vulnerability types: buffer
+overflow, format string, use-after-free, heap overflow, double free,
+integer overflow, out-of-bounds read/write, null dereference, type
+confusion.  Non-memory-corruption findings receive
+`feasibility.status: "not_applicable"` and skip this stage.
 
 The prep script (`raptor-validation-helper E`) scans the target for executables
 matching source files, sets `feasibility.binary_path` on each finding, and
@@ -294,8 +293,6 @@ each, and attaches an `empirical_mitigation_map` to the finding.
 | confirmed | not_applicable | `confirmed` |
 | confirmed | binary_not_found | `confirmed_unverified` |
 
-This mapping is identical in both implementations (the skill helper's
-`VERDICT_MAP` and the Python orchestrator's `verdict_to_status`);
 `likely_exploitable` is a distinct final status, never collapsed into
 `exploitable`.
 
@@ -357,7 +354,7 @@ Stage 1 never changes verdicts.  It only renders the final data.
 
 The `/understand` command produces `context-map.json` and `flow-trace-*.json`
 files.  When `/validate` runs on the same target, Stage 0 automatically
-imports this output via `core/orchestration/understand_bridge.py`.  The bridge:
+imports this output.  The bridge:
 
 - Pre-populates `attack-surface.json` with entry points, sinks, and trust
   boundaries.
@@ -385,10 +382,7 @@ observed call counts.  This evidence:
 ### SMT tools
 
 Stage B and Stage E both use Z3-backed SMT tools for path-condition
-verification.  The tools share a common architecture:
-`core/smt_solver/` provides the shared primitives (bitvector factories,
-timed solver construction, witness formatting), and domain-specific encodings
-live in the individual scripts and packages.
+verification:
 
 | Tool | Pattern | CWEs |
 |------|---------|------|
@@ -432,7 +426,7 @@ The two-axis feasibility model separates **triggerability** (`verdict`) from
 ### Context persistence
 
 The exploit context file from `save_exploit_context()` survives conversation
-compaction.  Reference it during [exploit development](commands.md#exploit):
+compaction.  Reference it during [exploit development](commands.md#exploit-beta):
 
 ```python
 from packages.exploit_feasibility import load_exploit_context
@@ -456,7 +450,8 @@ out/validate_<target>_<timestamp>/     (project mode: <project>/validate-<timest
   diagrams.md               -- Mermaid visual maps (Stage 1)
   summary.txt               -- Tabular summary (Stage 1)
   build/                    -- Compiled PoCs (Stage A)
-  coverage-llm.json         -- Coverage tracking data (Stage 1)
+  coverage-llm.json         -- Coverage record: items analysed (Stage 1)
+  coverage-read.json        -- Coverage record: files read (Stage 1)
 ```
 
 ### Validation gates

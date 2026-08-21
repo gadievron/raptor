@@ -7,7 +7,7 @@ Collects and deduplicates crashes from AFL output.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from core.hash import sha256_file
 from core.logging import get_logger
@@ -37,12 +37,33 @@ class CrashCollector:
         if not self.crashes_dir.exists():
             raise FileNotFoundError(f"Crashes directory not found: {crashes_dir}")
 
-    def collect_crashes(self, max_crashes: Optional[int] = None) -> List[Crash]:
+    def collect_crashes(
+        self,
+        max_crashes: Optional[int] = None,
+        stack_hasher: Optional[Callable[[Path], Optional[str]]] = None,
+    ) -> List[Crash]:
         """
         Collect unique crashes from AFL output.
 
+        Deduplication key: the crash's stack hash when analysis is
+        available (``stack_hasher`` — e.g. a wrapper over
+        ``CrashAnalyser._compute_stack_hash`` on the debugger trace),
+        falling back to the input-file content hash otherwise. Two
+        different inputs hitting the same bug share a stack hash but
+        never an input hash, so the fallback under-dedups — callers
+        with a debugger available should pass ``stack_hasher``.
+
+        ``max_crashes`` bounds the number of UNIQUE crashes returned.
+        The cap is applied after dedup: pre-fix the file list was
+        sliced first, so duplicate inputs consumed the budget and a
+        directory whose first N files were duplicates starved the
+        collection of distinct crashes that sorted later.
+
         Args:
-            max_crashes: Maximum number of crashes to collect
+            max_crashes: Maximum number of unique crashes to collect
+            stack_hasher: Optional callable mapping a crash input file
+                to a stack hash (or None when analysis fails); enables
+                root-cause dedup instead of input-content dedup
 
         Returns:
             List of Crash objects
@@ -61,18 +82,32 @@ class CrashCollector:
         logger.info("Found %d crash files", len(crash_files))
 
         crashes = []
-        seen_hashes = set()
+        seen_keys = set()
 
-        for crash_file in crash_files[:max_crashes] if max_crashes is not None else crash_files:
+        for crash_file in crash_files:
+            if max_crashes is not None and len(crashes) >= max_crashes:
+                break
+
             crash = self._parse_crash_file(crash_file)
 
-            # Deduplicate by input hash (simple approach)
-            # In practice, you'd want stack hash deduplication
-            input_hash = self._hash_file(crash_file)
+            if stack_hasher is not None and not crash.stack_hash:
+                try:
+                    crash.stack_hash = stack_hasher(crash_file) or None
+                except Exception as e:  # noqa: BLE001 — analysis is best-effort; fall back to input hash
+                    logger.debug(
+                        "stack_hasher failed for %s: %s", crash_file.name, e,
+                    )
 
-            if input_hash not in seen_hashes:
+            # Namespace the key so a stack hash can never collide with
+            # an input hash (both are hex prefixes).
+            if crash.stack_hash:
+                key = ("stack", crash.stack_hash)
+            else:
+                key = ("input", self._hash_file(crash_file))
+
+            if key not in seen_keys:
                 crashes.append(crash)
-                seen_hashes.add(input_hash)
+                seen_keys.add(key)
             else:
                 logger.debug("Skipping duplicate crash: %s", crash_file.name)
 

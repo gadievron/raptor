@@ -603,6 +603,63 @@ class TestRunRules:
         assert results[0].rule == "a"
         assert results[1].rule == "b"
 
+    def test_on_rule_progress_callback_fires_per_rule_in_order(
+        self, tmp_path,
+    ):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        for name in ["a.cocci", "b.cocci", "c.cocci"]:
+            (rules_dir / name).write_text(
+                "@r@\nposition p;\n@@\nmalloc@p(...)\n",
+            )
+        target = tmp_path / "test.c"
+        target.write_text("void f() {}\n")
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+
+        seen = []
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True), \
+             patch("packages.coccinelle.runner._sandboxed_run",
+                   return_value=mock_proc):
+            results = run_rules(
+                target, rules_dir, env=dict(os.environ),
+                on_rule=lambda i, n, name: seen.append((i, n, name)),
+            )
+
+        assert len(results) == 3
+        assert seen == [(0, 3, "a"), (1, 3, "b"), (2, 3, "c")]
+
+    def test_on_rule_callback_failure_never_costs_the_scan(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "a.cocci").write_text(
+            "@r@\nposition p;\n@@\nmalloc@p(...)\n",
+        )
+        target = tmp_path / "test.c"
+        target.write_text("void f() {}\n")
+
+        mock_proc = MagicMock()
+        mock_proc.stdout = ""
+        mock_proc.stderr = ""
+        mock_proc.returncode = 0
+
+        def boom(*_a):
+            raise RuntimeError("progress stream gone")
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True), \
+             patch("packages.coccinelle.runner._sandboxed_run",
+                   return_value=mock_proc):
+            results = run_rules(
+                target, rules_dir, env=dict(os.environ), on_rule=boom,
+            )
+
+        assert len(results) == 1
+
 
 class TestRunRulesBatched:
     def test_empty_list(self):
@@ -927,6 +984,110 @@ class TestShippedRulesIntegration:
         )
         assert result.returncode == 0
         assert result.match_count == 0
+
+    def test_atomic_check_then_act_catches_race(self, tmp_path):
+        target = tmp_path / "test.c"
+        target.write_text(textwrap.dedent("""\
+            void bug_read_kfree(struct obj *o) {
+                if (atomic_read(&o->refcnt) == 0) {
+                    kfree(o);
+                }
+            }
+            void bug_read_destroy(struct obj *o) {
+                if (atomic_read(&o->refcnt) == 1)
+                    obj_destroy(o);
+            }
+            void bug_dec_test_kfree(struct obj *o) {
+                if (atomic_dec_and_test(&o->refcnt)) {
+                    kfree(o);
+                }
+            }
+        """))
+        result = run_rule(
+            target,
+            self.RULES_DIR / "atomic_check_then_act.cocci",
+            allow_scripting=True,
+        )
+        assert result.returncode == 0
+        assert result.match_count >= 3
+
+    def test_atomic_check_then_act_clean(self, tmp_path):
+        target = tmp_path / "test.c"
+        target.write_text(textwrap.dedent("""\
+            void ok_under_lock(struct obj *o) {
+                spin_lock(&g_lock);
+                if (atomic_read(&o->refcnt) == 0) {
+                    kfree(o);
+                }
+                spin_unlock(&g_lock);
+            }
+            void ok_lock_between(struct obj *o) {
+                if (atomic_read(&o->refcnt) == 0) {
+                    mutex_lock(&o->lock);
+                    kfree(o);
+                    mutex_unlock(&o->lock);
+                }
+            }
+            void ok_atomic_between(struct obj *o) {
+                if (atomic_read(&o->refcnt) == 1) {
+                    atomic_set(&o->refcnt, 0);
+                    kfree(o);
+                }
+            }
+            void ok_other_object(struct obj *o, struct obj *q) {
+                if (atomic_read(&o->refcnt) == 0) {
+                    kfree(q);
+                }
+            }
+        """))
+        result = run_rule(
+            target,
+            self.RULES_DIR / "atomic_check_then_act.cocci",
+            allow_scripting=True,
+        )
+        assert result.returncode == 0
+        assert result.match_count == 0
+
+    def test_all_shipped_cocci_parse(self):
+        """Every shipped .cocci must pass `spatch --parse-cocci`.
+
+        A rule that trips the SmPL parser contributes nothing on its
+        own, and — worse — the /scan batch path concatenates every
+        non-parametric rule into ONE spatch input, so a single broken
+        rule aborts the parse of the whole batch and silently disables
+        every batched rule (observed with atomic_check_then_act).
+
+        Parametric rules (declaring `identifier virtual.<name>`) only
+        bind when -D <name>=... is supplied, so the sweep feeds each
+        one dummy defines for exactly the virtual names it declares.
+        """
+        import re
+        import subprocess
+
+        engine_dir = self.RULES_DIR.parents[1]
+        cocci_files = sorted(engine_dir.rglob("*.cocci"))
+        assert cocci_files, f"no .cocci files under {engine_dir}"
+
+        spatch = runner_mod._spatch_path()
+        # Catches every declared virtual metavariable, including the
+        # comma-list form `identifier virtual.lock, virtual.unlock;`.
+        # Over-matching (e.g. a comment) is harmless: spatch accepts
+        # -D names that no rule declares.
+        virtual_re = re.compile(r"virtual\.(\w+)")
+        failures = []
+        for f in cocci_files:
+            cmd = [spatch, "--parse-cocci", str(f)]
+            names = set(virtual_re.findall(f.read_text(encoding="utf-8")))
+            for name in sorted(names):
+                cmd.extend(["-D", f"{name}=raptor_parse_probe"])
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+                check=False,
+            )
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+                failures.append(f"{f}: {' | '.join(tail)}")
+        assert not failures, "unparseable .cocci rules:\n" + "\n".join(failures)
 
 
 class TestSpatchScratchTmpdir:

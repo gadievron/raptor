@@ -63,6 +63,20 @@ def path_to_module(rel_path: str) -> str | None:
     return _path_to_module(rel_path)
 
 
+def coerce_manual_override(value) -> bool:
+    """Coerce a finding-level ``manual_override`` to bool.
+
+    Explicit string-False becomes bool-False so an emitter that writes
+    ``"manual_override": "false"`` doesn't accidentally bypass a
+    chokepoint via Python truthiness on the non-empty string. One
+    convention for every consumer (reachability suppression, the SAGE
+    prior-verdict skip).
+    """
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "off")
+    return bool(value)
+
+
 def check_suppress(
     *,
     checklist: dict,
@@ -90,14 +104,7 @@ def check_suppress(
     finding silently; the suppression must be visible to the operator
     via annotations / suppressions.jsonl / report output.
     """
-    # NB: ``manual_override`` is a finding-level boolean. Coerce
-    # explicit string-False to bool-False so an emitter that writes
-    # ``"manual_override": "false"`` doesn't accidentally bypass the
-    # chokepoint via Python truthiness on the non-empty string.
-    if isinstance(manual_override, str):
-        manual_override = manual_override.strip().lower() not in (
-            "", "false", "0", "no", "off")
-    if manual_override:
+    if coerce_manual_override(manual_override):
         return None
     if allow_unreachable:
         return None

@@ -5,12 +5,14 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.tls.skip-verify.python
     message: >-
-      TLS certificate verification is disabled via verify=False. An attacker
-      in a network position can intercept and modify traffic. Always verify
-      certificates against a trusted CA bundle.
+      TLS certificate verification is disabled via verify=False (or
+      ssl=False for aiohttp). An attacker in a network position can
+      intercept and modify traffic. Always verify certificates against
+      a trusted CA bundle.
     languages: [python]
     severity: HIGH
     pattern-either:
+      # requests — module-level helpers
       - pattern: requests.get(..., verify=False, ...)
       - pattern: requests.post(..., verify=False, ...)
       - pattern: requests.put(..., verify=False, ...)
@@ -19,6 +21,53 @@ rules:
       - pattern: requests.head(..., verify=False, ...)
       - pattern: requests.options(..., verify=False, ...)
       - pattern: requests.request(..., verify=False, ...)
+      # requests.Session — per-call verify=False and the session-wide
+      # attribute, anchored to a Session constructed in scope
+      - patterns:
+          - pattern-inside: |
+              $S = requests.Session()
+              ...
+          - pattern-either:
+              - pattern: $S.get(..., verify=False, ...)
+              - pattern: $S.post(..., verify=False, ...)
+              - pattern: $S.put(..., verify=False, ...)
+              - pattern: $S.patch(..., verify=False, ...)
+              - pattern: $S.delete(..., verify=False, ...)
+              - pattern: $S.head(..., verify=False, ...)
+              - pattern: $S.options(..., verify=False, ...)
+              - pattern: $S.request(..., verify=False, ...)
+              - pattern: $S.verify = False
+      # httpx — module-level helpers and client constructors
+      - pattern: httpx.get(..., verify=False, ...)
+      - pattern: httpx.post(..., verify=False, ...)
+      - pattern: httpx.put(..., verify=False, ...)
+      - pattern: httpx.patch(..., verify=False, ...)
+      - pattern: httpx.delete(..., verify=False, ...)
+      - pattern: httpx.head(..., verify=False, ...)
+      - pattern: httpx.options(..., verify=False, ...)
+      - pattern: httpx.request(..., verify=False, ...)
+      - pattern: httpx.Client(..., verify=False, ...)
+      - pattern: httpx.AsyncClient(..., verify=False, ...)
+      # aiohttp — ssl=False on the connector or per-request on a
+      # ClientSession constructed in scope
+      - pattern: aiohttp.TCPConnector(..., ssl=False, ...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $S = aiohttp.ClientSession(...)
+                  ...
+              - pattern-inside: |
+                  async with aiohttp.ClientSession(...) as $S:
+                      ...
+          - pattern-either:
+              - pattern: $S.get(..., ssl=False, ...)
+              - pattern: $S.post(..., ssl=False, ...)
+              - pattern: $S.put(..., ssl=False, ...)
+              - pattern: $S.patch(..., ssl=False, ...)
+              - pattern: $S.delete(..., ssl=False, ...)
+              - pattern: $S.head(..., ssl=False, ...)
+              - pattern: $S.options(..., ssl=False, ...)
+              - pattern: $S.request(..., ssl=False, ...)
     metadata:
       cwe: ["CWE-295"]
       asvs: ["V14.1"]

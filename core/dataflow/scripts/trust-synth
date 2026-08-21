@@ -16,16 +16,13 @@ Needs CodeQL + an LLM client configured. Dev-tooling, co-located with
 ``core/dataflow/`` rather than ``libexec/`` (operator-command surface). Sibling
 to ``trust-corpus`` / ``corpus-run``.
 """
+import os
 import sys
-from pathlib import Path
 
-# Repo root: this script lives at core/dataflow/scripts/trust-synth,
-# three levels deep. parents[3] climbs:
-#   [0] core/dataflow/scripts/  (this file's directory)
-#   [1] core/dataflow/
-#   [2] core/
-#   [3] <repo root>
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
+# path ever added to sys.path (hard lookup; KeyError if the
+# script is run outside the launcher, by design).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.dataflow.barrier_synth import main
 

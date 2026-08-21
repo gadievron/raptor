@@ -51,7 +51,7 @@ def _manifest_response(*platforms: str) -> MagicMock:
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_native_match(mock_run: Any) -> None:
     mock_run.return_value = _manifest_response("linux/arm64", "linux/amd64")
     host = HostArch(arch="arm64", os="linux")
@@ -60,7 +60,7 @@ def test_arch_decide_native_match(mock_run: Any) -> None:
     assert "linux/arm64" in d.supported_platforms
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_rosetta_fallback(mock_run: Any) -> None:
     mock_run.return_value = _manifest_response("linux/amd64")
     host = HostArch(arch="arm64", os="darwin", rosetta_available=True)
@@ -68,7 +68,7 @@ def test_arch_decide_rosetta_fallback(mock_run: Any) -> None:
     assert d.decision == "rosetta_ok"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_no_match_triggers_build_from_source(mock_run: Any) -> None:
     mock_run.return_value = _manifest_response("linux/ppc64le")
     host = HostArch(arch="arm64", os="linux")
@@ -76,7 +76,7 @@ def test_arch_decide_no_match_triggers_build_from_source(mock_run: Any) -> None:
     assert d.decision == "build_from_source_required"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_rosetta_unavailable_forces_build(mock_run: Any) -> None:
     mock_run.return_value = _manifest_response("linux/amd64")
     host = HostArch(arch="arm64", os="darwin", rosetta_available=False)
@@ -84,7 +84,7 @@ def test_arch_decide_rosetta_unavailable_forces_build(mock_run: Any) -> None:
     assert d.decision == "build_from_source_required"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_manifest_inspect_fails(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
     host = HostArch(arch="arm64", os="linux")
@@ -92,7 +92,7 @@ def test_arch_decide_manifest_inspect_fails(mock_run: Any) -> None:
     assert d.decision == "error"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_single_arch_manifest(mock_run: Any) -> None:
     # Not a manifest list -- single-arch response.
     mock_run.return_value = MagicMock(
@@ -127,7 +127,7 @@ def test_detect_host_arch_unknown_machine(mock_plat: Any) -> None:
 # ``_manifest_inspect`` return ``None`` → ``arch_decide`` yields ``error``.
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_invalid_json_is_error(mock_run: Any) -> None:
     """Non-JSON stdout → JSONDecodeError → None → error (lines 88-89)."""
     mock_run.return_value = MagicMock(returncode=0, stdout="not json at all", stderr="")
@@ -136,7 +136,7 @@ def test_arch_decide_invalid_json_is_error(mock_run: Any) -> None:
     assert d.decision == "error"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_top_level_not_dict_is_error(mock_run: Any) -> None:
     """Top-level JSON that is not a dict → no platforms → error (91->110)."""
     mock_run.return_value = MagicMock(
@@ -147,7 +147,7 @@ def test_arch_decide_top_level_not_dict_is_error(mock_run: Any) -> None:
     assert d.decision == "error"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_skips_non_dict_manifest_entry(mock_run: Any) -> None:
     """A non-dict entry in ``manifests`` is skipped (line 96); the valid
     entry alongside it still drives the decision."""
@@ -169,7 +169,7 @@ def test_arch_decide_skips_non_dict_manifest_entry(mock_run: Any) -> None:
     assert d.supported_platforms == ["linux/arm64"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_skips_entry_with_non_dict_platform(mock_run: Any) -> None:
     """A manifest entry whose ``platform`` is not a dict is skipped
     (line 99); the only usable entry wins."""
@@ -191,7 +191,7 @@ def test_arch_decide_skips_entry_with_non_dict_platform(mock_run: Any) -> None:
     assert d.supported_platforms == ["linux/amd64"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_skips_entry_with_non_str_os_arch(mock_run: Any) -> None:
     """A platform whose os/arch are not both strings is not appended
     (102->94); with no usable entry the manifest yields error."""
@@ -207,7 +207,7 @@ def test_arch_decide_skips_entry_with_non_str_os_arch(mock_run: Any) -> None:
     assert d.decision == "error"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_dict_without_manifests_or_config_is_error(mock_run: Any) -> None:
     """A dict with neither a ``manifests`` list nor ``config``+
     ``architecture`` keys yields no platforms → error (104->110)."""
@@ -219,7 +219,7 @@ def test_arch_decide_dict_without_manifests_or_config_is_error(mock_run: Any) ->
     assert d.decision == "error"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_arch_decide_single_arch_non_str_fields_is_error(mock_run: Any) -> None:
     """Single-arch manifest whose architecture is not a string is not
     appended (108->110) → error."""

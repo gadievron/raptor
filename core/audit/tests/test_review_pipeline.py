@@ -2585,6 +2585,111 @@ int add(int a, int b) {
         assert result.findings == 0
         assert len(result.outcomes) == 0
 
+    def test_dead_path_boosts_but_never_resolves_dormant(
+        self, tmp_path, monkeypatch,
+    ):
+        """Safety contract: condition_smt is not in SUPPRESS_SOURCES.
+
+        A dead-path UNSAT from the conjunctive guard model may inject
+        evidence, but the function must STAY in the workqueue — it
+        used to be committed dormant without LLM review.
+        """
+        from core.audit import condition_extraction as ce
+        from core.audit.condition_extraction import GuardCondition, SinkGuard
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _pre_loop_smt_screen,
+        )
+
+        src = tmp_path / "dead.c"
+        src.write_text("""\
+int f(int n, char *srcb) {
+    char buf[16];
+    if (n < 5) {
+        if (n > 10) {
+            memcpy(buf, srcb, n);
+        }
+    }
+    return 0;
+}
+""")
+
+        def _fake_extract(source, filepath, *a, **kw):
+            return [SinkGuard(
+                sink_file=filepath, sink_line=5, sink_function="f",
+                sink_api="memcpy",
+                guards=[
+                    GuardCondition(
+                        text="n < 5", category="bounds",
+                        polarity="required", line=3,
+                    ),
+                    GuardCondition(
+                        text="n > 10", category="bounds",
+                        polarity="required", line=4,
+                    ),
+                ],
+            )]
+
+        monkeypatch.setattr(ce, "extract_sink_guards", _fake_extract)
+
+        workqueue = [
+            {"file": "dead.c", "name": "f", "line_start": 1, "line_end": 9},
+        ]
+        result = OrchestratorResult()
+        config = self._make_config(tmp_path)
+
+        kept = _pre_loop_smt_screen(workqueue, config, result)
+        assert len(kept) == 1
+        assert kept[0]["_smt_pre_evidence"] == "smt:dead-path"
+        assert result.dormant == 0
+        assert len(result.outcomes) == 0
+
+    def test_disjunctive_guard_is_not_dead_path(self, tmp_path, monkeypatch):
+        """A `n == 0 || n == 1` guard is trivially reachable — the old
+        flat-conjunction model proved it UNSAT and resolved the
+        function dormant.  It must stay unscreened."""
+        from core.audit import condition_extraction as ce
+        from core.audit.condition_extraction import GuardCondition, SinkGuard
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _pre_loop_smt_screen,
+        )
+
+        src = tmp_path / "disj.c"
+        src.write_text("""\
+int g(int n, char *srcb) {
+    char buf[16];
+    if (n == 0 || n == 1) {
+        memcpy(buf, srcb, n);
+    }
+    return 0;
+}
+""")
+
+        def _fake_extract(source, filepath, *a, **kw):
+            return [SinkGuard(
+                sink_file=filepath, sink_line=4, sink_function="g",
+                sink_api="memcpy",
+                guards=[GuardCondition(
+                    text="n == 0 || n == 1", category="bounds",
+                    polarity="required", line=3,
+                )],
+            )]
+
+        monkeypatch.setattr(ce, "extract_sink_guards", _fake_extract)
+
+        workqueue = [
+            {"file": "disj.c", "name": "g", "line_start": 1, "line_end": 7},
+        ]
+        result = OrchestratorResult()
+        config = self._make_config(tmp_path)
+
+        kept = _pre_loop_smt_screen(workqueue, config, result)
+        assert len(kept) == 1
+        assert kept[0].get("_smt_pre_evidence") != "smt:dead-path"
+        assert result.dormant == 0
+        assert len(result.outcomes) == 0
+
     def test_non_c_file_skips_c_only_checks(self, tmp_path):
         from core.audit.orchestrator import OrchestratorResult, _pre_loop_smt_screen
 

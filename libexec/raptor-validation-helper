@@ -1728,7 +1728,12 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    start_run(out_dir, "validate", target=target)
+    from core.project.oplock import OpLockContention
+    try:
+        start_run(out_dir, "validate", target=target)
+    except OpLockContention as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Resolve + persist the sanitizer-cut mode so the per-stage
     # subprocesses reload it (review #4, PR #794). Persist only when the
@@ -1825,6 +1830,34 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         raise
 
 
+def _write_stage1_coverage_records(workdir: Path) -> None:
+    """Coverage records: findings → llm (review-grade), reads manifest →
+    read (scanned). Two records, two depths.
+
+    Pre-fix the manifest reads were folded into the llm record's
+    files_examined, and the importer marks files_examined WHOLE-FILE at
+    the record tool's depth — every file the LLM merely opened during
+    validation was credited as analysed, contradicting the
+    read-vs-reviewed contract coverage-read.json enforces everywhere
+    else (core/coverage/registry.py).
+    """
+    from core.coverage.record import (
+        build_from_findings,
+        build_from_manifest,
+        cleanup_manifest,
+        write_record,
+    )
+    record = build_from_findings(workdir / "findings.json", tool="llm")
+    if record:
+        write_record(workdir, record, tool_name="llm")
+    read_record = build_from_manifest(workdir, "read")
+    if read_record:
+        write_record(workdir, read_record, tool_name="read")
+    if record or read_record:
+        # Consumed — run completion must not re-convert the manifest.
+        cleanup_manifest(workdir)
+
+
 def prepare_1(workdir, target=None, model=None):
     """Stage 1: report, coverage, diagrams, complete lifecycle."""
     _apply_stage_file(workdir, "F")
@@ -1842,24 +1875,8 @@ def prepare_1(workdir, target=None, model=None):
 
     print(generate_summary(workdir))
 
-    # Coverage record from findings + reads manifest
     with contextlib.suppress(Exception):
-        from core.coverage.record import (
-            READS_MANIFEST,
-            build_from_findings,
-            cleanup_manifest,
-            write_record,
-        )
-        findings_path = Path(workdir) / "findings.json"
-        manifest_path = Path(workdir) / READS_MANIFEST
-        record = build_from_findings(
-            findings_path,
-            reads_manifest_path=manifest_path if manifest_path.exists() else None,
-            tool="llm",
-        )
-        if record:
-            write_record(Path(workdir), record, tool_name="llm")
-            cleanup_manifest(Path(workdir))
+        _write_stage1_coverage_records(Path(workdir))
 
     # SAGE store: persist validation verdicts + disproven hypotheses for cross-run learning.
     with contextlib.suppress(Exception):
@@ -1944,6 +1961,32 @@ STAGES = {
 }
 
 
+def _flag_value(args, flag):
+    """Value of ``flag`` from ``--flag value`` or ``--flag=value``.
+
+    Last occurrence wins (matching argparse). Pre-fix the walker only
+    understood the space-separated form (``--target=PATH`` was
+    silently ignored) and blindly took the next token as the value —
+    ``--target --out /d`` consumed ``--out`` as the target and NO
+    stage saw an error. Errors loudly for every stage when the value
+    is missing or looks like another flag.
+    """
+    value = None
+    n = len(args)
+    for i, a in enumerate(args):
+        if a == flag:
+            if i + 1 >= n or args[i + 1].startswith("-"):
+                print(f"ERROR: {flag} requires a value", file=sys.stderr)
+                sys.exit(1)
+            value = args[i + 1]
+        elif a.startswith(flag + "="):
+            value = a[len(flag) + 1:]
+            if not value or value.startswith("-"):
+                print(f"ERROR: {flag} requires a value", file=sys.stderr)
+                sys.exit(1)
+    return value
+
+
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
@@ -1951,23 +1994,11 @@ def main():
         sys.exit(1)
 
     stage = args[0]
-    target = None
-    explicit_out = None
-    if "--target" in args:
-        idx = args.index("--target")
-        if idx + 1 < len(args):
-            target = args[idx + 1]
-    if "--out" in args:
-        idx = args.index("--out")
-        if idx + 1 < len(args):
-            explicit_out = args[idx + 1]
+    target = _flag_value(args, "--target")
+    explicit_out = _flag_value(args, "--out")
     # Ambient harness model the agent passes (only it knows /model); stage 1
     # records it into models[]. Omitted when absent.
-    model = None
-    if "--model" in args:
-        idx = args.index("--model")
-        if idx + 1 < len(args):
-            model = args[idx + 1]
+    model = _flag_value(args, "--model")
     no_bridge = "--no-bridge" in args
     # Witness-execution gate (stage E): tri-state. None = no explicit
     # choice (project 'dynamic' trust marker decides); --no-dynamic
@@ -1977,28 +2008,16 @@ def main():
         dynamic = False
     elif "--dynamic" in args:
         dynamic = True
-    findings_path = None
-    if "--findings" in args:
-        idx = args.index("--findings")
-        if idx + 1 < len(args):
-            findings_path = args[idx + 1]
-            if not Path(findings_path).is_file():
-                print(f"ERROR: findings file not found: {findings_path}",
-                      file=sys.stderr)
-                sys.exit(1)
+    findings_path = _flag_value(args, "--findings")
+    if findings_path is not None and not Path(findings_path).is_file():
+        print(f"ERROR: findings file not found: {findings_path}",
+              file=sys.stderr)
+        sys.exit(1)
 
     # Sanitizer-cut mode (review #4, PR #794). Stage 0 resolves +
     # persists it; later stages reload it. None means "not passed".
-    sanitizer_cut_mode = None
-    if "--sanitizer-cut" in args:
-        idx = args.index("--sanitizer-cut")
-        if idx + 1 < len(args):
-            sanitizer_cut_mode = args[idx + 1]
-    sanitizer_cut_parity_log = None
-    if "--sanitizer-cut-parity-log" in args:
-        idx = args.index("--sanitizer-cut-parity-log")
-        if idx + 1 < len(args):
-            sanitizer_cut_parity_log = args[idx + 1]
+    sanitizer_cut_mode = _flag_value(args, "--sanitizer-cut")
+    sanitizer_cut_parity_log = _flag_value(args, "--sanitizer-cut-parity-log")
 
     # Stage 0 creates its own workdir
     if stage == "0":

@@ -236,6 +236,7 @@ def run_validate_postpass(
     claude_bin: str | None = None,
     *,
     allow_unreachable: bool = False,
+    audit_dir: Path | None = None,
 ) -> PostpassResult:
     """Run /validate against findings flagged exploitable or high-confidence.
 
@@ -249,12 +250,19 @@ def run_validate_postpass(
     PipelineConfig.allow_unreachable field threads to the Stage B
     attack-path demoter).
 
+    ``audit_dir`` (from --gap-audit) merges the sibling audit run's
+    findings.json into the selection, so one validate pass covers both
+    pipelines' findings. Audit findings are tool-confirmed and take the
+    head of the selection cap; agentic findings fill the remainder in
+    signal order.
+
     Never raises — enrichment failure must not break the base agentic pipeline.
     """
     try:
         return _run_validate_postpass_unsafe(
             target, agentic_out_dir, analysis_report, block_cc_dispatch,
-            claude_bin, allow_unreachable=allow_unreachable)
+            claude_bin, allow_unreachable=allow_unreachable,
+            audit_dir=audit_dir)
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
         return PostpassResult(ran=False,
@@ -269,21 +277,35 @@ def _run_validate_postpass_unsafe(
     claude_bin: str | None,
     *,
     allow_unreachable: bool = False,
+    audit_dir: Path | None = None,
 ) -> PostpassResult:
     target = Path(target).resolve()
     agentic_out_dir = Path(agentic_out_dir).resolve()
     analysis_report = Path(analysis_report)
 
     selected: list = []
+    audit_selected: list = []
 
     def _preflight() -> str | None:
-        if not analysis_report.exists():
+        audit_selected.extend(
+            _load_audit_findings(audit_dir)[:_MAX_VALIDATE_FINDINGS])
+        found: list = []
+        if analysis_report.exists():
+            found = _select_findings_for_validate(analysis_report)
+        elif not audit_selected:
             return "analysis report not found — base pipeline produced no results"
-        found = _select_findings_for_validate(analysis_report)
-        if not found:
+        if not found and not audit_selected:
             return "no findings matched is_exploitable=true or confidence=high"
-        selected.extend(truncate_findings_by_signal(
-            found, _MAX_VALIDATE_FINDINGS, log_label="validate post-pass"))
+        remaining = _MAX_VALIDATE_FINDINGS - len(audit_selected)
+        if found and remaining > 0:
+            selected.extend(truncate_findings_by_signal(
+                found, remaining, log_label="validate post-pass"))
+        elif found:
+            logger.info(
+                "validate post-pass: selection cap consumed by %d audit "
+                "findings — %d agentic findings not selected",
+                len(audit_selected), len(found),
+            )
         return None
 
     def _stage(validate_dir: Path) -> None:
@@ -294,8 +316,15 @@ def _run_validate_postpass_unsafe(
         # skill can consume the file directly without prompt-driven
         # field translation (was the stopgap; this is the real fix).
         selection_file = validate_dir / "selected-findings.json"
-        save_json(selection_file,
-                  convert_agentic_to_validate(selected, str(target)))
+        payload = convert_agentic_to_validate(selected, str(target))
+        if audit_selected:
+            # Audit findings lead the container: they carry tool
+            # evidence (G2) where agentic findings carry LLM verdicts.
+            payload["findings"] = (
+                convert_audit_to_validate(audit_selected)
+                + payload["findings"]
+            )
+        save_json(selection_file, payload)
 
         # Drop a pointer to the parent /agentic checklist so /validate's
         # Stage 0 can reuse it instead of rebuilding the inventory from
@@ -342,7 +371,8 @@ def _run_validate_postpass_unsafe(
         return _build_validate_prompt(
             target, agentic_out_dir, validate_dir,
             analysis_report.resolve(),
-            validate_dir / "selected-findings.json", len(selected),
+            validate_dir / "selected-findings.json",
+            len(selected) + len(audit_selected),
             allow_unreachable=allow_unreachable)
 
     # /validate's tool list is broad (Bash for sandbox prep, SMT,
@@ -366,13 +396,15 @@ def _run_validate_postpass_unsafe(
         stage=_stage,
     )
     if not dispatch.ran:
-        return PostpassResult(ran=False, selected_count=len(selected),
+        return PostpassResult(ran=False,
+                              selected_count=len(selected) + len(audit_selected),
                               validate_dir=dispatch.run_dir,
                               skipped_reason=dispatch.skipped_reason,
                               duration_s=dispatch.duration_s)
 
     report_path = dispatch.run_dir / "validation-report.md"
-    return PostpassResult(ran=True, selected_count=len(selected),
+    return PostpassResult(ran=True,
+                          selected_count=len(selected) + len(audit_selected),
                           validate_dir=dispatch.run_dir,
                           report_path=report_path if report_path.exists() else None,
                           duration_s=dispatch.duration_s)
@@ -397,6 +429,55 @@ def _provision_understand_checklist(target: Path, agentic_out_dir: Path,
         except OSError as e:
             logger.warning("checklist copy failed (%s); falling back to fresh build", e)
     return _build_checklist_via_libexec(target, understand_dir)
+
+
+def _load_audit_findings(audit_dir: Path | None) -> list:
+    """Load a sibling /audit run's findings.json (bare list or
+    ``{"findings": [...]}``). Best-effort: missing or malformed input
+    yields an empty list."""
+    if audit_dir is None:
+        return []
+    data = load_json(Path(audit_dir) / "findings.json")
+    if isinstance(data, dict):
+        data = data.get("findings")
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def convert_audit_to_validate(audit_findings: list) -> list:
+    """Translate /audit finding dicts into /validate Finding shape.
+
+    /audit already emits validate-style names (file / line /
+    description — see core.audit.findings.emit_finding); the bridge's
+    ``normalize_audit_findings`` adds evidence-derived confidence and
+    the ``audit_context`` block, and the canonical ``Finding``
+    dataclass applies the same value coercions the agentic conversion
+    gets. ``audit_context`` is re-attached after canonical
+    serialisation (it is not a Finding field), mirroring the
+    ``ruling`` handling in ``_convert_one_finding``.
+    """
+    from core.orchestration.audit_bridge import normalize_audit_findings
+    from packages.exploitability_validation.models import Finding
+
+    out = []
+    for f in normalize_audit_findings(audit_findings):
+        if not isinstance(f, dict):
+            continue
+        raw = dict(f)
+        if not raw.get("description"):
+            raw["description"] = (
+                raw.get("title") or raw.get("hypothesis") or ""
+            )
+        # /audit emits "cwe"; the Finding field is cwe_id.
+        if raw.get("cwe") and not raw.get("cwe_id"):
+            raw["cwe_id"] = raw["cwe"]
+        raw.setdefault("origin", "audit-postpass")
+        converted = Finding.from_dict(raw).to_dict()
+        if raw.get("audit_context"):
+            converted["audit_context"] = raw["audit_context"]
+        out.append(converted)
+    return out
 
 
 def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dict:

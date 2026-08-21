@@ -7,6 +7,7 @@ serialization of Path/datetime objects.
 
 import json
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -200,8 +201,46 @@ class _RaptorEncoder(json.JSONEncoder):
             return str(obj)
 
 
+def _reject_non_finite_floats(data: Any) -> None:
+    """Raise ``ValueError`` if *data* contains a NaN/Infinity float.
+
+    Parity guard for the orjson save path: the stdlib branch passes
+    ``allow_nan=False`` so ``json.dumps`` raises on non-finite floats,
+    but orjson has no equivalent strict knob — it silently serialises
+    NaN/Infinity as ``null``. Whether a write raised or quietly
+    corrupted a numeric field then depended on which JSON library
+    happened to be installed. Pre-scan (iterative, so deep structures
+    can't blow the recursion limit) and raise the same exception type
+    with the stdlib's message so both paths behave identically.
+
+    Values inside containers the encoder stringifies wholesale
+    (arbitrary objects via ``default=``) are out of scope on both
+    paths — the stdlib encoder never sees them as floats either.
+    """
+    stack = [data]
+    while stack:
+        obj = stack.pop()
+        # bool is an int, never a float — no special-casing needed.
+        if isinstance(obj, float):
+            if not math.isfinite(obj):
+                raise ValueError(
+                    "Out of range float values are not JSON compliant: "
+                    f"{obj!r}"
+                )
+        elif isinstance(obj, dict):
+            stack.extend(obj.keys())
+            stack.extend(obj.values())
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            stack.extend(obj)
+
+
 def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
     """Save data as pretty-printed JSON. Handles Path/datetime serialization.
+
+    Non-finite floats (NaN, Infinity) raise ``ValueError`` on BOTH
+    encoder paths: the stdlib branch via ``allow_nan=False``, the
+    orjson branch via a pre-scan (orjson would otherwise silently
+    write ``null``).
 
     Delegates to :func:`core.atomic_fs.write_text_atomically` — the shared
     primitive owns the tempfile + fsync + rename + parent-dir fsync dance,
@@ -218,6 +257,7 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
               chmod-after-rename window.
     """
     if _orjson is not None:
+        _reject_non_finite_floats(data)
         content = _orjson.dumps(
             data,
             option=_orjson.OPT_INDENT_2 | _orjson.OPT_NON_STR_KEYS,

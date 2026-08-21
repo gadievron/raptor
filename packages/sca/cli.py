@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 SUBCOMMANDS = ("fix", "check", "upgrade", "diff",
                "verify", "health", "purl", "render",
                "clean-cache", "dt-push", "suppress", "bump",
-               "fingerprint", "triage")
+               "fingerprint", "triage", "fix-diff")
 _SUBCOMMANDS = SUBCOMMANDS  # backcompat alias for internal callers
 
 
@@ -124,6 +124,9 @@ def _dispatch(subcommand: str, argv: list[str]) -> int:
     if subcommand == "triage":
         from .supply_chain import typosquat_audit
         return typosquat_audit.main(argv)
+    if subcommand == "fix-diff":
+        from . import fix_diff
+        return fix_diff.main(argv)
     print(f"raptor-sca: unknown subcommand {subcommand!r}", file=sys.stderr)
     return 2
 
@@ -169,7 +172,11 @@ def _positional_to_target_flag(argv: list[str]) -> list[str]:
     if "--target" in argv:
         return argv
     has_findings = "--findings" in argv
-    _VALUE_FLAGS = {"--findings", "--out", "--fix", "--target", "--cache-root"}
+    # Every update.py flag that consumes a value — a value missing here
+    # gets mistaken for the positional target (``--format pr-comment``
+    # would become ``--target pr-comment``).
+    _VALUE_FLAGS = {"--findings", "--out", "--fix", "--target",
+                    "--cache-root", "--format", "--validate-against"}
     out: list[str] = []
     expect_value = False
     for arg in argv:

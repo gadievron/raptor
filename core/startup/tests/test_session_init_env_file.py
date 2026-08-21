@@ -21,6 +21,14 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-session-init"
 @pytest.fixture
 def session_init(monkeypatch):
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+    # write_env_file() mutates os.environ["RAPTOR_DIR"] directly (its
+    # production job: pin the var for the session process). Register
+    # the var with monkeypatch FIRST so that in-test mutation is rolled
+    # back at teardown — otherwise the hostile-path parametrizations
+    # leave RAPTOR_DIR pointing at the fake checkout for every later
+    # test in the session (observed: tracer spawns and subprocess
+    # probes importing from the poisoned tree under shuffled order).
+    monkeypatch.setenv("RAPTOR_DIR", str(REPO_ROOT))
     loader = importlib.machinery.SourceFileLoader(
         "raptor_session_init_under_test", str(SCRIPT),
     )

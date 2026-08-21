@@ -16,6 +16,7 @@ routes spatch through core.sandbox with network blocked.
 """
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -29,6 +30,8 @@ from core.run.scratch import scratch_dir
 from core.run.toolprobe import probe
 
 from .models import SpatchMatch, SpatchResult
+
+logger = logging.getLogger(__name__)
 
 RESULT_PREFIX = "COCCIRESULT:"
 _SPATCH_BIN = "spatch"
@@ -477,11 +480,20 @@ def run_rules(
     defines: dict[str, str] | None = None,
     subprocess_runner=None,
     allow_scripting: bool = False,
+    on_rule=None,
 ) -> list[SpatchResult]:
     """Run all .cocci rules in a directory against a target.
 
     ``allow_scripting`` is forwarded to run_rule — pass True only for
     in-repo, code-trust rule directories.
+
+    ``on_rule`` is an optional progress callback invoked BEFORE each
+    rule runs as ``on_rule(index, total, rule_stem)`` (0-based index,
+    total rules in this directory). A single spatch invocation can run
+    for minutes on large C targets; the callback lets callers emit
+    operator-facing progress instead of going silent for the whole
+    directory. Callback failures are swallowed — progress must never
+    cost a scan.
 
     Returns one SpatchResult per rule, in filename order.
     """
@@ -503,7 +515,14 @@ def run_rules(
         ]
 
     results = []
-    for rule_path in rule_paths:
+    for idx, rule_path in enumerate(rule_paths):
+        if on_rule is not None:
+            try:
+                on_rule(idx, len(rule_paths), rule_path.stem)
+            except Exception:  # noqa: BLE001 — progress must never cost a scan
+                logger.debug(
+                    "on_rule progress callback failed", exc_info=True,
+                )
         result = run_rule(
             target, rule_path,
             include_dirs=include_dirs,

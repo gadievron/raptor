@@ -550,6 +550,53 @@ class TestRefuteByKnownReturnType:
         assert r is not None
         assert r.gate == "input_bound_t0"
 
+    def test_getchar_underflow_not_refuted(self):
+        """getchar() returns EOF (-1) — a CWE-191 underflow claim on
+        its value is real and must NOT be demoted (the table only
+        bounds the value above)."""
+        outcome = _Outcome(
+            hypothesis=(
+                "integer underflow: getchar() returns EOF (-1) and "
+                "the value is subtracted from an unsigned counter"
+            ),
+            review_result={"cwe": "CWE-191"},
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_getchar_underflow_keyword_only_not_refuted(self):
+        """Underflow keyword without explicit CWE also spares the
+        negative-capable functions."""
+        outcome = _Outcome(
+            hypothesis=(
+                "integer underflow when fgetc() result feeds the "
+                "size computation"
+            ),
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is None
+
+    def test_getchar_overflow_still_refuted(self):
+        """CWE-190 on getchar() keeps the original refutation: the
+        value is bounded above by 0xFF."""
+        outcome = _Outcome(
+            hypothesis="integer overflow from getchar() return value",
+            review_result={"cwe": "CWE-190"},
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is not None
+        assert r.gate == "input_bound_t0"
+
+    def test_ntohs_underflow_still_refuted(self):
+        """ntohs() cannot return a negative value (min 0), so the
+        CWE-191 refutation stays for it."""
+        outcome = _Outcome(
+            hypothesis="integer underflow from ntohs() return value",
+            review_result={"cwe": "CWE-191"},
+        )
+        r = _refute_by_known_return_type(outcome, _Config())
+        assert r is not None
+
 
 # ===================================================================
 # Shared helpers
@@ -670,6 +717,62 @@ class TestSignalReachableSet:
         sig_set = _signal_reachable_set(cl)
         assert any("my_sig_handler" in s for s in sig_set)
         assert any("do_work" in s for s in sig_set)
+
+    def test_memoised_per_checklist_identity(self, monkeypatch):
+        """The gate runs per outcome; the reachable-set walk must be
+        served from the per-checklist cache on repeat calls."""
+        import core.audit.refutation as rf
+
+        cl = _checklist_with_calls([
+            {"line": 10, "chain": ["signal", "my_handler"],
+             "caller": "main"},
+        ])
+        cl["files"][0]["items"] = [{"name": "my_handler"}]
+        counter = {"n": 0}
+        orig = rf._get_calls
+
+        def _counting(fentry):
+            counter["n"] += 1
+            return orig(fentry)
+
+        monkeypatch.setattr(rf, "_get_calls", _counting)
+        first = rf._signal_reachable_set(cl)
+        walked = counter["n"]
+        assert walked > 0
+        second = rf._signal_reachable_set(cl)
+        assert second == first
+        assert counter["n"] == walked  # no rebuild
+
+        # A distinct checklist object is not served the cached value.
+        other = _checklist_with_calls([
+            {"line": 10, "chain": ["printf"], "caller": "main"},
+        ])
+        assert rf._signal_reachable_set(other) == frozenset()
+
+
+class TestClassifyLifecycleMemo:
+    def test_caller_map_memoised_per_checklist(self, monkeypatch):
+        import core.audit.refutation as rf
+
+        cl = _checklist_with_calls([
+            {"line": 50, "chain": ["setup"], "caller": "main"},
+            {"line": 200, "chain": ["poll"], "caller": "main"},
+        ])
+        counter = {"n": 0}
+        orig = rf._get_calls
+
+        def _counting(fentry):
+            counter["n"] += 1
+            return orig(fentry)
+
+        monkeypatch.setattr(rf, "_get_calls", _counting)
+        assert rf._classify_lifecycle("setup", "src/main.c", cl) \
+            == "init"
+        walked = counter["n"]
+        assert walked > 0
+        assert rf._classify_lifecycle("setup", "src/main.c", cl) \
+            == "init"
+        assert counter["n"] == walked  # map served from cache
 
 
 class TestClassifyLifecycle:
@@ -940,6 +1043,370 @@ class TestRescueSelfRefuted:
         assert r is None
 
 
+class TestRaceProtectedSelfRefutation:
+    """A race-family self-refutation corroborated by mechanical lock
+    protection is accepted, not floored — re-flagging fully serialized
+    kernel code manufactures a false positive. Lifetime CWEs keep the
+    floor: lock protection says nothing about object lifetime."""
+
+    _LOCKED_C = (
+        "void sync_counters(struct gate_state *st)\n"
+        "{\n"
+        "\tunsigned long flags;\n"
+        "\tmutex_lock(&st->gate_mutex);\n"
+        "\traw_spin_lock_irqsave(&st->gate_lock, flags);\n"
+        "\tst->count = st->count + 1;\n"
+        "\tWRITE_ONCE(st->snap, st->count);\n"
+        "\traw_spin_unlock_irqrestore(&st->gate_lock, flags);\n"
+        "\tmutex_unlock(&st->gate_mutex);\n"
+        "}\n"
+    )
+
+    def _race_outcome(self):
+        return _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-362 race on the shared counter",
+                "confidence": "refuted",
+                "counter": "serialized by the gate mutex",
+            }],
+        )
+
+    def test_protected_source_accepts_refutation(self):
+        r = rescue_self_refuted(self._race_outcome(), source=self._LOCKED_C)
+        assert r is None
+
+    def test_without_source_still_floors(self):
+        r = rescue_self_refuted(self._race_outcome())
+        assert r is not None
+        assert r.demote_to == "suspicious"
+
+    def test_unprotected_source_still_floors(self):
+        unlocked = (
+            "void sync_counters(void)\n"
+            "{\n"
+            "\tst->count = st->count + 1;\n"
+            "\tst->snap = st->count;\n"
+            "}\n"
+        )
+        r = rescue_self_refuted(self._race_outcome(), source=unlocked)
+        assert r is not None
+
+    def test_uaf_refutation_accepted_when_locked_and_nothing_freed(self):
+        # Doctrine update (corpus-verified): a lifetime self-refutation
+        # on FULLY lock-protected source that frees NOTHING is
+        # mechanically corroborated — the claimed hazard has no local
+        # mechanism and no concurrent window in scope. Flooring it
+        # manufactured a family of kernel false positives (the model
+        # concluded clean, the floor shipped suspicious, and no
+        # verification channel could ever adjudicate the lifetime
+        # claim).
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free of the state block",
+                "confidence": "refuted",
+                "counter": "reference held by caller",
+            }],
+        )
+        r = rescue_self_refuted(outcome, source=self._LOCKED_C)
+        assert r is None
+
+    _BARE_FREE_C = (
+        "void teardown(struct dev_priv *priv)\n"
+        "{\n"
+        "\tkfree(priv->buf);\n"
+        "\tpriv->buf = NULL;\n"
+        "}\n"
+    )
+
+    def test_uaf_refutation_still_floored_over_bare_free(self):
+        # A bare free with no visible teardown ordering: the witness
+        # grades unsafe, so the self-refutation is NOT accepted.
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free of the buffer",
+                "confidence": "refuted",
+                "counter": "no concurrent access believed possible",
+            }],
+        )
+        r = rescue_self_refuted(outcome, source=self._BARE_FREE_C)
+        assert r is not None
+        assert r.demote_to == "suspicious"
+
+    _ASYNC_CANCEL_FREE_C = (
+        "void disconnect(struct outer *dev)\n"
+        "{\n"
+        "\tstruct dev_priv *priv = dev->private;\n"
+        "\ttimer_delete(&priv->timer);\n"
+        "\tkfree(dev->private);\n"
+        "}\n"
+    )
+
+    def test_uaf_refutation_still_floored_over_async_cancel_free(self):
+        # The async-cancel-then-free race shape grades UNSAFE — a
+        # reviewer talking itself out of the real teardown race stays
+        # floored.
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free via the timer callback",
+                "confidence": "refuted",
+                "counter": "timer_delete cancels the pending timer",
+            }],
+        )
+        r = rescue_self_refuted(outcome, source=self._ASYNC_CANCEL_FREE_C)
+        assert r is not None
+
+    _SYNC_TEARDOWN_C = (
+        "void release(struct ctx *c)\n"
+        "{\n"
+        "\thrtimer_cancel(&c->tmr);\n"
+        "\tkfree_rcu(c, rcu);\n"
+        "}\n"
+    )
+
+    def test_uaf_refutation_accepted_over_waiting_teardown(self):
+        # Waiting cancel + RCU-deferred reclamation corroborate the
+        # reviewer's lifetime self-refutation.
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free if the callback re-arms",
+                "confidence": "refuted",
+                "counter": "hrtimer_cancel waits; kfree_rcu defers",
+            }],
+        )
+        r = rescue_self_refuted(outcome, source=self._SYNC_TEARDOWN_C)
+        assert r is None
+
+
+class TestPreEvidenceCorroboratedRefutation:
+    """A pre-loop screen receipt from the parsed-int family outranks a
+    same-family self-refutation — the integer CWEs are outside the
+    gate's CWE allowlist, so this clause is the only path."""
+
+    def _outcome(self, mechanism):
+        return _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": mechanism,
+                "confidence": "refuted",
+                "counter": "values are stored as metadata only",
+            }],
+        )
+
+    def test_int_family_refutation_floored_with_screen_receipt(self):
+        o = self._outcome(
+            "huge parsed values overflow int32 storage downstream",
+        )
+        r = rescue_self_refuted(
+            o, pre_evidence="smt:check-parsed-int-contract",
+        )
+        assert r is not None
+        assert r.demote_to == "suspicious"
+        assert "smt:check-parsed-int-contract" in r.reason
+
+    def test_low_dismissal_also_floored(self):
+        o = self._outcome(
+            "huge parsed values overflow int32 storage downstream",
+        )
+        o.hypotheses[0]["confidence"] = "low"
+        r = rescue_self_refuted(
+            o, pre_evidence="smt:check-parsed-int-contract",
+        )
+        assert r is not None
+
+    def test_no_screen_receipt_no_floor(self):
+        o = self._outcome(
+            "huge parsed values overflow int32 storage downstream",
+        )
+        assert rescue_self_refuted(o) is None
+
+    def test_unrelated_family_hypothesis_not_floored(self):
+        o = self._outcome(
+            "path traversal via the parsed filename component",
+        )
+        r = rescue_self_refuted(
+            o, pre_evidence="smt:check-parsed-int-contract",
+        )
+        assert r is None
+
+    def test_unrelated_pre_evidence_not_consumed(self):
+        o = self._outcome(
+            "huge parsed values overflow int32 storage downstream",
+        )
+        r = rescue_self_refuted(
+            o, pre_evidence="smt:check-auth-bypass",
+        )
+        assert r is None
+
+
+class TestDetectorCorroboratedDismissal:
+    """A mechanical detector receipt on this function outranks a
+    same-family hypothesis the reviewer raised then dismissed at low
+    confidence or refuted."""
+
+    _DETECTORS = [{"detector": "cocci:uninitialized_return"}]
+
+    def _outcome(self, conf="low", mechanism=None):
+        return _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": mechanism or (
+                    "uninitialized ret read: the switch has no default "
+                    "case, so an unexpected value leaves ret unset"
+                ),
+                "confidence": conf,
+                "counter": "only two enum values are ever assigned",
+            }],
+        )
+
+    def test_low_dismissal_floored(self):
+        r = rescue_self_refuted(
+            self._outcome("low"), detector_findings=self._DETECTORS,
+        )
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+        assert "detector receipt" in r.reason
+
+    def test_refuted_dismissal_floored(self):
+        r = rescue_self_refuted(
+            self._outcome("refuted"), detector_findings=self._DETECTORS,
+        )
+        assert r is not None
+
+    def test_medium_confidence_not_consumed(self):
+        r = rescue_self_refuted(
+            self._outcome("medium"), detector_findings=self._DETECTORS,
+        )
+        assert r is None
+
+    def test_unrelated_family_hypothesis_not_floored(self):
+        r = rescue_self_refuted(
+            self._outcome("low", "refcount imbalance on the pm runtime"),
+            detector_findings=self._DETECTORS,
+        )
+        assert r is None
+
+    def test_unmapped_detector_not_consumed(self):
+        r = rescue_self_refuted(
+            self._outcome("low"),
+            detector_findings=[{"detector": "stale_alias_candidate"}],
+        )
+        assert r is None
+
+    def test_tool_evidence_blocks(self):
+        o = self._outcome("low")
+        o.evidence_tool = "joern:flow"
+        r = rescue_self_refuted(o, detector_findings=self._DETECTORS)
+        assert r is None
+
+
+class TestDiagnoseRescue:
+    """diagnose_rescue mirrors the Gate-5 precondition chain and names
+    the first broken link, so a silent non-fire is explainable from a
+    durable audit-log row instead of invisible."""
+
+    _RECEIPT = {
+        "check_type": "auth_mode_registration",
+        "function": "handle_packet",
+        "file": "src/net.c",
+    }
+
+    def test_none_when_gate_would_fire(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-362 race between read and write",
+                "confidence": "refuted",
+                "counter": "appears safe",
+            }],
+        )
+        assert diagnose_rescue(outcome) is None
+
+    def test_non_clean_status(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(status="suspicious")
+        d = diagnose_rescue(outcome)
+        assert d["blocked_on"] == "status"
+
+    def test_no_refuted_hypothesis_with_receipt(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": (
+                    "auth mode gates registration views asymmetrically"
+                ),
+                "confidence": "low",
+                "counter": "views enforce their own permissions",
+            }],
+        )
+        d = diagnose_rescue(outcome, negative_space=[self._RECEIPT])
+        assert d["blocked_on"] == "no_refuted_hypothesis"
+        assert d["receipts"] == ["auth_mode_registration"]
+        assert d["confidences"] == ["low"]
+
+    def test_tool_evidence_blocks(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            evidence_tool="joern:taint",
+            hypotheses=[{
+                "mechanism": "CWE-362 race",
+                "confidence": "refuted",
+                "counter": "safe",
+            }],
+        )
+        d = diagnose_rescue(outcome)
+        assert d["blocked_on"] == "tool_evidence"
+
+    def test_missing_counter_blocks(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-416 use after free",
+                "confidence": "refuted",
+                "counter": "",
+            }],
+        )
+        d = diagnose_rescue(outcome)
+        assert d["blocked_on"] == "no_counter"
+
+    def test_unmatched_receipt_and_cwe(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": "CWE-190 integer overflow in size",
+                "confidence": "refuted",
+                "counter": "value bounded by caller",
+            }],
+        )
+        d = diagnose_rescue(outcome, negative_space=[self._RECEIPT])
+        assert d["blocked_on"] == "no_matching_receipt_or_cwe"
+
+    def test_receipt_on_other_function_not_counted(self):
+        from core.audit.refutation import diagnose_rescue
+        outcome = _Outcome(
+            status="clean",
+            hypotheses=[{
+                "mechanism": (
+                    "auth mode gates registration views asymmetrically"
+                ),
+                "confidence": "low",
+                "counter": "some counter",
+            }],
+        )
+        other = dict(self._RECEIPT, function="other_fn")
+        d = diagnose_rescue(outcome, negative_space=[other])
+        assert d["receipts"] == []
+
+
 # ---------------------------------------------------------------------------
 # Gate 6: Callee-inheritance suppression
 # ---------------------------------------------------------------------------
@@ -1161,3 +1628,72 @@ class TestGetFunctionSourceAndCallees:
         source, callees = _get_function_source_and_callees(outcome, None)
         assert source == ""
         assert callees == []
+
+
+class TestReceiptContradictionRescue:
+    """Self-refutations that contradict an active structural receipt on
+    the same function are rescued regardless of CWE family."""
+
+    def _refuted_auth_outcome(self):
+        return _Outcome(
+            file="app/setup/wiring.py",
+            function="mount_endpoints",
+            status="clean",
+            hypotheses=[{
+                "mechanism": (
+                    "the login-mode chain gates most endpoint "
+                    "registration calls, but two endpoints are "
+                    "registered outside the chain and mount in "
+                    "every mode"
+                ),
+                "confidence": "refuted",
+                "counter": "those views require login at request time",
+            }],
+        )
+
+    def test_matching_receipt_rescues(self):
+        receipts = [{
+            "check_type": "auth_mode_registration",
+            "function": "mount_endpoints",
+        }]
+        r = rescue_self_refuted(
+            self._refuted_auth_outcome(), negative_space=receipts,
+        )
+        assert r is not None
+        assert r.gate == "anti_self_refutation"
+        assert "auth_mode_registration receipt" in r.reason
+        assert r.demote_to == "suspicious"
+
+    def test_receipt_on_other_function_ignored(self):
+        receipts = [{
+            "check_type": "auth_mode_registration",
+            "function": "some_other_setup",
+        }]
+        r = rescue_self_refuted(
+            self._refuted_auth_outcome(), negative_space=receipts,
+        )
+        assert r is None
+
+    def test_unrelated_receipt_family_ignored(self):
+        receipts = [{
+            "check_type": "shared_writer_race",
+            "function": "mount_endpoints",
+        }]
+        r = rescue_self_refuted(
+            self._refuted_auth_outcome(), negative_space=receipts,
+        )
+        assert r is None
+
+    def test_object_shaped_receipts_supported(self):
+        class _NF:
+            check_type = "auth_mode_registration"
+            function = "mount_endpoints"
+
+        r = rescue_self_refuted(
+            self._refuted_auth_outcome(), negative_space=[_NF()],
+        )
+        assert r is not None
+
+    def test_no_receipts_no_rescue(self):
+        r = rescue_self_refuted(self._refuted_auth_outcome())
+        assert r is None

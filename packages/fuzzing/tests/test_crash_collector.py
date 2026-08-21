@@ -102,6 +102,54 @@ class TestCollectCrashes:
         # N" — so equality is the right check.
         assert len(crashes) == 2
 
+    def test_max_crashes_bounds_unique_not_raw_files(self, tmp_path):
+        # Regression: the file list was sliced to max_crashes BEFORE
+        # dedup, so duplicate inputs consumed the budget. Three
+        # identical files followed by two distinct ones must still
+        # yield two unique crashes at max_crashes=2.
+        dup = b"identical crash content"
+        for i in range(3):
+            _make_crash_file(tmp_path, f"id:{i:06d},sig:11", dup)
+        _make_crash_file(tmp_path, "id:000003,sig:11", b"distinct A")
+        _make_crash_file(tmp_path, "id:000004,sig:11", b"distinct B")
+
+        collector = CrashCollector(tmp_path)
+        crashes = collector.collect_crashes(max_crashes=2)
+        assert len(crashes) == 2
+        assert len({c.crash_id for c in crashes}) == 2
+
+    def test_stack_hasher_dedups_across_different_inputs(self, tmp_path):
+        # Two DIFFERENT inputs hitting the same bug share a stack hash;
+        # a third with a distinct stack survives.
+        _make_crash_file(tmp_path, "id:000000,sig:11", b"input A")
+        _make_crash_file(tmp_path, "id:000001,sig:11", b"input B")
+        _make_crash_file(tmp_path, "id:000002,sig:11", b"input C")
+
+        hashes = {
+            "id:000000,sig:11": "deadbeefcafe0001",
+            "id:000001,sig:11": "deadbeefcafe0001",
+            "id:000002,sig:11": "deadbeefcafe0002",
+        }
+
+        collector = CrashCollector(tmp_path)
+        crashes = collector.collect_crashes(
+            stack_hasher=lambda p: hashes[p.name],
+        )
+        assert len(crashes) == 2
+        assert all(c.stack_hash for c in crashes)
+
+    def test_stack_hasher_failure_falls_back_to_input_hash(self, tmp_path):
+        _make_crash_file(tmp_path, "id:000000,sig:11", b"same bytes")
+        _make_crash_file(tmp_path, "id:000001,sig:11", b"same bytes")
+
+        def broken_hasher(path):
+            raise RuntimeError("debugger unavailable")
+
+        collector = CrashCollector(tmp_path)
+        crashes = collector.collect_crashes(stack_hasher=broken_hasher)
+        # Fallback input-hash dedup still collapses identical content.
+        assert len(crashes) == 1
+
     def test_parses_crash_id_from_filename(self, tmp_path):
         _make_crash_file(tmp_path, "id:000042,sig:11,src:000000,op:havoc,rep:4")
         collector = CrashCollector(tmp_path)

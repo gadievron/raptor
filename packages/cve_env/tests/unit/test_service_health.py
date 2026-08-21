@@ -1,12 +1,19 @@
-"""Unit tests for :mod:`cve_env.infra.service_health` (Phase 18.1)."""
+"""Unit tests for :mod:`cve_env.infra.service_health` (Phase 18.1).
+
+HTTP probes are exercised against a scripted :mod:`core.http` client
+double patched at ``service_health._client`` — the transport moved off
+``requests`` in the citizenship pass (design record §4.7), taking the
+operator-proxy inversion with it (see the last test).
+"""
 
 from __future__ import annotations
 
+import json
 import socket
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import requests
+from core.http import HttpError, Response
 
 from cve_env.infra.service_health import (
     CRITICAL_NAMES,
@@ -19,6 +26,32 @@ from cve_env.infra.service_health import (
     probe_osv,
     render_table,
 )
+
+
+def _resp(status=200, body=b"{}", url="https://probe.example/x"):
+    return Response(status=status, headers={"content-type": "application/json"},
+                    body=body, url=url)
+
+
+class _FakeHttp:
+    """Scripted core.http client double: one queued Response or
+    exception per ``request`` call; records call kwargs."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls: list[dict[str, Any]] = []
+
+    def request(self, method, url, **kw):
+        self.calls.append({"method": method, "url": url, **kw})
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+def _with_http(script):
+    fake = _FakeHttp(script)
+    return fake, patch("cve_env.infra.service_health._client", lambda: fake)
 
 
 def test_health_result_as_row_ok() -> None:
@@ -60,59 +93,68 @@ def test_probe_dns_fails(mock_resolve: Any) -> None:
 # -- NVD probe ------------------------------------------------------------
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_nvd_anonymous_tier(mock_get: Any, monkeypatch: Any) -> None:
+def test_probe_nvd_anonymous_tier(monkeypatch: Any) -> None:
     monkeypatch.delenv("NVD_API_KEY", raising=False)
-    mock_get.return_value = MagicMock(status_code=200, headers={})
-    r = probe_nvd()
+    fake, ctx = _with_http([_resp(200)])
+    with ctx:
+        r = probe_nvd()
     assert r.ok is True
     assert "no API key" in r.rate_limit
     assert "5 req/30s" in r.rate_limit
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_nvd_with_api_key(mock_get: Any, monkeypatch: Any) -> None:
+def test_probe_nvd_with_api_key(monkeypatch: Any) -> None:
     monkeypatch.setenv("NVD_API_KEY", "test-key-abc")
-    mock_get.return_value = MagicMock(status_code=200, headers={})
-    r = probe_nvd()
+    fake, ctx = _with_http([_resp(200)])
+    with ctx:
+        r = probe_nvd()
     assert r.ok is True
     assert "with API key" in r.rate_limit
     # And the apiKey header was sent.
-    sent_headers = mock_get.call_args.kwargs.get("headers", {})
-    assert sent_headers.get("apiKey") == "test-key-abc"
+    assert fake.calls[0]["headers"].get("apiKey") == "test-key-abc"
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_nvd_429_surfaced(mock_get: Any, monkeypatch: Any) -> None:
+def test_probe_nvd_429_surfaced(monkeypatch: Any) -> None:
     monkeypatch.delenv("NVD_API_KEY", raising=False)
-    mock_get.return_value = MagicMock(status_code=429, headers={"Retry-After": "30"})
-    r = probe_nvd()
+    _fake, ctx = _with_http([_resp(429)])
+    with ctx:
+        r = probe_nvd()
     assert r.ok is False
     assert "429" in r.detail
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_nvd_network_error(mock_get: Any) -> None:
-    mock_get.side_effect = requests.ConnectionError("dns broken")
-    r = probe_nvd()
+def test_probe_nvd_network_error() -> None:
+    _fake, ctx = _with_http([HttpError("dns broken")])
+    with ctx:
+        r = probe_nvd()
     assert r.ok is False
     assert "network" in r.detail
+
+
+def test_probe_single_shot_no_retries() -> None:
+    """A probe measures the service as it is right now — the client's
+    transient-retry machinery must be disabled."""
+    fake, ctx = _with_http([_resp(200)])
+    with ctx:
+        probe_osv()
+    assert fake.calls[0]["retries"] == 0
+    assert fake.calls[0]["raise_on_status"] is False
 
 
 # -- OSV probe ------------------------------------------------------------
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_osv_ok(mock_get: Any) -> None:
-    mock_get.return_value = MagicMock(status_code=200)
-    r = probe_osv()
+def test_probe_osv_ok() -> None:
+    _fake, ctx = _with_http([_resp(200)])
+    with ctx:
+        r = probe_osv()
     assert r.ok is True
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_osv_failure(mock_get: Any) -> None:
-    mock_get.return_value = MagicMock(status_code=500)
-    r = probe_osv()
+def test_probe_osv_failure() -> None:
+    _fake, ctx = _with_http([_resp(500)])
+    with ctx:
+        r = probe_osv()
     assert r.ok is False
     assert "500" in r.detail
 
@@ -120,80 +162,70 @@ def test_probe_osv_failure(mock_get: Any) -> None:
 # -- GitHub probe ---------------------------------------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_github_with_gh_cli_token(
-    mock_get: Any,
-    mock_run: Any,
-    monkeypatch: Any,
-) -> None:
+def _github_resp(limit: int, remaining: int) -> Response:
+    body = json.dumps(
+        {"resources": {"core": {"limit": limit, "remaining": remaining}}}
+    ).encode()
+    return _resp(200, body=body)
+
+
+@patch("core.container.proc.subprocess.run")
+def test_probe_github_with_gh_cli_token(mock_run: Any, monkeypatch: Any) -> None:
     """When GITHUB_TOKEN unset but `gh auth token` returns a token, that token
     should be sent and the higher rate-limit reported."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     mock_run.return_value = MagicMock(returncode=0, stdout="gho_test_token\n")
-    mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {
-        "resources": {"core": {"limit": 5000, "remaining": 4998}}
-    }
-    mock_get.return_value = mock_resp
-    r = probe_github()
+    fake, ctx = _with_http([_github_resp(5000, 4998)])
+    with ctx:
+        r = probe_github()
     assert r.ok is True
     assert "4998/5000" in r.rate_limit
     assert "authed" in r.rate_limit
-    sent_headers = mock_get.call_args.kwargs.get("headers", {})
-    assert sent_headers.get("Authorization") == "Bearer gho_test_token"
+    assert fake.calls[0]["headers"].get("Authorization") == "Bearer gho_test_token"
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.infra.service_health.requests.get")
-def test_probe_github_anon_when_no_token(
-    mock_get: Any,
-    mock_run: Any,
-    monkeypatch: Any,
-) -> None:
+@patch("core.container.proc.subprocess.run")
+def test_probe_github_anon_when_no_token(mock_run: Any, monkeypatch: Any) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not logged in")
-    mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {
-        "resources": {"core": {"limit": 60, "remaining": 59}}
-    }
-    mock_get.return_value = mock_resp
-    r = probe_github()
+    fake, ctx = _with_http([_github_resp(60, 59)])
+    with ctx:
+        r = probe_github()
     assert r.ok is True
     assert "59/60" in r.rate_limit
     assert "unauth" in r.rate_limit
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.infra.service_health.requests.get")
+@patch("core.container.proc.subprocess.run")
 def test_probe_github_env_token_takes_precedence(
-    mock_get: Any,
-    mock_run: Any,
-    monkeypatch: Any,
+    mock_run: Any, monkeypatch: Any
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_explicit_env")
-    mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {
-        "resources": {"core": {"limit": 5000, "remaining": 4500}}
-    }
-    mock_get.return_value = mock_resp
-    r = probe_github()
-    sent_headers = mock_get.call_args.kwargs.get("headers", {})
-    assert sent_headers.get("Authorization") == "Bearer ghp_explicit_env"
+    fake, ctx = _with_http([_github_resp(5000, 4500)])
+    with ctx:
+        r = probe_github()
+    assert fake.calls[0]["headers"].get("Authorization") == "Bearer ghp_explicit_env"
     # When env var is set, gh CLI should NOT be invoked.
     mock_run.assert_not_called()
     assert r.ok is True
+
+
+@patch("core.container.proc.subprocess.run")
+def test_probe_github_non_json_body_is_ok(mock_run: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    _fake, ctx = _with_http([_resp(200, body=b"<html>not json</html>")])
+    with ctx:
+        r = probe_github()
+    assert r.ok is True
+    assert "non-JSON" in r.detail
 
 
 # -- Docker Hub probe ----------------------------------------------------
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("cve_env.utils.run.subprocess.run")
-def test_probe_docker_hub_anonymous(
-    mock_run: Any,
-    mock_auth: Any,
-) -> None:
+@patch("core.container.proc.subprocess.run")
+def test_probe_docker_hub_anonymous(mock_run: Any, mock_auth: Any) -> None:
     mock_auth.return_value = False
     mock_run.return_value = MagicMock(returncode=0, stdout="manifest", stderr="")
     r = probe_docker_hub()
@@ -203,11 +235,8 @@ def test_probe_docker_hub_anonymous(
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("cve_env.utils.run.subprocess.run")
-def test_probe_docker_hub_authed(
-    mock_run: Any,
-    mock_auth: Any,
-) -> None:
+@patch("core.container.proc.subprocess.run")
+def test_probe_docker_hub_authed(mock_run: Any, mock_auth: Any) -> None:
     mock_auth.return_value = True
     mock_run.return_value = MagicMock(returncode=0, stdout="manifest", stderr="")
     r = probe_docker_hub()
@@ -216,11 +245,8 @@ def test_probe_docker_hub_authed(
 
 
 @patch("cve_env.infra.service_health._docker_authed")
-@patch("cve_env.utils.run.subprocess.run")
-def test_probe_docker_hub_rate_limited(
-    mock_run: Any,
-    mock_auth: Any,
-) -> None:
+@patch("core.container.proc.subprocess.run")
+def test_probe_docker_hub_rate_limited(mock_run: Any, mock_auth: Any) -> None:
     mock_auth.return_value = False
     mock_run.return_value = MagicMock(
         returncode=1,
@@ -309,24 +335,20 @@ def test_critical_names_set_includes_dns_github_dockerhub() -> None:
     assert "NVD API" not in CRITICAL_NAMES
 
 
-# ─── BUG-004b: env-based proxy injection regression lock ────────────────
+# ─── transport delegation (BUG-004b successor) ───────────────────────────
 
 
-@patch("cve_env.infra.service_health.requests.get")
-def test_BUG004b_probe_passes_empty_proxies_kwarg(
-    mock_get: Any, monkeypatch: Any
-) -> None:
-    """BUG-004b lock: service_health._http_get (line 67) must pass
-    proxies={"http":"","https":""} to requests.get to defeat env-based
-    proxy injection. Pattern matches the other 5 BUG-004b sites; tests in
-    test_verify.py + test_web_fetch.py + test_source_build.py cover those.
-    """
-    monkeypatch.delenv("NVD_API_KEY", raising=False)
-    mock_get.return_value = MagicMock(status_code=200, headers={})
-    probe_nvd()  # exercises service_health._http_get → requests.get
-    assert mock_get.call_count == 1
-    _args, kwargs = mock_get.call_args
-    assert kwargs.get("proxies") == {"http": "", "https": ""}, (
-        f"BUG-004b regression: service_health did not pass "
-        f"proxies={{'http':'','https':''}}; got proxies={kwargs.get('proxies')!r}"
-    )
+def test_operator_proxy_honoured_via_core_http() -> None:
+    """Design inversion vs the requests-era BUG-004b lock: probes ride
+    core.http's UrllibClient, which snapshots the OPERATOR's proxy env
+    at construction — the doctor must measure the same network path the
+    real fetches use, so proxy-only hosts report honestly instead of
+    all-red. Child-process proxy hygiene is safe_subprocess_env's job."""
+    import cve_env.infra.service_health as sh
+    from core.http.urllib_backend import UrllibClient
+
+    sh._client_singleton = None
+    try:
+        assert isinstance(sh._client(), UrllibClient)
+    finally:
+        sh._client_singleton = None

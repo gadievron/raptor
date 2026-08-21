@@ -224,7 +224,12 @@ def cross_family_check(
 
     When both models agree, confidence stays. When they disagree, the
     conservative (higher-severity) verdict wins but confidence is capped
-    at ``"medium"``.
+    at ``"medium"``. Severity order follows ``high_severity_values``
+    (earlier = more severe; verdicts outside the tuple rank below all of
+    them), so a checker that escalates — primary ``"suspicious"``,
+    checker ``"malicious"`` — raises the verdict; a checker that
+    downgrades keeps the primary's. The primary's other fields are kept
+    either way.
     """
     if primary_result.model is None:
         return primary_result
@@ -262,26 +267,31 @@ def cross_family_check(
             cost=primary_result.cost + checker_result.cost,
         )
 
+    # Conservative merge: the higher-severity verdict wins.
+    def _severity_rank(verdict) -> int:
+        try:
+            return high_severity_values.index(verdict)
+        except ValueError:
+            return len(high_severity_values)
+
+    winning = (checker_verdict
+               if _severity_rank(checker_verdict) < _severity_rank(primary_verdict)
+               else primary_verdict)
     logger.info(
         "sca.llm: cross-family disagreement: primary=%s checker=%s "
-        "— taking conservative (primary)",
-        primary_verdict, checker_verdict,
+        "— taking conservative (%s)",
+        primary_verdict, checker_verdict, winning,
     )
+    updates: dict[str, Any] = {}
+    if winning != primary_verdict:
+        updates[verdict_field] = winning
     if hasattr(primary_result.model, "confidence"):
         cur = getattr(primary_result.model, "confidence", "medium")
-        capped = cur if cur in ("low",) else "medium"
-        updated = primary_result.model.model_copy(
-            update={"confidence": capped},
-        )
-        return StageResult(
-            model=updated,
-            raw=primary_result.raw,
-            preflight_hit=primary_result.preflight_hit,
-            confidence_haircut=primary_result.confidence_haircut,
-            cost=primary_result.cost + checker_result.cost,
-        )
+        updates["confidence"] = cur if cur in ("low",) else "medium"
+    model = (primary_result.model.model_copy(update=updates)
+             if updates else primary_result.model)
     return StageResult(
-        model=primary_result.model,
+        model=model,
         raw=primary_result.raw,
         preflight_hit=primary_result.preflight_hit,
         confidence_haircut=primary_result.confidence_haircut,

@@ -33,18 +33,24 @@ and do NOT hand-summarise the flags from this doc when `--help` is requested.
 
 ## Optional enrichment flags
 
-By default, `/agentic` scans and analyses findings in isolation. Two optional flags add richer context for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.
+By default, `/agentic` scans and analyses findings in isolation. Three optional flags add richer context and coverage for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.
 
 | Flag | What it does |
 |------|-------------|
 | `--understand` | Runs `/understand --map` as a proper sibling run, producing `context-map.json` (entry points, trust boundaries, sinks). Two consumers: (a) the agentic checklist gets priority markers, so per-finding analysis prompts say things like *"Architectural role: entry_point"* — improving in-run analysis; (b) any `/validate` against the same target — including this run's `--validate` post-pass — picks the map up via the bridge. |
 | `--validate` | After the agentic pipeline completes, runs `/validate` on findings flagged `is_exploitable: true` or `confidence: "high"`. Creates a sibling validate run; the bridge auto-discovers any `/understand` sibling produced by `--understand`. |
+| `--gap-audit` | After analysis, runs the `/audit` orchestrator over the coverage residual — functions no phase reviewed — as a sibling audit run. Inherits the run's checklist, every CodeQL database the scan phase built (dispatch routes per file language), binaries, and models (2+ models enable the adversarial reviewer); the run's own per-finding analyses ride in as prior claims, never as coverage. Uses the configured external LLM (`--model` or API key); with only Claude Code available it runs on the claudecode transport, gated on the repo trust check. With `--validate`, audit findings join the same validate pass and the validation verdicts feed back into the audit journal; without it, the run ends with a loud UNVALIDATED warning. NOTE: `--audit` (no prefix) is the sandbox audit mode — a different feature. |
 
-You can use either flag on its own or combine them:
+Sub-flags for the gap audit: `--gap-audit-budget N` (max functions), `--gap-audit-strategy NAME`, `--gap-audit-scope DIR` (repeatable), `--gap-audit-share FRACTION` (slice of `--max-cost-usd` reserved up front for the audit, default 0.35), `--gap-audit-no-adversarial` (suppress the 2+-model adversarial auto-enable; the decision is recorded in the report either way).
+
+You can use the flags independently or combine them:
 
 ```
-# Recommended for thorough reviews — pair both flags
+# Recommended for thorough reviews — pair map + validate
 /agentic --understand --validate
+
+# Full-coverage review: map, analyse, audit the residual, validate everything once
+/agentic --understand --gap-audit --validate
 
 # Just enrich this run's analysis with architectural priority markers
 /agentic --understand
@@ -53,7 +59,7 @@ You can use either flag on its own or combine them:
 /agentic --validate
 ```
 
-Pass both flags straight through to `libexec/raptor-agentic`. The Python layer owns all orchestration and selection logic; you don't need to filter findings or invoke other skills yourself.
+Pass the flags straight through to `libexec/raptor-agentic`. The Python layer owns all orchestration and selection logic; you don't need to filter findings or invoke other skills yourself. `--gap-audit` enables the `/understand` pre-pass automatically when no context map (even a stale one) is discoverable for the target.
 
 ## How analysis works
 
@@ -163,5 +169,34 @@ and add a 1-2 sentence summary paragraph after the `# RAPTOR Agentic Security Re
 header — e.g., "Scanned 26 findings across 10 C files. 8 are exploitable buffer overflows
 and command injections; 2 were ruled out as false positives." Use only facts from the
 report data. The report should stand on its own without this paragraph.
+
+## Post-run fork (interactive sessions only)
+
+When the completed run has findings with `is_exploitable: true` and the run did not
+already include `--validate`, offer the next step as a structured choice (see
+CLAUDE.md § INTERACTIVE PROMPTS). Run `libexec/raptor-may-ask` first; only if it
+prints `interactive` AND the AskUserQuestion tool is available, ask — "N exploitable
+findings. What next?" — options:
+
+1. **Validate the set (Recommended)** — run the exploitability-validation pipeline on
+   this run's findings: `/validate <target> --findings <output_dir>/autonomous_analysis_report.json`.
+   Cost note in the description: state this run's actual analysis spend (sum the
+   per-finding `cost_usd` values from the report) and that validation adds a further
+   multi-stage LLM pass (Stages A–F) per finding. (`--validate` on the original
+   command line runs this automatically on future runs.)
+2. **Exploit top finding** — work the highest-confidence exploitable finding toward a
+   working exploit: start from the generated PoC under `<output_dir>/autonomous/exploits/`
+   when the run produced one (it does unless `--no-exploits`), load
+   `tiers/exploit-guidance.md`, and check `exploitation_paths` constraints first.
+   Name the finding (id, file:line) in the description.
+3. **Generate report and stop** — present the `agentic-report.md` summary and finish.
+4. **Review first** — open the findings in the operator review CLI:
+   `libexec/raptor-review findings`.
+
+Fill descriptions with THIS run's facts: finding counts, top finding id/file, the
+actual `cost_usd` totals.
+
+**Non-interactive fallback:** current behavior — add the summary paragraph, present
+the report, stop (option 3).
 
 ---

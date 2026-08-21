@@ -1930,3 +1930,136 @@ class TestWeakestPrecondition:
         # Both kept because every check returned unknown
         assert len(conj) == 2
         assert complete is True
+
+
+# ---------------------------------------------------------------------------
+# Call-summary axioms
+# ---------------------------------------------------------------------------
+
+@_requires_z3
+class TestCallSummaries:
+    """Recognised libc/POSIX calls get summary axioms on their
+    placeholder; unknown calls and vacuous profiles keep the free
+    variable untouched."""
+
+    def test_strlen_negative_refuted_at_signed_profile(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is False
+        assert r.summary_axioms == ["summary: strlen(s)"]
+
+    def test_strlen_axiom_skipped_at_unsigned_profile(self):
+        # result >= 0 is vacuous over unsigned bitvectors — asserting
+        # it would be junk, and the path must stay feasible.
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) < 1024", step_index=0)],
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_sizeof_zero_refuted_and_core_names_axiom(self):
+        r = check_path_feasibility(
+            [PathCondition("sizeof(x) == 0", step_index=0)],
+        )
+        assert r.feasible is False
+        assert "summary: sizeof(x)" in r.unsatisfied
+
+    def test_sizeof_axiom_applies_at_signed_profile_too(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("sizeof(x) == 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is False
+
+    def test_abs_models_int_min_corner(self):
+        # abs(INT_MIN) == INT_MIN in two's-complement practice, so a
+        # path requiring abs(v) to be INT_MIN must stay feasible...
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("abs(v) == 0x80000000", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        # ...while any other negative value is refuted.
+        r2 = check_path_feasibility(
+            [PathCondition("abs(v) == 0xFFFFFFFF", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r2.feasible is False
+
+    def test_min_ite_definition(self):
+        r = check_path_feasibility(
+            [PathCondition("min(a, b) > a", step_index=0)],
+        )
+        assert r.feasible is False
+        r2 = check_path_feasibility(
+            [PathCondition("max(a, b) >= a", step_index=0)],
+        )
+        assert r2.feasible is True
+
+    def test_min_with_unparseable_arg_stays_free(self):
+        # Nested call inside the args — no axiom, free variable as
+        # before, so even min(...) > a is satisfiable.
+        r = check_path_feasibility(
+            [PathCondition("min(strlen(x), b) > b", step_index=0)],
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_unknown_call_unchanged(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("mystery(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_case_sensitive_match(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("STRLEN(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_axiom_recorded_once_per_deduped_call(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [
+                PathCondition("strlen(s) > 10", step_index=0),
+                PathCondition("strlen(s) < 100", step_index=1),
+            ],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == ["summary: strlen(s)"]
+
+    def test_wp_drops_axiom_implied_conjuncts(self):
+        # Both conditions are implied by the min() ITE axiom, so the
+        # weakest precondition over the path conjuncts is empty
+        # ("true") — the axiom carries the constraint, and the result
+        # names it in summary_axioms.
+        r = check_path_feasibility(
+            [
+                PathCondition("min(a, b) <= a", step_index=0),
+                PathCondition("min(a, b) <= b", step_index=1),
+            ],
+        )
+        assert r.feasible is True
+        assert r.wp_conjuncts == []
+        assert r.wp_predicate == "true"
+        assert r.summary_axioms == ["summary: min(a, b)"]
+
+    def test_summary_reported_in_reasoning(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) > 10", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert "1 call summary applied" in r.reasoning

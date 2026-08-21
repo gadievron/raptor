@@ -1595,9 +1595,26 @@ def _import_unchecked_flow_conditions(
             existing_paths = loaded
     existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
 
+    # Legacy compat: earlier bridge versions derived IDs from the
+    # flow's INDEX (map-flow-000, ...). Index IDs collide across
+    # refreshed context-maps — a different flow landing at index 0
+    # was skipped as "already imported". New IDs hash the flow's
+    # content (entry_point + sink) instead, so a re-imported flow
+    # dedups against itself and a new flow never collides. Legacy
+    # entries stay on disk untouched; to avoid re-importing a flow
+    # that already exists under a legacy index ID, its name string
+    # (which embeds entry_point → sink) doubles as the dedup key.
+    import hashlib
+    import re as _re
+    legacy_names = {
+        p.get("name") for p in existing_paths
+        if isinstance(p, dict)
+        and _re.fullmatch(r"map-flow-\d+", str(p.get("id", "")))
+    }
+
     imported = 0
     skipped = 0
-    for i, flow in enumerate(flows):
+    for flow in flows:
         if not isinstance(flow, dict):
             continue
         sink_id = flow.get("sink")
@@ -1611,12 +1628,19 @@ def _import_unchecked_flow_conditions(
         if pc is None:
             skipped += 1
             continue
-        path_id = f"map-flow-{i:03d}"
-        if path_id in existing_ids:
+        entry_name = (
+            f"Imported from /understand --map: "
+            f"{flow.get('entry_point')} → {sink_id}"
+        )
+        digest = hashlib.sha256(
+            f"{flow.get('entry_point')!r}|{sink_id}".encode("utf-8"),
+        ).hexdigest()[:12]
+        path_id = f"map-flow-{digest}"
+        if path_id in existing_ids or entry_name in legacy_names:
             continue
         entry: dict[str, Any] = {
             "id": path_id,
-            "name": f"Imported from /understand --map: {flow.get('entry_point')} → {sink_id}",
+            "name": entry_name,
             "finding": "",
             "steps": [],
             "proximity": 0,

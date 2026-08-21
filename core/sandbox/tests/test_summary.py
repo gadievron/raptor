@@ -238,6 +238,69 @@ class TestSummarizeAndWrite:
         assert result is None
         assert not jsonl.exists()
 
+    def test_allow_verdict_records_not_counted_as_denials(self, tmp_path):
+        """macOS audit mode logs ALLOWED operations with
+        verdict "allow" ((allow X (with report))); they succeeded and
+        must not inflate total_denials. They surface in a separate
+        informational section instead."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "write", "cmd": "c1",
+                        "returncode": 0, "verdict": "allow",
+                        "path": "/tmp/x"}) + "\n"
+            + json.dumps({"ts": "b", "type": "write", "cmd": "c2",
+                          "returncode": 0, "verdict": "allow",
+                          "path": "/tmp/y"}) + "\n"
+            + json.dumps({"ts": "c", "type": "read", "cmd": "c3",
+                          "returncode": 0, "verdict": "deny",
+                          "path": "/etc/shadow"}) + "\n"
+            # Verdict-less record — the Linux tracer / record_denial
+            # shape; always a denial.
+            + json.dumps({"ts": "d", "type": "network", "cmd": "c4",
+                          "returncode": 1}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["total_denials"] == 2
+        assert result["by_type"] == {"read": 1, "network": 1}
+        denial_paths = [d.get("path") for d in result["denials"]]
+        assert "/tmp/x" not in denial_paths
+        assert result["total_allowed_reports"] == 2
+        assert result["allowed_by_type"] == {"write": 2}
+        allowed_paths = [r["path"] for r in result["allowed_reports"]]
+        assert sorted(allowed_paths) == ["/tmp/x", "/tmp/y"]
+
+    def test_all_allow_records_still_write_summary(self, tmp_path):
+        """A run whose audit trail is entirely allow-with-report
+        records must still produce a summary (total_denials 0) —
+        operators asked for audit output, not a missing file."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "write", "cmd": "c",
+                        "returncode": 0, "verdict": "allow",
+                        "path": "/tmp/x"}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["total_denials"] == 0
+        assert result["total_allowed_reports"] == 1
+        assert (tmp_path / summary_mod.SUMMARY_FILE).exists()
+
+    def test_linux_summary_shape_unchanged_without_allow_records(
+            self, tmp_path):
+        """No allow-verdict records → no allowed-report keys, so
+        Linux-produced summaries keep their exact shape."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "network", "cmd": "c",
+                        "returncode": 1}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert "total_allowed_reports" not in result
+        assert "allowed_by_type" not in result
+        assert "allowed_reports" not in result
+
 
 class TestRecordAuditDegraded:
     """Per-call marker file when audit was requested but b2/b3 couldn't

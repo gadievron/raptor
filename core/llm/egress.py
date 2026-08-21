@@ -112,11 +112,24 @@ _KNOWN_DEFAULTS = {
 # url_is_loopback()/loopback_safe_get() would fetch it DIRECT and the
 # NO_PROXY augmentation exempted it from the chokepoint, so hostile
 # in-process code could read role credentials without ever meeting
-# the allowlist. IMDS is plain HTTP; the chokepoint only rewrites
-# HTTPS_PROXY, so botocore's role-credential fetch is unaffected by
-# its removal.
+# the allowlist. The removal DOES affect botocore's role-credential
+# fetch on proxied hosts: without a NO_PROXY exemption its link-local
+# IMDS probes travel to the operator's HTTP(S)_PROXY and are denied
+# there — that operational plane is served by _NO_PROXY_ONLY below,
+# which never feeds the chokepoint bypass check.
 _LOCAL_BYPASS = (
     "localhost", "127.0.0.1", "::1", "0.0.0.0",
+)
+
+# Operational NO_PROXY additions that are NOT chokepoint bypasses —
+# link-local probes must never travel to an operator proxy (botocore's
+# credential-chain resolution otherwise spams the proxy with denied
+# PUT /latest/api/token + GET /latest/meta-data/... pairs on every
+# resolution), but IMDS stays a DENIED chokepoint target because it
+# is not in _LOCAL_BYPASS: _is_loopback()/url_is_loopback() still
+# refuse it, and the in-process proxy's allowlist never carries it.
+_NO_PROXY_ONLY = (
+    "169.254.169.254",
 )
 
 
@@ -336,11 +349,31 @@ def _max_model_timeout(config: LLMConfig) -> float:
 
 def _augment_no_proxy(existing: str) -> str:
     """Return a NO_PROXY value that includes ``localhost`` and
-    ``127.0.0.1`` UNION-ed with whatever the operator already set.
+    ``127.0.0.1`` (plus the operational-only :data:`_NO_PROXY_ONLY`
+    entries) UNION-ed with whatever the operator already set.
     Order-preserving (operator entries first); de-duplicated."""
+    return _union_no_proxy(existing, _LOCAL_BYPASS + _NO_PROXY_ONLY)
+
+
+def augment_child_no_proxy(value: str) -> str:
+    """Append the operational-only NO_PROXY entries (IMDS) to a child
+    process's NO_PROXY value.
+
+    For consumers that hand a child the OPERATOR's proxy env (e.g.
+    ``cc_subprocess_env`` restoring ``operator_proxy_env()``): children
+    that legitimately resolve their own credential chain would
+    otherwise send their link-local IMDS probes through the operator
+    proxy and be denied. Adds ONLY :data:`_NO_PROXY_ONLY` — loopback
+    entries are the caller's decision — and never widens the
+    chokepoint bypass (:func:`url_is_loopback` is unaffected).
+    Order-preserving (existing entries first); de-duplicated."""
+    return _union_no_proxy(value, _NO_PROXY_ONLY)
+
+
+def _union_no_proxy(existing: str, additions: tuple[str, ...]) -> str:
     parts = [p.strip() for p in (existing or "").split(",") if p.strip()]
     seen = {p.lower() for p in parts}
-    for entry in _LOCAL_BYPASS:
+    for entry in additions:
         if entry.lower() not in seen:
             parts.append(entry)
             seen.add(entry.lower())
@@ -471,6 +504,7 @@ def _reset_for_tests() -> None:
 
 
 __all__ = [
+    "augment_child_no_proxy",
     "derive_allowlist",
     "enable_llm_egress",
     "loopback_safe_get",

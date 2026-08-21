@@ -714,25 +714,46 @@ class TestSeccompBlocklist(unittest.TestCase):
         if not check_seccomp_available():
             self.skipTest("libseccomp not available on this system")
 
-    def _run_probe(self, profile: str, code: str) -> subprocess.CompletedProcess:
+    def _run_probe(self, profile: str, code: str,
+                   force_preexec_tier: bool = False,
+                   ) -> subprocess.CompletedProcess:
+        run_kwargs = dict(
+            profile=profile,
+            capture_output=True, text=True, timeout=15,
+        )
         with TemporaryDirectory() as d:
-            return sandbox_run(
-                ["python3", "-c", code],
-                profile=profile, target=d, output=d,
-                capture_output=True, text=True, timeout=15,
-            )
+            if not force_preexec_tier:
+                return sandbox_run(["python3", "-c", code],
+                                   target=d, output=d, **run_kwargs)
+            # Force the no-mount-ns tier the way the observe-latency
+            # test does: the AF_UNIX block is tier-dependent (see
+            # _spawn's _allow_unix rationale — with mount-ns + netns
+            # engaged AF_UNIX is deliberately ALLOWED for Python
+            # 3.14's forkserver listener), so the blocked-assertions
+            # only hold on the preexec path and must pin THAT path on
+            # every host, not whichever tier the host happens to give.
+            from unittest.mock import patch
+            with patch("core.sandbox._spawn.mount_ns_available",
+                       return_value=False), \
+                 patch("core.sandbox.context.check_mount_available",
+                       return_value=False):
+                return sandbox_run(["python3", "-c", code],
+                                   target=d, output=d, **run_kwargs)
 
     def test_af_unix_blocked_in_full(self):
-        """AF_UNIX socket creation is blocked — closes docker.sock escape."""
+        """AF_UNIX socket creation is blocked on the preexec tier —
+        closes the docker.sock escape where no mount-ns masks /run."""
         r = self._run_probe("full",
-            "import socket; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)")
+            "import socket; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+            force_preexec_tier=True)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("Operation not permitted", r.stderr)
 
     def test_af_unix_blocked_in_debug(self):
         """debug profile still blocks AF_UNIX — only ptrace is exempted."""
         r = self._run_probe("debug",
-            "import socket; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)")
+            "import socket; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+            force_preexec_tier=True)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("Operation not permitted", r.stderr)
 
@@ -775,11 +796,11 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
     escapes the blocklist exists for (AF_UNIX → docker.sock, TIOCSTI
     injection). The rules now use MASKED_EQ on the low 32 bits.
 
-    These tests fork a child, apply the real filter via the production
-    preexec, and issue raw syscalls through libc's syscall(2) so the
-    high bits survive all the way to the kernel (Python's socket
-    module would reject the oversized constant long before the
-    syscall).
+    These tests spawn a fresh child interpreter, apply the real filter
+    via the production preexec, and issue raw syscalls through libc's
+    syscall(2) so the high bits survive all the way to the kernel
+    (Python's socket module would reject the oversized constant long
+    before the syscall).
     """
 
     _SYS_SOCKET = 41   # x86_64
@@ -800,38 +821,48 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
         if struct.calcsize("P") != 8 or os.uname().machine != "x86_64":
             self.skipTest("raw syscall numbers are x86_64-specific")
 
-    def _run_in_filtered_child(self, fn) -> int:
-        """Fork; apply the 'full' profile filter; run fn(); exit with
-        its return value. Returns the child's exit status code."""
-        from core.sandbox import seccomp as seccomp_mod
-        preexec = seccomp_mod._make_seccomp_preexec("full")
-        pid = os.fork()
-        if pid == 0:
-            try:
-                preexec()
-                os._exit(fn() & 0xFF)
-            except BaseException:
-                os._exit(120)
-        _, status = os.waitpid(pid, 0)
-        return os.waitstatus_to_exitcode(status)
+    def _errno_under_filter(self, num, *args) -> int:
+        """Apply the 'full' profile filter in a FRESH single-threaded
+        interpreter, issue the raw syscall there, and return its errno
+        (0 when the syscall succeeded).
 
-    @staticmethod
-    def _errno_of_syscall(num, *args) -> int:
-        import ctypes
-        import ctypes.util
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        res = libc.syscall(
-            ctypes.c_long(num),
-            *[ctypes.c_ulong(a) for a in args],
+        Previously this forked and applied the preexec in the fork
+        child, but by full-suite time the test process carries daemon
+        threads (the egress-proxy singleton's, started by any earlier
+        sandbox test), so a bare fork draws Python's multi-threaded-
+        fork DeprecationWarning on every run. A subprocess preserves
+        the semantics — the filter still guards the exact raw syscall
+        under test — and loading libc/resolving everything BEFORE the
+        filter goes on keeps the child's post-filter footprint to the
+        syscall plus ``os._exit``, as in the fork version.
+        """
+        code = (
+            "import ctypes, ctypes.util, os, sys\n"
+            # Resolve libc and the preexec BEFORE the filter goes on.
+            "libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)\n"
+            "libc.syscall.restype = ctypes.c_long\n"
+            "from core.sandbox import seccomp as seccomp_mod\n"
+            "preexec = seccomp_mod._make_seccomp_preexec('full')\n"
+            "num, *args = (int(a) for a in sys.argv[1:])\n"
+            "preexec()\n"
+            "res = libc.syscall(ctypes.c_long(num),\n"
+            "                   *[ctypes.c_ulong(a) for a in args])\n"
+            "os._exit((ctypes.get_errno() if res == -1 else 0) & 0xFF)\n"
         )
-        return ctypes.get_errno() if res == -1 else 0
+        env = dict(os.environ)
+        repo_root = str(Path(__file__).resolve().parents[3])
+        env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(num)] + [str(a) for a in args],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        assert not proc.stderr, f"filtered child failed: {proc.stderr}"
+        return proc.returncode
 
     def test_plain_af_unix_still_blocked(self):
         import errno
-        code = self._run_in_filtered_child(
-            lambda: self._errno_of_syscall(
-                self._SYS_SOCKET, self._AF_UNIX, self._SOCK_STREAM, 0,
-            ),
+        code = self._errno_under_filter(
+            self._SYS_SOCKET, self._AF_UNIX, self._SOCK_STREAM, 0,
         )
         self.assertEqual(code, errno.EPERM)
 
@@ -839,11 +870,9 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
         """The bypass: family AF_UNIX | 1<<32 truncates to AF_UNIX in
         the kernel; the old EQ rule missed it."""
         import errno
-        code = self._run_in_filtered_child(
-            lambda: self._errno_of_syscall(
-                self._SYS_SOCKET, self._AF_UNIX | self._HIGH_BIT,
-                self._SOCK_STREAM, 0,
-            ),
+        code = self._errno_under_filter(
+            self._SYS_SOCKET, self._AF_UNIX | self._HIGH_BIT,
+            self._SOCK_STREAM, 0,
         )
         self.assertEqual(code, errno.EPERM)
 
@@ -854,10 +883,8 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
 
         from core.sandbox import seccomp as seccomp_mod
         tiocsti = seccomp_mod._TIOCSTI
-        code = self._run_in_filtered_child(
-            lambda: self._errno_of_syscall(
-                self._SYS_IOCTL, 0, tiocsti | self._HIGH_BIT, 0,
-            ),
+        code = self._errno_under_filter(
+            self._SYS_IOCTL, 0, tiocsti | self._HIGH_BIT, 0,
         )
         self.assertEqual(code, errno.EPERM)
 
@@ -867,10 +894,8 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
         import errno
 
         from core.sandbox import seccomp as seccomp_mod
-        code = self._run_in_filtered_child(
-            lambda: self._errno_of_syscall(
-                self._SYS_IOCTL, 0, seccomp_mod._TIOCLINUX, 0,
-            ),
+        code = self._errno_under_filter(
+            self._SYS_IOCTL, 0, seccomp_mod._TIOCLINUX, 0,
         )
         self.assertEqual(code, errno.EPERM)
 
@@ -879,9 +904,8 @@ class TestSeccompTruncationBypassClosed(unittest.TestCase):
         from the filter — blocklist stays narrow."""
         import errno
         tiocgwinsz = 0x5413
-        code = self._run_in_filtered_child(
-            lambda: self._errno_of_syscall(
-                self._SYS_IOCTL, 0, tiocgwinsz, 0),
+        code = self._errno_under_filter(
+            self._SYS_IOCTL, 0, tiocgwinsz, 0,
         )
         self.assertNotEqual(code, errno.EPERM)
 

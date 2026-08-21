@@ -41,7 +41,13 @@ Safety hooks baked in:
 - Host validation: resolve the CONNECT target once per tunnel, reject
   if the resolved IP is loopback, private (RFC 1918), link-local, or
   multicast. Stops a compromised child from using the proxy to reach
-  internal services on the host's LAN.
+  internal services on the host's LAN. Applies on BOTH connect paths:
+  the direct path vets the addresses we dial; the upstream-proxy path
+  vets a literal-IP target outright and pre-vets hostname targets with
+  a local resolve before forwarding the CONNECT (residual: the
+  upstream proxy resolves independently, so a resolver that answers
+  differently for the upstream can still steer the tunnel — see
+  _vet_upstream_target).
 - DNS pinning: one resolve per tunnel, then connect to that exact IP.
   No mid-tunnel re-resolution — removes the DNS-rebinding window.
 - Idle timeout: 300s. Total tunnel duration cap: 3600s. Either bound
@@ -89,7 +95,9 @@ from typing import Optional
 # import has_nonprintable` inline on the hot path. Cached after the
 # first call but still a dict lookup + module attribute access per
 # request.
-from core.security.log_sanitisation import has_nonprintable
+from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
+
+from . import audit_budget, escalation_signatures
 
 # Process-unique lane ids. Labels are NOT unique (two concurrent
 # contexts may share caller_label="sandbox"), so event->buffer
@@ -123,8 +131,17 @@ class _Lane:
     allowed_hosts: "frozenset[str] | None" = None
     lane_id: int = field(default_factory=lambda: next(_LANE_IDS))
 
-
 logger = logging.getLogger(__name__)
+
+
+def _stderr_write(message: str) -> None:
+    """Best-effort immediate stderr write for live escalation banners
+    — raw os.write(2, ...) so it survives redirected/odd stdio state.
+    Mirrors core.sandbox.tracer._announce_escape_primitive."""
+    try:
+        os.write(2, message.encode("ascii", errors="replace"))
+    except OSError:
+        pass
 
 # Connection bounds — per-tunnel and aggregate. Tunable via EgressProxy
 # constructor kwargs but the defaults are deliberately conservative.
@@ -241,9 +258,109 @@ _PROXY_EVENT_RESULTS = frozenset({
     "handler_error",
 })
 
+# Live-escalation: default distinct-denied-host threshold before the
+# proxy prints an immediate stderr recon-pattern banner. Shared with
+# triage.py's post-hoc `host_recon_pattern` signal via the leaf
+# core.sandbox.escalation_signatures module (triage.py depends on this
+# module already; importing triage back would be circular), so the
+# live notice and the post-hoc signal agree on what counts as recon
+# by construction. Re-exported here because context.py and triage.py
+# already consume it under this name.
+#
+# Recon state is LANE-SCOPED (see _live_recon in __init__), mirroring
+# _record()'s lane-scoped buffer fan-out: a distinct-host counter per
+# registered sandbox context, torn down when its last registration
+# unregisters. A process-global counter would conflate
+# concurrently-registered sandboxes AND accumulate distinct denied
+# hosts across sequential runs for the life of the proxy singleton —
+# five unrelated one-host runs would eventually trip a "recon"
+# banner no single run earned.
+DEFAULT_HOST_RECON_THRESHOLD = (
+    escalation_signatures.DEFAULT_HOST_RECON_THRESHOLD)
+
+# Distinct resolved IPs that get their own live denied_resolved_ip
+# banner before further alerts collapse into a single "suppressed"
+# notice. Bounds both operator-terminal spam and the dedup set's
+# memory: a hostile target driving DNS rebinding can mint an unbounded
+# stream of distinct resolved IPs, and each is attacker-paced. The
+# full, uncapped record remains in proxy-events.jsonl and the run-end
+# sandbox-triage.json.
+_LIVE_RESOLVED_IP_BANNER_CAP = 8
+
 # Thread-safe singleton. `get_proxy()` is the sole entry point.
 _lock = threading.Lock()
 _instance: Optional["EgressProxy"] = None
+
+# One-shot guard for the SIGTERM cleanup hook (see
+# _install_sigterm_cleanup). Module-level so a stop/restart of the
+# singleton doesn't stack handlers.
+_sigterm_hook_installed = False
+
+
+def _install_sigterm_cleanup() -> None:
+    """Best-effort SIGTERM hook so the proxy tears down on TERM.
+
+    ``atexit`` only runs on normal interpreter exit — a SIGTERM'd
+    RAPTOR (operator Ctrl-backslash-less kill, CI timeout, systemd
+    stop) died without closing listeners or unlinking the unix-lane
+    ``.sock`` files, stranding them in output dirs / $TMPDIR. The hook
+    runs ``stop(drain_timeout=0)`` (which unbinds + unlinks every unix
+    lane) and then re-delivers the signal so the process still dies
+    with the default TERM disposition, or chains to a pre-existing
+    handler when one was installed before us.
+
+    Constraints, all deliberate:
+
+    - main-thread only: ``signal.signal`` raises ValueError elsewhere;
+      when ``get_proxy`` first runs off the main thread the hook is
+      simply skipped (atexit still covers normal exit).
+    - never clobbers SIG_IGN: an operator who ignored TERM keeps that.
+    - installed once per process; a callable prior handler is chained
+      after our cleanup rather than replaced.
+    - SIGKILL residual: nothing can run on KILL — stale lane sockets
+      are then bounded by the per-run output dir / $TMPDIR hygiene,
+      and the random per-context socket names mean a later run never
+      collides with a stale file.
+    """
+    global _sigterm_hook_installed
+    if _sigterm_hook_installed:
+        return
+    import signal as _signal
+    if threading.current_thread() is not threading.main_thread():
+        logger.debug(
+            "egress proxy: get_proxy() first called off the main "
+            "thread — SIGTERM cleanup hook not installed (atexit "
+            "still covers normal exit)"
+        )
+        return
+    try:
+        prev = _signal.getsignal(_signal.SIGTERM)
+    except (ValueError, OSError):
+        return
+    if prev is _signal.SIG_IGN:
+        return
+
+    def _on_sigterm(signum, frame):
+        inst = _instance
+        if inst is not None:
+            with contextlib.suppress(Exception):
+                inst.stop(drain_timeout=0)
+        if callable(prev) and prev not in (_signal.SIG_DFL,
+                                           _signal.SIG_IGN):
+            prev(signum, frame)
+        else:
+            # Restore the default disposition and re-deliver so the
+            # process exits with the conventional killed-by-TERM
+            # status instead of swallowing the signal.
+            with contextlib.suppress(ValueError, OSError):
+                _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+            os.kill(os.getpid(), _signal.SIGTERM)
+
+    try:
+        _signal.signal(_signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError):
+        return
+    _sigterm_hook_installed = True
 
 
 def _record_proxy_denial(host: str, port: int, resolved_ip: str | None,
@@ -319,6 +436,76 @@ def _normalise_lane_hosts(hosts) -> "frozenset[str] | None":
     if not hosts:
         return None
     return frozenset(h.lower() for h in hosts if h)
+
+
+def _hex_v4(ip: str) -> str:
+    """/proc/net/tcp spelling of an IPv4 address (little-endian hex)."""
+    return socket.inet_aton(ip)[::-1].hex().upper()
+
+
+def _hex_v6(ip: str) -> str:
+    """/proc/net/tcp6 spelling of an IPv6 address — four 32-bit words,
+    each printed as the little-endian hex of its raw bytes."""
+    raw = socket.inet_pton(socket.AF_INET6, ip)
+    return b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4)).hex().upper()
+
+
+def _loopback_peer_uid(peer, sockname) -> "int | None":
+    """Best-effort UID of a connected loopback TCP peer.
+
+    TCP sockets have no SO_PEERCRED, so the equivalent is the kernel's
+    per-socket table: find the peer's socket row in /proc/net/tcp{,6}
+    (its local_address == the peer's addr:port, its rem_address == our
+    listener-side addr:port) and read the uid column.
+
+    Only ESTABLISHED rows (st == 01) are matched: TIME_WAIT rows
+    report uid 0 regardless of who created the socket, and a peer we
+    are still serving holds an established socket by definition.
+
+    Returns None when the UID cannot be determined — non-Linux hosts
+    (no /proc/net), malformed peername tuples, or a row that vanished
+    because the peer closed mid-lookup. Callers treat None as
+    "unknown, allow": this is a defense-in-depth gate layered on the
+    loopback-only bind + hostname allowlist, and failing closed on a
+    lookup miss would break macOS and add a kernel-race denial mode.
+    Residual: a same-UID process can still hand its connected fd to
+    another principal (SCM_RIGHTS); no /proc view defends that.
+
+    Cost: one bounded /proc read per inbound loopback TCP connection
+    (unix-socket lanes never reach this). The scan stops at the first
+    matching established row.
+    """
+    try:
+        peer_ip, peer_port = peer[0], peer[1]
+        local_ip, local_port = sockname[0], sockname[1]
+    except (TypeError, IndexError):
+        return None
+    try:
+        if ":" in peer_ip:
+            table = "/proc/net/tcp6"
+            local_hex = f"{_hex_v6(peer_ip)}:{peer_port:04X}"
+            rem_hex = f"{_hex_v6(local_ip)}:{local_port:04X}"
+        else:
+            table = "/proc/net/tcp"
+            local_hex = f"{_hex_v4(peer_ip)}:{peer_port:04X}"
+            rem_hex = f"{_hex_v4(local_ip)}:{local_port:04X}"
+    except OSError:
+        return None
+    try:
+        with open(table, encoding="ascii") as f:
+            next(f, None)  # column header
+            for line in f:
+                cols = line.split()
+                if len(cols) < 8 or cols[3] != "01":
+                    continue
+                if cols[1] == local_hex and cols[2] == rem_hex:
+                    try:
+                        return int(cols[7])
+                    except ValueError:
+                        return None
+    except OSError:
+        return None
+    return None
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -556,10 +743,12 @@ class EgressProxy:
         # connect path — operator workflows that hit gate 1 keep working
         # but the policy violation is logged. Gate 2 (resolved-IP block)
         # is the proxy's DNS-rebinding/DNS-poisoning defense and stays
-        # ENFORCING regardless: it has no legitimate-workflow false
-        # positives (an allowlisted hostname resolving to a private/
-        # loopback IP is purely an attack signal). In audit mode gate 2
-        # additionally records the deny into the summary.
+        # ENFORCING regardless — on the direct path AND on the
+        # upstream-proxy path (see _vet_upstream_target): it has no
+        # legitimate-workflow false positives (an allowlisted hostname
+        # resolving to a private/loopback IP is purely an attack
+        # signal). In audit mode gate 2 additionally records the deny
+        # into the summary.
         #
         # Scope: this global flag now governs ONLY connections with
         # no lane — i.e. the shared main TCP listener that in-process
@@ -583,7 +772,8 @@ class EgressProxy:
         # the unset variable) leaves audit-mode in its default log-only
         # behaviour. The env-var parse lives at the `get_proxy()` read
         # below; this kwarg accepts the already-parsed bool.
-        # Gate 2 is always enforcing regardless of this flag.
+        # Gate 2 is always enforcing regardless of this flag — on the
+        # direct path and on the upstream-proxy path alike.
         self._audit_enforce = audit_enforce
         # Ref-count for concurrent acquire/release. Each audit-mode
         # sandbox via use_egress_proxy=True acquires on entry, releases
@@ -669,6 +859,26 @@ class EgressProxy:
         self._sandbox_lane_subs: dict = {}
         self._next_token = 0
         self._buffer_lock = threading.Lock()
+        # Live host-recon escalation state, LANE-SCOPED like the event
+        # buffers: bucket key is a lane_id (int) or None for run-global
+        # registrations, value is {"hosts": set, "escalated": bool,
+        # "threshold": int, "refs": int}. Created by register_sandbox
+        # (refs counts registrations sharing the bucket), torn down
+        # when the last registration on the bucket unregisters — so
+        # distinct-host counts are per sandbox context, never
+        # accumulated across sequential runs or conflated across
+        # concurrent ones. `escalated` makes the recon banner one-shot
+        # per bucket. `threshold` starts at the default and can only
+        # be tightened (never loosened) within a bucket — same
+        # "callers can tighten, never accidentally weaken a sibling's
+        # setting" pattern as update_idle_timeout's max-semantics
+        # above, scoped to the bucket.
+        self._live_recon: dict = {}
+        # Fallback resolved-IP state for events recorded outside any active
+        # sandbox registration. Registered runs keep their own state in the
+        # lane bucket below so one run hitting the cap cannot silence another.
+        self._live_resolved_ip_escalated: set[str] = set()
+        self._live_resolved_ip_cap_announced = False
         # Atomic snapshot of the buffer-list refs for the hot path.
         # `_record` is called once per CONNECT and used to acquire
         # `_buffer_lock` to iterate `_sandbox_buffers.values()`. Under
@@ -1018,7 +1228,8 @@ class EgressProxy:
             return host.lower() in self._allowed_hosts
 
     def register_sandbox(self, caller_label: str | None = None,
-                         lane_key: "str | int | None" = None) -> int:
+                         lane_key: "str | int | None" = None,
+                         host_recon_threshold: int | None = None) -> int:
         """Register an active sandbox and receive a token.
 
         While registered, tunnel events the proxy records are fanned
@@ -1043,6 +1254,19 @@ class EgressProxy:
         run-global subscription (over-capture, never under-capture) —
         the caller keeps a complete event view rather than a silently
         empty one.
+
+        `host_recon_threshold` (optional): a per-profile override for
+        the live host-recon escalation threshold (see
+        DEFAULT_HOST_RECON_THRESHOLD). Scoped to this registration's
+        recon bucket (the resolved lane, or the run-global bucket for
+        lane-less registrations) and min-combined within it: a
+        registration passing a looser threshold never weakens an
+        already-tighter sibling ON THE SAME bucket — mirrors
+        update_idle_timeout's max-semantics, inverted because tighter
+        is the more-sensitive direction here. Different lanes keep
+        fully independent thresholds, so a debug-profile sandbox never
+        loosens (or tightens) a concurrent full-profile run's recon
+        sensitivity.
 
         Must be paired with `unregister_sandbox(token)` — typically via
         try/finally around the sandboxed subprocess invocation. The
@@ -1072,6 +1296,18 @@ class EgressProxy:
                 (buf, self._sandbox_lane_subs[tok])
                 for tok, buf in self._sandbox_buffers.items()
             )
+            state = self._live_recon.get(lane_sub)
+            if state is None:
+                state = {"hosts": set(), "escalated": False,
+                         "threshold": DEFAULT_HOST_RECON_THRESHOLD,
+                         "resolved_ips": set(),
+                         "resolved_ip_cap_announced": False,
+                         "refs": 0}
+                self._live_recon[lane_sub] = state
+            state["refs"] += 1
+            if host_recon_threshold is not None:
+                state["threshold"] = min(state["threshold"],
+                                         host_recon_threshold)
             return token
 
     def unregister_sandbox(self, token: int) -> list[dict]:
@@ -1091,6 +1327,19 @@ class EgressProxy:
         finally blocks can always call this without a try/except.
         """
         with self._buffer_lock:
+            if token in self._sandbox_buffers:
+                # Tear down this registration's recon bucket when the
+                # last registration sharing it leaves — per-context
+                # distinct-host counts must not survive into the next
+                # run on the same proxy singleton. Guarded by buffer
+                # membership so the idempotent-unknown-token path
+                # never decrements a live bucket.
+                lane_sub = self._sandbox_lane_subs.get(token)
+                state = self._live_recon.get(lane_sub)
+                if state is not None:
+                    state["refs"] -= 1
+                    if state["refs"] <= 0:
+                        del self._live_recon[lane_sub]
             events = self._sandbox_buffers.pop(token, [])
             label = self._sandbox_labels.pop(token, None)
             self._sandbox_lane_subs.pop(token, None)
@@ -1174,6 +1423,131 @@ class EgressProxy:
         for buf, sub in self._sandbox_buffers_snapshot:
             if sub is None or (lane_id is not None and sub == lane_id):
                 buf.append(event)
+        self._live_escalate(event)
+
+    def _live_bucket_states(self, event: dict) -> list[dict]:
+        """Return the active lane/global live-escalation buckets for event."""
+        lane_id = event.get("lane_id")
+        buckets = []
+        if lane_id is not None:
+            lane_state = self._live_recon.get(lane_id)
+            if lane_state is not None:
+                buckets.append(lane_state)
+        global_state = self._live_recon.get(None)
+        if global_state is not None and all(
+                global_state is not state for state in buckets):
+            buckets.append(global_state)
+        return buckets
+
+    def _live_escalate(self, event: dict) -> None:
+        """Immediate stderr escalation for HIGH-severity proxy signals,
+        ahead of the run-end sandbox-triage.json classification —
+        mirrors core.sandbox.tracer._announce_escape_primitive /
+        seatbelt_audit._announce_credential_path_touch. Print-only, no
+        change to the CONNECT decision already made by gates 1/2 above.
+
+        Called from `_record()` on the proxy's single event-loop
+        thread — no lock taken for the dedup-state mutations below,
+        same reasoning as `_record`'s own lock-free hot path. The
+        recon buckets ARE created/torn down by register/unregister on
+        other threads (under `_buffer_lock`), but this path only
+        `.get()`s a bucket ref and mutates its contents — GIL-atomic
+        dict/set ops; the worst-case race is one host counted into a
+        bucket mid-teardown, which is discarded with the bucket.
+        """
+        if audit_budget.live_escalation_disabled():
+            return
+        result = event.get("result")
+
+        if result == "denied_resolved_ip":
+            resolved_ip = event.get("resolved_ip")
+            if not resolved_ip:
+                return
+            buckets = self._live_bucket_states(event)
+            emit_banner = False
+            emit_suppression = False
+            if buckets:
+                for state in buckets:
+                    escalated = state["resolved_ips"]
+                    if resolved_ip in escalated:
+                        continue
+                    if len(escalated) >= _LIVE_RESOLVED_IP_BANNER_CAP:
+                        if not state["resolved_ip_cap_announced"]:
+                            state["resolved_ip_cap_announced"] = True
+                            emit_suppression = True
+                        continue
+                    escalated.add(resolved_ip)
+                    emit_banner = True
+            else:
+                # Events outside a register/unregister window keep the
+                # pre-lane fallback behaviour for diagnostics/tests.
+                if resolved_ip in self._live_resolved_ip_escalated:
+                    return
+                if (len(self._live_resolved_ip_escalated)
+                        >= _LIVE_RESOLVED_IP_BANNER_CAP):
+                    if not self._live_resolved_ip_cap_announced:
+                        self._live_resolved_ip_cap_announced = True
+                        emit_suppression = True
+                else:
+                    self._live_resolved_ip_escalated.add(resolved_ip)
+                    emit_banner = True
+            if not emit_banner and not emit_suppression:
+                return
+            if emit_banner:
+                # The hostname is attacker-controlled (the sandboxed
+                # target picked it); sanitise + bound before it reaches
+                # the operator's terminal. resolved_ip comes from our own
+                # resolver — safe to embed as-is.
+                _host = sanitise_for_terminal(str(event.get("host")))
+                _stderr_write(
+                    f"RAPTOR sandbox ALERT: proxy CONNECT resolved to a "
+                    f"blocked IP range: {resolved_ip} (host="
+                    f"'{_host}'). Consistent with an "
+                    f"SSRF/DNS-rebinding/cloud-metadata probing attempt, "
+                    f"not ordinary allowlist noise. See sandbox-"
+                    f"triage.json at run end for full context.\n"
+                )
+            if emit_suppression:
+                # Bound the dedup set AND the terminal spam — a DNS-
+                # rebinding target can mint unlimited distinct IPs.
+                _stderr_write(
+                    f"RAPTOR sandbox ALERT: further blocked-"
+                    f"resolved-IP alerts suppressed after "
+                    f"{_LIVE_RESOLVED_IP_BANNER_CAP} distinct IPs — "
+                    f"full list in proxy-events.jsonl / sandbox-"
+                    f"triage.json at run end.\n"
+                )
+            return
+
+        if result in ("denied_host", "would_deny_host"):
+            host = event.get("host")
+            if not host:
+                return
+            # Mirror the buffer fan-out: the event counts toward its
+            # own lane's recon bucket (if one is registered) AND the
+            # run-global bucket (if a lane-less registration exists) —
+            # over-capture into the global view, never leakage into a
+            # sibling lane's view. No registered bucket → no live
+            # counting, matching the buffer semantics for events that
+            # arrive outside any register/unregister window; triage
+            # still sees them post-hoc via proxy-events.jsonl.
+            buckets = self._live_bucket_states(event)
+            for state in buckets:
+                if state["escalated"]:
+                    continue
+                state["hosts"].add(host)
+                if len(state["hosts"]) >= state["threshold"]:
+                    state["escalated"] = True
+                    _stderr_write(
+                        f"RAPTOR sandbox ALERT: {len(state['hosts'])} "
+                        f"distinct hosts denied by the egress proxy "
+                        f"within one sandbox context "
+                        f"(threshold={state['threshold']}) — "
+                        f"consistent with a host-recon/C2-discovery "
+                        f"pattern, not a single missing allowlist entry. "
+                        f"See sandbox-triage.json at run end for full "
+                        f"context.\n"
+                    )
 
     async def _cached_getaddrinfo(self, host: str, port: int) -> list:
         """Resolve `host:port` with a TTL cache.
@@ -1206,6 +1580,70 @@ class EgressProxy:
         )
         self._dns_cache[key] = (now + _DNS_CACHE_TTL, addrinfo)
         return addrinfo
+
+    async def _vet_upstream_target(self, host: str, port: int) -> str | None:
+        """Gate 2 (blocked-IP defense) for the upstream-proxy path.
+
+        Returns the offending address when the CONNECT must be denied,
+        or None when it may be forwarded to the upstream. Pre-fix the
+        upstream branch forwarded every allowlist-passing CONNECT with
+        NO IP vetting at all — a child on a corporate-proxy host could
+        CONNECT to ``10.0.0.5:443`` or ``169.254.169.254:443`` and the
+        upstream (which legitimately reaches private space) would
+        happily complete the pivot that gate 2 exists to stop.
+
+        Two cases:
+
+        - literal-IP target: judged directly by ``_ip_is_blocked`` —
+          no resolver involved, no TOCTOU, unconditional.
+        - hostname target: resolved LOCALLY and every returned address
+          is vetted; any blocked record denies the CONNECT
+          (fail-closed on mixed public/private answers, because we
+          cannot control which record the upstream dials).
+
+        Documented residual (TOCTOU vs the upstream resolver): the
+        upstream proxy resolves the hostname independently, so a DNS
+        server that answers differently for the upstream (split-horizon
+        or an active rebinding attack timed between our resolve and
+        the upstream's) can still steer the tunnel to a private
+        address from the upstream's vantage point. Closing that fully
+        would require the upstream to accept pre-resolved IP CONNECTs,
+        which HTTP proxies do not offer. Local resolution failure
+        (NXDOMAIN/timeout) proceeds WITH a warning rather than
+        denying: on locked-down corporate networks external names
+        often resolve only at the upstream proxy, and failing closed
+        there would break the entire upstream path. In that case the
+        upstream proxy's own egress policy is the remaining control.
+
+        Like the direct-path gate 2, this is ENFORCING in audit mode
+        too — an allowlisted target vetting to a private/loopback/
+        metadata address is purely an attack signal, never a
+        legitimate-workflow false positive.
+        """
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            literal_ip = False
+        else:
+            literal_ip = True
+        if literal_ip:
+            return host if _ip_is_blocked(host) else None
+        try:
+            addrinfo = await self._cached_getaddrinfo(host, port)
+        except (asyncio.TimeoutError, socket.gaierror) as e:
+            logger.warning(
+                "egress proxy: could not resolve %s locally to vet the "
+                "upstream-path CONNECT (%s) — forwarding; the upstream "
+                "proxy's own egress policy is the remaining control "
+                "for this tunnel.",
+                host, e.__class__.__name__,
+            )
+            return None
+        for entry in (addrinfo or []):
+            candidate = entry[4][0]
+            if _ip_is_blocked(candidate):
+                return candidate
+        return None
 
     async def _happy_eyeballs_connect(
         self, addrinfo: list, port: int,
@@ -1533,6 +1971,28 @@ class EgressProxy:
             writer.close()
             return
 
+        # Same-UID gate for loopback TCP peers (main listener AND TCP
+        # lanes; unix lanes are already mode-0600 via bind_unix's
+        # umask). Loopback is shared with EVERY local user — without
+        # this, any other account on the host could ride the proxy's
+        # allowlisted egress. TCP has no SO_PEERCRED, so the peer's
+        # UID comes from its /proc/net/tcp{,6} socket row; an
+        # undeterminable UID (None) is allowed by design — see
+        # _loopback_peer_uid for the fail-open rationale + residuals.
+        if client_ip != "unix" and isinstance(peer, tuple) and len(peer) >= 2:
+            peer_uid = _loopback_peer_uid(
+                peer, writer.get_extra_info("sockname"),
+            )
+            if peer_uid is not None and peer_uid != os.geteuid():
+                logger.warning(
+                    "egress proxy: rejecting loopback peer %s:%s owned "
+                    "by uid %d (proxy runs as uid %d) — cross-user "
+                    "loopback connections are refused",
+                    client_ip, peer[1], peer_uid, os.geteuid(),
+                )
+                writer.close()
+                return
+
         # Aggregate tunnel cap. Enforced best-effort — a race between
         # check and increment can let 65+ through momentarily, but the
         # bound holds to ~max.
@@ -1763,10 +2223,43 @@ class EgressProxy:
                         and not _host_in_no_proxy(host, self._no_proxy_patterns))
 
         if use_upstream:
-            # Tunnel through the user's upstream HTTPS_PROXY. The upstream
-            # handles DNS of the target host; we just CONNECT to the
-            # upstream's (host, port) directly. Upstream IP is trusted
-            # — corporate proxies legitimately live on private IPs.
+            # Tunnel through the user's upstream HTTPS_PROXY. The
+            # upstream PROXY itself is trusted to live on a private IP
+            # (corporate proxies legitimately do), but the TARGET is
+            # not: gate 2 vets it here before any bytes reach the
+            # upstream — literal non-global IPs are denied outright,
+            # hostnames are locally resolved and every returned
+            # address checked. See _vet_upstream_target for the
+            # documented residual vs the upstream's own resolver.
+            # Blocking (not log-only) in audit mode as well, matching
+            # the direct-path gate 2.
+            blocked_ip = await self._vet_upstream_target(host, port)
+            if blocked_ip is not None:
+                logger.warning(
+                    "egress proxy: DENY %s:%s — upstream path, target "
+                    "vets to blocked IP %s",
+                    host, port, blocked_ip,
+                )
+                event["resolved_ip"] = blocked_ip
+                event.update(
+                    result="denied_resolved_ip",
+                    reason=(f"resolved to blocked range: {blocked_ip} "
+                            f"(upstream path)"),
+                    duration=time.monotonic() - t_start,
+                )
+                self._record(event)
+                # Same audit-mode summary routing as the direct-path
+                # gate 2: the deny stays enforcing, but the attack
+                # signal also lands in sandbox-summary.json.
+                with self._audit_lock:
+                    _audit_now = (lane.audit_log_only
+                                  if lane is not None
+                                  else self._audit_log_only)
+                if _audit_now:
+                    _record_proxy_denial(host, port, blocked_ip,
+                                         "resolved_ip_blocked")
+                await self._write_error(writer, 403, "Forbidden")
+                return
             up_host, up_port = self._upstream
             event["resolved_ip"] = f"{up_host}:{up_port} (upstream)"
             try:
@@ -2166,6 +2659,12 @@ def get_proxy(
                                     no_proxy=no_proxy,
                                     audit_enforce=audit_enforce)
             atexit.register(_instance.stop)
+            # atexit never fires on SIGTERM — add the signal-aware
+            # teardown (closes listeners, unlinks unix-lane sockets)
+            # with the default disposition re-delivered afterwards.
+            # SIGKILL remains uncatchable; see the hook's docstring
+            # for the residual.
+            _install_sigterm_cleanup()
             if upstream:
                 logger.info(
                     f"egress proxy: tunnelling via upstream {upstream} "

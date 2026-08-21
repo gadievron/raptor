@@ -521,3 +521,174 @@ class TestMergeIntoStudyList:
         data = json.loads(p.read_text())
         assert len(data["related_docs"]) == 1
         assert len(data["unresolved_identifiers"]) == 1
+
+
+# ------------------------------------------------------------------
+# C (opt-in per-batch splice; default resolution still excludes C)
+# ------------------------------------------------------------------
+
+class TestCResolution:
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "net/proto/sock.c", '''\
+/* proto_set_level validates and stores the security level.
+ * Levels above PROTO_LEVEL_MAX are rejected with -EINVAL.
+ */
+int proto_set_level(struct proto_sock *ps, unsigned int level)
+{
+	if (level > PROTO_LEVEL_MAX)
+		return -EINVAL;
+	ps->level = level;
+	return 0;
+}
+''')
+        _write(tmp_path, "lib/other.py", "def unrelated():\n    return 1\n")
+        return tmp_path
+
+    def test_default_excludes_c(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["proto_set_level"])
+        assert not res.items
+        assert res.unresolved
+
+    def test_include_c_resolves_definition(self, tree: Path) -> None:
+        res = resolve_identifiers(
+            tree, ["proto_set_level"], include_c=True,
+        )
+        assert len(res.items) == 1
+        it = res.items[0]
+        assert it.kind == "function"
+        assert it.file == "net/proto/sock.c"
+        assert "level > PROTO_LEVEL_MAX" in it.definition
+        assert "rejected with -EINVAL" in it.doc_comment
+
+    def test_include_c_scope_limits_search(self, tree: Path) -> None:
+        res = resolve_identifiers(
+            tree, ["proto_set_level"],
+            scope=tree / "lib", include_c=True,
+        )
+        assert not res.items
+
+    def test_include_c_still_resolves_non_c(self, tree: Path) -> None:
+        res = resolve_identifiers(
+            tree, ["unrelated"], include_c=True,
+        )
+        assert len(res.items) == 1
+        assert res.items[0].file == "lib/other.py"
+
+
+# ------------------------------------------------------------------
+# Include-chase scoping + explicit file lists
+# ------------------------------------------------------------------
+
+class TestIncludeScopeFiles:
+    """include_scope_files: the request source file's #include graph."""
+
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        # Mirrors the observed shared-header shape: the reviewed file
+        # only reaches the defining header through its include graph
+        # (source.c -> local.h -> <sub/umbrella.h> -> sub/ dir).
+        _write(tmp_path, "drivers/widget/main.c", '''\
+#include <linux/kernel.h>
+#include "main.h"
+
+int widget_prepare(void) { return widget_ref_get(); }
+''')
+        _write(tmp_path, "drivers/widget/main.h", '''\
+#include <linux/widget.h>
+''')
+        _write(tmp_path, "include/linux/kernel.h", "#define K 1\n")
+        _write(tmp_path, "include/linux/widget.h", "/* umbrella */\n")
+        _write(tmp_path, "include/linux/widget/core.h", '''\
+/* widget_ref_get grabs a runtime PM reference. */
+static inline int widget_ref_get(void) { return 0; }
+''')
+        return tmp_path
+
+    def test_chase_reaches_headers(self, tree: Path) -> None:
+        from core.concepts.lang_resolve import include_scope_files
+
+        files = include_scope_files(tree, "drivers/widget/main.c")
+        rel = {str(p.relative_to(tree)) for p in files}
+        assert "drivers/widget/main.h" in rel
+        assert "include/linux/kernel.h" in rel
+        assert "include/linux/widget.h" in rel
+
+    def test_stem_directory_expansion(self, tree: Path) -> None:
+        # linux/widget.h has a sibling directory linux/widget/ — the umbrella-
+        # plus-directory split must pull the directory's headers in.
+        from core.concepts.lang_resolve import include_scope_files
+
+        files = include_scope_files(tree, "drivers/widget/main.c")
+        rel = {str(p.relative_to(tree)) for p in files}
+        assert "include/linux/widget/core.h" in rel
+
+    def test_non_c_source_returns_empty(self, tree: Path) -> None:
+        from core.concepts.lang_resolve import include_scope_files
+
+        _write(tree, "pkg/mod.go", 'package mod\nimport "fmt"\n')
+        assert include_scope_files(tree, "pkg/mod.go") == []
+
+    def test_missing_source_returns_empty(self, tree: Path) -> None:
+        from core.concepts.lang_resolve import include_scope_files
+
+        assert include_scope_files(tree, "no/such/file.c") == []
+
+    def test_escape_via_dotdot_not_followed(self, tmp_path: Path) -> None:
+        from core.concepts.lang_resolve import include_scope_files
+
+        outside = _write(tmp_path, "secrets/priv.h", "#define S 1\n")
+        root = tmp_path / "tree"
+        _write(root, "a.c", '#include "../secrets/priv.h"\n')
+        files = include_scope_files(root, "a.c")
+        assert outside not in files
+
+    def test_file_cap_respected(self, tmp_path: Path) -> None:
+        from core.concepts.lang_resolve import include_scope_files
+
+        incs = "".join(f'#include "h{i}.h"\n' for i in range(20))
+        _write(tmp_path, "a.c", incs)
+        for i in range(20):
+            _write(tmp_path, f"h{i}.h", f"#define H{i} {i}\n")
+        files = include_scope_files(tmp_path, "a.c", max_files=5)
+        assert len(files) == 5
+
+    def test_chased_definition_resolves(self, tree: Path) -> None:
+        # End-to-end over the pinned tree: the chased file set hands
+        # the resolver a definition neither the subsystem dir nor a
+        # defeated root scan could supply.
+        from core.concepts.lang_resolve import include_scope_files
+
+        files = include_scope_files(tree, "drivers/widget/main.c")
+        res = resolve_identifiers(
+            tree, ["widget_ref_get"], files=files, include_c=True,
+        )
+        assert [i.name for i in res.items] == ["widget_ref_get"]
+        assert res.items[0].file == "include/linux/widget/core.h"
+
+
+class TestExplicitFileList:
+    def test_files_param_limits_search(self, tmp_path: Path) -> None:
+        _write(tmp_path, "a/one.py", "def alpha():\n    return 1\n")
+        _write(tmp_path, "b/two.py", "def beta():\n    return 2\n")
+        res = resolve_identifiers(
+            tmp_path, ["alpha", "beta"], files=[tmp_path / "a" / "one.py"],
+        )
+        assert [i.name for i in res.items] == ["alpha"]
+        assert {u["name"] for u in res.unresolved} == {"beta"}
+
+    def test_files_param_filters_c_without_include_c(
+        self, tmp_path: Path,
+    ) -> None:
+        c_file = _write(tmp_path, "x.h", "#define X 1\n")
+        res = resolve_identifiers(tmp_path, ["X"], files=[c_file])
+        assert not res.items
+        res = resolve_identifiers(
+            tmp_path, ["X"], files=[c_file], include_c=True,
+        )
+        assert [i.name for i in res.items] == ["X"]
+
+    def test_empty_file_list_is_unresolved(self, tmp_path: Path) -> None:
+        res = resolve_identifiers(tmp_path, ["ghost"], files=[])
+        assert not res.items
+        assert res.unresolved

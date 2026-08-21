@@ -88,6 +88,16 @@
   "count": 14,
   "kind": "literal"
  },
+ "core/analysis/sanitizer_cut_postpass.py::to_dict": {
+  "count": 11,
+  "kind": "literal",
+  "note": "enforcement-stats field names (post-pass gate record JSON), not name vocabulary \u2014 same class as the sanitizer_cut_precision to_dict entry"
+ },
+ "core/analysis/sanitizer_cut_precision.py::to_dict": {
+  "count": 10,
+  "kind": "literal",
+  "note": "precision-report field names (counts/cross-tab keys of the sanitizer-cut gate report JSON), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+ },
  "core/analysis/summaries.py::to_dict": {
   "count": 12,
   "kind": "literal"
@@ -259,6 +269,11 @@
   "count": 22,
   "kind": "alternation"
  },
+ "core/audit/condition_smt.py::_CAST_CONSUMERS": {
+  "count": 16,
+  "kind": "literal",
+  "note": "Go builtin numeric/string conversion names for the bare-cast producer idiom (language taxonomy, not target API names)"
+ },
  "core/audit/condition_smt.py::_CAST_NARROWING_RE": {
   "count": 32,
   "kind": "alternation"
@@ -266,6 +281,11 @@
  "core/audit/condition_smt.py::_GO_TYPE_WIDTHS": {
   "count": 13,
   "kind": "literal"
+ },
+ "core/audit/condition_smt.py::_SIGNED_TYPE_NAMES": {
+  "count": 20,
+  "kind": "literal",
+  "note": "signed C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
  },
  "core/audit/condition_smt.py::_TOCTOU_C_CHECKS": {
   "count": 10,
@@ -278,6 +298,11 @@
  "core/audit/condition_smt.py::_TOCTOU_GO_USES": {
   "count": 14,
   "kind": "alternation"
+ },
+ "core/audit/condition_smt.py::_UNSIGNED_TYPE_NAMES": {
+  "count": 14,
+  "kind": "literal",
+  "note": "unsigned C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
  },
  "core/audit/condition_smt.py::_TOCTOU_PY_USES": {
   "count": 13,
@@ -480,6 +505,16 @@
   "count": 12,
   "kind": "literal"
  },
+ "core/audit/negative_space.py::_AMR_REGISTRATION_SHAPE_RE": {
+  "count": 15,
+  "kind": "alternation",
+  "note": "wiring-verb and view/api suffix morphology gating auth-mode asymmetry receipts to registration-shaped callees (verb/suffix taxonomy, not target API names)"
+ },
+ "core/audit/negative_space.py::_AMR_KEYWORDS": {
+  "count": 17,
+  "kind": "literal",
+  "note": "language keywords / Python builtins excluded from call-name extraction in the auth-mode-registration check - language taxonomy, not target API names"
+ },
  "core/audit/negative_space.py::_NON_REENTRANT_CALLS": {
   "count": 14,
   "kind": "literal"
@@ -491,6 +526,11 @@
  "core/audit/negative_space.py::handler_signals": {
   "count": 19,
   "kind": "literal"
+ },
+ "core/audit/orchestrator.py::_FUNCTION_LOCAL_TOOL_FAMILIES": {
+  "count": 12,
+  "kind": "literal",
+  "note": "RAPTOR's own tool-channel taxonomy (which engines model one function at a time) for the premise-binding gate - internal tool ids, not target API names"
  },
  "core/audit/orchestrator.py::_R2_ABI_TABLES": {
   "count": 10,
@@ -510,6 +550,11 @@
   "count": 10,
   "kind": "literal",
   "note": "audit-log demotion record field names (framework record keys, not target API names)"
+ },
+ "core/audit/orchestrator.py::_post_loop_receipt_rescue": {
+  "count": 10,
+  "kind": "literal",
+  "note": "audit-log refutation-gate record field names (framework record keys, not target API names)"
  },
  "core/audit/orchestrator.py::_make_tier_counters": {
   "count": 34,
@@ -875,6 +920,16 @@
   "count": 14,
   "kind": "literal"
  },
+ "core/dataflow/extension_pack.py::DEFAULT_SINK_KINDS": {
+  "count": 12,
+  "kind": "literal",
+  "note": "CodeQL models-as-data kind taxonomy (upstream engine-defined sink kind strings, threat-model/MaD spec) \u2014 engine vocabulary like the QL predicate names themselves, not project APIs; learned project names flow through ModelRow validation, never this list"
+ },
+ "core/dataflow/extension_pack.py::DEFAULT_SOURCE_KINDS": {
+  "count": 11,
+  "kind": "literal",
+  "note": "CodeQL models-as-data kind taxonomy (upstream engine-defined source kind strings, threat-model/MaD spec) \u2014 engine vocabulary like the QL predicate names themselves, not project APIs; learned project names flow through ModelRow validation, never this list"
+ },
  "core/dataflow/path_annotator.py::_COMMON_NOISE": {
   "count": 31,
   "kind": "literal"
@@ -1125,6 +1180,26 @@
   "count": 10,
   "kind": "literal"
  },
+ "core/recall/cvefix_manifest.py::fp_twin": {
+  "count": 10,
+  "kind": "literal",
+  "note": "recall-manifest schema field names (fp-only twin dict), not name vocabulary \u2014 same class as the report field-name entries"
+ },
+ "core/recall/score.py::to_dict": {
+  "count": 16,
+  "kind": "literal",
+  "note": "recall-report field names (counts/percentages/lists of the recall measurement JSON), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+ },
+ "core/recall/verify_enforced.py::verify_enforced": {
+  "count": 12,
+  "kind": "literal",
+  "note": "verify-enforced review-record field names, not name vocabulary \u2014 same class as the recall-report field-name entries"
+ },
+ "core/recall/warm.py::apply_would_suppress": {
+  "count": 10,
+  "kind": "literal",
+  "note": "mechanical-warm report field names (raw/warm FP counts, per-CWE rows, damage list), not name vocabulary \u2014 same class as the recall-report field-name entries"
+ },
  "core/reporting/findings.py::counts": {
   "count": 10,
   "kind": "literal"
@@ -1181,6 +1256,11 @@
   "count": 19,
   "kind": "literal"
  },
+ "core/sandbox/escalation_signatures.py::ESCAPE_PRIMITIVE_SYSCALLS": {
+  "count": 16,
+  "kind": "literal",
+  "note": "Linux syscall names mirroring seccomp's block sets (drift-pinned by test_escalation_signatures.py::test_escape_primitives_match_seccomp_block_sets) \u2014 kernel ABI vocabulary like the tracer's _NAME_TO_TYPE entry, not project APIs"
+ },
  "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
   "count": 23,
   "kind": "literal"
@@ -1193,6 +1273,11 @@
  "core/sandbox/seatbelt.py::MACOS_STRICT_MACH_SERVICES": {
   "count": 17,
   "kind": "literal"
+ },
+ "core/sandbox/seccomp.py::_AUDIT_HARD_DENY_SYSCALLS": {
+  "count": 11,
+  "kind": "literal",
+  "note": "Linux syscall names (kernel ABI escape primitives kept SCMP_ACT_ERRNO under audit mode), not target API name vocabulary \u2014 fixed security policy, same class as the seccomp blocklists"
  },
  "core/sandbox/seccomp.py::_SECCOMP_BLOCK_ALWAYS": {
   "count": 13,
@@ -1258,6 +1343,11 @@
  "core/security/rule_of_two.py::_CI_ENV_VARS": {
   "count": 17,
   "kind": "literal"
+ },
+ "core/smt_solver/path_feasibility.py::_CALL_SUMMARIES": {
+  "count": 11,
+  "kind": "literal",
+  "note": "libc/POSIX call-summary axiom table (strlen/abs/min-max family) \u2014 language-runtime names, doctrine-sanctioned hardcoding; project-API summaries must come from learned vocabulary, never this table (enforced by the table comment)"
  },
  "core/status/__init__.py::_STATUS_ALIASES": {
   "count": 24,
@@ -1520,6 +1610,11 @@
   "count": 11,
   "kind": "literal"
  },
+ "packages/checker_synthesis/replay_sweep.py::summary_dict": {
+  "count": 10,
+  "kind": "literal",
+  "note": "structured summary-report field names (counts/paths for the variant-sweep summary.json), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+ },
  "packages/coccinelle/runner.py::_COCCI_POS_VAR_DENY": {
   "count": 59,
   "kind": "literal"
@@ -1575,6 +1670,11 @@
  "packages/cve_diff/cve_diff/report/markdown.py::_humanize_class": {
   "count": 15,
   "kind": "literal"
+ },
+ "packages/describe/package_manager.py::_INSTALL_ADVICE": {
+  "count": 11,
+  "kind": "literal",
+  "note": "host tool binary-name registry keyed to install advice (mirrors the RaptorConfig.TOOL_DEPS binaries), operator environment guidance, not target API vocabulary"
  },
  "packages/describe/report.py::doc": {
   "count": 18,
@@ -1859,6 +1959,11 @@
  "packages/sca/findings.py::_license_finding_to_row": {
   "count": 13,
   "kind": "literal"
+ },
+ "packages/sca/findings.py::_scan_health_to_row": {
+  "count": 13,
+  "kind": "literal",
+  "note": "findings.json row-schema keys (same class as the other baselined row/to_dict builders), not function-name vocabulary"
  },
  "packages/sca/findings.py::_supply_chain_finding_to_row": {
   "count": 13,

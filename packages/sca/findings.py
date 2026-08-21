@@ -278,6 +278,13 @@ def _severity_for_advisory(advisory: Advisory) -> Severity:
         s = advisory.severity.severity
         if s in ("none", "low", "medium", "high", "critical"):
             return s             # type: ignore[return-value]
+    # No scoreable CVSS vector — use the database-provided label when
+    # the OSV layer derived one (CVSS_V4-only advisories with a GHSA
+    # ``database_specific.severity``) before degrading.
+    if advisory.severity_fallback in (
+        "none", "low", "medium", "high", "critical",
+    ):
+        return advisory.severity_fallback  # type: ignore[return-value]
     # No CVSS — degrade to "medium" since the advisory exists at all.
     return "medium"
 
@@ -387,12 +394,24 @@ def write_findings_json(
     hygiene_findings: Iterable[HygieneFinding] = (),
     supply_chain_findings: Iterable[SupplyChainFinding] = (),
     license_findings: Iterable[Any] = (),
+    scan_health: Iterable[dict[str, Any]] = (),
 ) -> int:
     """Write the merged finding list to ``path`` and return its row count.
 
     Output shape: a top-level list of dicts, each tagged with one of
     ``sca:vulnerable_dependency`` / ``sca:hygiene:<kind>`` /
-    ``sca:supply_chain:<kind>`` / ``sca:license:<kind>``.
+    ``sca:supply_chain:<kind>`` / ``sca:license:<kind>`` /
+    ``sca:scan_health:<kind>``.
+
+    ``scan_health`` entries record scan-level degradation (e.g. OSV
+    lookups that failed transiently) as ``info``-severity rows so CI
+    consumers of findings.json can see that the scan's coverage was
+    incomplete. Each entry is a dict with ``kind`` (snake_case tag),
+    ``detail`` (human-readable description) and optional ``evidence``
+    (JSON-serialisable dict merged into the row's ``sca`` block).
+    These rows never trip the ``--fail-on-*`` gates — thresholds
+    evaluate specific finding classes only — but they are stable,
+    machine-readable markers a pipeline can gate on explicitly.
     """
     rows: list[dict[str, Any]] = []
     for f in vuln_findings:
@@ -403,6 +422,8 @@ def write_findings_json(
         rows.append(_supply_chain_finding_to_row(f))
     for f in license_findings:
         rows.append(_license_finding_to_row(f))
+    for h in scan_health:
+        rows.append(_scan_health_to_row(h))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -588,6 +609,37 @@ def _license_finding_to_row(f: Any) -> dict[str, Any]:
     }
 
 
+def _scan_health_to_row(h: dict[str, Any]) -> dict[str, Any]:
+    """Render one scan-health entry as a findings.json row.
+
+    Shape mirrors the other row builders so schema-tolerant consumers
+    (SARIF emitter, diff, thresholds) handle it without special-casing;
+    consumers key on the ``sca:scan_health:`` vuln_type prefix.
+    """
+    kind = str(h.get("kind") or "unknown")
+    detail = str(h.get("detail") or "")
+    evidence = h.get("evidence")
+    sca_block: dict[str, Any] = {"kind": kind}
+    if isinstance(evidence, dict):
+        sca_block.update(evidence)
+    finding_id = f"sca:scan_health:{kind}"
+    return {
+        "id": finding_id,
+        "finding_id": finding_id,
+        "vuln_type": f"sca:scan_health:{kind}",
+        "tool": "sca",
+        "file": "",
+        "function": "",
+        "line": 0,
+        "severity": "info",
+        "suppressed": False,
+        "suppression_reason": None,
+        "title": kind.replace("_", " ").capitalize(),
+        "description": detail,
+        "sca": sca_block,
+    }
+
+
 def _vuln_title(f: VulnFinding, primary: Advisory | None) -> str:
     """Short human-readable title for a vuln finding.
 
@@ -647,6 +699,11 @@ def _advisory_summary(a: Advisory | None) -> dict[str, Any] | None:
         "published": a.published.isoformat() if a.published else None,
         "modified": a.modified.isoformat() if a.modified else None,
     }
+    if a.severity_fallback:
+        # Label-only severity (CVSS_V4-only advisory scored via the
+        # database-provided label) — surfaced so consumers can tell a
+        # derived label from a computed CVSS bucket.
+        out["severity_fallback"] = a.severity_fallback
     if a.informational:
         # RUSTSEC "unsound" / "unmaintained" / "notice" markers,
         # and similar non-security flags on other ecos. Surface

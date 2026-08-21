@@ -25,6 +25,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 
 # Disable reach_verdict_log atexit flush during tests so the synthetic
@@ -85,6 +87,34 @@ os.environ.setdefault(
 # is the source of truth per the RAPTOR_DIR block above.
 if _conftest_dir not in sys.path:
     sys.path.insert(0, _conftest_dir)
+
+
+# ---------------------------------------------------------------------------
+# Build-ID binary cache isolation
+# ---------------------------------------------------------------------------
+#
+# ``core.audit.build_id_cache.load_build_id_cache()`` defaults to
+# ``RaptorConfig.REPO_ROOT / ".cache/binary"`` — the install root, i.e.
+# THIS checkout under pytest (RAPTOR_DIR is pinned above). Any test that
+# exercises binary-oracle enrichment (``core.inventory.builder`` with
+# ``BINARY_ORACLE_PATHS`` set, the audit orchestrator's binary bridge)
+# would populate the operator-facing cache with test artifacts and leave
+# an untracked ``.cache/`` in the source tree, tripping the
+# tree-changed-mid-run sentinel below. ``RAPTOR_BINARY_CACHE_DIR`` is the
+# documented override and is re-read on every ``load_build_id_cache()``
+# call, so one session-scoped redirect covers every code path — including
+# subprocess-invoked CLIs, which inherit this process's environment.
+# ``setdefault`` semantics: a deliberately exported cache dir still wins.
+
+@pytest.fixture(autouse=True, scope="session")
+def _binary_cache_in_tmp(tmp_path_factory):
+    if os.environ.get("RAPTOR_BINARY_CACHE_DIR"):
+        yield
+        return
+    cache_dir = tmp_path_factory.mktemp("binary-cache")
+    os.environ["RAPTOR_BINARY_CACHE_DIR"] = str(cache_dir)
+    yield
+    os.environ.pop("RAPTOR_BINARY_CACHE_DIR", None)
 
 
 # ---------------------------------------------------------------------------

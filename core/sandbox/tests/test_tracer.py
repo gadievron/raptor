@@ -111,17 +111,17 @@ class TestArchSupport:
         info = tracer._ARCH_INFO[arch]
         # Six syscall args is the Linux ABI on all supported archs.
         assert len(info["arg_offsets"]) == 6, (
-            f"{arch}: expected 6 arg offsets, got {len(info["arg_offsets"])}")
+            f"{arch}: expected 6 arg offsets, got {len(info['arg_offsets'])}")
         # All offsets land within the regs region.
         assert info["user_regs_size"] > 0, (
             f"{arch}: user_regs_size must be > 0")
         assert 0 <= info["syscall_nr_offset"] < info["user_regs_size"], (
-            f"{arch}: syscall_nr_offset {info["syscall_nr_offset"]} out of "
-            f"range [0, {info["user_regs_size"]})")
+            f"{arch}: syscall_nr_offset {info['syscall_nr_offset']} out of "
+            f"range [0, {info['user_regs_size']})")
         for i, off in enumerate(info["arg_offsets"]):
             assert 0 <= off < info["user_regs_size"], (
                 f"{arch}: arg[{i}] offset {off} out of range "
-                f"[0, {info["user_regs_size"]})")
+                f"[0, {info['user_regs_size']})")
         # Syscall table must cover the union of b2 (blocklist) + b3
         # (file/network) syscalls — emptiness would mean the audit
         # tracer reports `unknown_<nr>` for everything.
@@ -155,7 +155,7 @@ class TestArchSupport:
             # typo (e.g., a hex value pasted as decimal).
             assert nr < 10000, (
                 f"{arch}: syscall_nr {nr} suspiciously large "
-                f"(name={info["syscall_table"][nr]!r})")
+                f"(name={info['syscall_table'][nr]!r})")
 
 
 class TestSyscallNameLookup:

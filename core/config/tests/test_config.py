@@ -180,6 +180,12 @@ class TestGetGitEnv:
             for var in RaptorConfig.PROXY_ENV_VARS:
                 assert var not in env
 
+    def test_is_a_pure_alias_of_get_safe_env(self):
+        """get_safe_env() already applies GIT_ENV_VARS for every
+        subprocess; get_git_env must not re-overlay anything on top —
+        one source of truth, so the two can never diverge."""
+        assert RaptorConfig.get_git_env() == RaptorConfig.get_safe_env()
+
 
 class TestGetOutDir:
     """Tests for RaptorConfig.get_out_dir()."""
@@ -693,3 +699,24 @@ class TestEnvFlag:
             self._flag("off", default=True)
         assert not [r for r in caplog.records
                     if "boolean toggle" in r.getMessage()]
+
+
+class TestPolicyGroupRuleFiles:
+    """Single-file policy groups must point at real in-repo rule files."""
+
+    def test_entries_exist_on_disk(self):
+        from core.config import RaptorConfig
+        for group, path in RaptorConfig.POLICY_GROUP_RULE_FILES.items():
+            assert path.is_file(), f"group {group!r} points at missing {path}"
+
+    def test_keys_do_not_shadow_rule_directories(self):
+        from core.config import RaptorConfig
+        for group in RaptorConfig.POLICY_GROUP_RULE_FILES:
+            assert not (RaptorConfig.SEMGREP_RULES_DIR / group).is_dir(), (
+                f"group {group!r} also has a rule directory — the dir "
+                "wins in scanner group resolution; remove the alias"
+            )
+
+    def test_ssrf_group_present(self):
+        from core.config import RaptorConfig
+        assert "ssrf" in RaptorConfig.POLICY_GROUP_RULE_FILES

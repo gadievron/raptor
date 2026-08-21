@@ -156,6 +156,109 @@ class TestGetRule:
         assert result is None
 
 
+class TestRunRuleSweep:
+    """run_rule_sweep against the REAL result models: SemgrepResult
+    holds SemgrepFinding dataclasses, SpatchResult holds ``matches``
+    (not ``findings``) — the old code assumed dicts / a ``findings``
+    attribute and broke on both engines."""
+
+    @staticmethod
+    def _install(monkeypatch, module_name, run_rule):
+        import sys
+        import types
+
+        fake_mod = types.ModuleType(module_name)
+        fake_mod.run_rule = run_rule
+        fake_mod.is_available = lambda: True
+        monkeypatch.setitem(sys.modules, module_name, fake_mod)
+
+    def test_semgrep_rule_sweep_matches(self, monkeypatch, tmp_path: Path):
+        from packages.semgrep.models import SemgrepFinding, SemgrepResult
+        from core.audit.rules import run_rule_sweep
+
+        save_rule(
+            out_dir=tmp_path, rule_id="sg-rule", tool="semgrep",
+            content="rules: []", description="test",
+        )
+
+        def fake_run_rule(target, config, timeout=300):
+            return SemgrepResult(
+                findings=[
+                    SemgrepFinding(
+                        file="src/a.c", line=12,
+                        rule_id="sg-rule", message="hit",
+                    ),
+                ],
+            )
+
+        self._install(monkeypatch, "packages.semgrep.runner", fake_run_rule)
+
+        out = run_rule_sweep(
+            out_dir=tmp_path, rule_id="sg-rule", target_path=tmp_path,
+        )
+        assert "error" not in out
+        assert out["tool"] == "semgrep"
+        assert out["match_count"] == 1
+        assert out["matches"][0]["file"] == "src/a.c"
+        assert out["matches"][0]["line"] == 12
+        assert out["matches"][0]["message"] == "hit"
+        assert out["errors"] == []
+
+    def test_coccinelle_rule_sweep_matches(self, monkeypatch, tmp_path: Path):
+        from packages.coccinelle.models import SpatchMatch, SpatchResult
+        from core.audit.rules import run_rule_sweep
+
+        save_rule(
+            out_dir=tmp_path, rule_id="cocci-rule", tool="coccinelle",
+            content="@@\n@@\n", description="test",
+        )
+
+        def fake_run_rule(target, config, timeout=300):
+            return SpatchResult(
+                rule="cocci-rule",
+                matches=[SpatchMatch(file="src/b.c", line=7)],
+            )
+
+        self._install(
+            monkeypatch, "packages.coccinelle.runner", fake_run_rule,
+        )
+
+        out = run_rule_sweep(
+            out_dir=tmp_path, rule_id="cocci-rule", target_path=tmp_path,
+        )
+        assert "error" not in out
+        assert out["tool"] == "coccinelle"
+        assert out["match_count"] == 1
+        assert out["matches"][0]["file"] == "src/b.c"
+        assert out["matches"][0]["line"] == 7
+        assert out["errors"] == []
+
+    def test_coccinelle_errors_surfaced(self, monkeypatch, tmp_path: Path):
+        from packages.coccinelle.models import SpatchResult
+        from core.audit.rules import run_rule_sweep
+
+        save_rule(
+            out_dir=tmp_path, rule_id="cocci-err", tool="coccinelle",
+            content="@@\n@@\n", description="test",
+        )
+
+        def fake_run_rule(target, config, timeout=300):
+            return SpatchResult(
+                rule="cocci-err", returncode=-1,
+                errors=["spatch timed out after 300s"],
+            )
+
+        self._install(
+            monkeypatch, "packages.coccinelle.runner", fake_run_rule,
+        )
+
+        out = run_rule_sweep(
+            out_dir=tmp_path, rule_id="cocci-err", target_path=tmp_path,
+        )
+        assert out["match_count"] == 0
+        assert out["errors"] == ["spatch timed out after 300s"]
+
+
 class TestAutoSynthesizeRules:
     """Verify _auto_synthesize_rules delegates to packages.checker_synthesis."""
 

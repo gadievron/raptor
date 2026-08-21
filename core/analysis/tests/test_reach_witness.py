@@ -180,6 +180,31 @@ def test_binary_oracle_absent_picks_innermost_enclosing_on_collision():
     assert rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
 
 
+def test_select_item_by_line_closest_start_fallback():
+    """The shared disambiguation helper implements the DOCUMENTED
+    fallback: when no candidate's [line_start, line_end] range contains
+    the query line (under-reported line_end), pick the item whose
+    line_start is the closest one <= the line — not blindly the first
+    candidate. Query lines preceding every candidate keep the legacy
+    first-item tie-break; line=0 / single candidate are no-ops."""
+    from core.analysis.reachability import _select_item_by_line
+
+    a = {"name": "helper", "line_start": 10, "line_end": 20}
+    b = {"name": "helper", "line_start": 100, "line_end": 120}
+
+    # Line 150 is past BOTH ranges — closest preceding start wins (b).
+    assert _select_item_by_line([a, b], 150) == [b]
+    # Line 50 is past a's range only, before b — a is the closest <=.
+    assert _select_item_by_line([a, b], 50) == [a]
+    # Containment still beats the fallback.
+    assert _select_item_by_line([a, b], 110) == [b]
+    # Query before every candidate: legacy first-item tie-break.
+    assert _select_item_by_line([a, b], 5) == [a]
+    # No line / single candidate: pass-through.
+    assert _select_item_by_line([a, b], 0) == [a, b]
+    assert _select_item_by_line([b], 150) == [b]
+
+
 def test_binary_oracle_inlined_does_not_demote_function():
     """An ``inlined`` classification is REACHABLE evidence (function ran,
     just merged into its caller). The accessor must NOT return absent for
@@ -288,10 +313,14 @@ def test_only_earned_sound_kinds_can_ever_be_suppress_eligible():
     assert suppressible == {
         "module_aborts", "lexical_dead", "binary_oracle_absent",
     }
+    # Grew again 2026-08-19: sanitizer_dominated earned suppression
+    # (operator-approved flip; zero-false-suppress corpus clean at flip
+    # time — attestation recorded on the VerdictSpec).
     assert STRUCTURALLY_SUPPRESSIBLE_KINDS == {
         WitnessKind.MODULE_ABORTS,
         WitnessKind.LEXICAL_DEAD,
         WitnessKind.BINARY_ORACLE_ABSENT,
+        WitnessKind.SANITIZER_CUT,
     }
 
 
@@ -331,10 +360,14 @@ def test_structurally_suppressible_derived_from_table():
     from core.analysis.reach_witness import (
         STRUCTURALLY_SUPPRESSIBLE_KINDS, WitnessKind,
     )
+    # sanitizer_dominated joined 2026-08-19 (operator-approved
+    # enforcement flip under the earning protocol; attestation on the
+    # VerdictSpec in reach_witness.py).
     assert STRUCTURALLY_SUPPRESSIBLE_KINDS == frozenset({
         WitnessKind.MODULE_ABORTS,
         WitnessKind.LEXICAL_DEAD,
         WitnessKind.BINARY_ORACLE_ABSENT,
+        WitnessKind.SANITIZER_CUT,
     })
 
 

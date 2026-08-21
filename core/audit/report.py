@@ -49,6 +49,18 @@ def _cell(value: Any, *, max_chars: int = 300) -> str:
     return _line(value, max_chars=max_chars).replace("|", "\\|")
 
 
+def _tier_title(value: Any) -> str:
+    """Render an evidence-tier enum value for human-readable output.
+
+    JSON keeps the raw snake_case enum (``xref_backed``); markdown and
+    prompt text render Title Case (``Xref Backed``) per the output
+    style rule — never ALL-CAPS. ``smt_proved`` keeps its acronym.
+    """
+    raw = getattr(value, "value", value)
+    title = str(raw or "").replace("_", " ").strip().title()
+    return title.replace("Smt", "SMT")
+
+
 def generate_report(
     out_dir: Path,
     *,
@@ -116,6 +128,13 @@ def generate_report(
             "count": not_attempted_count,
         }
 
+    # Vendored/generated triage decisions (per-function records in
+    # suppressions.jsonl) — the run summary states the counts so
+    # skipped/glanced functions are never silently absent.
+    vendored_triage = _load_vendored_triage(out_dir)
+    if vendored_triage:
+        report["vendored_triage"] = vendored_triage
+
     # Dark outcomes ("tool-blind, needs concrete verification") from
     # the graded export — surfaced so the bucket reaches the operator
     # instead of being tallied invisibly as dormant.
@@ -154,6 +173,20 @@ def generate_report(
             report["evaluation"] = eval_data
         except Exception as e:  # noqa: BLE001 — reporting must not fail the run
             logger.warning("failed to load evaluation results from %s: %s", eval_path, e)
+
+    # Interrupted Joern pre-sweep window (server restart mid-query):
+    # whether the window was re-queued and recovered or lost outright
+    # must reach the operator — a lost window means the run's taint
+    # evidence is incomplete, which reads as "no flows" everywhere
+    # downstream unless stated.
+    try:
+        from .joern_backend import load_presweep_status
+        presweep = load_presweep_status(out_dir)
+    except Exception:  # noqa: BLE001 — reporting must not fail the run
+        logger.debug("pre-sweep status load failed", exc_info=True)
+        presweep = None
+    if presweep:
+        report["joern_presweep"] = presweep
 
     report["summary"] = _format_summary(report)
     return report
@@ -269,7 +302,10 @@ def write_markdown_report(
             # cannot break out of the heading or inject markup.
             fid = _line(f.get("id", "FIND-???"), max_chars=80)
             title = _line(f.get("title", "Untitled"))
-            tier = _line(f.get("evidence_tier", "HEURISTIC"), max_chars=40)
+            tier = _line(
+                _tier_title(f.get("evidence_tier", "heuristic")),
+                max_chars=40,
+            )
             lines.append(f"### {fid}: {title} ({tier})")
             file_loc = _line(f.get("file", "?"))
             line_no = _line(f.get("line", "?"), max_chars=20)
@@ -310,7 +346,9 @@ def write_markdown_report(
         lines.append("| Tier | Count |")
         lines.append("|---|---|")
         for tier, count in sorted(evidence_dist.items()):
-            lines.append(f"| {_cell(tier, max_chars=40)} | {count} |")
+            lines.append(
+                f"| {_cell(_tier_title(tier), max_chars=40)} | {count} |"
+            )
     else:
         lines.append("No evidence recorded.")
     lines.append("")
@@ -373,7 +411,10 @@ def write_markdown_report(
 
     content = "\n".join(lines)
     path = out_dir / "audit-report.md"
-    path.write_text(content)
+    # Pinned encoding: finding titles/bodies carry target-derived text
+    # (often non-ASCII); the platform default (POSIX locale → ASCII)
+    # made the report write crash at run end.
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -383,7 +424,9 @@ def _evidence_distribution(
     """Count findings per evidence tier."""
     dist: dict[str, int] = {}
     for f in findings:
-        tier = f.get("evidence_tier", "HEURISTIC")
+        # Raw snake_case enum key (matching EvidenceTier values) —
+        # the markdown renderer Title-Cases at display time.
+        tier = f.get("evidence_tier", "heuristic")
         dist[tier] = dist.get(tier, 0) + 1
     return dist
 
@@ -572,6 +615,39 @@ def _load_dark_findings(out_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _load_vendored_triage(out_dir: Path) -> dict[str, int]:
+    """Count vendored/generated triage decisions from the
+    suppressions.jsonl audit trail (rule_id ``audit:vendored-triage``).
+    Returns ``{}`` when the tier made no decisions."""
+    path = out_dir / "suppressions.jsonl"
+    if not path.exists():
+        return {}
+    skipped = glanced = 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("rule_id") != "audit:vendored-triage":
+                    continue
+                if rec.get("tier") == "skip":
+                    skipped += 1
+                elif rec.get("tier") == "glance":
+                    glanced += 1
+    except OSError:
+        return {}
+    if not (skipped or glanced):
+        return {}
+    return {"skipped": skipped, "glanced": glanced}
+
+
 def _load_findings(out_dir: Path) -> list[dict[str, Any]]:
     path = out_dir / "findings.json"
     if not path.exists():
@@ -648,7 +724,14 @@ def _count_remaining_gaps(
     gaps_data: dict[str, Any],
     audit_data: dict[str, Any],
 ) -> int:
-    """Count gaps not covered by this audit run."""
+    """Count gaps not covered by this audit run.
+
+    One counting rule, shared with ``_compute_stats``: post-loop
+    mechanical journal echoes are not LLM reviews and must not count
+    as covered gaps — pre-fix each pattern-scan echo shrank
+    ``gaps_remaining`` by one while the reviewed count excluded it,
+    so the two headline numbers disagreed about the same journal.
+    """
     total_gaps = gaps_data.get("count", 0)
     if "files" in audit_data:
         reviewed = sum(
@@ -656,7 +739,10 @@ def _count_remaining_gaps(
             for fd in audit_data["files"].values()
         )
     elif "functions_analysed" in audit_data:
-        reviewed = len(audit_data["functions_analysed"])
+        reviewed = sum(
+            1 for func_data in audit_data["functions_analysed"]
+            if not func_data.get("mechanical")
+        )
     else:
         reviewed = 0
     return max(0, total_gaps - reviewed)
@@ -830,6 +916,13 @@ def _format_summary(report: dict[str, Any]) -> str:
             f"{not_attempted.get('count', 0)} functions — see "
             "not-attempted.json; they stay gap-eligible next run"
         )
+    vendored = report.get("vendored_triage")
+    if vendored:
+        lines.append(
+            f"Vendored/generated triage: {vendored.get('skipped', 0)} "
+            f"functions skipped, {vendored.get('glanced', 0)} routed to "
+            "glance — per-function records in suppressions.jsonl"
+        )
 
     findings = report.get("findings", [])
     if findings:
@@ -850,6 +943,31 @@ def _format_summary(report: dict[str, Any]) -> str:
         lines.append("")
         lines.append("### Finding survival (/validate feedback)")
         lines.extend(format_survival(survival)[1:])
+
+    presweep = report.get("joern_presweep")
+    if presweep:
+        lines.append("")
+        interrupted = presweep.get("interrupted", 0)
+        requeued = presweep.get("requeued", 0)
+        if presweep.get("recovered"):
+            lines.append(
+                f"Joern pre-sweep: interrupted by a server restart "
+                f"({interrupted}x), re-queued and recovered after "
+                f"{requeued} attempt(s) — "
+                f"{presweep.get('flows_recovered', 0)} flow group(s) "
+                f"recovered"
+            )
+        else:
+            lines.append(
+                f"### ⚠️ Joern pre-sweep window lost"
+            )
+            lines.append(
+                f"Interrupted by a server restart and NOT recovered "
+                f"after {requeued} re-queue attempt(s) — this run's "
+                f"taint-flow evidence is incomplete (functions read as "
+                f"'no flows' rather than 'not swept'). Re-run /audit "
+                f"or /agentic to regenerate the sweep."
+            )
 
     promotion_alarms = report.get("promotion_alarms")
     if promotion_alarms:

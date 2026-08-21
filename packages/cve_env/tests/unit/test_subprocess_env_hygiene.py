@@ -109,8 +109,10 @@ def test_docker_run_strips_dangerous_env(proxy_set: str) -> None:
     a debugger / MITM. If LD_PRELOAD leaks, every native binary inside the
     container loads a hijack library.
     """
+    from core.container import containers as cc
+    from core.container.proc import RunOutcome
+
     from cve_env.tools import docker_run as dr
-    from cve_env.utils.run import RunOutcome
 
     rwt_kwargs: list[dict[str, Any]] = []
 
@@ -132,8 +134,8 @@ def test_docker_run_strips_dangerous_env(proxy_set: str) -> None:
     # applies safe_subprocess_env() by default when no env= is passed — so the
     # REC-2 env-stripping holds for every site via that single-point default.
     with (
-        patch.object(dr, "run_with_timeout", side_effect=mock_rwt),
-        patch.object(dr.time, "sleep"),
+        patch.object(cc, "run_cli", side_effect=mock_rwt),
+        patch.object(cc.time, "sleep"),
     ):
         dr.docker_run(
             image="busybox:latest",
@@ -144,11 +146,11 @@ def test_docker_run_strips_dangerous_env(proxy_set: str) -> None:
     # Every docker call (main run + inspect poll + any logs tail) must take
     # run_with_timeout's safe env DEFAULT — i.e. no explicit env= — so REC-2
     # dangerous-var stripping (HTTPS_PROXY / LD_PRELOAD / ...) holds at all sites.
-    assert rwt_kwargs, "docker_run did not invoke run_with_timeout"
+    assert rwt_kwargs, "docker_run did not invoke the bounded runner"
     for kw in rwt_kwargs:
-        assert "env" not in kw, (
-            "a docker call passed an explicit env= to run_with_timeout, bypassing "
-            f"the safe default; REC-2 stripping would not apply. got: {kw}"
+        assert kw.get("env") is None, (
+            "a docker call passed an explicit env= to the bounded runner, "
+            f"bypassing the safe default; REC-2 stripping would not apply. got: {kw}"
         )
 
 
@@ -169,6 +171,8 @@ def test_run_with_timeout_default_strips_dangerous_env(
     who migrated to run_with_timeout (Cleanup-Item-3 Stage 2) automatically
     get env hygiene without needing per-site boilerplate.
     """
+    from core.container import proc as _proc_mod
+
     from cve_env.utils import run as run_mod
 
     captured: list[dict[str, Any]] = []
@@ -181,7 +185,7 @@ def test_run_with_timeout_default_strips_dangerous_env(
         m.stderr = ""
         return m
 
-    monkeypatch.setattr(run_mod.subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr(_proc_mod.subprocess, "run", mock_subprocess_run)
 
     # Call run_with_timeout with no env= → should default to safe.
     outcome = run_mod.run_with_timeout(["echo", "hi"], timeout=2.0)
@@ -199,6 +203,8 @@ def test_run_with_timeout_keep_env_opt_in(
     corporate proxy). Pass ``keep_env=frozenset({"HTTPS_PROXY"})`` and
     that single var stays; the rest of the dangerous list is still stripped.
     """
+    from core.container import proc as _proc_mod
+
     from cve_env.utils import run as run_mod
 
     captured: list[dict[str, Any]] = []
@@ -211,7 +217,7 @@ def test_run_with_timeout_keep_env_opt_in(
         m.stderr = ""
         return m
 
-    monkeypatch.setattr(run_mod.subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr(_proc_mod.subprocess, "run", mock_subprocess_run)
 
     run_mod.run_with_timeout(
         ["echo", "hi"],

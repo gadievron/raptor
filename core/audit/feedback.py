@@ -44,6 +44,147 @@ _CONFIRMED_STATUSES = frozenset({
     "confirmed", "exploitable",
 })
 
+# Mechanical disqualifiers a /validate ruling can carry. A Stage-D
+# ruling is otherwise LLM judgment, and an LLM-only ruling must not
+# erase a tool-evidenced audit finding (the demotion mirror of G2:
+# LLM-only signals never promote, so they never fully demote either).
+# Names here are referee labels; the detection logic in
+# ``_mechanical_disqualifier`` keys off the actual /validate record
+# shapes that produce them.
+_REFEREE_LLM_ONLY = "llm_only_ruling"
+
+
+def _prior_has_tool_evidence(prior_entry: Any | None) -> bool:
+    """Whether the prior journal verdict was backed by a tool receipt.
+
+    Uses the shared evidence classifier so LLM-claimed stamps
+    (``llm-claimed:*``) and bare consistency variants don't count —
+    same discipline as the G2 gate.
+    """
+    if prior_entry is None:
+        return False
+    tools = getattr(prior_entry, "evidence_tools", None) or []
+    try:
+        from core.audit.evidence_grade import is_tool_evidence
+    except Exception:  # noqa: BLE001 — classifier unavailable: fail open (legacy behavior)
+        return False
+    return any(is_tool_evidence(str(t)) for t in tools)
+
+
+class _ValidationSiblings:
+    """Mechanical refutation evidence from files next to the report.
+
+    The findings report alone doesn't carry every mechanical verdict:
+    the IRIS Tier-1 gate records refutations in ``disproven.json`` and
+    the Stage-B SMT sweep stamps ``smt_feasibility`` onto
+    ``attack-paths.json``. Both are loaded best-effort — a missing or
+    malformed sibling just means that channel contributes nothing.
+    """
+
+    def __init__(self, validation_report: Path) -> None:
+        self.iris_refuted_ids: set[str] = set()
+        self.paths_by_finding: dict[str, list[dict[str, Any]]] = {}
+
+        base = Path(validation_report).parent
+        disproven = self._load(base / "disproven.json")
+        if isinstance(disproven, dict):
+            disproven = disproven.get("disproven", [])
+        if isinstance(disproven, list):
+            for row in disproven:
+                if (
+                    isinstance(row, dict)
+                    and row.get("lesson") == "iris_tier1_refuted"
+                    and row.get("finding")
+                ):
+                    self.iris_refuted_ids.add(str(row["finding"]))
+
+        attack_paths = self._load(base / "attack-paths.json")
+        if isinstance(attack_paths, list):
+            for path in attack_paths:
+                if not isinstance(path, dict):
+                    continue
+                fid = path.get("finding_id") or path.get("finding")
+                if isinstance(fid, str) and fid:
+                    self.paths_by_finding.setdefault(fid, []).append(path)
+
+    @staticmethod
+    def _load(path: Path) -> Any:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def smt_all_paths_infeasible(self, finding_id: str) -> bool:
+        """True when every attack path linked to the finding carries a
+        mechanical ``smt_feasibility.feasible == False`` stamp from the
+        Stage-B sweep. A single unstamped or feasible path means the
+        finding was NOT mechanically refuted."""
+        paths = self.paths_by_finding.get(finding_id, [])
+        if not paths:
+            return False
+        for path in paths:
+            record = path.get("smt_feasibility")
+            if not isinstance(record, dict) or record.get("feasible") is not False:
+                return False
+        return True
+
+
+def _mechanical_disqualifier(
+    finding: dict[str, Any],
+    siblings: _ValidationSiblings | None,
+) -> str | None:
+    """Name the mechanical disqualifier backing a ruled-out finding.
+
+    Returns None when the ruling rests on LLM judgment alone. The
+    accepted set is enumerated from what /validate actually produces:
+
+    - ``witness_refuted`` — dark-verify harness executed the witness
+      spec and observed a refuting outcome (sandboxed run; the LLM
+      cannot fabricate the observation).
+    - ``iris_tier1_refuted`` — the in-repo LocalFlowSource CodeQL query
+      found no source→sink path (recorded in ``disproven.json``).
+    - ``smt_paths_infeasible`` — the Stage-B SMT sweep proved every
+      linked attack path's conditions jointly unsatisfiable.
+    - ``sanity_check_failed+structural`` — Stage C's ruling is
+      corroborated by a mechanical structural fact (Coccinelle
+      ``function_exists=False`` or the C0 checklist lookup failing);
+      a bare ``sanity_check_failed`` is LLM output and does not count.
+    """
+    ruling = finding.get("ruling")
+    if not isinstance(ruling, dict):
+        ruling = {}
+    disqualifier = ruling.get("disqualifier")
+    witness_execution = finding.get("witness_execution")
+    if not isinstance(witness_execution, dict):
+        witness_execution = {}
+
+    if (
+        disqualifier == "witness_refuted"
+        or ruling.get("witness") == "dark_verify:refuted"
+        or witness_execution.get("verdict") == "refuted"
+    ):
+        return "witness_refuted"
+
+    finding_id = finding.get("id") or finding.get("finding_id")
+    if isinstance(finding_id, str) and finding_id and siblings is not None:
+        if finding_id in siblings.iris_refuted_ids:
+            return "iris_tier1_refuted"
+        if siblings.smt_all_paths_infeasible(finding_id):
+            return "smt_paths_infeasible"
+
+    if disqualifier == "sanity_check_failed":
+        cocci = finding.get("cocci_prereqs")
+        if not isinstance(cocci, dict):
+            cocci = {}
+        if (
+            cocci.get("function_exists") is False
+            or finding.get("checklist_verified") is False
+        ):
+            return "sanity_check_failed+structural"
+
+    return None
+
 
 def import_validation_results(
     *,
@@ -124,6 +265,12 @@ def import_validation_results(
     # them (dedup no longer collapses same-function findings, so both
     # can appear in one report).
     confirmed_keys: set = set()
+
+    # Mechanical refutation evidence recorded outside the findings
+    # report (IRIS gate → disproven.json, Stage-B SMT sweep →
+    # attack-paths.json). Loaded once; consulted by the downgrade
+    # referee below.
+    siblings = _ValidationSiblings(validation_report)
 
     # Reliability records for the VALIDATE_FEEDBACK scorecard producer
     # — the live writer of audit:<CWE> cells (see
@@ -222,8 +369,55 @@ def import_validation_results(
         if validate_verdict == "confirmed":
             confirmed_keys.add(key)
 
+        # Referee: an LLM-only /validate ruling may not erase a
+        # tool-evidenced audit finding. Downgrade-to-clean requires a
+        # mechanical disqualifier on the ruling; without one, a
+        # tool-evidenced `finding` demotes to `suspicious` (flagged
+        # for re-review, evidence preserved) and a tool-evidenced
+        # `suspicious` keeps its status. LLM-tier priors (no tool
+        # receipt) keep the historical clean downgrade — the
+        # asymmetry protects only verdicts a tool backed. Runs after
+        # the decoy vetoes so it only referees surviving downgrades.
+        referee: str | None = None
+        if transition.get("new_status") == "clean":
+            referee = _mechanical_disqualifier(finding, siblings)
+            if referee is None and _prior_has_tool_evidence(prior_entry):
+                referee = _REFEREE_LLM_ONLY
+                if audit_status == "finding":
+                    transition = {
+                        "kind": "downgraded",
+                        "new_status": "suspicious",
+                        "description": (
+                            "Downgraded finding → suspicious, not clean: "
+                            "/validate ruled out without a mechanical "
+                            "disqualifier and the audit finding carries "
+                            "tool evidence"
+                        ),
+                        "referee": referee,
+                    }
+                else:
+                    transition = {
+                        "kind": "corroborated",
+                        "new_status": None,
+                        "description": (
+                            "/validate ruled out without a mechanical "
+                            f"disqualifier — keeping tool-evidenced "
+                            f"{audit_status!r}"
+                        ),
+                        "referee": referee,
+                    }
+            elif referee is not None:
+                transition = dict(transition)
+                transition["referee"] = referee
+
         reason = _sanitize_markdown(_extract_reason(finding))
         lesson = _extract_lesson(finding, audit_status, validate_verdict)
+        if transition.get("referee") == _REFEREE_LLM_ONLY:
+            lesson = (
+                "Lesson: /validate ruling carried no mechanical "
+                "disqualifier — tool-evidenced verdict retained for "
+                "re-review instead of cleaned."
+            )
 
         # Write a NEW journal entry recording the corrected verdict
         # + lesson. The journal is append-only, so
@@ -268,8 +462,17 @@ def import_validation_results(
             validate_verdict=validate_verdict,
             validate_reason=reason or None,
             source_drifted=source_drifted if source_drifted else None,
-            producer=(prior_entry.producer if prior_entry else None)
-                     or "audit",
+            # Kind-aware producer: a correction to an existing review
+            # inherits its grade (legacy audit entries without the
+            # stamp default to audit). A validated finding in a
+            # function the audit NEVER reviewed is finding-grade
+            # evidence about one finding — stamped producer="validate"
+            # so it feeds prior claims and coverage labels without
+            # satisfying the gap fold's "reviewed" predicate.
+            producer=(
+                (prior_entry.producer or "audit") if prior_entry
+                else "validate"
+            ),
         )
         try:
             append_entry(audit_out_dir or annotations_dir.parent, new_entry)
@@ -285,8 +488,14 @@ def import_validation_results(
         # Reliability event for the model that made the prior claim.
         # Decoy-vetoed disprovals carry no signal about THIS verdict
         # (the disproven finding wasn't the one the journal records).
+        # Referee-blocked disprovals are excluded for the same reason
+        # the downgrade was blocked: an LLM-only ruling is another
+        # model's opinion, not ground truth, and must not count as a
+        # miss against the prior model's scorecard cell.
         prior_model = prior_entry.model if prior_entry else None
-        if prior_model and not decoy_vetoed:
+        if prior_model and not decoy_vetoed and (
+            transition.get("referee") != _REFEREE_LLM_ONLY
+        ):
             scorecard_records.append({
                 "model": prior_model,
                 "cwe": prior_entry.cwe if prior_entry else None,
@@ -583,7 +792,7 @@ def _update_audit_state(
     ``coverage-audit.json`` was removed; the journal is authoritative.
     """
     from core.audit.record import append_audit_log
-    append_audit_log(audit_out_dir, {
+    event = {
         "action": "feedback",
         "key": f"{file_path}:{function_name}",
         "file": file_path,
@@ -592,4 +801,10 @@ def _update_audit_state(
         "transition": transition["kind"],
         "new_status": transition.get("new_status"),
         "reason": reason,
-    })
+    }
+    # Referee outcome — which mechanical disqualifier licensed a clean
+    # downgrade, or ``llm_only_ruling`` when the downgrade was blocked
+    # or softened. Absent for transitions the referee never examined.
+    if transition.get("referee"):
+        event["referee"] = transition["referee"]
+    append_audit_log(audit_out_dir, event)

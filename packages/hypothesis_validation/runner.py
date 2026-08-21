@@ -227,13 +227,22 @@ def validate(
                 f"Available: {sorted(by_name)}"
             ),
         )
+    # Provenance root: every Evidence produced by this run refers to
+    # the ORIGINAL hypothesis identity. Refinement rounds replace the
+    # working hypothesis (its context carries the refined rule), and
+    # stamping refined-round evidence with the refined hypothesis's
+    # hash made ValidationResult's ensure_same_provenance raise
+    # ProvenanceMismatch on every multi-round run. All rounds test the
+    # same root claim — one lineage, one refers_to.
+    root_hash = hash_hypothesis(hypothesis)
+
     if not rule.strip():
         return ValidationResult(
             verdict="inconclusive",
             evidence=[Evidence(
                 tool=tool_name, rule="", summary="(empty rule)",
                 success=False, error="LLM returned an empty rule",
-                refers_to=hash_hypothesis(hypothesis),
+                refers_to=root_hash,
             )],
             iterations=1,
             reasoning="LLM returned an empty rule.",
@@ -268,7 +277,11 @@ def validate(
             matches=tool_evidence.matches,
             success=tool_evidence.success,
             error=tool_evidence.error,
-            refers_to=hash_hypothesis(hypothesis),
+            # Root hash, not hash_hypothesis(hypothesis): after the
+            # first refinement `hypothesis` is a replaced copy and its
+            # hash would split the evidence lineage. See root_hash
+            # comment above.
+            refers_to=root_hash,
         )
         all_evidence.append(evidence_record)
 

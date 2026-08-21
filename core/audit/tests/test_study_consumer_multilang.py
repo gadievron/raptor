@@ -112,10 +112,8 @@ class TestPartitionStudyBatch:
 # Reading-list marking semantics (pinned)
 # ------------------------------------------------------------------
 
-import pytest as _pytest
 
-
-@_pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _scorecard_events(monkeypatch):
     """Capture scorecard events; never write the real sidecar."""
     events: list[tuple] = []
@@ -315,6 +313,55 @@ class TestMarkBatchReadingList:
         answers = json.loads(
             (tmp_path / "study-answers.json").read_text())["answers"]
         assert "DOES NOT match" in answers[0]["answer"]
+
+    def test_contradicting_spot_check_is_gated_not_trusted(
+        self, tmp_path,
+    ) -> None:
+        """A spot-check that CONTRADICTS the question's asserted value
+        is flip-causing: without a verification client for the
+        agreement gate it must quarantine (fail closed), not resolve
+        on unconditional mechanical trust."""
+        sl = self._corpus(tmp_path, [{
+            "name": "MAX_FRAME", "kind": "macro", "file": "lib.rs",
+            "line": 2,
+            "definition": "pub const MAX_FRAME: usize = 4096;",
+        }])
+        q = "Is MAX_FRAME equal to 8192?"
+        _seed_reading_list(tmp_path, [{
+            "question": q, "source_file": "lib.rs",
+        }])
+        _mark_batch_reading_list(
+            tmp_path, [_req("lib.rs", q)], None, {},
+            study_list_path=sl,
+        )
+        item = _load_rl(tmp_path)["items"][0]
+        assert not item.get("resolved")
+        answers = json.loads(
+            (tmp_path / "study-answers.json").read_text())["answers"]
+        assert answers[0]["status"] == "inconclusive"
+        assert answers[0]["agreement"]["agreed"] is False
+
+    def test_agreeing_spot_check_keeps_mechanical_trust(
+        self, tmp_path,
+    ) -> None:
+        sl = self._corpus(tmp_path, [{
+            "name": "MAX_FRAME", "kind": "macro", "file": "lib.rs",
+            "line": 2,
+            "definition": "pub const MAX_FRAME: usize = 4096;",
+        }])
+        q = "Is MAX_FRAME 4096?"
+        _seed_reading_list(tmp_path, [{
+            "question": q, "source_file": "lib.rs",
+        }])
+        _mark_batch_reading_list(
+            tmp_path, [_req("lib.rs", q)], None, {},
+            study_list_path=sl,
+        )
+        item = _load_rl(tmp_path)["items"][0]
+        assert item["resolved"]
+        answers = json.loads(
+            (tmp_path / "study-answers.json").read_text())["answers"]
+        assert answers[0]["status"] == "resolved"
 
     def test_no_extracted_snippet_is_unresolvable(self, tmp_path) -> None:
         """Extract-then-answer enforcement: when extraction produced
@@ -710,3 +757,215 @@ class TestStudyGateSuffixes:
     def test_supported_path(self, path, expected) -> None:
         from core.concepts.lang_resolve import is_study_supported_path
         assert is_study_supported_path(path) is expected
+
+
+# ------------------------------------------------------------------
+# C per-batch definition splice (one-shot prep gains no later corpus)
+# ------------------------------------------------------------------
+
+class TestCPerBatchSplice:
+    def _tree(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "net" / "proto").mkdir(parents=True)
+        (target / "net" / "proto" / "sock.c").write_text(
+            "/* proto_set_level rejects levels above PROTO_LEVEL_MAX. */\n"
+            "int proto_set_level(struct proto_sock *ps, unsigned int lv)\n"
+            "{\n"
+            "\tif (lv > PROTO_LEVEL_MAX)\n"
+            "\t\treturn -EINVAL;\n"
+            "\tps->level = lv;\n"
+            "\treturn 0;\n"
+            "}\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        return target, out
+
+    def test_c_question_splices_definition(self, tmp_path) -> None:
+        from core.audit.orchestrator import _resolve_multilang_requests
+
+        target, out = self._tree(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        study_list = out / "study-list.json"
+        req = StudyRequest(
+            question=(
+                "Does this hold: proto_set_level validates the level "
+                "before this function runs?"
+            ),
+            source_file="net/proto/rx.c",
+            source_function="rx_init",
+        )
+        _resolve_multilang_requests(
+            config, [req], study_list, include_c=True,
+        )
+        data = json.loads(study_list.read_text())
+        names = {i["name"] for i in data["items"]}
+        assert "proto_set_level" in names
+        item = next(
+            i for i in data["items"] if i["name"] == "proto_set_level"
+        )
+        assert "PROTO_LEVEL_MAX" in item["definition"]
+
+    def test_default_path_still_excludes_c(self, tmp_path) -> None:
+        from core.audit.orchestrator import _resolve_multilang_requests
+
+        target, out = self._tree(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        study_list = out / "study-list.json"
+        req = StudyRequest(
+            question="Does `proto_set_level` validate the level?",
+            source_file="net/proto/rx.c",
+            source_function="rx_init",
+        )
+        failures = _resolve_multilang_requests(config, [req], study_list)
+        assert failures  # C identifier is unresolvable on the ml path
+        if study_list.is_file():
+            data = json.loads(study_list.read_text())
+            names = {i["name"] for i in data.get("items", [])}
+            assert "proto_set_level" not in names
+
+    def test_scoped_before_root(self, tmp_path) -> None:
+        # A same-named decoy outside the request's subsystem must not
+        # shadow the subsystem definition.
+        from core.audit.orchestrator import (
+            _resolve_scoped,
+        )
+        from core.concepts.lang_resolve import resolve_identifiers
+
+        target, _out = self._tree(tmp_path)
+        (target / "vendorpkg").mkdir()
+        (target / "vendorpkg" / "decoy.c").write_text(
+            "int proto_set_level(int x) { return x; }\n",
+        )
+        req = StudyRequest(
+            question="Does proto_set_level validate?",
+            source_file="net/proto/rx.c",
+            source_function="rx_init",
+        )
+        res = _resolve_scoped(
+            target, ["proto_set_level"], [req], resolve_identifiers,
+            include_c=True,
+        )
+        files = [i.file for i in res.items]
+        assert "net/proto/sock.c" in files
+
+    def test_scoped_resolution_for_multilang(self, tmp_path) -> None:
+        # The scoped-first strategy applies to non-C study languages
+        # too: a Go identifier in the request's subsystem resolves
+        # even when the tree is larger than a flat scan would cover.
+        from core.audit.orchestrator import _resolve_scoped
+        from core.concepts.lang_resolve import resolve_identifiers
+
+        target = tmp_path / "t"
+        (target / "pkg" / "wire").mkdir(parents=True)
+        (target / "pkg" / "wire" / "frame.go").write_text(
+            "package wire\n\n"
+            "// advanceFrame records a frame boundary.\n"
+            "func advanceFrame(n int) int {\n"
+            "\treturn n + 1\n"
+            "}\n",
+        )
+        req = StudyRequest(
+            question="Does advanceFrame validate the parsed number?",
+            source_file="pkg/wire/decode.go",
+            source_function="decodeHeader",
+        )
+        res = _resolve_scoped(
+            target, ["advanceFrame"], [req], resolve_identifiers,
+        )
+        assert [i.name for i in res.items] == ["advanceFrame"]
+
+
+class TestIncludeChasePass:
+    """_resolve_scoped: identifiers the subsystem passes miss resolve
+    through the request source file's #include graph before the run
+    falls back to (and gives up at) the capped root scan."""
+
+    def _tree(self, tmp_path):
+        target = tmp_path / "tree"
+        (target / "drivers" / "widget").mkdir(parents=True)
+        (target / "include" / "linux" / "widget").mkdir(parents=True)
+        (target / "drivers" / "widget" / "main.c").write_text(
+            '#include <linux/widget.h>\n\n'
+            "int widget_prepare(void) { return widget_ref_get(); }\n",
+        )
+        (target / "include" / "linux" / "widget.h").write_text(
+            "/* umbrella */\n",
+        )
+        (target / "include" / "linux" / "widget" / "core.h").write_text(
+            "/* widget_ref_get grabs a runtime PM reference. */\n"
+            "static inline int widget_ref_get(void) { return 0; }\n",
+        )
+        return target
+
+    def test_chase_rescues_shared_header_definition(self, tmp_path) -> None:
+        from core.audit.orchestrator import _resolve_scoped
+        from core.concepts.lang_resolve import resolve_identifiers
+
+        target = self._tree(tmp_path)
+
+        calls = []
+
+        def capped(root, idents, scope=None, files=None, include_c=False):
+            # A kernel-sized tree: any pass without an explicit scope
+            # or file set stops at the flat cap before reaching
+            # include/ (simulated as an empty scan).
+            calls.append({"scope": scope, "files": files})
+            if scope is None and files is None:
+                return resolve_identifiers(
+                    root, idents, scope=root / "drivers",
+                    include_c=include_c,
+                )
+            return resolve_identifiers(
+                root, idents, scope=scope, files=files,
+                include_c=include_c,
+            )
+
+        req = StudyRequest(
+            question="Does widget_ref_get leave the count incremented on error?",
+            source_file="drivers/widget/main.c",
+            source_function="widget_prepare",
+        )
+        res = _resolve_scoped(
+            target, ["widget_ref_get"], [req], capped, include_c=True,
+        )
+        assert [i.name for i in res.items] == ["widget_ref_get"]
+        item = next(i for i in res.items if i.name == "widget_ref_get")
+        assert item.file == "include/linux/widget/core.h"
+        # The rescue came from the include-chase file set, not a
+        # lucky scope/root pass.
+        chase = [c for c in calls if c["files"] is not None]
+        assert chase and any(
+            "core.h" in str(p) for p in chase[0]["files"]
+        )
+
+    def test_no_chase_when_subsystem_pass_resolves(self, tmp_path) -> None:
+        from core.audit.orchestrator import _resolve_scoped
+        from core.concepts.lang_resolve import resolve_identifiers
+
+        target = self._tree(tmp_path)
+        (target / "drivers" / "widget" / "local.h").write_text(
+            "static inline int widget_ref_get(void) { return 1; }\n",
+        )
+
+        calls = []
+
+        def spy(root, idents, scope=None, files=None, include_c=False):
+            calls.append({"files": files})
+            return resolve_identifiers(
+                root, idents, scope=scope, files=files,
+                include_c=include_c,
+            )
+
+        req = StudyRequest(
+            question="Does widget_ref_get leave the count incremented on error?",
+            source_file="drivers/widget/main.c",
+            source_function="widget_prepare",
+        )
+        res = _resolve_scoped(
+            target, ["widget_ref_get"], [req], spy, include_c=True,
+        )
+        assert [i.name for i in res.items] == ["widget_ref_get"]
+        assert all(c["files"] is None for c in calls), (
+            "include chase must only run for leftovers"
+        )

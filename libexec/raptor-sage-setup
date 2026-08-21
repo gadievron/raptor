@@ -76,21 +76,44 @@ if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
 fi
 # ─── end trust-marker check ─────────────────────────────────
 
+# Exit codes: 2 is reserved for the trust-marker refusal above
+# (cc-trust-check convention); usage errors exit 3, and an explicit
+# help request exits 0.
 usage() {
     cat >&2 <<'EOF'
-usage: raptor-sage-setup [install | --uninstall | --status]
+usage: raptor-sage-setup [install | --uninstall | --status | review] [--reauthorize] [--approve]
 
-  (default)    install SAGE: bring up sidecar, seed, generate MCP entry.
-  --uninstall  stop SAGE sidecar and remove its MCP entry (data volumes kept).
-  --status     check whether SAGE is running and report health + embedding mode.
+  (default)      install SAGE: bring up sidecar, seed, generate MCP entry.
+  --uninstall    stop SAGE sidecar and remove its MCP entry (data volumes kept).
+  --status       check whether SAGE is running and report health + embedding mode.
+  review         capture the live boot payload, diff each instruction surface
+                 against the operator-authorized stamp, and record the
+                 operator's decision. Approve MERGES the reviewed variants into
+                 the stamp (union — previously authorized variants are kept, so
+                 state-dependent payloads stop flapping); reject records them
+                 as denied (the guard keeps them out of sessions with a calm
+                 note, and review/status stop flagging them as pending).
+                 Exit 0 = nothing pending review, 4 = undecided variant(s).
+  --approve      approve the reviewed variants non-interactively (review only).
+                 Approves every live variant, including previously rejected
+                 ones — this is also the un-reject path.
+  --reject       reject the unauthorized live variants non-interactively
+                 (review only).
+  --reauthorize  accept a CHANGED boot payload non-interactively (install only).
+                 Without it, a changed payload needs interactive confirmation
+                 and is otherwise left unauthorized. Unlike review, install
+                 REPLACES the stamp with the fresh capture.
 
 Prereqs: jq, docker + docker compose, python3, pip-installed sage-agent-sdk.
 EOF
-    exit 2
+    exit "${1:-3}"
 }
 
 MODE=install
 MODE_EXPLICIT=0
+REAUTHORIZE=0
+APPROVE=0
+REJECT=0
 # Pre-fix the parser only knew `--uninstall` (default install).
 # Two ambiguities operators hit:
 #
@@ -116,7 +139,7 @@ for arg in "$@"; do
         --install|install)
             if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "install" ]; then
                 echo "raptor-sage-setup: conflicting modes: $arg vs --$MODE" >&2
-                exit 2
+                exit 3
             fi
             MODE=install
             MODE_EXPLICIT=1
@@ -124,7 +147,7 @@ for arg in "$@"; do
         --uninstall|uninstall)
             if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "uninstall" ]; then
                 echo "raptor-sage-setup: conflicting modes: $arg vs --$MODE" >&2
-                exit 2
+                exit 3
             fi
             MODE=uninstall
             MODE_EXPLICIT=1
@@ -132,13 +155,30 @@ for arg in "$@"; do
         --status|status)
             if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "status" ]; then
                 echo "raptor-sage-setup: conflicting modes: $arg vs --$MODE" >&2
-                exit 2
+                exit 3
             fi
             MODE=status
             MODE_EXPLICIT=1
             ;;
+        --review|review)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "review" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --$MODE" >&2
+                exit 3
+            fi
+            MODE=review
+            MODE_EXPLICIT=1
+            ;;
+        --approve)
+            APPROVE=1
+            ;;
+        --reject)
+            REJECT=1
+            ;;
+        --reauthorize)
+            REAUTHORIZE=1
+            ;;
         -h|--help|help)
-            usage
+            usage 0
             ;;
         *)
             echo "raptor-sage-setup: unknown argument: $arg" >&2
@@ -741,17 +781,15 @@ smoke_test_mcp() {
     fi
 }
 
-capture_boot_payload() {
-    # Fetch the two instruction surfaces the SAGE server injects into
-    # agents at connection time: the MCP initialize `instructions`
-    # field and the sage_inception result message. These are prompt
-    # surfaces — an agent cannot otherwise distinguish them from
-    # untrusted runtime text, so authorize_boot_payload records them
-    # for core/sage/CLAUDE.md's trust declaration to point at.
-    # The payload text is state-dependent (first connection returns an
-    # "Auto-Inception" variant with boot safeguards; later connections
-    # a shorter "Auto-Connect" variant) — whichever the server emits
-    # NOW is what gets recorded.
+run_boot_probe() {
+    # One capture probe against the live server; raw newline-delimited
+    # JSON on stdout. RAPTOR_SAGE_BOOT_CAPTURE=1 takes the wrapper's
+    # sanctioned guard bypass: the guard strips both instruction
+    # surfaces when no stamp exists yet, so the very capture that
+    # CREATES the stamp must not run through enforcement — it would
+    # record the guard's own warning text and every real session would
+    # mismatch forever. Agent sessions can never set this variable
+    # (Claude Code spawns the wrapper with its own environment).
     local timeout_cmd=""
     if command -v timeout >/dev/null 2>&1; then
         timeout_cmd="timeout 15"
@@ -762,49 +800,167 @@ capture_boot_payload() {
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-sage-setup","version":"1.0.0"}}}' \
         '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sage_inception","arguments":{}}}' \
-        | CLAUDECODE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null \
-        | jq -r 'if .id == 1 then "### initialize.instructions\n" + (.result.instructions // "")
-                 elif .id == 2 then "### sage_inception.message\n" + ((try (.result.content[0].text | fromjson | .message) catch "") // "")
-                 else empty end'
+        | CLAUDECODE=1 RAPTOR_SAGE_BOOT_CAPTURE=1 $timeout_cmd "$MCP_WRAPPER" 2>/dev/null
+}
+
+capture_boot_payload() {
+    # Record the instruction surfaces the SAGE server injects into
+    # agents at connection time, in the v2 stamp format the MCP guard
+    # enforces:
+    #   ### initialize.instructions        first probe's text (v1
+    #                                      compat + human readability)
+    #   ### initialize.instructions.json   every observed variant,
+    #                                      JSON-encoded, one per line
+    #   ### sage_inception.message         first probe's message (v1
+    #                                      compat + human readability)
+    #   ### sage_inception.content         every observed variant's
+    #                                      ENTIRE result.content as
+    #                                      one JSON line
+    # The payload is state-dependent (first connection returns an
+    # "Auto-Inception" variant with boot safeguards; later connections
+    # a shorter "Auto-Connect" variant), so TWO probes run and both
+    # variants are recorded — steady-state sessions must not warn
+    # spuriously after a fresh install. The guard compares whole
+    # content objects, closing the injected-extra-block / extra-key
+    # channels a message-only comparison left open.
+    #
+    # Fail-closed: every extraction below goes through jq, so a
+    # missing jq (or a server whose inception result carries no
+    # content) would otherwise emit a stamp whose sections are all
+    # EMPTY with rc=0 — a poisoned record that authorizes nothing,
+    # making the guard strip every real session's payload until the
+    # operator re-authorizes. Returning non-zero instead routes
+    # authorize_boot_payload to its explicit could-not-capture
+    # warning path.
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "raptor-sage-setup: capture_boot_payload requires jq; refusing to record an empty boot-payload stamp" >&2
+        return 1
+    fi
+    local r1 r2
+    r1=$(run_boot_probe || true)
+    r2=$(run_boot_probe || true)
+    if [ -z "$r1" ] && [ -z "$r2" ]; then
+        return 1
+    fi
+    local init1 init2 msg1 content1 content2
+    init1=$(printf '%s\n' "$r1" | jq -r 'select(.id == 1) | .result.instructions // ""' 2>/dev/null || true)
+    init2=$(printf '%s\n' "$r2" | jq -r 'select(.id == 1) | .result.instructions // ""' 2>/dev/null || true)
+    msg1=$(printf '%s\n' "$r1" | jq -r 'select(.id == 2) | ((try (.result.content[0].text | fromjson | .message) catch "") // "")' 2>/dev/null || true)
+    content1=$(printf '%s\n' "$r1" | jq -c 'select(.id == 2) | .result.content // empty' 2>/dev/null || true)
+    content2=$(printf '%s\n' "$r2" | jq -c 'select(.id == 2) | .result.content // empty' 2>/dev/null || true)
+    if [ -z "$content1" ] && [ -z "$content2" ]; then
+        echo "raptor-sage-setup: boot probes answered but no sage_inception content could be extracted; refusing to record an empty boot-payload stamp" >&2
+        return 1
+    fi
+    printf '### initialize.instructions\n%s\n' "$init1"
+    printf '### initialize.instructions.json\n'
+    jq -cn --arg t "$init1" '$t'
+    if [ -n "$init2" ] && [ "$init2" != "$init1" ]; then
+        jq -cn --arg t "$init2" '$t'
+    fi
+    printf '### sage_inception.message\n%s\n' "$msg1"
+    printf '### sage_inception.content\n'
+    if [ -n "$content1" ]; then
+        printf '%s\n' "$content1"
+    fi
+    if [ -n "$content2" ] && [ "$content2" != "$content1" ]; then
+        printf '%s\n' "$content2"
+    fi
+}
+
+running_sage_digest() {
+    # RepoDigest of the image the RUNNING sage container is executing
+    # ("none" when it cannot be determined). The compose tag STRING in
+    # the stamp documents intent; only the running digest says what was
+    # actually executing at authorization time — a registry-side
+    # repoint of the tag keeps the tag text identical while swapping
+    # the code.
+    local cid img digest
+    cid=$(docker compose -f "$COMPOSE_FILE" ps -q sage 2>/dev/null || true)
+    if [ -z "$cid" ]; then
+        echo "none"
+        return 0
+    fi
+    img=$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)
+    if [ -z "$img" ]; then
+        echo "none"
+        return 0
+    fi
+    digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$img" 2>/dev/null || true)
+    echo "${digest:-none}"
 }
 
 authorize_boot_payload() {
     # Capture the server's boot payload and record it as operator-
-    # authorized. Running setup IS the authorization event: SAGE is
-    # opt-in, the image is pinned in the compose file, and the operator
-    # deliberately invoked this install — so the payload the pinned
-    # server emits now is what the operator is choosing to trust. No
-    # separate review step; the stamp (time, image, hash) makes the
-    # authorization auditable, and re-running setup after an upgrade
-    # re-authorizes automatically.
-    # Non-fatal: without the recorded file, agents treat server boot
-    # instructions as unreviewed and may ask before executing them.
+    # authorized. Running setup IS the authorization event for the
+    # FIRST capture: SAGE is opt-in, the image is pinned in the compose
+    # file, and the operator deliberately invoked this install — the
+    # payload text is displayed so the authorization is informed. A
+    # CHANGED payload is different: silently re-stamping would let a
+    # registry-side image swap (or a compromised server) self-authorize
+    # on the next routine setup run, so a change requires explicit
+    # confirmation — interactive y/N, or --reauthorize for
+    # non-interactive installs. Refusal keeps the OLD record: the MCP
+    # wrapper (libexec/raptor-sage-mcp-guard) then strips the drifted
+    # payload from live sessions until the operator re-authorizes.
+    # Non-fatal: without the recorded file, the wrapper withholds
+    # server boot instructions from agent sessions.
     local payload
     if ! payload=$(capture_boot_payload) || [ -z "$payload" ]; then
         echo "Warning: could not capture the SAGE boot payload." >&2
-        echo "  Agents will treat server boot instructions as unreviewed." >&2
+        echo "  The MCP wrapper will withhold server boot instructions until one is recorded." >&2
         echo "  Once SAGE is responsive, re-run: bin/raptor sage-setup install" >&2
         return 0
     fi
-    local sha image stamp
+    local sha image stamp running_digest
     sha=$(printf '%s\n' "$payload" | sha256sum | awk '{print $1}')
     image=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null \
         | grep sage | head -1 || true)
     image="${image:-unknown}"
+    running_digest=$(running_sage_digest)
     stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    # Show what changed when re-authorizing a different payload — the
-    # only moment an operator would want to eyeball an upgrade's new
-    # boot text. Informational, never blocking.
     if [ -f "$AUTHORIZED_PAYLOAD" ]; then
         local old_sha
         old_sha=$(sed -n 's/^# SHA256: //p' "$AUTHORIZED_PAYLOAD" | head -1)
-        if [ -n "$old_sha" ] && [ "$old_sha" != "$sha" ]; then
-            echo "SAGE boot payload changed since last authorization:"
+        if [ -n "$old_sha" ] && [ "$old_sha" = "$sha" ]; then
+            echo "SAGE boot payload unchanged since last authorization (sha256 ${sha:0:12})."
+        elif [ -n "$old_sha" ]; then
+            echo "SAGE boot payload CHANGED since last authorization:"
             sed '1,/^# ---$/d' "$AUTHORIZED_PAYLOAD" \
                 | diff -u --label previous --label current - <(printf '%s\n' "$payload") \
                 || true
-            echo "Re-authorized by this setup run."
+            if [ "$REAUTHORIZE" = "1" ]; then
+                echo "Re-authorized (--reauthorize)."
+            elif [ -t 0 ]; then
+                local answer
+                read -r -p "Authorize this NEW boot payload? [y/N] " answer
+                case "$answer" in
+                    y|Y|yes|YES)
+                        echo "Re-authorized by operator confirmation."
+                        ;;
+                    *)
+                        echo "NOT re-authorized. The previous record is kept;" >&2
+                        echo "the MCP wrapper will strip the changed payload from agent sessions." >&2
+                        echo "Review the diff above, then re-run: bin/raptor sage-setup install --reauthorize" >&2
+                        return 0
+                        ;;
+                esac
+            else
+                echo "Refusing to silently re-authorize a changed boot payload (non-interactive)." >&2
+                echo "The previous record is kept; the MCP wrapper will strip the changed" >&2
+                echo "payload from agent sessions. After review, re-run:" >&2
+                echo "  bin/raptor sage-setup install --reauthorize" >&2
+                return 0
+            fi
         fi
+    else
+        # First capture on this machine: show the operator exactly what
+        # they are authorizing.
+        echo "Recording the SAGE boot payload as operator-authorized."
+        echo "Payload text follows:"
+        echo "-----------------------------------------------------------"
+        printf '%s\n' "$payload"
+        echo "-----------------------------------------------------------"
     fi
     # Same-fs mktemp + atomic mv — see enable_sage_env for the rationale.
     mkdir -p "$(dirname "$AUTHORIZED_PAYLOAD")"
@@ -815,6 +971,7 @@ authorize_boot_payload() {
         echo "# SAGE boot payload — operator-authorized"
         echo "# Generated: $stamp by raptor-sage-setup"
         echo "# Image: $image"
+        echo "# RunningDigest: $running_digest"
         echo "# SHA256: $sha"
         echo "# Running raptor-sage-setup constitutes operator authorization of the"
         echo "# payload below. Regenerated on every install; per-machine; gitignored."
@@ -827,8 +984,122 @@ authorize_boot_payload() {
     echo "Recorded operator-authorized SAGE boot payload:"
     echo "  File:    $AUTHORIZED_PAYLOAD"
     echo "  Image:   $image"
+    echo "  Running: $running_digest"
     echo "  SHA256:  $sha"
-    echo "  Surfaces: initialize.instructions, sage_inception.message"
+    echo "  Surfaces: initialize.instructions(+.json), sage_inception.message, sage_inception.content"
+}
+
+review_boot_payload() {
+    # Operator review path for boot-payload drift: diff every live
+    # instruction surface against the authorized stamp and, on
+    # approval, MERGE the new variants into the stamp. Merge (union),
+    # not replace: the payload is server-state-dependent, so a fresh
+    # capture can observe a variant set disjoint from an earlier one —
+    # install's replace semantics would flap authorization between
+    # states. Comparison semantics come from the guard module itself
+    # (core/sage/boot_payload_review.py imports it), so a "review says
+    # clean" verdict is exactly a "guard will not strip" verdict.
+    local reviewer="$RAPTOR_DIR/core/sage/boot_payload_review.py"
+    if [ "$APPROVE" = "1" ] && [ "$REJECT" = "1" ]; then
+        echo "review: --approve and --reject conflict" >&2
+        return 3
+    fi
+    if [ ! -f "$AUTHORIZED_PAYLOAD" ]; then
+        echo "No operator-authorized boot payload recorded yet." >&2
+        echo "First authorization shows the full payload text:" >&2
+        echo "  libexec/raptor-sage-setup install" >&2
+        return 3
+    fi
+    local live
+    if ! live=$(capture_boot_payload) || [ -z "$live" ]; then
+        echo "Error: could not capture the live SAGE boot payload." >&2
+        echo "  Is the SAGE sidecar up? Check: libexec/raptor-sage-setup status" >&2
+        return 3
+    fi
+    local tmp_live
+    tmp_live=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp_live")
+    printf '%s\n' "$live" > "$tmp_live"
+    echo "Boot-payload review — live server vs $AUTHORIZED_PAYLOAD"
+    echo
+    local rc=0
+    python3 "$reviewer" compare \
+        --authorized "$AUTHORIZED_PAYLOAD" --live "$tmp_live" || rc=$?
+    echo
+    if [ "$rc" = "0" ]; then
+        echo "Nothing pending review: every live surface is authorized or"
+        echo "already rejected by the operator."
+        return 0
+    elif [ "$rc" != "4" ]; then
+        return "$rc"
+    fi
+    echo "The variants marked \"Not Authorized\" above are undecided: the MCP"
+    echo "guard strips them from live agent sessions until you decide."
+    echo
+    local decision=""
+    if [ "$APPROVE" = "1" ]; then
+        decision=merge
+        echo "Approving (--approve)."
+    elif [ "$REJECT" = "1" ]; then
+        decision=deny
+        echo "Rejecting (--reject)."
+    elif [ -t 0 ]; then
+        local answer
+        read -r -p "Approve or reject these variants? [a=approve / r=reject / N=decide later] " answer
+        case "$answer" in
+            a|A) decision=merge ;;
+            r|R) decision=deny ;;
+            *)
+                echo "No decision recorded. The stamp is unchanged; review will" >&2
+                echo "flag these variants again." >&2
+                return 4
+                ;;
+        esac
+    else
+        echo "Non-interactive and no decision flag: the stamp is unchanged." >&2
+        echo "  approve: libexec/raptor-sage-setup review --approve" >&2
+        echo "  reject:  libexec/raptor-sage-setup review --reject" >&2
+        return 4
+    fi
+    local merged
+    if ! merged=$(python3 "$reviewer" "$decision" \
+            --authorized "$AUTHORIZED_PAYLOAD" --live "$tmp_live"); then
+        echo "Error: recording the decision failed; the stamp is unchanged." >&2
+        return 3
+    fi
+    # Header + atomic write — same shape authorize_boot_payload stamps
+    # (kept inline: the reauthorize tests extract that function alone).
+    local sha image stamp running_digest
+    sha=$(printf '%s' "$merged" | sha256sum | awk '{print $1}')
+    image=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null \
+        | grep sage | head -1 || true)
+    image="${image:-unknown}"
+    running_digest=$(running_sage_digest)
+    stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local tmp
+    tmp=$(mktemp "$(dirname "$AUTHORIZED_PAYLOAD")/.tmp.payload.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
+    {
+        echo "# SAGE boot payload — operator-authorized"
+        echo "# Generated: $stamp by raptor-sage-setup (review)"
+        echo "# Image: $image"
+        echo "# RunningDigest: $running_digest"
+        echo "# SHA256: $sha"
+        echo "# Running raptor-sage-setup constitutes operator authorization of the"
+        echo "# payload below. Regenerated on every install; per-machine; gitignored."
+        echo "# Trust semantics: core/sage/CLAUDE.md."
+        echo "# ---"
+        printf '%s' "$merged"
+    } > "$tmp"
+    mv "$tmp" "$AUTHORIZED_PAYLOAD"
+    echo "Recorded the decision in the operator-authorized stamp:"
+    echo "  File:   $AUTHORIZED_PAYLOAD"
+    echo "  SHA256: $sha"
+    if [ "$decision" = "merge" ]; then
+        echo "New sessions will receive the approved variants intact."
+    else
+        echo "The guard keeps the rejected variants out of sessions (with a"
+        echo "calm note instead of the warning); review and status stop"
+        echo "flagging them as pending."
+    fi
 }
 
 ensure_rowmac_key() {
@@ -1234,22 +1505,51 @@ status_sage() {
     # script instead of ad-hoc head/sha256sum invocations that would
     # trip permission prompts.
     if [ -f "$AUTHORIZED_PAYLOAD" ]; then
-        local auth_stamp auth_image auth_sha
+        local auth_stamp auth_image auth_sha auth_digest
         auth_stamp=$(sed -n 's/^# Generated: //p' "$AUTHORIZED_PAYLOAD" | head -1)
         auth_image=$(sed -n 's/^# Image: //p' "$AUTHORIZED_PAYLOAD" | head -1)
         auth_sha=$(sed -n 's/^# SHA256: //p' "$AUTHORIZED_PAYLOAD" | head -1)
+        auth_digest=$(sed -n 's/^# RunningDigest: //p' "$AUTHORIZED_PAYLOAD" | head -1)
         echo "  Boot payload: authorized ${auth_stamp:-unknown} (${auth_image:-unknown}, sha256 ${auth_sha:0:12})"
-        # Compare against what the running server emits now. The payload
-        # is state-dependent (first-connection vs steady-state variant),
-        # so a mismatch means "look", not "compromised".
-        local live live_sha
+        # Compare the RUNNING container's image digest against the one
+        # recorded at authorization time — the tag string alone stays
+        # green across a registry-side repoint.
+        local live_digest
+        live_digest=$(running_sage_digest)
+        if [ -z "$auth_digest" ]; then
+            echo "  Image digest: not recorded at authorization (pre-digest stamp) — re-run install to record"
+        elif [ "$live_digest" = "none" ]; then
+            echo "  Image digest: could not determine the running container's digest"
+        elif [ "$live_digest" = "$auth_digest" ]; then
+            echo "  Image digest: running container matches authorization (${auth_digest##*@})"
+        else
+            echo "  Image digest: running container DIFFERS from authorization"
+            echo "    authorized: $auth_digest"
+            echo "    running:    $live_digest"
+            echo "    Review + re-authorize: bin/raptor sage-setup install --reauthorize"
+        fi
+        # Compare against what the running server emits now — variant-
+        # aware, via the same comparison the guard enforces (a whole-
+        # file sha compare is guaranteed noise against older stamp
+        # formats and state-dependent payloads). A mismatch means
+        # "look", not "compromised".
+        local live drift_rc tmp_live
         if live=$(capture_boot_payload) && [ -n "$live" ]; then
-            live_sha=$(printf '%s\n' "$live" | sha256sum | awk '{print $1}')
-            if [ "$live_sha" = "$auth_sha" ]; then
-                echo "  Boot payload drift: none — live payload matches"
+            tmp_live=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp_live")
+            printf '%s\n' "$live" > "$tmp_live"
+            local drift_out
+            drift_rc=0
+            drift_out=$(python3 "$RAPTOR_DIR/core/sage/boot_payload_review.py" \
+                summary --authorized "$AUTHORIZED_PAYLOAD" \
+                --live "$tmp_live" 2>/dev/null) || drift_rc=$?
+            if [ "$drift_rc" = "0" ]; then
+                echo "  Boot payload drift: none — every live surface is authorized"
+            elif [ "$drift_rc" = "4" ]; then
+                echo "  Boot payload drift: live payload serves UNAUTHORIZED variant(s)"
+                printf '%s\n' "$drift_out" | sed 's/^/  /'
+                echo "    Review + approve: libexec/raptor-sage-setup review"
             else
-                echo "  Boot payload drift: live payload DIFFERS (sha256 ${live_sha:0:12})"
-                echo "    Review + re-authorize: bin/raptor sage-setup install"
+                echo "  Boot payload drift: comparison failed (rc=$drift_rc)"
             fi
         else
             echo "  Boot payload drift: could not capture live payload to compare"
@@ -1263,4 +1563,5 @@ case "$MODE" in
     install)   install_sage ;;
     uninstall) uninstall_sage ;;
     status)    status_sage ;;
+    review)    review_boot_payload ;;
 esac

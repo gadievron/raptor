@@ -823,6 +823,24 @@ class TestPersistence:
     def test_load_missing_file(self, tmp_path):
         assert load_project_verbs(tmp_path) == []
 
+    def test_serialisation_is_order_independent(self, tmp_path):
+        # The caller dedups via a set, so input order is arbitrary —
+        # identical vocabularies must produce byte-identical files.
+        verbs = [
+            (frozenset({"kfree"}), frozenset(), ContractKind.ALLOC_FREE),
+            (frozenset({"begin"}), frozenset({"end"}), ContractKind.DISCOVERED),
+            (frozenset({"open"}), frozenset({"close"}), ContractKind.DISCOVERED),
+        ]
+        a_dir = tmp_path / "a"
+        b_dir = tmp_path / "b"
+        a_dir.mkdir()
+        b_dir.mkdir()
+        save_project_verbs(a_dir, verbs)
+        save_project_verbs(b_dir, list(reversed(verbs)))
+        a = (a_dir / "verb-contracts.json").read_text(encoding="utf-8")
+        b = (b_dir / "verb-contracts.json").read_text(encoding="utf-8")
+        assert a == b
+
     def test_load_corrupt_json(self, tmp_path):
         (tmp_path / "verb-contracts.json").write_text("not json")
         assert load_project_verbs(tmp_path) == []

@@ -1,0 +1,48 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet request data → XPath expression sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.xpath.taint.java
+    message: >-
+      Untrusted data flows into an XPath expression. Use parameterised
+      XPath (XPathVariableResolver) or escape the value before
+      concatenating it into the expression.
+    languages: [java]
+    severity: ERROR
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+          - pattern: (HttpServletRequest $REQ).getParameterMap()
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+    pattern-propagators:
+      - pattern: $M.put($K, $V)
+        from: $V
+        to: $M
+      - pattern: $M.add($V)
+        from: $V
+        to: $M
+    pattern-sinks:
+      # javax.xml.xpath — compile/evaluate take the expression string.
+      # Both simple and FQN typed spellings.
+      - patterns:
+          - pattern: (XPath $XP).compile($E)
+          - focus-metavariable: $E
+      - patterns:
+          - pattern: (javax.xml.xpath.XPath $XP).compile($E)
+          - focus-metavariable: $E
+      - patterns:
+          - pattern: (XPath $XP).evaluate($E, ...)
+          - focus-metavariable: $E
+      - patterns:
+          - pattern: (javax.xml.xpath.XPath $XP).evaluate($E, ...)
+          - focus-metavariable: $E
+    pattern-sanitizers:
+      - pattern: ESAPI.encoder().encodeForXPath(...)
+      - pattern: org.owasp.esapi.ESAPI.encoder().encodeForXPath(...)
+    metadata:
+      cwe: ["CWE-643"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "xpath", "taint"]

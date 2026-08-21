@@ -518,3 +518,45 @@ def test_cache_key_component_injective_and_safe():
     assert _cache_key_component("(empty)") != _cache_key_component("")
     # Plain names unchanged.
     assert _cache_key_component("requests") == "requests"
+
+
+# ---------------------------------------------------------------------------
+# URL injection defence
+# ---------------------------------------------------------------------------
+
+def test_fetcher_urls_quote_untrusted_names() -> None:
+    """Names/versions from scanned manifests are percent-encoded before
+    landing in a registry URL path — a hostile ``evil/../../other``
+    name must not redirect the request to a different endpoint."""
+    http = _StubHttp({"pypi.org": {"info": {"requires_dist": []}}})
+    walk_transitive(
+        [_direct("PyPI", "evil/../../other", "1.0?x=#frag")],
+        http=http, cache=None, ecosystems={"PyPI"},
+    )
+    assert len(http.calls) == 1
+    url = http.calls[0]
+    assert "/../" not in url and "?" not in url and "#" not in url
+    # PyPI name normalisation collapses the dot runs first; the
+    # remaining slashes are percent-encoded.
+    assert "evil%2F-%2F-%2Fother" in url
+    assert url.endswith("/1.0%3Fx%3D%23frag/json")
+
+
+def test_npm_scoped_name_keeps_at_and_encodes_slash() -> None:
+    http = _StubHttp({"registry.npmjs.org": {"dependencies": {}}})
+    walk_transitive(
+        [_direct("npm", "@scope/pkg", "1.0.0")],
+        http=http, cache=None, ecosystems={"npm"},
+    )
+    assert len(http.calls) == 1
+    assert "/@scope%2Fpkg/1.0.0" in http.calls[0]
+
+
+def test_package_version_exists_quotes_components() -> None:
+    from packages.sca.registry_metadata_walk import package_version_exists
+    http = _StubHttp({"crates.io": {"ok": True}})
+    assert package_version_exists(
+        "crates.io", "name/with/slash", "1.0#f", http=http,
+    ) is True
+    assert "name%2Fwith%2Fslash" in http.calls[0]
+    assert "1.0%23f" in http.calls[0]

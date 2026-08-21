@@ -167,3 +167,47 @@ def test_normal_json_does_not_fire():
 def test_normal_code_does_not_fire():
     result = preflight("int main() { printf(\"hello\\n\"); return 0; }")
     assert result.has_injection_indicators is False
+
+
+# --- Corpus-load diagnostics ---
+
+def test_malformed_pattern_dropped_with_warning(tmp_path, monkeypatch, caplog):
+    """A regex that fails to compile must not vanish silently — the
+    corpus author would never learn their new attack signature isn't
+    running. Mirrors the existing ReDoS-shape warning."""
+    import logging
+
+    from core.security import prompt_input_preflight as mod
+
+    corpus = tmp_path / "custom.txt"
+    corpus.write_text("valid_pattern\n(unclosed[group\n")
+    monkeypatch.setattr(mod, "_PATTERNS_DIR", tmp_path)
+    with caplog.at_level(
+            logging.WARNING,
+            logger="core.security.prompt_input_preflight"):
+        loaded = mod._load_patterns()
+    assert "custom" in loaded
+    assert len(loaded["custom"]) == 1  # only the valid pattern compiled
+    dropped = [r for r in caplog.records
+               if "dropping malformed pattern" in r.getMessage()]
+    assert len(dropped) == 1
+    msg = dropped[0].getMessage()
+    assert "custom.txt" in msg
+    assert "(unclosed[group" in msg
+
+
+def test_redos_pattern_still_dropped_with_warning(
+        tmp_path, monkeypatch, caplog):
+    import logging
+
+    from core.security import prompt_input_preflight as mod
+
+    corpus = tmp_path / "custom.txt"
+    corpus.write_text(r"(\w+)+!" + "\n")
+    monkeypatch.setattr(mod, "_PATTERNS_DIR", tmp_path)
+    with caplog.at_level(
+            logging.WARNING,
+            logger="core.security.prompt_input_preflight"):
+        loaded = mod._load_patterns()
+    assert "custom" not in loaded
+    assert any("catastrophic" in r.getMessage() for r in caplog.records)

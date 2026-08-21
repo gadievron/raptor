@@ -43,7 +43,7 @@ _SAFE_ARITH_RE = re.compile(
 # Evaluation caps: macro bodies come from the audited (untrusted) repo,
 # so the evaluator must be bounded. Legitimate C macro constants sit far
 # below these limits (typical: (1<<31), 0xFFFFFFFFFFFFFFFF, byte sizes);
-# a body like (1<<999999999999) would otherwise force a huge bigint.
+# a body like (1<<0x7fffffff) would otherwise force a huge bigint.
 _MAX_BODY_LEN = 512
 _MAX_LITERAL_MAGNITUDE = 1 << 64
 _MAX_SHIFT_BITS = 256
@@ -98,10 +98,14 @@ def _eval_arith_node(node: ast.AST) -> int | None:
     """Bounded bottom-up evaluation of an arithmetic AST node.
 
     Returns None for any node kind, literal magnitude, shift amount,
-    or intermediate result outside the caps above.
+    or intermediate result outside the caps above. Comparison nodes
+    (``<``, ``>``, ...) and bool literals are deliberately unhandled —
+    their results are truth values, not constants.
     """
     if isinstance(node, ast.Constant):
         value = node.value
+        # ``type is int`` (not isinstance): bool is an int subclass
+        # and a truth value must not resolve as a constant.
         if type(value) is int and abs(value) <= _MAX_LITERAL_MAGNITUDE:
             return value
         return None
@@ -150,10 +154,11 @@ def _try_evaluate(body: str) -> int | None:
     Accepts: integer literals (decimal, hex, negative), and pure
     arithmetic on integer literals (e.g. ``4 * 1024``, ``(1 << 12)``).
     Rejects: anything containing identifiers, function calls, casts,
-    or sizeof — and any body exceeding the evaluation caps (oversized
-    literals, huge shift amounts, results beyond 2**128), since macro
-    bodies come from the audited repo and must not be able to force
-    unbounded bigint work.
+    sizeof, comparisons (truth values are not constants) — and any
+    body exceeding the evaluation caps (oversized literals, huge shift
+    amounts, results beyond 2**128). The former bare ``eval`` computed
+    shift-bombs like ``(1<<0x7fffffff)`` eagerly, pinning the process
+    on a multi-hundred-megabyte bigint from hostile macro text.
     """
     cleaned = body.strip()
     if not cleaned or len(cleaned) > _MAX_BODY_LEN:

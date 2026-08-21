@@ -16,22 +16,42 @@ from typing import Dict, List, Sequence
 
 logger = logging.getLogger(__name__)
 
-_TEST_DIR_PATTERNS = ("test_", "tests", "test", "spec", "specs")
+# ``regress`` covers the OpenBSD/openssh convention (openssh ships a
+# 200+ file ``regress/`` tree; without the pattern the whole suite was
+# invisible to discovery).
+_TEST_DIR_PATTERNS = ("test_", "tests", "test", "spec", "specs", "regress")
 _TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$")
 # Languages the extraction heuristics below understand. Test-tree files
-# in other languages (C/C++ suites especially) are counted and reported
-# as skipped, not silently dropped — a huge native test suite used to
-# surface as "found 0 test cases for 0 functions in 7 files", which
-# reads as a discovery bug instead of a language-support boundary.
-_SUPPORTED_EXTENSIONS = (".py", ".js", ".ts", ".go", ".rs", ".rb", ".java")
+# in other languages are counted and reported as skipped, not silently
+# dropped — a huge native test suite used to surface as "found 0 test
+# cases for 0 functions in 7 files", which reads as a discovery bug
+# instead of a language-support boundary.
+_SUPPORTED_EXTENSIONS = (
+    ".py", ".js", ".ts", ".go", ".rs", ".rb", ".java",
+    # C/C++ test conventions (regress/, tests/, *_test.c, test_*.c).
+    ".c", ".cc", ".cpp", ".cxx",
+)
 _ASSERT_PATTERN = re.compile(
     r"^\s*(?:assert(?:Equal|True|False|Raises|In|NotIn|Is|IsNot|Greater|Less"
-    r"|Regex|Almost|Count|Contains|Not)?|self\.assert\w+|expect\(|assert )"
+    r"|Regex|Almost|Count|Contains|Not)?|self\.assert\w+|expect\(|assert |"
+    # C-family assertion conventions: libc assert(), openssh-style
+    # ASSERT_INT_EQ / ASSERT_PTR_NE, gtest EXPECT_*/ASSERT_*, check's
+    # ck_assert*, CUnit's CU_ASSERT*, Unity's TEST_ASSERT*. Generic
+    # ecosystem vocabulary (like the def/fn/func keywords above), not
+    # project-specific API lists.
+    r"assert\(|ASSERT_\w+\s*\(|EXPECT_\w+\s*\(|ck_assert\w*\s*\(|"
+    r"CU_ASSERT\w*\s*\(|TEST_ASSERT\w*\s*\()"
     r"(.+)",
     re.MULTILINE,
 )
+# Test-function openers. First alternative: keyword-introduced
+# definitions (Python/JS/Rust/Go). Second: C-family definitions —
+# ``[static] void|int|bool test_foo(`` and the ``*_test(s)`` suffix
+# convention. Prototypes also match; they yield an empty body and
+# contribute nothing, which is harmless.
 _TEST_FUNC_PATTERN = re.compile(
-    r"(?:def|function|fn|func)\s+(test_\w+)",
+    r"(?:def|function|fn|func)\s+(test_\w+)"
+    r"|(?:static\s+)?(?:void|int|bool)\s+\**(test_\w+|\w+_tests?)\s*\(",
 )
 
 
@@ -192,7 +212,8 @@ def _extract_test_functions(source: str) -> List[tuple]:
 
     func_starts = list(_TEST_FUNC_PATTERN.finditer(source))
     for i, match in enumerate(func_starts):
-        name = match.group(1)
+        # Group 1: keyword-introduced definitions; group 2: C-family.
+        name = match.group(1) or match.group(2)
         start = match.start()
         end = func_starts[i + 1].start() if i + 1 < len(func_starts) else len(source)
         body = source[start:min(end, start + 5000)]
@@ -214,6 +235,11 @@ def _infer_target_functions(
     stripped = test_name
     if stripped.startswith("test_"):
         stripped = stripped[5:]
+    elif stripped.endswith(("_tests", "_test")):
+        # C-family suffix convention (``sshkey_tests``): the driver
+        # name itself is not a target; call references in the body
+        # carry the real mapping.
+        stripped = ""
 
     for suffix in ("_success", "_failure", "_error", "_empty",
                    "_null", "_valid", "_invalid", "_basic",
@@ -229,6 +255,7 @@ def _infer_target_functions(
     for call in calls:
         if (
             call in test_body
+            and call != test_name  # the definition line matches too
             and not call.startswith("test_")
             and not call.startswith("assert")
             and not call.startswith("self")
@@ -240,7 +267,15 @@ def _infer_target_functions(
                              "mark", "skip", "xfail",
                              "open", "sorted", "map", "filter", "zip",
                              "format", "bytes", "tuple", "os", "json",
-                             "re")
+                             "re",
+                             # C keywords / ubiquitous libc noise the
+                             # ``name(`` heuristic would otherwise
+                             # misread as targets in C test bodies.
+                             "if", "for", "while", "switch", "return",
+                             "sizeof", "defined", "free", "malloc",
+                             "calloc", "memset", "memcpy", "strlen",
+                             "strcmp", "printf", "fprintf", "snprintf",
+                             "exit")
             and call not in targets
         ):
             targets.append(call)

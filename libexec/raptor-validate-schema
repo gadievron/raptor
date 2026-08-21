@@ -18,7 +18,9 @@ Types:
   variants        variants.json (/understand --hunt)
   bug-report      bug-report.json (/crash-analysis fetch stage)
 
-Exit code 0 on success, 1 on validation errors, 2 on missing file.
+Exit code 0 on success, 1 on validation errors, 3 on usage errors
+(unknown type, missing or unparseable file). 2 is reserved for the
+trust-marker refusal below (cc-trust-check convention).
 
 On success, records file hash in <dir>/.validated so the prep script
 can skip re-validation if the file hasn't changed.
@@ -327,7 +329,7 @@ def main():
     if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
         print(f"Usage: {sys.argv[0]} <type> <file>", file=sys.stderr)
         print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(3)
 
     schema_type = sys.argv[1]
     filepath = Path(sys.argv[2])
@@ -348,7 +350,7 @@ def main():
 
     if not filepath.exists():
         print(f"✗ file not found: {filepath}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(3)
 
     if is_already_validated(filepath):
         print(f"OK: {filepath.name} (cached)")
@@ -357,7 +359,7 @@ def main():
     data = load_json(filepath)
     if data is None:
         print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(3)
 
     # Normalise vuln_types before validating findings
     if schema_type == "findings" and isinstance(data, dict):

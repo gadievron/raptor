@@ -391,6 +391,19 @@ class TestSinkToCweHint:
         assert _sink_to_cwe_hint("os.system") == "CWE-78"
         assert _sink_to_cwe_hint("harmless_helper") is None
 
+class TestSanitizerNameVocabulary:
+    def test_allowlist_spellings_recognised(self):
+        from core.audit.context import _is_sanitizer_name
+
+        # Legacy spelling kept (matches scanned third-party code)…
+        assert _is_sanitizer_name("whitelist_hosts")
+        # …and the allowlist/blocklist spellings recognised too.
+        assert _is_sanitizer_name("allowlist_hosts")
+        assert _is_sanitizer_name("build_allow_list")
+        assert _is_sanitizer_name("blocklist_ip")
+        assert _is_sanitizer_name("denylist_check")
+
+
 
 class TestDangerousApiCaseFolding:
     """Mixed-case dangerous-API entries must match lowercased haystacks."""
@@ -755,6 +768,50 @@ class TestFindCallers:
         }
         result = _find_callers(None, "y.c", "target", 0, cm)
         assert len(result) == 1
+
+
+class TestFindCallees:
+    """Context-map fallback — mirror of the _find_callers fallback.
+
+    Delivery of callee-derived sections (most visibly "Callee CPG
+    summaries") depends on ctx["callees"]; on hosts whose inventory
+    carries no call edges the context map is the only edge source."""
+
+    def test_context_map_fallback_finds_callees(self):
+        from core.audit.context import _find_callees
+        cm = {
+            "call_edges": [
+                {"caller_file": "net.c", "caller": "handle_request",
+                 "callee": "parse_header", "callee_file": "net.c"},
+            ],
+        }
+        result = _find_callees(None, "net.c", "handle_request", 0, cm)
+        assert len(result) == 1
+        assert result[0]["file"] == "net.c"
+        assert result[0]["name"] == "parse_header"
+
+    def test_other_files_edges_ignored(self):
+        from core.audit.context import _find_callees
+        cm = {
+            "call_edges": [
+                {"caller_file": "other.c", "caller": "handle_request",
+                 "callee": "parse_header", "callee_file": "other.c"},
+            ],
+        }
+        result = _find_callees(None, "net.c", "handle_request", 0, cm)
+        assert result == []
+
+    def test_deduplicates_callees(self):
+        from core.audit.context import _find_callees
+        edge = {"caller_file": "x.c", "caller": "a",
+                "callee": "b", "callee_file": "x.c"}
+        cm = {"call_edges": [dict(edge), dict(edge)]}
+        result = _find_callees(None, "x.c", "a", 0, cm)
+        assert len(result) == 1
+
+    def test_no_context_map_no_inventory(self):
+        from core.audit.context import _find_callees
+        assert _find_callees(None, "a.c", "foo", 0, None) == []
 
 
 class TestEnrichCalleesWithSource:

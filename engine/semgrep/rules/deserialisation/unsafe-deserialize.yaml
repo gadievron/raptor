@@ -79,9 +79,16 @@ rules:
           - pattern: input(...)
           - pattern: os.environ[...]
           - pattern: sys.argv[...]
-          # File reads (common in deserialisation chains)
+          # File reads (common in deserialisation chains). Kept broad
+          # (sockets, uploads, opened files) but in-memory buffers over
+          # string literals are excluded — that data is fully hardcoded.
           - pattern: open(...).read()
-          - pattern: $F.read()
+          - patterns:
+              - pattern: $F.read()
+              - pattern-not: io.StringIO("...").read()
+              - pattern-not: io.BytesIO("...").read()
+              - pattern-not: StringIO("...").read()
+              - pattern-not: BytesIO("...").read()
     pattern-sinks:
       - pattern-either:
           # yaml.load without Loader kwarg — the dangerous form
@@ -145,18 +152,31 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP
@@ -193,20 +213,36 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.Body
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # network
           - pattern: $CONN.Read(...)
           - pattern: os.Getenv(...)
     pattern-sinks:
-      - pattern-either:
-          - pattern: gob.NewDecoder($R).Decode(...)
+      # Anchored to gob decoders only: a bare $DEC.Decode(...) sink
+      # flagged every json.NewDecoder(r.Body).Decode(&v) handler.
+      - pattern: gob.NewDecoder($R).Decode(...)
+      - patterns:
           - pattern: $DEC.Decode(...)
+          - pattern-either:
+              - pattern-inside: |
+                  $DEC := gob.NewDecoder(...)
+                  ...
+              - pattern-inside: |
+                  $DEC = gob.NewDecoder(...)
+                  ...
     metadata:
       cwe: ["CWE-502"]
       owasp_top_10: ["A8:2021-Software and Data Integrity Failures"]

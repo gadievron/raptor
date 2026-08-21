@@ -142,6 +142,153 @@ _KFREE_VAR_RE = re.compile(
 
 _STRUCT_VAR_RE = re.compile(r"&(\w+)->")
 
+# Async cancels (deactivate only — a concurrently-executing callback
+# keeps running) vs waiting teardown (sync/shutdown variants block
+# until the callback finishes) vs RCU-deferred reclamation. Kernel-ABI
+# seed sets, mirroring engine/coccinelle/rules/teardown_lifetime.cocci.
+_SEED_ASYNC_CANCEL_NAMES = (
+    "timer_delete", "del_timer", "cancel_work",
+    "cancel_delayed_work", "hrtimer_try_to_cancel",
+)
+
+_SEED_RCU_DEFER_NAMES = (
+    "kfree_rcu", "call_rcu", "queue_rcu_work", "synchronize_rcu",
+    "synchronize_net",
+)
+
+# Waiting teardown = the seed cancel set (all _sync/flush/kill
+# variants) plus the shutdown spellings.
+_SEED_WAITING_TEARDOWN_NAMES = _SEED_CANCEL_NAMES + (
+    "timer_shutdown", "timer_shutdown_sync", "timer_delete_sync",
+)
+
+
+@dataclass
+class SafeTeardownResult:
+    """Verdict of the safe-teardown witness.
+
+    ``no_dealloc`` marks the weakest safe arm — nothing is freed in
+    scope. Consumers that discharge lifetime claims should demand an
+    additional serialization witness for that arm (see the
+    anti-self-refutation gate).
+    """
+
+    safe: bool = False
+    reason: str = ""
+    no_dealloc: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "safe": self.safe,
+            "reason": self.reason,
+            "no_dealloc": self.no_dealloc,
+        }
+
+
+def check_safe_teardown(
+    source: str,
+    vocab: Any = None,
+) -> SafeTeardownResult:
+    """Mechanical witness that a teardown path is lifetime-safe.
+
+    Purpose: corroborate a reviewer's SELF-REFUTATION of a
+    use-after-free/teardown hypothesis. Conservative in the unsafe
+    direction:
+
+    * any ASYNC cancel followed later by a free-family call in the
+      same source → NOT safe (the async-cancel-then-free race shape;
+      waiting variants are excluded by suffix so ``timer_delete_sync``
+      never counts as async);
+    * else a waiting teardown (``*_sync`` / shutdown / flush / kill)
+      or an RCU-deferred reclamation present → safe;
+    * else no free-family call at all in the source (nothing's
+      lifetime ends here) → safe;
+    * else → not safe (a bare free with no visible teardown ordering
+      is exactly what the gate should keep flooring).
+    """
+    from .safety_contract import assert_boost_only
+    assert_boost_only("callback_lifetime")
+
+    async_re = re.compile(
+        r"\b(" + "|".join(map(re.escape, _SEED_ASYNC_CANCEL_NAMES))
+        + r")\s*\(",
+    )
+    waiting_names = set(_SEED_WAITING_TEARDOWN_NAMES) | set(
+        getattr(vocab, "callback_cancels", None) or (),
+    )
+    waiting_re = _call_re(tuple(sorted(waiting_names)))
+    rcu_re = re.compile(
+        r"\b(" + "|".join(map(re.escape, _SEED_RCU_DEFER_NAMES))
+        + r")\s*\(",
+    )
+    free_re = _call_re(_free_names(vocab))
+
+    lines = source.split("\n")
+    async_lines: list[int] = []
+    free_lines: list[int] = []
+    waiting = rcu = False
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith(("//", "/*", "*")):
+            continue
+        m = async_re.search(line)
+        # A waiting variant (timer_delete_sync) contains the async
+        # spelling as a prefix — only count a true async call.
+        if m and not re.search(
+            re.escape(m.group(1)) + r"_sync\s*\(", line,
+        ):
+            async_lines.append(i)
+        if free_re.search(line):
+            free_lines.append(i)
+        if waiting_re.search(line):
+            waiting = True
+        if rcu_re.search(line):
+            rcu = True
+
+    # Self-handler: the container was derived via container_of() — in
+    # the dominant kernel idiom the function IS the callback handler,
+    # and non-reentrancy of the executing item makes a plain
+    # cancel-then-free safe (same suppression the standing
+    # teardown_lifetime cocci rule applies).
+    self_handler = any(
+        re.search(r"=\s*container_of\s*\(", line) for line in lines
+    )
+    for a in async_lines:
+        later = [f for f in free_lines if f > a]
+        if later and not self_handler:
+            return SafeTeardownResult(
+                safe=False,
+                reason=(
+                    f"async cancel at line {a + 1} precedes a free at "
+                    f"line {later[0] + 1} — the async-cancel-then-free "
+                    f"race shape"
+                ),
+            )
+    if self_handler and async_lines and free_lines:
+        return SafeTeardownResult(
+            safe=True,
+            reason=(
+                "self-handler teardown (container_of-derived container; "
+                "non-reentrancy of the executing item)"
+            ),
+        )
+    if waiting:
+        return SafeTeardownResult(
+            safe=True, reason="waiting teardown (sync/shutdown) present",
+        )
+    if rcu:
+        return SafeTeardownResult(
+            safe=True, reason="RCU-deferred reclamation present",
+        )
+    if not free_lines:
+        return SafeTeardownResult(
+            safe=True, reason="no deallocation in scope",
+            no_dealloc=True,
+        )
+    return SafeTeardownResult(
+        safe=False, reason="free present with no visible teardown ordering",
+    )
+
 
 def check_callback_lifetime_local(
     source: str,

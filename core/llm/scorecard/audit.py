@@ -280,7 +280,8 @@ def render_markdown(report: AuditReport) -> str:
         f"(by {report.primary_event_type} coverage): **{report.total_cells}**"
     )
     lines.append("")
-    lines.append(f"## Verdict — **{report.verdict.upper()}**")
+    # Title Case per house output style (never all-caps statuses).
+    lines.append(f"## Verdict — **{report.verdict.title()}**")
     lines.append("")
     lines.append(report.verdict_reason)
     lines.append("")

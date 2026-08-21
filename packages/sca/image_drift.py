@@ -18,8 +18,6 @@ different capabilities. The bumper can't catch this (no version
 change in the manifest), but operators relying on mutable tags
 like ``alpine:3.18`` get a warning when the bytes silently
 change.
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations

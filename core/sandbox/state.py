@@ -130,6 +130,10 @@ _net_and_tcp_allowlist_warned = False
 # namespace backend): engaged / cannot-engage one-shot warnings.
 _degraded_tcp_deny_warned = False
 _degraded_tcp_deny_unavailable_warned = False
+# Egress-proxy tier 2 engaged (Landlock TCP port pin, no netns bridge):
+# the pin is port-scoped, not (host, port)-scoped — weaker guarantee
+# than the netns tier; warned once per process at engagement.
+_proxy_tier2_port_pin_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
 _ptrace_unavailable_warned = False
@@ -159,6 +163,22 @@ _gidmap_allow_warned_missing = False
 _speculative_failure_cache: dict = {}
 
 
+def _require_warn_flag(mod, flag_name: str) -> None:
+    """AttributeError-on-typo defense: if a caller passes a flag name
+    that doesn't exist on this module (typo, refactor missed an
+    update), the bare getattr would raise an opaque AttributeError
+    from inside state.py. Surface a clearer error that names the
+    offending flag so the caller can find their typo immediately."""
+    if not hasattr(mod, flag_name):
+        raise AttributeError(
+            f"warn_once: unknown flag {flag_name!r}. Add to "
+            f"core/sandbox/state.py module-level globals before "
+            f"using. (Likely a typo — flag names embed 'warned', "
+            f"most as `_<feature>_<reason>_warned`, some as "
+            f"`_<feature>_warned_<reason>`.)"
+        )
+
+
 def warn_once(flag_name: str) -> bool:
     """Atomic test-and-set for a module-level warn-once flag.
 
@@ -173,21 +193,28 @@ def warn_once(flag_name: str) -> bool:
     import sys
     mod = sys.modules[__name__]
     with _cache_lock:
-        # AttributeError-on-typo defense: if a caller passes a flag
-        # name that doesn't exist on this module (typo, refactor
-        # missed an update), the bare getattr would raise an opaque
-        # AttributeError from inside state.py. Surface a clearer
-        # error that names the offending flag so the caller can
-        # find their typo immediately.
-        if not hasattr(mod, flag_name):
-            raise AttributeError(
-                f"warn_once: unknown flag {flag_name!r}. Add to "
-                f"core/sandbox/state.py module-level globals before "
-                f"using. (Likely a typo — flag names embed 'warned', "
-                f"most as `_<feature>_<reason>_warned`, some as "
-                f"`_<feature>_warned_<reason>`.)"
-            )
+        _require_warn_flag(mod, flag_name)
         if getattr(mod, flag_name):
             return False
         setattr(mod, flag_name, True)
         return True
+
+
+def reset_warn_once(flag_name: str) -> None:
+    """Reset a warn-once latch to its unfired state.
+
+    Test-support API. The latches are once-per-PROCESS by design
+    (kernel capability and tier engagement don't change at runtime),
+    which makes any test that asserts on the warning itself
+    order-dependent: an earlier consumer anywhere in the same process
+    — including test directories whose conftest doesn't snapshot this
+    module's flags — eats the once. A test asserting warn-once
+    behaviour calls this first so it controls its own latch state
+    regardless of suite order. Same typo defense and locking as
+    :func:`warn_once`.
+    """
+    import sys
+    mod = sys.modules[__name__]
+    with _cache_lock:
+        _require_warn_flag(mod, flag_name)
+        setattr(mod, flag_name, False)

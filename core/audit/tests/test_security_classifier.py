@@ -143,3 +143,25 @@ class TestClassifySecurityImpact:
         client = self._client({})
         assert classify_security_impact([outcome], tmp_path, client) == {}
         client.generate_structured.assert_not_called()
+
+
+class TestCalibrationGuidance:
+    """The classification system prompt carries the two calibration
+    rules: concurrent stream-corruption is security-impacting for the
+    stream's consumers; speculative 'could mishandle X' hypotheses
+    without a stated trigger path are quality."""
+
+    def test_stream_race_guidance_present(self):
+        from core.audit.security_classifier import _CLASSIFICATION_SYSTEM
+
+        assert "unsynchronized concurrent writes" in _CLASSIFICATION_SYSTEM
+        assert "ordinary concurrent operation" in _CLASSIFICATION_SYSTEM
+
+    def test_no_impact_from_bug_class_alone(self):
+        from core.audit.security_classifier import _CLASSIFICATION_SYSTEM
+
+        assert (
+            "Do not infer impact from the bug class or CWE alone"
+            in _CLASSIFICATION_SYSTEM
+        )
+        assert "could mishandle X" in _CLASSIFICATION_SYSTEM

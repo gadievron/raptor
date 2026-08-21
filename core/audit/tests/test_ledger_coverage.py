@@ -316,17 +316,23 @@ class TestGateEnforcement:
         from core.llm.config import LLMConfig, ModelConfig
         from core.llm.providers import LLMResponse
 
+        # The alias must follow the repo's ``*-stub`` convention: the
+        # provider is fully stubbed but returns a deliberately nonzero
+        # cost (the ledger is what's under test), and the scorecard's
+        # live-API-leak detector exempts fake costs by that alias
+        # suffix — "stub-model" read as a paid call fired from a test
+        # and tripped the run-end leak-attribution line.
         class _Provider:
             def generate(self, prompt, system_prompt=None, **kwargs):
                 return LLMResponse(
-                    content="ok", model="stub-model",
+                    content="ok", model="ledger-stub",
                     provider="anthropic", tokens_used=10,
                     cost=4.0, finish_reason="complete",
                 )
 
         config = LLMConfig(
             primary_model=ModelConfig(
-                provider="anthropic", model_name="stub-model",
+                provider="anthropic", model_name="ledger-stub",
                 api_key="k",
             ),
             enable_caching=False,

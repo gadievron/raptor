@@ -19,13 +19,20 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
@@ -70,6 +77,12 @@ rules:
       - pattern-either:
           # Servlet
           - pattern: (HttpServletRequest $REQ).getParameter(...)
+          # Multi-value/map parameter spellings (source-consistency
+          # sweep; the exec args/env array seam is handled by the
+          # array-initializer propagator work — if a duplicate source
+          # addition arrives from that lane, dedup to one).
+          - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+          - pattern: (HttpServletRequest $REQ).getParameterMap()
           - pattern: (HttpServletRequest $REQ).getHeader(...)
           - pattern: (HttpServletRequest $REQ).getPathInfo()
           - pattern: (HttpServletRequest $REQ).getQueryString()
@@ -77,11 +90,42 @@ rules:
           # Spring MVC
           - pattern: (WebRequest $REQ).getParameter(...)
           - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-propagators:
+      # Collection round-trips (measured FN class: same-method
+      # map.put(k, tainted) -> get(k) -> sink). put/add taint the
+      # receiver; semgrep then propagates receiver taint through get.
+      # Key-insensitive by engine design — recall-side over-taint on a
+      # different key is adjudicated downstream (gate/validation), the
+      # honest asymmetry for a detector.
+      - pattern: $M.put($K, $V)
+        from: $V
+        to: $M
+      - pattern: $M.add($V)
+        from: $V
+        to: $M
+      # Array initializers (measured FN class: the Benchmark's
+      # String[] args = {"sh", "-c", tainted} / new String[]{...}
+      # shapes) — a tainted element taints the array variable. The
+      # constant-only initializer stays clean: taint only propagates
+      # when an element already carries it.
+      - pattern: String[] $A = { ..., $X, ... };
+        from: $X
+        to: $A
+      - pattern: $A = new String[] { ..., $X, ... }
+        from: $X
+        to: $A
     pattern-sinks:
       - pattern-either:
           # Runtime.exec — string form invokes the shell
           - pattern: Runtime.getRuntime().exec($CMD)
           - pattern: Runtime.getRuntime().exec($CMD, ...)
+          # Variable receiver (Runtime r = Runtime.getRuntime();
+          # r.exec(...)) — the chained spelling misses it (measured:
+          # every OWASP exec miss used a variable receiver). The env
+          # array is a sink position in its own right: attacker-
+          # controlled environment variables reach the child process.
+          - pattern: (Runtime $R).exec($CMD)
+          - pattern: (Runtime $R).exec($CMD, $ENV)
           # ProcessBuilder
           - pattern: new ProcessBuilder($CMD, ...)
           - pattern: new ProcessBuilder(Arrays.asList($CMD, ...))
@@ -105,20 +149,33 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.params[...]
-          - pattern: $CTX.params.$PROP
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP

@@ -13,12 +13,15 @@ LLM-tool round-trips.
     IterationStep                      one round of (hypothesis, evidence)
     must_progress(prev, curr)          raise IterationStalled if not strict
 
-`uncertainty` is the metric the guard checks. We define it as the count
-of evidence items that are *not yet conclusive* — tool failures plus
-clean-but-no-match results that the LLM has not yet ruled on. Strict
-progress means this count must go down between steps. The metric is
-deliberately coarse for now; a future revision can swap it for a real
-entropy measure once the evidence schema stabilises.
+`uncertainty` counts evidence items that are *not yet conclusive* —
+tool failures plus clean-but-no-match results that the LLM has not yet
+ruled on. The guard itself checks `resolved_fraction` (resolved items
+over total items): the runner passes cumulative evidence per step, so
+an absolute count can only grow while the fraction rises exactly when
+a round contributes conclusive evidence. Strict progress means the
+fraction must go up between steps. The metric is deliberately coarse
+for now; a future revision can swap it for a real entropy measure once
+the evidence schema stabilises.
 """
 
 from dataclasses import dataclass, field
@@ -69,15 +72,37 @@ def uncertainty(step: IterationStep) -> int:
     return n
 
 
+def resolved_fraction(step: IterationStep) -> float:
+    """Fraction of the step's evidence that is resolved.
+
+    Complements :func:`uncertainty`: where ``uncertainty`` counts
+    unresolved items in absolute terms, the fraction normalises by the
+    evidence count. That matters because the runner builds each step
+    from the CUMULATIVE evidence of all rounds so far — an absolute
+    count over a growing superset can never decrease, but the fraction
+    increases exactly when the fresh round contributed conclusive
+    evidence. An empty step has nothing resolved (0.0).
+    """
+    if not step.evidence:
+        return 0.0
+    unresolved = uncertainty(step)
+    return (len(step.evidence) - unresolved) / len(step.evidence)
+
+
 def must_progress(prev: IterationStep, curr: IterationStep) -> None:
     """Hoare postcondition: uncertainty must strictly decrease.
 
     Two conditions, both required:
       1. The hypothesis itself must change (no rerunning the same claim
          and calling it a refinement).
-      2. Uncertainty must strictly decrease (more grounded evidence
-         than before — a refine that adds no new conclusive evidence is
-         rejected before any tool runs).
+      2. The resolved fraction of the evidence must strictly increase.
+         Pre-fix this compared absolute ``uncertainty`` counts — but
+         the runner passes cumulative evidence (each round's step is a
+         superset of the previous round's), so the unresolved count
+         could never go down and the guard stalled every loop at round
+         two regardless of real progress. The fraction is stable under
+         superset growth: it rises iff the new round's evidence is
+         more conclusive than the running average.
 
     Raises IterationStalled with a specific reason on either failure.
     The caller is responsible for halting the loop on the exception;
@@ -85,12 +110,12 @@ def must_progress(prev: IterationStep, curr: IterationStep) -> None:
     """
     if curr.hypothesis == prev.hypothesis:
         raise IterationStalled("refinement produced an identical hypothesis")
-    prev_u = uncertainty(prev)
-    curr_u = uncertainty(curr)
-    if curr_u >= prev_u:
+    prev_f = resolved_fraction(prev)
+    curr_f = resolved_fraction(curr)
+    if curr_f <= prev_f:
         raise IterationStalled(
             f"uncertainty did not strictly decrease "
-            f"(prev={prev_u}, curr={curr_u})"
+            f"(resolved fraction prev={prev_f:.2f}, curr={curr_f:.2f})"
         )
 
 
@@ -98,5 +123,6 @@ __all__ = [
     "IterationStep",
     "IterationStalled",
     "uncertainty",
+    "resolved_fraction",
     "must_progress",
 ]

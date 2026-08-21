@@ -136,8 +136,14 @@ def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+    # Stamp finding_id back out as the tool fingerprint ONLY when it
+    # is a genuine per-finding identity. Legacy findings parsed before
+    # the finding_id fix carry the bare rule_id as their finding_id —
+    # writing THAT as matchBasedId/v1 would make every same-rule
+    # finding share a fingerprint on re-import, re-creating the
+    # collision this pipeline just fixed.
     fid = finding.get("finding_id")
-    if fid:
+    if fid and fid != rule_id:
         result["fingerprints"] = {"matchBasedId/v1": fid}
 
     if verdict == "suppressed":

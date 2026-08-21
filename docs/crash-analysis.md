@@ -68,33 +68,18 @@ Example:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Fetch / Build Split (Rule of Two)
+### Fetch / Build Split
 
 Bug-tracker content is untrusted, so fetching it is isolated in a
-dedicated reader agent, `crash-report-fetcher`:
-
-- **Fetcher** (`Read, Write, WebFetch` only): retrieves the tracker
-  page(s) and writes exactly one artifact, `bug-report.json` —
-  provenance-stamped `untrusted`, prose fields run through the
-  standard output sanitiser. A PreToolUse hook pins its WebFetch to
-  https URLs on the registrable domain of the operator-supplied URL
-  (anchor file `.claude/run/crash-report-fetcher.anchor`, written by
-  the orchestrator before dispatch); every fetch decision is logged
-  next to the anchor.
-- **Gate**: the orchestrator runs
-  `libexec/raptor-validate-schema bug-report <dir>/bug-report.json`
-  before anything downstream consumes the report. The gate refuses
-  unstamped or unsanitised artifacts.
-- **Orchestrator / builder / analyzer** have no WebFetch/WebSearch.
-  Cloning goes through `libexec/raptor-clone-repo`
-  (`core.git.clone`: URL allowlist + sandboxed git), attachment
-  downloads through `libexec/raptor-fetch-attachment` (URL must be
-  recorded in the validated report; egress-allowlisted HTTP client).
-
-Honest residual: the builder agents keep Bash — rr, gdb, and real
-builds need it — so network denial at the tool level is the enforced
-boundary, and Bash-level egress remains bounded by the sandbox and
-permission layers, not eliminated.
+dedicated fetch-only agent whose WebFetch is pinned to the registrable
+domain of the operator-supplied URL. Its single output,
+`bug-report.json`, is provenance-stamped, sanitised, and
+schema-validated before anything downstream consumes it. The
+orchestrator, builder, and analyzer agents have no WebFetch/WebSearch:
+cloning and attachment downloads go through mechanical helpers with
+URL allowlists and sandboxed git. (The builder agents keep Bash — rr,
+gdb, and real builds need it — so Bash-level egress remains bounded by
+the sandbox and permission layers rather than eliminated.)
 
 ## Output Directory Structure
 
@@ -230,175 +215,16 @@ CFLAGS="--coverage -g" LDFLAGS="--coverage" make
 
 ## Skills Reference
 
-The crash analysis system includes four skills located in `.claude/skills/crash-analysis/`:
+Four skills in `.claude/skills/crash-analysis/` back the agents:
 
-### rr-debugger
+| Skill | Provides |
+|-------|----------|
+| `rr-debugger` | Deterministic record-replay debugging with reverse execution (trace corruption back to its source) |
+| `function-tracing` | Function call instrumentation via `-finstrument-functions`, with a converter to Perfetto JSON |
+| `gcov-coverage` | Line and branch coverage collection |
+| `line-execution-checker` | Fast, script-friendly "was this line executed?" queries |
 
-**Location:** `.claude/skills/crash-analysis/rr-debugger/`
-
-Deterministic record-replay debugging with reverse execution capabilities.
-
-**Files:**
-- `SKILL.md` - Skill documentation and usage
-- `scripts/crash_trace.py` - Automated crash trace extraction
-
-**Key Commands:**
-```bash
-rr record ./program args        # Record execution
-rr replay                       # Replay in gdb
-reverse-next                    # Step backwards
-reverse-continue                # Continue backwards to breakpoint
-```
-
-**Use Cases:**
-- Trace memory corruption to its source
-- Find exact sequence of events before crash
-- Debug non-deterministic bugs deterministically
-
----
-
-### function-tracing
-
-**Location:** `.claude/skills/crash-analysis/function-tracing/`
-
-Function call instrumentation via GCC's `-finstrument-functions` flag.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-- `trace_instrument.c` - Instrumentation library source
-- `trace_to_perfetto.cpp` - Converter to Perfetto JSON format
-
-**Usage:**
-```bash
-# Build instrumentation library
-gcc -c -fPIC trace_instrument.c -o trace_instrument.o
-gcc -shared trace_instrument.o -o libtrace.so -ldl -lpthread
-
-# Build target with instrumentation
-gcc -finstrument-functions -g target.c -L. -ltrace -o target
-
-# Run and convert
-LD_LIBRARY_PATH=. ./target
-./trace_to_perfetto trace_*.log -o trace.json
-
-# View at ui.perfetto.dev
-```
-
-**Output Format:**
-```
-[seq] [timestamp] [depth] [ENTRY|EXIT!] function_name
-[0] [1.000000000]  [ENTRY] main
-[1] [1.000050000] . [ENTRY] process_data
-[2] [1.000100000] . [EXIT!] process_data
-```
-
----
-
-### gcov-coverage
-
-**Location:** `.claude/skills/crash-analysis/gcov-coverage/`
-
-Line and branch coverage collection using GCC's gcov.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-
-**Usage:**
-```bash
-# Build with coverage
-gcc --coverage -g target.c -o target
-
-# Run program (generates .gcda files)
-./target input_file
-
-# Generate coverage report
-gcov target.c
-
-# View coverage (##### = not executed)
-cat target.c.gcov
-```
-
-**Output Format:**
-```
-        1:   10:    int main() {
-        1:   11:        if (condition) {
-    #####:   12:            unreached_code();  // Not executed
-        -:   13:        }
-        1:   14:        return 0;
-```
-
----
-
-### line-execution-checker
-
-**Location:** `.claude/skills/crash-analysis/line-execution-checker/`
-
-Fast queries for whether specific source lines were executed.
-
-**Files:**
-- `SKILL.md` - Skill documentation
-- `line_checker.cpp` - Tool source code
-
-**Usage:**
-```bash
-# Build the checker
-g++ -o line_checker line_checker.cpp
-
-# Check if a specific line was executed
-./line_checker src/file.c:123
-
-# Exit codes:
-#   0 = line was executed
-#   1 = line was NOT executed
-#   2 = error (file not found, invalid line, etc.)
-```
-
-**Use Cases:**
-- Validate that specific code paths were taken during crash
-- Quickly check coverage without parsing full gcov files
-- Script-friendly for automated validation
-
----
-
-## Agents Reference
-
-The crash analysis uses six specialized agents in `.claude/agents/`:
-
-| Agent | File | Purpose |
-|-------|------|---------|
-| **crash-analysis-agent** | `crash-analysis-agent.md` | Main orchestrator - coordinates the full workflow |
-| **crash-report-fetcher-agent** | `crash-report-fetcher-agent.md` | Fetch-only reader - retrieves the bug tracker page, writes `bug-report.json` |
-| **crash-analyzer-agent** | `crash-analyzer-agent.md` | Deep root-cause analysis using rr, traces, coverage |
-| **crash-analyzer-checker-agent** | `crash-analyzer-checker-agent.md` | Rigorous validation of hypotheses |
-| **function-trace-generator-agent** | `function-trace-generator-agent.md` | Builds and runs function tracing |
-| **coverage-analysis-generator-agent** | `coverage-analysis-generator-agent.md` | Builds and collects gcov data |
-
-### Agent Workflow
-
-```
-crash-analysis-agent (orchestrator, no WebFetch/WebSearch)
-    │
-    ├── crash-report-fetcher-agent (WebFetch domain-pinned)
-    │       └── Writes bug-report.json
-    │           (gated by raptor-validate-schema bug-report)
-    │
-    ├── raptor-clone-repo / raptor-fetch-attachment (libexec, mechanical)
-    │       └── Local clone + attachments/ from the validated report
-    │
-    ├── function-trace-generator-agent
-    │       └── Generates traces/ directory
-    │
-    ├── coverage-analysis-generator-agent
-    │       └── Generates gcov/ directory
-    │
-    ├── crash-analyzer-agent
-    │       └── Writes root-cause-hypothesis-NNN.md
-    │
-    └── crash-analyzer-checker-agent
-            ├── PASS → root-cause-hypothesis-NNN-confirmed.md
-            └── FAIL → root-cause-hypothesis-NNN-rebuttal.md
-                       (loops back to crash-analyzer-agent)
-```
+Each skill's `SKILL.md` carries its full usage.
 
 ## Integration with RAPTOR
 

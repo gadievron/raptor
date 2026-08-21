@@ -43,6 +43,10 @@ class WitnessKind(str, Enum):
     BUILD_EXCLUDED = "build_excluded"
     NO_PATH_FROM_ENTRY = "no_path_from_entry"
     NOT_CALLED = "not_called"
+    # taint-unreachable (sink unreachable from source in the value
+    # graph — the sanitizer-cut vertex-cut argument, not a
+    # function-reachability fact)
+    SANITIZER_CUT = "sanitizer_cut"
     # reachable
     HAS_CALLER = "has_caller"
     FRAMEWORK_CALLABLE = "framework_callable"
@@ -207,6 +211,42 @@ VERDICTS: Dict[str, VerdictSpec] = {
             "reachability:not_called — entry function {fq} is not called from "
             "any non-test project source"),
         # prompt_verdict: rendered by the ``priority == low`` catch-all branch.
+    ),
+    # Sanitizer-cut: the value-bound vertex-cut proved every tainted
+    # source→sink path crosses a catalog sanitizer whose cleaned value
+    # reaches the sink (core.analysis.sanitizer_cut, verdict tag
+    # ``sanitizer_dominated``). SOUND as a candidate class — the cut is
+    # a structural graph argument. ``earns_suppression=True`` — EARNED
+    # under the binary-oracle protocol (CLAUDE.md
+    # binary-oracle-reachability §corpus-earned) and flipped with
+    # operator approval, 2026-08-19 (re-attempt after the first flip's
+    # stop-ship; both root causes closed by construction — the shared
+    # threat-model authority and line-carrying damage-gated records):
+    #   * zero-false-suppress corpus clean at flip time: 239 fixtures
+    #     (172 must-not-suppress), zero false suppressions, zero missed,
+    #     rule-of-three 95% UB 0.0174 (raptor-sanitizer-cut-precision,
+    #     report.json sha256 139a3f07fecade2b…50ee9a — recorded
+    #     alongside this change per the protocol);
+    #   * live evidence: zero true-finding damage across every
+    #     manifest-backed damage-gated measurement run, including the
+    #     replayed first-flip counterexamples now reading as damage
+    #     through the fixed matcher and refusing at the gate
+    #     (corpus-verified before enforcement was enabled).
+    # Enforcement consumer: the scan post-pass
+    # (core.analysis.sanitizer_cut_postpass) — full-proof ``suppress``
+    # verdicts only; ``candidate_only`` records can never enforce
+    # (structurally pinned). Reverting to record-only is this one field.
+    "sanitizer_dominated": VerdictSpec(
+        Reachability.UNREACHABLE, WitnessKind.SANITIZER_CUT,
+        Soundness.SOUND, earns_suppression=True,
+        summary=(
+            "value-bound vertex-cut: every tainted source→sink path "
+            "crosses a catalog sanitizer whose output reaches the sink"),
+        prompt_verdict=(
+            "Verdict: SANITIZER_DOMINATED — the value-bound vertex-cut "
+            "proved every tainted path to this sink crosses a catalog "
+            "sanitizer whose cleaned value reaches the sink "
+            "(corpus-earned; suppression enforced)."),
     ),
     "called": VerdictSpec(
         Reachability.REACHABLE, WitnessKind.HAS_CALLER, Soundness.HEURISTIC,

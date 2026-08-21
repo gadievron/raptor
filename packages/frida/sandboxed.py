@@ -107,7 +107,7 @@ def main() -> int:
     try:
         from core.sandbox import run as sandbox_run
     except ImportError as exc:
-        print(f"FATAL: core.sandbox not importable: {exc}", file=sys.stderr)
+        print(f"Fatal: core.sandbox not importable: {exc}", file=sys.stderr)
         print("Refusing to run frida unsandboxed. Fix the installation "
               "or use --unsafe-attach explicitly.", file=sys.stderr)
         return 1

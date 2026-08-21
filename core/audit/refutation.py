@@ -191,6 +191,31 @@ def _is_single_threaded(
     return True
 
 
+# Per-checklist memoisation for the call-graph structures the gates
+# derive: both gates run per outcome, and the adjacency / caller-map
+# rebuild was repeated for every hypothesis on the same run's
+# checklist. Keyed by object identity (the stored strong reference
+# pins the id); the small FIFO bound keeps long-lived processes from
+# accumulating dead checklists.
+_CHECKLIST_CACHE_MAX = 4
+_signal_reachable_cache: list = []
+_caller_map_cache: list = []
+
+
+def _checklist_cache_get(cache: list, checklist: Any) -> Any:
+    for obj, value in cache:
+        if obj is checklist:
+            return value
+    return None
+
+
+def _checklist_cache_put(cache: list, checklist: Any,
+                         value: Any) -> None:
+    cache.append((checklist, value))
+    if len(cache) > _CHECKLIST_CACHE_MAX:
+        cache.pop(0)
+
+
 def _signal_reachable_set(
     checklist: Optional[Dict[str, Any]],
 ) -> FrozenSet[str]:
@@ -200,10 +225,15 @@ def _signal_reachable_set(
     sigaction().  Returns frozenset of ``"file:function"`` keys.
 
     Falls back to empty set if signal handlers can't be identified
-    (safe: gate won't suppress).
+    (safe: gate won't suppress).  Memoised per checklist identity —
+    the gate runs once per outcome on the same checklist.
     """
     if not checklist:
         return frozenset()
+
+    cached = _checklist_cache_get(_signal_reachable_cache, checklist)
+    if cached is not None:
+        return cached
 
     files = checklist.get("files", [])
 
@@ -235,6 +265,9 @@ def _signal_reachable_set(
                 handler_names.add(name)
 
     if not handler_names:
+        _checklist_cache_put(
+            _signal_reachable_cache, checklist, frozenset(),
+        )
         return frozenset()
 
     # Phase 3: transitive closure over call graph
@@ -275,7 +308,9 @@ def _signal_reachable_set(
         # Also add bare name for matching
         result.add(f":{func}")
 
-    return frozenset(result)
+    frozen = frozenset(result)
+    _checklist_cache_put(_signal_reachable_cache, checklist, frozen)
+    return frozen
 
 
 def _refute_by_architecture(
@@ -349,19 +384,24 @@ def _classify_lifecycle(
     calls (``main → setup → target``).  Deeper chains return "unknown"
     — the checklist call graph is per-file and rarely has more depth.
     """
-    files = checklist.get("files", [])
-
-    # Build a global caller→[(callee, line)] map for indirect lookup
-    caller_map: Dict[str, list[tuple[str, int]]] = {}
-    for fentry in files:
-        for c in _get_calls(fentry):
-            caller = c.get("caller", "")
-            chain = c.get("chain", [])
-            line = c.get("line", 0)
-            if caller and chain:
-                caller_map.setdefault(caller, []).append(
-                    (chain[0], line),
-                )
+    # Build a global caller→[(callee, line)] map for indirect lookup.
+    # Memoised per checklist identity — the gate runs per outcome and
+    # the map only depends on the checklist.
+    caller_map: Dict[str, list[tuple[str, int]]] | None = (
+        _checklist_cache_get(_caller_map_cache, checklist)
+    )
+    if caller_map is None:
+        caller_map = {}
+        for fentry in checklist.get("files", []):
+            for c in _get_calls(fentry):
+                caller = c.get("caller", "")
+                chain = c.get("chain", [])
+                line = c.get("line", 0)
+                if caller and chain:
+                    caller_map.setdefault(caller, []).append(
+                        (chain[0], line),
+                    )
+        _checklist_cache_put(_caller_map_cache, checklist, caller_map)
 
     main_calls = caller_map.get("main", [])
     if not main_calls:
@@ -509,26 +549,30 @@ def _refute_by_contract(
 # Gate 4: Input-bound Tier 0 — known return-type table
 # ---------------------------------------------------------------------------
 
-# Functions whose return type is small enough that integer overflow is
-# impossible when the result is used in int-width arithmetic.  Only
-# functions whose max value fits in signed int (≤ 0x7FFF_FFFF) are
-# included.  ntohl/htonl are excluded: uint32_t can overflow signed int.
+# Functions whose return range is small enough that integer overflow
+# is impossible when the result is used in int-width arithmetic.
+# Entries carry (type description, min, max).  Only functions whose
+# max value fits in signed int (≤ 0x7FFF_FFFF) are included.
+# ntohl/htonl are excluded: uint32_t can overflow signed int.
 # atoi is excluded: it returns the full int range including negative
 # values, so wraparound in unsigned contexts is possible.
-_KNOWN_RETURN_BOUNDS: Dict[str, tuple[str, int]] = {
-    "ntohs":    ("uint16_t", 0xFFFF),
-    "htons":    ("uint16_t", 0xFFFF),
-    "getchar":  ("int [0..255 or EOF]", 0xFF),
-    "fgetc":    ("int [0..255 or EOF]", 0xFF),
-    "tolower":  ("int [0..255]", 0xFF),
-    "toupper":  ("int [0..255]", 0xFF),
-    "isdigit":  ("int [0..1]", 1),
-    "isalpha":  ("int [0..1]", 1),
-    "isspace":  ("int [0..1]", 1),
-    "isalnum":  ("int [0..1]", 1),
-    "isupper":  ("int [0..1]", 1),
-    "islower":  ("int [0..1]", 1),
-    "isprint":  ("int [0..1]", 1),
+# getchar/fgetc/tolower/toupper carry min = -1: they return EOF, and a
+# negative value is exactly what a CWE-191 underflow claim needs, so
+# they refute overflow (CWE-190) claims only.
+_KNOWN_RETURN_BOUNDS: Dict[str, tuple[str, int, int]] = {
+    "ntohs":    ("uint16_t", 0, 0xFFFF),
+    "htons":    ("uint16_t", 0, 0xFFFF),
+    "getchar":  ("int [0..255 or EOF]", -1, 0xFF),
+    "fgetc":    ("int [0..255 or EOF]", -1, 0xFF),
+    "tolower":  ("int [0..255 or EOF]", -1, 0xFF),
+    "toupper":  ("int [0..255 or EOF]", -1, 0xFF),
+    "isdigit":  ("int [0..1]", 0, 1),
+    "isalpha":  ("int [0..1]", 0, 1),
+    "isspace":  ("int [0..1]", 0, 1),
+    "isalnum":  ("int [0..1]", 0, 1),
+    "isupper":  ("int [0..1]", 0, 1),
+    "islower":  ("int [0..1]", 0, 1),
+    "isprint":  ("int [0..1]", 0, 1),
 }
 
 # Keywords that suggest an INTEGER overflow/wraparound claim.
@@ -583,13 +627,24 @@ def _refute_by_known_return_type(
     if _BUFFER_OVERFLOW_KW.search(hyp_lower):
         return None
 
+    # An underflow claim needs the value to go NEGATIVE (or wrap below
+    # zero) — a return type bounded above refutes nothing when the
+    # function can already return a negative sentinel (EOF).
+    claims_underflow = cwe == "CWE-191" or "underflow" in hyp_lower
+
     # Check if any known-bounded function appears in the hypothesis.
     # When multiple match, pick the one closest to an overflow keyword
     # for audit trail clarity.
     best: Optional[tuple[str, str, int, int]] = None  # (name, type, max, dist)
-    for func_name, (ret_type, max_val) in _KNOWN_RETURN_BOUNDS.items():
+    for func_name, (ret_type, min_val, max_val) in \
+            _KNOWN_RETURN_BOUNDS.items():
         func_pos = hyp_lower.find(func_name)
         if func_pos < 0:
+            continue
+        if claims_underflow and min_val < 0:
+            # getchar()/fgetc()/tolower() return EOF (-1): the table
+            # only bounds the value above, which cannot refute a
+            # CWE-191 (underflow) hypothesis.
             continue
 
         # When CWE is explicit (CWE-190/191), the function name alone
@@ -634,27 +689,131 @@ _SELF_REFUTATION_CWES = frozenset({
 })
 
 
+def _receipt_matches_mechanism(check_type: str, mechanism: str) -> bool:
+    """Does a structural receipt's family appear in the hypothesis text?
+
+    Token-stem match: at least two distinct stems of the check_type
+    (``auth_mode_registration`` → auth/mode/regist) must occur in the
+    mechanism, so an unrelated receipt on the same function cannot
+    rescue an unrelated hypothesis.
+    """
+    mech = (mechanism or "").lower()
+    if not mech or not check_type:
+        return False
+    stems = {t[:6] for t in check_type.lower().split("_") if len(t) >= 4}
+    return sum(1 for s in stems if s in mech) >= 2
+
+
+# Race-family CWEs whose self-refutation a mechanically verified
+# lock-protection receipt can discharge (deliberately excludes
+# CWE-367: a TOCTOU can span lock scopes).
+_LOCK_DISCHARGEABLE_RACE_CWES = frozenset({
+    "CWE-362", "CWE-364", "CWE-366",
+})
+
+# Lifetime families the safe-teardown witness can discharge
+# (callback_lifetime.check_safe_teardown): a UAF/double-free
+# self-refutation corroborated by waiting-cancel / RCU-deferred /
+# no-deallocation evidence is accepted instead of floored.
+_TEARDOWN_DISCHARGEABLE_CWES = frozenset({
+    "CWE-415", "CWE-416",
+})
+
+
+# Pre-loop screen families whose injected evidence can corroborate a
+# same-family self-refutation, and the hypothesis-text family matcher.
+_INT_CONTRACT_PRE_EVIDENCE = ("check-parsed-int-contract",
+                              "check-integer-narrowing")
+
+# Mechanical detector families whose per-function receipt corroborates
+# a same-family hypothesis the reviewer raised then dismissed or
+# refuted. Keyed by the detector name's last path segment.
+_DETECTOR_FAMILY_HYP_RES: Dict[str, re.Pattern] = {
+    "uninitialized_return": re.compile(
+        r"uninitiali[sz]|no default|left unset|garbage|indetermin|"
+        r"without (?:being )?initiali[sz]", re.IGNORECASE,
+    ),
+}
+_INT_FAMILY_HYP_RE = re.compile(
+    r"overflow|narrow|truncat|wraps?\b|int(?:8|16|32|64)\b|width",
+    re.IGNORECASE,
+)
+
+
 def rescue_self_refuted(
     outcome,
     *,
     domain_model: Optional[Dict[str, Any]] = None,
     checklist: Optional[Dict[str, Any]] = None,
     config=None,
+    negative_space: Optional[list] = None,
+    source: Optional[str] = None,
+    pre_evidence: Optional[str] = None,
+    detector_findings: Optional[list] = None,
 ) -> Optional[RefutationVerdict]:
     """Rescue hypotheses the LLM formed then refuted without evidence.
 
     Fires when ALL of:
       - outcome.status == "clean"
       - at least one hypothesis has confidence == "refuted"
-      - that hypothesis's CWE is in _SELF_REFUTATION_CWES
+      - that hypothesis's CWE is in _SELF_REFUTATION_CWES, OR a
+        structural negative-space receipt on this same function
+        matches the hypothesis's family (the checker flagged the
+        exact shape the reviewer refuted without evidence)
       - no mechanical tool has confirmed OR denied the hypothesis
       - the hypothesis has a non-empty counter field
+
+    When *pre_evidence* names a pre-loop screen hit from the
+    parsed-int/integer-narrowing family and a refuted hypothesis is in
+    the same family, the screen receipt outranks the self-refutation —
+    the mechanical checker flagged the exact contract the reviewer
+    talked itself out of (same philosophy as the structural
+    negative-space clause; the CWE allowlist cannot carry this case
+    because integer CWEs are not in it).
+
+    When *detector_findings* (this function's mechanical detector
+    hits, as injected into the review prompt) contain a detector whose
+    family matches a hypothesis the reviewer raised then REFUTED OR
+    DISMISSED at low confidence, the detector receipt outranks the
+    dismissal — the reviewer named the mechanical finding's exact
+    defect and talked itself out of it without tool evidence.
+
+    When *source* is provided and every shared-state access in it is
+    mechanically lock-protected (:func:`check_race_protection`), a
+    race-family (CWE-362/364/366) self-refutation is ACCEPTED instead
+    of floored: the refutation is corroborated by the very evidence
+    class this gate exists to demand, so re-flagging it manufactures a
+    false positive (heavily serialized kernel code is the canonical
+    shape). UAF/double-free self-refutations are unaffected — lock
+    protection says nothing about object lifetime.
 
     Returns a verdict that promotes clean → suspicious so the sweep
     pass can attempt mechanical verification.
     """
     if outcome.status != "clean":
         return None
+
+    race_protected = False
+    teardown_safe = False
+    teardown_reason = ""
+    if source:
+        try:
+            from .condition_smt import check_race_protection
+            race_protected = check_race_protection(source).protected
+        except Exception:
+            logger.debug("race-protection probe failed", exc_info=True)
+        try:
+            from .callback_lifetime import check_safe_teardown
+            _st = check_safe_teardown(source)
+            teardown_safe = _st.safe
+            teardown_reason = _st.reason
+            # The no-deallocation arm alone is too weak to discharge a
+            # lifetime claim (the free may live elsewhere); demand the
+            # serialization witness on top of it.
+            if _st.no_dealloc and not race_protected:
+                teardown_safe = False
+        except Exception:
+            logger.debug("safe-teardown probe failed", exc_info=True)
 
     hypotheses = getattr(outcome, "hypotheses", None) or []
     if not hypotheses:
@@ -664,6 +823,54 @@ def rescue_self_refuted(
     from .evidence_grade import is_tool_evidence
     if is_tool_evidence(outcome.evidence_tool or ""):
         return None
+
+    fn_receipts: list = []
+    for nf in negative_space or []:
+        ct = getattr(nf, "check_type", None) or (
+            nf.get("check_type") if isinstance(nf, dict) else None
+        )
+        nf_fn = getattr(nf, "function", None) or (
+            nf.get("function") if isinstance(nf, dict) else None
+        )
+        if ct and nf_fn == outcome.function:
+            fn_receipts.append(ct)
+
+    detector_families: list = []
+    for df in detector_findings or []:
+        det = (df.get("detector") if isinstance(df, dict)
+               else getattr(df, "detector", "")) or ""
+        fam = det.rsplit(":", 1)[-1]
+        if fam in _DETECTOR_FAMILY_HYP_RES:
+            detector_families.append((det, _DETECTOR_FAMILY_HYP_RES[fam]))
+    # The pre-loop screen's parsed-int/integer-narrowing receipt is a
+    # detector receipt in everything but plumbing: same family
+    # semantics, same dismissal modes (refuted OR low).
+    if pre_evidence and any(
+        t in pre_evidence for t in _INT_CONTRACT_PRE_EVIDENCE
+    ):
+        detector_families.append((pre_evidence, _INT_FAMILY_HYP_RE))
+
+    if detector_families:
+        for h in hypotheses:
+            if not isinstance(h, dict):
+                continue
+            conf = (h.get("confidence") or "").lower()
+            if conf not in ("refuted", "low"):
+                continue
+            mechanism = h.get("mechanism", "")
+            for det, fam_re in detector_families:
+                if fam_re.search(mechanism):
+                    return RefutationVerdict(
+                        gate="anti_self_refutation",
+                        reason=(
+                            f"hypothesis '{mechanism[:80]}' raised then "
+                            f"dismissed ({conf}) against an active {det} "
+                            f"detector receipt on this function; the "
+                            f"mechanical receipt outranks an unverified "
+                            f"dismissal"
+                        ),
+                        demote_to="suspicious",
+                    )
 
     for h in hypotheses:
         if not isinstance(h, dict):
@@ -677,20 +884,143 @@ def rescue_self_refuted(
 
         mechanism = h.get("mechanism", "")
         cwes = _extract_cwes_from_text(mechanism)
-        if not (cwes & _SELF_REFUTATION_CWES):
+        # Mechanically-discharged CWE families: a self-refutation whose
+        # every claimed class is covered by a corroborating witness is
+        # ACCEPTED — re-flagging it manufactures a false positive.
+        discharged: set = set()
+        if race_protected:
+            discharged |= _LOCK_DISCHARGEABLE_RACE_CWES
+        if teardown_safe:
+            # Lifetime self-refutations are corroborated by the
+            # safe-teardown witness (waiting cancel / RCU-deferred
+            # reclamation / self-handler / no deallocation in scope).
+            # The async-cancel-then-free shape grades UNSAFE, so a
+            # reviewer talking itself out of that real race is still
+            # floored.
+            discharged |= _TEARDOWN_DISCHARGEABLE_CWES
+        if cwes and cwes <= discharged:
+            logger.info(
+                "anti-self-refutation: accepting self-refutation for "
+                "%s — mechanically corroborated (%s)",
+                getattr(outcome, "function", "?"),
+                "; ".join(
+                    ([("race: full lock protection")] if race_protected
+                     and cwes & _LOCK_DISCHARGEABLE_RACE_CWES else [])
+                    + ([f"lifetime: {teardown_reason}"] if teardown_safe
+                       and cwes & _TEARDOWN_DISCHARGEABLE_CWES else [])
+                ),
+            )
             continue
-
-        return RefutationVerdict(
-            gate="anti_self_refutation",
-            reason=(
-                f"hypothesis '{mechanism[:80]}' self-refuted without "
-                f"mechanical evidence; concurrency/lifecycle self-refutations "
-                f"are unreliable"
-            ),
-            demote_to="suspicious",
+        if cwes & _SELF_REFUTATION_CWES:
+            return RefutationVerdict(
+                gate="anti_self_refutation",
+                reason=(
+                    f"hypothesis '{mechanism[:80]}' self-refuted without "
+                    f"mechanical evidence; concurrency/lifecycle "
+                    f"self-refutations are unreliable"
+                ),
+                demote_to="suspicious",
+            )
+        receipt = next(
+            (ct for ct in fn_receipts
+             if _receipt_matches_mechanism(ct, mechanism)),
+            None,
         )
+        if receipt:
+            return RefutationVerdict(
+                gate="anti_self_refutation",
+                reason=(
+                    f"hypothesis '{mechanism[:80]}' self-refuted "
+                    f"against an active {receipt} receipt on this "
+                    f"function; the structural receipt outranks an "
+                    f"unverified self-refutation"
+                ),
+                demote_to="suspicious",
+            )
 
     return None
+
+
+def diagnose_rescue(
+    outcome,
+    *,
+    negative_space: Optional[list] = None,
+) -> Optional[Dict[str, Any]]:
+    """Explain why :func:`rescue_self_refuted` did not fire.
+
+    Mirrors the gate's precondition chain link by link and reports the
+    first one that broke, so a run leaves a durable receipt whenever a
+    structural negative-space receipt exists on a function the reviewer
+    ruled clean but the rescue stayed silent.  Returns ``None`` when the
+    gate would fire (nothing to explain), otherwise a JSON-safe dict:
+
+    - ``blocked_on``: the first failed precondition
+      (``status`` / ``no_hypotheses`` / ``tool_evidence`` /
+      ``no_refuted_hypothesis`` / ``no_counter`` /
+      ``no_matching_receipt_or_cwe``)
+    - ``receipts``: structural check types on this function
+    - ``confidences``: per-hypothesis confidence values
+    """
+    if outcome.status != "clean":
+        return {"blocked_on": "status", "status": outcome.status}
+
+    hypotheses = getattr(outcome, "hypotheses", None) or []
+    if not hypotheses:
+        rr = outcome.review_result or {}
+        hypotheses = rr.get("hypotheses") or []
+
+    fn_receipts: list = []
+    for nf in negative_space or []:
+        ct = getattr(nf, "check_type", None) or (
+            nf.get("check_type") if isinstance(nf, dict) else None
+        )
+        nf_fn = getattr(nf, "function", None) or (
+            nf.get("function") if isinstance(nf, dict) else None
+        )
+        if ct and nf_fn == outcome.function:
+            fn_receipts.append(ct)
+
+    confidences = [
+        (h.get("confidence") or "").lower()
+        for h in hypotheses if isinstance(h, dict)
+    ]
+    base: Dict[str, Any] = {
+        "receipts": fn_receipts,
+        "confidences": confidences,
+    }
+
+    if not hypotheses:
+        return {"blocked_on": "no_hypotheses", **base}
+
+    from .evidence_grade import is_tool_evidence
+    if is_tool_evidence(outcome.evidence_tool or ""):
+        return {
+            "blocked_on": "tool_evidence",
+            "evidence_tool": outcome.evidence_tool,
+            **base,
+        }
+
+    refuted = [
+        h for h in hypotheses
+        if isinstance(h, dict)
+        and (h.get("confidence") or "").lower() == "refuted"
+    ]
+    if not refuted:
+        return {"blocked_on": "no_refuted_hypothesis", **base}
+    with_counter = [h for h in refuted if h.get("counter")]
+    if not with_counter:
+        return {"blocked_on": "no_counter", **base}
+
+    for h in with_counter:
+        mechanism = h.get("mechanism", "")
+        if _extract_cwes_from_text(mechanism) & _SELF_REFUTATION_CWES:
+            return None
+        if any(
+            _receipt_matches_mechanism(ct, mechanism)
+            for ct in fn_receipts
+        ):
+            return None
+    return {"blocked_on": "no_matching_receipt_or_cwe", **base}
 
 
 # ---------------------------------------------------------------------------

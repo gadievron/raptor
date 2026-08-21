@@ -1197,6 +1197,26 @@ class TestExtractionCompleteness:
         assert items.get("bm") == "Bar"
         assert items.get("tm") == "Tpl"
 
+    def test_cpp_out_of_line_methods_get_receiver(self, tmp_path):
+        # Out-of-line definitions (``Scanner::parseBody`` in a
+        # .cpp, ``inline T Reader::getElement`` in a header)
+        # sit at translation-unit level: class_name stayed None, so
+        # receiver-qualified pins/labels never matched and (with
+        # overloads sharing the bare name) the functions were never
+        # scheduled for review.
+        pytest.importorskip("tree_sitter_cpp")
+        items = self._items(
+            tmp_path, "o.cpp",
+            "void Scanner::parseBody(const char* p) {}\n"
+            "template <typename T>\n"
+            "inline T Reader::getElement(int index) { return T(); }\n"
+            "static char *ns::Klass::dup(const char *s) { return 0; }\n"
+            "int plain_fn(int x) { return x; }\n")
+        assert items.get("parseBody") == "Scanner"
+        assert items.get("getElement") == "Reader"
+        assert items.get("dup") == "Klass"       # rightmost qualifier
+        assert items.get("plain_fn") is None     # unqualified: unchanged
+
     def test_cpp_operator_overloads_extracted(self, tmp_path):
         # Operator overloads were dropped entirely (operator_name /
         # reference_declarator unhandled) — a vuln in operator[] / operator=

@@ -145,7 +145,9 @@ def _filter_locally_built(
     try:
         # ``git ls-files --error-unmatch <path>...`` returns non-zero
         # if ANY path is untracked. Run per-path so we can split.
-        # Cheap: cap=8 means ≤8 git invocations.
+        # One git invocation per candidate — the pre-probe filter can
+        # pass more than the result cap, but each call is comparable
+        # in cost to the readelf probe it replaces for dropped paths.
         locally_built: list[Path] = []
         repo_committed: list[Path] = []
         for c in candidates:
@@ -211,18 +213,31 @@ def _autodetect_binaries(
         DEFAULT_MAX_RESULTS,
         detect_binaries,
     )
-    detected = detect_binaries(repo, target_kind)
-    locally_built, repo_committed = _filter_locally_built(repo, detected)
-    if repo_committed:
-        logger.warning(
-            "binary-oracle: %d repo-committed binary(s) ignored "
-            "(provenance unverified — could be planted or stale): %s. "
-            "Pass --binary <path> to use them anyway when you know "
-            "they were built fresh.",
-            len(repo_committed),
-            ", ".join(str(p) for p in repo_committed[:3])
-            + ("..." if len(repo_committed) > 3 else ""),
-        )
+
+    def _drop_repo_committed(paths: list[Path]) -> list[Path]:
+        kept, dropped = _filter_locally_built(repo, paths)
+        if dropped:
+            logger.warning(
+                "binary-oracle: %d repo-committed binary(s) ignored "
+                "(provenance unverified — could be planted or stale): %s. "
+                "Pass --binary <path> to use them anyway when you know "
+                "they were built fresh.",
+                len(dropped),
+                ", ".join(str(p) for p in dropped[:3])
+                + ("..." if len(dropped) > 3 else ""),
+            )
+        return kept
+
+    # The provenance gate runs INSIDE detect_binaries, before its DWARF
+    # probe, so repo-committed (possibly attacker-planted) ELFs are
+    # never handed to readelf at all. Safe for explicit --binary flows:
+    # those never enter auto-detect (resolve_binary_paths validates
+    # them separately and deliberately bypasses the git-tracked
+    # filter — operator asserts trust). The post-filter below is a
+    # belt-and-braces re-check of the (≤ cap) returned paths.
+    detected = detect_binaries(
+        repo, target_kind, path_filter=_drop_repo_committed)
+    locally_built = _drop_repo_committed(detected)
     if locally_built:
         print(
             f"binary-oracle: auto-detected {len(locally_built)} "

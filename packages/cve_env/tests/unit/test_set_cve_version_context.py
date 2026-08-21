@@ -21,8 +21,6 @@ Location: src/cve_env/agent/tools.py:704-711.
 from __future__ import annotations
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
-
 import cve_env.agent.tools as cve_tools
 
 from cve_env.agent.tools import set_cve_version_context

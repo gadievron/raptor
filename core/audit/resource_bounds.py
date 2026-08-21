@@ -44,6 +44,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -609,6 +610,23 @@ def _clamp_witness(
     return None
 
 
+@lru_cache(maxsize=128)
+def _cfg_dom_cached(source: str, tail: str, language: str):
+    """(cfg, dominator tree) per (source, function, language) —
+    ``None`` when the function cannot be parsed into a CFG.
+
+    _caller_bound_search asks for guards at many call sites inside
+    the same caller, and the prepass adjudicates several sites per
+    function: without this cache every site rebuilt the full CFG and
+    dominator tree from scratch."""
+    from core.analysis.cfg_builder_cpp import build_cpp_intraproc_cfg
+    from core.analysis.dominators import build_dom_tree
+    cfg = build_cpp_intraproc_cfg(source, tail, language=language)
+    if cfg is None:
+        return None
+    return cfg, build_dom_tree(cfg)
+
+
 def _guards_at(
     source: str,
     function_name: str,
@@ -620,17 +638,21 @@ def _guards_at(
     (the lifecycle_collector path). ``None`` = CFG unavailable
     (tree-sitter grammar missing / function unparseable)."""
     try:
-        from core.analysis.cfg_builder_cpp import build_cpp_intraproc_cfg
-        from core.analysis.dominators import build_dom_tree
         from core.analysis.lifecycle_collector import collect_guards_at_site
     except ImportError:
         return None
     tail = function_name.rsplit(".", 1)[-1]
     try:
-        cfg = build_cpp_intraproc_cfg(source, tail, language=language)
-        if cfg is None:
-            return None
-        dom = build_dom_tree(cfg)
+        pair = _cfg_dom_cached(source, tail, language)
+    except ImportError:
+        return None
+    except Exception:
+        logger.debug("resource_bounds: CFG build failed", exc_info=True)
+        return None
+    if pair is None:
+        return None
+    cfg, dom = pair
+    try:
         guards = collect_guards_at_site(cfg, dom, line, file_path)
     except Exception:
         logger.debug("resource_bounds: guard collection failed",
@@ -719,11 +741,15 @@ def _caller_bound_search(
     constants: dict[str, int] | None,
     limit_names: frozenset[str],
     language: str,
+    deadline: float | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Depth-bounded reverse walk: a dominating count guard in a
     caller before the call refutes (``bound-in-caller``). Returns
     ``(witness_receipt | None, per_caller_receipts)`` — the receipt
-    list records how far the search went (the honesty requirement)."""
+    list records how far the search went (the honesty requirement).
+    *deadline* (``time.monotonic()`` epoch, ``None`` = unbounded)
+    stops the walk early; the receipts stay honest about the smaller
+    searched set."""
     per_caller: list[dict[str, Any]] = []
     spans_cache: dict[str, list[tuple[str, int, int]]] = {}
 
@@ -739,6 +765,9 @@ def _caller_bound_search(
         for callee in sorted(frontier):
             call_re = re.compile(rf"\b{re.escape(callee)}\s*\(")
             for fp, source in source_texts.items():
+                if deadline is not None and \
+                        time.monotonic() > deadline:
+                    return None, per_caller
                 if callee not in source:
                     continue
                 for m_line, raw in enumerate(
@@ -847,6 +876,7 @@ def _adjudicate_site(
     collection_pairs: list[dict[str, str]],
     context: Any,
     inventory: dict[str, Any] | None,
+    deadline: float | None = None,
 ) -> BoundEvidence:
     """The bound-witness comparator for one accumulation site."""
     resource = {
@@ -919,7 +949,7 @@ def _adjudicate_site(
     texts = source_texts or {file_path: source}
     caller_witness, per_caller = _caller_bound_search(
         function_name, texts, file_path, constants, limit_names,
-        language,
+        language, deadline=deadline,
     )
     bound_search["callers"] = per_caller
     if caller_witness is not None:
@@ -1199,13 +1229,15 @@ def run_resource_bounds_prepass(
         return bool(_STEM_INSERT_RE.search(text))
 
     candidates: list[tuple[str, str, int, int]] = []
+    lines_cache: dict[str, list[str]] = {}
     for fp, source in sorted(source_texts.items()):
         if not fp.endswith(_SOURCE_SUFFIXES):
             continue
         if not _has_insert(source):
             continue
+        lines = lines_cache.setdefault(fp, source.splitlines())
         for name, start, end in _c_function_spans(source):
-            segment = "\n".join(source.splitlines()[start - 1:end])
+            segment = "\n".join(lines[start - 1:end])
             if _has_insert(segment):
                 candidates.append((fp, name, start, end))
             if len(candidates) >= MAX_PREPASS_CANDIDATES:
@@ -1219,7 +1251,8 @@ def run_resource_bounds_prepass(
             telemetry["budget_exceeded"] = True
             break
         source = source_texts[fp]
-        segment_lines = source.splitlines()[start - 1:end]
+        lines = lines_cache.setdefault(fp, source.splitlines())
+        segment_lines = lines[start - 1:end]
         sites = _enumerate_sites(
             segment_lines, start, insert_vocab, alloc_vocab,
         )
@@ -1232,6 +1265,9 @@ def run_resource_bounds_prepass(
         except Exception:
             lang = "c"
         for site in sites[:2]:
+            if time.monotonic() - t0 > budget_s:
+                telemetry["budget_exceeded"] = True
+                break
             res = _adjudicate_site(
                 site, source, fp, name, lang,
                 segment_lines=segment_lines,
@@ -1242,6 +1278,7 @@ def run_resource_bounds_prepass(
                 collection_pairs=collection_pairs,
                 context=context,
                 inventory=inventory,
+                deadline=t0 + budget_s,
             )
             telemetry[res.outcome] = telemetry.get(res.outcome, 0) + 1
             if res.outcome == "inconclusive":

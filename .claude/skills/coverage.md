@@ -24,10 +24,15 @@ Each tool writes a `coverage-<tool>.json` in the run output directory:
 |------|-----------|----------|
 | `coverage-semgrep.json` | Scanner (`/scan`) | files examined, policy groups, errors |
 | `coverage-codeql.json` | Scanner (`/scan`, `/codeql`) | files examined, packs, rules, extraction failures |
-| `coverage-read.json` | Lifecycle complete | files the LLM read (from `.reads-manifest`) |
-| `coverage-llm.json` | Lifecycle complete (`/validate`, `/understand`) | files + items analysed (from findings + mark) |
+| `coverage-read.json` | Lifecycle end (any status) | files the LLM read (from `.reads-manifest`) |
+| `coverage-llm.json` | `/validate` stage 1; operator/agent `--mark` | items analysed (from findings + marks) |
+| `coverage-journal.json` | `/agentic` | functions reviewed (from review-journal entries) |
+| `coverage-fuzz.json` | `/fuzz` (gcov-instrumented targets) | per-function runtime reach (never counts as review) |
 
-Records are written automatically — no manual action needed.
+Records are written automatically — no manual action needed. The summary
+ends with a `Read tracking:` health line (did the LLM-read capture leg
+ever engage?) and, in project mode, a `Progress:` trend line from
+`coverage-progress.jsonl` (one row appended per completed run).
 
 ## Coverage Store
 
@@ -36,14 +41,14 @@ Records are written automatically — no manual action needed.
 ```python
 from core.coverage.store import CoverageStore
 
-store = CoverageStore.load(project_dir / "coverage.json")
+store = CoverageStore(project_dir / "coverage.json")   # loads if present
 
 # Mark lines as examined by a tool
-store.mark("src/auth.c", start=10, end=50, tool="audit")
+store.mark("src/auth.c", 10, 50, "audit")
 
-# Query who examined a line or function
-tools = store.who_checked("src/auth.c", line=25)
-tools = store.who_checked_function("src/auth.c", "check_pw", start=10, end=50)
+# Query who examined a line or a function's span
+tools = store.who_checked("src/auth.c", 25)
+tools = store.who_checked_function("src/auth.c", 10, 50)
 ```
 
 Line-range tracking uses inclusive `[lo, hi]` intervals, kept sorted and coalesced per tool.
@@ -56,8 +61,10 @@ Tool labels are classified by category and depth (`core/coverage/registry.py`):
 |----------|-------|-------|
 | static | scanned | semgrep, coccinelle, codeql |
 | llm | scanned | read, understand |
-| llm | analysed | claude, audit, validate, agentic, annotations |
-| runtime | runtime-tested | gcov, lcov, afl, fuzz, coverage.py, frida, sancov |
+| llm | analysed | claude, llm, audit, validate, agentic, journal, mark, annotations |
+| runtime | runtime-tested | gcov, lcov, llvm-cov, afl, fuzz, bincov, drcov, frida, sancov, coverage.py, pytest |
+
+The registry source is authoritative for the full label set.
 
 A file the LLM merely read (`read`) is `scanned`, not `analysed` — it does not count as "reviewed". Review requires depth >= `analysed`.
 
@@ -104,21 +111,24 @@ From file (many functions — preferred for `/understand` and `/validate`):
 libexec/raptor-coverage-summary <run_dir> --mark-file "$OUTPUT_DIR/reviewed-items.json"
 ```
 
-The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias.
+The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias. An optional `status` (`clean` / `suspicious` / `finding` / `dormant`) sets the journaled verdict; default `clean`.
 ```json
 [
     {"file": "src/auth.c", "item": "check_pw"},
-    {"file": "src/auth.c", "item": "credentials"},
+    {"file": "src/auth.c", "item": "credentials", "status": "suspicious"},
     {"file": "src/db.c", "item": "query"}
 ]
 ```
 
 Write this file using the Write tool, then pass it to `--mark-file`.
 
+**Durability:** in a project context (run dir under a project with a checklist), every mark is ALSO journaled into the project's `review-journal-index.json` as a review assertion (`producer=mark`, `model=operator`) with a source hash. Journaled marks survive run deletion, suppress `/audit` gaps cross-run through the hash-verified fold, and resurface automatically when the function's source drifts. On a standalone run dir the mark stays record-only (same-run suppression only).
+
 **Remove from reviewed** (undo incorrect mark):
 ```bash
 libexec/raptor-coverage-summary <run_dir> --unmark src/auth.c:check_pw
 ```
+Unmark also withdraws any journaled mark (an error-verdict entry replaces it in the index), so the function returns to the gap list.
 
 **Import external runtime coverage:**
 ```bash
@@ -259,7 +269,8 @@ Semgrep policy groups are compared against `RaptorConfig.POLICY_GROUP_TO_SEMGREP
 `core/audit/gaps.py:compute_gaps` determines which functions still need review. Coverage sources, in priority order:
 
 1. **Review journal** — `review-journal.jsonl` (per-run) and `review-journal-index.json` (project-level). This is the primary mid-run and cross-run source.
-2. **Coverage records** — legacy `coverage-record.json` (back-compat for pre-per-tool-split runs).
-3. **Coverage store** — `coverage.json` (imported at run completion via `import_journal`).
+2. **Coverage records** — per-tool `coverage-*.json` in the run dir: review-grade `functions_analysed` entries (an operator `--mark`, `coverage-llm.json`, `coverage-journal.json`) suppress gaps; scanned-depth labels (`read`, `understand`), whole-file `files_examined`, and runtime records (`coverage-fuzz.json` is reachability evidence, not review) never do. Legacy `coverage-record.json` still loads for pre-per-tool-split runs.
 
-A function is a gap when it has no entry in any of these sources.
+A function is a gap when it has no entry in either source. The durable
+`coverage.json` store is a query-time projection (summaries, `--gaps`),
+not a `compute_gaps` input.

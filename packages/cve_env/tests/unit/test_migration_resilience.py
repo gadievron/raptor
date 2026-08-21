@@ -5,7 +5,7 @@ several migrated sites (``docker_stop``, ``_container_logs_tail``,
 ``_compose_invocation``, ``_resolve_github_token_for_probe``,
 ``_inspect_state``, ``check_logs``, ``_manifest_inspect``) had NO direct
 tests for the timeout / missing-binary / OSError branches. These tests
-fill that gap by mocking ``cve_env.utils.run.subprocess.run`` to raise
+fill that gap by mocking ``core.container.proc.subprocess.run`` to raise
 each transport exception and asserting the migrated function returns its
 documented safe-fallback value (rather than propagating the exception).
 
@@ -30,7 +30,7 @@ def test_inspect_state_returns_error_on_timeout() -> None:
     from cve_env.tools.verify import _inspect_state
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = _inspect_state("c123")
@@ -42,7 +42,7 @@ def test_inspect_state_returns_error_on_missing_binary() -> None:
     from cve_env.tools.verify import _inspect_state
 
     with patch(
-        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
     ):
         result = _inspect_state("c123")
     assert "_error" in result
@@ -52,7 +52,7 @@ def test_inspect_state_returns_error_on_oserror() -> None:
     from cve_env.tools.verify import _inspect_state
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=OSError(24, "Too many open files"),
     ):
         result = _inspect_state("c123")
@@ -68,7 +68,7 @@ def test_container_logs_tail_returns_empty_on_timeout() -> None:
     from cve_env.tools.verify import _container_logs_tail
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=10),
     ):
         result = _container_logs_tail("c123")
@@ -79,7 +79,7 @@ def test_container_logs_tail_returns_empty_on_missing_binary() -> None:
     from cve_env.tools.verify import _container_logs_tail
 
     with patch(
-        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
     ):
         result = _container_logs_tail("c123")
     assert result == ""
@@ -97,7 +97,7 @@ def test_check_logs_returns_failed_on_timeout() -> None:
     from cve_env.tools.verify import check_logs
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = check_logs(
@@ -108,7 +108,10 @@ def test_check_logs_returns_failed_on_timeout() -> None:
     assert result["type"] == "log_check"
     assert result["passed"] is False
     assert "error" in result["details"]
-    assert "timed out" in result["details"]["error"].lower()
+    # Contract change with the core.env.verify engine: the handle seam
+    # folds every fetch failure (timeout, missing binary, dead daemon)
+    # into "no logs" — the structured-failure guarantee is the point.
+    assert "no logs available" in result["details"]["error"].lower()
 
 
 # ============================================================================
@@ -122,7 +125,7 @@ def test_manifest_inspect_returns_none_on_timeout() -> None:
     from cve_env.tools.arch import _manifest_inspect
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         result = _manifest_inspect("alpine:3.19")
@@ -133,7 +136,7 @@ def test_manifest_inspect_returns_none_on_missing_binary() -> None:
     from cve_env.tools.arch import _manifest_inspect
 
     with patch(
-        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
     ):
         result = _manifest_inspect("alpine:3.19")
     assert result is None
@@ -151,7 +154,7 @@ def test_docker_stop_swallows_timeout() -> None:
     from cve_env.tools.docker_run import docker_stop
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=30),
     ):
         # Must NOT raise.
@@ -162,7 +165,7 @@ def test_docker_stop_swallows_missing_binary() -> None:
     from cve_env.tools.docker_run import docker_stop
 
     with patch(
-        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+        "core.container.proc.subprocess.run", side_effect=FileNotFoundError("docker")
     ):
         # Must NOT raise.
         docker_stop("c123")
@@ -172,7 +175,7 @@ def test_docker_stop_swallows_oserror() -> None:
     from cve_env.tools.docker_run import docker_stop
 
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=OSError(24, "Too many open files"),
     ):
         # Must NOT raise.
@@ -190,7 +193,7 @@ def test_service_health_token_returns_empty_on_timeout(monkeypatch) -> None:  # 
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with patch(
-        "cve_env.utils.run.subprocess.run",
+        "core.container.proc.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=2),
     ):
         result = service_health._resolve_github_token_for_probe()
@@ -201,7 +204,7 @@ def test_service_health_token_returns_empty_on_missing_binary(monkeypatch) -> No
     from cve_env.infra import service_health
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with patch("cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("gh")):
+    with patch("core.container.proc.subprocess.run", side_effect=FileNotFoundError("gh")):
         result = service_health._resolve_github_token_for_probe()
     assert result == ""
 
@@ -232,7 +235,7 @@ def test_compose_invocation_falls_back_when_probe_times_out() -> None:
             side_effect=lambda b: f"/usr/bin/{b}",
         ),
         patch(
-            "cve_env.utils.run.subprocess.run",
+            "core.container.proc.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=10),
         ),
     ):

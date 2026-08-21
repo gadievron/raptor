@@ -15,32 +15,49 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.params
-          - pattern: $CTX.params[...]
-          - pattern: $CTX.params.$PROP
-          - pattern: $CTX.request.body
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP
           - pattern: process.argv[...]
-          # JSON.parse of request body — common intermediate
-          - pattern: JSON.parse(...)
+          # JSON.parse of request body — common intermediate. String
+          # literals excluded: JSON.parse('{"a": 1}') is fully hardcoded
+          # data, not attacker input.
+          - patterns:
+              - pattern: JSON.parse(...)
+              - pattern-not: JSON.parse("...")
     pattern-sinks:
       # lodash merge / defaultsDeep — focus on $INPUT (the source object)
       - patterns:

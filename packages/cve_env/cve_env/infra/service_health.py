@@ -34,8 +34,9 @@ import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-import requests
+from core.http import HttpError
 
 _TIMEOUT_S = 10.0
 _DOCKER_TIMEOUT_S = 30.0  # docker manifest inspect is slow even cache-warm
@@ -56,20 +57,44 @@ class HealthResult:
         return f"  {status}  {self.name:<22} {latency}  {self.detail[:60]}{rl}"
 
 
+_client_singleton = None
+
+
+def _client():
+    """Lazy core.http client (constructor snapshots the operator proxy
+    env — probes must answer for the network path real fetches use;
+    the pre-integration requests path disabled proxies, so on
+    proxy-only hosts every HTTP probe failed while the actual tools
+    could have worked)."""
+    global _client_singleton
+    if _client_singleton is None:
+        from core.http.urllib_backend import UrllibClient
+
+        _client_singleton = UrllibClient(user_agent="cve-env-doctor/0.1")
+    return _client_singleton
+
+
 def _timed_get(
     url: str, headers: dict[str, str] | None = None
-) -> tuple[float, requests.Response | None, str]:
-    """Return (latency_ms, response, error). One of response/error is filled."""
+) -> tuple[float, Any | None, str]:
+    """Return (latency_ms, response, error). One of response/error is
+    filled. The response is a :class:`core.http.Response` (carries the
+    ``status_code`` / ``json()`` requests-compat surface the probes
+    read). ``retries=0`` — a probe measures the service as it is right
+    now, not after backoff."""
     start = time.monotonic()
     try:
-        resp = requests.get(
+        resp = _client().request(
+            "GET",
             url,
-            headers=headers or {},
-            timeout=_TIMEOUT_S,
-            proxies={"http": "", "https": ""},  # disable env-based proxies
+            headers=headers or None,
+            timeout=int(_TIMEOUT_S),
+            total_timeout=int(_TIMEOUT_S),
+            retries=0,
+            raise_on_status=False,
         )
         return ((time.monotonic() - start) * 1000.0, resp, "")
-    except requests.RequestException as exc:
+    except HttpError as exc:
         return ((time.monotonic() - start) * 1000.0, None, str(exc)[:120])
 
 
@@ -183,7 +208,7 @@ def probe_github() -> HealthResult:
         )
     try:
         data = resp.json()
-    except ValueError:
+    except (ValueError, HttpError):
         return HealthResult(
             "GitHub API", ok=True, latency_ms=latency, detail="ok (non-JSON)"
         )

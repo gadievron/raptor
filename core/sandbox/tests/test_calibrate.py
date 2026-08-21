@@ -374,6 +374,80 @@ class TestConnectTargetsNormalised:
 
 
 # ---------------------------------------------------------------------------
+# env_keys plumb-through
+# ---------------------------------------------------------------------------
+
+
+class TestProbeEnvPlumbThrough:
+    """The cache key discriminates on env_keys values, so the probe
+    must actually run WITH them — pre-fix _spawn_probe never received
+    an env and get_safe_env() stripped the discriminators, so every
+    env shape produced the identical (wrong) measurement."""
+
+    def test_probe_env_none_without_keys(self):
+        assert cal._probe_env(()) is None
+        assert cal._probe_env(None) is None
+
+    def test_probe_env_carries_set_discriminators(self, monkeypatch):
+        monkeypatch.setenv("CAL_PROBE_X", "bedrock-on")
+        env = cal._probe_env(["CAL_PROBE_X"])
+        assert env is not None
+        assert env["CAL_PROBE_X"] == "bedrock-on"
+
+    def test_probe_env_removes_unset_discriminators(self, monkeypatch):
+        # An unset discriminator must be ABSENT even if the safe-env
+        # baseline would have carried a stale value through.
+        monkeypatch.delenv("CAL_PROBE_STALE", raising=False)
+        from core.config import RaptorConfig
+        base = dict(RaptorConfig.get_safe_env())
+        base["CAL_PROBE_STALE"] = "stale"
+        monkeypatch.setattr(RaptorConfig, "get_safe_env",
+                            classmethod(lambda cls: dict(base)))
+        env = cal._probe_env(["CAL_PROBE_STALE"])
+        assert "CAL_PROBE_STALE" not in env
+
+    def test_calibrate_binary_passes_discriminators_to_probe(
+            self, cache_dir, fake_binary, monkeypatch):
+        monkeypatch.setenv("CAL_PROBE_X", "corp-index")
+        captured = {}
+
+        def fake_spawn(bin_path, args, *, timeout, extra_env=None):
+            captured["extra_env"] = extra_env
+            return cal.SandboxProfile(
+                binary_path="", binary_sha256="", env_signature="",
+                captured_at="2026-05-09T00:00:00Z",
+                probe_args=list(args),
+                paths_read=["/probed"],
+                paths_written=[], paths_stat=[],
+                proxy_hosts=[], connect_targets=[],
+            ), 0
+
+        monkeypatch.setattr(cal, "_spawn_probe", fake_spawn)
+        cal.calibrate_binary(fake_binary, env_keys=["CAL_PROBE_X"])
+        assert captured["extra_env"] is not None
+        assert captured["extra_env"]["CAL_PROBE_X"] == "corp-index"
+
+    def test_calibrate_binary_no_env_keys_passes_none(
+            self, cache_dir, fake_binary, monkeypatch):
+        captured = {}
+
+        def fake_spawn(bin_path, args, *, timeout, extra_env=None):
+            captured["extra_env"] = extra_env
+            return cal.SandboxProfile(
+                binary_path="", binary_sha256="", env_signature="",
+                captured_at="2026-05-09T00:00:00Z",
+                probe_args=list(args),
+                paths_read=["/probed"],
+                paths_written=[], paths_stat=[],
+                proxy_hosts=[], connect_targets=[],
+            ), 0
+
+        monkeypatch.setattr(cal, "_spawn_probe", fake_spawn)
+        cal.calibrate_binary(fake_binary)
+        assert captured["extra_env"] is None
+
+
+# ---------------------------------------------------------------------------
 # calibrate_binary E2E — Linux
 # ---------------------------------------------------------------------------
 

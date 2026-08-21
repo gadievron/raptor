@@ -22,9 +22,6 @@ prevents future drift between the two layers.
 """
 
 from __future__ import annotations
-import pytest
-pytest.importorskip("claude_agent_sdk")
-
 import re
 from typing import Any
 

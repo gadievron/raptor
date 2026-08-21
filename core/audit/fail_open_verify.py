@@ -63,6 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from .fail_open_lang import (
+    JS_LANGUAGES,
     SUPPORTED_LANGUAGES,
     CallSiteOutcome,
     HandlerOutcome,
@@ -78,9 +79,17 @@ from .fail_open_lang import (
     java_function_throws,
     java_handlers,
     java_method_segment,
+    js_function_returns_promise,
+    js_function_span,
+    js_function_throws,
+    js_handlers,
+    js_unawaited_sites,
     language_for_path,
     python_function_raises,
     python_handlers,
+    rust_discard_sites,
+    rust_function_returns_result,
+    rust_function_span,
 )
 from .fail_open_roles import (
     GRADE_DETECTION,
@@ -99,6 +108,9 @@ RULE_IGNORED_RETURN = "fail_open:ignored-return"
 RULE_TRISTATE = "fail_open:tristate"
 RULE_RECOVER_CONTINUE = "fail_open:recover-continue"   # phase 2 (Go)
 RULE_UNAWAITED = "fail_open:unawaited"                 # phase 3 (JS/TS)
+# Phase 3: JS/TS handler outcomes reuse RULE_HANDLER_OUTCOME; Rust
+# ignored-Result shapes reuse RULE_IGNORED_RETURN (the language field
+# on the receipt distinguishes the legs).
 
 ALL_RULE_IDS = (
     RULE_HANDLER_OUTCOME,
@@ -1299,6 +1311,568 @@ def _run_go_check(
     )
 
 
+# ── JS/TS legs: handler outcome + unawaited promises ────────────────
+
+_UNAWAITED_HYPOTHESIS_RE = re.compile(
+    r"unawait|floating\s+promise|unhandled\s+rejection|\bawait",
+    re.IGNORECASE,
+)
+
+
+def _js_segment(source: str, function_name: str, language: str) -> str:
+    span = js_function_span(source, function_name, language=language)
+    if span is None:
+        return ""
+    lines = source.splitlines()
+    return "\n".join(lines[span[0] - 1:span[1]])
+
+
+def _js_fallibility(
+    handler: HandlerOutcome, source: str, language: str,
+) -> dict[str, Any] | None:
+    """Leg 2b for JS/TS: evidence the guarded region can throw or
+    reject. Strongest form is a same-file throw-capable callee; a
+    same-file async callee rejects through the same handler (an
+    ``await`` inside the try / the ``.catch`` receiver). JS catch
+    clauses are always broad, so any call inside the region earns the
+    weaker any-call receipt — mirroring the Python/Java broad-catch
+    rule."""
+    line = handler.try_span[0] if handler.try_span else 0
+    for callee in handler.try_calls:
+        thrown = js_function_throws(source, callee, language=language)
+        if thrown:
+            return {
+                "callee": callee,
+                "line": line,
+                "evidence": "throws",
+                "types": thrown,
+            }
+        if js_function_returns_promise(source, callee,
+                                       language=language):
+            return {
+                "callee": callee,
+                "line": line,
+                "evidence": "returns-promise (same-file signature)",
+                "types": ["<rejection>"],
+            }
+    if handler.try_calls:
+        evidence = (
+            "catchable: any-rejection-under-promise-catch"
+            if handler.idiom.startswith("promise_catch")
+            else "catchable: any-call-under-broad-catch"
+        )
+        return {
+            "callee": handler.try_calls[0],
+            "line": line,
+            "evidence": evidence,
+            "types": sorted(handler.caught),
+        }
+    return None
+
+
+def _run_js_handler_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    language: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    all_handlers = js_handlers(source, file_path, language=language)
+    if all_handlers is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            f"no tree-sitter {language} parser available — the JS leg "
+            "has no honest regex fallback for brace-delimited handlers",
+            language=language,
+        )
+    handlers = [
+        h for h in all_handlers
+        if _handler_in_function(h, function_name)
+    ]
+    if not handlers:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no catch clause or promise .catch handler found in "
+            f"{function_name}",
+            language=language,
+        )
+
+    permissive = [h for h in handlers if h.is_permissive]
+    fail_closed = [h for h in handlers if h.is_fail_closed]
+    undecided = [
+        h for h in handlers
+        if not h.is_permissive and not h.is_fail_closed
+    ]
+
+    if not permissive:
+        if fail_closed and not undecided:
+            first = fail_closed[0]
+            return FailOpenResult(
+                outcome="refuted",
+                reason=(
+                    f"fail-closed handler(s) demonstrated: "
+                    f"{first.evidence_snippet} at {file_path}:"
+                    f"{first.line} ({first.permissive_value}); no "
+                    f"permissive handler present in {function_name}"
+                ),
+                rule_id=RULE_HANDLER_OUTCOME,
+                language=language,
+                handler=first.to_dict(),
+            )
+        first = undecided[0] if undecided else handlers[0]
+        return _inconclusive(
+            REASON_HANDLER_UNDECIDED,
+            f"handler at {file_path}:{first.line} does substantial "
+            f"fallback work ({first.permissive_value}) — outcome not "
+            "structurally decidable",
+            language=language,
+        )
+
+    segment = _js_segment(source, function_name, language)
+    role: RoleEvidence | None = None
+    chosen: HandlerOutcome | None = None
+    for handler in permissive:
+        role = bind_role(
+            handler.try_calls,
+            function_name,
+            file_path,
+            language=language,
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            chosen = handler
+            break
+    if role is None or chosen is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to the guarded region "
+            f"(calls: {', '.join(permissive[0].try_calls) or '<none>'})",
+            language=language,
+        )
+
+    fallible = _js_fallibility(chosen, source, language)
+    if fallible is None:
+        return _inconclusive(
+            REASON_FALLIBILITY_UNRESOLVED,
+            "the guarded region makes no calls — nothing can throw "
+            "or reject, the handler is vacuous",
+            language=language,
+        )
+
+    rule_id = _apply_role_grade(RULE_HANDLER_OUTCOME, role)
+    caught_desc = ", ".join(chosen.caught)
+    reason = (
+        f"{chosen.evidence_snippet or chosen.idiom} at "
+        f"{file_path}:{chosen.line} swallows {fallible['callee']} "
+        f"({caught_desc}) inside {role.kind}-role region; control "
+        f"proceeds as if the check passed"
+    )
+    result = FailOpenResult(
+        outcome="confirmed",
+        reason=reason,
+        rule_id=rule_id,
+        language=language,
+        role=role.to_dict(),
+        handler=chosen.to_dict(),
+        fallible=fallible,
+    )
+    result.reachability = _entry_reachability(
+        role_context, inventory, file_path, function_name,
+    )
+    return result
+
+
+def _js_promise_fallibility(
+    callee: str,
+    role: RoleEvidence,
+    source: str,
+    language: str,
+    inventory: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Leg 2b for the unawaited leg: the callee demonstrably returns a
+    promise (same-file async / ``new Promise`` signature, inventory
+    signature, or a learned contract)."""
+    tail = _function_tail(callee)
+    if js_function_returns_promise(source, tail, language=language):
+        return {
+            "callee": callee,
+            "evidence": "returns-promise (same-file signature)",
+            "types": ["<rejection>"],
+        }
+    sig = _inventory_signature(inventory, tail)
+    if sig and re.search(r"\basync\b|\bPromise\b", sig):
+        return {
+            "callee": callee,
+            "evidence": "returns-promise (inventory signature)",
+            "types": ["<rejection>"],
+        }
+    if role.contract == "promise":
+        return {
+            "callee": callee,
+            "evidence": "contract:promise",
+            "types": ["<rejection>"],
+        }
+    return None
+
+
+def _run_js_unawaited_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    language: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    from .fail_open_lang import _ts_parser
+    if _ts_parser(language) is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            f"{language} grammar unavailable — promise consumption is "
+            "not honestly decidable from line shapes",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+    span = js_function_span(source, function_name, language=language)
+    segment = _js_segment(source, function_name, language)
+    if not segment:
+        # Same policy as the C/Go legs: a match elsewhere in the file
+        # is not evidence about this function.
+        return _inconclusive(
+            REASON_SPAN_UNRESOLVED,
+            f"cannot resolve the span of {function_name} — refusing "
+            "the whole-file scan (a match elsewhere in the file is "
+            "not evidence about this function)",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+
+    candidates = _candidate_callees(hypothesis, segment)
+    if not candidates:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"hypothesis names no call present in {function_name}",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+
+    role: RoleEvidence | None = None
+    callee = ""
+    for candidate in candidates:
+        role = bind_role(
+            [candidate],
+            "",  # per-callee binding: the enclosing name must not
+                 # smuggle a role onto an unrelated callee
+            file_path,
+            language=language,
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            callee = candidate
+            break
+    if role is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to any hypothesis callee "
+            f"({', '.join(candidates)})",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+
+    tail = _function_tail(callee)
+    fallible = _js_promise_fallibility(
+        callee, role, source, language, inventory,
+    )
+    if fallible is None:
+        return _inconclusive(
+            REASON_ASYNC_UNPROVABLE,
+            f"cannot demonstrate {callee} returns a promise "
+            "(same-file, inventory, contract) — an unawaited verdict "
+            "on a synchronous call would be fabricated",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+
+    sites = js_unawaited_sites(
+        source, file_path, tail, language=language, function_span=span,
+    )
+    if sites is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            f"no tree-sitter {language} parser available",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+    if not sites:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no call sites of {callee} located in {function_name}",
+            language=language, rule_id=RULE_UNAWAITED,
+        )
+
+    unguarded = [s for s in sites if s.verdict == "unguarded"]
+    undecided = [s for s in sites if s.verdict == "undecided"]
+    rule_id = _apply_role_grade(RULE_UNAWAITED, role)
+
+    if unguarded:
+        first = unguarded[0]
+        result = FailOpenResult(
+            outcome="confirmed",
+            reason=(
+                f"{first.code} at {file_path}:{first.line} — "
+                f"{first.evidence} ({role.kind}-role callee "
+                f"{callee}, {fallible['evidence']})"
+            ),
+            rule_id=rule_id,
+            language=language,
+            role=role.to_dict(),
+            handler={
+                "idiom": "unawaited",
+                "line": first.line,
+                "caught": [callee],
+                "broad": False,
+                "outcome_kind": "unawaited",
+                "permissive_value": first.shape,
+                "code": first.code,
+                "parser": first.parser,
+            },
+            fallible=fallible,
+            sites=sites,
+        )
+        result.reachability = _entry_reachability(
+            role_context, inventory, file_path, function_name,
+        )
+        return result
+    if not undecided:
+        return FailOpenResult(
+            outcome="refuted",
+            reason=(
+                f"all {len(sites)} site(s) of {callee} in "
+                f"{function_name} consume the promise (receipts per "
+                f"site)"
+            ),
+            rule_id=RULE_UNAWAITED,
+            language=language,
+            role=role.to_dict(),
+            fallible=fallible,
+            sites=sites,
+        )
+    return FailOpenResult(
+        outcome="inconclusive",
+        reason=(
+            f"{REASON_HANDLER_UNDECIDED}: {len(undecided)} of "
+            f"{len(sites)} site(s) could not be structurally decided"
+        ),
+        rule_id=RULE_UNAWAITED,
+        language=language,
+        role=role.to_dict(),
+        fallible=fallible,
+        sites=sites,
+    )
+
+
+def _run_js_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    language: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    if _UNAWAITED_HYPOTHESIS_RE.search(hypothesis):
+        return _run_js_unawaited_check(
+            source, file_path, function_name, hypothesis, language,
+            role_context, inventory,
+        )
+    return _run_js_handler_check(
+        source, file_path, function_name, language, role_context,
+        inventory,
+    )
+
+
+# ── Rust leg: ignored Result ────────────────────────────────────────
+
+
+def _rust_fallibility(
+    callee: str,
+    role: RoleEvidence,
+    source: str,
+    inventory: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Leg 2b for Rust: the callee's return type is a ``Result``
+    (same-file signature, then inventory extractor metadata), or a
+    learned contract records fallibility."""
+    tail = _function_tail(callee)
+    if rust_function_returns_result(source, tail):
+        return {
+            "callee": callee,
+            "evidence": "returns-result (same-file signature)",
+            "types": ["Result"],
+        }
+    sig = _inventory_signature(inventory, tail)
+    if sig and re.search(r"\bResult\b", sig):
+        return {
+            "callee": callee,
+            "evidence": "returns-result (inventory signature)",
+            "types": ["Result"],
+        }
+    if role.contract:
+        return {
+            "callee": callee,
+            "evidence": f"contract:{role.contract}",
+            "types": [],
+        }
+    return None
+
+
+def _run_rust_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    # Parser-absent is the documented degradation contract — report
+    # it as such rather than as a span failure (the Go rule).
+    from .fail_open_lang import _ts_parser
+    if _ts_parser("rust") is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "rust grammar unavailable — cannot resolve function spans",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+    span = rust_function_span(source, function_name)
+    if span is None:
+        return _inconclusive(
+            REASON_SPAN_UNRESOLVED,
+            f"cannot resolve the span of {function_name} — refusing "
+            "the whole-file scan (a match elsewhere in the file is "
+            "not evidence about this function)",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+    lines = source.splitlines()
+    segment = "\n".join(lines[span[0] - 1:span[1]])
+
+    candidates = _candidate_callees(hypothesis, segment)
+    if not candidates:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"hypothesis names no call present in {function_name}",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    role: RoleEvidence | None = None
+    callee = ""
+    for candidate in candidates:
+        role = bind_role(
+            [candidate],
+            "",  # per-callee binding: the enclosing name must not
+                 # smuggle a role onto an unrelated callee
+            file_path,
+            language="rust",
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            callee = candidate
+            break
+    if role is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to any hypothesis callee "
+            f"({', '.join(candidates)})",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    tail = _function_tail(callee)
+    fallible = _rust_fallibility(callee, role, source, inventory)
+    if fallible is None:
+        return _inconclusive(
+            REASON_FALLIBILITY_UNRESOLVED,
+            f"no Result-bearing signature resolvable for {callee} "
+            "(same-file, inventory) and no learned contract — cannot "
+            "demonstrate the discarded result can fail",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    sites = rust_discard_sites(
+        source, file_path, tail, function_span=span,
+    )
+    if sites is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "no tree-sitter rust parser available — binding "
+            "consumption and `?`/match shapes are not honestly "
+            "decidable from line shapes",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+    if not sites:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no call sites of {callee} located in {function_name}",
+            language="rust", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    unguarded = [s for s in sites if s.verdict == "unguarded"]
+    undecided = [s for s in sites if s.verdict == "undecided"]
+    rule_id = _apply_role_grade(RULE_IGNORED_RETURN, role)
+
+    if unguarded:
+        first = unguarded[0]
+        result = FailOpenResult(
+            outcome="confirmed",
+            reason=(
+                f"{first.code} at {file_path}:{first.line} — "
+                f"{first.evidence} ({role.kind}-role callee "
+                f"{callee}, {fallible['evidence']})"
+            ),
+            rule_id=rule_id,
+            language="rust",
+            role=role.to_dict(),
+            handler={
+                "idiom": "ignored_return",
+                "line": first.line,
+                "caught": [callee],
+                "broad": False,
+                "outcome_kind": "ignored_return",
+                "permissive_value": first.shape,
+                "code": first.code,
+                "parser": first.parser,
+            },
+            fallible=fallible,
+            sites=sites,
+        )
+        result.reachability = _entry_reachability(
+            role_context, inventory, file_path, function_name,
+        )
+        return result
+    if not undecided:
+        return FailOpenResult(
+            outcome="refuted",
+            reason=(
+                f"all {len(sites)} site(s) of {callee} in "
+                f"{function_name} consume the Result fail-closed "
+                f"(receipts per site)"
+            ),
+            rule_id=RULE_IGNORED_RETURN,
+            language="rust",
+            role=role.to_dict(),
+            fallible=fallible,
+            sites=sites,
+        )
+    return FailOpenResult(
+        outcome="inconclusive",
+        reason=(
+            f"{REASON_HANDLER_UNDECIDED}: {len(undecided)} of "
+            f"{len(sites)} site(s) could not be structurally decided"
+        ),
+        rule_id=RULE_IGNORED_RETURN,
+        language="rust",
+        role=role.to_dict(),
+        fallible=fallible,
+        sites=sites,
+    )
+
+
 # ── leg 3: Joern flow escalator (outcome-gated) ─────────────────────
 
 
@@ -1432,6 +2006,16 @@ def run_fail_open_check(
         )
     elif language == "go":
         result = _run_go_check(
+            source, file_path, function_name, hypothesis, ctx,
+            inventory,
+        )
+    elif language in JS_LANGUAGES:
+        result = _run_js_check(
+            source, file_path, function_name, hypothesis, language,
+            ctx, inventory,
+        )
+    elif language == "rust":
+        result = _run_rust_check(
             source, file_path, function_name, hypothesis, ctx,
             inventory,
         )

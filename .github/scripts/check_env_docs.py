@@ -443,8 +443,14 @@ _BASH_ASSIGN = re.compile(
 _BASH_EXPORT_BARE = re.compile(r"^\s*export\s+([A-Z][A-Z0-9_]*)\s*$")
 _BASH_READ = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)")
 _BASH_SELF_DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*)[:#%/^,\-+=?}]")
+# The trailing what-follows context (whitespace then a command-ish
+# character) is a lookahead, NOT consumed: `A=1 B=1 cmd` chains a
+# second assignment where the first match's trailing context would
+# otherwise swallow the boundary whitespace, leaving `B` with no
+# `(?:^|\s)` anchor — B's child-write went unrecorded and a variable
+# that is pure child plumbing misclassified as an operator knob.
 _ENV_PREFIX_ASSIGN = re.compile(
-    r"(?:^|\s)([A-Z][A-Z0-9_]*)=\S*\s+[a-zA-Z_./\"$]",
+    r"(?:^|\s)([A-Z][A-Z0-9_]*)=\S*(?=\s+[a-zA-Z_./\"$])",
 )
 
 

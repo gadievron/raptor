@@ -40,10 +40,31 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
     def test_wrapper_propagates_unknown_arg_failure(self):
         # An unknown flag should bubble up as a non-zero exit from argparse,
         # not be silently swallowed by the wrapper.
-        proc = subprocess.run(
-            [str(WRAPPER), "--definitely-not-a-flag"],
-            capture_output=True, text=True, timeout=60,
-        )
+        #
+        # Hermetic by construction: without an explicit --repo, the
+        # dispatcher back-fills the target from the host's ACTIVE
+        # PROJECT (or RAPTOR_CALLER_DIR) and runs its lifecycle
+        # pre-work — license detection, target-shape and build-system
+        # detection over the whole project tree — BEFORE the child's
+        # argparse ever sees the bogus flag. On a host with a large
+        # active project that pre-work alone blew the timeout and
+        # SIGKILLed a half-started real run into the operator's
+        # project directory. Pin --repo to an empty temp dir and
+        # RAPTOR_OUT_DIR to a temp out dir so the run touches nothing
+        # outside the test and reaches argparse immediately.
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "empty-repo"
+            repo.mkdir()
+            out = Path(tmp) / "out"
+            out.mkdir()
+            env = dict(os.environ)
+            env["RAPTOR_OUT_DIR"] = str(out)
+            env.pop("RAPTOR_CALLER_DIR", None)
+            proc = subprocess.run(
+                [str(WRAPPER), "--repo", str(repo),
+                 "--definitely-not-a-flag"],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
         self.assertNotEqual(proc.returncode, 0)
         # argparse writes errors to stderr.
         self.assertTrue(

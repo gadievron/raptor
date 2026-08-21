@@ -1981,6 +1981,54 @@ class TestBudgetGuard:
             budget = 100.0
         assert abs(_fraction_used(CT()) - 0.5) < 1e-9
 
+    def test_property_form_fraction_used(self):
+        """Property (non-callable) fraction_used is honoured — the
+        orchestrator's CostTracker exposes it as a property."""
+        class CT:
+            fraction_used = 0.7
+        assert abs(_fraction_used(CT()) - 0.7) < 1e-9
+
+    def test_real_orchestrator_cost_tracker_trips_gate(self):
+        """Regression: the orchestrator CostTracker exposed only the
+        private _max_cost and _budget_ratio, so _fraction_used probed
+        nothing, always computed 0.0, and this gate never tripped."""
+        from packages.llm_analysis.orchestrator import CostTracker
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("model-a", 8.0)
+        assert abs(_fraction_used(ct) - 0.8) < 1e-9
+        assert _budget_exhausted(ct, threshold=0.60)
+        assert not _budget_exhausted(ct, threshold=0.90)
+
+    def test_real_cost_tracker_no_budget_never_trips(self):
+        from packages.llm_analysis.orchestrator import CostTracker
+        ct = CostTracker(max_cost=0.0)
+        ct.add_cost("model-a", 8.0)
+        assert _fraction_used(ct) == 0.0
+        assert not _budget_exhausted(ct, threshold=0.60)
+
+    def test_real_cost_tracker_skips_validation(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from packages.llm_analysis.orchestrator import CostTracker
+        codeql = tmp_path / "out" / "codeql"
+        codeql.mkdir(parents=True)
+        db = codeql / "cpp-db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("")
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("model-a", 8.0)  # 80% > default 60% threshold
+        m = validate_dataflow_claims(
+            findings=[{"finding_id": "F1", "tool": "semgrep"}],
+            results_by_id={"F1": {"dataflow_summary": "claim",
+                                  "is_exploitable": True}},
+            codeql_db=db,
+            repo_path=tmp_path,
+            llm_client=MagicMock(),
+            cost_tracker=ct,
+        )
+        assert m["n_validated"] == 0
+        assert m["skipped_reason"] == "budget_exhausted"
+
 
 # validate_dataflow_claims (integration) --------------------------------------
 

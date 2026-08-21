@@ -99,6 +99,16 @@ class CallSite:
     assigned_names: FrozenSet[str]
     lineno: int
     col_offset: int = 0
+    # Names referenced ANYWHERE inside the argument subtrees —
+    # receivers of nested calls (``print(bar.toCharArray())`` →
+    # ``{"bar"}``), operands of concatenations (``println("x" + a)``
+    # → ``{"a"}``). SINK-ARG RESOLUTION FALLBACK ONLY: this set must
+    # never feed gate condition 2 (``input_symbols ∩ tainted``) —
+    # arg_names' deliberate undercount is the soundness guard there,
+    # and widening it would over-suppress. Producers that don't track
+    # deep names leave the default; the sink resolver uses it only
+    # when it contains exactly one name.
+    arg_deep_names: FrozenSet[str] = frozenset()
 
 
 @dataclass(frozen=True)

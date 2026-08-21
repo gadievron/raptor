@@ -67,7 +67,7 @@ sudo afl-system-config
 - The binary should ideally be compiled with:
   - AFL instrumentation: `afl-clang-fast` or `afl-gcc`
   - ASAN: `-fsanitize=address`
-- Crashes are saved to `out/fuzz_<binary>_<timestamp>/afl_output/main/crashes/`
+- Crashes are saved to `out/fuzz_<binary>_<timestamp>_pid<N>_<tail>/afl_output/main/crashes/`
 - RAPTOR automatically analyzes crashes and generates exploits
 - When `--dict` is not passed, an audit-generated `fuzz.dict` is auto-discovered (own run directory first, then the newest sibling run); an explicit `--dict` always wins
 

@@ -171,7 +171,64 @@ def _cmd_gaps(view):
         print(f"  {g['file']}:{g['function']}")
 
 
-def _cmd_mark(mark_targets, run_dir):
+def _journal_marks(run_dir, marked, verdict_by_key):
+    """Journal marks as review assertions so they are durable and
+    hash-aware.
+
+    The run-local coverage-llm.json record suppresses gaps only for
+    audits of the SAME run dir; a mark journaled into the project index
+    survives run deletion, suppresses cross-run via the hash-verified
+    fold, and resurfaces automatically when the function's source
+    drifts. Best-effort: no project context (standalone run dir, no
+    checklist) keeps the record-only behaviour.
+
+    Returns the number of entries journaled.
+    """
+    project_dir = run_dir.parent
+    if not (project_dir / "checklist.json").exists():
+        return 0
+    try:
+        from core.audit.record import _compute_hash  # collector's exact algorithm
+        from core.coverage.journal import (
+            ReviewJournalEntry,
+            append_entry,
+            merge_into_index,
+            now_iso,
+        )
+        from core.json import load_json
+
+        checklist = load_json(project_dir / "checklist.json") or {}
+        target = checklist.get("target_path") or ""
+        ranges = {}
+        for f in checklist.get("files", []):
+            for it in f.get("items", []) or f.get("functions", []) or []:
+                if it.get("name"):
+                    ranges[(f.get("path"), it["name"])] = (
+                        it.get("line_start") or 0, it.get("line_end"),
+                    )
+        for file_path, func_name in marked:
+            lo, hi = ranges.get((file_path, func_name), (0, None))
+            source_hash = ""
+            if target and lo:
+                source_hash = _compute_hash(
+                    Path(target), file_path, lo, hi,
+                ) or ""
+            append_entry(run_dir, ReviewJournalEntry(
+                ts=now_iso(), run_id=run_dir.name,
+                file=file_path, function=func_name,
+                verdict=verdict_by_key.get(
+                    (file_path, func_name), "clean"),
+                source_hash=source_hash,
+                line_start=lo, line_end=hi,
+                model="operator", producer="mark",
+            ))
+        return merge_into_index(project_dir, run_dir)
+    except Exception as exc:  # noqa: BLE001 — journaling is additive
+        print(f"WARNING: mark journaling skipped: {exc}", file=sys.stderr)
+        return 0
+
+
+def _cmd_mark(mark_targets, run_dir, statuses=None):
     """Mark items as reviewed in the coverage record."""
     if not run_dir:
         print("ERROR: cannot determine run directory for --mark.", file=sys.stderr)
@@ -203,6 +260,7 @@ def _cmd_mark(mark_targets, run_dir):
     }
 
     added = 0
+    marked = []
     for target in mark_targets:
         if ":" not in target:
             print(f"WARNING: skipping '{target}' (expected file:function)", file=sys.stderr)
@@ -213,12 +271,16 @@ def _cmd_mark(mark_targets, run_dir):
                 {"file": file_path, "function": func_name}
             )
             existing_funcs.add((file_path, func_name))
+            marked.append((file_path, func_name))
             added += 1
     # Marking a function records function-level review only — it must NOT add
     # the file to files_examined (which is the whole-file "tool scanned this
     # file" signal; the store would otherwise mark the entire file reviewed).
     write_record(run_dir, llm_record, tool_name="llm")
-    print(f"Marked {added} item{'s' if added != 1 else ''} as reviewed in {run_dir.name}")
+    journaled = _journal_marks(run_dir, marked, statuses or {})
+    durable = " (journaled to project index)" if journaled else ""
+    print(f"Marked {added} item{'s' if added != 1 else ''} "
+          f"as reviewed in {run_dir.name}{durable}")
 
 
 def _cmd_unmark(unmark_targets, run_dir):
@@ -256,7 +318,51 @@ def _cmd_unmark(unmark_targets, run_dir):
     removed = original - len(llm_record["functions_analysed"])
 
     write_record(run_dir, llm_record, tool_name="llm")
+    # Neutralise any journaled mark for the same key: the journal is
+    # append-only, so unmark appends a NEWER error-verdict entry under
+    # the same (file, function, operator) index key — the index's
+    # latest-wins merge replaces the mark row, and error verdicts are
+    # skipped by both import_journal and the gap folds, restoring the
+    # function to the gap list.
+    _neutralise_journaled_marks(run_dir, sorted(to_remove))
     print(f"Removed {removed} item{'s' if removed != 1 else ''} from reviewed in {run_dir.name}")
+
+
+def _neutralise_journaled_marks(run_dir, keys):
+    project_dir = run_dir.parent
+    if not (project_dir / "checklist.json").exists():
+        return
+    try:
+        from core.coverage.journal import (
+            INDEX_FILENAME,
+            ReviewJournalEntry,
+            append_entry,
+            merge_into_index,
+            now_iso,
+        )
+        from core.json import load_json
+        index = load_json(project_dir / INDEX_FILENAME) or {}
+        journaled = {
+            (row.get("file"), row.get("function"))
+            for row in (index.get("entries") or {}).values()
+            if isinstance(row, dict) and row.get("producer") == "mark"
+        }
+        touched = False
+        for file_path, func_name in keys:
+            if (file_path, func_name) not in journaled:
+                continue
+            append_entry(run_dir, ReviewJournalEntry(
+                ts=now_iso(), run_id=run_dir.name,
+                file=file_path, function=func_name,
+                verdict="error", source_hash="",
+                lesson="operator unmark — review assertion withdrawn",
+                model="operator", producer="mark",
+            ))
+            touched = True
+        if touched:
+            merge_into_index(project_dir, run_dir)
+    except Exception as exc:  # noqa: BLE001 — neutralisation is additive
+        print(f"WARNING: unmark journaling skipped: {exc}", file=sys.stderr)
 
 
 def _cmd_import(import_path, fmt, tool, args):
@@ -285,6 +391,12 @@ def _cmd_import(import_path, fmt, tool, args):
 def main():
     argv = sys.argv[1:]
 
+    if "-h" in argv or "--help" in argv:
+        # Hand-rolled flag walker (no argparse) — pre-fix an operator's
+        # --help was silently ignored and the summary ran instead.
+        print(__doc__.strip())
+        return
+
     # --import <path> [--format <fmt>] [--tool <label>]: ingest external runtime
     # coverage. Extract the flag+value pairs up front so the path value isn't
     # later mistaken for a positional <dir>.
@@ -305,6 +417,7 @@ def main():
 
     # Extract --mark, --mark-file, --unmark targets
     mark_targets = []
+    mark_statuses = {}
     unmark_targets = []
     if "--mark-file" in argv:
         idx = argv.index("--mark-file")
@@ -324,6 +437,11 @@ def main():
                 name = e.get("item") or e.get("function") or e.get("global") or e.get("macro", "")
                 if f and name:
                     mark_targets.append(f"{f}:{name}")
+                    # Optional per-entry verdict for the journaled mark
+                    # (clean when absent). Journal verdict enum only.
+                    st = e.get("status")
+                    if st in ("clean", "suspicious", "finding", "dormant"):
+                        mark_statuses[(f, name)] = st
             argv = argv[:idx] + argv[idx + 2:]
     # Process --mark / --unmark in a SINGLE pass so flag order
     # doesn't matter. Pre-fix the if-else sequence below
@@ -385,7 +503,7 @@ def main():
                 except Exception as exc:
                     logger.debug("get_run_dirs failed: %s", exc)
         if mark_targets:
-            _cmd_mark(mark_targets, run_dir)
+            _cmd_mark(mark_targets, run_dir, statuses=mark_statuses)
         if unmark_targets:
             _cmd_unmark(unmark_targets, run_dir)
         return

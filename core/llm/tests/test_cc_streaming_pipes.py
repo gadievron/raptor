@@ -120,3 +120,55 @@ def test_failed_call_carries_parsed_spend_telemetry():
     assert sr.input_tokens == 1000
     assert sr.output_tokens == 2000
     assert sr.session_id == "sess-abort"
+
+
+def test_large_prompt_to_busy_child_does_not_deadlock():
+    """Mutual pipe-block: child floods stderr past the pipe buffer
+    BEFORE reading stdin, while the parent feeds a prompt larger than
+    the pipe buffer. Pre-fix the parent wrote the whole prompt in one
+    blocking call before the drain loop started — both processes
+    blocked in write(2) forever, outside timeout coverage. The stdin
+    feed now happens inside the select loop, interleaved with the
+    stderr drain."""
+    result_line = json.dumps({
+        "type": "result",
+        "session_id": "sess-bigprompt",
+        "is_error": False,
+    })
+    script = (
+        "import sys\n"
+        f"sys.stderr.write('x' * {_STDERR_SPEW})\n"
+        "sys.stderr.flush()\n"
+        "n = len(sys.stdin.read())\n"
+        f"sys.stdout.write({result_line!r} + '\\n')\n"
+    )
+    sr = run_cc_streaming(
+        [sys.executable, "-c", script],
+        prompt="y" * (1024 * 1024),
+        env=_env(),
+        timeout_s=30,
+    )
+    assert sr.error is None
+    assert sr.session_id == "sess-bigprompt"
+
+
+def test_timeout_covers_stdin_write():
+    """A child that never reads stdin leaves the parent's prompt feed
+    stalled at the pipe buffer — the deadline must still fire as
+    TimeoutExpired instead of hanging in a blocking write."""
+    import subprocess
+    import time
+
+    import pytest
+
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_cc_streaming(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            prompt="y" * (1024 * 1024),
+            env=_env(),
+            timeout_s=2,
+        )
+    # Well under the child's sleep — the deadline, not the child,
+    # ended the call.
+    assert time.monotonic() - start < 30

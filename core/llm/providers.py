@@ -1995,6 +1995,11 @@ class OpenAICompatibleProvider(LLMProvider):
             "model": self.config.model_name,
             "messages": wire_messages,
             "stream": True,
+            # Without include_usage the OpenAI streaming API sends NO
+            # usage payload at all — every streamed turn recorded zero
+            # tokens/cost. Providers that reject the option (older
+            # vLLM/Ollama builds) get it dropped + retried below.
+            "stream_options": {"include_usage": True},
             **_openai_sampling_kwargs(self.config.model_name, max_tokens),
         }
         if tool_schemas:
@@ -2010,7 +2015,34 @@ class OpenAICompatibleProvider(LLMProvider):
             try:
                 resp = self.client.chat.completions.create(**kwargs)
                 break
+            except TypeError as exc:
+                # SDK old enough not to know ``stream_options`` —
+                # drop it and retry; usage stays zero for this
+                # provider (warned once).
+                if ("stream_options" in kwargs
+                        and "stream_options" in str(exc)):
+                    kwargs.pop("stream_options")
+                    _warn_stream_options_unsupported_once(
+                        self.config.provider, self.config.model_name,
+                    )
+                    continue
+                raise
             except (APIConnectionError, APIStatusError) as exc:
+                if (
+                    "stream_options" in kwargs
+                    and isinstance(exc, APIStatusError)
+                    and "stream_options" in str(exc)
+                ):
+                    # Endpoint rejects include_usage (older
+                    # vLLM/Ollama). Drop it and retry immediately —
+                    # zero-usage streaming beats a dead stream; warn
+                    # once per provider:model so the operator knows
+                    # streamed cost is untracked there.
+                    kwargs.pop("stream_options")
+                    _warn_stream_options_unsupported_once(
+                        self.config.provider, self.config.model_name,
+                    )
+                    continue
                 if (
                     tools
                     and isinstance(exc, APIStatusError)
@@ -2059,14 +2091,18 @@ class OpenAICompatibleProvider(LLMProvider):
 
         try:
             for chunk in resp:
+                # include_usage delivers usage on a final empty-choices
+                # chunk; some compat servers attach it to the last
+                # content chunk instead — read it wherever it appears.
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    input_tokens = (
+                        getattr(usage, "prompt_tokens", 0) or 0
+                    )
+                    output_tokens = (
+                        getattr(usage, "completion_tokens", 0) or 0
+                    )
                 if not chunk.choices:
-                    if chunk.usage:
-                        input_tokens = (
-                            getattr(chunk.usage, "prompt_tokens", 0) or 0
-                        )
-                        output_tokens = (
-                            getattr(chunk.usage, "completion_tokens", 0) or 0
-                        )
                     continue
 
                 choice = chunk.choices[0]
@@ -2134,6 +2170,27 @@ class OpenAICompatibleProvider(LLMProvider):
 # ---------------------------------------------------------------------------
 # OpenAI tool-use helpers
 # ---------------------------------------------------------------------------
+
+# Warn once per provider:model when an OpenAI-compat endpoint rejects
+# ``stream_options.include_usage`` — streamed turns there report zero
+# usage, so the operator should know cost tracking has a hole rather
+# than seeing a warning flood.
+_STREAM_OPTIONS_UNSUPPORTED_WARNED: set[str] = set()
+_stream_options_warned_lock = threading.Lock()
+
+
+def _warn_stream_options_unsupported_once(provider: str, model: str) -> None:
+    key = f"{provider}:{model}"
+    with _stream_options_warned_lock:
+        if key in _STREAM_OPTIONS_UNSUPPORTED_WARNED:
+            return
+        _STREAM_OPTIONS_UNSUPPORTED_WARNED.add(key)
+    logger.warning(
+        "%s rejects stream_options.include_usage — streamed turns for "
+        "%s report zero usage (cost untracked on this transport)",
+        provider, model,
+    )
+
 
 # OpenAI's native finish_reason → our enum.
 _OPENAI_FINISH_REASON_MAP = {
@@ -2361,6 +2418,12 @@ class AnthropicProvider(LLMProvider):
             )
             logger.debug("AnthropicProvider: direct SDK (no dispatcher)")
 
+        # Repair instructor's reask assembly before first use: a
+        # completion carrying PARALLEL tool_use blocks otherwise
+        # retries with unpaired ids and dies on a 400 (see
+        # core.llm.instructor_reask).
+        from core.llm.instructor_reask import ensure_anthropic_reask_pairing
+        ensure_anthropic_reask_pairing()
         self._init_instructor(lambda: instructor.from_anthropic(self.client))
 
         # Per-instance flag: have we warned about silent cache-failure

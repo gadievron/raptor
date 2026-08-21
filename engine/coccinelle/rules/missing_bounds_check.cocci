@@ -6,29 +6,32 @@
 // exists on the path. Targets the kernel IPC pattern where sem_num
 // indexes into sma->sems[] without validation.
 //
-// Parametric: pass -D func=<name> to restrict to a specific function.
-// Without -D func, matches across all functions (broader but noisier).
+// Discipline: per-position exclusion, same as format_string.cocci.
+// The `checked` rule binds a position at every array access that IS
+// guarded (if-guards in both operand orders, early-return guards,
+// and loop-bound conditions); the `unchecked` rule then matches any
+// access at a position NOT in that set. The earlier formulation used
+// a rule-level `depends on unchecked_index && !checked` guard, which
+// is per-file: one guarded access anywhere in the file suppressed
+// EVERY hit, discarding real findings. It also omitted loop shapes,
+// so `for (i = 0; i < n; i++) arr[i]` was flagged as unchecked.
 // @role: detection
 
-// Array access via parameter without prior bounds check
-@unchecked_index@
+// Guarded accesses — every position bound here is excluded below.
+@checked@
 identifier idx;
-expression arr;
+expression arr, E;
 position p;
 @@
 
-  arr[idx@p]
-
-// Exclude positions where idx was checked
-@checked depends on unchecked_index@
-identifier unchecked_index.idx;
-expression unchecked_index.arr;
-expression E;
-position unchecked_index.p;
-@@
-
 (
-  if (idx < E) { ... arr[idx@p] ... }
+  if (idx < E)  { <+... arr[idx@p] ...+> }
+|
+  if (idx <= E) { <+... arr[idx@p] ...+> }
+|
+  if (E > idx)  { <+... arr[idx@p] ...+> }
+|
+  if (E >= idx) { <+... arr[idx@p] ...+> }
 |
   if (idx >= E) { ... return ...; }
   ... when != idx = ...;
@@ -38,13 +41,28 @@ position unchecked_index.p;
   ... when != idx = ...;
   arr[idx@p]
 |
-  if (idx <= E) { ... arr[idx@p] ... }
+  for (...; idx < E; ...) { <+... arr[idx@p] ...+> }
+|
+  for (...; idx <= E; ...) { <+... arr[idx@p] ...+> }
+|
+  while (idx < E) { <+... arr[idx@p] ...+> }
+|
+  while (idx <= E) { <+... arr[idx@p] ...+> }
 )
 
-@script:python depends on unchecked_index && !checked@
-p << unchecked_index.p;
-idx << unchecked_index.idx;
-arr << unchecked_index.arr;
+// Any access at a position not proven guarded above.
+@unchecked@
+identifier idx;
+expression arr;
+position p != checked.p;
+@@
+
+  arr[idx@p]
+
+@script:python@
+p << unchecked.p;
+idx << unchecked.idx;
+arr << unchecked.arr;
 @@
 
 import json, sys

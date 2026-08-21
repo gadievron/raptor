@@ -1,0 +1,44 @@
+name: java.generic
+description: |
+  General Java (and JVM Kotlin) projects. Services, libraries,
+  Android-adjacent code built with Maven or Gradle. Catches any
+  repo whose primary language is Java via build manifests plus
+  file-extension scoring.
+
+detection:
+  file_globs:
+    - pom.xml
+    - build.gradle
+    - build.gradle.kts
+  file_extensions:
+    - .java
+    - .kt
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+  optional:
+    - secrets
+    - jwt
+
+attack_surface:
+  high_priority_dirs:
+    - src/main/java
+    - src/main/kotlin
+  low_priority_dirs:
+    - src/test
+    - docs
+    - examples
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+
+budget_defaults:
+  typical_findings_count: 20
+  typical_cost_per_run_usd: 20
+
+version: 1

@@ -3,8 +3,11 @@ ALREADY caused catastrophic-backtracking pathology before being
 fixed, OR is structurally adjacent to one that did.
 
 Bounds asserted:
-  * Per-input parse < 500ms (any pathological case should be < 200ms;
-    500ms gives slack for CI variability)
+  * Per-input parse < 500ms of CPU time (any pathological case should
+    be < 200ms; 500ms gives slack for CI variability).  CPU time, not
+    wall time: catastrophic backtracking burns CPU, while wall time
+    also charges scheduler contention from parallel test workers —
+    observed as a spurious failure under a fully loaded -n auto run.
   * Detection semantics unchanged on small adversarial inputs
 """
 
@@ -35,9 +38,9 @@ def test_redos_many_heredoc_openers_no_close(tmp_path: Path) -> None:
     """1000 ``cat <<TAG >> $GITHUB_ENV`` openers with no matching
     close.  Pre-fix took 5+ seconds (O(n²) walk per opener)."""
     body = "cat <<TAG >> $GITHUB_ENV\nx = y\n" * 1000
-    t0 = time.monotonic()
+    t0 = time.process_time()
     blocks = gha_secret_flow._extract_redirect_blocks(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS, (
         f"1000 unmatched heredoc openers took {elapsed:.3f}s — "
         f"ReDoS regression"
@@ -49,9 +52,9 @@ def test_redos_many_heredocs_one_closer(tmp_path: Path) -> None:
     """500 ``cat <<TAG ... `` openers and one matching ``TAG\\n``
     closer at the end.  Pre-fix each opener walked the body."""
     body = "cat <<TAG >> $GITHUB_ENV\nx=y\n" * 500 + "TAG\n"
-    t0 = time.monotonic()
+    t0 = time.process_time()
     gha_secret_flow._extract_redirect_blocks(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
 
 
@@ -70,9 +73,9 @@ def test_redos_chained_aliases_prefix_match_bounded() -> None:
     for i in range(1, 1000):
         lines.append(f"A{i}=$A{i-1}")
     body = "\n".join(lines)
-    t0 = time.monotonic()
+    t0 = time.process_time()
     aliases = gha_secret_flow._aliased_targets(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
     # Cap is 6 hops → 6 aliases (A0–A5) after excluding the target.
     assert len(aliases) == 6, (
@@ -101,9 +104,9 @@ def test_redos_eval_unclosed_quote_long_body() -> None:
     alternation in ``((?:[^"\\\\]|\\\\.)*)`` doesn't backtrack
     catastrophically."""
     body = 'eval "' + ("a" * 100_000)
-    t0 = time.monotonic()
+    t0 = time.process_time()
     blocks = gha_secret_flow._extract_redirect_blocks(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
     assert blocks == []
 
@@ -112,9 +115,9 @@ def test_redos_eval_pathological_backslashes() -> None:
     """``eval "\\\\\\\\\\\\\\\\..."`` — many backslash pairs.
     Worst case for the ``\\\\.`` branch of the alternation."""
     body = 'eval "' + ("\\\\" * 25_000)
-    t0 = time.monotonic()
+    t0 = time.process_time()
     gha_secret_flow._extract_redirect_blocks(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
 
 
@@ -122,9 +125,9 @@ def test_redos_many_short_evals() -> None:
     """1000 short ``eval "..."`` invocations — bounded extraction +
     fast per-eval parsing."""
     body = 'eval "echo X=Y >> $GITHUB_ENV";' * 1000
-    t0 = time.monotonic()
+    t0 = time.process_time()
     blocks = gha_secret_flow._extract_redirect_blocks(body, "GITHUB_ENV")
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < _TIME_BUDGET_SECONDS
     # Capped at _MAX_REDIRECT_BLOCKS_PER_BODY.
     assert len(blocks) == gha_secret_flow._MAX_REDIRECT_BLOCKS_PER_BODY
@@ -155,9 +158,9 @@ jobs:
         inner.append(f"          A{i}=$A{i-1}")
     body += "\n".join(inner) + "\n"
     _write_wf(tmp_path, body)
-    t0 = time.monotonic()
+    t0 = time.process_time()
     hits = gha_secret_flow.scan_target(tmp_path, [], [])
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 1.0, (
         f"pathological workflow took {elapsed:.3f}s — bounds broken"
     )
@@ -187,9 +190,9 @@ jobs:
     lines.append(
         '          echo "K=${{ secrets.NPM_TOKEN }}" >> $V42')
     _write_wf(tmp_path, header + "\n".join(lines) + "\n")
-    t0 = time.monotonic()
+    t0 = time.process_time()
     hits = gha_secret_flow.scan_target(tmp_path, [], [])
-    elapsed = time.monotonic() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 5.0, (
         f"5,000-alias body took {elapsed:.3f}s — alias-set scan "
         f"blowup regression"

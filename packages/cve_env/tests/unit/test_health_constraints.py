@@ -9,9 +9,6 @@ for SYSTEM_PROMPT prefix. Empty input → empty output (no spurious section).
 """
 
 from __future__ import annotations
-import pytest
-pytest.importorskip("claude_agent_sdk")
-
 from cve_env.agent.health_constraints import (
     ServiceConstraint,
     derive_constraints,
@@ -79,41 +76,23 @@ def test_format_dh_constraint_renders_avoid_prefer() -> None:
     assert "source-build" in out
     assert "give_up" in out  # guidance about give_up if no PREFER works
 
-def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """End-to-end: when build() receives constraints, the SYSTEM_PROMPT
-    passed to run_agent contains the constraint section. When constraints
-    is empty, system_prompt is the original SYSTEM_PROMPT unchanged."""
-    import asyncio
-    from unittest.mock import patch
-
-    from cve_env.agent.loop import build
+def test_compose_injects_constraints_into_system_prompt() -> None:
+    """When constraints are present, the composed system prompt carries
+    the constraint section ahead of the caps block; empty constraints
+    yield caps_block + SYSTEM_PROMPT only. (This assembly used to live
+    inline in the SDK engine's build(); it now lives in the shared
+    composer both the classifier tests and the core backend use.)"""
+    from cve_env.agent.loop import _compose_system_prompt
     from cve_env.agent.prompts import SYSTEM_PROMPT
-    from cve_env.models import CveRecord, HostInfo
 
-    # Capture what run_agent receives
-    captured: dict[str, str] = {}
+    kwargs = {"max_turns": 96, "max_cost_usd": 1.8,
+              "max_extensions": 0, "extension_pct": 0.0}
 
-    async def fake_run_agent(*, system_prompt, **kwargs):  # type: ignore[no-untyped-def]
-        captured["system_prompt"] = system_prompt
-        # Minimal Outcome-shaped result; build() needs SOMETHING terminal
-        from cve_env.agent.llm import AgentRunOutcome
+    empty = _compose_system_prompt(None, **kwargs)
+    assert SYSTEM_PROMPT in empty
+    assert "## Caps for this run" in empty
+    assert "## Service health constraints" not in empty
 
-        return AgentRunOutcome(stop_reason="end_turn", num_turns=1, total_cost_usd=0.0)
-
-    cve = CveRecord(cve_id="CVE-2024-9999", product="t", version="1.0", description="x")
-    host = HostInfo(arch="arm64", os="darwin", rosetta_available=True)
-
-    # Case 1: no constraints → system_prompt = caps_block + SYSTEM_PROMPT
-    # (B-20 2026-05-07: caps_block is always prepended; constraints when
-    # present prepend in front of caps_block.)
-    with patch("cve_env.agent.loop.run_agent", fake_run_agent):
-        asyncio.run(build(cve, host, run_id="run-empty", audit_root=tmp_path))
-    assert SYSTEM_PROMPT in captured["system_prompt"]
-    assert "## Caps for this run" in captured["system_prompt"]
-    assert "## Service health constraints" not in captured["system_prompt"]
-
-    # Case 2: with constraint → system_prompt has the constraint section prepended
-    captured.clear()
     constraint = ServiceConstraint(
         service="Docker Hub",
         state="rate_limited",
@@ -121,21 +100,12 @@ def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type
         prefer_methods=("source-build",),
         reason_text="DH down",
     )
-    with patch("cve_env.agent.loop.run_agent", fake_run_agent):
-        asyncio.run(
-            build(
-                cve,
-                host,
-                run_id="run-with-constraint",
-                audit_root=tmp_path,
-                constraints=[constraint],
-            )
-        )
-    assert "## Service health constraints" in captured["system_prompt"]
-    assert "Docker Hub" in captured["system_prompt"]
-    assert "AVOID" in captured["system_prompt"]
-    # Original SYSTEM_PROMPT also appears (constraint is a PREFIX, not replace)
-    assert SYSTEM_PROMPT in captured["system_prompt"]
+    with_constraint = _compose_system_prompt([constraint], **kwargs)
+    assert "## Service health constraints" in with_constraint
+    assert "Docker Hub" in with_constraint
+    assert with_constraint.index("Service health constraints") < \
+        with_constraint.index("## Caps for this run")
+    assert SYSTEM_PROMPT in with_constraint
 
 def test_format_multiple_constraints_separated() -> None:
     c1 = ServiceConstraint(

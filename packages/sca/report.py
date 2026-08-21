@@ -17,7 +17,7 @@ Layout:
     Cache hit rate: <pct>
 
     ## Vulnerable dependencies
-    ### CRITICAL — lodash 4.17.20 → fix: 5.0.0
+    ### Critical — lodash 4.17.20 → fix: 5.0.0
     - Advisory: GHSA-... (CVE-2021-44228)
     - KEV: yes  /  EPSS: 0.97
     - Reachability: not_evaluated (mechanical-layer scope)

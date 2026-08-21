@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
+from pathlib import Path
 
 from cve_env.tools.run_in_container import ExecResult
 from cve_env.tools.verify import (
@@ -27,14 +27,11 @@ from cve_env.tools.verify import (
 
 
 def _mk_resp(*, status: int, body: bytes) -> MagicMock:
-    r = MagicMock()
-    r.status_code = status
-    r.content = body
-    r.text = body.decode("utf-8", errors="replace")
-    return r
+    # The engine's transport seam returns (status_code, content_bytes).
+    return (status, body)
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_passes_on_200_nonempty(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=200, body=b"hello")
     r = check_http(host_ip="127.0.0.1", host_port=8080)
@@ -43,7 +40,7 @@ def test_http_check_passes_on_200_nonempty(mock_req: Any) -> None:
     assert r["details"]["actual_status"] == 200
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_fails_on_zero_bytes_200(mock_req: Any) -> None:
     """P: zero-bytes-200 trap must be a hard failure, not lifecycle-only pass."""
     mock_req.return_value = _mk_resp(status=200, body=b"")
@@ -52,7 +49,7 @@ def test_http_check_fails_on_zero_bytes_200(mock_req: Any) -> None:
     assert r["details"]["failure_kind"] == "CONTENT_MISSING"
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_fails_on_unexpected_status(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=500, body=b"err")
     r = check_http(host_ip="127.0.0.1", host_port=8080, expected_status=[200, 403])
@@ -60,24 +57,24 @@ def test_http_check_fails_on_unexpected_status(mock_req: Any) -> None:
     assert "500" in r["reason"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_accepts_403_when_in_expected_list(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=403, body=b"forbidden")
     r = check_http(host_ip="127.0.0.1", host_port=8080, expected_status=[200, 403])
     assert r["passed"] is True
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_timeout_fails(mock_req: Any) -> None:
-    mock_req.side_effect = requests.exceptions.Timeout("too slow")
+    mock_req.side_effect = TimeoutError("too slow")
     r = check_http(host_ip="127.0.0.1", host_port=8080, timeout_seconds=1.0)
     assert r["passed"] is False
     assert "timeout" in r["reason"].lower()
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_connection_error_fails(mock_req: Any) -> None:
-    mock_req.side_effect = requests.exceptions.ConnectionError("refused")
+    mock_req.side_effect = ConnectionRefusedError("refused")
     r = check_http(host_ip="127.0.0.1", host_port=8080)
     assert r["passed"] is False
     assert "connection error" in r["reason"].lower()
@@ -89,7 +86,7 @@ def test_http_check_rejects_bad_method() -> None:
     assert "not allowed" in r["reason"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_check_content_check_missing(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=200, body=b"hello world")
     r = check_http(
@@ -99,7 +96,7 @@ def test_http_check_content_check_missing(mock_req: Any) -> None:
     assert "admin" in r["details"]["missing_content"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_check_logs_passes_when_all_patterns_match(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=0, stdout="Started\nlistening on 80\n", stderr=""
@@ -108,7 +105,7 @@ def test_check_logs_passes_when_all_patterns_match(mock_run: Any) -> None:
     assert r["passed"] is True
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_check_logs_fails_on_missing_pattern(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
     r = check_logs("cid", expected_patterns=["missing-pattern"])
@@ -128,7 +125,7 @@ def test_check_logs_empty_patterns_passes() -> None:
     assert r["passed"] is True
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_check_container_status_passes_on_running(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=0, stdout='{"Status":"running","Running":true}', stderr=""
@@ -137,7 +134,7 @@ def test_check_container_status_passes_on_running(mock_run: Any) -> None:
     assert r["passed"] is True
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=0,
@@ -148,7 +145,7 @@ def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
     assert r["passed"] is False
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_check_container_status_fails_on_inspect_error(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=1, stdout="", stderr="no such container"
@@ -196,7 +193,7 @@ def test_verify_stops_at_first_failure(mock_status: Any) -> None:
 
 
 @patch("cve_env.tools.verify.check_container_status")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_verify_runs_whole_plan_when_all_pass(mock_req: Any, mock_status: Any) -> None:
     mock_status.return_value = {
         "passed": True,
@@ -335,7 +332,7 @@ def test_check_exec_accepts_and_propagates_workdir(mock_run: Any) -> None:
     assert kwargs.get("workdir") == "/srv/app"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
 def test_verify_dispatches_exec_check(mock_run: Any, mock_subproc: Any) -> None:
     """Phase 1 canonicalization auto-prepends container_status; mock it as running."""
@@ -362,7 +359,7 @@ def test_verify_dispatches_exec_check(mock_run: Any, mock_subproc: Any) -> None:
     assert out["results"][1]["type"] == "exec_check"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
 def test_verify_exec_check_aliases_normalized(mock_run: Any, mock_subproc: Any) -> None:
     """LLM may use 'cmd' / 'exit_code' / 'stdout_contains' aliases."""
@@ -388,15 +385,12 @@ def test_verify_exec_check_aliases_normalized(mock_run: Any, mock_subproc: Any) 
 # Phase 5: http_request_check (active payload injection) ---------------
 
 
-def _mk_payload_resp(*, status: int, body: str) -> MagicMock:
-    r = MagicMock()
-    r.status_code = status
-    r.text = body
-    r.content = body.encode("utf-8")
-    return r
+def _mk_payload_resp(*, status: int, body: str) -> tuple[int, bytes]:
+    # The engine's transport seam returns (status_code, content_bytes).
+    return (status, body.encode("utf-8"))
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_passes_on_marker_present(mock_req: Any) -> None:
     """Status matches AND response body contains the expected response marker → pass."""
     mock_req.return_value = _mk_payload_resp(
@@ -415,7 +409,7 @@ def test_http_request_check_passes_on_marker_present(mock_req: Any) -> None:
     assert r["details"]["actual_status"] == 200
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_fails_on_missing_marker(mock_req: Any) -> None:
     """Status matches but body is just the lifecycle '200 OK' page → fail."""
     mock_req.return_value = _mk_payload_resp(
@@ -431,7 +425,7 @@ def test_http_request_check_fails_on_missing_marker(mock_req: Any) -> None:
     assert "missing expected response marker" in r["reason"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_fails_on_status_mismatch(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=403, body="Forbidden")
     r = check_http_request(
@@ -447,7 +441,7 @@ def test_http_request_check_fails_on_status_mismatch(mock_req: Any) -> None:
 # Phase 9.4: failure introspection hints --------------------------------
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_html_response_without_marker(
     mock_req: Any,
 ) -> None:
@@ -468,7 +462,7 @@ def test_http_request_check_hint_for_html_response_without_marker(
     assert "endpoint" in hint or "field name" in hint or "encoding" in hint
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_empty_response(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=200, body="")
     r = check_http_request(
@@ -481,7 +475,7 @@ def test_http_request_check_hint_for_empty_response(mock_req: Any) -> None:
     assert "empty response" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_auth_status_mismatch(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=401, body="Unauthorized")
     r = check_http_request(
@@ -494,7 +488,7 @@ def test_http_request_check_hint_for_auth_status_mismatch(mock_req: Any) -> None
     assert "auth required" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_404(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=404, body="Not Found")
     r = check_http_request(
@@ -507,7 +501,7 @@ def test_http_request_check_hint_for_404(mock_req: Any) -> None:
     assert "endpoint not found" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_json_response(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=200, body='{"status": "ok"}')
     r = check_http_request(
@@ -520,7 +514,7 @@ def test_http_request_check_hint_for_json_response(mock_req: Any) -> None:
     assert "JSON" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_hint_for_500_server_error(mock_req: Any) -> None:
     mock_req.return_value = _mk_payload_resp(status=500, body="Internal Server Error")
     r = check_http_request(
@@ -536,7 +530,7 @@ def test_http_request_check_hint_for_500_server_error(mock_req: Any) -> None:
 # Phase 13.1: container_status logs_tail + hint -----------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> None:
     """When container_status reports exited, augment details with logs_tail
     + a classified hint instead of just the bare State dict.
@@ -568,7 +562,7 @@ def test_container_status_failure_includes_logs_tail_and_hint(mock_run: Any) -> 
     assert "port conflict" in r["details"]["hint"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_container_status_oom_hint(mock_run: Any) -> None:
     from cve_env.tools.verify import check_container_status
 
@@ -587,7 +581,7 @@ def test_container_status_oom_hint(mock_run: Any) -> None:
     assert "OOM" in r["details"]["hint"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_container_status_silent_death_hint(mock_run: Any) -> None:
     """Empty logs + non-running container → ENTRYPOINT/CMD ran-to-completion hint."""
     from cve_env.tools.verify import check_container_status
@@ -607,7 +601,7 @@ def test_container_status_silent_death_hint(mock_run: Any) -> None:
     assert "ENTRYPOINT" in r["details"]["hint"] or "CMD" in r["details"]["hint"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_container_status_missing_module_hint(mock_run: Any) -> None:
     from cve_env.tools.verify import check_container_status
 
@@ -630,7 +624,7 @@ def test_container_status_missing_module_hint(mock_run: Any) -> None:
     assert "missing language deps" in r["details"]["hint"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_container_status_running_does_not_fetch_logs(mock_run: Any) -> None:
     """Phase 13.1: don't waste a docker logs call when the container is fine."""
     from cve_env.tools.verify import check_container_status
@@ -648,7 +642,7 @@ def test_container_status_running_does_not_fetch_logs(mock_run: Any) -> None:
     assert mock_run.call_count == 1
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_rejects_missing_payload(mock_req: Any) -> None:
     """Empty payload is invalid — guard against agent passing nothing."""
     r = check_http_request(
@@ -662,7 +656,7 @@ def test_http_request_check_rejects_missing_payload(mock_req: Any) -> None:
     mock_req.assert_not_called()
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_http_request_check_rejects_missing_marker(mock_req: Any) -> None:
     """Empty marker is invalid — without it we can't distinguish exploit from lifecycle."""
     r = check_http_request(
@@ -676,8 +670,8 @@ def test_http_request_check_rejects_missing_marker(mock_req: Any) -> None:
     mock_req.assert_not_called()
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_verify_dispatches_http_request_check_with_aliases(
     mock_req: Any, mock_subproc: Any
 ) -> None:
@@ -738,7 +732,7 @@ def test_canonicalize_plan_handles_empty_plan() -> None:
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_verify_canonicalizes_at_dispatch(mock_subproc: Any, mock_run: Any) -> None:
     """End-to-end: a stability_wait-first plan runs container_status BEFORE stability_wait."""
     # First call: docker inspect for container_status -> running.
@@ -798,7 +792,7 @@ class _FakeTCPSocket:
         self.closed = True
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_passes_on_marker_present(mock_conn: Any) -> None:
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
     r = check_tcp_probe(
@@ -813,7 +807,7 @@ def test_tcp_probe_check_passes_on_marker_present(mock_conn: Any) -> None:
     assert r["details"]["response_size_bytes"] == len(b"+PONG\r\n")
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_fails_on_marker_absent(mock_conn: Any) -> None:
     mock_conn.return_value = _FakeTCPSocket(response=b"-ERR unknown command\r\n")
     r = check_tcp_probe(
@@ -828,7 +822,7 @@ def test_tcp_probe_check_fails_on_marker_absent(mock_conn: Any) -> None:
     assert r["details"]["response_tail_ascii"].startswith("-ERR")
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_hex_payload_and_marker(mock_conn: Any) -> None:
     """Hex payload + hex marker — used for binary protocols (DNS, raw RTSP)."""
     mock_conn.return_value = _FakeTCPSocket(response=bytes.fromhex("deadbeef"))
@@ -841,7 +835,7 @@ def test_tcp_probe_check_hex_payload_and_marker(mock_conn: Any) -> None:
     assert r["passed"] is True
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_banner_grab_no_payload(mock_conn: Any) -> None:
     """SSH/MySQL/Postgres send first — no payload needed."""
     fake = _FakeTCPSocket(response=b"SSH-2.0-OpenSSH_8.2p1\r\n")
@@ -855,7 +849,7 @@ def test_tcp_probe_check_banner_grab_no_payload(mock_conn: Any) -> None:
     assert fake.sent == b""  # banner-grab sends nothing
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_connection_refused_hint(mock_conn: Any) -> None:
     mock_conn.side_effect = ConnectionRefusedError("Connection refused")
     r = check_tcp_probe(
@@ -869,7 +863,7 @@ def test_tcp_probe_check_connection_refused_hint(mock_conn: Any) -> None:
     assert "ss -tlnp" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_timeout_hint(mock_conn: Any) -> None:
     mock_conn.return_value = _FakeTCPSocket(raise_on_recv=TimeoutError)
     r = check_tcp_probe(
@@ -883,7 +877,7 @@ def test_tcp_probe_check_timeout_hint(mock_conn: Any) -> None:
     assert "wrong protocol or wrong port" in r["details"]["hint"]
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_tcp_probe_check_empty_response_hint(mock_conn: Any) -> None:
     """Service closed connection without responding."""
     mock_conn.return_value = _FakeTCPSocket(response=b"")
@@ -933,7 +927,7 @@ def test_tcp_probe_check_rejects_invalid_hex() -> None:
     assert "not valid hex" in r["reason"]
 
 
-# Phase 61.4 — host_ip loopback/private-only whitelist for TCP + HTTP probes.
+# Phase 61.4 — host_ip loopback/private-only allowlist for TCP + HTTP probes.
 #
 # Without this, the agent could send raw TLS payloads or HTTP requests to
 # arbitrary public hosts via cve-env's process — combined with the SSRF
@@ -941,7 +935,7 @@ def test_tcp_probe_check_rejects_invalid_hex() -> None:
 # meaningful against published container ports (loopback or Docker bridge).
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_phase61_check_tcp_probe_rejects_public_ip(mock_conn: Any) -> None:
     """tcp_probe_check refuses to connect to a public IP (e.g., 8.8.8.8)."""
     r = check_tcp_probe(
@@ -956,7 +950,7 @@ def test_phase61_check_tcp_probe_rejects_public_ip(mock_conn: Any) -> None:
     assert mock_conn.call_count == 0
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_phase61_check_tcp_probe_allows_loopback(mock_conn: Any) -> None:
     """Sanity: 127.0.0.1 still passes the gate (will then proceed to socket)."""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
@@ -969,7 +963,7 @@ def test_phase61_check_tcp_probe_allows_loopback(mock_conn: Any) -> None:
     assert r["passed"] is True
 
 
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.env.verify.socket.create_connection")
 def test_phase61_check_tcp_probe_allows_docker_bridge_ip(mock_conn: Any) -> None:
     """A Docker bridge IP (172.17.0.x is RFC 1918 private) is permitted."""
     mock_conn.return_value = _FakeTCPSocket(response=b"+PONG\r\n")
@@ -982,7 +976,7 @@ def test_phase61_check_tcp_probe_allows_docker_bridge_ip(mock_conn: Any) -> None
     assert r["passed"] is True
 
 
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.env.verify._http_exchange")
 def test_phase61_check_http_rejects_public_ip(mock_req: Any) -> None:
     """check_http (uses requests.request which DNS-resolves) also gated."""
     r = check_http(host_ip="8.8.8.8", host_port=80)
@@ -991,8 +985,8 @@ def test_phase61_check_http_rejects_public_ip(mock_req: Any) -> None:
     assert mock_req.call_count == 0
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify.socket.create_connection")
 def test_verify_dispatches_tcp_probe_check_with_port_target_alias(
     mock_conn: Any, mock_subproc: Any
 ) -> None:
@@ -1023,8 +1017,8 @@ def test_verify_dispatches_tcp_probe_check_with_port_target_alias(
     assert args[0] == ("127.0.0.1", 6379)
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify.socket.create_connection")
 def test_verify_dispatches_tcp_probe_check_with_host_alias(
     mock_conn: Any, mock_subproc: Any
 ) -> None:
@@ -1060,8 +1054,8 @@ def test_verify_dispatches_tcp_probe_check_with_host_alias(
     assert args[0] == ("127.0.0.1", 6379)
 
 
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.socket.create_connection")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify.socket.create_connection")
 def test_verify_dispatches_tcp_probe_check_with_aliases(
     mock_conn: Any, mock_subproc: Any
 ) -> None:
@@ -1095,8 +1089,8 @@ def test_verify_dispatches_tcp_probe_check_with_aliases(
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_verify_quality_warning_when_active_check_lacks_version_assertion(
     mock_req: Any, mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1128,8 +1122,8 @@ def test_verify_quality_warning_when_active_check_lacks_version_assertion(
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_verify_no_quality_warning_when_active_version_and_functional_smoke_all_present(
     mock_req: Any, mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1168,8 +1162,8 @@ def test_verify_no_quality_warning_when_active_version_and_functional_smoke_all_
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_phase49_3_warning_when_only_version_and_vuln_no_functional_smoke(
     mock_req: Any, mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1209,8 +1203,8 @@ def test_phase49_3_warning_when_only_version_and_vuln_no_functional_smoke(
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_phase49_3_no_warning_when_http_check_with_content_check_provides_smoke(
     mock_req: Any, mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1254,7 +1248,7 @@ def test_phase49_3_no_warning_when_http_check_with_content_check_provides_smoke(
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_verify_quality_warning_for_lifecycle_only_plans(mock_subproc: Any) -> None:
     """Phase 52: lifecycle-only plans get a quality warning. Reframed from
     "missing active payload check" to "missing version-assertion" — under the
@@ -1279,7 +1273,7 @@ def test_verify_quality_warning_for_lifecycle_only_plans(mock_subproc: Any) -> N
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase49_3_warning_when_only_one_exec_check_is_both_active_and_version(
     mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1316,8 +1310,8 @@ def test_phase49_3_warning_when_only_one_exec_check_is_both_active_and_version(
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
-@patch("cve_env.utils.run.subprocess.run")
-@patch("cve_env.tools.verify.requests.request")
+@patch("core.container.proc.subprocess.run")
+@patch("core.env.verify._http_exchange")
 def test_phase52_no_warning_when_three_active_checks_satisfy_smoke_heuristic(
     mock_req: Any, mock_subproc: Any, mock_exec: Any
 ) -> None:
@@ -1351,8 +1345,8 @@ def test_phase52_no_warning_when_three_active_checks_satisfy_smoke_heuristic(
     )
 
 
-@patch("cve_env.tools.verify.requests.request")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.env.verify._http_exchange")
+@patch("core.container.proc.subprocess.run")
 def test_phase52_warning_when_smoke_present_but_no_version(
     mock_subproc: Any, mock_req: Any
 ) -> None:
@@ -1364,11 +1358,7 @@ def test_phase52_warning_when_smoke_present_but_no_version(
     mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
     mock_subproc.return_value.stderr = ""
     # Mock both http_check calls as 200 OK (no body content_check, just status).
-    resp = Mock()
-    resp.status_code = 200
-    resp.content = b"<html>ok</html>"
-    resp.text = "<html>ok</html>"
-    mock_req.return_value = resp
+    mock_req.return_value = (200, b"<html>ok</html>")
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -1388,7 +1378,7 @@ def test_phase52_warning_when_smoke_present_but_no_version(
     assert "FUNCTIONAL SMOKE" not in warning
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase52_http_check_with_content_check_sets_performed_flag(
     mock_subproc: Any,
 ) -> None:
@@ -1401,12 +1391,8 @@ def test_phase52_http_check_with_content_check_sets_performed_flag(
     mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
     mock_subproc.return_value.stderr = ""
     # Mock the http call as a successful response with body containing the marker
-    with patch("cve_env.tools.verify.requests.request") as mock_req:
-        resp = Mock()
-        resp.status_code = 200
-        resp.content = b"Welcome to nginx"
-        resp.text = "Welcome to nginx"
-        mock_req.return_value = resp
+    with patch("core.env.verify._http_exchange") as mock_req:
+        mock_req.return_value = (200, b"Welcome to nginx")
         out = verify(
             container_id="cid",
             host_ip="127.0.0.1",
@@ -1431,7 +1417,7 @@ def test_phase52_http_check_with_content_check_sets_performed_flag(
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase52_quality_warning_when_both_version_and_smoke_missing(
     mock_subproc: Any,
 ) -> None:
@@ -1460,7 +1446,7 @@ def test_phase52_quality_warning_when_both_version_and_smoke_missing(
     assert "FUNCTIONAL SMOKE" not in warning
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_verify_rejects_unknown_type(mock_subproc: Any) -> None:
     """Unknown check type fails. Phase 1: container_status runs first, then mystery_check."""
     mock_subproc.return_value.returncode = 0
@@ -1498,106 +1484,53 @@ def test_verify_rejects_string_encoded_plan() -> None:
 
 # ─── BUG-004b: env-based proxy injection regression locks ────────────────
 # /work-audit B-2 finding: BUG-004b had only 1 regression test (web_fetch).
-# These 4 tests lock the fix in place at the 4 verify.py sites so a future
-# refactor can't silently regress the security defense.
-# Pattern: requests' proxies={} is a NO-OP (env vars merge); the explicit
-# {"http":"","https":""} is required.
-_EXPECTED_PROXIES = {"http": "", "https": ""}
+# BUG-004b successor pins: the original defense passed explicit empty
+# proxies= to requests at 4 call sites (requests merges env proxies
+# otherwise). The verify HTTP path now goes through
+# core.env.verify._http_exchange, which builds an http.client
+# HTTPConnection DIRECTLY — no proxy resolution exists in that stack at
+# all, so the env-injection channel is closed structurally. These pins
+# keep it that way.
 
 
-@patch("cve_env.tools.verify.requests.request")
-def test_BUG004b_check_http_passes_empty_proxies_kwarg(mock_req: Any) -> None:
-    """BUG-004b lock: check_http (verify.py:_http_request → line 350)
-    must pass proxies={"http":"","https":""} to requests.request to
-    defeat env-based proxy injection (HTTP_PROXY / HTTPS_PROXY).
-    """
-    mock_req.return_value = _mk_resp(status=200, body=b"ok")
-    check_http(host_ip="127.0.0.1", host_port=8080)
-    assert mock_req.call_count >= 1
-    _args, kwargs = mock_req.call_args
-    assert kwargs.get("proxies") == _EXPECTED_PROXIES, (
-        f"BUG-004b regression: check_http→requests.request did not pass "
-        f"proxies={_EXPECTED_PROXIES!r}; got proxies={kwargs.get('proxies')!r}"
-    )
+def test_BUG004b_verify_tool_module_has_no_requests() -> None:
+    """The verify tool surface must not import requests — the direct
+    core transport is the whole defense."""
+    import cve_env.tools.verify as verify_mod
+
+    assert not hasattr(verify_mod, "requests")
+    src = Path(verify_mod.__file__).read_text(encoding="utf-8")
+    assert "import requests" not in src
 
 
-@patch("cve_env.tools.verify.requests.get")
-def test_BUG004b_check_http_request_GET_passes_empty_proxies_kwarg(
-    mock_get: Any,
-) -> None:
-    """BUG-004b lock: check_http_request's GET branch (verify.py:603)
-    must pass proxies={"http":"","https":""} to requests.get.
-    """
-    mock_get.return_value = _mk_resp(status=200, body=b"ok")
-    check_http_request(
-        host_ip="127.0.0.1",
-        host_port=8080,
-        method="GET",
-        path="/",
-        request_body="probe",
-        form_encoded=True,
-        field_name="q",
-        expected_response_contains="ok",
-    )
-    assert mock_get.call_count == 1
-    _args, kwargs = mock_get.call_args
-    assert kwargs.get("proxies") == _EXPECTED_PROXIES, (
-        f"BUG-004b regression: check_http_request GET branch did not pass "
-        f"proxies={_EXPECTED_PROXIES!r}; got proxies={kwargs.get('proxies')!r}"
-    )
+def test_BUG004b_core_transport_is_direct_http_client() -> None:
+    """core's exchange uses http.client.HTTPConnection directly (no
+    urllib opener, no requests session — neither consults proxy env)."""
+    import inspect
+
+    import core.env.verify as core_verify
+
+    src = inspect.getsource(core_verify._http_exchange)
+    assert "http.client.HTTPConnection" in src
+    assert "requests" not in src
+    assert "urlopen" not in src and "ProxyHandler" not in src
 
 
-@patch("cve_env.tools.verify.requests.request")
-def test_BUG004b_check_http_request_form_passes_empty_proxies_kwarg(
-    mock_req: Any,
-) -> None:
-    """BUG-004b lock: check_http_request's form-payload branch
-    (verify.py:612) must pass proxies={"http":"","https":""} to
-    requests.request.
-    """
-    mock_req.return_value = _mk_resp(status=200, body=b"ok")
-    check_http_request(
-        host_ip="127.0.0.1",
-        host_port=8080,
-        method="POST",
-        path="/",
-        request_body="probe",
-        form_encoded=True,
-        field_name="q",
-        expected_response_contains="ok",
-    )
-    assert mock_req.call_count == 1
-    _args, kwargs = mock_req.call_args
-    assert kwargs.get("proxies") == _EXPECTED_PROXIES, (
-        f"BUG-004b regression: check_http_request form branch did not pass "
-        f"proxies={_EXPECTED_PROXIES!r}; got proxies={kwargs.get('proxies')!r}"
-    )
+def test_BUG004b_http_check_ignores_proxy_env(monkeypatch: Any) -> None:
+    """Even with hostile proxy env vars set, the probe connects to the
+    given loopback endpoint (here: nothing listening → connection
+    error), never to the proxy."""
+    monkeypatch.setenv("HTTP_PROXY", "http://192.0.2.1:1")
+    monkeypatch.setenv("http_proxy", "http://192.0.2.1:1")
+    import socket as _socket
 
-
-@patch("cve_env.tools.verify.requests.request")
-def test_BUG004b_check_http_request_raw_passes_empty_proxies_kwarg(
-    mock_req: Any,
-) -> None:
-    """BUG-004b lock: check_http_request's raw-body branch
-    (verify.py:623) must pass proxies={"http":"","https":""} to
-    requests.request.
-    """
-    mock_req.return_value = _mk_resp(status=200, body=b"ok")
-    check_http_request(
-        host_ip="127.0.0.1",
-        host_port=8080,
-        method="POST",
-        path="/",
-        request_body="probe",
-        form_encoded=False,  # raw-body branch
-        expected_response_contains="ok",
-    )
-    assert mock_req.call_count == 1
-    _args, kwargs = mock_req.call_args
-    assert kwargs.get("proxies") == _EXPECTED_PROXIES, (
-        f"BUG-004b regression: check_http_request raw-body branch did not "
-        f"pass proxies={_EXPECTED_PROXIES!r}; got proxies={kwargs.get('proxies')!r}"
-    )
+    sock = _socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()  # nothing listening on this port now
+    r = check_http(host_ip="127.0.0.1", host_port=port, timeout_seconds=2.0)
+    assert r["passed"] is False
+    assert "connection error" in r["reason"].lower()
 
 
 # ---- P8-C-01: injected functional-smoke checks must be NON-fatal ----

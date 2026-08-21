@@ -4,7 +4,10 @@ Builds a fixture with O(10k) deps across mixed ecosystems, runs
 ``raptor-sca <target> --offline`` against it, records:
 
   * Cold wallclock (total)
-  * Peak RSS (via ``resource.getrusage``)
+  * Peak RSS of the scan process itself (via ``os.wait4`` performed
+    by a slim relay interpreter — see ``_run_scan`` for why both
+    session-cumulative ``getrusage`` readings and a direct
+    fork-from-pytest ``wait4`` are wrong here)
   * Per-stage timing (best-effort — extracted from stderr if
     progress logs carry stage transitions)
 
@@ -27,12 +30,13 @@ egregious regressions.
 from __future__ import annotations
 
 import json
-import resource
+import os
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Tuple
 
 import pytest
 
@@ -165,38 +169,137 @@ spec:
         )
 
 
-def _peak_rss_mb() -> float:
-    """Peak RSS of the current process in MiB.
+# Hard cap on one scan invocation. Mirrors the old
+# ``subprocess.run(..., timeout=600)`` bound.
+_SCAN_TIMEOUT_S = 600.0
+
+# ``os.wait4`` poll interval while the scan child runs.
+_WAIT_POLL_S = 0.05
+
+
+def _rusage_rss_mb(ru_maxrss: int) -> float:
+    """Convert a reaped child's ``ru_maxrss`` to MiB.
 
     Linux: ``ru_maxrss`` is in KiB. macOS: ``ru_maxrss`` is in bytes.
     Sniff via platform.
     """
-    rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     if sys.platform == "darwin":
-        return rusage.ru_maxrss / (1024 * 1024)
-    return rusage.ru_maxrss / 1024
+        return ru_maxrss / (1024 * 1024)
+    return ru_maxrss / 1024
 
 
-def _run_scan(target: Path, out: Path) -> Tuple[float, float, str]:
+# Measurement relay: a freshly exec'd interpreter that spawns the
+# scan, reaps it via ``os.wait4``, and writes ``{exit, ru_maxrss}``
+# as JSON to the path in argv[1]. Runs the reaping from a slim
+# (~15 MiB) process instead of the test process — see ``_run_scan``
+# for why the fork parent's size matters.
+_RELAY_SRC = """\
+import json, os, subprocess, sys
+
+result_path = sys.argv[1]
+proc = subprocess.Popen(sys.argv[2:])
+_, status, rusage = os.wait4(proc.pid, 0)
+proc.returncode = os.waitstatus_to_exitcode(status)
+with open(result_path, "w", encoding="utf-8") as fh:
+    json.dump({
+        "exit": proc.returncode,
+        "ru_maxrss": rusage.ru_maxrss,
+    }, fh)
+"""
+
+
+def _run_scan(target: Path, out: Path) -> tuple[float, float, str]:
     """Run the scan, returning (wallclock_s, peak_child_rss_mb,
-    stderr)."""
+    stderr).
+
+    Peak RSS comes from ``os.wait4`` on the scan process, so the
+    reading covers exactly that child (plus anything it spawned and
+    reaped) and nothing else. Two measurement artifacts shaped this
+    implementation — both surfaced as nightly failures where this
+    gate blamed the SCA scan for memory it never allocated:
+
+    * ``resource.getrusage(RUSAGE_CHILDREN)`` (the original
+      implementation) is the high-water mark across EVERY child the
+      test process ever reaped — and the nightly runs all slow tests
+      in one shuffled pytest process, so an earlier test's
+      heavyweight child (an audit-orchestrator E2E's Joern JVM peaks
+      ~1.7 GiB) set the mark. Fixed by per-child ``os.wait4``.
+
+    * A child forked directly from the test process inherits the
+      test process's resident set: on Linux the pre-exec
+      (COW-shared) address space is accounted to the child, so the
+      ``ru_maxrss`` that ``wait4`` reports starts at the fork
+      parent's RSS at spawn time, regardless of what the child
+      itself allocates (measured: a 1.5 GiB parent produces a
+      1.5 GiB ``wait4`` reading for a scan whose true peak is
+      ~120 MiB). The nightly's single pytest process accumulates
+      >1.7 GiB across the slow suite, so any scan forked from it
+      read as ~1.8 GiB. Fixed by exec'ing a slim relay interpreter
+      (``_RELAY_SRC``) and letting IT spawn + ``wait4`` the scan:
+      the scan then forks from a ~15 MiB parent, and the relay's
+      own (still-contaminated) rusage is discarded.
+
+    Scan stdout/stderr go to unnamed temp files rather than pipes
+    (inherited through the relay, which touches neither stream):
+    the relay's ``os.wait4`` must be the reaper, and files can't
+    deadlock on a full pipe buffer while it sits in the wait call.
+    """
     cmd = [
         sys.executable, "-m", "packages.sca.cli",
         str(target), "--offline", "--out", str(out),
     ]
-    start = time.perf_counter()
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True,
-        cwd=str(REPO_ROOT), timeout=600,
-    )
-    elapsed = time.perf_counter() - start
-    rss_mb = _peak_rss_mb()
-    if proc.returncode not in (0, 1):
-        raise RuntimeError(
-            f"scan crashed: exit={proc.returncode}\n"
-            f"stderr (last 2k):\n{proc.stderr[-2000:]}"
+    result_fd, result_path = tempfile.mkstemp(suffix=".json")
+    os.close(result_fd)
+    try:
+        start = time.perf_counter()
+        with tempfile.TemporaryFile() as out_fh, \
+                tempfile.TemporaryFile() as err_fh:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _RELAY_SRC, result_path, *cmd],
+                stdout=out_fh, stderr=err_fh, cwd=str(REPO_ROOT),
+                start_new_session=True,
+            )
+            deadline = start + _SCAN_TIMEOUT_S
+            while True:
+                pid, status, _ = os.wait4(proc.pid, os.WNOHANG)
+                if pid == proc.pid:
+                    break
+                if time.perf_counter() > deadline:
+                    # Kill the whole session (relay + scan) — killing
+                    # just the relay would orphan the scan.
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    _, status, _ = os.wait4(proc.pid, 0)
+                    proc.returncode = os.waitstatus_to_exitcode(status)
+                    raise RuntimeError(
+                        f"scan timed out after {_SCAN_TIMEOUT_S:.0f}s"
+                    )
+                time.sleep(_WAIT_POLL_S)
+            # The relay was reaped via wait4, behind Popen's back —
+            # sync its bookkeeping so __exit__/__del__ don't wait
+            # again.
+            relay_rc = os.waitstatus_to_exitcode(status)
+            proc.returncode = relay_rc
+            elapsed = time.perf_counter() - start
+            err_fh.seek(0)
+            stderr = err_fh.read().decode("utf-8", errors="replace")
+        if relay_rc != 0:
+            raise RuntimeError(
+                f"measurement relay crashed: exit={relay_rc}\n"
+                f"stderr (last 2k):\n{stderr[-2000:]}"
+            )
+        result = json.loads(
+            Path(result_path).read_text(encoding="utf-8")
         )
-    return elapsed, rss_mb, proc.stderr
+    finally:
+        os.unlink(result_path)
+    returncode = result["exit"]
+    rss_mb = _rusage_rss_mb(result["ru_maxrss"])
+    if returncode not in (0, 1):
+        raise RuntimeError(
+            f"scan crashed: exit={returncode}\n"
+            f"stderr (last 2k):\n{stderr[-2000:]}"
+        )
+    return elapsed, rss_mb, stderr
 
 
 # ---------------------------------------------------------------------------

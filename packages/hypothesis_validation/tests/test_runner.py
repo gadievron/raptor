@@ -539,3 +539,109 @@ class TestInvalidVerdictUsesClaim:
             h, evidence, llm, task_type="audit",
         )
         assert verdict == "inconclusive"
+
+
+class SequencedAdapter(FakeAdapter):
+    """FakeAdapter variant returning a different ToolEvidence per run()."""
+
+    def __init__(self, name, evidences):
+        super().__init__(name)
+        self._evidences = list(evidences)
+
+    def run(self, rule, target, *, timeout=300, env=None) -> ToolEvidence:
+        self.run_calls.append({"rule": rule, "target": target})
+        ev = self._evidences.pop(0)
+        return ToolEvidence(
+            tool=ev.tool, rule=rule, success=ev.success,
+            matches=list(ev.matches), summary=ev.summary, error=ev.error,
+        )
+
+
+class TestValidateMultiRound:
+    """Multi-round refinement must terminate with a verdict, not a
+    ProvenanceMismatch. Pre-fix, refinement replaced the hypothesis and
+    round-2 evidence carried the refined hash — ValidationResult's
+    ensure_same_provenance then raised on EVERY multi-round run. And
+    the iteration guard compared absolute uncertainty over cumulative
+    evidence, so it could never decrease and round 3 was unreachable."""
+
+    def test_two_round_run_reaches_verdict_with_single_lineage(self):
+        from packages.hypothesis_validation.provenance import hash_hypothesis
+
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "rule too narrow",
+             "refined_rule": "r2"},
+            {"verdict": "confirmed", "reasoning": "match consistent",
+             "refined_rule": ""},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        assert result.verdict == "confirmed"
+        assert result.iterations == 2
+        assert len(result.evidence) == 2
+        # All rounds share the root hypothesis's provenance edge.
+        assert {e.refers_to for e in result.evidence} == {hash_hypothesis(h)}
+
+    def test_third_round_reachable_when_evidence_improves(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+            ToolEvidence(tool="cocci", rule="r3", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "no matches yet",
+             "refined_rule": "r2"},
+            {"verdict": "inconclusive", "reasoning": "match ambiguous",
+             "refined_rule": "r3"},
+            {"verdict": "confirmed", "reasoning": "match consistent",
+             "refined_rule": ""},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        assert result.verdict == "confirmed"
+        assert result.iterations == 3
+        assert len(result.evidence) == 3
+
+    def test_stalls_when_refinement_adds_no_conclusive_evidence(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[], summary="no matches"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "unclear",
+             "refined_rule": "r2"},
+            {"verdict": "inconclusive", "reasoning": "still unclear",
+             "refined_rule": "r3"},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        # Guard halts the loop before a third tool run.
+        assert result.verdict == "inconclusive"
+        assert len(result.evidence) == 2
+        assert len(adapter.run_calls) == 2

@@ -165,6 +165,12 @@ _CMDLINE = "BOOT_IMAGE=/boot/vmlinuz root=/dev/vda1 ro quiet\n"
 _DMI_SYS_VENDOR = "QEMU\n"
 _DMI_PRODUCT_NAME = "Standard PC (i440FX + PIIX, 1996)\n"
 
+# /proc/stat jiffy unit. USER_HZ is 100 on every mainstream Linux
+# build (it is the userspace-visible clock tick, fixed for ABI
+# compatibility regardless of the kernel's internal CONFIG_HZ);
+# tools converting jiffies to seconds divide by this.
+_USER_HZ = 100
+
 # /proc/cpuinfo block — per-processor. Per-CPU fields are templated
 # with the processor index and the global cpu_count. The `flags` field
 # is templated with the host's actual flags so capability dispatch
@@ -333,9 +339,33 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     fake_uptime_s, fake_processes = _derive_uptime_and_processes()
     btime = int(_now()) - fake_uptime_s
 
-    stat_lines = ["cpu  100 0 50 1000 0 0 0 0 0 0\n"]
+    # /proc/uptime idle: idle ≈ uptime * cpu_count (each CPU
+    # accumulates idle independently). Real systems report idle ≈
+    # 0.97 * uptime * cpu_count on a low-load box; we pick 0.95 to
+    # leave a small "we've done some work" signal. Computed before
+    # /proc/stat because the stat jiffies derive from the same value.
+    idle_s = int(fake_uptime_s * cpu_count * 0.95)
+
+    # /proc/stat cpu jiffies must agree with the fabricated uptime:
+    # the earlier hardcoded "cpu 100 0 50 1000" summed to ~11.5s of
+    # CPU time at USER_HZ=100 while /proc/uptime claimed days — a
+    # cross-checking detector flags the contradiction instantly.
+    # Derive from fake_uptime_s instead: idle is exactly the
+    # /proc/uptime idle figure in jiffies; the busy remainder splits
+    # user/system 3:2 — a plausible low-load production box.
+    idle_jiffies = idle_s * _USER_HZ
+    user_jiffies = int(fake_uptime_s * cpu_count * 0.03) * _USER_HZ
+    system_jiffies = int(fake_uptime_s * cpu_count * 0.02) * _USER_HZ
+    stat_lines = [
+        f"cpu  {user_jiffies} 0 {system_jiffies} {idle_jiffies} "
+        f"0 0 0 0 0 0\n"
+    ]
     for i in range(cpu_count):
-        stat_lines.append(f"cpu{i} 100 0 50 1000 0 0 0 0 0 0\n")
+        stat_lines.append(
+            f"cpu{i} {user_jiffies // cpu_count} 0 "
+            f"{system_jiffies // cpu_count} "
+            f"{idle_jiffies // cpu_count} 0 0 0 0 0 0\n"
+        )
     stat_lines.append(
         f"intr 0\nctxt 0\nbtime {btime}\n"
         f"processes {fake_processes}\nprocs_running 1\n"
@@ -343,13 +373,8 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     )
     files["/proc/stat"] = _write(tmpdir / "stat", "".join(stat_lines))
 
-    # /proc/uptime — two floats: total uptime seconds + idle seconds.
-    # idle ≈ uptime * cpu_count (each CPU accumulates idle independently).
-    # Real systems report idle ≈ 0.97 * uptime * cpu_count on a low-load
-    # box; we pick 0.95 to leave a small "we've done some work" signal.
-    idle = int(fake_uptime_s * cpu_count * 0.95)
     files["/proc/uptime"] = _write(
-        tmpdir / "uptime", f"{fake_uptime_s}.00 {idle}.00\n",
+        tmpdir / "uptime", f"{fake_uptime_s}.00 {idle_s}.00\n",
     )
 
     # /proc/loadavg — low-load values + a plausible "running/total

@@ -499,14 +499,11 @@ def build_from_journal(run_dir: Path,
     if not entries:
         return None
 
-    files = set()
     functions: list[dict[str, str]] = []
     seen = set()
     statuses: dict[str, int] = {}
 
     for entry in entries:
-        if entry.file:
-            files.add(entry.file)
         key = (entry.file, entry.function)
         if key in seen:
             continue
@@ -522,12 +519,17 @@ def build_from_journal(run_dir: Path,
             func_entry["hash"] = entry.source_hash
         functions.append(func_entry)
 
-    if not files and not functions:
+    if not functions:
         return None
+    # Deliberately NO files_examined: the record's tool label is
+    # review-grade (llm/analysed — see core/coverage/registry.py), and
+    # the importer marks files_examined WHOLE-FILE under the record's
+    # tool. A journal entry reviews one function, not its whole file;
+    # emitting the file list here inflated every containing file to
+    # reviewed. functions_analysed carries the exact spans.
     return {
         "tool": tool_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "files_examined": sorted(files),
         "functions_analysed": functions,
         "journal_statuses": statuses,
     }

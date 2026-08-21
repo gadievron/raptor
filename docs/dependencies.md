@@ -57,7 +57,7 @@ Pinned versions are in `requirements.txt`. Install with
 | Package | Licence | Purpose |
 |---------|---------|---------|
 | anthropic | MIT | Anthropic Claude SDK |
-| openai | MIT | OpenAI SDK (also used for Ollama and compatible endpoints) |
+| openai | Apache 2.0 | OpenAI SDK (also used for Ollama and compatible endpoints) |
 | google-genai | Apache 2.0 | Google Gemini native SDK |
 | botocore | Apache 2.0 | AWS Bedrock SigV4 signing (parent-only, not needed for bearer-token auth) |
 | beautifulsoup4 | MIT | HTML parsing (web scanning) |
@@ -69,6 +69,8 @@ Pinned versions are in `requirements.txt`. Install with
 | z3-solver | MIT | SMT-based constraint analysis (one-gadget feasibility, path validation) |
 | tree-sitter + grammars | MIT | Rich inventory metadata (decorators, typed params) |
 | sage-agent-sdk | -- | SAGE persistent memory (see [sage.md](sage.md)) |
+| httpx | BSD | HTTP client used by the SAGE SDK (installed alongside it) |
+| h2 | MIT | HTTP/2 for pooled LLM transports (opt-in via `RAPTOR_HTTP2=1`; see [llm.md](llm.md)) |
 | tomli | MIT | TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+) |
 
 

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """RAPTOR Recon Agent (safe, read-only)
+
+Deprecated: no slash-command dispatch routes here — the target
+description role is served by ``/describe`` (``packages/describe``),
+which covers language mix, build system, catalog match, and tool
+readiness. This agent remains for direct manual invocation
+(``python3 packages/recon/agent.py --repo <path-or-url>``).
+
 - Accepts repo path or git URL
 - Clones shallowly if URL (no credentials, no network if disabled)
 - Produces out/recon.json with simple inventory: file counts, languages by extension

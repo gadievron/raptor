@@ -335,6 +335,51 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
 _PR_SET_PDEATHSIG = 1
 _libc = None
 
+# ── OOM child scoring ───────────────────────────────────────────────
+#
+# Analysis children (scanners, builds, r2, gdb, CodeQL, target
+# processes) are sacrificial: under memory pressure the kernel should
+# kill THEM, never the RAPTOR session that orchestrates them — losing
+# one tool invocation costs a retry; losing the session costs the run.
+# oom_score_adj=+500 makes every spawned child a strongly preferred
+# OOM victim relative to the session (which stays at its inherited
+# score). Raising one's own score never needs privilege.
+#
+# Stickiness is honest, not absolute: an unprivileged child MAY lower
+# its score back down to the floor it inherited at fork (only going
+# BELOW that floor needs CAP_SYS_RESOURCE — the direction
+# test_sandbox_attack_scenarios' oom probe pins). Outside the sandbox
+# the stamp is therefore a default that well-behaved tools keep, not
+# a boundary against a malicious child; under core.sandbox.run,
+# Landlock denies the /proc/self write and the preference does stick
+# through the child tree.
+#
+# Written post-fork/pre-exec, so on the sandboxed path it lands
+# BEFORE Landlock restricts /proc writes and is inherited across the
+# unshare chain. Silently skipped where /proc/self/oom_score_adj is
+# unwritable (locked-down containers) or absent (non-Linux).
+
+_OOM_SCORE_ADJ_PATH = "/proc/self/oom_score_adj"
+_OOM_SCORE_ADJ = b"500"
+
+
+def raise_oom_score_adj() -> None:
+    """Mark the calling (child) process as a preferred OOM victim.
+
+    Post-fork safe: raw os.open/os.write only. Never raises — an
+    environment that refuses the write just keeps the inherited score.
+    """
+    try:
+        fd = os.open(_OOM_SCORE_ADJ_PATH, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        os.write(fd, _OOM_SCORE_ADJ)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
 
 def _get_libc():
     global _libc
@@ -351,6 +396,13 @@ def set_pdeathsig(sig=signal.SIGKILL):
     Linux-only; returns a no-op on other platforms.  Callers pass this
     to ``subprocess.run(..., preexec_fn=set_pdeathsig())`` so the child
     is killed when the parent dies — no more orphaned git/readelf/gdb.
+
+    Also raises the child's ``oom_score_adj`` to +500 (see the block
+    comment above): this helper IS the shared child-preexec for every
+    non-sandboxed tool spawn, and both properties serve one doctrine —
+    analysis children are sacrificial, the session is not. The
+    sandboxed path gets the same score via ``_make_preexec_fn``'s
+    composed preexec, which calls this first.
     """
     if sys.platform != "linux":
         return lambda: None
@@ -359,5 +411,6 @@ def set_pdeathsig(sig=signal.SIGKILL):
         libc = _get_libc()
         if libc is not None:
             libc.prctl(_PR_SET_PDEATHSIG, sig)
+        raise_oom_score_adj()
 
     return _apply

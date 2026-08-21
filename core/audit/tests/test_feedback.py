@@ -44,7 +44,8 @@ def _write_annotation(annotations_dir: Path, file_path: str,
 
 def _seed_journal_entry(out_dir: Path, file_path: str,
                          function_name: str, verdict: str,
-                         body: str = "") -> None:
+                         body: str = "",
+                         evidence_tools: list[str] | None = None) -> None:
     """Write a prior LLM review to the review journal at ``out_dir``
     so ``import_validation_results`` finds it as the prior verdict."""
     entry = ReviewJournalEntry(
@@ -55,6 +56,7 @@ def _seed_journal_entry(out_dir: Path, file_path: str,
         verdict=verdict,
         source_hash="",
         body=body,
+        evidence_tools=list(evidence_tools or []),
     )
     append_entry(out_dir, entry)
 
@@ -1038,3 +1040,360 @@ class TestProvenanceGatedVeto:
         assert _latest_journal_verdict(
             audit_out, "src/vuln.c", "vuln_fn",
         ) == "clean"
+
+
+# ---- downgrade referee ----
+
+class TestDowngradeReferee:
+    """An LLM-only /validate ruling must not erase a tool-evidenced
+    audit finding; mechanical disqualifiers license the clean
+    downgrade."""
+
+    def _setup(self, tmp_path: Path, evidence_tools: list[str]):
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "finding", "Confirmed overflow",
+                             evidence_tools=evidence_tools)
+        return ann_dir, audit_out
+
+    def _report(self, tmp_path: Path, finding: dict) -> Path:
+        report_path = tmp_path / "findings.json"
+        base = {"file": "src/vuln.c", "function": "vuln_fn"}
+        base.update(finding)
+        report_path.write_text(json.dumps([base]))
+        return report_path
+
+    def _audit_log_events(self, audit_out: Path) -> list[dict]:
+        log = audit_out / ".audit-log.jsonl"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in
+                log.read_text().splitlines() if line.strip()]
+
+    def test_witness_refuted_downgrades_tool_evidenced_to_clean(
+            self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out",
+                        "disqualifier": "witness_refuted",
+                        "witness": "dark_verify:refuted",
+                        "reason": "harness observed normal return"},
+        })
+        result = import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        assert result["downgraded"] == 1
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "clean"
+        events = [e for e in self._audit_log_events(audit_out)
+                  if e.get("action") == "feedback"]
+        assert events and events[-1].get("referee") == "witness_refuted"
+
+    def test_llm_only_ruling_demotes_tool_evidenced_to_suspicious(
+            self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["joern:flow"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out", "disqualifier": "D-1",
+                        "reason": "looks like test code"},
+        })
+        result = import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        assert result["downgraded"] == 1
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "suspicious"
+        assert entry.prior_review == "finding"
+        assert entry.lesson and "mechanical" in entry.lesson
+        events = [e for e in self._audit_log_events(audit_out)
+                  if e.get("action") == "feedback"]
+        assert events and events[-1].get("referee") == "llm_only_ruling"
+        assert events[-1].get("new_status") == "suspicious"
+
+    def test_llm_only_ruling_cleans_llm_tier_finding(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(
+            tmp_path, ["llm-claimed:manual review"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out", "disqualifier": "D-0",
+                        "reason": "hypothesis wrong"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "clean"
+
+    def test_llm_only_ruling_keeps_tool_evidenced_suspicious(
+            self, tmp_path: Path):
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/vuln.c", "vuln_fn",
+                             "suspicious", "cocci matched",
+                             evidence_tools=["coccinelle"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out", "disqualifier": "D-3"},
+        })
+        result = import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        assert result["downgraded"] == 0
+        assert result["corroborated"] == 1
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "suspicious"
+
+    def test_missing_disqualifier_is_conservative(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["codeql"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "suspicious"
+
+    def test_iris_sibling_refutation_cleans(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        (tmp_path / "disproven.json").write_text(json.dumps([{
+            "finding": "F-1", "lesson": "iris_tier1_refuted",
+            "why_wrong": "no path under broad source model",
+        }]))
+        report = self._report(tmp_path, {
+            "id": "F-1",
+            "ruling": {"status": "ruled_out", "disqualifier": "D-0"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "clean"
+
+    def test_smt_all_paths_infeasible_cleans(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        (tmp_path / "attack-paths.json").write_text(json.dumps([
+            {"finding_id": "F-2",
+             "smt_feasibility": {"feasible": False}},
+            {"finding_id": "F-2",
+             "smt_feasibility": {"feasible": False}},
+        ]))
+        report = self._report(tmp_path, {
+            "id": "F-2",
+            "ruling": {"status": "ruled_out", "disqualifier": "D-2"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "clean"
+
+    def test_smt_one_feasible_path_blocks_clean(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        (tmp_path / "attack-paths.json").write_text(json.dumps([
+            {"finding_id": "F-3",
+             "smt_feasibility": {"feasible": False}},
+            {"finding_id": "F-3", "steps": []},
+        ]))
+        report = self._report(tmp_path, {
+            "id": "F-3",
+            "ruling": {"status": "ruled_out", "disqualifier": "D-2"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "suspicious"
+
+    def test_sanity_failure_with_structural_fact_cleans(
+            self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        report = self._report(tmp_path, {
+            "cocci_prereqs": {"applicable": True, "function_exists": False},
+            "ruling": {"status": "ruled_out",
+                        "disqualifier": "sanity_check_failed"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "clean"
+
+    def test_bare_sanity_failure_blocks_clean(self, tmp_path: Path):
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out",
+                        "disqualifier": "sanity_check_failed"},
+        })
+        import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "suspicious"
+
+    def test_human_annotation_veto_still_wins(self, tmp_path: Path):
+        # The veto short-circuits before the referee: even a
+        # mechanical disqualifier defers to the operator's assertion.
+        ann_dir, audit_out = self._setup(tmp_path, ["semgrep"])
+        _write_annotation_meta(
+            ann_dir, "src/vuln.c", "vuln_fn",
+            "status=finding source=human "
+            "provenance=interactive-tty tty=stdin",
+            "operator confirmed",
+        )
+        report = self._report(tmp_path, {
+            "ruling": {"status": "ruled_out",
+                        "disqualifier": "witness_refuted"},
+        })
+        result = import_validation_results(
+            validation_report=report, annotations_dir=ann_dir,
+            audit_out_dir=audit_out)
+        assert result["skipped"] == 1
+        assert result["updated"] == 0
+        entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry.verdict == "finding"
+
+
+# ---- referee unit tests ----
+
+class TestMechanicalDisqualifier:
+    def test_llm_disqualifiers_return_none(self):
+        from core.audit.feedback import _mechanical_disqualifier
+        for code in ("D-0", "D-1", "D-1.5", "D-2", "D-3", "D-4", None):
+            finding = {"ruling": {"status": "ruled_out",
+                                   "disqualifier": code}}
+            assert _mechanical_disqualifier(finding, None) is None
+
+    def test_witness_execution_verdict_qualifies(self):
+        from core.audit.feedback import _mechanical_disqualifier
+        finding = {"witness_execution": {"verdict": "refuted"}}
+        assert _mechanical_disqualifier(finding, None) == "witness_refuted"
+
+    def test_malformed_ruling_is_none(self):
+        from core.audit.feedback import _mechanical_disqualifier
+        assert _mechanical_disqualifier({"ruling": "ruled_out"}, None) is None
+        assert _mechanical_disqualifier({}, None) is None
+
+
+class TestPriorHasToolEvidence:
+    def test_tool_stamps(self):
+        from core.audit.feedback import _prior_has_tool_evidence
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="t", file="a.c", function="f",
+            verdict="finding", source_hash="",
+            evidence_tools=["semgrep"])
+        assert _prior_has_tool_evidence(entry) is True
+
+    def test_llm_claimed_does_not_count(self):
+        from core.audit.feedback import _prior_has_tool_evidence
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="t", file="a.c", function="f",
+            verdict="finding", source_hash="",
+            evidence_tools=["llm-claimed:code review"])
+        assert _prior_has_tool_evidence(entry) is False
+
+    def test_none_prior(self):
+        from core.audit.feedback import _prior_has_tool_evidence
+        assert _prior_has_tool_evidence(None) is False
+
+
+class TestFeedbackProducerKind:
+    """Kind-aware producer stamping on feedback-written entries."""
+
+    def test_no_prior_claim_stays_skipped(self, tmp_path: Path):
+        """A validated finding with NO prior claim of any kind is a
+        new signal for the next audit run, not feedback — the
+        deliberate skip must survive the kind-aware change."""
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+
+        report_path = tmp_path / "findings.json"
+        report_path.write_text(json.dumps([{
+            "file": "src/new.c",
+            "function": "never_reviewed",
+            "ruling": {"status": "exploitable"},
+            "is_true_positive": True,
+        }]))
+
+        result = import_validation_results(
+            validation_report=report_path,
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+
+        assert result["skipped"] == 1
+        assert _latest_journal_entry(
+            audit_out, "src/new.c", "never_reviewed") is None
+
+    def test_machine_annotation_prior_correction_is_finding_grade(
+        self, tmp_path: Path,
+    ):
+        """When the only prior claim is a machine-tier annotation (no
+        journal entry), the correction records per-finding /validate
+        evidence about a function no audit reviewed — it must be
+        finding-grade, not fabricated function-review coverage."""
+        from core.coverage.journal import is_function_grade
+
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _write_annotation(ann_dir, "src/new.c", "never_reviewed",
+                          "clean", "Legacy LLM note, looks safe")
+
+        report_path = tmp_path / "findings.json"
+        report_path.write_text(json.dumps([{
+            "file": "src/new.c",
+            "function": "never_reviewed",
+            "ruling": {"status": "exploitable"},
+            "is_true_positive": True,
+        }]))
+
+        import_validation_results(
+            validation_report=report_path,
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+
+        entry = _latest_journal_entry(audit_out, "src/new.c",
+                                      "never_reviewed")
+        assert entry is not None
+        assert entry.verdict == "finding"
+        assert entry.producer == "validate"
+        assert not is_function_grade(entry)
+
+    def test_correction_to_audit_review_stays_function_grade(
+        self, tmp_path: Path,
+    ):
+        from core.coverage.journal import is_function_grade
+
+        ann_dir = tmp_path / "annotations"
+        ann_dir.mkdir()
+        audit_out = tmp_path / "audit-out"
+        audit_out.mkdir()
+        _seed_journal_entry(audit_out, "src/safe.c", "safe_fn",
+                            "clean", "Reviewed, looks safe")
+
+        report_path = tmp_path / "findings.json"
+        report_path.write_text(json.dumps([{
+            "file": "src/safe.c",
+            "function": "safe_fn",
+            "ruling": {"status": "exploitable"},
+            "is_true_positive": True,
+        }]))
+
+        import_validation_results(
+            validation_report=report_path,
+            annotations_dir=ann_dir,
+            audit_out_dir=audit_out,
+        )
+
+        entry = _latest_journal_entry(audit_out, "src/safe.c", "safe_fn")
+        assert entry is not None
+        assert entry.verdict == "finding"
+        assert entry.producer == "audit"
+        assert is_function_grade(entry)

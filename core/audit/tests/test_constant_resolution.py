@@ -176,6 +176,54 @@ class TestEvaluationCaps:
         assert _try_evaluate(f"-{2**65}") is None
 
 
+class TestTryEvaluateBounds:
+    """The evaluator is an AST walker with explicit literal/shift/
+    result caps — hostile macro bodies must not force bigint work or
+    resolve truth values as constants."""
+
+    def test_hex_shift_bomb_returns_none_quickly(self):
+        import time
+        start = time.monotonic()
+        assert _try_evaluate("1<<0x7fffffff") is None
+        assert time.monotonic() - start < 1.0
+
+    def test_decimal_shift_bomb(self):
+        assert _try_evaluate("(1<<999999999999)") is None
+
+    def test_shift_past_cap(self):
+        assert _try_evaluate("1 << 257") is None
+
+    def test_negative_shift(self):
+        assert _try_evaluate("1 << -1") is None
+
+    def test_wide_shift_within_result_cap_ok(self):
+        assert _try_evaluate("1 << 100") == 1 << 100
+
+    def test_nested_shift_bomb(self):
+        assert _try_evaluate("(1<<200) << (1<<200)") is None
+
+    def test_oversized_literal(self):
+        assert _try_evaluate(str(1 << 80)) is None
+
+    def test_oversized_result_via_multiplication(self):
+        assert _try_evaluate(f"{(1 << 64) - 1} * {(1 << 64) - 1} * 4") is None
+
+    def test_oversized_body(self):
+        assert _try_evaluate("1 + " * 400 + "1") is None
+
+    def test_comparison_not_a_constant(self):
+        # A truth value is not a constant — `<` / `>` are shift chars
+        # to the charset gate but comparisons must not resolve.
+        assert _try_evaluate("1 < 2") is None
+        assert _try_evaluate("2 > 1") is None
+
+    def test_typical_kernel_constants_still_resolve(self):
+        assert _try_evaluate("(1 << 31)") == 1 << 31
+        assert _try_evaluate("0xFFFFFFFF") == 0xFFFFFFFF
+        assert _try_evaluate("~0") == -1
+        assert _try_evaluate("(4 * 1024) - 1") == 4095
+
+
 # ── Conditional depth tracking ───────────────────────────────────────
 
 

@@ -196,6 +196,16 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
     resolved = resolve_finding(finding)
     if not isinstance(resolved, ResolvedFinding):
         return VERDICT_UNRESOLVED
+    java_text = None
+    if resolved.language == "java":
+        # The constant-definers pre-check folds over the file's AST;
+        # unreadable file just skips that check, never the gate.
+        try:
+            java_text = Path(str(finding.get("file_path", ""))).read_text(
+                encoding="utf-8", errors="replace",
+            )
+        except OSError:
+            java_text = None
     result = evaluate_finding(
         resolved.cfg,
         [resolved.source_node],
@@ -205,6 +215,9 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
         source_symbols=resolved.source_symbols,
         sink_arg=resolved.sink_arg,
         extra_bindings=resolved.inter_proc_bindings,
+        java_source_text=java_text,
+        java_file_path=str(finding.get("file_path") or "") or None,
+        repo_root=str(finding.get("repo_root") or "") or None,
     )
     return result.verdict
 

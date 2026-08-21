@@ -17,11 +17,11 @@ import contextlib
 import json as _json
 import logging
 import os
-import pickle
 import re as _re
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1003,6 +1003,24 @@ def run_coccinelle_sweep(
             if _rendered_tmp is not None:
                 _rendered_tmp.unlink(missing_ok=True)
 
+        # spatch failure / parse errors / timeout (runner reports
+        # returncode=-1) → error, never refuted: a rule that failed to
+        # run produced no matches for a reason that says NOTHING about
+        # the code (mirrors the landed per-hypothesis semgrep semantics
+        # and cocci_flow's flow-channel handling).
+        spatch_errors = list(getattr(result, "errors", []) or [])
+        returncode = getattr(result, "returncode", 0)
+        if returncode != 0 or spatch_errors:
+            return SweepResult(
+                tool="coccinelle",
+                file_path=file_path,
+                function_name=function_name,
+                outcome="error",
+                errors=spatch_errors
+                or [f"spatch exited with code {returncode}"],
+                rule_id=cocci_rule,
+            )
+
         matches = []
         for f in result.matches:
             if hasattr(f, "to_dict"):
@@ -1024,7 +1042,6 @@ def run_coccinelle_sweep(
             outcome=outcome,
             matches=matches,
             rule_id=cocci_rule,
-            errors=result.errors if hasattr(result, "errors") else [],
         )
     except Exception as exc:  # noqa: BLE001
         return SweepResult(
@@ -1036,7 +1053,12 @@ def run_coccinelle_sweep(
         )
 
 
-# SMT verb names → libexec shim basenames
+# SMT verb names → libexec shim basenames. Only verbs with an actual
+# shim on disk belong here; the source-analysis verbs (check-auth-bypass,
+# check-lock-discipline, check-resource-leak, check-null-propagation,
+# check-integer-narrowing, check-early-release, check-lock-domain,
+# check-toctou) have no CLI shim and run in-process via
+# run_smt_verb_direct().
 _SMT_VERBS = {
     "check-overflow": "raptor-smt-check-overflow",
     "check-oob": "raptor-smt-check-oob",
@@ -1044,15 +1066,19 @@ _SMT_VERBS = {
     "check-overflow-to-oob": "raptor-smt-check-overflow-to-oob",
     "check-negative-bypass": "raptor-smt-check-negative-bypass",
     "validate-path": "raptor-smt-validate-path",
-    "check-auth-bypass": "raptor-smt-check-auth-bypass",
-    "check-lock-discipline": "raptor-smt-check-lock-discipline",
-    "check-resource-leak": "raptor-smt-check-resource-leak",
-    "check-null-propagation": "raptor-smt-check-null-propagation",
-    "check-integer-narrowing": "raptor-smt-check-integer-narrowing",
-    "check-early-release": "raptor-smt-check-early-release",
-    "check-lock-domain": "raptor-smt-check-lock-domain",
-    "check-toctou": "raptor-smt-check-toctou",
 }
+
+# Verbs served only by run_smt_verb_direct() (no libexec shim).
+_SMT_DIRECT_ONLY_VERBS = frozenset({
+    "check-auth-bypass",
+    "check-lock-discipline",
+    "check-resource-leak",
+    "check-null-propagation",
+    "check-integer-narrowing",
+    "check-early-release",
+    "check-lock-domain",
+    "check-toctou",
+})
 
 _SMT_VERB_ROLES = {
     # Invariant-preservation harness (core.audit.invariant_smt): a sat
@@ -1066,14 +1092,25 @@ _SMT_VERB_ROLES = {
     "check-overflow-to-oob": "detection",
     "check-negative-bypass": "detection",
     "validate-path": "verification",
-    "check-auth-bypass": "verification",
+    # Demoted to detection (corpus-verified): these verbs "confirm"
+    # from lexical flow/ordering heuristics — check-early-release and
+    # check-toctou never touch the solver, check-auth-bypass /
+    # check-resource-leak / check-null-propagation use Z3 only to
+    # feasibility-check text fragments, not to model the semantics
+    # their confirmation asserts (refcounts, RCU grace periods,
+    # intentional permission-tier short-circuits). Their receipts
+    # backed a cluster of machine-raised kernel false positives while
+    # every true positive they touched also survives at detection
+    # grade (a fired probe still corroborates and seeds; it no longer
+    # convicts on its own).
+    "check-auth-bypass": "detection",
     "check-lock-discipline": "verification",
-    "check-resource-leak": "verification",
-    "check-null-propagation": "verification",
+    "check-resource-leak": "detection",
+    "check-null-propagation": "detection",
     "check-integer-narrowing": "verification",
-    "check-early-release": "verification",
+    "check-early-release": "detection",
     "check-lock-domain": "detection",
-    "check-toctou": "verification",
+    "check-toctou": "detection",
 }
 
 
@@ -1142,6 +1179,17 @@ def run_smt_sweep(
     """
     shim_name = _SMT_VERBS.get(verb)
     if not shim_name:
+        if verb in _SMT_DIRECT_ONLY_VERBS:
+            return SweepResult(
+                tool="smt",
+                file_path=file_path,
+                function_name=function_name,
+                outcome="error",
+                errors=[
+                    (f"SMT verb {verb!r} has no CLI shim; "
+                     "call run_smt_verb_direct() instead"),
+                ],
+            )
         return SweepResult(
             tool="smt",
             file_path=file_path,
@@ -1161,7 +1209,10 @@ def run_smt_sweep(
             errors=[f"shim not found: {shim_path}"],
         )
 
-    cmd = ["python3", str(shim_path)]
+    # sys.executable, not a PATH-resolved "python3": the shim must run
+    # under THIS interpreter (same venv, same installed z3), matching
+    # the SMT verb child spawn below.
+    cmd = [sys.executable, str(shim_path)]
     import re as _re
     _safe_key_re = _re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
     for key, value in smt_args.items():
@@ -1303,6 +1354,21 @@ def _verb_vocab(target_path: str | None):
         return _EMPTY_VOCAB
 
 
+def _negative_outcome(result) -> str:
+    """Outcome for a detector that found nothing.
+
+    A detector whose prerequisites were absent (``result.applicable``
+    is False — e.g. 'no auth checks found', 'no lock acquires found')
+    never tested the hypothesis; recording 'refuted' for that model
+    miss would clear tool confirmations on the strength of an analysis
+    that did not run.  Only an APPLIED detector that scanned its
+    pattern space and found nothing counts as a refutation.
+    """
+    if getattr(result, "applicable", True):
+        return "refuted"
+    return "inconclusive"
+
+
 def run_smt_verb_direct(
     *,
     file_path: str,
@@ -1335,15 +1401,6 @@ def run_smt_verb_direct(
     )
 
 
-_SMT_VERB_CHILD_SCRIPT = (
-    "import sys,os,pickle\n"
-    "sys.path.insert(0,os.environ['RAPTOR_DIR'])\n"
-    "from core.audit.sweep import _run_smt_verb_inner\n"
-    "r=_run_smt_verb_inner(**pickle.loads(sys.stdin.buffer.read()))\n"
-    "sys.stdout.buffer.write(pickle.dumps(r))\n"
-)
-
-
 def smt_child_env() -> dict:
     """Env for SMT/Z3 probe children with RAPTOR_DIR pinned to THIS tree.
 
@@ -1364,6 +1421,17 @@ def smt_child_env() -> dict:
         pin_raptor_dir(dict(os.environ)))
 
 
+def _run_smt_verb_inner_json(request: dict) -> dict:
+    """Child-side JSON adapter: kwargs dict in, SweepResult dict out.
+
+    The JSON protocol (see :mod:`core.audit.subproc_json`) carries
+    only plain data across the process boundary — the parent rebuilds
+    the SweepResult from the dict, so child stdout is never unpickled.
+    """
+    from dataclasses import asdict
+    return asdict(_run_smt_verb_inner(**request))
+
+
 def _smt_verb_in_subprocess(
     *,
     file_path: str,
@@ -1376,42 +1444,35 @@ def _smt_verb_in_subprocess(
 ) -> SweepResult:
     """Run SMT verb in an isolated subprocess.
 
-    Uses subprocess.Popen (fork+exec) rather than bare os.fork() so the
-    child gets a clean, single-threaded process image -- safe when the
-    parent has worker threads.
+    fork+exec gives the child a clean, single-threaded process image
+    (safe when the parent has worker threads); the JSON child protocol
+    keeps object deserialisation out of the parent.
     """
-    payload = pickle.dumps({
-        "file_path": file_path,
-        "function_name": function_name,
-        "verb": verb,
-        "source": source,
-        "hypothesis": hypothesis,
-        "target_path": target_path,
-    })
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", _SMT_VERB_CHILD_SCRIPT],
-            input=payload, capture_output=True, timeout=timeout,
-            check=False, env=smt_child_env(),
-        )
-        if proc.returncode == 0:
-            # Broad by design: pickle.loads on malformed child stdout
-            # can raise nearly anything (UnpicklingError, EOFError,
-            # AttributeError, ImportError, ...); any failure degrades
-            # to the loud warning below.
-            with contextlib.suppress(Exception):
-                sr = pickle.loads(proc.stdout)
-                if isinstance(sr, SweepResult):
-                    return sr
-        logger.warning(
-            "SMT subprocess exited %d for %s:%s verb=%s",
-            proc.returncode, file_path, function_name, verb,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "SMT subprocess timed out for %s:%s verb=%s",
-            file_path, function_name, verb,
-        )
+    from .subproc_json import run_json_child
+
+    out = run_json_child(
+        "core.audit.sweep:_run_smt_verb_inner_json",
+        {
+            "file_path": file_path,
+            "function_name": function_name,
+            "verb": verb,
+            "source": source,
+            "hypothesis": hypothesis,
+            "target_path": target_path,
+        },
+        env=smt_child_env(),
+        timeout=timeout,
+        label=f"smt:{verb}",
+    )
+    if isinstance(out, dict):
+        # Tolerate a child from a slightly different tree revision:
+        # unexpected fields degrade to the crash sentinel below.
+        with contextlib.suppress(TypeError):
+            return SweepResult(**out)
+    logger.warning(
+        "SMT subprocess failed for %s:%s verb=%s",
+        file_path, function_name, verb,
+    )
     return SweepResult(
         tool="smt", file_path=file_path,
         function_name=function_name, outcome="inconclusive",
@@ -1553,7 +1614,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(auth_result),
                 rule_id=f"smt:{verb}",
                 details=auth_result.to_dict(),
             )
@@ -1575,7 +1637,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(narr_result),
                 rule_id=f"smt:{verb}",
                 details=narr_result.to_dict(),
             )
@@ -1597,7 +1660,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(lock_result),
                 rule_id=f"smt:{verb}",
                 details=lock_result.to_dict(),
             )
@@ -1619,7 +1683,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(null_result),
                 rule_id=f"smt:{verb}",
                 details=null_result.to_dict(),
             )
@@ -1641,7 +1706,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(leak_result),
                 rule_id=f"smt:{verb}",
                 details=leak_result.to_dict(),
             )
@@ -1663,7 +1729,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(er_result),
                 rule_id=f"smt:{verb}",
                 details=er_result.to_dict(),
             )
@@ -1685,7 +1752,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(ld_result),
                 rule_id=f"smt:{verb}",
                 details=ld_result.to_dict(),
             )
@@ -1707,7 +1775,8 @@ def _run_smt_verb_inner(
                 )
             return SweepResult(
                 tool="smt", file_path=file_path,
-                function_name=function_name, outcome="refuted",
+                function_name=function_name,
+                outcome=_negative_outcome(tt_result),
                 rule_id=f"smt:{verb}",
                 details=tt_result.to_dict(),
             )
@@ -2265,6 +2334,22 @@ def run_consistency_check(
             if _rendered_tmp is not None:
                 _rendered_tmp.unlink(missing_ok=True)
 
+        # Same policy as run_coccinelle_sweep: a failed / timed-out
+        # spatch run (returncode=-1 from the runner) is an error, not a
+        # refutation — no-match means nothing when the tool never ran.
+        spatch_errors = list(getattr(result, "errors", []) or [])
+        returncode = getattr(result, "returncode", 0)
+        if returncode != 0 or spatch_errors:
+            return SweepResult(
+                tool="coccinelle_consistency",
+                file_path="<codebase>",
+                function_name=function_name,
+                outcome="error",
+                errors=spatch_errors
+                or [f"spatch exited with code {returncode}"],
+                rule_id=cocci_rule,
+            )
+
         matches = []
         for match in result.matches:
             if hasattr(match, "to_dict"):
@@ -2406,6 +2491,76 @@ def run_joern_sweep(
     )
 
 
+# Interruption-class pre-sweep errors: the query did not fail on its
+# own merits — the shared single-threaded server was restarted (stuck
+# query recovery, possibly triggered by ANOTHER worker's query), died,
+# or the transport was cut. These are re-queueable once the server is
+# back; script/compile errors are not.
+_PRE_SWEEP_INTERRUPTION_MARKERS = (
+    "restarting",            # _RESTARTING_ERROR fail-fast
+    "server process exited",
+    "timed out",             # sync post timeout (restart already fired)
+    "timeout (async poll)",  # async poll timeout (restart already fired)
+    "cancelled",
+    "connection failed",
+    "connection refused",
+    "server did not respond",
+    "no cpg loaded",         # restart gap / failed reload
+)
+
+#: Bounded re-queue attempts for an interrupted pre-sweep window.
+_PRE_SWEEP_MAX_REQUEUES = 2
+#: How long to wait for the restarted server before each re-queue.
+#: Covers a JVM boot + CPG reload (~1-2 min on big targets).
+_PRE_SWEEP_RECOVERY_WAIT_S = 300
+_PRE_SWEEP_RECOVERY_POLL_S = 5
+
+
+def _presweep_interrupted(errors: list[str] | None) -> bool:
+    """True when the pre-sweep result carries an interruption-class
+    error (re-queueable) rather than a query/script failure."""
+    for err in errors or []:
+        low = str(err).lower()
+        if any(marker in low for marker in _PRE_SWEEP_INTERRUPTION_MARKERS):
+            return True
+    return False
+
+
+def _wait_for_presweep_server(
+    server,
+    *,
+    deadline_s: float,
+    poll_s: float,
+    on_progress: Callable | None = None,
+) -> bool:
+    """Wait for a restarting/dead Joern server to come back with a CPG.
+
+    Feeds ``on_progress`` each poll so the orchestrator's stall
+    detector sees activity while the re-queue is pending. Returns True
+    when the server is alive with a loaded CPG, False on deadline.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < deadline_s:
+        try:
+            if not getattr(server, "restarting", False):
+                alive = True
+                ensure = getattr(server, "ensure_alive", None)
+                if callable(ensure):
+                    alive = bool(ensure())
+                if alive and getattr(server, "_cpg_loaded", False):
+                    return True
+        except Exception:  # noqa: BLE001 — probe must not kill the sweep thread
+            logger.debug("pre-sweep recovery probe failed", exc_info=True)
+        if on_progress:
+            waited = int(time.monotonic() - start)
+            on_progress(
+                f"Joern pre-sweep interrupted — waiting for server "
+                f"recovery to re-queue ({waited}s)"
+            )
+        time.sleep(poll_s)
+    return False
+
+
 def run_joern_pre_sweep(
     target_path: Path,
     checklist: dict,
@@ -2415,6 +2570,7 @@ def run_joern_pre_sweep(
     query_timeout: int = 300,
     heap_mb: int | None = None,
     server=None,
+    status_out: dict | None = None,
 ) -> dict[str, list]:
     """Run standard taint queries before the LLM loop.
 
@@ -2422,6 +2578,14 @@ def run_joern_pre_sweep(
     Returns per-function flows keyed by "file:function".
     When cache_dir is set, reuses a cached CPG if fresh.
     When server is provided, uses the already-running JoernServer.
+
+    Server mode shares the single-threaded REPL with the review loop's
+    verification queries: a stuck query ANYWHERE restarts the server,
+    which interrupts an in-flight pre-sweep window. Interruption-class
+    failures are re-queued (bounded) against the restarted server
+    instead of dropped; ``status_out`` (when provided) records
+    ``interrupted`` / ``requeued`` / ``recovered`` / ``errors`` so the
+    run summary and critique can surface what happened.
 
     Returns {} when joern is unavailable.
     """
@@ -2463,8 +2627,59 @@ def run_joern_pre_sweep(
         result = server.query_script(
             sinks_script, timeout=query_timeout, substitutions=sink_subst,
         )
+        requeued = 0
+        interrupted = 1 if _presweep_interrupted(result.errors) else 0
+        while (
+            _presweep_interrupted(result.errors)
+            and requeued < _PRE_SWEEP_MAX_REQUEUES
+        ):
+            logger.warning(
+                "joern pre-sweep window interrupted (%s) — re-queueing "
+                "against the restarted server (attempt %d/%d)",
+                "; ".join(str(e) for e in result.errors)[:300],
+                requeued + 1, _PRE_SWEEP_MAX_REQUEUES,
+            )
+            if not _wait_for_presweep_server(
+                server,
+                deadline_s=_PRE_SWEEP_RECOVERY_WAIT_S,
+                poll_s=_PRE_SWEEP_RECOVERY_POLL_S,
+                on_progress=on_progress,
+            ):
+                logger.warning(
+                    "joern pre-sweep re-queue abandoned — server did "
+                    "not recover within %ds", _PRE_SWEEP_RECOVERY_WAIT_S,
+                )
+                break
+            requeued += 1
+            result = server.query_script(
+                sinks_script, timeout=query_timeout,
+                substitutions=sink_subst,
+            )
+            if _presweep_interrupted(result.errors):
+                interrupted += 1
+
+        recovered = interrupted > 0 and not _presweep_interrupted(
+            result.errors,
+        )
+        if status_out is not None:
+            status_out["interrupted"] = interrupted
+            status_out["requeued"] = requeued
+            status_out["recovered"] = recovered
+            status_out["errors"] = [str(e) for e in (result.errors or [])]
         if result.errors:
-            logger.warning("joern pre-sweep errors: %s", result.errors)
+            if _presweep_interrupted(result.errors):
+                logger.warning(
+                    "joern pre-sweep window LOST after %d re-queue "
+                    "attempt(s): %s — taint flows for this run are "
+                    "incomplete", requeued, result.errors,
+                )
+            else:
+                logger.warning("joern pre-sweep errors: %s", result.errors)
+        elif recovered:
+            logger.info(
+                "joern pre-sweep recovered after %d re-queue attempt(s)",
+                requeued,
+            )
 
         flows_by_key: dict[str, list] = {}
         for flow in result.flows:

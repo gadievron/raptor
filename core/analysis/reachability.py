@@ -2356,6 +2356,55 @@ def build_excluded(
     return None
 
 
+def _select_item_by_line(
+    candidates: List[Dict[str, Any]],
+    line: int,
+) -> List[Dict[str, Any]]:
+    """Narrow same-name inventory items to the single best match for a
+    query line. Shared by the binary-oracle / frida accessors so the
+    disambiguation can't drift between copies (it had, three ways).
+
+    Production callers (semgrep, codeql) pass the line OF THE FINDING,
+    which is typically INSIDE the function, not at its first line. The
+    documented heuristic (adversarial review P0-C-3):
+
+      1. Prefer the innermost item whose ``[line_start, line_end]``
+         range contains the line — a missing/0 ``line_end`` is treated
+         as open-ended, and "innermost" = greatest ``line_start``.
+      2. Otherwise fall back to the item whose ``line_start`` is the
+         CLOSEST one <= the query line (extractors sometimes under-
+         report ``line_end``; the containing function is still the one
+         that starts nearest above the finding).
+      3. Otherwise (query line precedes every candidate) keep the
+         first candidate — the legacy deterministic tie-break.
+
+    No-op when ``line`` is 0/unset or there's at most one candidate.
+    """
+    if not line or len(candidates) < 2:
+        return candidates
+    enclosing = [
+        it for it in candidates
+        if int(it.get("line_start") or 0) <= line
+        and (int(it.get("line_end") or 0) == 0
+             or line <= int(it.get("line_end") or 0))
+    ]
+    if enclosing:
+        return [max(
+            enclosing,
+            key=lambda it: int(it.get("line_start") or 0),
+        )]
+    preceding = [
+        it for it in candidates
+        if 0 < int(it.get("line_start") or 0) <= line
+    ]
+    if preceding:
+        return [max(
+            preceding,
+            key=lambda it: int(it.get("line_start") or 0),
+        )]
+    return candidates[:1]
+
+
 def binary_call_edge_present(
     inventory: Dict[str, Any],
     file_path: str,
@@ -2391,20 +2440,7 @@ def binary_call_edge_present(
     candidates = by_name.get(name)
     if not candidates:
         return False
-    if line and len(candidates) > 1:
-        enclosing = [
-            it for it in candidates
-            if int(it.get("line_start") or 0) <= line
-            and (int(it.get("line_end") or 0) == 0
-                 or line <= int(it.get("line_end") or 0))
-        ]
-        if enclosing:
-            candidates = [max(
-                enclosing,
-                key=lambda it: int(it.get("line_start") or 0),
-            )]
-        else:
-            candidates = candidates[:1]
+    candidates = _select_item_by_line(candidates, line)
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
@@ -2442,20 +2478,7 @@ def frida_runtime_trace_present(
     candidates = by_name.get(name)
     if not candidates:
         return False
-    if line and len(candidates) > 1:
-        enclosing = [
-            it for it in candidates
-            if int(it.get("line_start") or 0) <= line
-            and (int(it.get("line_end") or 0) == 0
-                 or line <= int(it.get("line_end") or 0))
-        ]
-        if enclosing:
-            candidates = [max(
-                enclosing,
-                key=lambda it: int(it.get("line_start") or 0),
-            )]
-        else:
-            candidates = candidates[:1]
+    candidates = _select_item_by_line(candidates, line)
     for item in candidates:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
@@ -2513,28 +2536,11 @@ def binary_oracle_absent(
     candidates = by_name.get(name)
     if not candidates:
         return False
-    # Line disambiguation: production callers (semgrep, codeql) pass
-    # the line OF THE FINDING, which is typically INSIDE the function,
-    # not at its first line. Pick the item whose range
-    # [line_start, line_end] contains the query line; when line_end
-    # isn't set on the inventory item, fall back to "function whose
-    # line_start is the closest <= query line" (the standard
-    # function-containing-line heuristic). This subsumes the
-    # name-collision disambiguation case AND interior-line queries.
-    if line and len(candidates) > 1:
-        enclosing = [
-            it for it in candidates
-            if int(it.get("line_start") or 0) <= line
-            and (int(it.get("line_end") or 0) == 0
-                 or line <= int(it.get("line_end") or 0))
-        ]
-        if enclosing:
-            candidates = [max(
-                enclosing,
-                key=lambda it: int(it.get("line_start") or 0),
-            )]
-        else:
-            candidates = candidates[:1]
+    # Line disambiguation — see _select_item_by_line for the documented
+    # heuristic (containment first, closest line_start <= query as the
+    # fallback). Subsumes the name-collision case AND interior-line
+    # queries.
+    candidates = _select_item_by_line(candidates, line)
     any_confirmed = False
     for item in candidates:
         meta = item.get("metadata")

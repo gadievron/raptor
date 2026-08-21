@@ -1,19 +1,31 @@
 """Generic HTTP GET for agent research.
 
-Agentic-first: the agent calls this to retrieve advisories, vendor docs,
-release notes, vulhub raw files, etc. Returns the body (capped) plus
-headers so the LLM can reason about content type.
+Agentic-first: the agent's research tools call this to retrieve
+advisories, vendor docs, release notes, vulhub raw files, etc. Returns
+the body (capped) plus selected headers so the LLM can reason about
+content type.
 
-SSRF guards: block loopback / link-local / private ranges so the agent
-cannot probe the host's internal network. Size-cap the response.
-Timeout is aggressive.
+Transport is :mod:`core.http` (``UrllibClient``) — RAPTOR's single
+outbound chokepoint: pooled, size-capped, Retry-After-aware, and it
+snapshots the operator's ``https_proxy``/``no_proxy`` at construction.
+The pre-integration implementation drove ``requests`` directly and
+*disabled proxy resolution entirely*; on operator hosts whose only
+egress is a proxy, every research fetch timed out.
 
-Network resilience:
-* ``reason_class`` categorical field on every result so the agent / callers
-  can distinguish transient (rate-limited, timeout, 5xx) from permanent
-  (404, blocked URL) failures.
-* Built-in single-retry on transients (rate_limited / transport) before
-  surfacing the failure.
+What stays here is cve-env domain logic:
+
+* SSRF guards — block loopback / link-local / private ranges, resolve
+  hostnames up front (DNS-rebinding pre-check), and re-check the final
+  post-redirect hostname, so the agent cannot probe internal networks.
+  (The old best-effort post-connect peer-socket introspection is gone —
+  core.http's pooling doesn't expose the socket; on proxied deployments
+  name resolution happens at the operator's trusted proxy anyway.)
+* The ``ReasonClass`` taxonomy + ``FetchResult`` shape the research
+  tools and the LLM consume.
+
+Retries on transients are core.http's (429/5xx/network with
+Retry-After honoured); ``enable_retry`` maps onto the client's retry
+count instead of a local sleep loop.
 """
 
 from __future__ import annotations
@@ -21,16 +33,17 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
-import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-import requests
+from core.http import HttpError, SizeLimitExceeded
 
 from cve_env.config import WEB_FETCH_MAX_BYTES, WEB_FETCH_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
+
+_USER_AGENT = "cve-env/0.1 (agentic CVE env builder)"
 
 ReasonClass = Literal["ok", "rate_limited", "transport", "auth", "not_found"]
 """Coarse categorization of why a fetch failed (or 'ok' if it succeeded).
@@ -43,10 +56,17 @@ Mapping:
 * ``not_found``    — HTTP 404 / 410 / SSRF block / scheme reject (permanent)
 """
 
-# Transients eligible for one retry.
-_TRANSIENT_CLASSES: frozenset[ReasonClass] = frozenset({"rate_limited", "transport"})
-_RETRY_BACKOFF_RATE_LIMITED_S: float = 10.0
-_RETRY_BACKOFF_TRANSPORT_S: float = 5.0
+_client_singleton = None
+
+
+def _client():
+    """Lazy singleton UrllibClient (constructor snapshots proxy env)."""
+    global _client_singleton
+    if _client_singleton is None:
+        from core.http.urllib_backend import UrllibClient
+
+        _client_singleton = UrllibClient(user_agent=_USER_AGENT)
+    return _client_singleton
 
 
 def _classify_http_status(status: int) -> ReasonClass:
@@ -119,7 +139,7 @@ def _resolve_hostname_safe(hostname: str) -> str | None:
 
     Closes the DNS-rebinding bypass: a hostname like ``evil.example.com``
     passes ``_is_loopback_or_private`` (which only checks IP literals +
-    two hardcoded names) but ``requests.get`` then resolves DNS and may
+    two hardcoded names) but the transport then resolves DNS and may
     fetch ``127.0.0.1`` / ``169.254.169.254``. We resolve via
     ``socket.getaddrinfo`` BEFORE the request and reject if ANY returned
     address is loopback / private / link-local / metadata.
@@ -131,9 +151,9 @@ def _resolve_hostname_safe(hostname: str) -> str | None:
     try:
         infos = socket.getaddrinfo(hostname, None)
     except (OSError, UnicodeError) as exc:
-        # Resolution failure: fail closed — block the request rather than
-        # allowing it through to requests.get which would resolve
-        # independently and could succeed where getaddrinfo failed.
+        # Resolution failure: fail closed — block the request rather
+        # than letting the transport resolve independently and possibly
+        # succeed where getaddrinfo failed.
         logger.debug("getaddrinfo(%s) failed: %s", hostname, exc)
         return (
             f"hostname {hostname!r} DNS resolution failed: {exc} "
@@ -156,14 +176,8 @@ def _resolve_hostname_safe(hostname: str) -> str | None:
     return None
 
 
-def _fetch_once(
-    *,
-    url: str,
-    headers: dict[str, str] | None,
-    timeout_seconds: float,
-    max_bytes: int,
-) -> FetchResult:
-    """Single HTTP GET attempt. Sets ``reason_class`` on every return."""
+def _guard_url(url: str) -> FetchResult | None:
+    """Run the pre-request SSRF/scheme guards. None = proceed."""
     parsed = urlparse(url)
     if not _scheme_allowed(parsed.scheme):
         return FetchResult(
@@ -180,156 +194,152 @@ def _fetch_once(
         return FetchResult(
             ok=False,
             url=url,
-            reason=f"hostname {parsed.hostname!r} resolves to a local/private range (SSRF guard)",
+            reason=(
+                f"hostname {parsed.hostname!r} resolves to a local/private "
+                f"range (SSRF guard)"
+            ),
             reason_class="not_found",
         )
-
-    # DNS-rebinding guard. Even if the hostname is not a literal
-    # private IP and not in our hardcoded name set, the agent could still pass
-    # an attacker-controlled hostname whose A record points at 127.0.0.1 or
-    # 169.254.169.254. Resolve once up-front and check ALL returned addresses.
-    # TOCTOU: getaddrinfo and requests.get resolve independently. DNS rebinding
-    # possible with short-TTL records. Post-redirect check (below) partially
-    # mitigates.
     rebind_reason = _resolve_hostname_safe(parsed.hostname)
     if rebind_reason is not None:
         return FetchResult(
-            ok=False,
-            url=url,
-            reason=rebind_reason,
-            reason_class="not_found",
+            ok=False, url=url, reason=rebind_reason, reason_class="not_found"
         )
+    return None
 
-    req_headers: dict[str, str] = {
-        "User-Agent": "cve-env/0.1 (agentic CVE env builder)",
-    }
-    if headers:
-        req_headers.update(headers)
 
+def _fetch_truncated_body(
+    url: str, headers: dict[str, str] | None, timeout_seconds: float,
+    max_bytes: int,
+) -> bytes:
+    """Stream the body of an over-cap response, keeping the first
+    ``max_bytes``. Chunks yielded before core.http raises
+    ``SizeLimitExceeded`` are kept — that raise is expected here."""
+    buf = bytearray()
     try:
-        resp = requests.get(
+        for chunk in _client().stream_bytes(
             url,
-            headers=req_headers,
-            timeout=timeout_seconds,
-            stream=True,
-            allow_redirects=True,
-            # Defeat env-based proxy injection (HTTP_PROXY / HTTPS_PROXY).
-            # Empty dict ({}) is a no-op in `requests` — env vars still merge —
-            # so the explicit empty-string sentinel is required.
-            proxies={"http": "", "https": ""},
+            timeout=max(1, int(timeout_seconds)),
+            max_bytes=max_bytes,
+            headers=headers,
+            retries=0,
+        ):
+            buf.extend(chunk)
+    except SizeLimitExceeded:
+        pass
+    except HttpError:
+        # Second fetch racing the first can fail; whatever we captured
+        # (possibly nothing) is still the best available body.
+        logger.debug("truncated-body re-fetch failed for %s", url, exc_info=True)
+    return bytes(buf[:max_bytes])
+
+
+def _fetch_once(
+    *,
+    url: str,
+    headers: dict[str, str] | None,
+    timeout_seconds: float,
+    max_bytes: int,
+    retries: int,
+) -> FetchResult:
+    """Single guarded GET through core.http. Sets ``reason_class`` on
+    every return."""
+    guard = _guard_url(url)
+    if guard is not None:
+        return guard
+
+    timeout = max(1, int(timeout_seconds))
+    try:
+        resp = _client().request(
+            "GET",
+            url,
+            headers=headers or None,
+            timeout=timeout,
+            total_timeout=max(timeout * (retries + 2), timeout + 10),
+            max_bytes=max_bytes,
+            retries=retries,
+            follow_redirects=True,
+            raise_on_status=False,
         )
-    except requests.exceptions.Timeout:
+    except SizeLimitExceeded:
+        # Body exceeded the cap mid-read. Re-stream to recover the
+        # first max_bytes; status/headers of the oversize response are
+        # not recoverable through this path.
+        body_raw = _fetch_truncated_body(url, headers, timeout_seconds, max_bytes)
+        return FetchResult(
+            ok=True,
+            url=url,
+            status=200,
+            body=body_raw.decode("utf-8", errors="replace"),
+            body_bytes=len(body_raw),
+            truncated=True,
+            reason_class="ok",
+        )
+    except HttpError as exc:
+        status = exc.status or 0
+        reason_class: ReasonClass = (
+            _classify_http_status(status) if status else "transport"
+        )
+        if reason_class == "ok":  # defensive: HttpError never carries 2xx
+            reason_class = "transport"
         return FetchResult(
             ok=False,
             url=url,
-            reason=f"timeout after {timeout_seconds}s",
-            reason_class="transport",
-        )
-    except requests.exceptions.RequestException as exc:
-        return FetchResult(
-            ok=False, url=url, reason=f"request error: {exc}", reason_class="transport"
+            status=status,
+            reason=str(exc)[:300],
+            reason_class=reason_class,
         )
 
-    # DNS-rebinding post-connect check: verify the actual peer IP is safe.
-    # The pre-request _resolve_hostname_safe check can be bypassed via
-    # short-TTL DNS rebinding (requests.get resolves independently).
-    # This check catches rebinding by inspecting the actual connection.
-    _peer_ip_str = None
-    try:
-        _raw_sock = getattr(
-            getattr(
-                getattr(resp, "raw", None), "_connection", None
-            ),
-            "sock",
-            None,
-        )
-        if _raw_sock is None:
-            _raw_sock = getattr(
-                getattr(resp, "raw", None), "_fp", None
-            )
-            if _raw_sock is not None:
-                _raw_sock = getattr(_raw_sock, "raw", None)
-                if _raw_sock is not None:
-                    _raw_sock = getattr(_raw_sock, "_sock", None)
-        if _raw_sock is not None and hasattr(_raw_sock, "getpeername"):
-            _peer_addr = _raw_sock.getpeername()
-            if _peer_addr:
-                _peer_ip_str = _peer_addr[0]
-    except Exception:
-        pass
-    if _peer_ip_str is not None:
-        try:
-            if _ip_is_unsafe(ipaddress.ip_address(_peer_ip_str)):
-                resp.close()
-                return FetchResult(
-                    ok=False,
-                    url=url,
-                    reason=(
-                        f"DNS rebinding detected: pre-check passed but "
-                        f"connected to unsafe IP {_peer_ip_str}"
-                    ),
-                    reason_class="not_found",
-                )
-        except ValueError:
-            pass
-
-    # Re-check the final URL after redirects for SSRF.
-    final_url = resp.url
+    # Re-check the final URL after redirects for SSRF: literal/private
+    # names first, then re-resolve so a public-LOOKING redirect target
+    # whose A record points inside is also rejected.
+    final_url = resp.url or url
     final_parsed = urlparse(final_url)
     if _is_loopback_or_private(final_parsed.hostname or ""):
         return FetchResult(
             ok=False,
             url=final_url,
-            status=resp.status_code,
-            reason=f"post-redirect hostname {final_parsed.hostname!r} is local/private",
+            status=resp.status,
+            reason=(
+                f"post-redirect hostname {final_parsed.hostname!r} is "
+                f"local/private"
+            ),
             reason_class="not_found",
         )
-
-    # Defense-in-depth (RACE-2): the check above only catches IP-literal /
-    # hardcoded-name redirect targets. A redirect to a public-LOOKING hostname
-    # whose A record resolves to an internal IP (10.x / 169.254.169.254) would
-    # otherwise pass — the pre-request guard at line 189 resolves DNS but the
-    # post-redirect path did not. Bring it to parity by re-resolving the final
-    # hostname. No-op for legitimate redirects (they resolve to public IPs).
     if final_parsed.hostname:
         post_redirect_reason = _resolve_hostname_safe(final_parsed.hostname)
         if post_redirect_reason is not None:
             return FetchResult(
                 ok=False,
                 url=final_url,
-                status=resp.status_code,
+                status=resp.status,
                 reason=f"post-redirect {post_redirect_reason}",
                 reason_class="not_found",
             )
 
-    raw = b""
+    raw = resp.body
     truncated = False
-    with resp:
-        for chunk in resp.iter_content(chunk_size=8192):
-            raw += chunk
-            if len(raw) >= max_bytes:
-                raw = raw[:max_bytes]
-                truncated = True
-                break
+    if len(raw) > max_bytes:  # defensive: the client should have capped
+        raw = raw[:max_bytes]
+        truncated = True
 
-    body: str
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        body = raw.decode("utf-8", errors="replace")
+    body = raw.decode("utf-8", errors="replace")
 
     _keep = {"content-type", "etag", "last-modified"}
-    kept_headers = {k: v for k, v in resp.headers.items() if k.lower() in _keep}
+    kept_headers = {
+        k: v for k, v in resp.headers.items() if k.lower() in _keep
+    }
+    ok = 200 <= resp.status < 300
     return FetchResult(
-        ok=resp.ok,
+        ok=ok,
         url=final_url,
-        status=resp.status_code,
-        content_type=str(resp.headers.get("Content-Type", "")),
+        status=resp.status,
+        content_type=str(resp.headers.get("content-type", "")),
         body=body,
         body_bytes=len(raw),
         truncated=truncated,
-        reason="" if resp.ok else f"HTTP {resp.status_code}",
-        reason_class=_classify_http_status(resp.status_code),
+        reason="" if ok else f"HTTP {resp.status}",
+        reason_class=_classify_http_status(resp.status),
         headers=kept_headers,
     )
 
@@ -344,39 +354,18 @@ def web_fetch(
 ) -> FetchResult:
     """GET ``url`` with SSRF + size guards. Never raises.
 
-    When ``enable_retry`` is True (default), a single retry fires on a
-    transient classification (``rate_limited`` or ``transport``) with a
-    category-specific backoff. Permanent classes (``auth``, ``not_found``)
-    surface immediately.
+    When ``enable_retry`` is True (default), core.http retries once on
+    transient failures (429 with Retry-After honoured, 5xx, network
+    errors). Permanent classes (``auth``, ``not_found``) surface
+    immediately — core.http does not retry those.
     """
-    result = _fetch_once(
+    return _fetch_once(
         url=url,
         headers=headers,
         timeout_seconds=timeout_seconds,
         max_bytes=max_bytes,
+        retries=1 if enable_retry else 0,
     )
-    if not enable_retry or result.ok or result.reason_class not in _TRANSIENT_CLASSES:
-        return result
-
-    backoff = (
-        _RETRY_BACKOFF_RATE_LIMITED_S
-        if result.reason_class == "rate_limited"
-        else _RETRY_BACKOFF_TRANSPORT_S
-    )
-    logger.info(
-        "web_fetch transient (%s) on %s; retrying in %ss",
-        result.reason_class,
-        url,
-        backoff,
-    )
-    time.sleep(backoff)
-    retry_result = _fetch_once(
-        url=url,
-        headers=headers,
-        timeout_seconds=timeout_seconds,
-        max_bytes=max_bytes,
-    )
-    return retry_result
 
 
 def web_fetch_payload(

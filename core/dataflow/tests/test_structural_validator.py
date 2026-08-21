@@ -23,7 +23,6 @@ from core.inventory.call_graph import (
     FileCallGraph,
 )
 
-
 # ── helpers ──────────────────────────────────────────────────────
 
 
@@ -502,3 +501,51 @@ class TestLineCountConvention:
         }
         result = validate_structurally(path, tmp_path)
         assert all(ev["exists"] for ev in result.evidence)
+
+
+# ── Same-function consecutive steps (verdict soundness) ─────────
+
+
+class TestSameFunctionSteps:
+    """Consecutive steps inside one function are linked by straight-
+    line control flow, not by a self-call edge.  The old code demanded
+    a call edge between them and 'refuted' every intra-procedural
+    taint path with high confidence."""
+
+    def test_intraprocedural_path_not_refuted(self, tmp_path):
+        _write_py(tmp_path, "app.py", """\
+            import subprocess
+
+            def handler(req):
+                cmd = req.args.get("cmd")
+                full = "prefix " + cmd
+                subprocess.call(full, shell=True)
+        """)
+        path = _make_path(
+            _make_step("app.py", 4, label="req.args.get"),
+            _make_step("app.py", 6, label="subprocess.call"),
+            steps=[_make_step("app.py", 5, label="concat")],
+        )
+        result = validate_structurally(path, tmp_path, language="python")
+        assert result.verdict != "refuted"
+
+    def test_same_name_across_files_not_shortcircuited(self, tmp_path):
+        # Same function NAME in two files is not the same function —
+        # the cross-file leg must not take the same-function shortcut.
+        _write_py(tmp_path, "a.py", """\
+            def handler(req):
+                data = req.args.get("x")
+                return data
+        """)
+        _write_py(tmp_path, "b.py", """\
+            def handler(data):
+                eval(data)
+        """)
+        path = _make_path(
+            _make_step("a.py", 2),
+            _make_step("b.py", 2),
+        )
+        result = validate_structurally(path, tmp_path, language="python")
+        # No call edge, no import link: anything but a confident
+        # same-function confirmation.
+        assert result.verdict != "confirmed" or result.confidence != "high"

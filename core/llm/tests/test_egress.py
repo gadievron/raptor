@@ -550,27 +550,48 @@ class TestDeriveAllowlistBedrock:
         assert "sts.eu-west-1.amazonaws.com" in hosts
 
 
-def test_no_proxy_augmentation_excludes_imds():
-    """IMDS is a credential-bearing metadata service, not a local
-    service — it must NEVER bypass the chokepoint. Listing it in
-    _LOCAL_BYPASS made url_is_loopback()/loopback_safe_get() treat it
-    as loopback-safe and exempted it from every proxied path, so
-    hostile in-process code could read role credentials without
-    meeting the allowlist. (IMDS is plain HTTP and the chokepoint
-    rewrites HTTPS_PROXY only, so botocore's role-credential fetch
-    does not need the exemption.)"""
+def test_no_proxy_augmentation_includes_imds():
+    """IMDS rides NO_PROXY via _NO_PROXY_ONLY: link-local credential
+    probes (botocore's IMDS token/credential requests) must never
+    travel to an operator proxy, which denies them on every
+    credential-chain resolution. Operational plane only — the
+    chokepoint bypass check is asserted separately below."""
     out = egress._augment_no_proxy("corp.example")
-    assert "169.254.169.254" not in out.split(",")
-    assert out.startswith("corp.example")
+    parts = [p.strip() for p in out.split(",")]
+    assert "169.254.169.254" in parts
+    assert out.startswith("corp.example")  # operator entries first
 
 
 def test_imds_is_not_loopback():
+    """IMDS is a credential-bearing metadata service, not a local
+    service — it must NEVER bypass the chokepoint. It is deliberately
+    absent from _LOCAL_BYPASS, so url_is_loopback()/loopback_safe_get()
+    refuse it and the in-process proxy's allowlist never carries it;
+    _NO_PROXY_ONLY grants only the operational NO_PROXY exemption."""
     assert not egress._is_loopback("169.254.169.254")
     assert not egress.url_is_loopback("http://169.254.169.254/latest/api")
 
 
 def test_operator_no_proxy_imds_entry_preserved():
     """An operator who explicitly NO_PROXY-exempts IMDS keeps their
-    entry — we only stop ADDING it ourselves."""
+    entry first, with no duplicate appended."""
     out = egress._augment_no_proxy("169.254.169.254,corp.example")
-    assert out.split(",")[0] == "169.254.169.254"
+    parts = [p.strip() for p in out.split(",")]
+    assert parts[0] == "169.254.169.254"
+    assert parts.count("169.254.169.254") == 1
+
+
+def test_augment_child_no_proxy_adds_imds_only():
+    """The child-env helper appends the operational-only entries and
+    nothing else — loopback additions are the caller's decision."""
+    out = egress.augment_child_no_proxy("internal.corp")
+    parts = [p.strip() for p in out.split(",")]
+    assert parts[0] == "internal.corp"      # existing entries first
+    assert "169.254.169.254" in parts
+    assert "localhost" not in parts
+    assert "127.0.0.1" not in parts
+
+
+def test_augment_child_no_proxy_deduplicates():
+    out = egress.augment_child_no_proxy("169.254.169.254")
+    assert out == "169.254.169.254"

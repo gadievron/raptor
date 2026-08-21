@@ -4,10 +4,24 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     patterns:
-      - pattern: Cipher.getInstance($ALGO)
+      - pattern: Cipher.getInstance($ALGO, ...)
       - metavariable-regex:
           metavariable: $ALGO
           regex: "\"AES/ECB/.*\""
+    metadata:
+      cwe: ["CWE-327"]
+      asvs: ["V3.11"]
+
+  # Bare "AES" is its own rule so the message can explain the trap: the JCE
+  # default transformation for "AES" is AES/ECB/PKCS5Padding.
+  - id: raptor.crypto.aes.default-ecb.java
+    message: >
+      Cipher.getInstance("AES") uses the JCE default transformation
+      AES/ECB/PKCS5Padding — this is ECB. Spell out an AEAD transformation
+      such as "AES/GCM/NoPadding" instead.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern: Cipher.getInstance("AES", ...)
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]
@@ -16,7 +30,9 @@ rules:
     message: AES-ECB is insecure. Use AEAD modes like GCM. Verify migration plan.
     languages: [python]
     severity: HIGH
-    pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_ECB, ...)
+    pattern-either:
+      - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_ECB, ...)
+      - pattern: modes.ECB()
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]

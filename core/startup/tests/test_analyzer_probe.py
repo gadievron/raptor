@@ -15,12 +15,29 @@ from core.startup.init import _check_analyzer_capabilities
 
 
 class TestAnalyzerProbe:
-    def test_gcc_analyzer_reported(self):
+    def test_gcc_analyzer_reported_with_version(self):
+        # gcc is version-gated (-fanalyzer needs >= 10) so the part
+        # carries the version per the TOOL_DEPS display convention.
         with patch(
             "core.audit.compiler_sweep._gcc_analyzer",
             return_value=("/usr/bin/gcc", "sarif-file"),
         ), patch(
             "core.audit.compiler_sweep._clang_path", return_value=None,
+        ), patch(
+            "core.startup.init._gcc_version", return_value="13.2.0",
+        ):
+            parts, warnings = _check_analyzer_capabilities()
+        assert "analyzer ✓ (gcc 13.2.0 -fanalyzer)" in parts
+        assert not any("analyzer" in w for w in warnings)
+
+    def test_gcc_version_probe_failure_degrades_to_plain_line(self):
+        with patch(
+            "core.audit.compiler_sweep._gcc_analyzer",
+            return_value=("/usr/bin/gcc", "sarif-file"),
+        ), patch(
+            "core.audit.compiler_sweep._clang_path", return_value=None,
+        ), patch(
+            "core.startup.init._gcc_version", return_value=None,
         ):
             parts, warnings = _check_analyzer_capabilities()
         assert "analyzer ✓ (gcc -fanalyzer)" in parts
@@ -68,6 +85,8 @@ class TestAnalyzerProbe:
         ), patch(
             "core.audit.compiler_sweep._clang_path", return_value=None,
         ), patch(
+            "core.startup.init._gcc_version", return_value=None,
+        ), patch(
             "importlib.metadata.version", return_value="4.13.0.0",
         ):
             parts, _ = _check_analyzer_capabilities()
@@ -81,6 +100,8 @@ class TestAnalyzerProbe:
             return_value=("/usr/bin/gcc", "json"),
         ), patch(
             "core.audit.compiler_sweep._clang_path", return_value=None,
+        ), patch(
+            "core.startup.init._gcc_version", return_value=None,
         ), patch(
             "importlib.metadata.version",
             side_effect=PackageNotFoundError("z3-solver"),

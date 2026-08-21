@@ -151,6 +151,68 @@ def test_classify_candidate_rejects_split_debug_and_templates(
             f"(got kind={result.kind if result else None})")
 
 
+def test_path_filter_runs_before_dwarf_probe(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The provenance gate must fire BEFORE readelf ever sees a
+    candidate — a repo-committed (possibly attacker-planted) ELF is
+    dropped without being parsed."""
+    import core.analysis.binary_oracle_autodetect as _ad
+
+    planted = tmp_path / "planted"
+    planted.write_bytes(b"\x7fELF" + b"\x00" * 12)
+    os.chmod(planted, 0o755)
+    fresh = tmp_path / "fresh"
+    fresh.write_bytes(b"\x7fELF" + b"\x00" * 12)
+    os.chmod(fresh, 0o755)
+
+    probed: list[Path] = []
+
+    def _fake_has_dwarf(path: Path) -> bool:
+        probed.append(path)
+        return True
+
+    monkeypatch.setattr(_ad, "_has_dwarf", _fake_has_dwarf)
+    result = _ad.detect_binaries(
+        tmp_path, "auto",
+        path_filter=lambda paths: [p for p in paths if p.name != "planted"],
+    )
+    assert [p.name for p in result] == ["fresh"]
+    assert planted not in probed, (
+        "filtered-out candidate must never reach the DWARF probe")
+
+
+def test_non_elf_executable_never_probed(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A +x file without ELF magic (suffix-less script, ld linker
+    script named lib*.so) is rejected by the 4-byte magic check —
+    no readelf subprocess, no provenance-gate noise."""
+    import core.analysis.binary_oracle_autodetect as _ad
+
+    script = tmp_path / "install-helper"
+    script.write_text("#!/bin/sh\necho hi\n")
+    os.chmod(script, 0o755)
+
+    probed: list[Path] = []
+    filtered: list[Path] = []
+
+    def _fake_has_dwarf(path: Path) -> bool:
+        probed.append(path)
+        return True
+
+    monkeypatch.setattr(_ad, "_has_dwarf", _fake_has_dwarf)
+
+    def _filter(paths):
+        filtered.extend(paths)
+        return paths
+
+    result = _ad.detect_binaries(tmp_path, "auto", path_filter=_filter)
+    assert result == []
+    assert script not in probed
+    assert script not in filtered
+
+
 @_needs_gcc
 @pytest.mark.slow
 def test_has_dwarf_distinguishes_stripped(tmp_path: Path) -> None:

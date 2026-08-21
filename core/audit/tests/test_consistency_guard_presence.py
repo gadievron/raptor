@@ -126,6 +126,52 @@ class TestBoundsLeg:
         )
         assert detect_guard_presence_deviations(texts) == []
 
+    @requires_ts('c')
+    def test_same_line_subscript_comparison_does_not_self_guard(self):
+        # The subscript expression itself must not count as the
+        # bounds check (the same-line comparison table only counts
+        # matches that END before the access starts).
+        texts = _bounds_fixture(deviant=True)
+        texts["src/pkt.c"] = texts["src/pkt.c"].replace(
+            "int sum_dev(pkt_t *p, int i) {\n    return p->data[i];",
+            "int sum_dev(pkt_t *p, int i) {\n"
+            "    return p->data[i] < 0 ? 0 : p->data[i];",
+        )
+        devs = detect_guard_presence_deviations(texts)
+        assert len(devs) == 1
+        assert devs[0].enclosing_function == "sum_dev"
+
+
+class TestScanBounds:
+    """Budget/window behaviour of the guard-presence comparator."""
+
+    @requires_ts('c')
+    def test_zero_budget_returns_without_stalling(self):
+        assert detect_guard_presence_deviations(
+            _null_fixture(deviant=True), budget_s=0.0,
+        ) == []
+
+    @requires_ts('c')
+    def test_deref_beyond_window_is_skipped(self):
+        # A capture whose first dereference sits beyond the lookahead
+        # window is dropped as a candidate (fewer sites, never a
+        # wrong verdict).
+        from core.audit.consistency_dimensions import _GUARD_SCAN_WINDOW
+        filler = "    acc += 1;\n" * (_GUARD_SCAN_WINDOW + 10)
+        texts = _null_fixture(deviant=True)
+        texts["src/map.c"] = texts["src/map.c"].replace(
+            "int use_dev(map_t *m) {\n"
+            "    entry_t *e = lookup_entry(m);\n"
+            "    return e->value;",
+            "int use_dev(map_t *m) {\n"
+            "    int acc = 0;\n"
+            "    entry_t *e = lookup_entry(m);\n"
+            + filler
+            + "    return acc + e->value;",
+        )
+        devs = detect_guard_presence_deviations(texts)
+        assert all(d.enclosing_function != "use_dev" for d in devs)
+
 
 @requires_ts('c')
 class TestSmtEscalation:

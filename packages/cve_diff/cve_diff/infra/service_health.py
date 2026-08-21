@@ -92,6 +92,30 @@ def probe_anthropic() -> HealthResult:
     and no Anthropic auth, the agent loop's resolver picks Gemini
     cleanly; this health probe is informational, not gating.
     """
+    # When the operator's configured primary model routes to another
+    # provider entirely (models.json / env autodetect — see
+    # cve_diff.llm.auth.default_model_id), Anthropic is NOT on this
+    # run's critical path: report the probe as informational-ok rather
+    # than failing the health check for a credential the run won't use.
+    default_m = ""
+    try:
+        from core.security.llm_family import provider_of
+
+        from cve_diff.llm.auth import default_model_id
+        default_m = default_model_id()
+        default_provider = provider_of(default_m) or "anthropic"
+    except Exception:  # noqa: BLE001 — resolution trouble → historical behaviour
+        default_provider = "anthropic"
+    if default_provider not in ("anthropic", "claudecode"):
+        return HealthResult(
+            "Anthropic API", True, 0,
+            detail=(
+                f"skipped — default model {default_m} routes to "
+                f"{default_provider}; that provider is exercised at "
+                f"first pipeline call"
+            ),
+        )
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
     if not api_key and not via_dispatcher:

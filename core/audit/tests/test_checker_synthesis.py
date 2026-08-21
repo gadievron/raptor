@@ -516,3 +516,180 @@ class TestSageReplayRule:
         assert result is not None
         assert result.rule_id == "sqli-001"
         assert all(h["provenance"] == "sage:sqli-001" for h in result.hits)
+
+
+class TestNoDefectHypothesisRefusal:
+    """Synthesis must refuse hypotheses the review itself classified as
+    refuted (the structural confidence field, never text matching)."""
+
+    def _outcome(self, *, hypotheses, hypothesis="helper is trivial"):
+        return _StubOutcome(
+            status="suspicious",
+            hypothesis=hypothesis,
+            review_result={
+                "hypothesis": hypothesis,
+                "cwe_class": "CWE-120",
+                "hypotheses": hypotheses,
+            },
+        )
+
+    def test_primary_entry_refuted_refuses(self):
+        from core.audit.checker_synthesis import (
+            _hypothesis_self_classified_refuted,
+        )
+        out = self._outcome(hypotheses=[
+            {"mechanism": "helper is trivial — no plausible defect",
+             "confidence": "refuted"},
+        ], hypothesis="helper is trivial — no plausible defect")
+        assert _hypothesis_self_classified_refuted(out, out.hypothesis)
+
+    def test_live_primary_entry_is_allowed(self):
+        from core.audit.checker_synthesis import (
+            _hypothesis_self_classified_refuted,
+        )
+        out = self._outcome(hypotheses=[
+            {"mechanism": "missing bounds check on len",
+             "confidence": "medium"},
+            {"mechanism": "some other idea", "confidence": "refuted"},
+        ], hypothesis="missing bounds check on len")
+        assert not _hypothesis_self_classified_refuted(out, out.hypothesis)
+
+    def test_all_refuted_array_refuses_unmatched_primary(self):
+        from core.audit.checker_synthesis import (
+            _hypothesis_self_classified_refuted,
+        )
+        out = self._outcome(hypotheses=[
+            {"mechanism": "idea one", "confidence": "refuted"},
+            {"mechanism": "idea two", "confidence": "refuted"},
+        ], hypothesis="an unmatched primary phrasing")
+        assert _hypothesis_self_classified_refuted(out, out.hypothesis)
+
+    def test_no_structured_hypotheses_is_not_refused(self):
+        from core.audit.checker_synthesis import (
+            _hypothesis_self_classified_refuted,
+        )
+        out = self._outcome(hypotheses=[], hypothesis="live idea")
+        assert not _hypothesis_self_classified_refuted(out, out.hypothesis)
+
+    def test_verification_rule_refuses_refuted_hypothesis(self, tmp_path):
+        from core.audit.checker_synthesis import synthesize_verification_rule
+
+        out = self._outcome(hypotheses=[
+            {"mechanism": "trivial one-line helper — no plausible defect "
+                          "mechanism", "confidence": "refuted"},
+        ], hypothesis="trivial one-line helper — no plausible defect "
+                      "mechanism")
+        cfg = _StubConfig(target_path=str(tmp_path), out_dir=str(tmp_path))
+        # Refusal happens before any LLM plumbing is touched.
+        assert synthesize_verification_rule(out, cfg) is None
+
+    def test_amplification_lane_refuses_refuted_seed(self, tmp_path):
+        from core.audit.checker_synthesis import synthesize_and_sweep
+
+        out = self._outcome(hypotheses=[
+            {"mechanism": "trivial helper — no plausible defect",
+             "confidence": "refuted"},
+        ], hypothesis="trivial helper — no plausible defect")
+        out.status = "finding"
+        cfg = _StubConfig(target_path=str(tmp_path), out_dir=str(tmp_path))
+        assert synthesize_and_sweep(out, cfg, set()) is None
+
+
+class TestRuleQuarantine:
+    """0%-precision synthesized rules are deactivated for the run."""
+
+    def _shared(self):
+        from core.audit.shared_state import SharedState
+        return SharedState()
+
+    def test_quarantines_after_three_all_fp_triages(self, caplog):
+        import logging
+
+        from core.audit.orchestrator import _note_rule_triage
+        shared = self._shared()
+        with caplog.at_level(logging.WARNING, logger="core.audit.orchestrator"):
+            for _ in range(3):
+                _note_rule_triage(shared, "rule-x", False)
+        assert "rule-x" in shared.quarantined_rules
+        assert any("rule quarantine" in r.getMessage() for r in caplog.records)
+
+    def test_one_true_positive_prevents_quarantine(self):
+        from core.audit.orchestrator import _note_rule_triage
+        shared = self._shared()
+        _note_rule_triage(shared, "rule-y", True)
+        for _ in range(10):
+            _note_rule_triage(shared, "rule-y", False)
+        assert "rule-y" not in shared.quarantined_rules
+
+    def test_below_min_evidence_not_quarantined(self):
+        from core.audit.orchestrator import _note_rule_triage
+        shared = self._shared()
+        _note_rule_triage(shared, "rule-z", False)
+        _note_rule_triage(shared, "rule-z", False)
+        assert "rule-z" not in shared.quarantined_rules
+
+    def test_replay_skips_quarantined_rule(self, tmp_path, monkeypatch):
+        # find_replayable returns a quarantined candidate; the replay
+        # path must not run it — synthesis falls through to the fresh
+        # lane instead of replaying the dead rule.
+        from core.audit import checker_synthesis as cs
+
+        out = _StubOutcome(status="finding")
+        cfg = _StubConfig(target_path=str(tmp_path), out_dir=str(tmp_path))
+
+        class _Entry:
+            rule_id = "quarantined-rule"
+
+        replayed: list[str] = []
+
+        class _FakeLib:
+            def find_replayable(self, cwe, engine):
+                return [_Entry()]
+
+            def rule_path(self, entry):
+                replayed.append(entry.rule_id)
+                raise AssertionError("quarantined rule was replayed")
+
+        class _FakeClient:
+            _call_cost_history: dict = {}
+
+        monkeypatch.setattr(
+            "packages.checker_synthesis.RuleLibrary", lambda: _FakeLib(),
+        )
+        monkeypatch.setattr(
+            cs, "_build_llm_callable",
+            lambda config: (lambda *a, **k: None, _FakeClient()),
+        )
+
+        def _no_rule(seed, **kwargs):
+            class _R:
+                rule = None
+                errors: list = []
+            return _R()
+
+        monkeypatch.setattr(
+            "packages.checker_synthesis.synthesise_with_refinement",
+            _no_rule,
+        )
+        result = cs.synthesize_and_sweep(
+            out, cfg, set(),
+            quarantined_rules={"quarantined-rule"},
+        )
+        assert result is None
+        assert replayed == []
+
+    def test_synthesis_hits_carry_rule_id_into_gaps(self):
+        from core.audit.orchestrator import _synthesis_hits_to_gaps
+
+        checklist = {"files": [{
+            "path": "src/a.c",
+            "items": [{"name": "f", "kind": "function",
+                       "line_start": 1, "line_end": 20}],
+        }]}
+        gaps = _synthesis_hits_to_gaps(
+            [{"file": "src/a.c", "line": 5, "function": "",
+              "origin_file": "src/b.c", "origin_function": "seed",
+              "rule_id": "rule-q"}],
+            checklist,
+        )
+        assert gaps and gaps[0]["synthesis_rule_id"] == "rule-q"

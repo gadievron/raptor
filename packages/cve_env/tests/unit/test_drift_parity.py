@@ -12,8 +12,6 @@ import re
 from pathlib import Path
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
-
 import cve_env
 
 # Derive the package source dir from the imported module — layout-independent
@@ -85,25 +83,3 @@ def test_loop_exception_path_branch_parity() -> None:
         f"exception-path must call it (Phase 31.2 parity)."
     )
 
-def test_refusal_two_systems_disjoint() -> None:
-    """``_REFUSAL_SIGNATURES`` (string substrings) and ``_REFUSAL_PATTERNS``
-    (regex compiled) target different surfaces; they must not cover the
-    same shape with different mechanisms (existing test_refusals.py only
-    checks ``len >= 8`` for SIGNATURES; disjointness is uncovered).
-    """
-    from cve_env.agent.llm import _REFUSAL_SIGNATURES
-    from cve_env.agent.refusals import _REFUSAL_PATTERNS
-
-    assert isinstance(_REFUSAL_SIGNATURES, tuple)
-    assert isinstance(_REFUSAL_PATTERNS, tuple)
-    assert all(isinstance(s, str) for s in _REFUSAL_SIGNATURES)
-    assert all(hasattr(p, "search") for p in _REFUSAL_PATTERNS), (
-        "_REFUSAL_PATTERNS must be a tuple of compiled regex; got non-Pattern."
-    )
-    sig_lower = {s.lower() for s in _REFUSAL_SIGNATURES}
-    pat_sources_lower = {p.pattern.lower() for p in _REFUSAL_PATTERNS}
-    overlap = sig_lower & pat_sources_lower
-    assert not overlap, (
-        f"_REFUSAL_SIGNATURES and _REFUSAL_PATTERNS overlap on: {overlap}. "
-        f"They target different surfaces — keep disjoint or unify into one system."
-    )

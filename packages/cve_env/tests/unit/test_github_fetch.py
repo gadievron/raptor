@@ -109,7 +109,7 @@ def test_github_fetch_auth_header_when_token_set(
     assert "Bearer ghp_test_token_abc" in headers["Authorization"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_no_auth_header_when_no_token_anywhere(
     mock_fetch: Any, mock_run: Any, monkeypatch: Any
@@ -128,7 +128,7 @@ def test_github_fetch_no_auth_header_when_no_token_anywhere(
     assert "Authorization" not in headers
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_uses_gh_cli_token_when_env_unset(
     mock_fetch: Any, mock_run: Any, monkeypatch: Any
@@ -148,7 +148,7 @@ def test_github_fetch_uses_gh_cli_token_when_env_unset(
     assert "Bearer gho_from_gh_cli_xyz" in headers["Authorization"]
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_env_token_takes_precedence_over_gh_cli(
     mock_fetch: Any, mock_run: Any, monkeypatch: Any

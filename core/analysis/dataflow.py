@@ -111,12 +111,30 @@ def reaching_defs(cfg: Any) -> ReachingDefs:
     if not nodes:
         return ReachingDefs(_in={})
 
+    # Restrict the fixpoint to entry-REACHABLE nodes. A node with no
+    # path from entry cannot execute, so its definitions must not
+    # reach anywhere — but seeding OUT = GEN for every node would leak
+    # them into the live region through any residual out-edge (e.g. a
+    # proof-pruned switch branch whose break still targets the join).
+    # Unreachable nodes keep an empty IN via the constructor default.
+    entry_node = cfg.entry
+    reachable: Set[Any] = {entry_node}
+    frontier = [entry_node]
+    while frontier:
+        cur = frontier.pop()
+        for succ in cfg.successors(cur):
+            if succ not in reachable:
+                reachable.add(succ)
+                frontier.append(succ)
+    nodes = [n for n in nodes if n in reachable]
+
     # Forward edges via cfg.successors; invert to get predecessors
-    # for the IN-set merge step.
+    # for the IN-set merge step (reachable endpoints only).
     preds: Dict[Any, Set[Any]] = defaultdict(set)
     for n in nodes:
         for succ in cfg.successors(n):
-            preds[succ].add(n)
+            if succ in reachable:
+                preds[succ].add(n)
 
     params: Tuple[str, ...] = tuple(getattr(cfg, "params", ()) or ())
     entry = cfg.entry

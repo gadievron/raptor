@@ -102,3 +102,38 @@ class TestSingleWorkerGate:
         )
         assert collected == [1, 2]
         assert executed == [1, 2]
+
+
+class TestShutdownSafeDispatch:
+    def test_submit_runtimeerror_harvests_dispatched(self, monkeypatch):
+        """Interpreter-shutdown RuntimeError from pool.submit must not
+        escape: already-dispatched futures are harvested, the rest are
+        skipped (observed live: an unhandled crash hung the run after
+        results were written)."""
+        import concurrent.futures as cf
+
+        real_pool = cf.ThreadPoolExecutor
+
+        class FlakyPool(real_pool):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self._n = 0
+
+            def submit(self, fn, *a, **k):
+                self._n += 1
+                if self._n > 2:
+                    raise RuntimeError(
+                        "cannot schedule new futures after "
+                        "interpreter shutdown",
+                    )
+                return super().submit(fn, *a, **k)
+
+        monkeypatch.setattr(cf, "ThreadPoolExecutor", FlakyPool)
+        out = _collect_reviews_until_budget(
+            ["a", "b", "c", "d"],
+            lambda item: item.upper(),
+            lambda: False,
+            2,
+            phase_label="study re-review",
+        )
+        assert sorted(out) == ["A", "B"]

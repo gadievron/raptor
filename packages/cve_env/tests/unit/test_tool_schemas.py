@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("claude_agent_sdk")
-
-from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server
+from core.llm.tool_use.types import ToolDef
 
 from cve_env.agent.tools import ALL_TOOLS, TOOL_NAMES, get_tool_by_name
 
@@ -67,7 +65,7 @@ def test_exactly_eleven_tools_registered() -> None:
 
 def test_all_tools_are_mcp_tool_instances() -> None:
     for t in ALL_TOOLS:
-        assert isinstance(t, SdkMcpTool), f"{t} is not an SdkMcpTool"
+        assert isinstance(t, ToolDef), f"{t} is not a ToolDef"
 
 
 def test_canonical_name_list_matches() -> None:
@@ -96,7 +94,7 @@ def test_tool_input_schema_has_expected_params(
 ) -> None:
     t = get_tool_by_name(tool_name)
     assert isinstance(t.input_schema, dict)
-    actual = set(t.input_schema.keys())
+    actual = set(t.input_schema["properties"].keys())
     assert actual == expected, (
         f"{tool_name}: schema keys {actual} != expected {expected}"
     )
@@ -111,7 +109,17 @@ def test_get_tool_by_name_misses_raise_keyerror() -> None:
         get_tool_by_name("nonexistent_tool")
 
 
-def test_all_tools_can_be_assembled_into_an_mcp_server() -> None:
-    """The SDK's create_sdk_mcp_server validates tool shapes on construction."""
-    server = create_sdk_mcp_server(name="cve_env", version="0.0.0", tools=ALL_TOOLS)
-    assert server is not None
+def test_all_tools_are_engine_ready_tool_defs() -> None:
+    """The belt is declared directly in the engine's wire shape:
+    unique names, object schemas with typed properties, callable sync
+    handlers returning JSON text."""
+    import json as _json
+
+    assert len({t.name for t in ALL_TOOLS}) == len(ALL_TOOLS)
+    for t in ALL_TOOLS:
+        assert t.input_schema["type"] == "object"
+        for prop in t.input_schema["properties"].values():
+            assert "type" in prop
+        assert callable(t.handler)
+    text = get_tool_by_name("give_up").handler({"reason": "x", "detail": "y"})
+    assert _json.loads(text)["terminal"] is True

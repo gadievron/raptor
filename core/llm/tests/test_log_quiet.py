@@ -185,3 +185,35 @@ class TestDispatcherAuditLogLevel:
         assert isinstance(server_mod._DEMOTED_AUDIT_EVENTS, frozenset)
         assert "request.dispatch" in server_mod._DEMOTED_AUDIT_EVENTS
         assert "request.error" not in server_mod._DEMOTED_AUDIT_EVENTS
+
+
+class TestSdkRetrySpamQuieting:
+    """SDK backoff chatter and instructor's redundant terminal ERROR
+    are quieted centrally — RAPTOR's client logs one line per retry
+    sequence and the instructor funnel logs the accurate detail."""
+
+    def test_anthropic_and_openai_sdks_quiet_to_warning(self):
+        import logging
+
+        from core.llm.log_quiet import quiet_noisy_loggers
+
+        quiet_noisy_loggers()
+        for name in ("anthropic", "openai"):
+            lg = logging.getLogger(name)
+            # "Retrying request to <url> in Ns" is INFO — suppressed.
+            assert not lg.isEnabledFor(logging.INFO), name
+            assert lg.isEnabledFor(logging.WARNING), name
+
+    def test_instructor_redundant_error_is_quieted(self):
+        import logging
+
+        from core.llm.log_quiet import quiet_noisy_loggers
+
+        quiet_noisy_loggers()
+        lg = logging.getLogger("instructor")
+        # "Max retries exceeded. Total attempts: 1" fires at ERROR for
+        # every terminal failure (including never-retried ones — the
+        # count reads as a lie); the funnel's WARNING carries the
+        # truth, so instructor's duplicate is gated to CRITICAL.
+        assert not lg.isEnabledFor(logging.ERROR)
+        assert lg.isEnabledFor(logging.CRITICAL)

@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register
@@ -524,8 +525,18 @@ def _classify_specifier(
         ver = only.version
         if op == "~=":
             return PinStyle.TILDE, ver
-        # >=, <=, >, <, != — a single bound is still a range.
-        return PinStyle.RANGE, ver
+        if op in (">=", "<="):
+            # Inclusive single bound — the operand is admissible and is
+            # the conservative version guess (``>=X`` matches the
+            # metadata-walk lower-bound convention; ``<=X`` is what a
+            # resolver maximising within the bound would install).
+            return PinStyle.RANGE, ver
+        # >, <, != — the operand is EXCLUDED by the spec. Recording it
+        # as the installed version produced findings for precisely the
+        # one version that is guaranteed NOT installed (``pkg!=1.5``
+        # flagged 1.5's CVEs). No concrete version → the OSV query is
+        # skipped, same as any other unresolvable range.
+        return PinStyle.RANGE, None
     return PinStyle.RANGE, None
 
 
@@ -545,16 +556,29 @@ def _spec_bounds(spec) -> tuple[str | None, str | None]:
     if spec is None or Version is None:
         return None, None
 
-    def _key(v: str):
+    def _parse(v: str):
         try:
             return Version(v)
         except Exception:                   # noqa: BLE001
-            return Version("0")
+            return None
 
-    lowers = [s.version for s in spec if s.operator in (">=", ">")]
-    uppers = [s.version for s in spec if s.operator in ("<", "<=")]
-    floor = max(lowers, key=_key) if lowers else None
-    ceiling = min(uppers, key=_key) if uppers else None
+    # Unparseable bound versions are DROPPED, not coerced: the old
+    # ``Version("0")`` fallback made an unparseable operand sort as the
+    # lowest version, so it could win ``min(uppers)`` (a bogus ceiling)
+    # or lose ``max(lowers)`` silently — either way the recorded
+    # corridor was wrong.
+    lowers: list[tuple[Any, str]] = []
+    uppers: list[tuple[Any, str]] = []
+    for s in spec:
+        parsed = _parse(s.version)
+        if parsed is None:
+            continue
+        if s.operator in (">=", ">"):
+            lowers.append((parsed, s.version))
+        elif s.operator in ("<", "<="):
+            uppers.append((parsed, s.version))
+    floor = max(lowers)[1] if lowers else None
+    ceiling = min(uppers)[1] if uppers else None
     return floor, ceiling
 
 

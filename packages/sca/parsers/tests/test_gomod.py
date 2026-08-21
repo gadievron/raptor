@@ -98,6 +98,56 @@ replace github.com/foo/bar => ../local
     assert len(deps) == 1
     assert deps[0].pin_style is PinStyle.PATH
     assert deps[0].version is None
+    # The dep keeps the module identity — a filesystem path is not a
+    # module name (a dep literally named "../local" produced bogus
+    # purls / OSV keys).
+    assert deps[0].name == "github.com/foo/bar"
+    assert deps[0].purl == "pkg:golang/github.com/foo/bar"
+    assert "local path ../local" in (deps[0].parser_confidence.reason or "")
+
+
+def test_versioned_replace_only_applies_to_that_version(
+    tmp_path: Path,
+) -> None:
+    """``replace foo v1.2.3 => bar v9.9.9`` applies only when v1.2.3 is
+    required — the pre-fix parser discarded the original version and
+    replaced every required version of foo."""
+    body = """\
+require github.com/foo/bar v2.0.0
+
+replace github.com/foo/bar v1.2.3 => github.com/me/forked v9.9.9
+"""
+    p = _write(tmp_path, body, "go.mod")
+    deps = parse_manifest(p)
+    assert len(deps) == 1
+    assert deps[0].name == "github.com/foo/bar"
+    assert deps[0].version == "v2.0.0"
+
+
+def test_versioned_replace_matches_required_version(tmp_path: Path) -> None:
+    body = """\
+require github.com/foo/bar v1.2.3
+
+replace github.com/foo/bar v1.2.3 => github.com/me/forked v9.9.9
+"""
+    p = _write(tmp_path, body, "go.mod")
+    deps = parse_manifest(p)
+    assert len(deps) == 1
+    assert deps[0].name == "github.com/me/forked"
+    assert deps[0].version == "v9.9.9"
+
+
+def test_replace_with_trailing_comment(tmp_path: Path) -> None:
+    body = """\
+require github.com/foo/bar v1.2.3
+
+replace github.com/foo/bar => github.com/me/forked v2.0.0 // pinned fork
+"""
+    p = _write(tmp_path, body, "go.mod")
+    deps = parse_manifest(p)
+    assert len(deps) == 1
+    assert deps[0].name == "github.com/me/forked"
+    assert deps[0].version == "v2.0.0"
 
 
 def test_block_replace(tmp_path: Path) -> None:

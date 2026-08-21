@@ -107,6 +107,17 @@ _CREDENTIAL_HELPER_KEYS = (
 _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     "TERMINAL", "BROWSER", "PAGER", "VISUAL", "EDITOR",
     "IFS", "CDPATH",
+    # PATH / HOME — a repo-supplied CC settings.json env dict has NO
+    # legitimate reason to set either. env.PATH prepends an
+    # attacker-controlled directory so every bare command name CC (or
+    # a later RAPTOR invocation inheriting the env) runs resolves to
+    # a repo-shipped binary; env.HOME repoints ~ so dotfile-consuming
+    # tools (git, ssh, gh, pip, npm) read attacker-authored configs —
+    # credential helpers, aliases, hooks — from a fake home. Both are
+    # command-execution primitives on par with LD_PRELOAD for this
+    # threat model. (This set only feeds the settings-env scan, so
+    # listing them cannot affect legitimate process environments.)
+    "PATH", "HOME",
     "BASH_ENV", "ENV", "PROMPT_COMMAND",
     "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
     "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",

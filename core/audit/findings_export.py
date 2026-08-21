@@ -222,15 +222,16 @@ def export_findings(
     When ``out_dir`` is given, the promotion-without-tool-evidence
     alarm sweeps the FINAL outcome statuses here (post-loop promotions
     run after the per-review journal writes, so the export is the
-    second chokepoint that sees them).  Alarm-only; the export output
-    is unchanged.
+    second chokepoint that sees them).  Enforcing: a violating finding
+    is demoted to suspicious before it is graded, so the export ships
+    the gated status.
     """
     if out_dir is not None:
         try:
             from .promotion_alarm import check_outcomes
             check_outcomes(
                 Path(out_dir), outcomes, stage="findings-export",
-                run_id=run_id,
+                run_id=run_id, enforce=True,
             )
         except Exception:
             logger.debug("promotion alarm export sweep failed", exc_info=True)

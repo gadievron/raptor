@@ -468,11 +468,24 @@ def test_cross_ecosystem_parallel_runs_concurrently(tmp_path, monkeypatch):
 
     Defends the cross-ecosystem parallelism — without threads each
     ecosystem's batch would serialise behind the previous one."""
-    import time as _time
+    import threading
     from packages.sca.transitive import _run_cascades_parallel
 
+    # Structural concurrency check: both ecosystem batches must be
+    # in flight at the same moment to release the barrier. A
+    # serialised implementation leaves the first batch waiting alone
+    # until the barrier times out — no wall-clock assertion, so
+    # scheduler jitter under a loaded test runner can't flake this.
+    barrier = threading.Barrier(2)
+
     def fake_try(eco, work_items, cache=None):
-        _time.sleep(0.3)
+        try:
+            barrier.wait(timeout=10)
+        except threading.BrokenBarrierError:
+            raise AssertionError(
+                "cascade batches serialised: second ecosystem batch "
+                "never started while the first was still running"
+            ) from None
         return [(pd, host, [], None) for pd, host in work_items]
 
     monkeypatch.setattr(
@@ -483,14 +496,9 @@ def test_cross_ecosystem_parallel_runs_concurrently(tmp_path, monkeypatch):
         "PyPI": [(tmp_path / "a", tmp_path / "a/req.txt")],
         "npm":  [(tmp_path / "b", tmp_path / "b/pkg.json")],
     }
-    t0 = _time.time()
     out = _run_cascades_parallel(work)
-    elapsed = _time.time() - t0
     assert ("PyPI", tmp_path / "a") in out
     assert ("npm", tmp_path / "b") in out
-    # Sequential would be ~0.6s; parallel should be ~0.3s. Generous
-    # slack for CI noise but still detects serialisation.
-    assert elapsed < 0.55, f"expected parallel <0.55s, got {elapsed:.2f}s"
 
 
 def test_cross_ecosystem_one_crashes_others_proceed(tmp_path, monkeypatch):

@@ -26,8 +26,10 @@ read-only preview, or `--force` if you really do want to overwrite an existing
 | `flow-trace-*.json` | flowchart TD | Each hop in the call chain, tainted variable at each step, branches, attacker control |
 | `attack-tree.json` | flowchart TD | Knowledge graph with nodes styled by status (confirmed/disproven/exploring/unexplored) |
 | `attack-paths.json` | flowchart TD per path | Step chain with proximity score (0–10) and blocker annotations |
+| `hypotheses.json` | flowchart TD | Hypothesis states |
+| `findings.json` | pie | Verdict/type summary (rendered when 2+ findings) |
 
-Black-box binary `context-map.json` files also render xref-backed candidate call
+Black-box binary `context-map.json` files (and `binary-context-map.json`) also render xref-backed candidate call
 edges as dotted grey edges labelled `candidate`. They are deliberately not
 drawn as unchecked flows because a binary xref is not taint proof.
 
@@ -35,13 +37,13 @@ drawn as unchecked flows because a binary xref is not taint proof.
 
 ```
 # Everything from a /understand run
-/diagram .out/code-understanding-20240101/
+/diagram out/understand_<timestamp>/
 
 # Include a target name in the header
-/diagram .out/exploitability-validation-20240101/ --target myapp
+/diagram out/validate_<timestamp>/ --target myapp
 
 # Print to stdout
-/diagram .out/code-understanding-20240101/ --stdout
+/diagram out/understand_<timestamp>/ --stdout
 ```
 
 ## Output

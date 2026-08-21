@@ -2125,6 +2125,7 @@ class LLMClient:
                 logger.debug("Trying model: %s/%s", model.provider, model.model_name)
 
                 timeout_failures = 0
+                last_safe_e = ""
                 for attempt in range(self.config.max_retries):
                     attempt_start = time.monotonic()
                     try:
@@ -2227,6 +2228,17 @@ class LLMClient:
 
                         logger.debug("Generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, response.tokens_used, response.cost, duration)
 
+                        if attempt > 0:
+                            # One line per retry SEQUENCE: the per-
+                            # attempt failures logged at DEBUG; a
+                            # recovery states how many attempts the
+                            # call actually burned.
+                            logger.info(
+                                "%s/%s recovered after %d attempt(s)",
+                                model.provider, model.model_name,
+                                attempt + 1,
+                            )
+
                         return response
 
                     except LLMBudgetExceededError:
@@ -2290,7 +2302,13 @@ class LLMClient:
                             redact_secrets as _redact,
                         )
                         _safe_e = _esc_np(_redact(str(e)))[:1024]
-                        logger.warning(
+                        last_safe_e = _safe_e
+                        # DEBUG: intermediate attempts are noise — a
+                        # 429 storm printed ~370 near-identical retry
+                        # WARNINGs. The terminal per-model WARNING
+                        # below carries the attempt count and last
+                        # error; a recovery logs one INFO.
+                        logger.debug(
                             "Attempt %d/%d failed for %s/%s: %s",
                             attempt + 1, self.config.max_retries,
                             model.provider, model.model_name, _safe_e,
@@ -2330,7 +2348,12 @@ class LLMClient:
                             logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
 
-                logger.warning("All attempts failed for %s/%s, trying next model...", model.provider, model.model_name)
+                logger.warning(
+                    "%s/%s: giving up after %d failed attempt(s), "
+                    "trying next model. Last error: %s",
+                    model.provider, model.model_name, attempt + 1,
+                    last_safe_e or "(not recorded)",
+                )
 
             # All models in tier failed
             _prov = model_config.provider.lower()
@@ -2584,6 +2607,7 @@ class LLMClient:
                     logger.warning("Local model — exploit PoCs may be unreliable")
 
                 timeout_failures = 0
+                last_safe_e = ""
                 for attempt in range(self.config.max_retries):
                     attempt_start = time.monotonic()
                     try:
@@ -2801,6 +2825,13 @@ class LLMClient:
                         # a fallback's output is filed under the original
                         # request's identity — matches generate()'s behaviour.
                         self._save_structured_to_cache(cache_key, structured_response)
+                        if attempt > 0:
+                            logger.info(
+                                "%s/%s recovered after %d attempt(s) "
+                                "(structured)",
+                                model.provider, model.model_name,
+                                attempt + 1,
+                            )
                         return structured_response
 
                     except LLMBudgetExceededError:
@@ -2861,7 +2892,10 @@ class LLMClient:
                             redact_secrets as _redact,
                         )
                         _safe_e = _esc_np(_redact(str(e)))[:1024]
-                        logger.warning(
+                        last_safe_e = _safe_e
+                        # DEBUG — collapsed to one WARNING per retry
+                        # sequence (see ``generate`` above).
+                        logger.debug(
                             "Structured generation attempt %d failed: %s",
                             attempt + 1, _safe_e,
                         )
@@ -2900,6 +2934,14 @@ class LLMClient:
                             delay = min(self.config.retry_delay * (2 ** attempt), 30)
                             logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
+
+                logger.warning(
+                    "%s/%s: structured generation giving up after %d "
+                    "failed attempt(s), trying next model. "
+                    "Last error: %s",
+                    model.provider, model.model_name, attempt + 1,
+                    last_safe_e or "(not recorded)",
+                )
 
             # All models in tier failed
             _prov = model_config.provider.lower()

@@ -215,20 +215,69 @@ class TestDrainStudyConsumer:
         done = threading.Event()
 
         def _work():
-            done.wait(timeout=3.0)
+            done.wait(timeout=30.0)
+
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        stops = []
+        orig_stop = q.request_stop
+
+        def _spy_stop():
+            stops.append(time.monotonic())
+            orig_stop()
+
+        q.request_stop = _spy_stop
+        t0 = time.monotonic()
+        done_at = t0 + 0.6
+        threading.Thread(
+            target=lambda: (time.sleep(0.6), done.set()), daemon=True,
+        ).start()
+        _drain_study_consumer(
+            t, q,
+            budget_exhausted=False,
+            no_progress_grace_s=0.5,
+            poll_s=0.1,
+            timeout_s=5.0,
+        )
+        t.join(timeout=5)
+        # A working consumer with budget left that finishes within the
+        # cap is never stopped.
+        assert not stops or stops[0] >= done_at, (
+            "no stop may be requested while the working consumer is "
+            "inside the cap"
+        )
+        assert not q.stop_requested
+
+    def test_abandonment_carries_a_stop(self, monkeypatch):
+        # Timeout-with-activity was the one abandonment branch that
+        # never requested a stop: the still-alive daemon consumer kept
+        # dispatching re-reviews into non-daemon executor workers after
+        # the run was over (observed as trailing LLM retry loops and
+        # dispatcher ReadErrors after server.stop). Abandoning must
+        # request a cooperative stop so the thread unwinds at its next
+        # checkpoint.
+        warnings = _capture(monkeypatch, "warning")
+        q = StudyQueue()
+        q.set_working(True)
+        done = threading.Event()
+
+        def _work():
+            done.wait(timeout=30.0)
 
         t = threading.Thread(target=_work, daemon=True)
         t.start()
         _drain_study_consumer(
             t, q,
             budget_exhausted=False,
-            no_progress_grace_s=0.5,
+            no_progress_grace_s=5.0,
             poll_s=0.1,
-            timeout_s=1.2,
+            timeout_s=0.8,
         )
-        # The drain hit its cap without requesting a stop: a working
-        # consumer with budget left is allowed to finish.
-        assert not q.stop_requested
+        assert t.is_alive(), "precondition: the drain abandoned a live thread"
+        assert q.stop_requested, (
+            "abandonment must request a cooperative stop"
+        )
+        assert any("abandoning" in m for m in warnings)
         done.set()
         t.join(timeout=5)
 

@@ -108,3 +108,22 @@ rules:
       cwe: ["CWE-22"]
       owasp_top_10: ["A1:2021-Broken Access Control"]
       tags: ["security", "python", "path-traversal", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Python — pattern: header value interpolated into a composed URL authority
+  # ---------------------------------------------------------------------------
+  - id: raptor.python.header-url-boundary-injection
+    message: >-
+      A header-derived value is interpolated directly after "://" in a
+      composed URL. A "/", "?", or "#" inside the value shifts the
+      path/query/fragment boundaries when the composite is re-parsed
+      (urlsplit/urlparse), so the parsed path diverges from the routed path
+      and path-based authorization can be bypassed. Validate the value for
+      delimiter characters (or percent-encode it) before composing.
+    languages: [python]
+    severity: WARNING
+    patterns:
+      - pattern-regex: 'f["''][^"'']*://\{[^}]*header[^}]*\}'
+    metadata:
+      cwe: ["CWE-20", "CWE-601"]
+      tags: ["security", "python", "url", "boundary-injection"]

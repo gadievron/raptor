@@ -18,7 +18,7 @@ Available Modes:
     binary      - Black-box binary investigation and evidence collection
     fuzz        - Binary fuzzing with AFL++
     web         - Web application security testing
-    agentic     - Full autonomous workflow (Semgrep + LLM analysis; --codeql adds CodeQL)
+    agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis; --no-codeql skips CodeQL)
     codeql      - CodeQL-only analysis
     analyze     - LLM-powered vulnerability analysis (requires SARIF input)
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
@@ -60,9 +60,21 @@ from pathlib import Path
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core.startup.process_init  # noqa: F401
-from core.run.metadata import complete_run, fail_run, start_run
-from core.run.output import TargetMismatchError, get_output_dir, resolve_default_target
-from core.run.safe_io import safe_run_mkdir
+
+# Cache-name helper lives in core.archive (shared with
+# packages/describe/cli.py — extracts opportunistically into
+# the same cache so /describe + /scan don't re-extract the
+# same archive). Re-exported here under the old private name
+# for backward compatibility with anything in this module that
+# still references _safe_cache_name.
+from core.archive import safe_cache_name as _safe_cache_name  # noqa: E402
+from core.run.metadata import complete_run, fail_run, start_run  # noqa: E402
+from core.run.output import (  # noqa: E402
+    TargetMismatchError,
+    get_output_dir,
+    resolve_default_target,
+)
+from core.run.safe_io import safe_run_mkdir  # noqa: E402
 
 
 def _extract_target(args: list) -> str | None:
@@ -134,6 +146,39 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
         )
         return (None, out)
     return (cap, out)
+
+
+def _extract_and_strip_out(args: list) -> tuple[str | None, list]:
+    """Extract ``--out <dir>`` (or ``--out=<dir>``) from ``args``.
+
+    Returns ``(out_dir, args_without_flag)``. The lifecycle adopts an
+    operator-supplied ``--out`` as THE run directory (``explicit_out``
+    is priority 1 in ``get_output_dir``) and re-injects the resolved
+    path downstream, so the sentinel, the lifecycle records, and the
+    child all name one directory. A dangling ``--out`` with no value is
+    left in place for the child's argparse to reject, matching every
+    other malformed-flag path.
+    """
+    flag = "--out"
+    prefix = f"{flag}="
+    out_str: str | None = None
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == flag and i + 1 < len(args):
+            out_str = args[i + 1]
+            i += 2
+            continue
+        if a.startswith(prefix):
+            out_str = a[len(prefix):]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    if out_str is None:
+        return (None, args)
+    return (out_str, out)
 
 
 def _preflight_cost_gate(
@@ -236,17 +281,6 @@ def _rewrite_target_arg(args: list, old: str, new: str) -> list:
     return out
 
 
-# Cache-name helper lives in core.archive (shared with
-# packages/describe/cli.py — extracts opportunistically into
-# the same cache so /describe + /scan don't re-extract the
-# same archive). Re-exported here under the old private name
-# for backward compatibility with anything in this module that
-# still references _safe_cache_name. Mid-file by necessity:
-# raptor.py's top-of-file import order is load-bearing
-# (core.startup.process_init must run before core.* imports).
-from core.archive import safe_cache_name as _safe_cache_name  # noqa: E402
-
-
 def _unpack_archive_target(target: str, args: list, out_dir: Path):
     """Extract an archive ``target`` into a CONTENT-ADDRESSED shared cache and
     point the scan at it.
@@ -320,6 +354,53 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
     return new_args, identity
 
 
+# Which modes carry their target in --repo (and may therefore be
+# back-filled from the active project / RAPTOR_CALLER_DIR default).
+# fuzz and web children do NOT parse --repo as their target: fuzz
+# needs --binary and web needs --url, and a project target (a source
+# directory) is meaningless for both.
+_REPO_TARGET_COMMANDS = frozenset({"scan", "agentic", "codeql"})
+_REQUIRED_TARGET_FLAG = {"fuzz": "--binary", "web": "--url"}
+# fuzz utility modes that legitimately run without --binary.
+_FUZZ_STANDALONE_FLAGS = ("--export-seed-corpus", "--prepare-corpus")
+
+
+def _resolve_target_for_command(command: str, args: list,
+                                target: str | None):
+    """Per-mode default-target handling for the lifecycle wrapper.
+
+    Returns ``(target, args, error)``. ``error`` is a message the
+    caller must print and fail on BEFORE creating a run directory —
+    pre-fix a fuzz/web invocation without its required flag had a
+    project target injected as ``--repo`` (which the child either
+    doesn't define or misreads as the binary), and the child's
+    argparse error then left a spurious failed run dir behind.
+    """
+    if target is not None:
+        return target, args, None
+    if command in _REPO_TARGET_COMMANDS:
+        # CLAUDE.md DEFAULT TARGET DIRECTORY: (1) active project,
+        # (2) RAPTOR_CALLER_DIR. Explicit --repo always wins (the
+        # caller only reaches here when args carry no target).
+        target = resolve_default_target()
+        if target is not None:
+            args = args + ["--repo", target]
+        return target, args, None
+    required = _REQUIRED_TARGET_FLAG.get(command)
+    if required is None:
+        return None, args, None
+    if command == "fuzz" and any(
+            a in _FUZZ_STANDALONE_FLAGS
+            or a.startswith(tuple(f + "=" for f in _FUZZ_STANDALONE_FLAGS))
+            for a in args):
+        # --export-seed-corpus / --prepare-corpus run without a binary.
+        return None, args, None
+    return None, args, (
+        f"{command}: missing required argument {required} "
+        f"(e.g. python3 raptor.py {command} {required} <value>)"
+    )
+
+
 def _wants_help(args: list) -> bool:
     """True if args request argparse help (``--help`` / ``-h``).
 
@@ -354,20 +435,28 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # downstream commands can pick it up for runtime enforcement.
     max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
 
-    # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
-    # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
-    # an explicit target. Pre-fix, scanner.py's `--repo required=True`
-    # crashed with "required: --repo" even when a project was active —
-    # the dispatcher resolved the output dir correctly but never
-    # forwarded the target into the downstream script's args.
-    # Explicit --repo from args always wins (per the override pattern).
-    if target is None:
-        target = resolve_default_target()
-        if target is not None:
-            args = args + ["--repo", target]
+    # Operator-supplied --out is adopted by the lifecycle as the run
+    # directory (explicit_out is priority 1 in get_output_dir and wins
+    # over the active project, with a logged warning) and re-injected
+    # resolved below. Pre-fix the wrapper ignored it: the child
+    # honoured --out while the lifecycle created and sealed a second,
+    # project-attached directory and printed a divergent OUTPUT_DIR
+    # sentinel.
+    explicit_out, args = _extract_and_strip_out(args)
+
+    # Per-mode default-target handling: back-fill --repo for the modes
+    # whose child parses it; fail fast (no run dir) when fuzz/web lack
+    # their mode-specific required flag. See _resolve_target_for_command.
+    target, args, target_error = _resolve_target_for_command(
+        command, args, target,
+    )
+    if target_error:
+        print(f"✗ {target_error}", file=sys.stderr)
+        return 2
 
     try:
-        out_dir = get_output_dir(command, target_path=target)
+        out_dir = get_output_dir(command, explicit_out=explicit_out,
+                                 target_path=target)
     except TargetMismatchError as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
@@ -398,7 +487,19 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             # extracted tree, not the archive file.
             target = _extract_target(args)
 
-    start_run(out_dir, command, target=target, target_identity=target_identity)
+    # Run-start contention (managed project dirs only): another
+    # session's live run refuses the start with the holder named. The
+    # pre-created (still empty) run dir is removed so a refused start
+    # leaves nothing behind.
+    from core.project.oplock import OpLockContention
+    try:
+        start_run(out_dir, command, target=target,
+                  target_identity=target_identity)
+    except OpLockContention as e:
+        with contextlib.suppress(OSError):
+            out_dir.rmdir()
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
 
     # Surface the target's license at lifecycle start, BEFORE any
     # tool actually runs — operators about to use CodeQL get the
@@ -479,7 +580,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     if max_cost_usd is not None:
         args = args + ["--max-cost-usd", str(max_cost_usd)]
 
-    # Inject --out so the downstream script uses the lifecycle directory
+    # Inject --out so the downstream script uses the lifecycle directory.
+    # An operator --out was stripped above and adopted as out_dir, so the
+    # child receives the RESOLVED path — parent and child agree byte-for-
+    # byte even when the operator typed a relative path. The guard is
+    # defensive (nothing should carry --out here after the strip).
     if not any(a == "--out" or a.startswith("--out=") for a in args):
         args = args + ["--out", str(out_dir)]
 

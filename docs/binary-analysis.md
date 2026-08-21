@@ -33,8 +33,8 @@ PE) and builds a structured evidence layer without requiring source code.
 | `harness <run-dir>` | Turn a recovered ingress candidate into a harness plan. Emits source only when the ABI contract is explicit. |
 | `fuzz <binary>` | Hand off to the `/fuzz` orchestrator for crash witnesses. |
 | `graph <run-dir>` | Query the persistent binary graph (SQLite). |
-| `report <run-dir>` | Regenerate the human-readable report from an existing run. |
-| `handoff <run-dir>` | Regenerate the validation handoff record. |
+| `report <run-dir>` | Print the investigation report from an existing run (the map report when no investigation exists). |
+| `handoff <run-dir>` | Print the validation handoff JSON. |
 | `diagram <run-dir>` | Render Mermaid diagrams from a binary run's JSON outputs. |
 
 ### Usage and Flags
@@ -228,10 +228,6 @@ and nm to suppress dead-code findings before they reach LLM analysis.
 Used by `/agentic` and `/codeql` to filter findings for functions the
 compiler removed.
 
-Implementation: `core/analysis/binary_oracle.py` (classifier),
-`core/analysis/binary_oracle_autodetect.py` (auto-detection),
-`core/analysis/binary_oracle_precision.py` (measurement harness).
-
 ### How It Works
 
 The classifier examines each function from the source inventory against
@@ -280,6 +276,11 @@ auto-detection. This defends against:
 The operator can bypass this via explicit `--binary <path>` when they
 have verified provenance.
 
+The gate runs *before* any parsing: tracked binaries are filtered out
+ahead of the DWARF probe, non-ELF candidates are rejected on the magic
+bytes, and the probe itself runs inside the sandbox -- a planted binary
+is never parsed at all.
+
 ### Source-Coverage Floor
 
 A source-coverage floor (at least 5% of project source names matched,
@@ -290,19 +291,10 @@ is dropped with a warning rather than driving every source function to
 
 ### Precision
 
-Precision has been validated across multiple corpora:
-
-- **1952/1952 verdicts correct** across 6 iteratively-tuned corpora
-  (consistency).
-- **187/187 correct on the held-out zstd v1.5.6 corpus** with no
-  classifier tuning (generalisation). Rule-of-three 95% upper bound
-  on miss rate: 1.6% on first-contact-with-unseen-data.
-
-The held-out corpus is non-vacuous: 473/1431 functions were exercised by
-the workload, and zero `absent` verdicts were issued on actually-live
-functions. Conditional on full-DWARF evidence -- a stripped binary
-downgrades to `tier="symbol_only"` and the chokepoint refuses to
-suppress.
+The `absent` verdict is corpus-validated before it is allowed to
+suppress anything, and the guarantee is conditional on full-DWARF
+evidence -- a stripped binary downgrades to `tier="symbol_only"` and
+the chokepoint refuses to suppress.
 
 ### CLI Flags
 
@@ -359,19 +351,6 @@ The classifier's per-finding analysis record also carries
 `analysis.reachability_suppression` and
 `analysis.reachability_verdict` for per-finding inspection.
 
-### Verification
-
-Two verification tools are provided:
-
-- `libexec/raptor-binary-oracle-e2e` -- end-to-end audit: builds a real
-  C target and walks 14 consumer surfaces (~50 assertions). No LLM calls.
-  Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
-- `libexec/raptor-binary-oracle-precision --corpus <name>` -- re-measure
-  absent-precision on any corpus driver (synthetic, zlib, libsodium,
-  snappy, leveldb, regex-rust, zstd_holdout). Report includes per-corpus
-  cross-tab, aggregate with rule-of-three upper bound, n-concentration
-  dominator detection, and toolchain block for reproducibility.
-
 ---
 
 ## Exploit Feasibility
@@ -380,10 +359,9 @@ The exploit feasibility subsystem analyses a compiled binary's
 mitigations, ROP gadget quality, one-gadget constraints and glibc
 version to determine what exploitation techniques are architecturally
 possible. It answers "can this bug actually be weaponised?" before any
-time is spent on technique selection.
-
-Implementation: `packages/exploit_feasibility/`.
-Entry point: `libexec/raptor-run-feasibility`.
+time is spent on technique selection.  Entry point:
+`libexec/raptor-run-feasibility`; the Python API lives in
+`packages/exploit_feasibility`.
 
 ### Mitigation Profiling
 
@@ -525,8 +503,6 @@ ctx = load_exploit_context(context_file)
 - `/validate` Stage E uses feasibility output to assess exploitability.
 - The `check_exploit_viability()` API provides a single-call verdict
   for pipeline consumers.
-- See [exploit feasibility guide](binary-analysis.md) for detailed
-  scenario walkthroughs and API reference.
 
 ### What Feasibility Does Not Do
 

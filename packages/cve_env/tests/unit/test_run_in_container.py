@@ -40,7 +40,7 @@ def test_rejects_whitespace_only_command() -> None:
     assert "command is empty" in r.reason
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_exec_success_returns_exit_code_zero(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
     r = run_in_container(container_id="cid", command="echo hello")
@@ -50,7 +50,7 @@ def test_exec_success_returns_exit_code_zero(mock_run: Any) -> None:
     assert r.reason == ""
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_exec_nonzero_exit_is_not_ok(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=42, stdout="", stderr="boom")
     r = run_in_container(container_id="cid", command="false")
@@ -60,7 +60,7 @@ def test_exec_nonzero_exit_is_not_ok(mock_run: Any) -> None:
     assert "exit_code=42" in r.reason
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_exec_timeout_returns_structured_failure(mock_run: Any) -> None:
     mock_run.side_effect = subprocess.TimeoutExpired(
         cmd=["docker", "exec"], timeout=1.0
@@ -71,7 +71,7 @@ def test_exec_timeout_returns_structured_failure(mock_run: Any) -> None:
     assert r.exit_code == -1
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_cli_not_found(mock_run: Any) -> None:
     mock_run.side_effect = FileNotFoundError()
     r = run_in_container(container_id="cid", command="echo hi")
@@ -79,7 +79,7 @@ def test_docker_cli_not_found(mock_run: Any) -> None:
     assert "docker CLI not found" in r.reason
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_invocation_does_not_include_privileged(mock_run: Any) -> None:
     """P17 invariant: no privilege-escalation flags on docker exec."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -94,7 +94,7 @@ def test_invocation_does_not_include_privileged(mock_run: Any) -> None:
     assert "-c" in argv
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_workdir_is_threaded_through(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="/app\n", stderr="")
     run_in_container(container_id="cid", command="pwd", workdir="/app")
@@ -103,7 +103,7 @@ def test_workdir_is_threaded_through(mock_run: Any) -> None:
     assert "/app" in argv
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_stdout_is_capped(mock_run: Any) -> None:
     big = "x" * (16 * 1024)
     mock_run.return_value = MagicMock(returncode=0, stdout=big, stderr="")
@@ -111,7 +111,7 @@ def test_stdout_is_capped(mock_run: Any) -> None:
     assert len(r.stdout) <= 8 * 1024
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_timeout_is_clamped_upward_to_max(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     run_in_container(container_id="cid", command="echo", timeout_seconds=10_000.0)
@@ -121,7 +121,7 @@ def test_timeout_is_clamped_upward_to_max(mock_run: Any) -> None:
     assert called_timeout <= 300.0
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_timeout_is_clamped_upward_from_zero(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     run_in_container(container_id="cid", command="echo", timeout_seconds=0.0)
@@ -133,7 +133,7 @@ def test_timeout_is_clamped_upward_from_zero(mock_run: Any) -> None:
 # Phase 12.2: reason_class population --------------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_ok_on_zero_exit(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=0, stdout="hi", stderr="")
     r = run_in_container(container_id="cid", command="echo hi")
@@ -141,7 +141,7 @@ def test_reason_class_ok_on_zero_exit(mock_run: Any) -> None:
     assert r.reason_class == "ok"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_command_not_found_on_127(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=127, stdout="", stderr="sh: 1: foobar: not found"
@@ -151,7 +151,7 @@ def test_reason_class_command_not_found_on_127(mock_run: Any) -> None:
     assert r.reason_class == "command_not_found"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_permission_denied_on_126(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=126, stdout="", stderr="sh: 1: ./script.sh: Permission denied"
@@ -161,7 +161,7 @@ def test_reason_class_permission_denied_on_126(mock_run: Any) -> None:
     assert r.reason_class == "permission_denied"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_oom_killed_on_137(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=137, stdout="", stderr="Killed")
     r = run_in_container(container_id="cid", command="memhog")
@@ -169,7 +169,7 @@ def test_reason_class_oom_killed_on_137(mock_run: Any) -> None:
     assert r.reason_class == "oom_killed"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=1,
@@ -181,7 +181,7 @@ def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
     assert r.reason_class == "disk_full"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_unknown_for_generic_failure(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
         returncode=42, stdout="", stderr="weird app error"
@@ -191,7 +191,7 @@ def test_reason_class_unknown_for_generic_failure(mock_run: Any) -> None:
     assert r.reason_class == "unknown"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_reason_class_transport_on_timeout(mock_run: Any) -> None:
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker exec", timeout=30)
     r = run_in_container(container_id="cid", command="long_running")

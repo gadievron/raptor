@@ -75,6 +75,15 @@ class SinkSpec:
     text_pattern: re.Pattern | None = None
     # Human note about what "sufficient" means for this sink
     note: str = ""
+    # Sufficiency cannot be established from guard categories/text at
+    # all for this sink class (e.g. auth gates: an identifier that
+    # LOOKS like a permission check proves nothing about what it
+    # authorises).  Verdicts cap at PARTIAL — the LLM reviews.
+    category_cap_partial: bool = False
+    # Bounds-required sinks: SUFFICIENT additionally needs an actual
+    # upper-bound comparison in a bounds-category guard.  ``len > 0``
+    # matches the size-token text pattern but bounds nothing.
+    requires_upper_bound: bool = False
 
 
 # --- Memory copy sinks (buffer overflow) ---
@@ -87,6 +96,7 @@ _MEMCPY_SPEC = SinkSpec(
         re.IGNORECASE,
     ),
     note="bounds check must compare length against destination buffer size",
+    requires_upper_bound=True,
 )
 
 # --- Command execution sinks (RCE) ---
@@ -95,6 +105,7 @@ _EXEC_SPEC = SinkSpec(
     helpful=frozenset({"config", "type"}),
     irrelevant=frozenset({"bounds", "null", "resource"}),
     note="auth/permission gate required; bounds checks are irrelevant for RCE",
+    category_cap_partial=True,
 )
 
 # --- Code evaluation sinks (code injection) ---
@@ -104,6 +115,7 @@ _EVAL_SPEC = SinkSpec(
     irrelevant=frozenset({"bounds", "null", "resource"}),
     note="auth gate required; input validation also needed but not detectable "
          "from guard category alone",
+    category_cap_partial=True,
 )
 
 # --- Format string sinks ---
@@ -144,6 +156,7 @@ _DESER_SPEC = SinkSpec(
     helpful=frozenset({"config"}),
     irrelevant=frozenset({"bounds", "null", "resource"}),
     note="type restriction (safe_load, allowlist) AND auth required",
+    category_cap_partial=True,
 )
 
 # --- Memory allocation sinks (integer overflow → small alloc) ---
@@ -156,6 +169,7 @@ _ALLOC_SPEC = SinkSpec(
         re.IGNORECASE,
     ),
     note="integer overflow check on size argument required before allocation",
+    requires_upper_bound=True,
 )
 
 # Null dereference has no sink-API name to key on (dereference is an
@@ -190,6 +204,7 @@ _register((
     irrelevant=frozenset({"auth", "config", "type"}),
     note="unbounded copy — bounds check on source length required, "
          "or use bounded variant",
+    requires_upper_bound=True,
 ))
 
 _register((
@@ -245,6 +260,33 @@ _register((
 # ---------------------------------------------------------------------------
 # Main API: assess guard adequacy
 # ---------------------------------------------------------------------------
+
+# An upper-bound comparison shape: ``len < X`` / ``len <= X`` (X may be
+# an identifier — ``sizeof(buf)``, a named limit — or a literal), or
+# the reversed ``X > len`` / ``X >= len``.  ``min()``/``min_t()``/
+# ``clamp()`` count as upper-bounding uses.
+_UPPER_BOUND_FWD_RE = re.compile(
+    r"[\w)\]]\s*<=?\s*[a-zA-Z_0-9]"
+)
+_UPPER_BOUND_REV_RE = re.compile(
+    r"[\w)\]]\s*>=?\s*[a-zA-Z_]"
+)
+_UPPER_BOUND_FN_RE = re.compile(r"\b(?:min|min_t|clamp|clamp_t)\s*\(")
+
+
+def _has_upper_bound_comparison(text: str) -> bool:
+    """True when the guard text contains an upper-bound comparison.
+
+    ``len > 0`` / ``len != 0`` match the size-token text patterns but
+    bound nothing from above — treating them as sufficient let a
+    non-emptiness check stand in for a bounds check (verdict
+    soundness).
+    """
+    return bool(
+        _UPPER_BOUND_FWD_RE.search(text)
+        or _UPPER_BOUND_REV_RE.search(text)
+        or _UPPER_BOUND_FN_RE.search(text)
+    )
 
 
 def assess_guard_adequacy(
@@ -306,6 +348,29 @@ def assess_guard_adequacy(
         notes.append("no guards present")
     elif not missing and text_match:
         verdict = Adequacy.SUFFICIENT
+        # Category presence + token match is a lint-grade signal; the
+        # consumer treats SUFFICIENT as strong enough to skip LLM
+        # review, so SUFFICIENT must carry semantic weight:
+        if spec.category_cap_partial:
+            # Auth-style gates: a name that LOOKS like a permission
+            # check proves nothing about what it authorises or binds.
+            verdict = Adequacy.PARTIAL
+            notes.append(
+                "category/text match alone cannot establish "
+                "sufficiency for this sink class — needs review"
+            )
+        elif spec.requires_upper_bound and not any(
+            g.category == "bounds"
+            and _has_upper_bound_comparison(g.text)
+            for g in guards
+        ):
+            # ``len > 0`` matches the size-token pattern but bounds
+            # nothing from above.
+            verdict = Adequacy.PARTIAL
+            notes.append(
+                "bounds guard has no upper-bound comparison "
+                "(non-emptiness is not a bounds check)"
+            )
     elif not missing and not text_match:
         verdict = Adequacy.PARTIAL
         notes.append("required category present but text pattern unmatched")

@@ -35,8 +35,15 @@ rules:
           - pattern: os.environ[...]
           - pattern: os.environ.get(...)
           - pattern: sys.argv[...]
-          # File reads (XML from uploaded files / disk)
-          - pattern: $F.read()
+          # File reads (XML from uploaded files / disk). Kept broad but
+          # in-memory buffers over string literals are excluded — that
+          # data is fully hardcoded.
+          - patterns:
+              - pattern: $F.read()
+              - pattern-not: io.StringIO("...").read()
+              - pattern-not: io.BytesIO("...").read()
+              - pattern-not: StringIO("...").read()
+              - pattern-not: BytesIO("...").read()
     pattern-sinks:
       # lxml — resolves external entities by default.
       # pattern-not-inside excludes calls that pass a safe parser

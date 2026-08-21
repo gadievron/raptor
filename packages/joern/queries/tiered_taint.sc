@@ -10,6 +10,8 @@
 //   __EFFECTIVE_DEPTH__    — int, inter-procedural call depth
 //   __MAX_ARGS__           — int, maxArgsToAllow for Tier 2
 //   __MAX_OUTPUT_ARGS__    — int, maxOutputArgsExpansion for Tier 2
+//   SEMANTICS_DECL (line slot)  — learned FlowSemantic installation, or empty
+//   CTX_SEMANTICS (arg slot)    — semantics= EngineContext argument, or empty
 //
 // maxArgsToAllow is all-or-nothing: when ANY parameter maps to more
 // call sites than the cap, the engine drops ALL expansion for that
@@ -24,6 +26,7 @@ import scala.collection.mutable
 import scala.util.Try
 
 val dangerousSinks = __DANGEROUS_SINKS__
+__SEMANTICS_DECL__
 
 def flowToJson(flow: io.joern.dataflowengineoss.language.Path): String = {
   val steps = flow.elements.map { e =>
@@ -92,7 +95,7 @@ if (methodsWithSinks.isEmpty) {
 
   // --- Tier 1: Intra-procedural (maxCallDepth=0) ---
   val tier1Config = EngineConfig(maxCallDepth = 0, initialTable = Some(sharedTable))
-  val tier1Ctx = EngineContext(config = tier1Config)
+  val tier1Ctx = EngineContext(__CTX_SEMANTICS__config = tier1Config)
   val tier1Sources = cpg.method
     .filter(m => methodsWithSinks.contains(m.name))
     .parameter
@@ -124,7 +127,7 @@ if (methodsWithSinks.isEmpty) {
       maxArgsToAllow = __MAX_ARGS__,
       maxOutputArgsExpansion = __MAX_OUTPUT_ARGS__
     )
-    val tier2Ctx = EngineContext(config = tier2Config)
+    val tier2Ctx = EngineContext(__CTX_SEMANTICS__config = tier2Config)
     val tier2Sources = cpg.method
       .filter(m => t1Unresolved.contains(m.name))
       .parameter

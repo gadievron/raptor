@@ -489,3 +489,15 @@ Display a summary to the user after writing:
 - N trust boundaries found (N gaps identified)
 - N sinks found (N have unchecked flows)
 - Recommended next step: `--trace <entry-point-id>` for highest-risk unchecked flow
+
+### Trace follow-up fork (interactive sessions only)
+
+After the summary, offer trace follow-up as a structured choice (see CLAUDE.md § INTERACTIVE PROMPTS). Run `libexec/raptor-may-ask` first; only if it prints `interactive` AND the AskUserQuestion tool is available, present AskUserQuestion with `multiSelect: true` over the discovered entry points — "Which entry points should I trace?":
+
+- One option per entry point, highest-risk first (start with those appearing in `unchecked_flows`); cap the list at the risk-ordered top handful so the choice stays readable, and put the first option's "(Recommended)" tag on the highest-risk one.
+- Label: the entry point id plus its `path`/`name` (`EP-001 POST /api/v2/query`).
+- Description: its `file`:`line`, `type`, `auth_required`, and why it's risky — which sink it reaches without passing a trust boundary, from `unchecked_flows`.
+
+For each selected entry point, run the `--trace` workflow (`trace.md`) in this same run directory, producing a `flow-trace-<id>.json` per trace, then re-run `libexec/raptor-render-diagrams "$WORKDIR"`.
+
+**Non-interactive fallback:** current behavior — print the "Recommended next step: `--trace <entry-point-id>`" line above and stop; the operator invokes `/understand <target> --trace EP-xxx` themselves.

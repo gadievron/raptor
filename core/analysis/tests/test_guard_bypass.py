@@ -238,6 +238,52 @@ class TestCheckGuardCoverage:
         )
         assert not check_guard_coverage(cfg, 2, "nonexistent_guard")
 
+    def test_unreachable_read_site_is_vacuously_covered(self):
+        """Complete enumeration with no entry->read path: nothing to
+        guard, coverage holds vacuously (pre-existing behaviour)."""
+        n_entry = _FakeNode(1, "entry")
+        n_guard = _FakeNode(3, "If (task->mm != NULL)")
+        n_body = _FakeNode(4, "body")
+        n_exit = _FakeNode(5, "exit")
+        n_read = _FakeNode(6, "dumpable = get_dumpable(task)")
+        cfg = _FakeCFG(
+            [n_entry, n_guard, n_body, n_exit, n_read],
+            # read node disconnected from the entry component
+            {
+                id(n_entry): [n_guard],
+                id(n_guard): [n_body, n_exit],
+                id(n_body): [n_exit],
+            },
+        )
+        assert check_guard_coverage(cfg, 6, "task->mm != NULL")
+
+    def test_depth_truncation_is_not_coverage(self):
+        """A CFG deeper than the DFS bound yields zero enumerated paths
+        with complete=False. Pre-fix that empty result was reported as
+        'guard on every path' — lifecycle_checker then dropped findings
+        as covered_structurally. Truncation must answer not-covered."""
+        from core.analysis.guard_bypass import _MAX_DEPTH
+
+        n_entry = _FakeNode(1, "entry")
+        n_guard = _FakeNode(2, "If (task->mm != NULL)")
+        chain = [n_entry, n_guard]
+        # Linear chain far deeper than the enumeration bound, read at
+        # the end — every real path DOES pass the guard, but the DFS
+        # never reaches the read site.
+        for i in range(_MAX_DEPTH + 10):
+            chain.append(_FakeNode(3 + i, f"step {i}"))
+        n_read = _FakeNode(1000, "dumpable = get_dumpable(task)")
+        chain.append(n_read)
+        adjacency = {
+            id(a): [b] for a, b in zip(chain, chain[1:])
+        }
+        # Give the guard a second (early-exit) successor so it forms a
+        # real branch and its condition is extracted as a guard.
+        n_exit = _FakeNode(999, "exit")
+        adjacency[id(n_guard)] = [chain[2], n_exit]
+        cfg = _FakeCFG(chain + [n_exit], adjacency)
+        assert not check_guard_coverage(cfg, 1000, "task->mm != NULL")
+
 
 class TestGuardBypassResult:
     def test_to_dict(self):

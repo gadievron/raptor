@@ -2,39 +2,46 @@
 // rcu_read_lock held.
 //
 // The pattern: rcu_dereference is called outside an rcu_read_lock /
-// rcu_read_unlock region, or the lock is released before the
-// dereferenced pointer is last used.
+// rcu_read_unlock region.
+//
+// Position discipline (format_string.cocci technique): first bind the
+// positions of every rcu_dereference that IS preceded by
+// rcu_read_lock (safe set), then report every rcu_dereference at a
+// position NOT in the safe set. A rule-level `depends on !safe` would
+// be evaluated file-wide — one locked dereference anywhere in the
+// file would suppress every unlocked one (measured FN class).
 //
 // Covers CWE-416: use-after-free via RCU grace period violation.
 // @role: verification
 
-// Case 1: rcu_dereference without any preceding rcu_read_lock
-@no_lock@
+// Safe set: rcu_dereference reached from rcu_read_lock without an
+// intervening rcu_read_unlock.
+@safe_rcu@
 expression ptr, rcu_ptr;
 position p;
 @@
 
+rcu_read_lock()
+... when != rcu_read_unlock()
 (
   ptr = rcu_dereference@p(rcu_ptr)
 |
   ptr = rcu_dereference_check@p(rcu_ptr, ...)
 )
-... when != rcu_read_lock()
 
-@has_lock@
-expression no_lock.ptr, no_lock.rcu_ptr;
-position no_lock.p;
+// Bug set: every other rcu_dereference position.
+@no_lock@
+expression ptr, rcu_ptr;
+position p != safe_rcu.p;
 @@
 
-rcu_read_lock()
-...
 (
-  ptr = rcu_dereference@p(rcu_ptr)
+* ptr = rcu_dereference@p(rcu_ptr)
 |
-  ptr = rcu_dereference_check@p(rcu_ptr, ...)
+* ptr = rcu_dereference_check@p(rcu_ptr, ...)
 )
 
-@script:python depends on no_lock && !has_lock@
+@script:python@
 p << no_lock.p;
 rcu_ptr << no_lock.rcu_ptr;
 @@

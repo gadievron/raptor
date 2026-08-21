@@ -1,0 +1,221 @@
+name: Corpus Labels
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  merge_group:
+  schedule:
+    # Weekly full-sweep pin lint over ALL labels with --fetch-missing:
+    # upstream history rewrites and tag deletions surface here as a CI
+    # failure instead of a mid-run surprise during an (expensive)
+    # corpus measurement run.
+    - cron: '0 6 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.14'
+  # Sparse-fetch cache for pin verification (repo@ref-keyed
+  # subdirectories; see core/audit/corpus/lint.py).
+  LINT_CACHE: .corpus-lint-cache
+
+permissions:
+  contents: read
+  # Needed by the pre_check job to query prior workflow runs at the
+  # current SHA via ``gh api repos/.../actions/runs``.
+  actions: read
+  # Needed by the squash-merge dedup's ``commits/{sha}/pulls`` lookup.
+  pull-requests: read
+
+jobs:
+  # Same dedup pattern as tests.yml / lint.yml — skip a duplicate run
+  # of the same SHA. Inlined rather than refactored into a reusable
+  # composite so each workflow stays self-contained (raptor
+  # convention).
+  pre_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_skip: ${{ steps.dup.outputs.should_skip }}
+    steps:
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          # Never dedup forced-full events: the operator triggered them
+          # deliberately (cron, manual dispatch) or the merge queue needs
+          # an authoritative pass.
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            # 1. Exact-SHA match — covers fast-forward merges and
+            #    explicit re-runs where the SHA is identical.
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+            # 2. Squash-merge fallback — the push-to-main SHA is brand
+            #    new, but GitHub links it to the source PR. Look up the
+            #    PR's head SHA and check whether *that* already passed.
+            if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
+              pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+                          --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)
+              if [[ -n "${pr_head:-}" ]]; then
+                dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                        -f "head_sha=${pr_head}" -f "status=success" \
+                        --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                      | head -n1 || true)
+                if [[ -n "${dup:-}" ]]; then
+                  should_skip=true
+                  echo "Skipping: source PR head ${pr_head} already passed in run ${dup}"
+                fi
+              fi
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
+
+  # Schema lint (blocking, always). Loads every label and checks field
+  # sanity — no fixtures, no network — so it gates every PR regardless
+  # of connectivity. Pure stdlib Python; no setup beyond checkout.
+  schema-lint:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Schema-lint corpus labels
+        run: python3 -m core.audit.corpus.lint --mode schema
+
+  # PR pin lint (blocking for the labels the PR touches). Verifies the
+  # changed labels' pins against the pinned upstream trees by fetching
+  # ONLY the labelled files at the pinned refs (sparse, blob-filtered;
+  # see sources.fetch_files) into a cached checkout. A drifted pin
+  # (relocatable/missing) fails the job with a suggested re-pin.
+  #
+  # Degrades gracefully offline: an unreachable remote scores
+  # no-fixture, which the linter treats as a loud warning, not a
+  # failure — schema-lint above still gates. A remote that answers but
+  # no longer serves the pinned ref (history rewrite, tag deletion)
+  # scores missing and DOES fail.
+  pin-lint-pr:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Need merge-base history for ``git diff origin/main...HEAD``.
+          # Depth 200 covers any sane PR; shallower clones miss the base.
+          fetch-depth: 200
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Compute changed label files
+        id: changed
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main --depth=200 2>/dev/null \
+            || git fetch origin main --depth=200 2>/dev/null \
+            || true
+          BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+          if [[ -z "$BASE_SHA" ]]; then
+            echo "WARN: no merge-base found; pin-linting all labels" >&2
+            CHANGED="core/audit/corpus/labels"
+          else
+            CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD \
+                        -- 'core/audit/corpus/labels/**/*.label.json' \
+                      | tr '\n' ' ')
+          fi
+          echo "files=${CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Changed label files vs origin/main: ${CHANGED:-<none>}"
+
+      # Sparse checkouts are keyed by repo@ref inside the cache dir, so
+      # a content hash of the label set is a good cache key: any pin
+      # change (new repo, new ref, new file) misses to a fresh key while
+      # restore-keys still seed it with the previous fetches.
+      - name: Cache pinned-source sparse checkouts
+        if: steps.changed.outputs.files != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ env.LINT_CACHE }}
+          key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
+          restore-keys: |
+            corpus-lint-
+
+      - name: Pin-lint changed labels
+        if: steps.changed.outputs.files != ''
+        env:
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          set -f  # disable globbing — $CHANGED_FILES needs word-split but not glob-expand
+          python3 -m core.audit.corpus.lint --mode pins \
+            --fetch-missing \
+            --cache-dir "$LINT_CACHE" \
+            $CHANGED_FILES | tee pin-lint.log
+          if grep -q "no-fixture" pin-lint.log; then
+            echo "::warning::pin lint could not verify some labels (no-fixture — network unreachable?); schema lint still gates"
+          fi
+
+  # Weekly full sweep (scheduled): pin lint over ALL labels with
+  # --fetch-missing. Catches upstream drift that happens *between*
+  # PRs — a force-pushed branch, a deleted release tag — while the
+  # labels themselves are untouched.
+  pin-lint-sweep:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pinned-source sparse checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ env.LINT_CACHE }}
+          key: corpus-lint-${{ hashFiles('core/audit/corpus/labels/**/*.label.json') }}
+          restore-keys: |
+            corpus-lint-
+
+      - name: Pin-lint all labels
+        run: |
+          python3 -m core.audit.corpus.lint --mode pins \
+            --fetch-missing \
+            --cache-dir "$LINT_CACHE" \
+            --tree-search | tee pin-lint.log
+          if grep -q "no-fixture" pin-lint.log; then
+            echo "::warning::pin lint could not verify some labels (no-fixture — network unreachable?)"
+          fi

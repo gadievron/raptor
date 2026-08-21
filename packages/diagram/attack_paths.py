@@ -48,7 +48,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     has_runtime = path_data.get("runtime_evidence_available", False)
 
     lines = ["flowchart TD"]
-    rt_tag = " [RUNTIME CONFIRMED]" if has_runtime else ""
+    rt_tag = " [Runtime Confirmed]" if has_runtime else ""
     title_label = f"{name}{rt_tag}\\nProximity: {proximity}/10,{prox_desc}\\nStatus: {status}"
     lines.append(f'    TITLE_{path_index}["{_sanitize(title_label)}"]')
     lines.append(f"    style TITLE_{path_index} fill:#f0f0f0,stroke:#999,font-weight:bold")
@@ -66,7 +66,13 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
             desc = _sanitize(step.get("description", step.get("action", str(step))))
             loc = _sanitize(step.get("call_site") or step.get("definition") or "")
             tainted = _sanitize(step.get("tainted_var", ""))
-            rt_ev = step.get("runtime_evidence", {})
+            # runtime_evidence comes raw from attack-paths.json; a
+            # non-dict value (string, list, null) would crash the
+            # whole section on the .get() calls below — coerce like
+            # the call_count / proximity handling.
+            rt_ev = step.get("runtime_evidence")
+            if not isinstance(rt_ev, dict):
+                rt_ev = {}
             parts = [f"[{i+1}] {step_type}"]
             if loc:
                 parts.append(loc)
@@ -82,7 +88,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
                     count = int(rt_ev.get("call_count", 0))
                 except (TypeError, ValueError):
                     count = 0
-                parts.append(f"OBSERVED x{count}")
+                parts.append(f"Observed x{count}")
                 runtime_nodes.append(nid)
             label = "\\n".join(parts)
         else:

@@ -114,7 +114,7 @@ def _descriptor_entry(
     return out
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_picks_first_native(mock_run: Any) -> None:
     manifest = _descriptor_entry(
         "linux/amd64",
@@ -135,7 +135,7 @@ def test_resolve_picks_first_native(mock_run: Any) -> None:
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
     manifest = _descriptor_entry("linux/amd64", digest="sha256:" + "b" * 64)
     mock_run.return_value = MagicMock(
@@ -148,7 +148,7 @@ def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
     assert r.decision == "rosetta_ok"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_arch_incompatible_when_no_platform_matches(mock_run: Any) -> None:
     manifest = _descriptor_entry("linux/ppc64le")
     mock_run.return_value = MagicMock(
@@ -159,7 +159,7 @@ def test_resolve_arch_incompatible_when_no_platform_matches(mock_run: Any) -> No
     assert r.decision == "arch_incompatible"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_not_found_when_all_candidates_miss(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
@@ -169,7 +169,7 @@ def test_resolve_not_found_when_all_candidates_miss(mock_run: Any) -> None:
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_rate_limited_surfaces_pivot_signal(
     mock_run: Any,
     mock_sleep: Any,
@@ -198,7 +198,7 @@ def test_resolve_rate_limited_surfaces_pivot_signal(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_transport_surfaces_retry_or_pivot(
     mock_run: Any,
     mock_sleep: Any,
@@ -219,7 +219,7 @@ def test_resolve_transport_surfaces_retry_or_pivot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")  # skip 10s retry backoff in tests
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_rate_limit_budget_short_circuits_after_two_hits(
     mock_run: Any,
     mock_sleep: Any,
@@ -250,7 +250,7 @@ def test_rate_limit_budget_short_circuits_after_two_hits(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_rate_limit_budget_per_product_isolated(
     mock_run: Any,
     mock_sleep: Any,
@@ -272,7 +272,7 @@ def test_rate_limit_budget_per_product_isolated(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
     mock_run: Any,
     mock_sleep: Any,
@@ -312,7 +312,7 @@ def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase37_2_rate_limit_cooldown_retry_one_shot(
     mock_run: Any,
     mock_sleep: Any,
@@ -346,7 +346,7 @@ def test_phase37_2_rate_limit_cooldown_retry_one_shot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase37_2_cooldown_resets_per_cve(
     mock_run: Any,
     mock_sleep: Any,
@@ -401,7 +401,7 @@ def test_reset_rate_limit_budget_clears_counters() -> None:
 # Phase 9.5: next_step_hint on failure --------------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_arch_incompatible_emits_next_step_hint(mock_run: Any) -> None:
     """Phase 9.5: arch_incompatible decision tells agent to source_build."""
     manifest = _descriptor_entry("linux/ppc64le")
@@ -413,7 +413,7 @@ def test_resolve_arch_incompatible_emits_next_step_hint(mock_run: Any) -> None:
     assert "source_build" in r.next_step_hint
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_not_found_emits_next_step_hint(mock_run: Any) -> None:
     """Phase 9.5: not_found decision tells agent to source_build or compose."""
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
@@ -423,7 +423,7 @@ def test_resolve_not_found_emits_next_step_hint(mock_run: Any) -> None:
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_rate_limited_persistent_emits_pivot_hint(
     mock_run: Any,
     mock_sleep: Any,
@@ -440,7 +440,7 @@ def test_resolve_rate_limited_persistent_emits_pivot_hint(
     assert "ubuntu" in hint_lower or "pivot" in hint_lower
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_native_has_empty_next_step_hint(mock_run: Any) -> None:
     """Phase 9.5: success path leaves next_step_hint empty (no pivot needed)."""
     manifest = _descriptor_entry(
@@ -468,7 +468,7 @@ def _manifest_entry_unknown() -> dict[str, Any]:
     }
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_run: Any) -> None:
     """BuildKit cache entries advertise a platform that lies -- filter them."""
     manifest = [
@@ -484,7 +484,7 @@ def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_run: Any) -> None:
     assert r.decision in {"arch_incompatible", "not_found"}
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_skips_platform_without_arch_digest(mock_run: Any) -> None:
     """The core bug fix: platform listed but no per-arch digest -> don't pick it."""
     # An entry claiming arm64 but with NO digest -> skipped.
@@ -502,7 +502,7 @@ def test_resolve_skips_platform_without_arch_digest(mock_run: Any) -> None:
     assert r.decision != "native"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
     """Multiarch manifest: we must return the arm64 digest, not whichever came last."""
     arm64_digest = "sha256:" + "a" * 64
@@ -525,7 +525,7 @@ def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
 # Phase 38.4: arch_incompatible cumulative cross-product short-circuit ---
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase38_4_arch_incompatible_persistent_after_threshold(
     mock_run: Any,
 ) -> None:
@@ -562,7 +562,7 @@ def test_phase38_4_arch_incompatible_persistent_after_threshold(
     mock_run.assert_not_called()
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase38_4_arch_counter_resets_per_cve(mock_run: Any) -> None:
     """Phase 38.4: reset_rate_limit_budget() (called per-CVE) clears
     the arch_incompatible cumulative counter so the next CVE starts fresh.
@@ -614,7 +614,7 @@ def test_phase45_mirror_gcr_io_is_high_priority_candidate() -> None:
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase46_2_transport_cooldown_retry_one_shot(
     mock_run: Any,
     mock_sleep: Any,
@@ -649,7 +649,7 @@ def test_phase46_2_transport_cooldown_retry_one_shot(
 
 
 @patch("cve_env.tools.image_resolve.time.sleep")
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown(
     mock_run: Any,
     mock_sleep: Any,

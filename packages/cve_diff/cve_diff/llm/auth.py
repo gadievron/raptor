@@ -27,6 +27,35 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+# Historical cve-diff default; also the last-resort fallback when the
+# shared model registry resolves nothing (the Claude Code OAuth path
+# can still serve it without an API key — see resolve_auth).
+FALLBACK_MODEL_ID = "claude-opus-4-7"
+
+
+def default_model_id() -> str:
+    """Default model for cve-diff's LLM stages (discovery agent,
+    root-cause analysis).
+
+    Resolves through the shared model registry —
+    :func:`core.llm.config._get_default_primary_model` walks the
+    operator ``--model`` pin, ``~/.config/raptor/models.json``, and the
+    provider env-key autodetect — so the operator's configured primary
+    drives cve-diff exactly like the other pipelines (same private-
+    helper convention as ``core/audit/orchestrator.py``). Falls back
+    to :data:`FALLBACK_MODEL_ID` when nothing is configured.
+    """
+    try:
+        from core.llm.config import _get_default_primary_model
+
+        mc = _get_default_primary_model()
+        if mc is not None and mc.model_name:
+            return mc.model_name
+    except Exception:  # noqa: BLE001 — registry trouble must never break the CLI
+        pass
+    return FALLBACK_MODEL_ID
+
+
 @dataclass(frozen=True)
 class AuthDecision:
     """Resolution result for a model id.

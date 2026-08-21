@@ -82,6 +82,23 @@ def run_autonomous_workflow(args):
     if getattr(args, "no_iris_tier1", False):
         RaptorConfig.IRIS_TIER1_ENABLED = False
 
+    # Same process-scoped pattern for the curated in-repo query pass.
+    if getattr(args, "no_curated_queries", False):
+        RaptorConfig.CODEQL_CURATED_ENABLED = False
+
+    # Same process-scoped pattern for the learned-models pass.
+    if getattr(args, "no_learned_models", False):
+        RaptorConfig.CODEQL_LEARNED_MODELS_ENABLED = False
+
+    # Same process-scoped pattern for threat models. Explicit negative
+    # beats positive when both are passed.
+    if getattr(args, "threat_models", None):
+        RaptorConfig.CODEQL_THREAT_MODELS = tuple(
+            m.strip() for m in args.threat_models.split(",") if m.strip()
+        )
+    if getattr(args, "no_threat_models", False):
+        RaptorConfig.CODEQL_THREAT_MODELS_ENABLED = False
+
     # Parse languages — filter out empty entries from leading /
     # trailing / consecutive commas. Pre-fix `--languages
     # ",python,"` produced `["", "python", ""]`; the empty
@@ -368,6 +385,34 @@ Examples:
              "for this run (flips RaptorConfig.IRIS_TIER1_ENABLED). Use "
              "when the in-repo packs produce noise on a specific target "
              "or when comparing stdlib-only vs LocalFlowSource verdicts.",
+    )
+    parser.add_argument(
+        "--no-curated-queries", action="store_true",
+        help="Skip the curated in-repo query pass "
+             "(engine/codeql/queries/<lang>/) for this run (flips "
+             "RaptorConfig.CODEQL_CURATED_ENABLED). Use when a curated "
+             "query produces noise on a specific target or when "
+             "comparing standard-suite-only verdicts.",
+    )
+    parser.add_argument(
+        "--no-learned-models", action="store_true",
+        help="Skip the learned-models measurement pass (IRIS taint "
+             "specs emitted as a models-as-data pack, baseline vs "
+             "augmented diff; flips "
+             "RaptorConfig.CODEQL_LEARNED_MODELS_ENABLED).",
+    )
+    parser.add_argument(
+        "--threat-models",
+        help="Comma-separated CodeQL threat models to enable on the "
+             "standard suite for this run (default: local — enables "
+             "environment/commandargs/stdin/file/database source kinds "
+             "on stock queries). Skipped automatically on CLIs older "
+             "than 2.15.3.",
+    )
+    parser.add_argument(
+        "--no-threat-models", action="store_true",
+        help="Do not pass any --threat-model flag to codeql database "
+             "analyze for this run (stock remote-only source models).",
     )
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
     parser.add_argument(

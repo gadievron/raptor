@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from core.project.findings_utils import (
     count_vulns,
     dedup_key,
+    finding_file,
     group_findings,
     group_key,
     load_sca_findings_from_dir,
@@ -45,6 +46,35 @@ class TestDedupKey(unittest.TestCase):
 
     def test_missing_fields(self):
         self.assertEqual(dedup_key({}), ("", "", 0))
+
+    def test_orchestrated_file_path(self):
+        """Orchestrated /agentic results carry file_path, not file."""
+        f = {"file_path": "a.c", "function": "main", "line": 10}
+        self.assertEqual(dedup_key(f), ("a.c", "main", 10))
+
+    def test_scan_and_orchestrated_shapes_share_key(self):
+        scan = {"file": "src/a.c", "function": "main", "line": 10}
+        orch = {"file_path": "src/a.c", "function": "main", "line": 10}
+        self.assertEqual(dedup_key(scan), dedup_key(orch))
+
+    def test_relative_path_normalised(self):
+        a = {"file": "./src/a.c", "function": "main", "line": 10}
+        b = {"file_path": "src//a.c", "function": "main", "line": 10}
+        self.assertEqual(dedup_key(a), dedup_key(b))
+
+    def test_file_wins_over_file_path(self):
+        f = {"file": "a.c", "file_path": "b.c", "function": "fn", "line": 1}
+        self.assertEqual(dedup_key(f), ("a.c", "fn", 1))
+
+
+class TestFindingFile(unittest.TestCase):
+
+    def test_non_string_values_ignored(self):
+        self.assertEqual(finding_file({"file": ["a.c"]}), "")
+        self.assertEqual(finding_file({"file_path": 7}), "")
+
+    def test_empty(self):
+        self.assertEqual(finding_file({}), "")
 
 
 class TestGroupKey(unittest.TestCase):

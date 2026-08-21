@@ -72,6 +72,21 @@ def test_lockfile_missing_silenced_when_lockfile_sibling_exists(
     assert all(f.kind != "lockfile_missing" for f in findings)
 
 
+def test_lockfile_missing_silenced_by_requirements_txt_sibling(
+    tmp_path: Path,
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    reqs = tmp_path / "requirements.txt"
+    pyproject.touch()
+    reqs.touch()
+    deps = [_dep("flask", ecosystem="PyPI", path=pyproject)]
+    findings = evaluate(
+        [_manifest(pyproject, "PyPI")],
+        deps,
+    )
+    assert all(f.kind != "lockfile_missing" for f in findings)
+
+
 def test_lockfile_missing_skipped_for_ecosystems_without_expectation(
     tmp_path: Path,
 ) -> None:

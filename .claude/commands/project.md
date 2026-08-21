@@ -35,7 +35,6 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |
 | `rename <old> <new>` | Rename a project |
 | `notes <name> [<text>] [--file <path>]` | View or update notes |
-| `description <name> [<text>]` | View or update description |
 | `add <name> <dir> [--target <path>]` | Add existing runs to a project |
 | `remove <name> <run> --to <path>` | Move a run out of the project |
 | `report [<name>]` | Generate merged report across all runs |
@@ -58,7 +57,25 @@ Run project commands via the Bash tool:
 libexec/raptor-project-manager <subcommand> [args]
 ```
 
-For destructive commands (`merge`, `clean`, `delete --purge`), confirm with the user before running with `--yes`.
+## Destructive commands
+
+`merge`, `clean`, and `delete --purge` delete data. Never pass `--yes` without an explicit confirmation. In an interactive session, take the confirmation as a structured choice (see CLAUDE.md § INTERACTIVE PROMPTS): run `libexec/raptor-may-ask` first; only if it prints `interactive` AND the AskUserQuestion tool is available, ask as below. Otherwise apply the non-interactive fallback.
+
+**`clean`** — first run the same command with `--dry-run` (never deletes; prints the per-type breakdown, MB to free, and any coverage-loss warnings) and `/project status` (the full run list with names and dates). The deletion set is every run beyond the latest `--keep <n>` per command type. Then ask — "Delete these runs?" — options:
+
+1. **Cancel (Recommended)** — delete nothing.
+2. **Delete the listed runs** — build this option's preview from the `/project status` + `--dry-run` output: the exact run directories that will be deleted, one per line, plus the MB freed and any found-then-lost coverage warnings. On selection, re-run the command with `--yes`.
+3. **Keep more runs** — re-run `--dry-run` with a higher `--keep <n>` and ask again.
+
+**`create` over an existing directory** — before creating, check whether the output directory (`--output-dir`, or the default `out/projects/<name>`) already exists and is non-empty. If it does, ask — options:
+
+1. **Choose a different name/dir (Recommended)** — pick a fresh directory; nothing is adopted.
+2. **Adopt the existing directory** — proceed; `create` reuses the directory, and existing run dirs inside it join the project's views (`status`, `findings`, `report`). Preview: list the directory's existing contents.
+3. **Cancel** — do not create the project.
+
+**`merge` / `delete --purge`** — same pattern: show exactly what will be merged or removed (from `/project status`), ask with a Cancel-first option, and pass `--yes` only after an explicit selection.
+
+**Non-interactive fallback:** current behavior — never pass `--yes`. For `clean`/`merge`/`delete --purge`, run at most the `--dry-run` / read-only preview, report what would be deleted, and stop — deletion requires an interactive confirmation or an operator-supplied `--yes`. For `create`, proceed as today (the existing directory is reused); note the adoption in your output.
 
 ## Output
 

@@ -168,6 +168,27 @@ class TestEmitMethod:
         assert "unknown" not in entry.evidence_tools
         assert "codeql" in entry.evidence_tools
 
+    def test_emitted_entry_is_finding_grade(self, tmp_path):
+        """The emitter must stamp producer=agentic: these entries record
+        one finding's analysis, not a function review, and the audit gap
+        fold keys suppression off the stamp (the run_id heuristic fails
+        for project run dirs that don't start with "agentic")."""
+        from core.coverage.journal import is_function_grade
+
+        agent = _make_agent(tmp_path)
+        (agent.repo_path / "src" / "foo.py").write_text(
+            "\n" * 9 + "def login(req):\n    return req\n" * 4
+        )
+        vuln = VulnerabilityContext(_make_finding(), agent.repo_path)
+        _set_analysis(vuln)
+
+        agent._emit_journal_entry(vuln, _checklist())
+
+        entries = load_entries(agent.out_dir)
+        assert len(entries) == 1
+        assert entries[0].producer == "agentic"
+        assert not is_function_grade(entries[0])
+
     def test_swallows_exceptions(self, tmp_path, monkeypatch):
         agent = _make_agent(tmp_path)
         vuln = VulnerabilityContext(_make_finding(), agent.repo_path)

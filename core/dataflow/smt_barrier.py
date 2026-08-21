@@ -8,9 +8,14 @@ FIRST on any case where the fix adds a charset/regex-shaped validator.
 The whoogle archetype is::
 
     name = request.args.get('name')
-    if not re.match(r'^[A-Za-z0-9_.+-]+$', name):
+    if not re.match(r'^[A-Za-z0-9_+-]+$', name):
         return error()
     open(os.path.join(CONFIG_PATH, name))            # CWE-22 sink
+
+(The historical whoogle charset also admitted '.'; the pathtrav danger
+model now includes '.' — '..' segments escape via multi-component
+joins the charset model cannot see — so a dot-admitting charset is
+DECLINED, not SOUND.)
 
 The Tier 2 LLM keeps failing to express that as a CodeQL barrier-guard;
 Z3 dispatches it directly by proving the validator's language and the
@@ -79,22 +84,41 @@ from core.smt_solver import z3_available as _z3_available
 # Tier 2.
 # --------------------------------------------------------------------------
 _DANGER_CHARS = {
-    # Path separators are the load-bearing chars for traversal.  Without '/'
-    # (or '\') the value can't escape os.path.join's base directory or name
-    # an absolute path.  Conservative — a lone '..' without separators
-    # resolves to a directory, not an arbitrary file.
-    "pathtrav": ["/", "\\"],
-    # Shell metachars that introduce command separation, substitution, or
-    # backgrounding.  Newlines included because they terminate a command in
-    # most shell contexts.
-    "cmdi":     [";", "|", "&", "$", "`", "\n"],
-    # SQL quote / comment / statement-terminator chars.  Wider than strict
-    # SQLi exploits need (a lone '-' isn't an exploit), so the verdict here
-    # will more often be DECLINED than for pathtrav/cmdi.  Honest scope.
-    "sqli":     ["'", '"', ";", "-"],
-    # XSS tag- and attribute-breakers.  Same fuzziness caveat as SQLi.
-    "xss":      ["<", ">", '"', "'"],
+    # Path separators are the load-bearing chars for traversal, and '.'
+    # builds '..' segments.  Whether a bare '..' (no separator) is
+    # dangerous depends on how the value is joined downstream —
+    # ``join(base, name, "x")`` escapes via name=".." — which the
+    # charset model cannot see, so '.' must be excluded for the
+    # verdict to be sound.
+    "pathtrav": ["/", "\\", "."],
+    # Shell metachars that introduce command separation, substitution,
+    # backgrounding, or redirection.  Newlines included because they
+    # terminate a command in most shell contexts; '<' / '>' because
+    # redirects need no separator (``foo>x`` clobbers x).  Residual
+    # known gap: option injection (a leading '-') is argument-position
+    # dependent and out of scope for a charset model.
+    "cmdi":     [";", "|", "&", "$", "`", "\n", "<", ">"],
+    # SQL quote / comment / statement-terminator chars PLUS the chars
+    # that suffice in an UNQUOTED (numeric) context, where no quote is
+    # needed to change the query: whitespace and grouping/comparison
+    # chars (``1 OR 1``, ``1)--``).  The charset model cannot see the
+    # interpolation context, so both contexts must be covered for the
+    # verdict to be sound.  Digits-only charsets remain provably safe.
+    "sqli":     ["'", '"', ";", "-", " ", "\t", "\n", "\r",
+                 "=", "(", ")"],
+    # XSS tag- and attribute-breakers PLUS unquoted-attribute-context
+    # injectors: whitespace and '=' add new attributes without any of
+    # <>"' (``x onmouseover=...``), '`' breaks IE-legacy attributes.
+    "xss":      ["<", ">", '"', "'", " ", "\t", "\n", "=", "`"],
 }
+
+
+def danger_chars_for(sink_class: str):
+    """Public read of the per-class danger model (None for unknown
+    classes). Finite-set consumers (the collection-membership guard)
+    decide per element with the same chars the regex-intersection
+    proof uses — the finite-language specialisation of one model."""
+    return _DANGER_CHARS.get(sink_class)
 
 
 # --------------------------------------------------------------------------
@@ -269,14 +293,21 @@ _JAVA_GUARD = _re.compile(
 )
 
 # Ruby — `return|raise … unless <var> =~ /^[chars]+$/`
+# Ruby anchors: ^ and $ are ALWAYS line anchors (Onigmo has no flag
+# that changes this; /m only alters `.`), so /^[chars]+$/ passes any
+# string containing ONE conforming line — "safe\n../../etc/passwd"
+# satisfies the guard while smuggling the danger characters on another
+# line. Only \A...\z proves whole-string membership (\Z would readmit
+# the trailing-newline hazard). Line-anchored Ruby guards therefore
+# never lift; the fix author must use \A\z for the proof to hold.
 _RUBY_GUARD_UNLESS = _re.compile(
     r"(?:return|raise)\b[^\n]*?\s+unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
-    r"/\^\[(?P<chars>[^\]]+)\][+*]\$/"
+    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/"
 )
-# Ruby — `return|raise … if <var> !~ /^[chars]+$/`
+# Ruby — `return|raise … if <var> !~ /\A[chars]+\z/`
 _RUBY_GUARD_IF_NOT_MATCH = _re.compile(
     r"(?:return|raise)\b[^\n]*?\s+if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
-    r"/\^\[(?P<chars>[^\]]+)\][+*]\$/"
+    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/"
 )
 
 
@@ -326,24 +357,6 @@ def _charset_body_is_safe(body: str) -> bool:
     return _ALPHA_BACKSLASH_ESCAPE.search(body) is None
 
 
-def _unescape_charclass(chars: str) -> str:
-    """Strip backslash escapes from a regex character-class body.
-
-    Inside ``[...]`` only ``]``, ``\\``, and a leading ``^`` need real
-    escaping; other escape sequences (``\\!``, ``\\@``, ...) are
-    unnecessary but legal, and the unescaped character is what the
-    pattern actually matches.  Stripping them gives us the true
-    member-set of the class.
-
-    Used by the ``re.sub`` extractor where authors often over-escape
-    (e.g. Gerapy's
-    ``'[\\!\\@\\#\\$\\;\\&\\*\\~\\"\\'\\{\\}\\]\\[\\-\\+\\%\\^]+'``).
-    """
-    # Preserve \- : stripping it produces a bare hyphen that
-    # _expand_charset_body / _charclass_to_re misread as a range operator.
-    return _re.sub(r"\\([^-])", r"\1", chars)
-
-
 def _try_charset_validator(line: str) -> ValidatorSpec | None:
     """Match the whole-string `re.match`/`re.fullmatch` over `^[chars]+$`
     pattern.  Returns ``None`` on no match so the caller can try other
@@ -375,10 +388,13 @@ def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
     cs = _SUB_CHARSET.match(pattern)
     if not cs or not _charset_body_is_safe(cs.group(1)):
         return None
-    forbidden = _unescape_charclass(cs.group(1))
+    # Store the RAW class body: _expand_charset_body is the single
+    # escape interpreter.  Unescaping here and expanding later double-
+    # processes the body — a stored ``\\`` swallows the following char
+    # (``[/\\.]`` lost the backslash from the forbidden set).
     return ValidatorSpec(
         kind="charset_sub", var_name=m.group("var"),
-        forbidden=forbidden, source_line=line.strip(),
+        forbidden=cs.group(1), source_line=line.strip(),
     )
 
 
@@ -407,7 +423,12 @@ def _try_java_validator(line: str) -> ValidatorSpec | None:
 
 
 def _try_ruby_validator(line: str) -> ValidatorSpec | None:
-    """Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes."""
+    """Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes.
+
+    Only ``\\A[chars]+\\z``-anchored patterns lift — Ruby ``^``/``$``
+    are line anchors, so a line-anchored guard does not bound the whole
+    string (see the anchor note on the guard regexes above).
+    """
     m = _RUBY_GUARD_UNLESS.search(line) or _RUBY_GUARD_IF_NOT_MATCH.search(line)
     if m is None or not _charset_body_is_safe(m.group("chars")):
         return None
@@ -431,6 +452,32 @@ _LANG_EXTRACTORS = {
 }
 
 
+def extractor_languages() -> frozenset:
+    """Languages the mechanical validator extractor supports."""
+    return frozenset(_LANG_EXTRACTORS)
+
+
+def extract_validator_from_line(
+    line: str, language: str = "python",
+) -> ValidatorSpec | None:
+    """Run the per-``language`` extractor table on ONE source line.
+
+    Shared by the fix-diff scanner below and the live-finding
+    injection prescreen (core.dataflow.injection_prescreen), which
+    lifts validators from dataflow-path step lines instead of diff
+    ``+`` lines. First matching extractor wins; None when the line
+    carries no recognised validator shape.
+    """
+    extractors = _LANG_EXTRACTORS.get(language)
+    if not extractors:
+        return None
+    for try_fn in extractors:
+        spec = try_fn(line)
+        if spec is not None:
+            return spec
+    return None
+
+
 def extract_validator(fix_diff: str, language: str = "python") -> ValidatorSpec | None:
     """Scan the fix diff for a recognised mechanical validator pattern.
 
@@ -448,17 +495,14 @@ def extract_validator(fix_diff: str, language: str = "python") -> ValidatorSpec 
     """
     if not fix_diff:
         return None
-    extractors = _LANG_EXTRACTORS.get(language)
-    if not extractors:
+    if language not in _LANG_EXTRACTORS:
         return None
     for raw in fix_diff.splitlines():
         if not raw.startswith("+") or raw.startswith("+++"):
             continue
-        line = raw[1:]
-        for try_fn in extractors:
-            spec = try_fn(line)
-            if spec is not None:
-                return spec
+        spec = extract_validator_from_line(raw[1:], language)
+        if spec is not None:
+            return spec
     return None
 
 
@@ -848,6 +892,36 @@ def _maybe_record_parity(
         pass
 
 
+def _record_value_bound_audit(finding, result) -> None:
+    """Record-only audit bridge: write the value-bound gate's verdict
+    to ``suppressions.jsonl`` under the configured audit dir
+    (``sanitizer_cut_config.audit_dir`` — set by the consuming
+    command's ``--sanitizer-cut on|strict`` + run dir).
+
+    Always ``enforce=False``: the sanitizer-cut witness has not earned
+    hard-suppression on the zero-false-suppress corpus
+    (``libexec/raptor-sanitizer-cut-precision``), so every record
+    carries ``dropped: false`` — evidence for the operator, never a
+    drop. Best-effort: telemetry must not break a run.
+    """
+    try:
+        audit = _sc_config.audit_dir()
+        if not audit:
+            return
+        from pathlib import Path as _Path
+
+        from core.analysis.sanitizer_cut import (
+            record_sanitizer_cut_suppression,
+        )
+        record = dict(finding)
+        record.setdefault("line", finding.get("sink_line"))
+        record_sanitizer_cut_suppression(
+            _Path(audit), record, result, enforce=False,
+        )
+    except Exception:                                       # noqa: BLE001
+        return
+
+
 def _value_bound_dominates(
     *,
     file_path: str | None,
@@ -871,7 +945,8 @@ def _value_bound_dominates(
     * ``None``  → "consult lexical fallback." Returned when the
       value-bound gate is disabled (``off`` / ``shadow`` mode), the
       resolver can't normalise the finding (missing kwargs, file
-      unreadable, function not found, non-python language, …), or the
+      unreadable, function not found, or a language without a
+      resolver leg — python, c/c++, and java are wired), or the
       gate's verdict was ``candidate_only`` (control-flow holds but
       value binding unproven).
 
@@ -912,6 +987,16 @@ def _value_bound_dominates(
         resolved = resolve_finding(finding)
         if not isinstance(resolved, ResolvedFinding):
             return None
+        java_text = None
+        if resolved.language == "java" and file_path:
+            # The constant-definers pre-check folds over the file's
+            # AST; an unreadable file skips that check, never the gate.
+            try:
+                java_text = Path(file_path).read_text(
+                    encoding="utf-8", errors="replace",
+                )
+            except OSError:
+                java_text = None
         result = evaluate_finding(
             resolved.cfg,
             [resolved.source_node],
@@ -926,9 +1011,11 @@ def _value_bound_dominates(
             # the production gate evaluate DIFFERENT bindings than the
             # telemetry used for the strict-promotion decision.
             extra_bindings=resolved.inter_proc_bindings,
+            java_source_text=java_text,
         )
     except Exception:                                       # noqa: BLE001
         return None
+    _record_value_bound_audit(finding, result)
     if result.verdict == VERDICT_SUPPRESS:
         return True
     if result.verdict == VERDICT_NO_SUPPRESS:
@@ -1149,42 +1236,101 @@ def _python_chain_reaches_sink(
 
     Chain growth: any Assign/AnnAssign/AugAssign between validator and
     sink whose RHS references a chain variable adds its target name(s)
-    to the chain.  Conservative w.r.t. control flow (every assignment
-    is treated as reachable) — soundness for the Tier 0 verdict still
-    rests on the SMT proof + the dominance check; this is just the
-    soundness layer that the validator's constraint applies to what
-    reaches the sink.
+    to the chain.
+
+    Chain KILL: an assignment whose target is a chain member and whose
+    RHS references NO chain member REBINDS that variable to a fresh
+    value — the validator's constraint no longer applies to it.
+    Without the kill, ``y = name; y = request.args.get('raw')`` left
+    ``y`` "validated" at the sink and the Tier 0 verdict suppressed a
+    live flow.  Assignments are processed in source order (single
+    forward pass) so a later rebind wins over earlier derivation;
+    loop-carried back-edges are not modeled, which can only SHRINK the
+    chain (fewer SOUND verdicts — the conservative direction).
+
+    Conservative w.r.t. control flow (every assignment is treated as
+    reachable) — soundness for the Tier 0 verdict still rests on the
+    SMT proof + the dominance check; this is the soundness layer that
+    the validator's constraint applies to what reaches the sink.
     """
     chain: set = {start_var}
-    # Iterate multiple passes — a derived variable assigned later might
-    # itself feed a still-later assignment.  Fixed point on a small
-    # chain is cheap (at most ~function-line-count iterations).
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                continue
-            node_line = getattr(node, "lineno", None) or 0
-            if not (validator_line <= node_line <= sink_line):
-                continue
-            value = node.value
-            if value is None:
-                continue
-            rhs_names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
-            if not (chain & rhs_names):
-                continue
-            targets = (list(node.targets) if isinstance(node, ast.Assign)
-                       else [node.target])
-            before = len(chain)
-            for t in targets:
-                _collect_target_names(t, chain)
-            if len(chain) > before:
-                changed = True
+    assigns = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+        and validator_line <= (getattr(node, "lineno", None) or 0) <= sink_line
+        and node.value is not None
+    ]
+    assigns.sort(key=lambda n: (n.lineno, n.col_offset))
+    for node in assigns:
+        rhs_names = {
+            n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)
+        }
+        targets = (list(node.targets) if isinstance(node, ast.Assign)
+                   else [node.target])
+        target_names: set = set()
+        for t in targets:
+            _collect_target_names(t, target_names)
+        # The validator line's own assignment BINDS the validated
+        # value (``abs_path = safe_join(...)``, ``x = re.sub(...)``) —
+        # it must not be treated as a rebind of the start variable.
+        at_validator = node.lineno == validator_line
+        if isinstance(node, ast.AugAssign):
+            # ``x += rhs`` mixes the old value with the RHS.  It never
+            # ADDS to the chain (the old target value may be
+            # unvalidated), and it kills a chain member when the RHS
+            # references any non-chain name (the mixed-in data is not
+            # covered by the validator's constraint).
+            if rhs_names - chain and not at_validator:
+                chain -= target_names
+            continue
+        if chain & rhs_names:
+            chain |= target_names
+        elif not at_validator:
+            # Rebind from non-chain RHS: the target no longer carries
+            # the validated value.
+            chain -= target_names
+    if not chain:
+        return False
     for var in chain:
         if _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
             return True
     return False
+
+
+def _lexical_var_reaches_sink(
+    var: str, source_text: str, validator_line: int,
+    sink_line: int, sink_line_text: str,
+) -> bool:
+    """AST-free analogue of ``_python_chain_reaches_sink``'s rebind-KILL,
+    for languages without a parsed tree (JS/TS/Java).
+
+    Returns ``True`` iff ``var`` appears at the sink line AND is not
+    rebound between the validator and the sink. Previously the non-Python
+    path was a bare ``\\bvar\\b`` match at the sink with NO rebind-KILL
+    (a204f309): ``x = validate(raw); x = req.query.evil; sink(x)`` left
+    ``x`` "validated" at the sink and the charset prescreen suppressed a
+    live flow. A reassignment ``var = <expr not referencing var>`` between
+    validator and sink rebinds it to a value the validator never
+    constrained, so it must KILL the reach.
+
+    Conservative by design: it detects reassignments lexically and errs
+    toward KILL (declining the suppression → the finding falls through to
+    LLM validation), which is the sound direction for a false-negative
+    fix. Member/index writes (``var.f = …``, ``var[i] = …``) and
+    comparisons (``==``/``!=``/``<=``/``>=``) do not count as rebinds.
+    """
+    if not _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
+        return False
+    lines = source_text.splitlines()
+    assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
+    self_re = _re.compile(rf"\b{_re.escape(var)}\b")
+    for lineno in range(validator_line + 1, sink_line):
+        if 1 <= lineno <= len(lines):
+            text = lines[lineno - 1]
+            m = assign_re.search(text)
+            if m and not self_re.search(text[m.end():]):
+                return False  # rebind from a non-self RHS -> KILL
+    return True
 
 
 def substitution_dominates_sink(
@@ -1339,7 +1485,10 @@ def _expand_charset_body(body: str) -> set:
     return out
 
 
-def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: list[str]) -> _ProofVerdict:
+def _prove_charset(
+    spec: ValidatorSpec, sink_class: str, danger: list[str],
+    timeout_ms: int | None = None,
+) -> _ProofVerdict:
     """Z3 regex-intersection emptiness for whole-string anchored allowlists."""
     name = z3.String("name")
     char_re = _charclass_to_re(spec.charset)
@@ -1350,6 +1499,12 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: list[str]) -> _
         )
     validator_re = z3.Plus(char_re)
     s = z3.Solver()
+    if timeout_ms:
+        # Hard per-query bound for callers on a latency budget (the
+        # live-finding prescreen). Timeout surfaces as z3 `unknown`,
+        # which the caller below already treats as "declining" — a
+        # timed-out proof can never read as SOUND.
+        s.set("timeout", timeout_ms)
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
     r = s.check()
     if r == z3.unsat:
@@ -1415,7 +1570,10 @@ def _prove_charset_sub(
     )
 
 
-def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
+def prove_neutralizes(
+    spec: ValidatorSpec, sink_class: str,
+    timeout_ms: int | None = None,
+) -> _ProofVerdict:
     """Dispatch on ``spec.kind`` to the appropriate sound proof:
 
       * ``charset``     -> Z3 regex-intersection emptiness
@@ -1424,6 +1582,10 @@ def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
     Either way, SOUND verdicts are real mathematical proofs of
     language neutralisation; SAT/missing-element verdicts carry a
     concrete counterexample input.
+
+    ``timeout_ms`` bounds the Z3 query (charset kind only —
+    finite-set inclusion is constant-time); ``None`` keeps the
+    unbounded patch-verification behaviour.
     """
     danger = _DANGER_CHARS.get(sink_class)
     if danger is None:
@@ -1432,7 +1594,7 @@ def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
             f"no danger model for sink_class={sink_class!r}",
         )
     if spec.kind == "charset":
-        return _prove_charset(spec, sink_class, danger)
+        return _prove_charset(spec, sink_class, danger, timeout_ms=timeout_ms)
     if spec.kind == "charset_sub":
         return _prove_charset_sub(spec, sink_class, danger)
     return _ProofVerdict(
@@ -1573,9 +1735,9 @@ def try_tier0(
                 chain_tree, spec.var_name, line, sink_line, sink_line_text,
             )
     else:
-        var_reaches = bool(_re.search(
-            rf"\b{_re.escape(spec.var_name)}\b", sink_line_text,
-        ))
+        var_reaches = _lexical_var_reaches_sink(
+            spec.var_name, source_text, line, sink_line, sink_line_text,
+        )
     if not var_reaches:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

@@ -27,7 +27,12 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-sys.path.insert(0, os.environ.get("RAPTOR_DIR", str(Path(__file__).resolve().parents[2])))
+# Path setup for direct script execution (`python3 raptor.py binary`
+# spawns this file; `libexec/raptor-binary` imports it with the path
+# already set). RAPTOR_DIR is the canonical project-root marker — hard
+# lookup per the CLAUDE.md path-safety rule: KeyError if unset, no
+# positional-walk fallback that silently imports a different checkout.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.json import load_json, save_json
@@ -225,7 +230,12 @@ def _run_map(args: argparse.Namespace) -> int:
         return 2
     target, out_dir = resolved
 
-    start_run(out_dir, "understand", target=str(target))
+    from core.project.oplock import OpLockContention
+    try:
+        start_run(out_dir, "understand", target=str(target))
+    except OpLockContention as e:
+        print(f"raptor-binary: {e}", file=sys.stderr)
+        return 1
     try:
         result = _analyse_for_args(args, target, out_dir)
         payload = map_result_payload(result, out_dir)
@@ -369,7 +379,12 @@ def _run_investigate(args: argparse.Namespace) -> int:
         print("raptor-binary: --fuzz-dir cannot be combined with --fuzz/--active", file=sys.stderr)
         return 2
 
-    start_run(out_dir, "understand", target=str(target))
+    from core.project.oplock import OpLockContention
+    try:
+        start_run(out_dir, "understand", target=str(target))
+    except OpLockContention as e:
+        print(f"raptor-binary: {e}", file=sys.stderr)
+        return 1
     active_phases: list[dict[str, Any]] = []
     try:
         # Always map first. Agentic follow-on work needs a mechanical view of

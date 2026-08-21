@@ -33,7 +33,7 @@ def _find_docker_build_cmd(mock_run: object) -> list[str]:
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_appends_pull_for_external_from_image(mock_run: MagicMock) -> None:
     """Dockerfile FROM debian:11 → docker build --pull (force-pull base)."""
     reset_docker_build_state()
@@ -49,7 +49,7 @@ def test_docker_build_appends_pull_for_external_from_image(mock_run: MagicMock) 
     assert "--pull" in cmd, f"missing --pull for external FROM: {cmd}"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_skips_pull_for_local_from_image(mock_run: MagicMock) -> None:
     """Dockerfile FROM cve-X:build → no --pull (no upstream)."""
     reset_docker_build_state()
@@ -69,7 +69,7 @@ def test_docker_build_skips_pull_for_local_from_image(mock_run: MagicMock) -> No
 # cleanup (lifecycle.cleanup_result_images) can label-scope the rmi exactly like
 # cleanup_containers, avoiding the result-image accumulation that filled the
 # Colima VM and stopped bench50-20260524-121602 at 181/253.
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_labels_image_with_cve_id(mock_run: MagicMock) -> None:
     """When cve_id is passed, `docker build` argv carries --label cve-env.cve-id=<id>."""
     reset_docker_build_state()
@@ -88,7 +88,7 @@ def test_docker_build_labels_image_with_cve_id(mock_run: MagicMock) -> None:
     assert "cve-env.cve-id=CVE-2018-7600" in cmd, f"missing cve-id label value: {cmd}"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_no_cve_label_when_cve_id_empty(mock_run: MagicMock) -> None:
     """No cve_id (default) → no cve-env.cve-id label (back-compat / no spurious label)."""
     reset_docker_build_state()
@@ -143,7 +143,7 @@ def test_classify_build_error_falls_through_on_unknown() -> None:
     assert classify_build_error(stderr) == []
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_autocreates_missing_context(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -180,7 +180,7 @@ def test_docker_build_rejects_empty_context() -> None:
     assert r.reason == "bad_context"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_success(mock_run: MagicMock, tmp_path: object) -> None:
     mock_run.return_value = MagicMock(
         returncode=0, stdout="Successfully built abc123\n", stderr=""
@@ -191,7 +191,7 @@ def test_docker_build_success(mock_run: MagicMock, tmp_path: object) -> None:
     assert r.exit_code == 0
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_default_tag_embeds_cve_id(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -210,7 +210,7 @@ def test_docker_build_default_tag_embeds_cve_id(
     )
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_default_tag_uuid_when_no_cve_id(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -226,7 +226,7 @@ def test_docker_build_default_tag_uuid_when_no_cve_id(
     assert "CVE-" not in r.image_tag, f"no cve_id → no CVE in tag: {r.image_tag}"
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_returns_suggested_patch_on_missing_dep(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -238,7 +238,7 @@ def test_docker_build_returns_suggested_patch_on_missing_dep(
     assert r.suggested_patch == {"apt_packages": ["libssl-dev"]}
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_no_hint_on_generic_failure(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -251,7 +251,7 @@ def test_docker_build_no_hint_on_generic_failure(
     assert r.suggested_patch is None
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_build_writes_dockerfile_text_tempfile(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
@@ -342,7 +342,7 @@ def test_docker_build_failure_result_includes_next_step_hint() -> None:
 # Phase 37.3: build-loop closure guard tests --------------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase37_3_first_build_with_suggested_patch_records_state(
     mock_run: MagicMock,
     tmp_path: object,
@@ -367,7 +367,7 @@ def test_phase37_3_first_build_with_suggested_patch_records_state(
     # State recorded — proven by the next test.
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase37_3_second_build_same_tag_is_blocked(
     mock_run: MagicMock,
     tmp_path: object,
@@ -397,7 +397,7 @@ def test_phase37_3_second_build_same_tag_is_blocked(
     mock_run.assert_not_called()
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase37_3_different_tag_not_blocked(
     mock_run: MagicMock,
     tmp_path: object,
@@ -434,7 +434,7 @@ def test_phase37_3_reset_clears_state() -> None:
 # Phase 38.2: gpg_signature recovery guard tests ---------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase38_2_gpg_signature_records_tag_for_recovery_guard(
     mock_run: MagicMock,
     tmp_path: object,
@@ -464,7 +464,7 @@ def test_phase38_2_gpg_signature_records_tag_for_recovery_guard(
     assert "cve-env-local:gpgtest" in db._PENDING_GPG_RECOVERY
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase38_2_second_build_after_gpg_signature_is_blocked(
     mock_run: MagicMock,
     tmp_path: object,
@@ -520,7 +520,7 @@ def test_phase38_2_reset_clears_gpg_recovery_state() -> None:
 # subprocess.run.
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_phase67_docker_build_revalidates_raw_text_against_p14(
     mock_run: MagicMock, tmp_path: object
 ) -> None:

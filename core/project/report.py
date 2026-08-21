@@ -388,11 +388,16 @@ def gather_project_annotations(project) -> list[dict[str, Any]]:
     """
     from core.annotations import iter_all_annotations
 
+    from .findings_utils import safe_run_mtime
+
     roots = []
     for rd in project.get_run_dirs(sweep=False):
         ann_dir = rd / "annotations"
         if ann_dir.exists():
-            roots.append((rd.stat().st_mtime, ann_dir))
+            # safe_run_mtime: the run dir can vanish between the
+            # exists() probe and the stat (`/project clean` racing this
+            # report) — a vanished dir sorts oldest instead of crashing.
+            roots.append((safe_run_mtime(rd), ann_dir))
     project_ann = project.output_path / "annotations"
     if project_ann.exists():
         roots.append((float("inf"), project_ann))

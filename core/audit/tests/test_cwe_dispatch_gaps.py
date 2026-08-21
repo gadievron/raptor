@@ -95,10 +95,29 @@ class TestNewDispatchEntries:
     def test_every_cocci_rule_reference_exists_on_disk(self):
         for cwe, entry in CWE_TO_TOOL_DISPATCH.items():
             rule = entry.get("cocci")
-            if rule:
-                assert (_RULES_DIR / rule).is_file(), (
-                    f"{cwe} references missing cocci rule {rule}"
+            rules = rule if isinstance(rule, (list, tuple)) else (
+                [rule] if rule else []
+            )
+            for one in rules:
+                assert (_RULES_DIR / one).is_file(), (
+                    f"{cwe} references missing cocci rule {one}"
                 )
+
+    def test_cocci_rules_accessors_handle_lists(self):
+        from core.audit.cwe_dispatch import (
+            cocci_rule_for_cwe,
+            cocci_rules_for_cwe,
+        )
+
+        rules = cocci_rules_for_cwe("CWE-416")
+        assert "use_after_free.cocci" in rules
+        assert "teardown_lifetime.cocci" in rules
+        # Primary accessor keeps returning a single filename.
+        assert cocci_rule_for_cwe("CWE-416") == rules[0]
+        # Single-string entries still work through both accessors.
+        assert cocci_rules_for_cwe("CWE-415") == ["double_free.cocci"]
+        assert cocci_rule_for_cwe("CWE-415") == "double_free.cocci"
+        assert cocci_rules_for_cwe("CWE-825") == []
 
 
 def _suspicious_outcome(cwe: str, counter: str) -> ReviewOutcome:

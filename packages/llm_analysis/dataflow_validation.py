@@ -2666,9 +2666,10 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
 def _fraction_used(cost_tracker: Any) -> float:
     """Compute fraction of budget consumed.
 
-    CostTracker exposes either `fraction_used()` or `total_cost`/`budget`.
-    Be defensive — different versions of the orchestrator have evolved
-    the API.
+    The orchestrator's CostTracker exposes `fraction_used` as a
+    property; other tracker shapes expose a `fraction_used()` method
+    or `total_cost` + `budget`/`max_cost` attributes. Be defensive —
+    different versions of the orchestrator have evolved the API.
     """
     fn = getattr(cost_tracker, "fraction_used", None)
     if callable(fn):
@@ -2679,6 +2680,13 @@ def _fraction_used(cost_tracker: Any) -> float:
             # ValueError on float() conversion failure,
             # AttributeError if cost_tracker exposes the name but
             # the implementation chained through a missing field.
+            pass
+    elif fn is not None:
+        # Property/attribute form — the orchestrator's CostTracker
+        # exposes ``fraction_used`` as a property.
+        try:
+            return float(fn)
+        except (TypeError, ValueError):
             pass
     total = getattr(cost_tracker, "total_cost", None)
     budget = getattr(cost_tracker, "budget", None)

@@ -605,10 +605,12 @@ def compile_model(
             )
 
     manifest_path = out_dir / "compiled-invariants.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
+    # Atomic replace: a crash mid-write must not leave a truncated
+    # manifest for /review and later study passes to choke on.
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(
+        manifest_path,
         json.dumps([r.to_dict() for r in results], indent=2) + "\n",
-        encoding="utf-8",
     )
 
     return results

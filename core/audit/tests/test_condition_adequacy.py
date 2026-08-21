@@ -10,7 +10,6 @@ from core.audit.condition_adequacy import (
 )
 from core.audit.condition_extraction import GuardCondition, SinkGuard
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -60,9 +59,12 @@ class TestAssessGuardAdequacy:
         assert "no guards present" in result.notes
 
     def test_system_with_auth(self):
+        # Soundness: an auth-LOOKING identifier proves nothing about
+        # what it authorises — category/text match caps at PARTIAL so
+        # the guard-clean skip path cannot fire on it.
         g = _guard("user.is_authenticated", "auth")
         result = assess_guard_adequacy("system", [g])
-        assert result.verdict == Adequacy.SUFFICIENT
+        assert result.verdict == Adequacy.PARTIAL
 
     def test_system_with_only_bounds(self):
         g = _guard("len < 256", "bounds")
@@ -74,9 +76,10 @@ class TestAssessGuardAdequacy:
         assert result.verdict == Adequacy.INSUFFICIENT
 
     def test_eval_with_auth(self):
+        # Same soundness cap as test_system_with_auth.
         g = _guard("request.user.is_staff", "auth")
         result = assess_guard_adequacy("eval", [g])
-        assert result.verdict == Adequacy.SUFFICIENT
+        assert result.verdict == Adequacy.PARTIAL
 
     def test_malloc_with_overflow_check(self):
         g = _guard("n < SIZE_MAX / sizeof(int)", "bounds")
@@ -84,9 +87,12 @@ class TestAssessGuardAdequacy:
         assert result.verdict == Adequacy.SUFFICIENT
 
     def test_malloc_with_simple_bound(self):
+        # Soundness: ``n > 0`` is a non-emptiness check, not a bounds
+        # check — nothing prevents n * elem_size from wrapping.  The
+        # verdict caps at PARTIAL without an upper-bound comparison.
         g = _guard("n > 0", "bounds")
         result = assess_guard_adequacy("malloc", [g])
-        assert result.verdict == Adequacy.SUFFICIENT
+        assert result.verdict == Adequacy.PARTIAL
 
     def test_pickle_loads_needs_both(self):
         g1 = _guard("user.is_admin", "auth")
@@ -95,10 +101,15 @@ class TestAssessGuardAdequacy:
         assert "type" in result.missing_categories
 
     def test_pickle_loads_with_both(self):
+        # Both required categories present, but auth/type category
+        # matches cannot establish sufficiency mechanically (what does
+        # is_admin gate? does the isinstance bind the loaded value?) —
+        # capped at PARTIAL for review.
         g1 = _guard("user.is_admin", "auth")
         g2 = _guard("isinstance(data, SafeType)", "type")
         result = assess_guard_adequacy("pickle.loads", [g1, g2])
-        assert result.verdict == Adequacy.SUFFICIENT
+        assert result.verdict == Adequacy.PARTIAL
+        assert not result.missing_categories
 
     def test_unknown_sink_api(self):
         g = _guard("x > 0", "bounds")
@@ -107,9 +118,11 @@ class TestAssessGuardAdequacy:
         assert "no sink spec defined" in result.notes[0]
 
     def test_dotted_api_suffix_match(self):
+        # Suffix match still resolves the spec (verdict is not
+        # UNKNOWN); the auth cap applies as for bare "system".
         g = _guard("is_admin", "auth")
         result = assess_guard_adequacy("os.system", [g])
-        assert result.verdict == Adequacy.SUFFICIENT
+        assert result.verdict == Adequacy.PARTIAL
 
     def test_sql_sink_needs_type(self):
         g = _guard("len(query) < 1000", "bounds")
@@ -133,6 +146,61 @@ class TestAssessGuardAdequacy:
         d = result.to_dict()
         assert d["verdict"] == "sufficient"
         assert "bounds" in d["required_categories"]
+
+
+class TestSufficientRequiresSemanticAdequacy:
+    """Regression (verdict soundness): category-regex matches used to
+    yield SUFFICIENT verdicts that drove whole-function guard-clean
+    commits skipping LLM review.  ``len > 0`` is not a bounds check
+    for memcpy; an auth-looking identifier is never sufficient for
+    system/eval/deserialize."""
+
+    def test_memcpy_len_gt_zero_not_sufficient(self):
+        g = _guard("len > 0", "bounds")
+        result = assess_guard_adequacy("memcpy", [g])
+        assert result.verdict != Adequacy.SUFFICIENT
+
+    def test_memcpy_len_ne_zero_not_sufficient(self):
+        g = _guard("len != 0", "bounds")
+        result = assess_guard_adequacy("memcpy", [g])
+        assert result.verdict != Adequacy.SUFFICIENT
+
+    def test_strcpy_size_ge_one_not_sufficient(self):
+        g = _guard("size >= 1", "bounds")
+        result = assess_guard_adequacy("strcpy", [g])
+        assert result.verdict != Adequacy.SUFFICIENT
+
+    def test_system_bare_auth_word_not_sufficient(self):
+        g = _guard("allowed", "auth")
+        result = assess_guard_adequacy("system", [g])
+        assert result.verdict != Adequacy.SUFFICIENT
+
+    def test_system_auth_field_not_sufficient(self):
+        g = _guard("opts->permitted", "auth")
+        result = assess_guard_adequacy("system", [g])
+        assert result.verdict != Adequacy.SUFFICIENT
+
+    def test_memcpy_upper_bound_still_sufficient(self):
+        # Boost value preserved: a real upper-bound comparison keeps
+        # the SUFFICIENT verdict.
+        g = _guard("len < sizeof(buf)", "bounds")
+        result = assess_guard_adequacy("memcpy", [g])
+        assert result.verdict == Adequacy.SUFFICIENT
+
+    def test_memcpy_reversed_upper_bound_sufficient(self):
+        g = _guard("sizeof(buf) > len", "bounds")
+        result = assess_guard_adequacy("memcpy", [g])
+        assert result.verdict == Adequacy.SUFFICIENT
+
+    def test_alloc_upper_bound_against_size_max(self):
+        g = _guard("n < SIZE_MAX / size", "bounds")
+        result = assess_guard_adequacy("malloc", [g])
+        assert result.verdict == Adequacy.SUFFICIENT
+
+    def test_memcpy_min_clamp_counts_as_upper_bound(self):
+        g = _guard("len = min(len, sizeof(buf))", "bounds")
+        result = assess_guard_adequacy("memcpy", [g])
+        assert result.verdict == Adequacy.SUFFICIENT
 
 
 # ---------------------------------------------------------------------------

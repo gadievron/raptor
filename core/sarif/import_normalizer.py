@@ -469,8 +469,13 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
         if f.get("has_dataflow") and f.get("dataflow_path"):
             result["codeFlows"] = f["dataflow_path"]
 
+        # Same guard as enriched_writer._build_result: a legacy
+        # finding whose finding_id is the bare rule_id (the pre-fix
+        # collided form) must not be stamped out as a tool
+        # fingerprint — every same-rule finding would share a
+        # matchBasedId/v1 on re-parse.
         fid = f.get("finding_id")
-        if fid:
+        if fid and fid != rule_id:
             result["fingerprints"] = {"matchBasedId/v1": fid}
 
         runs_by_tool[tool].append(result)

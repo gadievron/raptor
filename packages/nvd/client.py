@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from core.http import HttpError
 from core.http.urllib_backend import UrllibClient
@@ -44,6 +45,13 @@ _NVD_KEY_RE = re.compile(
 )
 
 _NVD_CACHE_MISSING: dict[str, str] = {"_sentinel": "nvd_missing"}
+
+# CVE ids are `CVE-<year>-<4+ digits>`. `cve_id` values reach this
+# client from advisory-derived data, not just operator input — validate
+# the shape before the value joins a cache key or the request URL, so a
+# crafted "id" can't smuggle extra query parameters, path separators,
+# or control bytes into either.
+_CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
 _SENTINEL_USE_DEFAULT = object()
 
@@ -78,6 +86,11 @@ class NvdClient:
 
     def get_payload(self, cve_id: str) -> dict[str, Any] | None:
         """Return the full NVD 2.0 JSON for *cve_id*, or ``None``."""
+        cve_id = (cve_id or "").strip()
+        if not _CVE_ID_RE.match(cve_id):
+            # Not a CVE id — never let the value reach the cache keys
+            # or the request URL.
+            return None
         if self.cache_enabled and cve_id in self._cache:
             return self._cache[cve_id]
         if self.cache_enabled and self._disk is not None:
@@ -110,7 +123,10 @@ class NvdClient:
         if api_key and not _NVD_KEY_RE.match(api_key):
             api_key = ""
         headers = {"apiKey": api_key} if api_key else {}
-        url = f"{BASE_URL}?cveId={cve_id}"
+        # get_payload validated the id shape; percent-encode anyway
+        # (mirrors the OSV client) so the value can never terminate the
+        # query parameter early.
+        url = f"{BASE_URL}?cveId={quote(cve_id, safe='')}"
 
         # Transient = 429 (NVD quota) or 5xx, whether raised as
         # HttpError or returned as an error-status response. 502/503/

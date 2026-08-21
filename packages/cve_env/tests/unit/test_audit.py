@@ -1,9 +1,6 @@
 """Audit writer round-trip + filesystem layout."""
 
 from __future__ import annotations
-import pytest
-pytest.importorskip("claude_agent_sdk")
-
 from pathlib import Path
 
 from cve_env.agent.audit import AuditEntry, AuditWriter, _sanitize_cve_id

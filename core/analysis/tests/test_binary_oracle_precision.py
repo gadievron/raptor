@@ -134,22 +134,33 @@ def _corpus_origin_unreachable() -> str | None:
 
 @functools.cache
 def _crates_io_unreachable() -> str | None:
-    """HEAD the crates.io index the way cargo's fetch step would.
+    """HEAD the crates.io hosts the way cargo's fetch step would.
 
     The regex-rust driver's ``cargo build`` is a declared network
     fetch step that keeps the operator proxy vars — mirror that:
     honour env proxies. Restrictive egress proxies commonly allowlist
-    the corpus forges but not crates.io (CONNECT 403)."""
+    the corpus forges but not crates.io (CONNECT 403).
+
+    cargo needs BOTH the sparse index (``index.crates.io``) and the
+    download CDN (``static.crates.io``) — egress proxies have been
+    seen allowing one while refusing CONNECT to the other, and an
+    index-only probe then lets the test run straight into a mid-build
+    download failure. Probe both; the CDN probe uses a pinned crate
+    file (one the corpus build actually fetches) because the CDN has
+    no meaningful root document."""
     import urllib.error
     import urllib.request
-    req = urllib.request.Request(
-        "https://index.crates.io/config.json", method="HEAD",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15):  # noqa: S310 — fixed https URL
-            return None
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        return f"{type(e).__name__}: {e}"
+    for url in (
+        "https://index.crates.io/config.json",
+        "https://static.crates.io/crates/equivalent/1.0.2/download",
+    ):
+        req = urllib.request.Request(url, method="HEAD")
+        try:
+            with urllib.request.urlopen(req, timeout=15):  # noqa: S310 — fixed https URLs
+                pass
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return f"{type(e).__name__}: {e}"
+    return None
 
 
 def _require_corpus_substrate(

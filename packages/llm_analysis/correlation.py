@@ -17,7 +17,10 @@ def correlate_results(results_by_id: Dict[str, Dict]) -> Dict[str, Any]:
         agreement_matrix: {finding_id: {model: {verdict, score, ruling}}}
         clusters: [{pattern, finding_ids, models_agreed}]
         unique_insights: [{finding_id, model, insight}]
-        confidence_signals: {finding_id: "high"|"high-negative"|"disputed"}
+        confidence_signals: {finding_id:
+            "high"|"high-negative"|"disputed"|"no-verdict"}
+            ("no-verdict" = every model abstained — errored/refused;
+            abstentions never count as votes)
         summary: {agreed, disputed, total, models}
     """
     matrix: Dict[str, Dict[str, Dict]] = {}
@@ -66,21 +69,36 @@ def correlate_results(results_by_id: Dict[str, Dict]) -> Dict[str, Any]:
             }
         matrix[fid] = per_model
 
-        verdicts = [bool(a.get("is_exploitable")) for a in analyses]
+        # Missing/null is_exploitable is an ABSTENTION (errored model,
+        # refused response, schema failure), not a "not exploitable"
+        # vote — pre-fix bool(None) coerced abstainers into False
+        # votes, so one real "exploitable" verdict plus two errored
+        # models read as a 2-1 majority AGAINST and could even mint a
+        # unanimous 'high-negative' from zero actual verdicts.
+        verdicts = [
+            bool(a["is_exploitable"]) for a in analyses
+            if a.get("is_exploitable") is not None
+        ]
         all_agree = len(set(verdicts)) == 1
 
-        if all_agree and verdicts[0]:
+        if not verdicts:
+            # Every model abstained — no verdict exists to agree on.
+            confidence[fid] = "no-verdict"
+        elif all_agree and verdicts[0]:
             confidence[fid] = "high"
         elif all_agree and not verdicts[0]:
             confidence[fid] = "high-negative"
         else:
             confidence[fid] = "disputed"
 
+            # Majority/minority over models that actually voted.
             exploitable_models = [
                 a.get("model", "?") for a in analyses if a.get("is_exploitable")
             ]
             non_exploitable_models = [
-                a.get("model", "?") for a in analyses if not a.get("is_exploitable")
+                a.get("model", "?") for a in analyses
+                if a.get("is_exploitable") is not None
+                and not a["is_exploitable"]
             ]
             minority = (exploitable_models if len(exploitable_models) < len(non_exploitable_models)
                         else non_exploitable_models)

@@ -151,3 +151,50 @@ class TestParseLanguagesFor:
 
         for name, profile in _PROFILES.items():
             assert profile.joern_parse_language, name
+
+
+class TestSupportedSourceExtensions:
+    def test_matches_detect_language_map(self):
+        from packages.joern.lang_config import (
+            _EXT_LANGUAGE_MAP,
+            supported_source_extensions,
+        )
+        assert supported_source_extensions() == frozenset(_EXT_LANGUAGE_MAP)
+
+    def test_every_extension_maps_to_a_curated_profile(self):
+        from packages.joern.lang_config import (
+            DEFAULT,
+            detect_language,
+            profile_for,
+            supported_source_extensions,
+        )
+        for ext in supported_source_extensions():
+            lang = detect_language(f"sample{ext}")
+            profile = profile_for(lang)
+            if ext != ".py":
+                assert profile is not DEFAULT or lang == "python", (
+                    f"{ext} falls back to the default profile"
+                )
+            assert profile.joern_parse_language, ext
+
+    def test_unprofiled_languages_excluded(self):
+        from packages.joern.lang_config import supported_source_extensions
+        exts = supported_source_extensions()
+        # rubysrc / php2cpg probed and rejected (broken ast-gen /
+        # missing interpreter — see the profile note); no Scala
+        # frontend exists.
+        for ext in (".rb", ".php", ".scala"):
+            assert ext not in exts
+
+    def test_verified_frontends_included(self):
+        from packages.joern.lang_config import (
+            profile_for,
+            supported_source_extensions,
+        )
+        exts = supported_source_extensions()
+        for ext, frontend in ((".kt", "kotlin"), (".kts", "kotlin"),
+                              (".cs", "csharpsrc"), (".swift", "swiftsrc")):
+            assert ext in exts
+            lang = {".kt": "kotlin", ".kts": "kotlin",
+                    ".cs": "csharp", ".swift": "swift"}[ext]
+            assert profile_for(lang).joern_parse_language == frontend

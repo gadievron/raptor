@@ -256,13 +256,30 @@ def setup_mount_ns(target: str | None, output: str | None,
                    persona: Optional["Persona"] = None,
                    etc_overlay: dict | None = None,
                    stage_files: dict | None = None,
-                   rw_submounts_ok: bool = False) -> None:
+                   rw_submounts_ok: bool = False,
+                   rootfs: str | None = None) -> None:
     """Establish pivot_root'd tmpfs sandbox root.
 
     Must be called AFTER the child has entered the new user-ns and acquired
     CAP_SYS_ADMIN (via the parent's newuidmap setup), and BEFORE
     landlock_restrict_self() — Landlock blocks mount operations on kernel
     6.15+.
+
+    `rootfs`: when set, the new root is THAT directory (an unpacked
+    container-image filesystem, e.g. from ``docker create`` +
+    ``docker export``) instead of a tmpfs populated with host system
+    dirs. The environment then runs against the image's own /usr, /lib,
+    /etc — no host system dirs leak in — while /dev, /sys, /proc and the
+    fresh per-sandbox /tmp, /run, /dev/shm are provided per-namespace
+    exactly as in the host-root mode (the grandchild's fresh procfs
+    remount in _spawn gives ns-local pids on top). The rootfs directory
+    is the sacrificial WRITABLE upper layer: environment writes land in
+    it on the host side (Landlock-wise, _spawn grants the post-pivot
+    "/" — the mount namespace is the write boundary in this mode), and
+    callers must treat the directory as consumed after the run.
+    Everything downstream — target/output binds at their
+    original paths, evidence-dir shadowing, extra_ro_paths, stage_files,
+    pivot_root — behaves identically in both modes.
 
     `rw_submounts_ok`: parent-computed "Landlock is active as the
     write-enforcement backstop" signal. Permits the recursive-bind
@@ -326,15 +343,35 @@ def setup_mount_ns(target: str | None, output: str | None,
             "symlink-pre-plant target)"
         )
     root = root_path
-    _mount("tmpfs", root, "tmpfs", 0, "mode=755")
 
-    # 3. Create standard-dir mount points in the new tmpfs root. We own
-    # the tmpfs inodes here so mkdir is not blocked by host-/ ACL
-    # (which was the failure mode of the legacy mount_script).
-    for d in (*_SYSTEM_RO_DIRS, "dev", "proc", "sys", "run", "tmp"):
-        os.makedirs(f"{root}/{d}", exist_ok=True)
+    if rootfs:
+        # Rootfs mode (steps 2-4 replacement): bind the image rootfs
+        # onto the mkdtemp'd mount point — it becomes the new root
+        # directly. No tmpfs, no host system-dir binds: the environment
+        # sees only the image's own filesystem plus the per-namespace
+        # mounts below. The bind is left WRITABLE — the rootfs dir is
+        # the environment's upper layer (_spawn grants the post-pivot
+        # "/" to Landlock when a write mask engages; the namespace
+        # itself is the write boundary in this mode).
+        rootfs = os.path.abspath(rootfs)
+        _mount(rootfs, root, None, MS_BIND)
+        # Exported image tarballs routinely lack /run, ship an empty
+        # /dev, etc. — create the per-namespace mount points inside
+        # the (writable) rootfs so steps 5-7 can stack their mounts.
+        for d in ("dev", "proc", "sys", "run", "tmp"):
+            os.makedirs(f"{root}/{d}", exist_ok=True)
+    else:
+        _mount("tmpfs", root, "tmpfs", 0, "mode=755")
 
-    # 4. Bind system dirs read-only. Two-step bind + remount-ro because
+        # 3. Create standard-dir mount points in the new tmpfs root. We
+        # own the tmpfs inodes here so mkdir is not blocked by host-/
+        # ACL (which was the failure mode of the legacy mount_script).
+        for d in (*_SYSTEM_RO_DIRS, "dev", "proc", "sys", "run", "tmp"):
+            os.makedirs(f"{root}/{d}", exist_ok=True)
+
+    # 4. Bind system dirs read-only (host-root mode only — in rootfs
+    # mode the image supplies /usr, /lib, /etc and no host system dir
+    # may leak in). Two-step bind + remount-ro because
     # one-step `--bind -o ro` sometimes fails with EPERM on unprivileged
     # user-ns — the ro attribute can only be set by a subsequent remount.
     #
@@ -355,7 +392,7 @@ def setup_mount_ns(target: str | None, output: str | None,
                 _etc_has_missing_targets = True
                 break
 
-    for d in _SYSTEM_RO_DIRS:
+    for d in (() if rootfs else _SYSTEM_RO_DIRS):
         host_dir = f"/{d}"
         if not os.path.isdir(host_dir):
             continue
@@ -576,6 +613,13 @@ def setup_mount_ns(target: str | None, output: str | None,
                     # extra_ro_paths entry) was bind-mounted into the
                     # namespace, which populated this path.  Skip
                     # creation and proceed to the overlay bind.
+                    pass
+                elif rootfs and os.path.lexists(inside):
+                    # Rootfs mode: the whole root came from the image
+                    # bind, so an existing path here is image content —
+                    # binding over it is exactly the caller's intent
+                    # (the host-mode O_EXCL planted-state defence guards
+                    # a fresh private tmpfs, which doesn't apply).
                     pass
                 else:
                     # File bind-mount: create an empty regular file to

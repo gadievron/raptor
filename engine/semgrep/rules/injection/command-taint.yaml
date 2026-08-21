@@ -6,16 +6,39 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          - pattern: request.GET[$_]
-          - pattern: request.POST[$_]
-          - pattern: flask.request.args[$_]
-          - pattern: flask.request.form[$_]
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask — both the flask.request spelling and the bare
+          # `from flask import request` spelling
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: request.args[...]
+          - pattern: request.args.get(...)
+          - pattern: request.form[...]
+          - pattern: request.form.get(...)
+          # FastAPI / Starlette
+          - pattern: request.path_params[...]
+          # Generic
           - pattern: input(...)
-          - pattern: os.environ[$_]
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
     pattern-sinks:
       - pattern-either:
           - pattern: subprocess.run($CMD, ..., shell=True, ...)
           - pattern: subprocess.Popen($CMD, ..., shell=True, ...)
+          - pattern: subprocess.call($CMD, ..., shell=True, ...)
+          - pattern: subprocess.check_call($CMD, ..., shell=True, ...)
+          - pattern: subprocess.check_output($CMD, ..., shell=True, ...)
           - pattern: os.system($CMD)
           - pattern: os.popen($CMD)
     pattern-sanitizers:
@@ -23,5 +46,5 @@ rules:
       - pattern: shlex.join(...)
     metadata:
       cwe: ["CWE-78"]
-      owasp_top_10: ["A1:2021-Broken Access Control"]
+      owasp_top_10: ["A3:2021-Injection"]
       tags: ["security", "injection", "command injection", "taint"]

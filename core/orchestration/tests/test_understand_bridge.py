@@ -1916,3 +1916,60 @@ class TestStaleFileContainment:
         (target / "sub" / "a.py").write_text("aaa")
         h1 = {"sub/a.py": hashlib.sha256(b"aaa").hexdigest()}
         assert _find_stale_files(h1, str(target)) == set()
+
+
+class TestMapFlowIds:
+    """Map-flow attack-path IDs derive from flow content, not list index."""
+
+    def test_map_flow_ids_stable_across_refreshed_maps(self, tmp_path):
+        """Index-based map-flow-<i> IDs collided across refreshed
+        context-maps: a DIFFERENT flow landing at index 0 was skipped
+        as already-imported. Content-hash IDs import both."""
+        from core.orchestration import understand_bridge as ub
+        validate_dir = tmp_path / "v"
+        validate_dir.mkdir()
+        map1 = {
+            "unchecked_flows": [{"entry_point": "EP-1", "sink": "SINK-1"}],
+            "sink_details": [
+                {"id": "SINK-1", "path_conditions": ["a > 1"]},
+            ],
+        }
+        map2 = {
+            "unchecked_flows": [{"entry_point": "EP-2", "sink": "SINK-2"}],
+            "sink_details": [
+                {"id": "SINK-2", "path_conditions": ["b > 2"]},
+            ],
+        }
+        s1 = ub._import_unchecked_flow_conditions(map1, validate_dir)
+        s2 = ub._import_unchecked_flow_conditions(map2, validate_dir)
+        assert s1["imported_as_paths"] == 1
+        assert s2["imported_as_paths"] == 1
+        paths = json.loads(
+            (validate_dir / "attack-paths.json").read_text(encoding="utf-8"))
+        assert len(paths) == 2
+        # Re-importing the same flow dedups against its own hash ID.
+        s3 = ub._import_unchecked_flow_conditions(map1, validate_dir)
+        assert s3["imported_as_paths"] == 0
+
+    def test_map_flow_legacy_index_id_not_duplicated(self, tmp_path):
+        """A flow already on disk under a legacy index ID must not be
+        re-imported under its new hash ID (name-string dedup)."""
+        from core.orchestration import understand_bridge as ub
+        validate_dir = tmp_path / "v"
+        validate_dir.mkdir()
+        _write_json(validate_dir / "attack-paths.json", [{
+            "id": "map-flow-000",
+            "name": "Imported from /understand --map: EP-1 → SINK-1",
+        }])
+        context_map = {
+            "unchecked_flows": [
+                {"entry_point": "EP-1", "sink": "SINK-1"},
+                {"entry_point": "EP-9", "sink": "SINK-1"},
+            ],
+            "sink_details": [
+                {"id": "SINK-1", "path_conditions": ["a > 1"]},
+            ],
+        }
+        stats = ub._import_unchecked_flow_conditions(context_map, validate_dir)
+        # EP-1 flow already present under the legacy ID; EP-9 is new.
+        assert stats["imported_as_paths"] == 1

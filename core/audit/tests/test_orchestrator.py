@@ -1401,7 +1401,15 @@ class TestGateEnforcement:
     """Test G1/G2 gate enforcement in _commit_outcome."""
 
     def test_finding_without_hypothesis_demoted_by_gate(self, tmp_path: Path):
-        """G1: finding without hypothesis gets demoted to suspicious."""
+        """G1: finding without hypothesis gets demoted to suspicious.
+
+        The stub claims a bare tool receipt (``semgrep:...``), so the
+        demotion referee keeps the demoted outcomes suspicious at
+        end-of-run: a probe-backed suspicious may only be resolved by a
+        verification-role refuter, never by silence (see
+        test_demotion_referee.py). The gate's own contract — no finding
+        survives without a testable hypothesis — still holds.
+        """
         target, out = _setup_target(tmp_path)
 
         def review_fn(ctx, config):
@@ -1421,7 +1429,7 @@ class TestGateEnforcement:
         )
         result = run_orchestrator(config, review_fn)
         assert result.findings == 0
-        assert result.suspicious == 0
+        assert result.suspicious == 2
 
     def test_finding_without_evidence_demoted_by_gate(self, tmp_path: Path):
         """G2: finding without evidence_tool gets demoted to suspicious."""
@@ -2306,6 +2314,551 @@ class TestRejournalFinalStatuses:
         result.outcomes = [final]
 
         assert _rejournal_final_statuses(result, config) == 0
+
+
+class TestPostLoopReceiptRescue:
+    """Post-loop structural receipts re-drive the anti-self-refutation
+    gate for clean outcomes, so a receipt that never reached (or did
+    not survive to) the review-time gate still reaches the verdict."""
+
+    def _setup(self, tmp_path: Path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "m.py").write_text("def wire_endpoints():\n    pass\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        return OrchestratorConfig(target_path=target, out_dir=out)
+
+    def _clean_outcome(self, *, confidence="refuted"):
+        return ReviewOutcome(
+            file="m.py", function="wire_endpoints", status="clean",
+            body="reviewed clean", line=800,
+            hypotheses=[{
+                "mechanism": (
+                    "the auth mode flag gates registration endpoints "
+                    "asymmetrically: some stay wired in every mode"
+                ),
+                "confidence": confidence,
+                "counter": "each view enforces its own permission",
+            }],
+        )
+
+    def _receipt(self, check_type="auth_mode_registration"):
+        return {
+            "check_type": check_type,
+            "file": "m.py",
+            "function": "wire_endpoints",
+            "evidence": "calls gated on an auth-mode conditional",
+            "cwe": "CWE-306",
+        }
+
+    def test_strong_stem_floors_without_call_overlap(
+        self, tmp_path: Path,
+    ):
+        """Reviewer used the receipt's own vocabulary (auth/mode/
+        registration) without naming the call site — still floors."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "views registered unconditionally regardless of the auth mode; "
+            "under external auth modes the endpoints stay reachable"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._call_site_receipt()], config,
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+
+    def test_matching_receipt_flips_clean_outcome(self, tmp_path: Path):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+        from core.audit.record import load_audit_log
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome()
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt()], config,
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+        assert "anti_self_refutation" in outcome.body
+        rows = [
+            e for e in load_audit_log(config.out_dir)
+            if e.get("action") == "refutation_gate"
+        ]
+        assert len(rows) == 1
+        assert rows[0]["stage"] == "post-loop"
+        assert rows[0]["function"] == "wire_endpoints"
+
+    def test_source_reaches_gate_for_mechanical_acceptance(
+        self, tmp_path: Path,
+    ):
+        """The post-loop backstop threads the raw source span to the
+        gate: without it the mechanical acceptance probes (safe
+        teardown / race protection) cannot run and this pass RE-FLOORED
+        the very self-refutations the mid-loop gate had accepted."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        src_file = config.target_path / "t.c"
+        src_file.write_text(
+            "static int release_ctx(struct ctx *c)\n"
+            "{\n"
+            "\thrtimer_cancel(&c->tmr);\n"
+            "\tkfree_rcu(c, rcu);\n"
+            "\treturn 0;\n"
+            "}\n",
+        )
+        outcome = ReviewOutcome(
+            file="t.c", function="release_ctx", status="clean",
+            body="reviewed clean", line=1,
+            hypotheses=[{
+                "mechanism": (
+                    "CWE-416 use after free: kfree_rcu frees the ctx "
+                    "while a callback may still walk it"
+                ),
+                "confidence": "refuted",
+                "counter": "hrtimer_cancel waits; kfree_rcu defers",
+            }],
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        detectors = {
+            "t.c:release_ctx": [{
+                "file": "t.c", "function": "release_ctx",
+                "detector": "typestate", "line": 4,
+                "description": "free of tracked pointer",
+            }],
+        }
+        gaps = [{
+            "file": "t.c", "name": "release_ctx",
+            "line_start": 1, "line_end": 6,
+        }]
+        flipped = _post_loop_receipt_rescue(
+            result, [], config,
+            mechanical_findings=detectors, gaps=gaps,
+        )
+        # The waiting-teardown witness discharges the lifetime
+        # self-refutation — no re-floor.
+        assert flipped == 0
+        assert outcome.status == "clean"
+
+    def test_non_structural_receipt_ignored(self, tmp_path: Path):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome()
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt(check_type="resource_exhaustion")],
+            config,
+        )
+        assert flipped == 0
+        assert outcome.status == "clean"
+
+    def test_unrefuted_hypothesis_not_rescued(self, tmp_path: Path):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt()], config,
+        )
+        assert flipped == 0
+        assert outcome.status == "clean"
+
+    def test_non_clean_outcomes_untouched(self, tmp_path: Path):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome()
+        outcome.status = "suspicious"
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._receipt()], config,
+        )
+        assert flipped == 0
+
+    def _call_site_receipt(self):
+        return {
+            "check_type": "auth_mode_registration",
+            "file": "m.py",
+            "function": "wire_endpoints",
+            "evidence": (
+                "2 add_view_no_menu() call(s) are gated on an "
+                "auth-mode conditional, but the add_view_no_menu() "
+                "call(s) at line(s) 17, 18 run REGARDLESS of the mode"
+            ),
+            "cwe": "CWE-306",
+        }
+
+    def test_low_confidence_dismissal_floored_on_call_site_overlap(
+        self, tmp_path: Path,
+    ):
+        """Reviewer raised the receipt's exact shape (same call site)
+        at low confidence and ruled clean — receipt outranks the
+        dismissal."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+        from core.audit.record import load_audit_log
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "views registered via add_view_no_menu regardless of the "
+            "auth mode, exposing mode-gated registration capability"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._call_site_receipt()], config,
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+        rows = [
+            e for e in load_audit_log(config.out_dir)
+            if e.get("action") == "refutation_gate"
+        ]
+        assert rows[0]["gate"] == "receipt_corroborated_hypothesis"
+
+    def test_low_confidence_unrelated_hypothesis_untouched(
+        self, tmp_path: Path,
+    ):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "session cookie flags are permissive on the login response"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._call_site_receipt()], config,
+        )
+        assert flipped == 0
+        assert outcome.status == "clean"
+
+    def test_family_bridge_floors_race_dismissal(self, tmp_path: Path):
+        """Natural race phrasing carries none of the check-type token
+        stems — the family bridge plus call-site overlap must carry."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "two Write calls on the output field without a lock; a "
+            "concurrent caller can insert bytes between them"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        receipt = {
+            "check_type": "shared_writer_race",
+            "file": "m.py",
+            "function": "wire_endpoints",
+            "evidence": (
+                "wire_endpoints() performs 2 separate Write() calls on "
+                "the writer field per invocation, holds no lock"
+            ),
+        }
+        flipped = _post_loop_receipt_rescue(result, [receipt], config)
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+
+    def test_family_bridge_ignores_unrelated_write_mention(
+        self, tmp_path: Path,
+    ):
+        """A hypothesis that mentions the call name for a different
+        reason (ignored error) has no family keyword — no floor."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="refuted")
+        outcome.hypotheses[0]["mechanism"] = (
+            "error from the second Write is returned but the first "
+            "Write's failure may be swallowed"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        receipt = {
+            "check_type": "shared_writer_race",
+            "file": "m.py",
+            "function": "wire_endpoints",
+            "evidence": (
+                "wire_endpoints() performs 2 separate Write() calls on "
+                "the writer field per invocation, holds no lock"
+            ),
+        }
+        flipped = _post_loop_receipt_rescue(result, [receipt], config)
+        assert flipped == 0
+
+    def test_detector_findings_refloor_clobbered_verdict(
+        self, tmp_path: Path,
+    ):
+        """A later re-review can clobber a mid-loop detector floor
+        (its synthetic context lacks the injection); the post-loop
+        pass re-applies the deterministic receipt."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+        from core.audit.record import load_audit_log
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "uninitialized ret: the switch has no default case so ret "
+            "is left unset on unexpected values"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [], config,
+            mechanical_findings={
+                "m.py:wire_endpoints": [
+                    {"detector": "cocci:uninitialized_return"},
+                ],
+            },
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+        rows = [
+            e for e in load_audit_log(config.out_dir)
+            if e.get("action") == "refutation_gate"
+        ]
+        assert rows[0]["gate"] == "anti_self_refutation"
+        assert rows[0]["stage"] == "post-loop"
+
+    def test_pre_evidence_refloors_clobbered_verdict(
+        self, tmp_path: Path,
+    ):
+        """The pre-loop screen receipt lives on the gap; a re-review
+        from a synthetic gap loses it — the post-loop pass re-applies
+        it to the current verdict."""
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "huge parsed values overflow int32 storage downstream"
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [], config,
+            gaps=[{
+                "file": "m.py", "name": "wire_endpoints",
+                "_smt_pre_evidence": "smt:check-parsed-int-contract",
+            }],
+        )
+        assert flipped == 1
+        assert outcome.status == "suspicious"
+
+    def test_tool_evidence_blocks_corroboration_floor(
+        self, tmp_path: Path,
+    ):
+        from core.audit.orchestrator import _post_loop_receipt_rescue
+
+        config = self._setup(tmp_path)
+        outcome = self._clean_outcome(confidence="low")
+        outcome.hypotheses[0]["mechanism"] = (
+            "views registered via add_view_no_menu regardless of the "
+            "auth mode, exposing mode-gated registration capability"
+        )
+        outcome.evidence_tool = "joern:flow"
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+
+        flipped = _post_loop_receipt_rescue(
+            result, [self._call_site_receipt()], config,
+        )
+        assert flipped == 0
+
+
+class TestQualifiedIdentityCarry:
+    """Status-flipping clone helpers must carry function_qualified —
+    a promotion logged without it never reaches a receiver-qualified
+    label key, so the flip is invisible to last-row-wins scoring."""
+
+    def _outcome(self):
+        o = ReviewOutcome(
+            file="pkg/a.go", function="SetVal", status="clean",
+            body="b", line=10,
+            hypotheses=[{
+                "mechanism": "unchecked arithmetic on parsed exponent",
+                "confidence": "medium",
+                "counter": "",
+            }],
+        )
+        o.function_qualified = "Recv.SetVal"
+        return o
+
+    def test_promote_outcome_carries_qualified(self):
+        from core.audit.orchestrator import _promote_outcome
+        p = _promote_outcome(self._outcome(), "smt:check")
+        assert p.function_qualified == "Recv.SetVal"
+
+    def test_demote_outcome_carries_qualified(self):
+        from core.audit.orchestrator import _demote_outcome
+        d = _demote_outcome(self._outcome(), "[gate]")
+        assert d.function_qualified == "Recv.SetVal"
+
+    def test_hypothesis_inconsistent_promotion_carries_qualified(self):
+        from core.audit.orchestrator import (
+            _promote_hypothesis_inconsistent,
+        )
+        result = OrchestratorResult()
+        o = self._outcome()
+        result.outcomes = [o]
+        result.clean = 1
+        _promote_hypothesis_inconsistent(result)
+        assert result.outcomes[0].status == "suspicious"
+        assert result.outcomes[0].function_qualified == "Recv.SetVal"
+
+
+class TestVerdictFinalizationLatch:
+    """After the corrective passes, a straggler commit (abandoned
+    study re-review finishing late) must not append — it would land
+    after the corrective rows and win last-row-wins with a verdict the
+    export never saw."""
+
+    def test_late_commit_suppressed(self, tmp_path: Path):
+        from core.audit.journal import latest_entries
+        from core.audit.orchestrator import _commit_outcome
+
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(void) { return 0; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+
+        early = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="b", line=1,
+        )
+        _commit_outcome(config, early, {"line_start": 1})
+        config._verdicts_finalized = True
+        late = ReviewOutcome(
+            file="a.c", function="f", status="clean",
+            body="late re-review", line=1,
+        )
+        _commit_outcome(config, late, {"line_start": 1})
+
+        entries = latest_entries(out)
+        assert len(entries) == 1
+        (entry,) = entries.values()
+        assert entry.verdict == "suspicious"
+
+
+class TestRelogFinalStatuses:
+    """Audit-log twin of the re-journal pass: ``orchestrator_review``
+    rows are written mid-loop, pre-resolution — the end-of-run pass
+    appends corrective rows so last-row-per-key consumers (corpus
+    scoring, resume dedup) read final statuses, not retracted ones."""
+
+    def _setup(self, tmp_path: Path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f(int x) { return x + 1; }\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        return OrchestratorConfig(target_path=target, out_dir=out)
+
+    def _log_initial(self, config, status="suspicious"):
+        from core.audit.record import append_audit_log
+        append_audit_log(config.out_dir, {
+            "action": "orchestrator_review",
+            "key": "a.c:f:1",
+            "status": status,
+            "strategies": ["memory"],
+            "cost_usd": 0.25,
+        })
+
+    def test_drifted_status_relogged_last(self, tmp_path: Path):
+        from core.audit.orchestrator import _relog_final_statuses
+        from core.audit.record import load_audit_log
+
+        config = self._setup(tmp_path)
+        self._log_initial(config, status="suspicious")
+
+        final = ReviewOutcome(
+            file="a.c", function="f", status="clean",
+            body="[counter-escalation resolution: ...]",
+            hypothesis="auth bypass", line=1, cost_usd=0.25,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _relog_final_statuses(result, config) == 1
+        rows = [
+            e for e in load_audit_log(config.out_dir)
+            if e.get("action") == "orchestrator_review"
+        ]
+        assert rows[-1]["status"] == "clean"
+        assert rows[-1]["prior_status"] == "suspicious"
+        assert rows[-1]["final_status_correction"] is True
+        # strategy_stats must not double-count this function: the
+        # corrective row never carries ``strategies``.
+        assert "strategies" not in rows[-1]
+        # Per-label cost attribution survives last-row-wins scoring.
+        assert rows[-1]["cost_usd"] == 0.25
+
+    def test_unchanged_status_not_relogged(self, tmp_path: Path):
+        from core.audit.orchestrator import _relog_final_statuses
+
+        config = self._setup(tmp_path)
+        self._log_initial(config, status="suspicious")
+
+        final = ReviewOutcome(
+            file="a.c", function="f", status="suspicious",
+            body="still suspicious", hypothesis="auth bypass", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _relog_final_statuses(result, config) == 0
+
+    def test_never_logged_outcome_skipped(self, tmp_path: Path):
+        from core.audit.orchestrator import _relog_final_statuses
+
+        config = self._setup(tmp_path)
+        final = ReviewOutcome(
+            file="a.c", function="f", status="clean",
+            body="resolved", hypothesis="auth bypass", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _relog_final_statuses(result, config) == 0
+
+    def test_error_outcome_skipped(self, tmp_path: Path):
+        from core.audit.orchestrator import _relog_final_statuses
+
+        config = self._setup(tmp_path)
+        self._log_initial(config, status="suspicious")
+        final = ReviewOutcome(
+            file="a.c", function="f", status="error",
+            body="", hypothesis="", line=1,
+        )
+        result = OrchestratorResult()
+        result.outcomes = [final]
+
+        assert _relog_final_statuses(result, config) == 0
 
 
 class TestRefutationGateWirePoint:
@@ -3615,6 +4168,46 @@ class TestMultiPassReview:
         assert call_count[0] == 2
 
 
+class TestMultiPassBudgetPropagation:
+    """Budget-exceeded RuntimeErrors must escape _multi_pass_review —
+    swallowing them journaled 'error' verdicts (or bought more spend
+    via the fallback passes) after the cap was already blown."""
+
+    @staticmethod
+    def _budget_review(ctx, cfg):
+        raise RuntimeError("LLM budget exceeded ($5.00 cap reached)")
+
+    def test_single_pass_reraises_budget(self, tmp_path: Path):
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        with pytest.raises(RuntimeError, match="budget exceeded"):
+            _multi_pass_review(
+                self._budget_review,
+                {"file": "a.c", "function": "f"}, config, passes=1,
+            )
+
+    def test_self_consistency_reraises_budget(self, tmp_path: Path):
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        with pytest.raises(RuntimeError, match="budget exceeded"):
+            _multi_pass_review(
+                self._budget_review,
+                {"file": "a.c", "function": "f"}, config, passes=3,
+            )
+
+    def test_non_budget_error_still_journals(self, tmp_path: Path):
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+
+        def broken(ctx, cfg):
+            raise RuntimeError("segfault in helper")
+
+        outcome = _multi_pass_review(
+            broken, {"file": "a.c", "function": "f"}, config, passes=1,
+        )
+        assert outcome.status == "error"
+
+
 class TestRefinementConfig:
     """Tests for refinement config fields and result counters."""
 
@@ -4023,9 +4616,12 @@ class TestSageHypothesisPathway:
 
         orig_hash = None
 
-        def track_hash(file_path, line, window=10):
-            h = orig_hash(file_path, line, window)
-            hash_calls.append({"file": str(file_path), "line": line, "hash": h})
+        def track_hash(file_path, line, window=10, line_end=None):
+            h = orig_hash(file_path, line, window, line_end=line_end)
+            hash_calls.append({
+                "file": str(file_path), "line": line,
+                "line_end": line_end, "hash": h,
+            })
             return h
 
         def review_fn(ctx, config):

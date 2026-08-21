@@ -1102,6 +1102,288 @@ def _build_completion_manifest(orch_meta, import_result, import_sarif_files,
     return manifest
 
 
+# ============================================================================
+# AUDIT POST-PASS (opt-in via --gap-audit)
+# ============================================================================
+
+def _discover_codeql_dbs(out_dir: Path) -> list:
+    """Successfully-created CodeQL database paths from this run's
+    codeql phase (one per language).
+
+    ``raptor-audit run`` takes ``--codeql-db`` repeatably and routes
+    per-function dispatch by the file's language, so every database
+    the scan phase built is handed over.
+    """
+    report = load_json(out_dir / "codeql" / "codeql_report.json")
+    if not isinstance(report, dict):
+        return []
+    dbs = []
+    for result in (report.get("databases_created") or {}).values():
+        if not isinstance(result, dict):
+            continue
+        db_path = result.get("database_path")
+        if db_path and result.get("success", True) and Path(db_path).is_dir():
+            dbs.append(db_path)
+    return dbs
+
+
+def _gap_audit_adversarial(args) -> bool:
+    """Whether the post-pass enables the adversarial reviewer.
+
+    Auto-enabled when two or more analysis models are configured (the
+    reviewer needs a second model to challenge positive verdicts);
+    --gap-audit-no-adversarial opts out. The decision is recorded in
+    the run report so the auto-enable's value can be measured across
+    runs instead of staying an unexamined default.
+    """
+    models = args.model or []
+    return len(models) >= 2 and not getattr(
+        args, "gap_audit_no_adversarial", False,
+    )
+
+
+def _build_audit_postpass_cmd(
+    args, target: Path, audit_dir: Path, agentic_out: Path,
+) -> list:
+    """argv for the ``raptor-audit run`` subprocess.
+
+    Shared inputs are inherited from the agentic run (models, binaries,
+    CodeQL database, the agentic journal as prior finding-grade
+    claims); the audit-specific surface is the small prefixed flag set
+    (--audit-budget / --audit-strategy / --audit-scope). Anything finer
+    belongs in a standalone /audit run.
+    """
+    raptor_dir = Path(__file__).parent.resolve()
+    cmd = [
+        str(raptor_dir / "libexec" / "raptor-audit"), "run", str(target),
+        "--out", str(audit_dir),
+        # Validation is unified at the pipeline level: audit findings
+        # join the --validate post-pass selection instead of spawning
+        # a second validate run.
+        "--no-validate",
+        # Budget-capped pass over an unknown-size residual: review the
+        # most promising functions first.
+        "--schedule", "priority",
+        # The agentic run completes AFTER this subprocess, so its
+        # journals are not yet merged into any project index — hand
+        # them over directly as prior finding-grade claims. The
+        # analysis agent journals under autonomous/; the run root is
+        # included for producers that write there (and costs nothing
+        # when absent).
+        "--prior-journal", str(agentic_out),
+        "--prior-journal", str(agentic_out / "autonomous"),
+    ]
+    if args.gap_audit_reserved_cost:
+        cmd += ["--max-cost", str(args.gap_audit_reserved_cost)]
+    elif getattr(args, "max_cost_usd", None):
+        cmd += ["--max-cost", str(args.max_cost_usd)]
+    if args.gap_audit_budget:
+        cmd += ["--budget", str(args.gap_audit_budget)]
+    if args.gap_audit_strategy:
+        cmd += ["--strategy", args.gap_audit_strategy]
+    for scope in args.gap_audit_scope or []:
+        cmd += ["--scope", scope]
+    models = args.model or []
+    for model in models:
+        cmd += ["--model", model]
+    if _gap_audit_adversarial(args):
+        cmd.append("--adversarial")
+    for binary in args.binary or []:
+        cmd += ["--binary", str(binary)]
+    if getattr(args, "binary_auto", False):
+        cmd.append("--binary-auto")
+    if getattr(args, "no_binary_oracle", False):
+        cmd.append("--no-binary-oracle")
+    for codeql_db in _discover_codeql_dbs(agentic_out):
+        cmd += ["--codeql-db", codeql_db]
+    return cmd
+
+
+def _audit_run_status(audit_dir: Path) -> str | None:
+    """Lifecycle status recorded in the audit run dir, or None."""
+    meta = load_json(audit_dir / ".raptor-run.json")
+    if isinstance(meta, dict):
+        return meta.get("status")
+    return None
+
+
+def _run_audit_feedback(audit_dir: Path, validate_dir: Path) -> bool:
+    """Import /validate verdicts into the audit journal (Reflexion loop).
+
+    Best-effort: a feedback failure costs the correction entries, never
+    the run. Uses the same annotations-dir default the audit run itself
+    resolved (project-level in project mode).
+    """
+    validation_report = Path(validate_dir) / "findings.json"
+    if not validation_report.is_file():
+        logger.info(
+            "audit feedback skipped: validate run wrote no findings.json",
+        )
+        return False
+    # Same resolution the audit run applied for its own default.
+    from core.audit.record import _resolve_annotations_dir
+    raptor_dir = Path(__file__).parent.resolve()
+    cmd = [
+        str(raptor_dir / "libexec" / "raptor-audit"), "feedback",
+        "--validation-report", str(validation_report),
+        "--annotations-dir", str(_resolve_annotations_dir(Path(audit_dir))),
+        "--audit-out", str(audit_dir),
+    ]
+    rc, _stdout, stderr = run_command_streaming(
+        cmd, "Importing validation verdicts into the audit journal",
+        timeout=300,
+    )
+    if rc != 0:
+        logger.warning(
+            "audit feedback exited %d: %s", rc, (stderr or "")[-300:],
+        )
+    return rc == 0
+
+
+def _gap_audit_skip_reason(args, llm_env, *, block_cc_dispatch: bool):
+    """None when the gap-audit post-pass can run, else the skip reason.
+
+    An explicit --model or a configured external LLM always qualifies
+    (the audit subprocess builds its own client). Otherwise the
+    claudecode transport (claude -p as a real LLM provider — the audit
+    orchestrator's documented fallback) carries the run, gated on the
+    target-repo trust check since the transport dispatches claude
+    against content from the scanned repo.
+    """
+    if (args.model or []) or llm_env.external_llm:
+        return None
+    if not llm_env.claude_code:
+        return (
+            "no LLM available — configure an API key, pass --model, "
+            "or install Claude Code"
+        )
+    if block_cc_dispatch:
+        return (
+            "no external LLM and the target repo failed the Claude "
+            "Code trust check — the claudecode transport will not "
+            "dispatch against an untrusted repo (pass --model, or "
+            "review with /audit --local)"
+        )
+    return None
+
+
+def run_audit_postpass(args, target: Path, out_dir: Path) -> dict:
+    """Run ``raptor-audit run`` over the residual coverage gaps.
+
+    Creates a proper lifecycle-managed sibling /audit run (project
+    sibling in project mode, global out/ otherwise) so the artifacts
+    are discoverable by /review, /validate's audit bridge, and
+    cross-run verdict reuse. The subprocess manages its own lifecycle
+    completion/failure; this wrapper only backstops early exits that
+    die before the orchestrator takes over.
+
+    Returns a phase dict for the final report. Never raises.
+    """
+    from core.orchestration.skill_dispatch import (
+        fail_lifecycle,
+        start_lifecycle,
+    )
+
+    phase: dict = {"enabled": True, "completed": False}
+    t0 = time.time()
+    try:
+        audit_dir = start_lifecycle("audit", target)
+        if audit_dir is None:
+            phase["skipped_reason"] = "lifecycle start failed"
+            return phase
+        phase["audit_dir"] = str(audit_dir)
+
+        # Reuse the agentic checklist — same target, same parser;
+        # skips a full re-parse of the repo. raptor-audit builds a
+        # fresh one when the copy is missing.
+        agentic_checklist = out_dir / "checklist.json"
+        if agentic_checklist.is_file():
+            import shutil
+            try:
+                shutil.copyfile(
+                    agentic_checklist, audit_dir / "checklist.json",
+                )
+            except OSError as e:
+                logger.warning(
+                    "audit post-pass: checklist copy failed (%s); "
+                    "raptor-audit will rebuild it", e,
+                )
+
+        # Stage the deferred-tail marker: this audit runs with
+        # --no-validate because the parent pipeline validates the
+        # findings itself. If the audit is interrupted and resumed
+        # later, the parent has completed — the marker lets
+        # `raptor-audit resume` tell the operator which tail steps
+        # remain (see core.audit.resume.pipeline_tail_hint).
+        try:
+            save_json(audit_dir / "pipeline-tail.json", {
+                "parent_run": str(out_dir),
+                "deferred": ["validate", "feedback"],
+                "reason": "validation unified in the parent /agentic "
+                          "run (--gap-audit)",
+            })
+        except Exception:  # noqa: BLE001 — marker is best-effort
+            logger.debug("pipeline-tail marker write failed", exc_info=True)
+
+        # Record the adversarial decision: on this surface every
+        # enable is the auto rule (2+ models), so the flag's value can
+        # be measured across runs rather than staying an unexamined
+        # default. adversarial_opted_out marks runs where the operator
+        # suppressed an enable the rule would have made.
+        phase["adversarial"] = _gap_audit_adversarial(args)
+        if len(args.model or []) >= 2 and not phase["adversarial"]:
+            phase["adversarial_opted_out"] = True
+
+        cmd = _build_audit_postpass_cmd(args, target, audit_dir, out_dir)
+        # No wall timeout here: the audit self-bounds via --max-cost /
+        # its own supervisor bound, and a wall kill would waste the
+        # spend (an interrupted run stays resumable via
+        # `raptor-audit resume`).
+        rc, _stdout, stderr = run_command_streaming(
+            cmd, "Auditing coverage residual", timeout=0,
+        )
+        phase["duration_seconds"] = round(time.time() - t0, 1)
+        phase["exit_code"] = rc
+
+        if rc == 130:
+            phase["skipped_reason"] = (
+                "interrupted — resume with: libexec/raptor-audit "
+                f"resume {audit_dir}"
+            )
+            return phase
+        if rc != 0:
+            # raptor-audit marks its own lifecycle failure for pipeline
+            # errors; backstop the early-exit paths (argparse, trust
+            # gate) that die before lifecycle handling exists.
+            if _audit_run_status(audit_dir) == "running":
+                fail_lifecycle(
+                    audit_dir, f"audit post-pass exited {rc}",
+                )
+            phase["skipped_reason"] = (
+                f"raptor-audit exited {rc}: {(stderr or '')[-300:]}"
+            )
+            return phase
+
+        phase["completed"] = True
+        report = load_json(audit_dir / "audit-report.json")
+        if isinstance(report, dict):
+            stats = report.get("stats")
+            if isinstance(stats, dict):
+                for key in ("reviewed", "clean", "suspicious", "finding",
+                            "dormant", "error"):
+                    if isinstance(stats.get(key), int):
+                        phase[key] = stats[key]
+            for key in ("findings_count", "gaps_remaining"):
+                if isinstance(report.get(key), int):
+                    phase[key] = report[key]
+        return phase
+    except Exception as e:  # noqa: BLE001 — post-pass must not kill the run
+        logger.exception("audit post-pass crashed unexpectedly")
+        phase["skipped_reason"] = f"unexpected {type(e).__name__}: {e}"
+        phase.setdefault("duration_seconds", round(time.time() - t0, 1))
+        return phase
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RAPTOR Agentic Security Testing - Scan, Analyse, Exploit, Patch",
@@ -1479,6 +1761,49 @@ Examples:
     )
     parser.add_argument("--validate", action="store_true",
                         help="Run /validate on exploitable/high-confidence findings after analysis")
+    audit_group = parser.add_argument_group(
+        "audit post-pass",
+        "Run the /audit orchestrator over the residual — functions no "
+        "phase reviewed — after analysis completes. Opt-in: per-function "
+        "hypothesis-driven review is the most expensive pass available.",
+    )
+    audit_group.add_argument(
+        "--gap-audit", action="store_true", dest="gap_audit",
+        help="Audit the coverage residual after analysis (sibling /audit "
+             "run; findings join the --validate post-pass when both flags "
+             "are set). Uses the configured external LLM (or --model); "
+             "with only Claude Code available it runs on the claudecode "
+             "transport, gated on the repo trust check. "
+             "Unrelated to --audit, which is the sandbox audit mode.",
+    )
+    audit_group.add_argument(
+        "--gap-audit-budget", type=int, default=None, metavar="N",
+        help="Max functions the audit post-pass reviews (default: all gaps)",
+    )
+    audit_group.add_argument(
+        "--gap-audit-strategy", default=None, metavar="NAME",
+        help="Restrict the audit post-pass to one strategy (general, "
+             "input_handling, concurrency, memory, auth, crypto, "
+             "aliasing, integer)",
+    )
+    audit_group.add_argument(
+        "--gap-audit-scope", action="append", default=None, metavar="DIR",
+        help="Restrict the audit post-pass to a subdirectory (repeatable)",
+    )
+    audit_group.add_argument(
+        "--gap-audit-no-adversarial", action="store_true",
+        help="Do not auto-enable the adversarial reviewer when two or "
+             "more --model values are configured. The auto-enable is "
+             "recorded in the run report either way, so its value can "
+             "be measured across runs.",
+    )
+    audit_group.add_argument(
+        "--gap-audit-share", type=float, default=0.35, metavar="FRACTION",
+        help="Fraction of --max-cost-usd reserved UP FRONT for the audit "
+             "post-pass (default: 0.35). Analysis phases run under the "
+             "remainder, so the audit keeps its budget even when analysis "
+             "hits its adaptive cutoff. No effect without --max-cost-usd.",
+    )
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
     parser.add_argument("--verbose", action="store_true",
@@ -1635,6 +1960,21 @@ Examples:
         args.threat_model = True
     if args.threat_model:
         args.understand = True
+
+    # --gap-audit budget reserve: carve the audit share out of
+    # --max-cost-usd UP FRONT so an analysis-phase overrun can't starve
+    # the pass the operator explicitly asked for. args.max_cost_usd is
+    # reduced in place — every downstream consumer (the Phase 4
+    # llm_config cap) sees only the analysis share. Without
+    # --max-cost-usd the audit post-pass runs uncapped, matching a
+    # bare standalone /audit.
+    args.gap_audit_reserved_cost = None
+    if args.gap_audit and getattr(args, "max_cost_usd", None):
+        share = min(max(args.gap_audit_share, 0.05), 0.95)
+        args.gap_audit_reserved_cost = round(args.max_cost_usd * share, 2)
+        args.max_cost_usd = round(
+            args.max_cost_usd - args.gap_audit_reserved_cost, 2,
+        )
 
     # Apply --phase-timeout uniformly. ``0`` is the unbounded
     # sentinel — set RaptorConfig.DEFAULT_TIMEOUT to None so
@@ -1902,6 +2242,16 @@ Examples:
         from core.run import start_run
         start_run(out_dir, "agentic", target=str(original_repo_path))
     except Exception as e:  # noqa: BLE001
+        # Run-start contention must not be swallowed like an optional
+        # metadata failure: another session's live run owns the project.
+        # (When raptor.py's lifecycle wrapper drove this run, it already
+        # stamped the dir and this start_run is a re-entrant enrich —
+        # the gate skips those, so reaching here means a DIRECT
+        # raptor_agentic.py invocation raced a live run.)
+        from core.project.oplock import OpLockContention
+        if isinstance(e, OpLockContention):
+            print(f"✗ {e}", file=sys.stderr)
+            sys.exit(1)
         logger.debug("Run metadata: %s", e)  # Optional — don't fail the pipeline
 
     logger.info("=" * 70)
@@ -2040,6 +2390,27 @@ Examples:
     # markers. The analysis prompt surfaces those markers per finding, so
     # --understand pays off in this run too — not just in any later /validate.
     # ========================================================================
+    # --gap-audit depends on a context map for sink/entry-point priority
+    # ordering. Bridge-search first (co-located, project siblings,
+    # global out/ with hash-freshness ranking) — only enable the
+    # understand pre-pass when nothing usable exists, so projects that
+    # already carry a map don't pay for a re-map.
+    if args.gap_audit and not args.understand:
+        _map_dir = None
+        try:
+            from core.orchestration.understand_bridge import (
+                find_understand_output,
+            )
+            _map_dir, _ = find_understand_output(
+                out_dir, str(original_repo_path),
+            )
+        except Exception:  # noqa: BLE001 — bridge miss = run the map
+            logger.debug("--gap-audit map bridge-search failed", exc_info=True)
+        if _map_dir is None:
+            print("\n  --gap-audit: no /understand map found for this "
+                  "target — enabling the understand pre-pass")
+            args.understand = True
+
     prepass_result = None
     threat_model_phase = {"enabled": bool(args.threat_model), "completed": False}
     if args.understand:
@@ -3081,11 +3452,74 @@ Examples:
                 allow_unreachable=getattr(args, "allow_unreachable", False),
                 checklist=scan_inventory,
             )
+
+            # Journal the orchestrated per-finding analyses. The
+            # orchestrator has no journal writer of its own, so without
+            # this the review journal carries only the prep phase's
+            # mechanical suppressions in the default mode — downstream
+            # kind-aware consumers (audit prior claims, agentic-labelled
+            # coverage) saw nothing from the actual LLM analyses.
+            if orchestration_result and not args.no_journal:
+                try:
+                    from packages.llm_analysis.journal_emit import (
+                        journal_orchestrated_results,
+                    )
+                    journal_orchestrated_results(
+                        out_dir, original_repo_path,
+                        orchestration_result.get("results") or [],
+                    )
+                except Exception:  # noqa: BLE001 — journaling is best-effort
+                    logger.debug(
+                        "orchestrated journal emit failed", exc_info=True,
+                    )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
     elif not llm_env.llm_available:
         print("\n  No LLM available. Findings prepared for manual review.")
         print("  For automated analysis, set an API key or install Claude Code.")
+
+    # ========================================================================
+    # POST-PASS: /audit (opt-in via --gap-audit)
+    # Runs the audit orchestrator over the coverage residual — functions
+    # neither the scanners nor the analysis phase reviewed — as a proper
+    # sibling /audit run. The kind-aware gap fold makes "residual" exact:
+    # this run's per-finding analyses never count as function reviews,
+    # but ride into the audit as prior claims (--prior-journal).
+    # ========================================================================
+    audit_postpass: dict = {"enabled": bool(args.gap_audit), "completed": False}
+    audit_dir = None
+    if args.gap_audit:
+        print("\n" + "=" * 70)
+        print("AUDIT POST-PASS")
+        print("=" * 70)
+        _audit_skip = _gap_audit_skip_reason(
+            args, llm_env,
+            # Re-check at dispatch time — the pre-scan verdict may be
+            # stale (scanning ran untrusted target code since).
+            block_cc_dispatch=check_repo_claude_trust(original_repo_path),
+        )
+        if _audit_skip is None:
+            audit_postpass = run_audit_postpass(
+                args, original_repo_path, out_dir,
+            )
+            if audit_postpass.get("audit_dir"):
+                audit_dir = Path(audit_postpass["audit_dir"])
+            if audit_postpass.get("completed"):
+                logger.info(
+                    "Audit post-pass reviewed %s functions, %s findings "
+                    "(took %.1fs)",
+                    audit_postpass.get("reviewed", "?"),
+                    audit_postpass.get("findings_count", "?"),
+                    audit_postpass.get("duration_seconds", 0.0),
+                )
+            else:
+                logger.warning(
+                    "Audit post-pass did not complete: %s",
+                    audit_postpass.get("skipped_reason"),
+                )
+        else:
+            audit_postpass["skipped_reason"] = _audit_skip
+            print(f"\n  ⚠️  --gap-audit skipped: {_audit_skip}")
 
     # ========================================================================
     # POST-PASS: /validate (opt-in via --validate)
@@ -3110,6 +3544,9 @@ Examples:
             # Re-check at dispatch time — the pre-scan verdict may be stale.
             block_cc_dispatch=check_repo_claude_trust(original_repo_path),
             allow_unreachable=getattr(args, "allow_unreachable", False),
+            # --gap-audit: the sibling audit run's findings join the
+            # selection, so one validate pass covers both pipelines.
+            audit_dir=audit_dir if audit_postpass.get("completed") else None,
         )
         if postpass_result.ran:
             logger.info(
@@ -3117,8 +3554,21 @@ Examples:
                 postpass_result.selected_count,
                 postpass_result.duration_s,
             )
+            # Close the Reflexion loop: import the validation verdicts
+            # into the audit journal (disproven findings downgrade,
+            # corroborated ones get confirmation entries).
+            if audit_dir is not None and audit_postpass.get("completed") \
+                    and postpass_result.validate_dir is not None:
+                _run_audit_feedback(audit_dir, postpass_result.validate_dir)
         else:
             logger.warning("Post-pass skipped: %s", postpass_result.skipped_reason)
+    elif audit_postpass.get("completed"):
+        print(
+            "\n  ⚠️  --gap-audit findings are UNVALIDATED (--validate not "
+            "set). The audit is the wide net; /validate is the filter "
+            "that kills false positives. Re-run with --validate, or run "
+            f"/validate against {audit_postpass.get('audit_dir')}/findings.json."
+        )
 
     # ========================================================================
     # FINAL REPORT
@@ -3128,6 +3578,21 @@ Examples:
     print("\n" + "=" * 70)
     print("🎉 RAPTOR AGENTIC WORKFLOW COMPLETE")
     print("=" * 70)
+
+    # Coverage nudge: /agentic reviews what the scanners flag; make the
+    # size of what it DIDN'T review visible instead of implying
+    # "scanned = reviewed". Estimate only — the audit's own gap
+    # computation is authoritative.
+    if not args.gap_audit:
+        residual = _estimate_review_residual(out_dir)
+        if residual and residual[0] > 0:
+            unreviewed, total_funcs = residual
+            print(
+                f"\n  Coverage: ~{unreviewed} of {total_funcs} inventory "
+                "functions have no review record — /agentic analyses "
+                "scanner findings only. Add --gap-audit (or run /audit) "
+                "to review the residual."
+            )
 
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -3184,6 +3649,7 @@ Examples:
                 "completed": False,
                 "mode": "none",
             },
+            "audit": audit_postpass,
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
@@ -3203,6 +3669,16 @@ Examples:
             "aggregation_report": str(out_dir / "aggregation.json") if orchestration_result and orchestration_result.get("aggregation") else None,
             "exploits_directory": str(autonomous_out / "exploits") if autonomous_out else None,
             "patches_directory": str(autonomous_out / "patches") if autonomous_out else None,
+            "audit_report": (
+                str(audit_dir / "audit-report.json")
+                if audit_dir and (audit_dir / "audit-report.json").exists()
+                else None
+            ),
+            "audit_findings": (
+                str(audit_dir / "findings.json")
+                if audit_dir and (audit_dir / "findings.json").exists()
+                else None
+            ),
             "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
             "enriched_sarif": None,  # populated after --sarif-out write
         }
@@ -3749,6 +4225,10 @@ Examples:
         output_files.append(outputs["aggregation_report"])
     if outputs.get("autonomous_report"):
         output_files.append(outputs["autonomous_report"])
+    if outputs.get("audit_report"):
+        output_files.append(outputs["audit_report"])
+    if outputs.get("audit_findings"):
+        output_files.append(outputs["audit_findings"])
     if outputs.get("threat_model_json"):
         output_files.append(outputs["threat_model_json"])
     if outputs.get("threat_model_markdown"):
@@ -3770,6 +4250,14 @@ Examples:
     output_files.append("agentic-report.md")
 
     extra_sections = []
+    if audit_postpass.get("enabled"):
+        extra_sections.append(_build_audit_report_section(
+            audit_postpass,
+            validate_dir=(
+                postpass_result.validate_dir
+                if postpass_result and postpass_result.ran else None
+            ),
+        ))
     if threat_model_phase.get("completed"):
         extra_sections.append(_build_threat_model_report_section(threat_model_phase))
     if aggregation:
@@ -3831,6 +4319,166 @@ Examples:
             logger.debug("Cleaned up temp git dir: %s", _git_temp_dir)
         except Exception as e:  # noqa: BLE001
             logger.debug("Failed to clean temp git dir: %s", e)
+
+
+#: Cap on gap-audit finding rows inlined into the agentic report —
+#: the full list stays in the audit run's findings.json.
+_AUDIT_REPORT_FINDINGS_CAP = 10
+
+
+def _load_validate_outcomes(validate_dir) -> dict:
+    """``finding id → Title Case outcome`` from a validate run's
+    findings.json. Best-effort; empty when absent or unreadable."""
+    if not validate_dir:
+        return {}
+    data = load_json(Path(validate_dir) / "findings.json")
+    if isinstance(data, dict):
+        data = data.get("findings")
+    outcomes: dict = {}
+    for f in data if isinstance(data, list) else []:
+        if not isinstance(f, dict) or not f.get("id"):
+            continue
+        status = f.get("final_status") or f.get("status")
+        if not status:
+            ruling = f.get("ruling")
+            status = ruling.get("status") if isinstance(ruling, dict) else ruling
+        if status:
+            outcomes[str(f["id"])] = str(status).replace("_", " ").title()
+    return outcomes
+
+
+def _build_audit_report_section(audit_phase, validate_dir=None):
+    """Render the --gap-audit post-pass outcome for the final report.
+
+    The audit's findings live in a sibling run dir; without inlining
+    them here the main report reduces the whole pass to counts and a
+    pointer, and the operator has to open a second report to learn
+    WHAT was found. Rows come from the sibling's audit-report.json
+    (journal-verdict-corrected findings), joined with the merged
+    validate pass's per-finding outcome when one ran.
+    """
+    from core.reporting import ReportSection
+    from core.security.prompt_output_sanitise import sanitise_string
+
+    if not audit_phase.get("completed"):
+        content = (
+            f"- Status: **Skipped** — "
+            f"{audit_phase.get('skipped_reason', 'unknown')}"
+        )
+        return ReportSection(title="Gap Audit Post-Pass", content=content)
+
+    lines = [
+        f"- Functions reviewed: **{audit_phase.get('reviewed', 0)}**",
+        f"- Findings: **{audit_phase.get('findings_count', 0)}**",
+        f"- Suspicious: **{audit_phase.get('suspicious', 0)}**",
+        f"- Clean: **{audit_phase.get('clean', 0)}**",
+        f"- Dormant: **{audit_phase.get('dormant', 0)}**",
+        f"- Gaps remaining: **{audit_phase.get('gaps_remaining', 0)}**",
+    ]
+    if audit_phase.get("audit_dir"):
+        lines.append(f"- Run directory: `{audit_phase['audit_dir']}`")
+
+    findings = []
+    if audit_phase.get("audit_dir"):
+        report = load_json(
+            Path(audit_phase["audit_dir"]) / "audit-report.json")
+        if isinstance(report, dict) and isinstance(
+                report.get("findings"), list):
+            findings = [f for f in report["findings"] if isinstance(f, dict)]
+
+    if findings:
+        severities = {}
+        for f in findings:
+            sev = str(f.get("severity") or "medium").lower()
+            severities[sev] = severities.get(sev, 0) + 1
+        roll_up = ", ".join(
+            f"{severities[s]} {s}"
+            for s in ("critical", "high", "medium", "low")
+            if s in severities
+        )
+        if roll_up:
+            lines.append(f"- Severity: {roll_up}")
+
+        outcomes = _load_validate_outcomes(validate_dir)
+        header = "| Finding | Location | Severity | Evidence |"
+        divider = "|---|---|---|---|"
+        if outcomes:
+            header += " Validation |"
+            divider += "---|"
+        lines.append("")
+        lines.append(header)
+        lines.append(divider)
+
+        def _cell(value, cap=120):
+            return sanitise_string(
+                str(value or "").strip(), max_chars=cap,
+            ).replace("|", "\\|").replace("\n", " ")
+
+        for f in findings[:_AUDIT_REPORT_FINDINGS_CAP]:
+            location = f"{f.get('file', '?')}:{f.get('function', '?')}"
+            evidence = ", ".join(
+                str(t.get("tool") or t)
+                for t in (f.get("tool_evidence") or [])[:2]
+                if t
+            ) or f.get("cwe") or f.get("vuln_type") or ""
+            row = (
+                f"| {_cell(f.get('title') or f.get('id'))} "
+                f"| `{_cell(location, cap=100)}` "
+                f"| {_cell(f.get('severity') or 'medium', cap=20)} "
+                f"| {_cell(evidence, cap=60)} |"
+            )
+            if outcomes:
+                row += f" {_cell(outcomes.get(str(f.get('id'))) or '—', cap=30)} |"
+            lines.append(row)
+        if len(findings) > _AUDIT_REPORT_FINDINGS_CAP:
+            lines.append(
+                f"\n{len(findings) - _AUDIT_REPORT_FINDINGS_CAP} more in "
+                f"`{audit_phase.get('audit_dir')}/findings.json`."
+            )
+
+    return ReportSection(
+        title="Gap Audit Post-Pass",
+        content="\n".join(lines),
+    )
+
+
+def _estimate_review_residual(out_dir: Path) -> tuple | None:
+    """Rough (unreviewed, total) function count for the end-of-run
+    coverage nudge.
+
+    Total = reviewable checklist items; reviewed = distinct
+    ``file:function`` keys journaled by this run (root + one-level tool
+    subdirs). An estimate, not the audit's gap computation — good
+    enough to say "most of the inventory was never reviewed".
+    """
+    checklist = load_json(out_dir / "checklist.json")
+    if not isinstance(checklist, dict):
+        return None
+    total = 0
+    for file_info in checklist.get("files", []) or []:
+        if not isinstance(file_info, dict):
+            continue
+        items = file_info.get("items", file_info.get("functions", []))
+        for item in items or []:
+            if isinstance(item, dict) and item.get("kind", "") in (
+                "function", "method", "",
+            ):
+                total += 1
+    if total == 0:
+        return None
+    try:
+        from core.coverage.journal import load_entries
+        reviewed: set = set()
+        candidates = [out_dir]
+        candidates += [d for d in out_dir.iterdir() if d.is_dir()]
+        for d in candidates:
+            reviewed.update(
+                e.key for e in load_entries(d) if e.verdict != "error"
+            )
+    except Exception:  # noqa: BLE001 — nudge is best-effort
+        logger.debug("residual estimate failed", exc_info=True)
+        return None
+    return (max(total - len(reviewed), 0), total)
 
 
 def _build_threat_model_report_section(summary):

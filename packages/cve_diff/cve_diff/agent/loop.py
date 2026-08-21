@@ -29,6 +29,7 @@ from cve_diff.infra import github_client
 from cve_diff.llm.client import MODEL_PRICES
 
 from core.config import env_flag
+from core.llm import telemetry
 from core.llm.config import ModelConfig
 from core.llm.providers import create_provider
 from core.llm.tool_use.loop import ToolUseLoop
@@ -237,6 +238,9 @@ class AgentLoop:
         cost_usd = 0.0
         tokens_total = 0
         iterations_count = 0
+        # Filled after resolve_auth below; the events callback closes
+        # over it so per-turn telemetry records carry the provider.
+        provider_name: list[str] = [""]
 
         def _on_event(event: LoopEvent) -> None:
             nonlocal cost_usd, tokens_total, iterations_count
@@ -246,6 +250,22 @@ class AgentLoop:
                 cost_usd += event.cost_usd
                 tokens_total += resp.input_tokens + resp.output_tokens + resp.cache_write_tokens + resp.cache_read_tokens
                 iterations_count = event.iteration + 1
+                # One run-local llm-telemetry.jsonl record per provider
+                # round-trip, same shape as core.llm.client's records.
+                # No-op unless the orchestrator installed a sink.
+                telemetry.emit(
+                    event="call",
+                    disposition="ok",
+                    call_class="cve-diff:discovery",
+                    provider=provider_name[0],
+                    model=config.model_id,
+                    iteration=event.iteration,
+                    cost_usd=event.cost_usd,
+                    tokens_in=resp.input_tokens,
+                    tokens_out=resp.output_tokens,
+                    cache_read_tokens=resp.cache_read_tokens,
+                    cache_write_tokens=resp.cache_write_tokens,
+                )
 
             elif isinstance(event, ToolCallDispatched):
                 call = event.call
@@ -356,6 +376,7 @@ class AgentLoop:
         try:
             from cve_diff.llm.auth import resolve_auth
             decision = resolve_auth(config.model_id)
+            provider_name[0] = decision.provider
             model_config = ModelConfig(
                 provider=decision.provider,
                 model_name=config.model_id,

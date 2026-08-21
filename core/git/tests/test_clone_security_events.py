@@ -70,7 +70,12 @@ def test_rejected_url_userinfo_is_redacted(tmp_path: Path) -> None:
 def test_happy_path_emits_no_security_event(tmp_path: Path) -> None:
     with patch("core.git.clone._log_security_event") as mock_emit, \
             patch("core.sandbox.run_untrusted_networked") as mock_run:
-        mock_run.return_value = _completed(0)
+        def _materialise(cmd, **kwargs):
+            # clone_repository verifies host-side materialisation
+            # after a zero exit — model it like real git would.
+            Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return _completed(0)
+        mock_run.side_effect = _materialise
         assert clone_repository("https://github.com/foo/bar",
                                 tmp_path / "out") is True
     mock_emit.assert_not_called()

@@ -251,9 +251,17 @@ def check_guard_coverage(
     if not guard_lines:
         return False
 
-    paths, _ = _enumerate_paths(cfg, entry_node, read_node)
+    paths, complete = _enumerate_paths(cfg, entry_node, read_node)
     if not paths:
-        return True
+        # No enumerated paths is only vacuous coverage ("read site
+        # unreachable, nothing to guard") when the DFS actually
+        # completed. When the depth/path cap truncated enumeration,
+        # the absence of paths is an artifact of the bound, not a
+        # reachability fact — answer "not covered" so callers fall
+        # back to their weaker textual check instead of dropping
+        # findings as structurally covered. Mirrors query()'s
+        # confidence degradation to "incomplete" on truncation.
+        return complete
 
     for path in paths:
         if not any(line in guard_lines for line in path):

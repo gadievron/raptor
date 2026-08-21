@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.fuzzing.afl_runner import AFLRunner
@@ -177,6 +179,19 @@ class TestMergeCrashFiles:
         assert all(f.name.startswith("id:") for f in merged)
         assert sorted(f.read_bytes() for f in merged) == [b"a", b"b", b"c"]
 
+    def test_no_crashes_returns_none_when_main_dir_missing(self, tmp_path):
+        # Regression: all() over the empty crash list returned a
+        # nonexistent main/crashes path; CrashCollector then raised
+        # FileNotFoundError on a perfectly healthy zero-crash campaign.
+        runner = self._make_runner(tmp_path)
+        assert runner._merge_crash_files([]) is None
+
+    def test_no_crashes_returns_main_dir_when_it_exists(self, tmp_path):
+        runner = self._make_runner(tmp_path)
+        main_crashes = tmp_path / "main" / "crashes"
+        main_crashes.mkdir(parents=True)
+        assert runner._merge_crash_files([]) == main_crashes
+
     def test_merge_is_idempotent(self, tmp_path):
         runner = self._make_runner(tmp_path)
         self._plant_crash(tmp_path, "main",
@@ -190,6 +205,120 @@ class TestMergeCrashFiles:
 
         assert first == second
         assert len(list(second.iterdir())) == 2
+
+
+# ---------------------------------------------------------------------------
+# run_fuzzing() — sandboxed campaign
+# ---------------------------------------------------------------------------
+
+class TestSandboxedCampaign:
+    """The afl-fuzz campaign executes the untrusted target, so it must
+    run under ``core.sandbox.run`` (network deny, Landlock writes
+    confined to the output dir) — never a plain ``subprocess.Popen``.
+
+    Regression: the campaign historically ran unsandboxed while
+    afl-showmap and the libFuzzer runner were already sandboxed.
+    """
+
+    @staticmethod
+    def _make_runner(tmp_path: Path) -> AFLRunner:
+        binary = tmp_path / "target"
+        binary.write_bytes(b"\x7fELF-not-really")
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "seed0").write_bytes(b"A")
+
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.binary = binary
+        runner.corpus_dir = corpus
+        runner.output_dir = tmp_path / "afl_out"
+        runner.dict_path = None
+        runner.input_mode = "stdin"
+        runner.check_sanitizers = False
+        runner.recompile_guide = False
+        runner.use_showmap = False
+        runner.extra_afl_flags = []
+        runner.cmplog_binary = None
+        runner.power_schedule = "fast"
+        runner.use_laf_intel = True
+        runner.deterministic = False
+        runner.custom_mutator = None
+        runner.seed_profile = "default"
+        runner.telemetry = None
+        runner.afl_fuzz = "/usr/bin/afl-fuzz"
+        return runner
+
+    @staticmethod
+    def _instrumented(monkeypatch):
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+
+        def fake_trusted(cmd, **kwargs):
+            return sp.CompletedProcess(cmd, 0, stdout="__AFL_SHM_ID", stderr="")
+
+        monkeypatch.setattr(mod, "_run_trusted", fake_trusted)
+
+    def test_campaign_routed_through_sandbox(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+
+        self._instrumented(monkeypatch)
+        calls = []
+
+        def fake_sandbox_run(cmd, **kwargs):
+            calls.append((list(cmd), dict(kwargs)))
+            return sp.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_sandbox_run)
+
+        def popen_tripwire(*args, **kwargs):
+            raise AssertionError(
+                "afl-fuzz must not run via plain subprocess.Popen"
+            )
+
+        monkeypatch.setattr(mod.subprocess, "Popen", popen_tripwire)
+
+        runner = self._make_runner(tmp_path)
+        crashes, _crashes_dir = runner.run_fuzzing(duration=0, parallel_jobs=2)
+
+        assert crashes == 0
+        assert len(calls) == 2
+        for cmd, kwargs in calls:
+            assert Path(cmd[0]).name == "afl-fuzz"
+            assert kwargs["block_network"] is True
+            assert kwargs["target"] == str(runner.output_dir)
+            assert kwargs["output"] == str(runner.output_dir)
+            assert str(runner.binary.parent) in kwargs["readable_paths"]
+            assert str(runner.corpus_dir) in kwargs["readable_paths"]
+            # afl-fuzz must be self-terminating: the sandbox call blocks.
+            v_idx = cmd.index("-V")
+            assert cmd[v_idx + 1] == "0"
+            assert kwargs["timeout"] >= 300
+
+        # Instances start on supervising threads, so the mock's append
+        # order is nondeterministic — identify each command by its role
+        # flag instead of by position.
+        main_cmds = [c for c, _ in calls if "-M" in c]
+        secondary_cmds = [c for c, _ in calls if "-S" in c]
+        assert len(main_cmds) == 1 and "main" in main_cmds[0]
+        assert len(secondary_cmds) == 1 and "secondary1" in secondary_cmds[0]
+
+    def test_sandbox_setup_error_fails_loud(self, tmp_path, monkeypatch):
+        from core.sandbox import SandboxSetupError
+        from packages.fuzzing import afl_runner as mod
+
+        self._instrumented(monkeypatch)
+
+        def raising_run(cmd, **kwargs):
+            raise SandboxSetupError("isolation unavailable")
+
+        monkeypatch.setattr(mod, "_sandbox_run", raising_run)
+
+        runner = self._make_runner(tmp_path)
+        with pytest.raises(SandboxSetupError):
+            runner.run_fuzzing(duration=0, parallel_jobs=1)
 
 
 if __name__ == "__main__":

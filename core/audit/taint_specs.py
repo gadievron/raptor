@@ -184,8 +184,11 @@ def load_taint_specs(path: Path) -> TaintSpecSet:
 
 
 def save_taint_specs(spec_set: TaintSpecSet, path: Path) -> None:
+    """Atomic write — the spec set is a cross-run artifact; a torn
+    write left load_taint_specs silently starting from empty."""
+    from core.atomic_fs import write_text_atomically
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(spec_set.to_dict(), indent=2))
+    write_text_atomically(path, json.dumps(spec_set.to_dict(), indent=2))
 
 
 _SOURCE_PATTERNS = frozenset({

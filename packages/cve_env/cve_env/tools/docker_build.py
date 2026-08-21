@@ -1,149 +1,34 @@
-"""docker build subprocess wrapper with DEPENDENCY_PACKAGE_MAP hints.
+"""docker build tool surface — the build mechanics live in ``core.container.build``.
 
-Runs ``docker build`` on a context directory (optionally with an
-LLM-provided Dockerfile) and returns exit code + last ~200 log lines.
-If the stderr tail matches :data:`DEPENDENCY_PACKAGE_MAP` regex, a
-``suggested_patch`` hint is included for the agent to feed back into
-the next ``dockerfile_gen`` call as additional ``apt_packages``.
+The build invocation (context handling, tempfile Dockerfile, fresh-pull
+policy for external FROM bases, labels, wall bound) and the dependency
+classifier (stderr → apt dev packages) moved to
+:mod:`core.container.build`. What stays here is the agent-facing
+layer: the raw-Dockerfile P-invariant validation, the build-loop and
+GPG-recovery guards (blocking a retry that discards the recovery
+hint), the ``suggested_patch`` derivation, the tag policy, and the
+discriminated ``next_step_hint`` text.
 """
 
 from __future__ import annotations
 
 import re
-import tempfile
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+
+from core.container.build import (
+    DEPENDENCY_PACKAGE_MAP as DEPENDENCY_PACKAGE_MAP,
+)
+from core.container.build import (
+    build_image,
+    classify_build_error,
+    extract_from_image as _extract_from_image,  # noqa: F401 — test surface
+)
 
 from cve_env.config import CVE_LABEL
-from cve_env.tools._image_origin import _is_external_image
 
-
-def _extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
-    """Parse the FROM image reference from a Dockerfile (text first;
-    fall back to <ctx>/Dockerfile). Returns the image name (e.g.,
-    'debian:11', 'cve-X:build') or None if no FROM line found.
-
-    Strips 'AS <stage>' aliases and '--platform=...' flags. Multi-stage
-    Dockerfiles return the FIRST FROM (the base for stage 0); subsequent
-    stages may FROM previous stages (local refs) but the gate is whether
-    the BASE chain reaches an external registry.
-
-    Returns first FROM only. Multi-stage with external later stages may
-    miss --pull benefit. Acceptable: Docker caches are typically warm.
-    """
-    text = dockerfile_text
-    if text is None:
-        dockerfile_path = ctx / "Dockerfile"
-        if not dockerfile_path.is_file():
-            return None
-        try:
-            text = dockerfile_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line.upper().startswith("FROM "):
-            continue
-        # Strip optional --platform=... flag
-        rest = re.sub(r"^FROM\s+(?:--\S+\s+)*", "", line, flags=re.IGNORECASE)
-        # Strip ' AS <stage>'
-        rest = re.split(r"\s+AS\s+", rest, maxsplit=1, flags=re.IGNORECASE)[0]
-        return rest.strip() or None
-    return None
-
-
-DEPENDENCY_PACKAGE_MAP: dict[str, str] = {
-    # APR (Apache Portable Runtime)
-    "apr.h": "libapr1-dev",
-    "apr_util.h": "libaprutil1-dev",
-    "-lapr-1": "libapr1-dev",
-    "-laprutil-1": "libaprutil1-dev",
-    # OpenSSL
-    "openssl/ssl.h": "libssl-dev",
-    "openssl/crypto.h": "libssl-dev",
-    "-lssl": "libssl-dev",
-    "-lcrypto": "libssl-dev",
-    # PCRE
-    "pcre.h": "libpcre3-dev",
-    "-lpcre": "libpcre3-dev",
-    # Compression
-    "zlib.h": "zlib1g-dev",
-    "-lz": "zlib1g-dev",
-    "expat.h": "libexpat1-dev",
-    "-lexpat": "libexpat1-dev",
-    "bz2.h": "libbz2-dev",
-    "-lbz2": "libbz2-dev",
-    # XML
-    "libxml/parser.h": "libxml2-dev",
-    "-lxml2": "libxml2-dev",
-    # Networking
-    "curl/curl.h": "libcurl4-openssl-dev",
-    "-lcurl": "libcurl4-openssl-dev",
-    # Database
-    "mysql/mysql.h": "libmysqlclient-dev",
-    "-lmysqlclient": "libmysqlclient-dev",
-    "postgresql/libpq-fe.h": "libpq-dev",
-    "-lpq": "libpq-dev",
-    # Other common
-    "readline/readline.h": "libreadline-dev",
-    "-lreadline": "libreadline-dev",
-    "ncurses.h": "libncurses5-dev",
-    "-lncurses": "libncurses5-dev",
-}
-
-_CONFIGURE_KEYWORD_MAP: dict[str, str] = {
-    "openssl": "libssl-dev",
-    "apr-1": "libapr1-dev",
-    "pcre": "libpcre3-dev",
-}
-
-_HEADER_NOT_FOUND_RE = re.compile(
-    r"fatal error:\s*([^\s:]+\.h)(?::\s*No such file)?", re.IGNORECASE
-)
-_LIB_NOT_FOUND_RE = re.compile(
-    r"(?:cannot find|/usr/bin/ld: cannot find)\s+(-l[\w+.\-]+)", re.IGNORECASE
-)
-
-
-# Keyword-to-error correlation is global (not line-scoped). May
-# false-positive when keywords appear in unrelated lines.
-def classify_build_error(stderr: str) -> list[str]:
-    """Return apt packages implied by build stderr, or ``[]``."""
-    if not stderr:
-        return []
-    found: list[str] = []
-    seen: set[str] = set()
-
-    def _add(pkg: str) -> None:
-        if pkg not in seen:
-            seen.add(pkg)
-            found.append(pkg)
-
-    for match in _HEADER_NOT_FOUND_RE.finditer(stderr):
-        header = match.group(1)
-        pkg = DEPENDENCY_PACKAGE_MAP.get(header)
-        if pkg is not None:
-            _add(pkg)
-            continue
-        tail = header.split("/")[-1]
-        for key, mapped in DEPENDENCY_PACKAGE_MAP.items():
-            if key.endswith(tail) and key.endswith(".h"):
-                _add(mapped)
-                break
-
-    for match in _LIB_NOT_FOUND_RE.finditer(stderr):
-        lib = match.group(1).lower()
-        pkg = DEPENDENCY_PACKAGE_MAP.get(lib)
-        if pkg is not None:
-            _add(pkg)
-
-    lowered = stderr.lower()
-    for keyword, pkg in _CONFIGURE_KEYWORD_MAP.items():
-        if keyword in lowered and ("not found" in lowered or "not correct" in lowered):
-            _add(pkg)
-
-    return found
+# source_build's local naming convention (skip --pull for these bases).
+_LOCAL_IMAGE_PREFIXES: tuple[str, ...] = ("cve-",)
 
 
 @dataclass
@@ -281,8 +166,7 @@ def _docker_build_next_step_hint(
 # Built images carry the same per-CVE label as containers, so
 # lifecycle.cleanup_result_images() can rmi exactly THIS CVE's result images —
 # preventing tagged-image accumulation that fills the Colima VM. The label
-# string is config.CVE_LABEL (single source shared by all writers + readers),
-# re-exported here.
+# string is config.CVE_LABEL (single source shared by all writers + readers).
 
 
 def docker_build(
@@ -306,51 +190,8 @@ def docker_build(
     to ``docker_build`` would otherwise skip these checks; the build is refused
     with ``reason="P14"`` or ``reason="P17"`` and a structured next_step_hint.
     """
-    # Auto-create a genuinely-missing context dir instead of erroring
-    # bad_context. The agent frequently calls docker_build BEFORE mkdir-ing the
-    # context and quits on the first bad_context. FROM+RUN Dockerfiles need no
-    # COPY context; COPY ops still fail later at the COPY step (correctly).
-    # Empty path and exists-but-not-a-dir stay hard rejections — only a
-    # creatable missing path is auto-created.
-    if not isinstance(context_dir, str) or not context_dir.strip():
-        return BuildResult(
-            ok=False,
-            reason="bad_context",
-            reason_class="unknown",
-            stderr_tail="context_dir is empty",
-            next_step_hint=_docker_build_next_step_hint(
-                "bad_context", "unknown", None, ""
-            ),
-        )
-    ctx = Path(context_dir)
-    if not ctx.exists():
-        try:
-            ctx.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return BuildResult(
-                ok=False,
-                reason="bad_context",
-                reason_class="unknown",
-                stderr_tail=f"{context_dir}: cannot create context dir ({exc})",
-                next_step_hint=_docker_build_next_step_hint(
-                    "bad_context", "unknown", None, ""
-                ),
-            )
-    if not ctx.is_dir():
-        return BuildResult(
-            ok=False,
-            reason="bad_context",
-            reason_class="unknown",
-            stderr_tail=f"{context_dir}: not a directory",
-            next_step_hint=_docker_build_next_step_hint(
-                "bad_context", "unknown", None, ""
-            ),
-        )
-
     # Raw-text validation: when the agent supplies a Dockerfile directly
     # (bypassing ``dockerfile_gen``), apply the same P14/P17/etc. checks.
-    # Defers to ``validate_dockerfile_semantics`` for the structural rules +
-    # tag-blocklist.
     if dockerfile_text is not None:
         from cve_env.utils.dockerfile_hygiene import validate_dockerfile_semantics
 
@@ -359,10 +200,7 @@ def docker_build(
             primary = issues[0]
             # Surface the validator's P-code (e.g. "P14") in `reason` so the
             # agent can match on a stable token; full issue list goes into
-            # stderr_tail. Extract whatever P-code was emitted (regex) rather
-            # than matching a hardcoded list — validate_dockerfile_semantics
-            # only checks FROM/RUN/COPY/LABEL semantics → P14; P17/P18 are
-            # image-ref / port-bind invariants enforced elsewhere.
+            # stderr_tail.
             _pcode = re.search(r"\bP\d+\b", primary)
             code = _pcode.group(0) if _pcode else "validation"
             return BuildResult(
@@ -452,117 +290,79 @@ def docker_build(
                 f"Dockerfile."
             ),
         )
-    cmd: list[str] = ["docker", "build", "-t", tag]
-    if cve_id:
-        # Tag the image with this CVE so cleanup_result_images can rmi exactly
-        # this CVE's images (parity with docker_run container labels).
-        cmd.extend(["--label", f"{CVE_LABEL}={cve_id}"])
-    if platform:
-        cmd.extend(["--platform", platform])
-    # Force fresh pull of the FROM base image when it came from a public
-    # registry. Bypasses the local Docker layer cache for base images, which
-    # can silently re-use cached base layers even when the registry is
-    # rate-limited. Skipped when FROM is locally-built (cve-X:build), since
-    # `--pull` would fail with "manifest unknown" on no-upstream.
-    from_image = _extract_from_image(dockerfile_text, ctx)
-    if from_image and _is_external_image(from_image):
-        cmd.append("--pull")
 
-    tmpfile: Path | None = None
-    try:
-        if dockerfile_text is not None:
-            with tempfile.NamedTemporaryFile(  # noqa: SIM115 -- delete=False intentional
-                mode="w",
-                prefix="cve-env-df-",
-                suffix=".Dockerfile",
-                delete=False,
-            ) as fd:
-                fd.write(dockerfile_text)
-                tmpfile = Path(fd.name)
-            cmd.extend(["-f", str(tmpfile)])
-        cmd.append(str(ctx))
+    # Tag the image with this CVE so cleanup_result_images can rmi exactly
+    # this CVE's images (parity with docker_run container labels).
+    labels = {CVE_LABEL: cve_id} if cve_id else None
+    outcome = build_image(
+        context_dir=context_dir,
+        tag=tag,
+        dockerfile_text=dockerfile_text,
+        platform=platform,
+        timeout_seconds=timeout_seconds,
+        labels=labels,
+        local_prefixes=_LOCAL_IMAGE_PREFIXES,
+    )
 
-        # Strip dangerous env vars before docker build so HTTPS_PROXY /
-        # DOCKER_CONFIG-adjacent vars in the operator's shell can't redirect
-        # the build context. run_with_timeout places any partial output in
-        # outcome.stdout on the timed_out=True branch.
-        from cve_env.utils.run import run_with_timeout
-        from cve_env.utils.safe_env import safe_subprocess_env
-
-        outcome = run_with_timeout(
-            cmd,
-            timeout=timeout_seconds,
-            env=safe_subprocess_env(),
-        )
-        if outcome.timed_out:
-            return BuildResult(
-                ok=False,
-                reason="timeout",
-                reason_class="timeout",
-                image_tag=tag,
-                stderr_tail=f"timeout after {timeout_seconds}s",
-                logs_tail=outcome.stdout[-4000:] if outcome.stdout else "",
-                next_step_hint=_docker_build_next_step_hint(
-                    "timeout", "timeout", None, ""
-                ),
-            )
-
-        stdout_tail = (outcome.stdout or "").splitlines()[-200:]
-        stderr_tail = (outcome.stderr or "").splitlines()[-200:]
-        logs_tail = "\n".join(stdout_tail)[-4000:]
-        stderr_blob = "\n".join(stderr_tail)[-4000:]
-
-        if outcome.returncode == 0:
-            return BuildResult(
-                ok=True,
-                image_tag=tag,
-                exit_code=0,
-                logs_tail=logs_tail,
-                stderr_tail=stderr_blob,
-                reason_class="ok",
-            )
-
-        packages = classify_build_error(outcome.stderr or "")
-        suggested: dict[str, list[str]] | None = None
-        if packages:
-            suggested = {"apt_packages": packages}
-            # Remember that this image_tag had a suggested_patch. Next
-            # docker_build call with the same tag will be blocked unless the
-            # agent calls dockerfile_gen with these apt_packages.
-            _PENDING_SUGGESTED_PATCH[tag] = suggested
-        # Classify the docker build failure (disk_full, transport, etc.).
-        # If the dependency-classifier already inferred missing apt packages,
-        # that's a higher-signal classification — preserve it via "missing_dependency"
-        # reason but still surface reason_class for retry decisions.
-        from cve_env.tools._failure_class import classify_docker_stderr
-
-        failure_class = classify_docker_stderr(outcome.stderr or "")
-
-        # Track gpg_signature failures by image_tag so the next docker_build
-        # with the same tag is blocked (forces the agent to apply the recovery
-        # hint).
-        if failure_class == "gpg_signature":
-            _PENDING_GPG_RECOVERY.add(tag)
-
-        reason_str = "build_failed" if suggested is None else "missing_dependency"
-        # RunOutcome.returncode is int | None (None when subprocess never
-        # started OR on timeout). Normalize to -1 in the failure path —
-        # matches the int-typed BuildResult.exit_code field and the
-        # convention from run_in_container.py (timeout = -1).
-        exit_code = outcome.returncode if outcome.returncode is not None else -1
+    if outcome.reason == "bad_context":
         return BuildResult(
             ok=False,
-            image_tag=tag,
-            exit_code=exit_code,
-            logs_tail=logs_tail,
-            stderr_tail=stderr_blob,
-            suggested_patch=suggested,
-            reason=reason_str,
-            reason_class=failure_class,
+            reason="bad_context",
+            reason_class="unknown",
+            stderr_tail=outcome.stderr_tail,
             next_step_hint=_docker_build_next_step_hint(
-                reason_str, failure_class, suggested, outcome.stderr or ""
+                "bad_context", "unknown", None, ""
             ),
         )
-    finally:
-        if tmpfile is not None and tmpfile.exists():
-            tmpfile.unlink()
+    if outcome.reason == "timeout":
+        return BuildResult(
+            ok=False,
+            reason="timeout",
+            reason_class="timeout",
+            image_tag=tag,
+            stderr_tail=outcome.stderr_tail,
+            logs_tail=outcome.logs_tail,
+            next_step_hint=_docker_build_next_step_hint(
+                "timeout", "timeout", None, ""
+            ),
+        )
+    if outcome.ok:
+        return BuildResult(
+            ok=True,
+            image_tag=tag,
+            exit_code=0,
+            logs_tail=outcome.logs_tail,
+            stderr_tail=outcome.stderr_tail,
+            reason_class="ok",
+        )
+
+    packages = classify_build_error(outcome.stderr_tail or "")
+    suggested: dict[str, list[str]] | None = None
+    if packages:
+        suggested = {"apt_packages": packages}
+        # Remember that this image_tag had a suggested_patch. Next
+        # docker_build call with the same tag will be blocked unless the
+        # agent calls dockerfile_gen with these apt_packages.
+        _PENDING_SUGGESTED_PATCH[tag] = suggested
+
+    # Track gpg_signature failures by image_tag so the next docker_build
+    # with the same tag is blocked (forces the agent to apply the recovery
+    # hint).
+    if outcome.reason_class == "gpg_signature":
+        _PENDING_GPG_RECOVERY.add(tag)
+
+    reason_str = "build_failed" if suggested is None else "missing_dependency"
+    return BuildResult(
+        ok=False,
+        image_tag=tag,
+        exit_code=outcome.exit_code,
+        logs_tail=outcome.logs_tail,
+        stderr_tail=outcome.stderr_tail,
+        suggested_patch=suggested,
+        reason=reason_str,
+        reason_class=outcome.reason_class,
+        next_step_hint=_docker_build_next_step_hint(
+            reason_str, outcome.reason_class, suggested,
+            outcome.stderr_tail or "",
+        ),
+    )

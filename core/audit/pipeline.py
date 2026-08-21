@@ -84,6 +84,8 @@ class AuditPipelineOpts:
     inventory: dict[str, Any] | None = None
     annotations_dir: Path | None = None
     codeql_db_path: str | None = None
+    # Repeatable --codeql-db (one database per language).
+    codeql_db_paths: list[str] | None = None
     threat_model: dict[str, Any] | None = None
     joern_overrides: dict[str, Any] | None = None
     joern_server: Any | None = None
@@ -100,6 +102,54 @@ class AuditPipelineOpts:
     # prior-run verdicts for functions whose source hash is unchanged
     # instead of silently suppressing them.
     verdict_reuse: bool = True
+    # Ignore all prior review state — coverage records, the per-run
+    # review journal, the project journal index, and recall caches —
+    # so every scheduled function is re-reviewed. The corpus runner
+    # sets this: a label pin must never be suppressed by state left
+    # behind by an earlier run. Production default unchanged (off).
+    force: bool = False
+    # Prefilter skip_llm shortcut. False keeps the prefilter running
+    # (hits still feed review context) but its skip verdict no longer
+    # resolves a scheduled function clean without review. The corpus
+    # runner defaults this off for the same reason as ``triage``:
+    # labels encode deep-mechanism expectations that a mechanical skip
+    # can never exercise. Production default unchanged (on).
+    prefilter_skip: bool = True
+    # Triage-classifier SKIP shortcut. False disables the skip so every
+    # scheduled function receives a real review. The corpus runner
+    # defaults this off: labels encode deep-mechanism expectations
+    # that a classifier skip can never exercise. Production default
+    # unchanged (on).
+    triage: bool = True
+    # Vendored/generated-code triage tier (--no-vendored-triage to
+    # disable): corroborated generator provenance → skip tier;
+    # uncorroborated banners / vendored paths / generated-shape
+    # structure → glance tier. Every decision leaves a
+    # suppressions.jsonl record; pinned gaps are exempt.
+    vendored_triage: bool = True
+    # ── Accumulated-knowledge gates (see OrchestratorConfig) ────────
+    # All default ON — production behaviour unchanged. The corpus
+    # runner's cold profile turns them off so a measurement run sees
+    # what a first-time user with default flags and cold caches would
+    # see. ``profile`` is the label stamped into the per-gate disable
+    # log lines.
+    profile: str = "deployed"
+    # IRIS: spec synthesis, sink-store reads, refinement (incl.
+    # prior_specs store reads), heuristic assumption passes.
+    iris: bool = True
+    # SAGE recall reads (hypothesis verdicts, prior-run observations,
+    # proven-rule replay). Writes unaffected.
+    sage_recall: bool = True
+    # Graduated-rule library replay (find_replayable). In-run
+    # on-demand synthesis and library writes stay on.
+    library_replay: bool = True
+    # Cross-run journal reads: verdict-reuse eligibility + sibling/
+    # project journal sources for external synthesis seeds.
+    cross_run_import: bool = True
+    # Prior domain-model import (in-run study output still read).
+    domain_model_import: bool = True
+    # Operator annotation reads.
+    annotations_read: bool = True
     # Opt-in (--pre-scan): bounded semgrep baseline pass when no scan
     # SARIF exists in this run or any fresh sibling run.
     pre_scan: bool = False
@@ -116,6 +166,10 @@ class AuditPipelineOpts:
     # Slice of --max-cost held back for the deepen phase so announced
     # re-reviews can execute (None = orchestrator default).
     deepen_reserve_fraction: float | None = None
+    # Slice of --max-cost held back from the pre-review bulk passes
+    # so the review loop is guaranteed headroom (None = orchestrator
+    # default, off). The corpus runner sets it per group.
+    review_reserve_fraction: float | None = None
     # Same-run resume (raptor-audit resume): re-import this run's own
     # journal verdicts at $0 and re-review only the remaining gaps.
     same_run_reuse: bool = False
@@ -126,6 +180,15 @@ class AuditPipelineOpts:
     # Segment number for a resumed run (from core.run.metadata.
     # resume_run); 1 for a first run.
     resume_segment: int = 1
+    # Extra run dirs whose review journals feed prior finding-grade
+    # claims (/agentic per-finding analyses) into review context
+    # (--prior-journal, repeatable). Covers journals not yet merged
+    # into the project index.
+    prior_journal_dirs: list[Path] | None = None
+    # Per-function cap on prior finding-grade claims in review context
+    # (--prior-claims; 0 disables) and the per-claim body excerpt.
+    prior_claims_per_function: int = 3
+    prior_claim_excerpt_chars: int = 600
 
 
 
@@ -245,6 +308,7 @@ def _build_orchestrator_config(
         binary_verdicts=opts.binary_verdicts,
         inventory=opts.inventory,
         codeql_db_path=opts.codeql_db_path,
+        codeql_db_paths=opts.codeql_db_paths,
         threat_model=opts.threat_model,
         annotations_dir=opts.annotations_dir,
         functions=opts.functions,
@@ -255,15 +319,31 @@ def _build_orchestrator_config(
         max_workers=opts.max_workers,
         dynamic_validation=_resolve_dynamic(opts),
         verdict_reuse=opts.verdict_reuse,
+        force=opts.force,
+        prefilter_skip=opts.prefilter_skip,
+        triage=opts.triage,
+        vendored_triage=opts.vendored_triage,
+        profile=opts.profile,
+        iris=opts.iris,
+        sage_recall=opts.sage_recall,
+        library_replay=opts.library_replay,
+        cross_run_import=opts.cross_run_import,
+        domain_model_import=opts.domain_model_import,
+        annotations_read=opts.annotations_read,
         pre_scan=opts.pre_scan,
         schedule=opts.schedule,
         on_demand_synthesis=opts.on_demand_synthesis,
         probe_determine_value=opts.probe_determine_value,
         **({"deepen_reserve_fraction": opts.deepen_reserve_fraction}
            if opts.deepen_reserve_fraction is not None else {}),
+        **({"review_reserve_fraction": opts.review_reserve_fraction}
+           if opts.review_reserve_fraction is not None else {}),
         same_run_reuse=opts.same_run_reuse,
         prior_cost_breakdown=opts.prior_cost_breakdown,
         resume_segment=opts.resume_segment,
+        prior_journal_dirs=opts.prior_journal_dirs,
+        prior_claims_per_function=opts.prior_claims_per_function,
+        prior_claim_excerpt_chars=opts.prior_claim_excerpt_chars,
         llm_budget_client=client,
         llm_client=client,
     )
@@ -857,6 +937,17 @@ def counter_refutes_vulnerability(counter: str) -> bool:
     return any(kw in lower for kw in COUNTER_REFUTATION_KW)
 
 
+def _get_counter_direction(item) -> str:
+    """Structured ``counter_direction`` emitted by the review model
+    (``supports_vuln`` / ``refutes_vuln``), or "" when absent."""
+    if isinstance(item, dict):
+        raw = item.get("counter_direction", "") or ""
+    else:
+        rr = getattr(item, "review_result", None) or {}
+        raw = rr.get("counter_direction", "") or ""
+    return str(raw).strip().lower()
+
+
 def counter_hypothesis_vetoes(item) -> bool:
     """True when a strong counter-hypothesis should veto a speculative finding.
 
@@ -865,6 +956,11 @@ def counter_hypothesis_vetoes(item) -> bool:
     substantial and names a concrete protection mechanism,
     (3) hypothesis does not name a security-primitive pattern that
     counter-hypotheses are unreliable for.
+
+    The structured ``counter_direction`` field, when present, replaces
+    the prose re-derivation: refutes_vuln vetoes, supports_vuln never
+    does. The keyword paths remain as the fallback for responses
+    predating the field.
     """
     ev = _get_evidence(item)
     if ev and not ev.startswith(NON_MECHANICAL):
@@ -873,13 +969,24 @@ def counter_hypothesis_vetoes(item) -> bool:
     counter = _get_counter(item)
     hyp = _get_hypothesis(item)
 
-    if not counter or len(counter) < 40:
-        return False
-    if len(counter) < len(hyp) * 0.6:
+    if not counter:
         return False
 
     hyp_lower = hyp.lower()
     if any(kw in hyp_lower for kw in COUNTER_VETO_EXEMPT_KW):
+        return False
+
+    direction = _get_counter_direction(item)
+    if direction == "supports_vuln":
+        # The counter argues FOR the vulnerability — it corroborates
+        # rather than refutes; there is nothing to veto with.
+        return False
+    if direction == "refutes_vuln":
+        return True
+
+    if len(counter) < 40:
+        return False
+    if len(counter) < len(hyp) * 0.6:
         return False
 
     lower = counter.lower()

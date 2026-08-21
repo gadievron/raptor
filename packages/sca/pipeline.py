@@ -692,7 +692,41 @@ def run_sca(
     osv_results = osv_client.query_batch(canonical)
     progress.tick(done=len(canonical))
     affected = sum(1 for r in osv_results if r.advisories)
-    progress.done(f"{affected}/{len(canonical)} deps with advisories")
+    scan_health: list[dict] = []
+    if osv_client.degraded:
+        # Transient OSV failures — those slots returned no advisories
+        # and were deliberately left uncached (a retry next run gets a
+        # fresh answer). Surface the degradation: operator warning now,
+        # plus a machine-readable scan-health row in findings.json so
+        # CI consumers can see the scan's advisory coverage was
+        # incomplete. No new exit-code path: the thresholds gate acts
+        # on specific finding classes, and inventing a failure exit for
+        # a degraded-but-completed scan would break existing gate
+        # semantics — pipelines that want to hard-fail on degradation
+        # can key on the ``sca:scan_health:osv_lookup_degraded`` row.
+        sample = ", ".join(osv_client.failed_dep_keys[:5])
+        detail = (
+            f"OSV lookups failed transiently for "
+            f"{osv_client.failed_lookups} query slot(s) out of "
+            f"{len(canonical)} deps; advisories for those deps may be "
+            f"missing from this run. Failed lookups were not cached "
+            f"and will retry on the next run. Sample: {sample}"
+        )
+        logger.warning("sca.pipeline: %s", detail)
+        scan_health.append({
+            "kind": "osv_lookup_degraded",
+            "detail": detail,
+            "evidence": {
+                "failed_lookups": osv_client.failed_lookups,
+                "total_deps": len(canonical),
+                "failed_dep_keys_sample": list(osv_client.failed_dep_keys),
+            },
+        })
+    progress.done(
+        f"{affected}/{len(canonical)} deps with advisories"
+        + (f" · {osv_client.failed_lookups} lookup(s) failed"
+           if osv_client.degraded else "")
+    )
 
     # 5. KEV / EPSS / Vulnrichment enrichment (best-effort; degrades on failure).
     kev: KevClient | None = None
@@ -959,6 +993,7 @@ def run_sca(
         hygiene_findings=hygiene_findings,
         supply_chain_findings=supply_chain_findings,
         license_findings=license_findings,
+        scan_health=scan_health,
     )
     md = render_markdown_report(
         target=target,
@@ -1190,6 +1225,13 @@ def _run_llm_stages(
         for f in supply_chain_findings:
             if not f.evidence.get("llm_verdict"):
                 continue
+            if f.evidence.get("sage_short_circuit"):
+                # This verdict came FROM SAGE recall, not from a fresh
+                # review — re-storing it as a new malicious_confirmed
+                # fact would corroborate the row with itself, making
+                # the recalled verdict durable and self-reinforcing.
+                # The originating row already exists; skip the re-store.
+                continue
             sca_outcomes.append({
                 "package_name": f.dependency.name,
                 "ecosystem": f.dependency.ecosystem,
@@ -1310,7 +1352,10 @@ def _run_slopsquat_review(
         # install's import can legitimately fail here; anything else
         # is a wiring bug and must propagate.
         with contextlib.suppress(ImportError):
-            from core.sage.hooks import recall_context_for_sca
+            from core.sage.hooks import (
+                parse_verified_sca_fields,
+                recall_context_for_sca,
+            )
             dep_names = [f.dependency.name for f in suspect_findings[:10]]
             ecosystems = list({f.dependency.ecosystem for f in suspect_findings
                               if f.dependency.ecosystem})
@@ -1319,12 +1364,33 @@ def _run_slopsquat_review(
                 ecosystems=ecosystems,
                 dep_names=dep_names,
             )
+            # Short-circuit on the AUTHENTICATED decision fields only —
+            # never on substring matches over the row prose. The prose
+            # carries LLM summary text (prompt-injectable via hostile
+            # package metadata) and detail strings that legitimately
+            # name the imitated package: a validly MAC'd suspect row
+            # whose summary says "malicious_confirmed <victim>" must
+            # not mint a 0.98 confirmed verdict for the victim.
+            confirmed_keys = set()
             for row in prior:
-                content = str(row.get("content") or "")
-                if "malicious_confirmed" in content:
-                    for f in suspect_findings:
-                        if f.dependency.name in content:
-                            sage_confirmed.add(f.dependency.name)
+                fields = parse_verified_sca_fields(row)
+                if fields and fields.get("verdict") == "malicious_confirmed":
+                    confirmed_keys.add(
+                        (fields.get("eco", ""), fields.get("name", "")),
+                    )
+            for f in suspect_findings:
+                dep = f.dependency
+                # Mirror store-time _sanitise_delim ('|' stripped) so
+                # equality compares like with like.
+                key = (
+                    str(dep.ecosystem or "").replace("|", ""),
+                    str(dep.name or "").replace("|", ""),
+                )
+                if key in confirmed_keys:
+                    # Keyed on (ecosystem, name): two same-named
+                    # suspects in different ecosystems must not share
+                    # a confirmation.
+                    sage_confirmed.add(key)
 
     # Build registry-client lookups for the deps we want to
     # review. Same offline-honouring pattern as
@@ -1351,8 +1417,13 @@ def _run_slopsquat_review(
         dep = f.dependency
 
         # SAGE short-circuit: skip LLM if this package is already
-        # confirmed malicious from a prior run.
-        if dep.name in sage_confirmed:
+        # confirmed malicious from a prior run. Same (eco, name) key
+        # shape (and '|' strip) as the recall stage above.
+        _sc_key = (
+            str(dep.ecosystem or "").replace("|", ""),
+            str(dep.name or "").replace("|", ""),
+        )
+        if _sc_key in sage_confirmed:
             existing_evidence = dict(f.evidence)
             existing_evidence["llm_verdict"] = "malicious"
             existing_evidence["llm_confidence"] = 0.98
@@ -1577,10 +1648,11 @@ def _run_triage(
         return (False, 0.0)
 
     # Write triage output.
+    from ._atomic import atomic_write_text
     triage_path = output_dir / "triage.json"
-    triage_path.write_text(
+    atomic_write_text(
+        triage_path,
         _json_mod.dumps(result.model_dump(), indent=2, default=str),
-        encoding="utf-8",
     )
     logger.info("sca.pipeline: LLM triage ranked %d finding(s) → %s",
                  len(result.items), triage_path)
@@ -1703,9 +1775,10 @@ def _run_upgrade_impact(
         })
 
     if results:
-        (output_dir / "upgrade-impact.json").write_text(
+        from ._atomic import atomic_write_text
+        atomic_write_text(
+            output_dir / "upgrade-impact.json",
             _json_mod.dumps(results, indent=2),
-            encoding="utf-8",
         )
         logger.info("sca.pipeline: LLM upgrade-impact assessed %d dep(s)",
                      len(results))

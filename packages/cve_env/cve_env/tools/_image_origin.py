@@ -26,16 +26,16 @@ silently re-uses a stale cache — the bug this guards against. DO NOT relax.
 
 from __future__ import annotations
 
+from core.container.containers import is_external_image
+
+# source_build's local naming convention. The generic classifier lives in
+# core.container.containers; this binds the cve-env-specific prefix.
+_LOCAL_IMAGE_PREFIXES: tuple[str, ...] = ("cve-",)
+
 
 def _is_external_image(image: str) -> bool:
     """Return True iff `image` came from a public registry (and therefore
     should get `--pull` on docker run/build/compose). False for locally-
     built images (source_build output, localhost/, scratch).
     """
-    if not image:
-        return False
-    if image == "scratch":
-        return False
-    if image.startswith("localhost/"):
-        return False
-    return not image.startswith("cve-")
+    return is_external_image(image, local_prefixes=_LOCAL_IMAGE_PREFIXES)

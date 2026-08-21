@@ -200,6 +200,11 @@ class TaskGraph:
     _repass_keys: frozenset[str] = field(default_factory=frozenset)
     _effective_priority: dict[str, float] = field(default_factory=dict)
     _requeued: set[str] = field(default_factory=set)
+    # Keys handed out by ``pop_ready`` and not yet completed. The ready
+    # heap can hold duplicate entries for one key (reprioritising
+    # ``inject_task`` pushes again); without this set two ``pop_ready``
+    # calls could hand the same task to two parallel workers.
+    _issued: set[str] = field(default_factory=set)
     _duration_hints: dict[str, float] = field(default_factory=dict)
     _schedule: str = "priority"
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -340,13 +345,20 @@ class TaskGraph:
         return graph
 
     def pop_ready(self, n: int = 1) -> list[ReviewTask]:
-        """Pop up to *n* ready tasks in schedule order."""
+        """Pop up to *n* ready tasks in schedule order.
+
+        Duplicate heap entries for one key (an ``inject_task``
+        reprioritisation pushes a second entry) collapse here: a key
+        already issued to a worker — or already completed — is
+        skipped, so parallel workers never double-dispatch a task.
+        """
         with self._lock:
             result: list[ReviewTask] = []
             while self._ready and len(result) < n:
                 *_, key = heapq.heappop(self._ready)
-                if key in self._completed:
+                if key in self._completed or key in self._issued:
                     continue
+                self._issued.add(key)
                 result.append(self._tasks[key])
             return result
 
@@ -354,12 +366,17 @@ class TaskGraph:
         """Mark *key* done. Returns keys of newly-ready tasks."""
         with self._lock:
             self._completed.add(key)
+            self._issued.discard(key)
             newly_ready: list[str] = []
             for dep_key in self._dependents.get(key, []):
                 remaining = self._remaining_deps.get(dep_key)
                 if remaining is not None:
                     remaining.discard(key)
-                    if not remaining and dep_key not in self._completed:
+                    if (
+                        not remaining
+                        and dep_key not in self._completed
+                        and dep_key not in self._issued
+                    ):
                         ep = self._effective_priority.get(
                             dep_key, self._tasks[dep_key].priority,
                         )
@@ -419,6 +436,7 @@ class TaskGraph:
             if not requeue or key in self._requeued:
                 return False
             self._completed.discard(key)
+            self._issued.discard(key)
             self._requeued.add(key)
             old_task = self._tasks[key]
             self._tasks[key] = ReviewTask(
@@ -439,7 +457,18 @@ class TaskGraph:
             old_ep = self._effective_priority.get(key, 0.0)
             if priority > old_ep:
                 self._effective_priority[key] = priority
-                self._push_ready(key, priority, urgent=True)
+                # Only push tasks whose dependencies are satisfied and
+                # that no worker holds: an urgent push of a task with
+                # unfinished callees dispatched it before its taint
+                # summaries existed, and a push of an in-flight task
+                # double-dispatched it. Elevating the effective
+                # priority alone is enough — ``mark_complete`` pushes
+                # with the elevated value once the deps drain.
+                if (
+                    not self._remaining_deps.get(key)
+                    and key not in self._issued
+                ):
+                    self._push_ready(key, priority, urgent=True)
                 logger.debug(
                     "inject_task: reprioritised %s (%.1f -> %.1f)",
                     key.rsplit(":", 1)[0], old_ep, priority,

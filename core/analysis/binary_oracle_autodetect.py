@@ -27,7 +27,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Callable, List, Literal, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ def detect_binaries(
     target_kind: TargetKind = "auto",
     *,
     max_results: int = 8,
+    path_filter: Optional[Callable[[List[Path]], List[Path]]] = None,
 ) -> List[Path]:
     """Walk ``target_root`` for plausible debug binaries.
 
@@ -107,6 +108,11 @@ def detect_binaries(
       ``hybrid`` / ``auto`` / ``unknown``: BOTH (the safe default —
                        picking the wrong filter here would silently drop
                        binaries the operator needed)
+
+    ``path_filter`` (optional) runs over the candidate paths BEFORE the
+    DWARF probe — the CLI passes the git-provenance gate here so
+    repo-committed (possibly attacker-planted) ELFs are dropped without
+    ever being handed to readelf.
 
     Returns paths in deterministic order (alphabetical within each
     bucket; libraries before executables). Capped at ``max_results``
@@ -123,7 +129,7 @@ def detect_binaries(
     if not target_root.is_dir():
         return []
 
-    candidates: List[_Candidate] = []
+    raw: List[_Candidate] = []
     # Expand the literal build-dir list with Rust cross-target globs
     # (``target/x86_64-unknown-linux-gnu/release`` etc.). Glob is
     # cheap — single readdir on ``target/`` — and avoids enumerating
@@ -155,9 +161,23 @@ def detect_binaries(
             cand = _classify_candidate(p)
             if cand is None:
                 continue
-            if not _has_dwarf(cand.path):
+            # Cheap 4-byte magic check: name/mode heuristics let
+            # non-ELF files through (+x scripts without a known
+            # suffix, ``lib*.so`` GNU-ld linker scripts). Rejecting
+            # them here avoids a readelf subprocess per text file AND
+            # keeps them out of the provenance-gate warning below.
+            if not _is_elf(cand.path):
                 continue
-            candidates.append(cand)
+            raw.append(cand)
+
+    # Provenance / trust gate BEFORE the DWARF probe: a repo-committed
+    # (possibly attacker-planted) ELF should never reach readelf's
+    # parser at all, sandboxed or not.
+    if path_filter is not None and raw:
+        allowed = {Path(p) for p in path_filter([c.path for c in raw])}
+        raw = [c for c in raw if c.path in allowed]
+
+    candidates = [c for c in raw if _has_dwarf(c.path)]
 
     if not candidates:
         return []
@@ -277,31 +297,52 @@ def _classify_candidate(p: Path) -> Optional[_Candidate]:
     return _Candidate(path=p, kind="executable")
 
 
+def _is_elf(path: Path) -> bool:
+    """Cheap 4-byte ELF magic check — no subprocess. False on any read
+    error (unreadable file is not a usable candidate anyway)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
 def _has_dwarf(path: Path) -> bool:
     """True if ``path`` is an ELF file with a ``.debug_info`` (or
     split-DWARF ``.debug_info.dwo``) section.
 
-    Adversarial review Agent D P2: closed two fail-opens — (1) on
-    ``OSError`` / ``TimeoutExpired`` (readelf missing, hung on hostile
-    binary, sandbox-killed) the prior code returned ``True``, meaning a
-    crafted ELF that hangs readelf would slip through to classification
-    via foreign-DWARF; now reject (return False) on failure; (2) added
-    ``.debug_info.dwo`` recognition for split-DWARF builds (clang's
-    ``-gsplit-dwarf``, gcc's ``-gdwarf-split``) — without it, a perfectly
-    valid split-DWARF binary was filtered out as if stripped.
+    Runs readelf under the FULL sandbox (namespace + Landlock +
+    network deny) — the same posture as every binutils invocation
+    :func:`core.analysis.binary_oracle._run` makes. The candidates
+    probed here are pre-provenance: the walk may hand us an
+    attacker-committed ELF, and binutils' ELF parsers have a long CVE
+    history, so a plain get_safe_env() subprocess is not enough. The
+    sandbox is invoked directly rather than through ``_run`` because
+    the fail-closed contract below needs the exit status, which
+    ``_run`` (best-effort, log-and-return-stdout) does not surface.
+
+    Fail-closed (adversarial review Agent D P2): any failure —
+    readelf missing, non-zero exit, timeout, sandbox kill — reads as
+    "no DWARF" rather than letting a hostile binary through.
+    ``.debug_info.dwo`` covers split-DWARF builds (clang's
+    ``-gsplit-dwarf``, gcc's ``-gdwarf-split``).
     """
+    if not _is_elf(path):
+        return False
+    # Lazy import — keeps this module independently importable in
+    # unit tests that stub the sandbox (mirrors binary_oracle._run).
+    from core.sandbox import run as _sandbox_run
     try:
-        from core.config import RaptorConfig
-        from core.sandbox.preexec import set_pdeathsig
-        out = subprocess.run(
-            ["readelf", "-S", str(path)],
-            capture_output=True, text=True, check=False, timeout=10,
-            env=RaptorConfig.get_safe_env(), preexec_fn=set_pdeathsig(),
+        proc = _sandbox_run(
+            ["readelf", "-S", str(path)], block_network=True,
+            target=str(path.resolve().parent),
+            capture_output=True, text=True, timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as e:
+    except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle_autodetect: readelf -S failed on %s: %s",
                      path, e)
         return False
-    if out.returncode != 0:
+    if proc.returncode != 0:
         return False
-    return ".debug_info" in out.stdout or ".debug_info.dwo" in out.stdout
+    out = proc.stdout or ""
+    return ".debug_info" in out or ".debug_info.dwo" in out

@@ -30,6 +30,7 @@ import logging
 import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -346,8 +347,24 @@ def build_fuzz_coverage(
         if any_reached:
             files_examined.append(file_path)
 
+    # tool/timestamp make this a first-class coverage record: without
+    # them core.coverage.record.load_records skipped the file entirely,
+    # so fuzz runtime coverage never reached the durable store or the
+    # coverage summary's runtime category. functions_analysed carries
+    # the reached functions so the store gets function-precise
+    # runtime-tested marks (the registry classifies "fuzz" as runtime;
+    # audit gap suppression is llm/analysed-gated, so fuzz reach never
+    # counts as review).
     return {
+        "tool": "fuzz",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": files_examined,
+        "functions_analysed": [
+            {"file": file_path, "function": name}
+            for file_path, data in sorted(files.items())
+            for name, info in sorted(data["functions"].items())
+            if info["reached"]
+        ],
         "files": files,
         "meta": {
             "producer": "raptor-fuzz",

@@ -4,7 +4,7 @@ Phase 12.1 added per-stage cost telemetry fields (`stage_costs`,
 `stage_calls`, `over_budget_stages_list`) to the ``Outcome`` dataclass
 in ``models.py``. The fields WERE populated at outcome construction
 in ``loop.py`` — but the sidecar JSON written by ``cli.py`` is a
-MANUAL whitelist of fields (lines 87-103). The Phase 12.1 additions
+MANUAL allowlist of fields (lines 87-103). The Phase 12.1 additions
 were never propagated to the sidecar dict; the empirical evidence
 is `output/bench/bench50-20260512-135101/CVE-2024-1061.json` which
 has NO `stage_costs` key.
@@ -133,7 +133,7 @@ def test_method_serialized_to_outcome_dict() -> None:
 # ── #1a (2026-06-02): propagate daemon_corruption to the per-CVE outcome JSON ──
 # So the bench heal + bench_select_retry can detect containerd corruption from a
 # reliable greppable field, not by parsing the audit JSONL. Mirrors the #6 method
-# pattern (state flag -> Outcome field -> cli.py outcome_dict whitelist).
+# pattern (state flag -> Outcome field -> cli.py outcome_dict allowlist).
 
 
 def test_daemon_corruption_in_outcome_dict() -> None:

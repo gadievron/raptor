@@ -21,8 +21,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
-
 from cve_env.agent.loop import _map_status, _StreamState, _terminal_status_for_result
 from cve_env.models import OutcomeStatus
 

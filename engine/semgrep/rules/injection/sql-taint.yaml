@@ -16,13 +16,20 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the db.Query(...) sinks below, so a
+          # hardcoded db.Query("SELECT..." + "literal") self-tainted
+          # with no attacker data involved.
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
@@ -57,13 +64,34 @@ rules:
       - pattern-either:
           # Servlet
           - pattern: (HttpServletRequest $REQ).getParameter(...)
+          - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+          - pattern: (HttpServletRequest $REQ).getParameterMap()
           - pattern: (HttpServletRequest $REQ).getHeader(...)
           - pattern: (HttpServletRequest $REQ).getPathInfo()
           - pattern: (HttpServletRequest $REQ).getQueryString()
           - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Header/parameter enumerations are request data too: the
+          # Enumeration itself is the source; taint reaches values via
+          # nextElement(). Parameter/header NAMES are attacker-chosen.
+          - pattern: (HttpServletRequest $REQ).getHeaders(...)
+          - pattern: (HttpServletRequest $REQ).getHeaderNames()
+          - pattern: (HttpServletRequest $REQ).getParameterNames()
           # Spring MVC
           - pattern: (WebRequest $REQ).getParameter(...)
           - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-propagators:
+      # Collection round-trips (measured FN class: same-method
+      # map.put(k, tainted) -> get(k) -> sink). put/add taint the
+      # receiver; semgrep then propagates receiver taint through get.
+      # Key-insensitive by engine design — recall-side over-taint on a
+      # different key is adjudicated downstream (gate/validation), the
+      # honest asymmetry for a detector.
+      - pattern: $M.put($K, $V)
+        from: $V
+        to: $M
+      - pattern: $M.add($V)
+        from: $V
+        to: $M
     pattern-sinks:
       - pattern-either:
           # Statement — always string-based, no parameterisation
@@ -74,15 +102,49 @@ rules:
           - pattern: (Statement $STMT).executeQuery($Q + $X)
           - pattern: (Statement $STMT).executeUpdate($Q + $X)
           - pattern: (Statement $STMT).execute($Q + $X)
+      # Tainted SQL text handed to prepare — a constant '?' query is
+      # the safe form and carries no taint; concatenated SQL prepared
+      # then executed is injectable despite the PreparedStatement type.
+      - patterns:
+          - pattern-either:
+              - pattern: (Connection $C).prepareStatement($Q, ...)
+              - pattern: (Connection $C).prepareCall($Q, ...)
+              # FQN-declared locals: semgrep type matching is syntactic
+              - pattern: (java.sql.Connection $C).prepareStatement($Q, ...)
+              - pattern: (java.sql.Connection $C).prepareCall($Q, ...)
+          - focus-metavariable: $Q
       # JdbcTemplate — focus on $Q prevents FPs on parameterised bind args
       - patterns:
           - pattern-either:
               - pattern: (JdbcTemplate $JT).queryForObject($Q, ...)
               - pattern: (JdbcTemplate $JT).queryForList($Q, ...)
+              - pattern: (JdbcTemplate $JT).queryForMap($Q, ...)
               - pattern: (JdbcTemplate $JT).query($Q, ...)
               - pattern: (JdbcTemplate $JT).update($Q, ...)
               - pattern: (JdbcTemplate $JT).execute($Q)
           - focus-metavariable: $Q
+      # Distinctive Spring-JDBC method names, untyped receiver: the
+      # receiver is often a cross-file static field whose type
+      # semgrep cannot resolve syntactically; these names are unique
+      # enough to stand alone. Generic names (query/update/execute)
+      # deliberately stay type-gated above.
+      - patterns:
+          - pattern-either:
+              - pattern: $RECV.queryForObject($Q, ...)
+              - pattern: $RECV.queryForList($Q, ...)
+              - pattern: $RECV.queryForMap($Q, ...)
+              - pattern: $RECV.queryForRowSet($Q, ...)
+              - pattern: $RECV.batchUpdate($Q, ...)
+          - focus-metavariable: $Q
+      # Untrusted data concatenated onto SQL-shaped text is the
+      # CWE-89 anti-pattern regardless of the executing API's type —
+      # anchors on the SQL grammar, not the receiver.
+      - patterns:
+          - pattern: '"$SQL" + $X'
+          - metavariable-regex:
+              metavariable: $SQL
+              regex: (?i)^(select|insert|update|delete)\b.*
+          - focus-metavariable: $X
     metadata:
       cwe: ["CWE-89"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -100,20 +162,33 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.params[...]
-          - pattern: $CTX.params.$PROP
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP
@@ -143,6 +218,31 @@ rules:
           - metavariable-regex:
               metavariable: $Q
               regex: '(?i).*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|WHERE|FROM|INTO|SET|VALUES|JOIN|UNION|GRANT|REVOKE).*'
+      # Template-literal query construction in query position. The $Q
+      # regex requires a quoted/backtick literal opening with SQL text,
+      # so identifier names containing SQL words never match; taint can
+      # only reach a template literal through ${...} interpolation, so
+      # parameterised literals without interpolation stay clean.
+      - patterns:
+          - pattern-either:
+              - pattern: $CONN.query($Q, ...)
+              - pattern: $CONN.execute($Q, ...)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: '(?is)^[`"''].*\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|UNION|GRANT|REVOKE)\b.*'
+          - focus-metavariable: $Q
+      # Assignment-then-call form: the query text is built into a
+      # variable (template literal or concat) and handed to .query()
+      # later. $Q carries no SQL text to anchor on, so the receiver
+      # name is the FP control — only DB-shaped receivers qualify.
+      - patterns:
+          - pattern-either:
+              - pattern: $DBOBJ.query($Q, ...)
+              - pattern: $DBOBJ.execute($Q, ...)
+          - metavariable-regex:
+              metavariable: $DBOBJ
+              regex: '(?i)^(conn(ection)?|client|pool|db|database|sql|mysql|pg|pgpool|dbconn|dbpool)[0-9_]*$'
+          - focus-metavariable: $Q
     metadata:
       cwe: ["CWE-89"]
       owasp_top_10: ["A3:2021-Injection"]

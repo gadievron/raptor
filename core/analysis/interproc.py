@@ -73,6 +73,7 @@ from typing import (
     List,
     Optional,
     Set,
+    Tuple,
 )
 
 from core.dataflow.sanitizer_catalog import (
@@ -138,13 +139,24 @@ def _param_cleanly_sanitized(
     )
 
 
-def _positional_arg_names(
+def _call_arg_names(
     fn_ast: ast.AST, lineno: int, col_offset: int, callee_chain: str,
-) -> Optional[List[Optional[str]]]:
-    """Positional argument bare-names for the call to ``callee_chain``
-    at ``(lineno, col_offset)``. Each entry is the arg's identifier
-    (``ast.Name``) or None for non-name args (literals, nested calls,
-    subscripts). None if no matching call is found.
+) -> Optional[Tuple[List[Optional[str]], List[Tuple[Optional[str], Optional[str]]]]]:
+    """Argument bare-names for the call to ``callee_chain`` at
+    ``(lineno, col_offset)``. Returns ``(positional, keywords)``:
+    ``positional`` has one entry per positional arg — the arg's
+    identifier (``ast.Name``) or None for non-name args (literals,
+    nested calls, subscripts); ``keywords`` has one
+    ``(keyword_name, value_name)`` entry per keyword arg, where
+    ``keyword_name`` is None for ``**kwargs`` expansion and
+    ``value_name`` is the value's identifier or None for non-name
+    values. None if no matching call is found.
+
+    Keyword args matter for soundness, not just coverage: a symbol
+    passed BOTH positionally into a sanitized parameter AND by keyword
+    into an unsanitized one (``helper(x, b=x)``) reaches the sink dirty
+    through the keyword path, so the caller must see the keyword flow
+    to decline the binding.
 
     Matching on the exact ``(lineno, col_offset)`` pair — not lineno
     alone — uniquely identifies the call node even when two calls
@@ -165,7 +177,14 @@ def _positional_arg_names(
         out: List[Optional[str]] = []
         for arg in node.args:
             out.append(arg.id if isinstance(arg, ast.Name) else None)
-        return out
+        kw_out: List[Tuple[Optional[str], Optional[str]]] = []
+        for kw in node.keywords:
+            val = kw.value
+            kw_out.append((
+                kw.arg,
+                val.id if isinstance(val, ast.Name) else None,
+            ))
+        return out, kw_out
     return None
 
 
@@ -212,11 +231,12 @@ def synthetic_sanitizer_bindings(
             ]
             if not sanitized_positions:
                 continue
-            arg_names = _positional_arg_names(
+            resolved = _call_arg_names(
                 fn_ast, cs.lineno, cs.col_offset, cs.name,
             )
-            if arg_names is None:
+            if resolved is None:
                 continue
+            arg_names, kw_args = resolved
             sanitized_set = set(sanitized_positions)
             # Review #1: a symbol passed at a position that taints the
             # return but is NOT cleanly sanitized reaches the sink
@@ -233,6 +253,26 @@ def synthetic_sanitizer_bindings(
                     continue
                 if i < len(summary.params) and summary.param_taints_return(i):
                     unsanitized_symbols.add(name)
+            # Keyword-passed flows of the same symbol are just as
+            # dirty as positional ones: ``helper(x, b=x)`` sends x
+            # into the unsanitized ``b`` no matter how ``a`` cleans
+            # it. Map keyword name → parameter position and apply the
+            # same rule; anything unresolvable (``**kwargs``
+            # expansion, a keyword that matches no known parameter)
+            # is uncertainty — the docstring's contract is to decline
+            # to suppress on uncertainty, so treat the symbol as
+            # unsanitized.
+            for kw_name, val_name in kw_args:
+                if val_name is None:
+                    continue
+                if kw_name is None or kw_name not in summary.params:
+                    unsanitized_symbols.add(val_name)
+                    continue
+                idx = summary.params.index(kw_name)
+                if idx in sanitized_set:
+                    continue
+                if summary.param_taints_return(idx):
+                    unsanitized_symbols.add(val_name)
             input_symbols: Set[str] = set()
             for i in sanitized_positions:
                 if i < len(arg_names) and arg_names[i] is not None:

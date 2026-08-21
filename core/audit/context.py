@@ -215,7 +215,9 @@ def assemble_context(
     _enrich_callers_with_call_sites(
         ctx["callers"], target_path, function_name,
     )
-    ctx["callees"] = _find_callees(inventory, file_path, function_name, line_start)
+    ctx["callees"] = _find_callees(
+        inventory, file_path, function_name, line_start, context_map,
+    )
     _enrich_callees_with_source(ctx["callees"], target_path, checklist)
     ctx["existing_annotation"] = _load_existing_annotation(
         annotations_dir, file_path, function_name,
@@ -1434,6 +1436,46 @@ def format_context_for_prompt(
     if prior_hyp_text:
         sections.append(PromptSection("prior_hypotheses", prior_hyp_text, 1))
 
+    if ctx.get("prior_finding_analyses"):
+        # Finding-grade prior claims: /agentic analysed individual
+        # scanner findings located in this function. The kind-aware
+        # gap fold deliberately does NOT count them as coverage; this
+        # section is where they reach the reviewer instead — as prior
+        # claims to verify, never as verdicts. Bodies can embed
+        # scanner messages quoting the target repo, so they go
+        # through the untrusted envelope like every other
+        # target-derived surface.
+        pfa = ["\n### Prior finding-grade analyses (claims, not verdicts)"]
+        pfa.append(
+            "Earlier pipeline runs analysed individual findings located "
+            "in this function (/agentic scanner-finding analyses, "
+            "/validate-confirmed findings) — one finding each, not a "
+            "function review. Treat each as a prior claim from another "
+            "reviewer: "
+            "verify independently against THIS function's code, never "
+            "inherit a verdict, and still review the whole function, "
+            "not just the claimed line."
+        )
+        for pa in ctx["prior_finding_analyses"]:
+            head = f"- Prior claim: **{pa.get('verdict') or 'unknown'}**"
+            if pa.get("cwe"):
+                head += f" ({pa['cwe']})"
+            if pa.get("model"):
+                head += f" by {pa['model']}"
+            pfa.append(head)
+            # Bodies are excerpted at collection time
+            # (prior_claim_excerpt_chars) — one bound, every consumer.
+            body = (pa.get("body") or "").strip()
+            if body:
+                pfa.append(wrap_untrusted(
+                    body,
+                    kind="prior_finding_analysis",
+                    origin=f"agentic:{pa.get('run_id') or 'unknown'}",
+                ))
+        sections.append(
+            PromptSection("prior_finding_analyses", "\n".join(pfa), 4),
+        )
+
     injected_hyp_text = _format_injected_hypotheses(
         ctx.get("injected_hypotheses"),
     )
@@ -2209,42 +2251,67 @@ def _find_callees(
     file_path: str,
     function_name: str,
     line_start: int = 0,
+    context_map: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Find 1-hop callees via reachability API."""
-    if not inventory:
-        return []
+    """Find 1-hop callees via reachability API.
 
-    try:
-        from core.analysis.reachability import (
-            ExternalFunction,
-            InternalFunction,
-            callees_of,
-        )
-        source = InternalFunction(
-            file_path=file_path, name=function_name, line=line_start,
-        )
-        result = callees_of(inventory, source, exclude_test_files=True)
-        out = []
-        for c in result.definitive:
-            if isinstance(c, InternalFunction):
+    Falls back to the context map's ``call_edges`` when the inventory
+    yields nothing — the mirror of :func:`_find_callers`. Without the
+    fallback, hosts whose inventory carries no call edges (optional
+    tree-sitter grammars absent, regex extraction) drop every
+    callee-derived prompt section — most visibly the "Callee CPG
+    summaries" delivery, whose candidate DISCOVERY already accepts
+    context-map edges as a documented second source.
+    """
+    out: list[dict[str, Any]] = []
+    if inventory:
+        try:
+            from core.analysis.reachability import (
+                ExternalFunction,
+                InternalFunction,
+                callees_of,
+            )
+            source = InternalFunction(
+                file_path=file_path, name=function_name, line=line_start,
+            )
+            result = callees_of(inventory, source, exclude_test_files=True)
+            for c in result.definitive:
+                if isinstance(c, InternalFunction):
+                    out.append({
+                        "file": c.file_path,
+                        "name": c.name,
+                        "line_start": c.line,
+                    })
+                elif isinstance(c, ExternalFunction):
+                    out.append({
+                        "file": "(external)",
+                        "name": c.qualified_name,
+                        "line_start": 0,
+                    })
+        except Exception:
+            logger.debug(
+                "callees_of failed for %s:%s", file_path, function_name,
+                exc_info=True,
+            )
+
+    if context_map and not out:
+        seen = set()
+        for edge in context_map.get("call_edges", []):
+            if edge.get("caller") != function_name or not edge.get("callee"):
+                continue
+            caller_file = edge.get("caller_file", "")
+            if caller_file and file_path and caller_file != file_path:
+                continue
+            callee_key = (edge.get("callee_file", ""), edge["callee"])
+            if callee_key not in seen:
+                seen.add(callee_key)
                 out.append({
-                    "file": c.file_path,
-                    "name": c.name,
-                    "line_start": c.line,
-                })
-            elif isinstance(c, ExternalFunction):
-                out.append({
-                    "file": "(external)",
-                    "name": c.qualified_name,
+                    "file": edge.get("callee_file", ""),
+                    "name": edge["callee"],
                     "line_start": 0,
                 })
-        return out
-    except Exception:
-        logger.debug(
-            "callees_of failed for %s:%s", file_path, function_name,
-            exc_info=True,
-        )
-        return []
+
+    return out
 
 
 _OPERATOR_NOTE_MAX_BYTES = 16 * 1024
@@ -2450,10 +2517,15 @@ _DANGEROUS_API_RE = {
 }
 _DANGEROUS_APIS_LOWER = frozenset(api.lower() for api in _DANGEROUS_APIS)
 
+# Detection vocabulary matched against SCANNED third-party code —
+# the legacy whitelist token stays (older codebases use it) and the
+# allowlist/blocklist spellings are recognised alongside; this is
+# exempt from the house allowlist/blocklist terminology rule.
 _SANITIZER_PATTERNS = frozenset({
     "validate", "sanitize", "escape", "encode", "normalize",
     "check", "verify", "is_valid", "assert", "guard",
     "clean", "strip", "filter", "whitelist",
+    "allowlist", "allow_list", "blocklist", "denylist",
 })
 
 

@@ -1,5 +1,9 @@
 """Stage 3E-b — bound the bare subprocess.run calls in docker_run (RED tests).
 
+The bounded runner now lives in core.container (the shims in docker_run
+keep the package-local names); the seam these tests monkeypatch is
+core.container.containers.run_cli.
+
 behavioral-audit-2026-05-27.md F4: `_logs_tail` (docker logs) and
 `_read_allocated_host_port` (docker inspect, per-poll) used bare
 `subprocess.run` with NO timeout. A wedged docker daemon makes them hang —
@@ -17,8 +21,10 @@ from typing import Any
 
 import pytest
 
+from core.container import containers as cc
+from core.container.proc import RunOutcome
+
 from cve_env.tools import docker_run as dr
-from cve_env.utils.run import RunOutcome
 
 
 def test_logs_tail_is_bounded(monkeypatch: Any) -> None:
@@ -28,7 +34,7 @@ def test_logs_tail_is_bounded(monkeypatch: Any) -> None:
         seen["timeout"] = timeout
         return RunOutcome(returncode=None, stdout="", stderr="", timed_out=True)
 
-    monkeypatch.setattr(dr, "run_with_timeout", fake_rwt)
+    monkeypatch.setattr(cc, "run_cli", fake_rwt)
     out = dr._logs_tail("cid")
     assert seen.get("timeout", 0) > 0, (
         "_logs_tail must route through run_with_timeout (bounded), not bare "
@@ -44,9 +50,9 @@ def test_read_allocated_host_port_poll_is_bounded(monkeypatch: Any) -> None:
         seen["timeout"] = timeout
         return RunOutcome(returncode=None, stdout="", stderr="", timed_out=True)
 
-    monkeypatch.setattr(dr, "run_with_timeout", fake_rwt)
+    monkeypatch.setattr(cc, "run_cli", fake_rwt)
     monkeypatch.setattr(
-        dr.time, "sleep", lambda *_a, **_k: None
+        cc.time, "sleep", lambda *_a, **_k: None
     )  # don't really sleep the poll gap
 
     start = time.monotonic()

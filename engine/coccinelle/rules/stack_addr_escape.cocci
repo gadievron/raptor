@@ -6,13 +6,21 @@
 // output pointer parameter, where the dangling pointer survives
 // the function return.
 //
+// Position discipline (format_string.cocci technique): a safe rule
+// binds the positions of &LOCAL assignments whose target provably
+// stays in the same scope — a locally declared pointer variable, or
+// a member of a locally declared struct (same lifetime as LOCAL).
+// The bug rule reports assignments at positions NOT in the safe set:
+// globals/statics, members reached through pointers, and any other
+// target that can survive the frame.
+//
 // CWE-562: Return of Stack Variable Address (generalised)
 // @role: verification
 
-@stack_to_global@
+@safe_local_target@
 identifier FUNC, LOCAL;
-type T;
-expression G;
+type T, T2;
+identifier G, S, M;
 position p;
 @@
 
@@ -21,15 +29,23 @@ position p;
     ... when any
     T LOCAL;
     ... when any
+(
+    T2 *G;
+    ... when any
     G = &LOCAL@p;
+|
+    T2 S;
+    ... when any
+    S.M = &LOCAL@p;
+)
     ... when any
   }
 
-@ok_local_only depends on stack_to_global@
-identifier stack_to_global.FUNC, stack_to_global.LOCAL;
-type T, T2;
-identifier G;
-position stack_to_global.p;
+@stack_to_global@
+identifier FUNC, LOCAL;
+type T;
+expression G;
+position p != safe_local_target.p;
 @@
 
   FUNC(...)
@@ -37,13 +53,11 @@ position stack_to_global.p;
     ... when any
     T LOCAL;
     ... when any
-    T2 *G;
-    ... when any
     G = &LOCAL@p;
     ... when any
   }
 
-@script:python stack_escape_report depends on stack_to_global && !ok_local_only@
+@script:python stack_escape_report depends on stack_to_global@
 p << stack_to_global.p;
 @@
 import json

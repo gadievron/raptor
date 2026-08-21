@@ -783,3 +783,91 @@ class TestDurationHints:
         wq = [{"file": "a.py", "name": "f", "line_start": 1, "sloc": 10}]
         hints = _review_duration_hints(wq, {"a.py:f": _TR()})
         assert hints["a.py:f:1"] == 6010.0
+
+
+class TestDispatchDeduplication:
+    """Duplicate ready-heap entries must never double-dispatch, and
+    injected reprioritisations must respect unfinished dependencies."""
+
+    def test_reprioritised_task_pops_once(self) -> None:
+        """inject_task on a pending task pushes a second heap entry;
+        pop_ready must hand the task out exactly once."""
+        g = TaskGraph.from_workqueue(
+            [_gap("a.py", "f1", 0.5), _gap("a.py", "f2", 0.4)], [],
+        )
+        g.inject_task("a.py:f1:0", _gap("a.py", "f1"), 3.0)
+        popped = [t.key for t in g.pop_ready(10)]
+        assert popped.count("a.py:f1:0") == 1
+        assert set(popped) == {"a.py:f1:0", "a.py:f2:0"}
+
+    def test_parallel_pops_disjoint(self) -> None:
+        """Two workers popping concurrently never share a task, even
+        when the heap carries duplicate entries for one key."""
+        g = TaskGraph.from_workqueue([_gap("a.py", "f1", 0.5)], [])
+        g.inject_task("a.py:f1:0", _gap("a.py", "f1"), 2.0)
+        first = g.pop_ready(1)
+        second = g.pop_ready(1)
+        assert [t.key for t in first] == ["a.py:f1:0"]
+        assert second == []
+
+    def test_inject_with_unfinished_deps_not_dispatched_early(self) -> None:
+        """Chain-following injects a caller at elevated priority; it
+        must still wait for its callee's summary."""
+        wq = [_gap("a.py", "caller", 0.5), _gap("a.py", "callee", 0.4)]
+        edges = [_edge("a.py", "caller", "a.py", "callee")]
+        g = TaskGraph.from_workqueue(wq, edges)
+        g.inject_task("a.py:caller:0", _gap("a.py", "caller"), 5.0)
+
+        ready = g.pop_ready(10)
+        assert [t.key for t in ready] == ["a.py:callee:0"]
+
+        newly = g.mark_complete("a.py:callee:0")
+        assert newly == ["a.py:caller:0"]
+        ready = g.pop_ready(10)
+        assert [t.key for t in ready] == ["a.py:caller:0"]
+
+    def test_elevated_priority_survives_dep_completion(self) -> None:
+        """The injected priority applies when deps finally drain."""
+        wq = [
+            _gap("a.py", "caller", 0.1),
+            _gap("a.py", "callee", 0.4),
+            _gap("a.py", "other", 0.5),
+        ]
+        edges = [_edge("a.py", "caller", "a.py", "callee")]
+        g = TaskGraph.from_workqueue(wq, edges)
+        g.inject_task("a.py:caller:0", _gap("a.py", "caller"), 5.0)
+
+        for t in g.pop_ready(10):
+            g.mark_complete(t.key)
+        # caller now ready at its elevated (5.0) priority
+        ready = g.pop_ready(10)
+        assert [t.key for t in ready] == ["a.py:caller:0"]
+
+    def test_requeue_after_issue_dispatches_again(self) -> None:
+        """A completed task requeued for chain context is issued again
+        exactly once."""
+        g = TaskGraph.from_workqueue([_gap("a.py", "f1")], [])
+        g.pop_ready(1)
+        g.mark_complete("a.py:f1:0")
+        g.inject_task("a.py:f1:0", _gap("a.py", "f1"), 5.0, requeue=True)
+        popped = [t.key for t in g.pop_ready(10)]
+        assert popped == ["a.py:f1:0"]
+        assert g.pop_ready(10) == []
+
+    def test_drain_completes_all_with_duplicates(self) -> None:
+        """Full drain with duplicate entries reaches pending == 0."""
+        wq = [_gap("a.py", f"f{i}", 0.5) for i in range(4)]
+        edges = [_edge("a.py", "f0", "a.py", "f1")]
+        g = TaskGraph.from_workqueue(wq, edges)
+        g.inject_task("a.py:f0:0", _gap("a.py", "f0"), 9.0)
+        g.inject_task("a.py:f2:0", _gap("a.py", "f2"), 9.0)
+        seen: list[str] = []
+        while g.pending > 0:
+            ready = g.pop_ready(2)
+            if not ready:
+                break
+            for t in ready:
+                seen.append(t.key)
+                g.mark_complete(t.key)
+        assert g.pending == 0
+        assert len(seen) == len(set(seen)) == 4

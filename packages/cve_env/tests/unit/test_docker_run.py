@@ -75,7 +75,7 @@ def _find_docker_run_cmd(mock_run: Any) -> list[str]:
 
 
 @pytest.mark.slow  # real host-port inspect poll runs to _INSPECT_POLL_TIMEOUT_S (10s); nightly tier
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> None:
     """External image (vulhub/openssl) → --pull always in argv."""
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
@@ -92,7 +92,7 @@ def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> Non
 
 
 @pytest.mark.slow  # real host-port inspect poll runs to _INSPECT_POLL_TIMEOUT_S (10s); nightly tier
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_skips_pull_always_for_local_image(mock_run: Any) -> None:
     """Locally-built image (cve-X:build) → no --pull flag (no upstream)."""
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
@@ -107,7 +107,7 @@ def test_docker_run_skips_pull_always_for_local_image(mock_run: Any) -> None:
 # -- sticky-retry guard ---------------------------------------------------
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_blocks_duplicate_failing_attempt(mock_run: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
@@ -128,7 +128,7 @@ def test_docker_run_blocks_duplicate_failing_attempt(mock_run: Any) -> None:
     mock_run.assert_not_called()
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_allows_different_platform_after_failure(mock_run: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
@@ -148,7 +148,7 @@ def test_docker_run_allows_different_platform_after_failure(mock_run: Any) -> No
     mock_run.assert_called_once()
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_allows_different_image_after_failure(mock_run: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
 
@@ -207,7 +207,7 @@ def test_docker_run_next_step_hint_for_arch_mismatch_via_stderr() -> None:
     assert "arch" in h.lower() or "platform" in h.lower()
 
 
-@patch("cve_env.utils.run.subprocess.run")
+@patch("core.container.proc.subprocess.run")
 def test_docker_run_failure_payload_includes_next_step_hint(
     mock_run: Any,
 ) -> None:
@@ -233,8 +233,8 @@ def test_docker_run_failure_payload_includes_next_step_hint(
 # wall-guard. docker_run must turn that into a fast, pivot-able failure.
 
 
-@patch("cve_env.tools.docker_run.run_with_timeout")
-@patch("cve_env.tools.docker_run.time.sleep")  # don't burn the retry backoff
+@patch("core.container.containers.run_cli")
+@patch("core.container.containers.time.sleep")  # don't burn the retry backoff
 def test_docker_run_pull_timeout_surfaces_pivot(mock_sleep: Any, mock_rwt: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
     from cve_env.utils.run import RunOutcome

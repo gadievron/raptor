@@ -2,7 +2,7 @@
 """Stamp release version into tracked files.
 
 Called by the release workflow to bake the version tag into
-core/config/__init__.py, CITATION.cff, and README.md.
+core/config/__init__.py, pyproject.toml, CITATION.cff, and README.md.
 
 Usage:
   stamp-version <tag>
@@ -66,6 +66,23 @@ def stamp_citation(ver: str) -> str:
     return match.group(0) if match else ""
 
 
+def stamp_pyproject(ver: str) -> str:
+    path = Path("pyproject.toml")
+    if not path.exists():
+        return ""
+    text = path.read_text()
+    text, n = re.subn(
+        r'^(version = ")[^"]+(")',
+        lambda m: m.group(1) + ver + m.group(2),
+        text, count=1, flags=re.MULTILINE,
+    )
+    if n == 0:
+        return ""
+    atomic_write(path, text)
+    match = re.search(r'^version = ".*"', text, re.MULTILINE)
+    return match.group(0) if match else ""
+
+
 def stamp_readme(tag: str) -> str:
     path = Path("README.md")
     text = path.read_text()
@@ -111,6 +128,10 @@ def main() -> None:
         print(f"  {result}")
         stamped += 1
     result = stamp_citation(ver)
+    if result:
+        print(f"  {result}")
+        stamped += 1
+    result = stamp_pyproject(ver)
     if result:
         print(f"  {result}")
         stamped += 1

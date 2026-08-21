@@ -13,12 +13,10 @@ import re
 from typing import Dict, List, Set, Optional
 from urllib.parse import urlparse, urljoin, parse_qs
 
-import sys
-from pathlib import Path
-
-# Add paths for cross-package imports
-# packages/web/crawler.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# No sys.path mutation here: this module is only ever imported (no
+# __main__ entry point), and the path-safety rule (CLAUDE.md) forbids
+# positional-walk inserts — callers already run with the repo root on
+# sys.path via the launcher's RAPTOR_DIR.
 
 from core.logging import get_logger
 from core.security.redaction import is_secret_field_name, redact_url_secrets_only
@@ -49,6 +47,12 @@ class WebCrawler:
         self.discovered_forms: List[Dict] = []
         self.discovered_apis: List[Dict] = []
         self.discovered_parameters: Set[str] = set()
+        # param name -> set of (unredacted) URLs whose query string
+        # carried it. Lets the scanner fuzz a parameter only where it
+        # was actually discovered instead of the full URL x parameter
+        # cross-product. Form input names are NOT recorded here — the
+        # scanner's form loop fuzzes those against their form action.
+        self.parameter_urls: Dict[str, Set[str]] = {}
         self._log_page_ids: Dict[str, str] = {}
 
         logger.info(
@@ -331,6 +335,10 @@ class WebCrawler:
                     if parsed.query:
                         params = parse_qs(parsed.query)
                         self.discovered_parameters.update(params.keys())
+                        for param_name in params:
+                            self.parameter_urls.setdefault(
+                                param_name, set(),
+                            ).add(absolute_url)
 
                     # Enqueue for the BFS loop (or fall through
                     # if no queue — legacy single-page caller).
@@ -490,6 +498,10 @@ class WebCrawler:
                 self._redacted_api(api) for api in self.discovered_apis
             ],
             "discovered_parameters": sorted(self.discovered_parameters),
+            "parameter_urls": {
+                param: self._redacted_url_list(urls)
+                for param, urls in sorted(self.parameter_urls.items())
+            },
             "stats": {
                 "total_pages": len(self.visited_urls),
                 "total_urls": len(self.discovered_urls),

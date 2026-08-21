@@ -448,9 +448,21 @@ def compile_probe_question(
         return _unavailable(f"no working {lang} compiler on PATH")
     compiler, version = toolchain
 
-    include_path = (Path(source_root) / probe_item["file"]).resolve()
+    # One canonical root for BOTH the #include path and the sandbox
+    # mount target.  ``include_path.resolve()`` follows symlinks, but
+    # the mount-ns backend binds the target at its abspath — when the
+    # tree is reached via a symlink (shared fixture farms), a resolved
+    # include path against an unresolved mount target points at a path
+    # that does not exist inside the namespace, and every baseline
+    # step fails "does not compile standalone" on a file that plainly
+    # exists.  Resolving the root once keeps the pair consistent.
     try:
-        include_path.relative_to(Path(source_root).resolve())
+        source_root = Path(source_root).resolve()
+    except OSError:
+        return _unavailable("source root could not be resolved")
+    include_path = (source_root / probe_item["file"]).resolve()
+    try:
+        include_path.relative_to(source_root)
     except ValueError:
         return _unavailable("defining file escapes the source root")
     if not include_path.is_file():
@@ -464,7 +476,7 @@ def compile_probe_question(
     try:
         from core.audit.compiler_sweep import _derive_include_dirs
         include_dirs = _derive_include_dirs(
-            Path(source_root), include_path.parent,
+            source_root, include_path.parent,
         )
     except Exception:  # noqa: BLE001 - fall back to the minimal set
         include_dirs = [str(source_root), str(include_path.parent)]
@@ -599,9 +611,15 @@ def determine_probe_question(
         return _unavailable(f"no working {lang} compiler on PATH")
     compiler, version = toolchain
 
-    include_path = (Path(source_root) / probe_item["file"]).resolve()
+    # Resolved-root agreement with the sandbox mount target — see the
+    # claim probe above for the symlinked-fixture failure this avoids.
     try:
-        include_path.relative_to(Path(source_root).resolve())
+        source_root = Path(source_root).resolve()
+    except OSError:
+        return _unavailable("source root could not be resolved")
+    include_path = (source_root / probe_item["file"]).resolve()
+    try:
+        include_path.relative_to(source_root)
     except ValueError:
         return _unavailable("defining file escapes the source root")
     if not include_path.is_file():
@@ -615,7 +633,7 @@ def determine_probe_question(
     try:
         from core.audit.compiler_sweep import _derive_include_dirs
         include_dirs = _derive_include_dirs(
-            Path(source_root), include_path.parent,
+            source_root, include_path.parent,
         )
     except Exception:  # noqa: BLE001 - fall back to the minimal set
         include_dirs = [str(source_root), str(include_path.parent)]

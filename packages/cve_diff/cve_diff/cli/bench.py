@@ -426,9 +426,13 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         for t, n in tool_calls_total.most_common()
     ]
 
-    # Failure cluster (excluding PASS).
+    # Failure cluster (excluding PASS). Markdown-escape pipes and
+    # flatten newlines so a multi-line error stays in one table cell.
+    def _error_cell(error: str | None) -> str:
+        return (error or "")[:200].replace("|", "\\|").replace("\n", " ")
+
     fail_lines = [
-        f"| {r.cve_id} | {r.error_class or 'Other'} | {(r.error or '')[:200].replace('|', '\\|').replace(chr(10), ' ')} |"
+        f"| {r.cve_id} | {r.error_class or 'Other'} | {_error_cell(r.error)} |"
         for r in summary.results
         if not r.ok
     ]

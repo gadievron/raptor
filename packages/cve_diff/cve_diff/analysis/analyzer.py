@@ -78,7 +78,11 @@ class RootCause:
 
 @dataclass
 class RootCauseAnalyzer:
-    client: ResilientLLMClient = field(default_factory=ResilientLLMClient)
+    client: ResilientLLMClient = field(
+        default_factory=lambda: ResilientLLMClient(
+            call_class="cve-diff:root-cause",
+        ),
+    )
     model_id: str = DEFAULT_MODEL
     diff_limit: int = DIFF_PROMPT_LIMIT
 

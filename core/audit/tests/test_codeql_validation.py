@@ -499,3 +499,68 @@ class TestExtractClaimsFromReview:
         }
         claims = extract_claims_from_review(result)
         assert claims == []
+
+
+class TestSourceLineContainment:
+    """SARIF uris are attacker-influenced: containment must be
+    separator-anchored (the old bare startswith accepted sibling
+    directories like /repo-evil for target /repo)."""
+
+    def test_in_target_loads(self, tmp_path):
+        from core.audit.codeql_validation import _load_source_lines
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "a.c").write_text("int x;\nint y;\n", encoding="utf-8")
+        cache: dict = {}
+        lines = _load_source_lines("a.c", target, cache)
+        assert lines == ["int x;", "int y;"]
+
+    def test_sibling_directory_rejected(self, tmp_path):
+        from core.audit.codeql_validation import _load_source_lines
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        evil = tmp_path / "repo-evil"
+        evil.mkdir()
+        (evil / "leak.c").write_text("secret\n", encoding="utf-8")
+        cache: dict = {}
+        assert _load_source_lines(
+            "../repo-evil/leak.c", target, cache,
+        ) is None
+
+    def test_traversal_rejected(self, tmp_path):
+        from core.audit.codeql_validation import _load_source_lines
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (tmp_path / "outside.c").write_text("secret\n", encoding="utf-8")
+        cache: dict = {}
+        assert _load_source_lines("../outside.c", target, cache) is None
+
+
+class TestScopeContainment:
+    def test_sibling_scope_dir_rejected(self, tmp_path):
+        from core.audit.codeql_backend import _path_in_scope_dirs
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src2").mkdir()
+        (tmp_path / "src" / "a.py").write_text("x = 1\n")
+        (tmp_path / "src2" / "b.py").write_text("x = 1\n")
+        scope_dirs = (str((tmp_path / "src").resolve()),)
+        assert _path_in_scope_dirs(tmp_path / "src" / "a.py", scope_dirs)
+        assert not _path_in_scope_dirs(
+            tmp_path / "src2" / "b.py", scope_dirs,
+        )
+
+    def test_scope_dir_itself_in_scope(self, tmp_path):
+        from core.audit.codeql_backend import _path_in_scope_dirs
+
+        (tmp_path / "src").mkdir()
+        scope_dirs = (str((tmp_path / "src").resolve()),)
+        assert _path_in_scope_dirs(tmp_path / "src", scope_dirs)
+
+    def test_unscoped_everything_in(self, tmp_path):
+        from core.audit.codeql_backend import _path_in_scope_dirs
+
+        assert _path_in_scope_dirs(tmp_path / "anything.py", None)

@@ -954,8 +954,9 @@ jobs:
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
-  # fix). sage is the proving ground: zero subprocess usage in
-  # core/sage/tests, so if this goes green the container approach is
+  # fix). sage is the proving ground (NOTE: the tier now spawns
+  # subprocesses — the guard/capture tests run python, bash and jq
+  # pipelines, so the image must carry bash+jq): if green, the
   # sound and the remaining pure-Python tiers can follow. It runs
   # INSIDE ghcr.io/<owner>/raptor-ci-deps (deps baked in) instead of
   # `needs: deps` + downloading the venv artifact — removing one

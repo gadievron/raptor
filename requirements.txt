@@ -14,20 +14,11 @@ urllib3==2.7.0
 pydantic==2.13.4
 typer==0.25.1
 
-# packages/cve_env drives the Claude Code agent SDK (session auth; no
-# ANTHROPIC_API_KEY required) for its in-process MCP tool-use loop. Exact
-# pin = the version cve-env was resolved/tested against (uv.lock @ ba9f91c,
-# within the upstream >=0.1.66,<0.2 range). Pulls anyio/mcp/sniffio
-# transitively; none clash with raptor's existing pins.
-claude-agent-sdk==0.1.71
-
-# claude-agent-sdk 0.1.71 declares an uncapped `mcp` dependency, but its
-# create_sdk_mcp_server() decorates the low-level
-# mcp.server.Server.list_tools() / call_tool() API, which mcp 2.0.0
-# removed — a fresh resolve pulling 2.x fails with AttributeError as soon
-# as an in-process MCP server is assembled. Pin the newest compatible 1.x
-# (1.29.0 still ships the decorator API). Unpin path: claude-agent-sdk
-# >=0.2 declares mcp>=1.23,<3 and supports the 2.x server API.
+# semgrep imports `mcp` unconditionally at startup (its MCP-server
+# feature is not optional at import time), but declares a pin (1.23.3)
+# that predates the decorator-API cleanup. 1.29.0 is the newest 1.x
+# semgrep runs against (verified by scan smoke test); 2.x removes the
+# low-level server decorator API some consumers still use.
 mcp==1.29.0
 
 # Structured output (works with both OpenAI and Anthropic SDKs).
@@ -58,7 +49,8 @@ instructor==1.15.4
 # Optional: Rich inventory metadata (decorators, annotations, visibility, typed params)
 # Without a grammar a language falls back to the regex extractor, which finds
 # fewer functions and no line_end — so anything that slices source by span
-# degrades silently. Install the grammars for the languages you scan.
+# degrades silently. Install the grammars for the languages you scan
+# (requirements-grammars.txt carries this exact pinned set).
 # tree-sitter==0.25.2
 # tree-sitter-c==0.24.2
 # tree-sitter-c-sharp==0.23.5

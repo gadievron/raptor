@@ -7,6 +7,7 @@ summaries from the target.  Separated from orchestrator.py.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -30,9 +31,15 @@ def codeql_pre_sweep(
 
     import subprocess as _sp
     try:
+        from core.config import RaptorConfig
+
         info = _sp.run(
             ["codeql", "resolve", "database", str(db_path)],
             capture_output=True, text=True, timeout=30,
+            # Sanitised environment like every other subprocess that
+            # touches scan-derived paths (the database may live under
+            # the scanned repo).
+            env=RaptorConfig.get_safe_env(),
         )
         language = None
         for line in info.stdout.splitlines():
@@ -155,6 +162,22 @@ def build_sink_results(
     return result
 
 
+def _path_in_scope_dirs(p, scope_dirs) -> bool:
+    """Separator-anchored scope containment.
+
+    A bare ``startswith`` on the resolved-path string admitted sibling
+    directories — scope ``src`` matched ``src2/...``. Anchor on
+    ``os.sep`` (or exact equality) instead. ``scope_dirs`` holds
+    resolved directory strings; falsy means unscoped (everything in).
+    """
+    if not scope_dirs:
+        return True
+    rp = str(Path(p).resolve())
+    return any(
+        rp == d or rp.startswith(d + os.sep) for d in scope_dirs
+    )
+
+
 def build_taint_summary(
     target_path,
     scope=None,
@@ -164,14 +187,14 @@ def build_taint_summary(
         return None
 
     target_path = Path(target_path)
-    scope_prefixes = (
+    scope_dirs = (
         tuple(str((target_path / s).resolve()) for s in scope)
         if scope else None
     )
     results: Dict[str, Any] = {}
 
     def _in_scope(p):
-        return not scope_prefixes or str(p.resolve()).startswith(scope_prefixes)
+        return _path_in_scope_dirs(p, scope_dirs)
 
     try:
         from core.analysis.python_module_callgraph import build_python_module_callgraph

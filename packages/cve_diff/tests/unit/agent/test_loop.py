@@ -1040,3 +1040,35 @@ def test_price_falls_back_to_class_token_for_unknown_models():
 def test_price_unknown_model_is_zero():
     from cve_diff.agent.loop import _price
     assert _price("totally-unknown-model", in_t=1000, out_t=1000) == 0.0
+
+
+def test_turn_completed_emits_run_local_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """Each completed provider turn writes one llm-telemetry.jsonl
+    record (call_class cve-diff:discovery) when a sink is installed —
+    the run-local cost ledger the libexec shim and the Typer CLI
+    install at run start. Without a sink the emit is a no-op, so the
+    bench and library consumers pay nothing."""
+    from core.llm.telemetry import TelemetrySink, set_sink
+
+    _patch_provider(monkeypatch, [_tc_response(_submit_call())])
+    sink = TelemetrySink(tmp_path / "llm-telemetry.jsonl")
+    set_sink(sink)
+    try:
+        result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-X"))
+    finally:
+        set_sink(None)
+
+    assert isinstance(result, AgentOutput)
+    lines = (tmp_path / "llm-telemetry.jsonl").read_text().splitlines()
+    recs = [json.loads(line) for line in lines]
+    discovery = [r for r in recs if r.get("call_class") == "cve-diff:discovery"]
+    assert discovery, f"no discovery telemetry records in {recs}"
+    rec = discovery[0]
+    assert rec["event"] == "call"
+    assert rec["model"] == _cfg().model_id
+    assert rec["provider"] == "anthropic"
+    assert rec["tokens_in"] == 100
+    assert rec["tokens_out"] == 50
+    assert rec["cost_usd"] > 0

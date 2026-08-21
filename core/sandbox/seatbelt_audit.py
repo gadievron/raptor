@@ -8,7 +8,12 @@ appends RAPTOR-format records to the run's evidence directory —
 ``<run_dir>/.audit/.sandbox-denials.jsonl`` (see
 core/sandbox/evidence.py) — matching the JSONL schema produced by the
 Linux ptrace tracer so the existing ``summarize_and_write``
-aggregation works unchanged. The seatbelt profile denies the target
+aggregation works unchanged. macOS records additionally carry a
+``verdict`` field (``allow`` under the audit profile's
+allow-with-report clauses, ``deny`` for genuine blocks);
+``summarize_and_write`` counts only deny-verdict — or verdict-less
+Linux — records as denials and buckets allow-verdict records into a
+separate informational section. The seatbelt profile denies the target
 all writes beneath ``<run_dir>/.audit`` (seatbelt.build_profile's
 ``audit_evidence_dir``), so only this parent-side streamer can touch
 the file; appends go through a held fd whose inode is verified when
@@ -49,6 +54,9 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from core.sandbox.escalation_signatures import is_credential_path
+from core.security.log_sanitisation import sanitise_for_terminal
 
 # Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
 # which is shared with the Linux ptrace tracer so the two backends
@@ -106,9 +114,63 @@ _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 # Sandbox kext eventMessage format. Spike #4 confirmed:
 #   "Sandbox: <ProcessName>(<PID>) <verdict> <action> <path>"
 # verdict ∈ {allow, deny}; action is file-* / network-* / etc.
+# Tolerated variants beyond the spike's canonical shape:
+#   * repeat-count verdicts — the kernel coalesces repeated events as
+#     "deny(12) file-read-data ..." — matched and discarded via the
+#     optional (?:\(\d+\)) group;
+#   * process names containing spaces or parentheses ("Google Chrome
+#     Helper (Renderer)") — the name is a non-greedy (.+?) anchored by
+#     the "(<PID>) <verdict>" tail, so the LAST "(digits)" before the
+#     verdict is always the PID.
+# Pre-fix, both shapes silently failed the match and their records
+# were dropped from the audit trail.
 _LOG_LINE_RE = re.compile(
-    r"Sandbox:\s+(\S+)\((\d+)\)\s+(allow|deny)\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
+
+# Parse-ratio diagnostic thresholds (see LogStreamer.stop). When at
+# least this many kext-sender lines were seen and fewer than this
+# fraction parsed into records, emit a loud "parsed M of N" warning —
+# the likely cause is a kernel eventMessage format drift that the
+# regex above no longer matches.
+_PARSE_DIAG_MIN_LINES = 10
+_PARSE_DIAG_MIN_RATIO = 0.5
+
+
+# Live-escalation: credential-path matching is shared with triage.py's
+# post-hoc `credential_path_touch` signal via the leaf
+# core.sandbox.escalation_signatures module, so the live stderr notice
+# here and the post-hoc signal agree on what counts by construction.
+#
+# Unlike Linux's escape-primitive syscall set (ptrace, bpf, keyctl,
+# io_uring_*, ...), there is no macOS/SBPL analogue worth inventing
+# here: non-file/network SBPL actions (mach-lookup, process-*,
+# iokit-open, sysctl-*, ...) all collapse to the generic "seccomp"
+# bucket in `_action_to_type` below with no established HIGH-severity
+# subset — fabricating one would be an ungrounded judgment call.
+# Network-level live escalation (resolved_ip_screened / host_recon) is
+# already covered platform-wide by core/sandbox/proxy.py, which both
+# platforms share. Credential-path touches on file-read/file-write
+# records are the one live signal this platform's audit stream can
+# attribute meaningfully on its own.
+def _announce_credential_path_touch(path: str, pid: int) -> None:
+    """Best-effort immediate stderr banner — mirrors
+    core.sandbox.tracer._announce_escape_primitive's use of raw
+    os.write(2, ...) so it survives redirected/odd stdio state.
+
+    The path is attacker-controlled (the sandboxed target chose what
+    to touch); sanitise + bound it before it reaches the operator's
+    terminal — ascii/replace alone keeps ESC/CR/BEL, which are ASCII,
+    so a crafted filename could otherwise inject terminal control
+    sequences into the banner."""
+    try:
+        os.write(2, (
+            f"RAPTOR sandbox ALERT: credential-looking path touched: "
+            f"'{sanitise_for_terminal(path)}' (pid={pid}). "
+            f"See sandbox-triage.json at run end for full context.\n"
+        ).encode("ascii", errors="replace"))
+    except OSError:
+        pass
 
 
 # Map SBPL action prefixes to the RAPTOR sandbox-summary type taxonomy
@@ -261,6 +323,18 @@ class LogStreamer:
         # Lazily-opened held evidence fd (core/sandbox/evidence.py).
         # See _append_record_locked for the tamper rationale.
         self._evidence: _evidence_mod.EvidenceFile | None = None
+        # Live-escalation dedup: paths already announced to stderr
+        # this run, so a target repeatedly touching the same
+        # credential-looking path doesn't spam the operator's
+        # terminal. One banner per distinct path per run — mirrors
+        # tracer.py's per-syscall-name dedup.
+        self._escalated_paths: set = set()
+        # Parse-ratio bookkeeping for the "parsed M of N kext lines"
+        # diagnostic (kernel eventMessage format drift detector).
+        # Mutated only on the reader thread; read at stop() after the
+        # reader join, so no lock needed.
+        self._kext_lines_seen = 0
+        self._kext_lines_parsed = 0
 
     def register_target_pid(self, pid: int) -> None:
         """Mark ``pid`` — and its process group, when resolvable —
@@ -571,6 +645,23 @@ class LogStreamer:
 
         return seen
 
+    def _maybe_escalate_credential_path(self, record: dict) -> None:
+        """Live stderr escalation for credential-looking path touches.
+        Pulled out of `_read_loop` as its own method purely so tests
+        can exercise it directly against a synthetic `record` dict
+        without needing a real `log stream` subprocess."""
+        path = record.get("path")
+        if (path
+                and record.get("type") in ("read", "write")
+                and path not in self._escalated_paths
+                and not _audit_budget.live_escalation_disabled()
+                and is_credential_path(path)):
+            self._escalated_paths.add(path)
+            # .get: the never-raise-out-of-the-hot-path contract must
+            # not hinge on every record shape carrying target_pid.
+            _announce_credential_path_touch(
+                path, record.get("target_pid", -1))
+
     def _read_loop(self) -> None:
         """Read ndjson lines from `log stream`, parse, and append
         records to the JSONL. Robust to malformed lines (silently
@@ -589,6 +680,8 @@ class LogStreamer:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if entry.get("senderImagePath") == SANDBOX_KEXT_SENDER:
+                    self._kext_lines_seen += 1
                 record = parse_log_entry(
                     entry,
                     observe_mode=self._observe_mode,
@@ -596,6 +689,10 @@ class LogStreamer:
                 )
                 if record is None:
                     continue
+                # Counted before the scope filter: "parsed" measures
+                # regex/format health only — foreign-but-well-formed
+                # events dropped by scoping must not read as drift.
+                self._kext_lines_parsed += 1
                 if not self._record_in_scope(record):
                     # Host-wide kext event from a process outside the
                     # registered scope — a sibling sandboxed run or an
@@ -620,12 +717,24 @@ class LogStreamer:
                 #       before its associated record without another
                 #       writer slipping a record in between.
                 try:
+                    self._maybe_escalate_credential_path(record)
+
                     with self._append_lock:
                         decision, marker = self._budget.evaluate(
                             record["syscall"], record["target_pid"],
                         )
                         if marker is not None:
                             self._append_record_locked(marker)
+                        # Global-cap notice: the Linux tracer surfaces
+                        # this on stderr; there is no tracer on macOS,
+                        # so pre-fix the global cap suppressed
+                        # silently (only the sub-caps got in-band
+                        # markers). Emit the one-shot marker into the
+                        # stream where operators actually look.
+                        if self._budget.pop_global_cap_notice():
+                            self._append_record_locked(
+                                self._budget.global_cap_marker(),
+                            )
                         if decision != _audit_budget.DROP:
                             self._append_record_locked(record)
                 except OSError:
@@ -741,12 +850,32 @@ class LogStreamer:
         # zero counts — operators can distinguish it from
         # "summary file missing entirely" (streamer never even
         # constructed).
+        # Parse-ratio diagnostic: a high drop ratio on kext-sender
+        # lines means the eventMessage format drifted away from
+        # _LOG_LINE_RE — the audit trail is silently incomplete and
+        # operators must see it. Counters are stable here (reader
+        # joined or abandoned above; a straggler under-counts at
+        # worst, never crashes).
+        seen = self._kext_lines_seen
+        parsed = self._kext_lines_parsed
+        if (seen >= _PARSE_DIAG_MIN_LINES
+                and parsed < seen * _PARSE_DIAG_MIN_RATIO):
+            logger.warning(
+                "seatbelt audit: parsed %d of %d kext log lines — "
+                "the kernel Sandbox log format may have drifted from "
+                "_LOG_LINE_RE; the audit JSONL is likely incomplete",
+                parsed, seen,
+            )
         try:
             # Hold the lock across summary_record + append so the
             # snapshot read and the JSONL write are atomic with
             # respect to any reader thread still draining.
             with self._append_lock:
                 summary = self._budget.summary_record()
+                # Parse-ratio surface for operators reading the JSONL
+                # (extra keys tolerated by consumers per contract).
+                summary["kext_lines_seen"] = seen
+                summary["kext_lines_parsed"] = parsed
                 # Stamp nonce on the summary so an observe-mode
                 # parser attributes it to this run and rejects one
                 # spoofed by a target binary writing a fake summary

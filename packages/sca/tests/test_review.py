@@ -94,7 +94,11 @@ def test_clean_dep_returns_zero(tmp_path: Path, capsys) -> None:
     URL would otherwise trigger the seed-metadata-unverifiable warning.
     """
     http = StubHttp(gets={
-        "https://registry.npmjs.org/@types/node/20.10.5": {"name": "@types/node"},
+        # Scoped npm names percent-encode the ``/`` in the existence
+        # probe URL (matching the npm registry client's encoding).
+        "https://registry.npmjs.org/@types%2Fnode/20.10.5": {
+            "name": "@types/node",
+        },
     })
     cache = JsonCache(root=tmp_path)
     rc = review.main(

@@ -441,3 +441,58 @@ def test_conformant_response_untouched_by_floor(tmp_path):
 
     assert "error" not in dr.result
     assert dr.result["verdict"] == "clean"
+
+
+def test_invoke_cc_simple_routes_system_prompt_via_flag(
+    captured_helper_kwargs, tmp_path,
+):
+    """The system prompt travels on CC's dedicated `--system-prompt`
+    channel, never folded into the stdin user prompt — folding drops
+    the role separation the subprocess's prompt-injection defences
+    key off (see CCDispatchConfig.system_prompt)."""
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    invoke_cc_simple(
+        prompt="user content only",
+        schema=None,
+        repo_path=str(repo),
+        claude_bin="/usr/bin/true",
+        out_dir=str(out_dir),
+        timeout=5,
+        system_prompt="operator system instructions",
+    )
+
+    assert len(captured_helper_kwargs) == 1
+    cmd = captured_helper_kwargs[0]["cmd"]
+    assert "--system-prompt" in cmd
+    assert cmd[cmd.index("--system-prompt") + 1] == "operator system instructions"
+    # stdin carries ONLY the user prompt.
+    assert captured_helper_kwargs[0]["kwargs"]["input"] == "user content only"
+
+
+def test_invoke_cc_simple_no_system_prompt_omits_flag(
+    captured_helper_kwargs, tmp_path,
+):
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    invoke_cc_simple(
+        prompt="user content only",
+        schema=None,
+        repo_path=str(repo),
+        claude_bin="/usr/bin/true",
+        out_dir=str(out_dir),
+        timeout=5,
+    )
+
+    assert len(captured_helper_kwargs) == 1
+    assert "--system-prompt" not in captured_helper_kwargs[0]["cmd"]

@@ -429,7 +429,20 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     from core.sage.config import ensure_loopback_no_proxy
     ensure_loopback_no_proxy()
     print(f"Connecting to SAGE at {sage_url}...")
-    identity = AgentIdentity.default()
+    # Owner-only key provisioning: the SDK persists the Ed25519 seed
+    # with a plain open(path, "wb"), inheriting the process umask —
+    # and this install-time script runs BEFORE any clamped call site,
+    # which is exactly how deployed keys ended up group-readable.
+    # Clamp the umask across creation (no write-then-chmod window),
+    # then harden for keys that already existed.
+    import os as _os
+    from core.sage.client import harden_identity_key_perms
+    _old_umask = _os.umask(0o077)
+    try:
+        identity = AgentIdentity.default()
+    finally:
+        _os.umask(_old_umask)
+    harden_identity_key_perms()
     client = AsyncSageClient(
         base_url=sage_url,
         identity=identity,

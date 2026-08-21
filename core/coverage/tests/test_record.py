@@ -721,3 +721,37 @@ class TestSemgrepCrossPackErrorMerge:
         rec = build_from_semgrep(tmp_path, j1)
         assert rec["files_examined"] == ["a.c"]
         assert "files_failed" not in rec
+
+
+class TestBuildFromJournal(unittest.TestCase):
+    """coverage-journal.json: function-level review marks, never whole-file."""
+
+    def _run_dir_with_entries(self, tmp):
+        from core.coverage.journal import ReviewJournalEntry, append_entry
+        run_dir = Path(tmp)
+        for func, verdict in (("parse", "clean"), ("emit", "suspicious")):
+            append_entry(run_dir, ReviewJournalEntry(
+                ts="2026-01-01T00:00:00+00:00", run_id="r1",
+                file="src/a.c", function=func, verdict=verdict,
+                source_hash="abcd1234",
+            ))
+        return run_dir
+
+    def test_emits_function_marks_only(self):
+        # The record's tool label is review-grade (llm/analysed), and the
+        # importer marks files_examined WHOLE-FILE under the record's tool.
+        # A journal entry reviews one function, not its file — a files list
+        # here would inflate every containing file to reviewed.
+        from core.coverage.record import build_from_journal
+        with TemporaryDirectory() as tmp:
+            rec = build_from_journal(self._run_dir_with_entries(tmp))
+        assert rec["tool"] == "journal"
+        assert "files_examined" not in rec
+        analysed = {(f["file"], f["function"]) for f in rec["functions_analysed"]}
+        assert analysed == {("src/a.c", "parse"), ("src/a.c", "emit")}
+        assert rec["journal_statuses"] == {"clean": 1, "suspicious": 1}
+
+    def test_returns_none_without_entries(self):
+        from core.coverage.record import build_from_journal
+        with TemporaryDirectory() as tmp:
+            assert build_from_journal(Path(tmp)) is None

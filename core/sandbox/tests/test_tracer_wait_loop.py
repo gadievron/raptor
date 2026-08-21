@@ -65,9 +65,18 @@ pytestmark = pytest.mark.skipif(
 # subprocess is the faithful environment, not a convenience.
 
 
+# Anchor the probe's sys.path to the SAME tree these tests run from,
+# passed as argv[1] (the test_fork_safe_warn*.py idiom). Neither the
+# ambient RAPTOR_DIR env var nor the child's cwd is trustworthy here:
+# under shuffled order either can have drifted by the time this test
+# runs (observed as ModuleNotFoundError: 'core' in the probe child),
+# and the module under test must in any case be imported from THIS
+# checkout, not whatever tree the environment names.
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+
 _SUBPROC_PRELUDE = """
 import os, signal, sys, time
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+sys.path.insert(0, sys.argv[1])
 from core.sandbox.tracer import _idle_wait_for_sigchld
 
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
@@ -111,13 +120,12 @@ print(f"ELAPSED={elapsed:.3f}")
 
 def _run_single_threaded(script: str) -> float:
     """Run a timing probe in a fresh single-threaded interpreter;
-    return the ELAPSED= value it prints. The probe locates the repo
-    via RAPTOR_DIR (hard lookup — the conftest pins it to the tree
-    under test)."""
+    return the ELAPSED= value it prints. The probe imports from this
+    test's own tree via argv[1] (see _REPO_ROOT above)."""
     import subprocess
 
     proc = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", script, _REPO_ROOT],
         capture_output=True, text=True, timeout=30,
     )
     assert proc.returncode == 0, (

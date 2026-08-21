@@ -20,6 +20,10 @@ _FAMILIES: dict[str, list[str]] = {
     "buffer_overflow": ["CWE-120", "CWE-121", "CWE-122", "CWE-787"],
     "integer_overflow": ["CWE-190", "CWE-191", "CWE-680"],
     "use_after_free": ["CWE-415", "CWE-416"],
+    # A weak-cipher checker (DES/RC4/ECB instantiation) catches both:
+    # producers tag the same finding CWE-326 (inadequate strength) or
+    # CWE-327 (broken/risky algorithm) interchangeably.
+    "weak_cipher": ["CWE-326", "CWE-327"],
     "null_deref": ["CWE-476"],
     "format_string": ["CWE-134"],
     "deserialization": ["CWE-502"],

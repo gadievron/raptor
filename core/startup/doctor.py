@@ -46,10 +46,9 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from core.security.log_sanitisation import escape_nonprintable
-
 
 _USAGE = (
     "usage: raptor doctor [--strict] [--verbose]\n"
@@ -58,7 +57,7 @@ _USAGE = (
 )
 
 
-def _build_install_hints(missing_tool_names: List[str]) -> dict:
+def _build_install_hints(missing_tool_names: list[str]) -> dict:
     """For each missing TOOL_DEPS name, look up its binary and
     format install advice via packages.describe.package_manager.
 
@@ -88,12 +87,16 @@ def _build_install_hints(missing_tool_names: List[str]) -> dict:
             continue
         try:
             out[binary] = format_install_advice(binary)
-        except Exception:  # noqa: BLE001
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "install-advice lookup failed for %s", binary,
+                exc_info=True,
+            )
             continue
     return out
 
 
-def _hint_for_warning(warning: str, install_hints: dict) -> Optional[str]:
+def _hint_for_warning(warning: str, install_hints: dict) -> str | None:
     """Match a warning string to one of the install hints. The
     warnings produced by check_tools look like ``"… <binary>
     not found"`` (single-tool case) or ``"… (afl-fuzz or
@@ -109,15 +112,65 @@ def _hint_for_warning(warning: str, install_hints: dict) -> Optional[str]:
     return None
 
 
-def _gather() -> Tuple[
-    List[Tuple[str, bool]],  # tool_results
-    List[str],               # tool_warnings
-    List[str],               # llm_lines
-    List[str],               # llm_warnings
-    List[str],               # env_parts
-    List[str],               # env_warnings
-    Optional[str],           # lang_line
-    Optional[str],           # project_line
+def _module_dep_warnings() -> list[str]:
+    """Import-verify the Python-module TOOL_DEPS in a subprocess.
+
+    ``check_tools`` uses ``find_spec`` (locate without importing), so
+    a wheel whose native extension is broken — Python upgraded under
+    the venv, half-completed install — passes the presence check and
+    then crashes the first /audit or /codeql run that imports it.
+    Import in a THROWAWAY subprocess: a segfaulting extension module
+    must not take doctor down with it. Never raises.
+    """
+    import subprocess
+
+    out: list[str] = []
+    try:
+        import importlib.util
+
+        from core.config import RaptorConfig
+    except Exception:  # noqa: BLE001
+        return out
+    for name in sorted(RaptorConfig.TOOL_DEPS):
+        dep = RaptorConfig.TOOL_DEPS[name]
+        module = dep.get("module")
+        if not module:
+            continue
+        try:
+            if importlib.util.find_spec(module) is None:
+                continue  # absent — check_tools already covers it
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "find_spec(%s) failed", module, exc_info=True,
+            )
+            continue
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c",
+                 f"import importlib; importlib.import_module({module!r})"],
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue  # probe failure ≠ broken module; stay quiet
+        if proc.returncode != 0:
+            pip_name = dep.get("pip", module)
+            out.append(
+                f"{name} is installed but failed to import — "
+                f"{dep['affects']} will fail at use time "
+                f"(pip install --force-reinstall {pip_name})"
+            )
+    return out
+
+
+def _gather() -> tuple[
+    list[tuple[str, bool]],  # tool_results
+    list[str],               # tool_warnings
+    list[str],               # llm_lines
+    list[str],               # llm_warnings
+    list[str],               # env_parts
+    list[str],               # env_warnings
+    str | None,           # lang_line
+    str | None,           # project_line
 ]:
     """Run every check and return the same shape ``init.main`` builds.
 
@@ -125,16 +178,36 @@ def _gather() -> Tuple[
     noisy at WARNING level (LLM key validation, sandbox probes).
     """
     from .init import (
-        check_active_project, check_env, check_lang, check_llm,
+        check_active_project,
+        check_env,
+        check_lang,
+        check_llm,
         check_tools,
     )
 
     logging.disable(logging.WARNING)
     try:
         tool_results, tool_warnings, unavailable = check_tools()
+        # Doctor-only depth: verify Python-module deps actually
+        # import. The banner's find_spec probe deliberately does not
+        # import (startup speed; a broken wheel can't crash the
+        # banner) — the cost is that a present-but-broken wheel shows
+        # ✓ and crashes at first use. Doctor is on-demand and allowed
+        # to spend a subprocess to catch exactly that.
+        tool_warnings = list(tool_warnings) + _module_dep_warnings()
         llm_lines, llm_warnings = check_llm()
         env_parts, env_warnings = check_env(unavailable)
-        lang_line = check_lang()
+        lang_line, lang_warnings = check_lang()
+        env_warnings = list(env_warnings) + list(lang_warnings)
+        # Doctor-only depth (same rationale shape as the module-import
+        # verification above): the AWS IMDS / proxy / credential-chain
+        # interaction matrix. Advisory environment-shape lines, gated
+        # on AWS use being plausible. Deliberately not in the banner —
+        # session start should not editorialise about credential
+        # topology on every launch, but an operator who typed
+        # ``raptor doctor`` is asking exactly that question.
+        from .aws_imds import aws_imds_advisories
+        env_warnings += aws_imds_advisories()
         project_line = check_active_project()
     finally:
         logging.disable(logging.NOTSET)
@@ -148,17 +221,17 @@ def _gather() -> Tuple[
 
 
 def _render(
-    tool_results: Iterable[Tuple[str, bool]],
+    tool_results: Iterable[tuple[str, bool]],
     tool_warnings: Iterable[str],
     llm_lines: Iterable[str],
     llm_warnings: Iterable[str],
     env_parts: Iterable[str],
     env_warnings: Iterable[str],
-    lang_line: Optional[str],
-    project_line: Optional[str],
+    lang_line: str | None,
+    project_line: str | None,
     *,
     verbose: bool,
-) -> Tuple[str, int, int]:
+) -> tuple[str, int, int]:
     """Render the doctor output. Returns (text, n_failures, n_warnings).
 
     Failure classification:
@@ -170,9 +243,9 @@ def _render(
         severity in ``tool_warnings``; we surface those as-is).
       * Anything in a ``*_warnings`` list is a warning.
     """
-    failures: List[str] = []
-    warnings: List[str] = []
-    passes: List[str] = []
+    failures: list[str] = []
+    warnings: list[str] = []
+    passes: list[str] = []
 
     # Tools — single line summary of present/missing, then individual
     # warnings (which already carry severity).
@@ -180,12 +253,9 @@ def _render(
     present = [name for name, ok in tool_results if ok]
     if present:
         passes.append(f"tools present: {', '.join(sorted(present))}")
-    if missing:
-        # The warnings list carries the feature-impact phrasing
-        # (``rr not found — /crash-analysis limited``) so we don't
-        # need to re-format from tool_results here. tool_warnings
-        # also carries group-level entries (e.g. "no scanner").
-        pass
+    # Missing tools need no re-formatting here: the warnings list
+    # carries the feature-impact phrasing (``/crash-analysis limited
+    # — rr not found``) and the group-level entries ("no scanner").
     # Build a lookup of "binary name → install advice" for every
     # tool that's missing so we can enrich the upstream warnings.
     # Pre-fix /doctor printed "rr not found" with no hint — the
@@ -217,8 +287,7 @@ def _render(
         clean = line.strip()
         if clean:
             passes.append(clean)
-    for w in llm_warnings:
-        warnings.append(w)
+    warnings.extend(llm_warnings)
 
     # Env — mixed: ``out/ ✗`` is a failure, ``disk 16 GB free`` is a
     # pass, ``RAPTOR_DIR not set …`` from the new check appears in
@@ -231,11 +300,12 @@ def _render(
             failures.append(clean)
         else:
             passes.append(clean)
-    for w in env_warnings:
-        warnings.append(w)
+    warnings.extend(env_warnings)
 
-    # Language support — single informational line.
-    if lang_line:
+    # Language support — single informational line. A ✗ lang line
+    # (no grammars) must NOT be listed under PASSED; the degradation
+    # warning check_lang emits alongside it covers the signal.
+    if lang_line and "✗" not in lang_line:
         passes.append(lang_line.strip())
 
     # Active project — informational.
@@ -244,7 +314,7 @@ def _render(
 
     from core.config import RaptorConfig
 
-    out: List[str] = [
+    out: list[str] = [
         "RAPTOR doctor",
         "=============",
         f"version: {RaptorConfig.effective_version()}",
@@ -304,7 +374,7 @@ def _render(
     return "\n".join(out), len(failures), real_warnings
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the doctor.
 
     Exit codes:

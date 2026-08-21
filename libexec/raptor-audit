@@ -1303,7 +1303,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         binary_verdicts=binary_verdicts,
         inventory=checklist_data,
         annotations_dir=Path(args.annotations_dir) if args.annotations_dir else None,
-        codeql_db_path=args.codeql_db,
+        codeql_db_path=(args.codeql_db[0] if args.codeql_db else None),
+        codeql_db_paths=args.codeql_db,
         threat_model=threat_model,
         on_progress=on_progress,
         # Tri-state: explicit negative > explicit positive > None
@@ -1315,8 +1316,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         pre_scan=args.pre_scan,
         schedule=args.schedule,
         on_demand_synthesis=not args.no_on_demand_synthesis,
+        vendored_triage=not args.no_vendored_triage,
         probe_determine_value=args.probe_determine_value,
         deepen_reserve_fraction=args.deepen_reserve,
+        prior_journal_dirs=(
+            [Path(p) for p in args.prior_journal]
+            if args.prior_journal else None
+        ),
+        prior_claims_per_function=args.prior_claims,
     )
 
     # Persist the resolved run configuration BEFORE the pipeline
@@ -1404,12 +1411,31 @@ def _finalize_run(
         origin = "this run's prior segments" if segment else "prior runs"
         print(f"{reused} reused from {origin} (source unchanged, $0)",
               flush=True)
+    vend_skipped = getattr(result, "vendored_skipped", 0)
+    vend_glanced = getattr(result, "vendored_glanced", 0)
+    if vend_skipped or vend_glanced:
+        print(f"Vendored/generated triage: {vend_skipped} skipped, "
+              f"{vend_glanced} glanced (records in suppressions.jsonl)",
+              flush=True)
     from core.audit.cost_tracker import format_cost_summary
     cost_line = format_cost_summary(result)
     if cost_line:
         print(cost_line, flush=True)
     print(f"Report: {report_path}", flush=True)
     print(f"Terminated: {result.terminated_by}", flush=True)
+
+    # Deferred pipeline tail (resumed segments only): a launcher that
+    # ran this audit with --no-validate to validate the findings
+    # itself has completed by the time a resume finishes — surface the
+    # remaining tail steps instead of silently dropping them.
+    if segment:
+        try:
+            from core.audit.resume import pipeline_tail_hint
+            hint = pipeline_tail_hint(out_dir, result.findings or 0)
+            if hint:
+                print(f"\n{hint}", flush=True)
+        except Exception:  # noqa: BLE001 — hint is best-effort
+            pass
     # Scoped-run slot allocation (see gaps.truncate_gaps_to_budget):
     # zero-slot in-scope files are the silent-failure mode — always
     # state the allocation when a scope was set.
@@ -1460,7 +1486,19 @@ def _finalize_run(
     ]
     if model_id:
         lifecycle_args.extend(["--model", model_id])
-    subprocess.run(lifecycle_args, capture_output=True, check=False)
+    # Surface the child's stderr on failure — pre-fix capture_output
+    # swallowed it, so a failed complete (corrupt metadata, journal
+    # merge error) left the run stuck in 'running' with no signal.
+    lifecycle_cp = subprocess.run(
+        lifecycle_args, capture_output=True, text=True, check=False,
+    )
+    if lifecycle_cp.returncode != 0:
+        detail = (lifecycle_cp.stderr or "").strip()
+        print(
+            f"lifecycle complete failed (exit {lifecycle_cp.returncode})"
+            + (f": {detail}" if detail else ""),
+            file=sys.stderr, flush=True,
+        )
 
     return _exit_code_for(result.terminated_by)
 
@@ -1800,6 +1838,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
             if run_cfg.get("annotations_dir") else None
         ),
         codeql_db_path=run_cfg.get("codeql_db_path"),
+        codeql_db_paths=(
+            run_cfg.get("codeql_db_paths")
+            or ([run_cfg["codeql_db_path"]]
+                if run_cfg.get("codeql_db_path") else None)
+        ),
         threat_model=threat_model,
         on_progress=on_progress,
         dynamic_validation=(
@@ -1810,11 +1853,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
         pre_scan=bool(run_cfg.get("pre_scan")),
         schedule=run_cfg.get("schedule") or "cost",
         on_demand_synthesis=bool(run_cfg.get("on_demand_synthesis", True)),
+        vendored_triage=bool(run_cfg.get("vendored_triage", True)),
         probe_determine_value=bool(run_cfg.get("probe_determine_value")),
         deepen_reserve_fraction=run_cfg.get("deepen_reserve_fraction"),
         same_run_reuse=True,
         prior_cost_breakdown=prior_breakdown,
         resume_segment=segment,
+        prior_journal_dirs=(
+            [Path(p) for p in run_cfg["prior_journal_dirs"]]
+            if run_cfg.get("prior_journal_dirs") else None
+        ),
+        prior_claims_per_function=int(
+            run_cfg.get("prior_claims_per_function", 3)
+        ),
     )
 
     print(f"\nResuming audit of {target_path}", flush=True)
@@ -1905,15 +1956,19 @@ def _run_config_from_args(
         "validate": not args.no_validate,
         "no_binary_oracle": bool(getattr(args, "no_binary_oracle", False)),
         "annotations_dir": args.annotations_dir,
-        "codeql_db_path": args.codeql_db,
+        "codeql_db_path": (args.codeql_db[0] if args.codeql_db else None),
+        "codeql_db_paths": args.codeql_db,
         "dynamic": args.dynamic,
         "no_dynamic": args.no_dynamic,
         "verdict_reuse": not args.no_verdict_reuse,
         "pre_scan": args.pre_scan,
         "schedule": args.schedule,
         "on_demand_synthesis": not args.no_on_demand_synthesis,
+        "vendored_triage": not args.no_vendored_triage,
         "probe_determine_value": args.probe_determine_value,
         "deepen_reserve_fraction": args.deepen_reserve,
+        "prior_journal_dirs": args.prior_journal,
+        "prior_claims_per_function": args.prior_claims,
         # Informational: the self-bound applied to segment 1 (the
         # operator's explicit max_seconds above stays authoritative
         # for resume; each segment re-derives its own bound).
@@ -2134,8 +2189,13 @@ def main() -> int:
                        help="Enable adversarial reviewer for positive verdicts")
     p_run.add_argument("--max-propagation-depth", type=int, default=None,
                        help="Override adaptive constraint propagation depth")
-    p_run.add_argument("--codeql-db", default=None,
-                       help="Path to CodeQL database for query dispatch")
+    p_run.add_argument("--codeql-db", action="append", default=None,
+                       metavar="PATH",
+                       help="CodeQL database for query dispatch and "
+                            "the pre-sweep. Repeatable — one per "
+                            "language for multi-language targets; "
+                            "per-function dispatch routes by the "
+                            "file's language")
     p_run.add_argument("--max-cost", type=float, default=None,
                        help="Maximum cost in USD before stopping")
     p_run.add_argument("--deepen-reserve", type=float, default=None,
@@ -2186,6 +2246,12 @@ def main() -> int:
                             "suspicious hypotheses whose CWE has no "
                             "tool-chain dispatch entry (synthesis is "
                             "LLM-cost bearing; capped per run)")
+    p_run.add_argument("--no-vendored-triage", action="store_true",
+                       help="Disable the vendored/generated-code triage "
+                            "tier for this run — vendored and generated "
+                            "files get normal review depth instead of "
+                            "the skip/glance tier (use when auditing a "
+                            "vendored library ON PURPOSE)")
     p_run.add_argument("--probe-determine-value", action="store_true",
                        help="Resolve claim-less constant study questions "
                             "('what is the value of X?') by compile-probe "
@@ -2207,6 +2273,21 @@ def main() -> int:
                             "promising functions first (fastest first "
                             "finding). Serial runs always use priority "
                             "order")
+    p_run.add_argument("--prior-claims", type=int, default=3,
+                       metavar="N",
+                       help="Max prior finding-grade claims injected "
+                            "per function into review context, newest "
+                            "first (default: 3; 0 disables the "
+                            "injection entirely)")
+    p_run.add_argument("--prior-journal", action="append", default=None,
+                       metavar="RUN_DIR",
+                       help="Run directory whose review-journal.jsonl "
+                            "feeds prior finding-grade claims "
+                            "(/agentic per-finding analyses) into "
+                            "review context (repeatable). Covers "
+                            "journals not yet merged into the project "
+                            "index — the /agentic --audit post-pass "
+                            "passes its own run dir here")
     from core.analysis.binary_oracle_cli import add_binary_args
     add_binary_args(p_run, include_edges=False)
 

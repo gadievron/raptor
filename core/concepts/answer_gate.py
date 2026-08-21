@@ -110,14 +110,21 @@ def verify_flip_answer(
     source_root: Path,
     *,
     tier: str = "",
+    contradicts_llm: bool = False,
 ) -> dict:
     """Second independent resolution for a flip-causing answer.
 
     *snippets* are study-list item dicts (name/file/line/definition)
     relevant to the question.  Returns ``{"agreed": bool, "reason":
-    str}``.  Mechanical-tier answers pass without a call.
+    str}``.  Mechanical-tier answers pass without a call — a second
+    run of a deterministic extractor is the same run — UNLESS the
+    mechanical answer CONTRADICTS an LLM answer
+    (``contradicts_llm=True``): determinism only guarantees the
+    extractor repeats itself, not that its pattern read the right
+    statement, so a contradicting mechanical answer must survive the
+    same agreement check as any other flip-causing answer.
     """
-    if tier == TIER_MECHANICAL:
+    if tier == TIER_MECHANICAL and not contradicts_llm:
         return {
             "agreed": True,
             "reason": "mechanical answer — deterministic, gate skipped",

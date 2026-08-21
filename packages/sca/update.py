@@ -385,7 +385,7 @@ def _run_external_validation(manifest: Path, out_dir: Path) -> None:
         }, indent=2),
         encoding="utf-8",
     )
-    verb = "validates" if result.success else "FAILS"
+    verb = "validates" if result.success else "fails"
     print(f"raptor-sca fix --cve-only --validate-against: {manifest.name} {verb} via "
           f"{eco} resolver. Detail: {out_dir}/validate-against.json")
 
@@ -845,11 +845,19 @@ def _rewrite_via_registry(
     by NuGet CPM / csproj / Gradle catalog paths. The registry
     operates on file paths (it reads + atomic-writes the file
     itself), but ``_rewrite_one``'s contract is text-in / text-
-    out + bool applied + reason. Adapt by:
+    out + bool applied + reason — and this function runs during
+    PLANNING, so the original manifest must never be written here
+    (only ``--apply`` writes the source tree). Adapt by:
 
       * Synthesise a single ``RewriteEdit`` from the plan.
-      * Call the registry's dispatcher.
-      * Read back the (possibly mutated) file content.
+      * Copy ``text`` to a scratch file carrying the manifest's
+        filename (registry dispatch keys on the name), and run
+        the registry's dispatcher against the copy.
+      * Read the post-state back from the copy.
+
+    Running against a copy also composes with earlier plans on
+    the same manifest: the registry rewriter sees the caller's
+    working ``text`` rather than re-reading the original file.
 
     For Gradle catalogs the locator needs a section prefix
     (``library:<alias>`` / ``version:<key>`` / ``plugin:<alias>``).
@@ -878,20 +886,27 @@ def _rewrite_via_registry(
         old_value=plan.installed,
         new_value=plan.target,
     )
-    results = _rewrite(manifest, [edit])
-    if not results:
-        return text, False, f"no rewriter for {manifest.name}"
-    r = results[0]
-    if r.applied:
-        # Reload the file content for the caller. The rewriter
-        # already wrote atomically; this read is the canonical
-        # post-state.
+    from core.run.scratch import scratch_dir
+    with scratch_dir("raptor-sca-rewrite-plan-") as scratch:
+        scratch_copy = scratch / manifest.name
         try:
-            new_text = manifest.read_text(encoding="utf-8")
+            scratch_copy.write_text(text, encoding="utf-8")
         except OSError as e:
-            return text, False, f"error: post-write read failed: {e}"
-        return new_text, True, None
-    return text, False, r.reason
+            return text, False, f"error: scratch copy write failed: {e}"
+        results = _rewrite(scratch_copy, [edit])
+        if not results:
+            return text, False, f"no rewriter for {manifest.name}"
+        r = results[0]
+        if r.applied:
+            # Reload the scratch copy for the caller. The rewriter
+            # wrote it atomically; this read is the canonical
+            # post-state. The original manifest is untouched.
+            try:
+                new_text = scratch_copy.read_text(encoding="utf-8")
+            except OSError as e:
+                return text, False, f"error: post-write read failed: {e}"
+            return new_text, True, None
+        return text, False, r.reason
 
 
 def _is_inline_install_file(path: Path) -> bool:
@@ -1135,6 +1150,7 @@ def _rewrite_requirements_txt(
     norm = _normalise_pypi_name(plan.name)
     out_lines: list[str] = []
     rewrote = False
+    declined = False
     for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
         if (not stripped
@@ -1188,12 +1204,22 @@ def _rewrite_requirements_txt(
         # trailing PEP 508 marker (``; python_version >= ...``) intact.
         new_spec = _pypi_pin_preserving_bounds(
             m.group(2) or "", plan.target, floor_raise=plan.floor_raise)
+        if new_spec is None:
+            # Target falls outside the declared corridor — declining
+            # (like the npm rewriter) beats emitting an unsatisfiable
+            # spec such as ``>=2.0,==2.31.0,<2.25``.
+            declined = True
+            out_lines.append(raw)
+            continue
         new_inner = m.group(1) + new_spec + line_value[m.end():]
         new_line = f"{comment_prefix}{new_inner}" if comment_prefix else new_inner
         new_line += inline_comment
         out_lines.append(raw.replace(stripped, new_line))
         rewrote = True
     if not rewrote:
+        if declined:
+            return text, False, ("spec matched but not safely bumpable "
+                                 "(target outside the declared bounds)")
         return text, False, "no matching line"
     return "".join(out_lines), True, None
 
@@ -1320,12 +1346,18 @@ def _rewrite_inline_install(
     for raw in text.splitlines(keepends=True):
         m = cmd_re.search(raw)
         if m is not None:
-            # Install command on this physical line: rewrite same-line args.
-            prefix = raw[: m.end()]
-            new_rest, hit = sub_fn(raw[m.end():], plan.name, plan.target)
+            # Install command(s) on this physical line: rewrite each
+            # command's own argument segment, bounded at shell
+            # separators (see ``_rewrite_inline_cmd_line``).
+            new_line, hit, still_open = _rewrite_inline_cmd_line(
+                raw, cmd_re, sub_fn, plan.name, plan.target)
             rewrote = rewrote or hit
-            out_lines.append(prefix + new_rest)
-            in_args = _inline_line_continues(raw)
+            out_lines.append(new_line)
+            # A ``\`` continuation only extends the install's args when
+            # the line's LAST install command runs to end-of-line — a
+            # separator after it means the continuation belongs to the
+            # post-separator command, not the install.
+            in_args = still_open and _inline_line_continues(raw)
             continue
         if in_args:
             if raw.lstrip().startswith("#"):
@@ -1359,11 +1391,54 @@ def _rewrite_inline_install(
     return "".join(out_lines), True, None
 
 
+def _rewrite_inline_cmd_line(
+    raw: str, cmd_re: re.Pattern, sub_fn: Any,
+    name: str, new_version: str,
+) -> tuple[str, bool, bool]:
+    """Rewrite every matching install command's OWN argument segment
+    on one physical line.
+
+    Each command's args end at the first shell separator after it.
+    Substituting into the whole remainder (the old behaviour) let a
+    bare-name match rewrite a LATER command on the same line
+    (``apt-get install -y curl && curl … | bash`` turning the second
+    ``curl`` — a command invocation — into ``curl=<ver>``) and let
+    ``_inline_sub_versioned_flag`` find a ``--version`` flag belonging
+    to a different install (``cargo install a --version X && cargo
+    install b``). Scanning segment-by-segment also covers a second
+    install command after the separator, which the single-prefix
+    rewrite handled only by that same over-broad substitution.
+
+    Returns ``(new_line, any_hit, still_in_args)``; ``still_in_args``
+    is True when the final install command's args run to end-of-line,
+    so a ``\\`` continuation extends THEM rather than a post-separator
+    command.
+    """
+    out: list[str] = []
+    pos = 0
+    hit_any = False
+    last_seg_open = False
+    while True:
+        m = cmd_re.search(raw, pos)
+        if m is None:
+            out.append(raw[pos:])
+            break
+        sep = _INLINE_SHELL_SEP_RE.search(raw, m.end())
+        seg_end = sep.start() if sep is not None else len(raw)
+        new_seg, hit = sub_fn(raw[m.end():seg_end], name, new_version)
+        hit_any = hit_any or hit
+        out.append(raw[pos:m.end()])
+        out.append(new_seg)
+        pos = seg_end
+        last_seg_open = sep is None
+    return "".join(out), hit_any, last_seg_open
+
+
 _PYPI_CLAUSE_RE = re.compile(r"^\s*(===|==|>=|<=|~=|!=|>|<)\s*(.+?)\s*$")
 
 
 def _pypi_pin_preserving_bounds(spec: str, target: str,
-                                floor_raise: bool = False) -> str:
+                                floor_raise: bool = False) -> str | None:
     """Return a PEP 440 specifier that pins to ``target`` while keeping
     any range bounds from ``spec`` as a record of the safe corridor.
 
@@ -1384,8 +1459,14 @@ def _pypi_pin_preserving_bounds(spec: str, target: str,
     clauses (``==`` ``===`` ``~=``) are dropped and replaced by a single
     ``==<target>``. The floor lets a future ``degraded_safety`` downgrade
     know how far down is acceptable; the ceiling stops an auto-jump past
-    a declared major. Assumes ``target`` satisfies the kept bounds —
-    harden's selection honours the corridor (see ``_plan_one``).
+    a declared major.
+
+    Returns ``None`` (decline — mirror of the npm rewriter) when
+    ``target`` falls outside the declared corridor (at/above a kept
+    ceiling, or below a kept floor) or a bound isn't comparable —
+    never emit an unsatisfiable spec like ``>=2.0,==2.31.0,<2.25``.
+    Harden's selection honours the corridor (see ``_plan_one``); this
+    guard covers findings-driven targets that don't.
     """
     lowers, uppers, excludes = [], [], []
     for part in spec.split(","):
@@ -1394,17 +1475,35 @@ def _pypi_pin_preserving_bounds(spec: str, target: str,
             continue
         op, ver = cm.group(1), cm.group(2)
         if op in (">=", ">"):
-            lowers.append(f"{op}{ver}")
+            lowers.append((op, ver))
         elif op in ("<", "<="):
-            uppers.append(f"{op}{ver}")
+            uppers.append((op, ver))
         elif op == "!=":
             excludes.append(f"{op}{ver}")
         # ==, ===, ~= are dropped — replaced by the pin/floor below.
+    try:
+        for op, ver in uppers:
+            cmp = version_compare("PyPI", target, ver)
+            if op == "<" and cmp >= 0:
+                return None
+            if op == "<=" and cmp > 0:
+                return None
+        if not floor_raise:
+            for op, ver in lowers:
+                cmp = version_compare("PyPI", target, ver)
+                if op == ">=" and cmp < 0:
+                    return None
+                if op == ">" and cmp <= 0:
+                    return None
+    except VersionError:
+        return None
+    upper_specs = [f"{op}{ver}" for op, ver in uppers]
     if floor_raise:
         # Library posture: a single ``>=target`` floor (replacing any old
         # lowers), keep ceilings/excludes, no exact pin.
-        return ",".join([f">={target}"] + uppers + excludes)
-    return ",".join(lowers + [f"=={target}"] + uppers + excludes)
+        return ",".join([f">={target}"] + upper_specs + excludes)
+    lower_specs = [f"{op}{ver}" for op, ver in lowers]
+    return ",".join(lower_specs + [f"=={target}"] + upper_specs + excludes)
 
 
 def _inline_sub_pypi(
@@ -1424,19 +1523,32 @@ def _inline_sub_pypi(
         rf"((?:[ \t]*(?:===|==|>=|<=|~=|!=|>|<)[ \t]*[^\s\\;\"',]+[ \t]*,?)+)",
         re.IGNORECASE,
     )
-    new_text, n = spec_re.subn(
-        lambda m: m.group(1) + _pypi_pin_preserving_bounds(
-            m.group(2), new_version),
-        text, count=1,
-    )
+    declined = False
+
+    def _pin_spec(m: re.Match) -> str:
+        nonlocal declined
+        pinned = _pypi_pin_preserving_bounds(m.group(2), new_version)
+        if pinned is None:
+            # Target outside the declared corridor — leave the spec
+            # alone rather than emit an unsatisfiable one.
+            declined = True
+            return m.group(0)
+        return m.group(1) + pinned
+
+    new_text, n = spec_re.subn(_pin_spec, text, count=1)
+    if declined:
+        return text, False
     if n > 0:
         return new_text, True
     # 2. Bare name (not part of another identifier or version-separated).
+    #    ``count=1`` — pin the first occurrence only, so a repeat of the
+    #    name later in the segment (e.g. inside a trailing comment) is
+    #    left alone.
     bare = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/-])",
         re.IGNORECASE,
     )
-    new_text, n = bare.subn(rf"\1=={new_version}", text)
+    new_text, n = bare.subn(rf"\1=={new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1456,7 +1568,7 @@ def _inline_sub_eq_separated(
         rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
         re.IGNORECASE,
     )
-    new_text, n = bare.subn(rf"\1={new_version}", text)
+    new_text, n = bare.subn(rf"\1={new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1476,7 +1588,7 @@ def _inline_sub_yum(
         rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
         re.IGNORECASE,
     )
-    new_text, n = bare.subn(rf"\1-{new_version}", text)
+    new_text, n = bare.subn(rf"\1-{new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1499,7 +1611,7 @@ def _inline_sub_at_separated(
     bare = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=-])",
     )
-    new_text, n = bare.subn(rf"\1@{new_version}", text)
+    new_text, n = bare.subn(rf"\1@{new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1595,7 +1707,7 @@ def _inline_sub_composer(
     bare = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})(?![A-Za-z0-9._@/=:-])",
     )
-    new_text, n = bare.subn(rf"\1:{new_version}", text)
+    new_text, n = bare.subn(rf"\1:{new_version}", text, count=1)
     return (new_text, True) if n > 0 else (text, False)
 
 
@@ -1663,8 +1775,10 @@ def _rewrite_pyproject_toml(
     """Best-effort string-level rewrite covering PEP 621 dep lists and
     Poetry-style ``name = "spec"`` lines.
 
-    Keeps the original spec prefix when present (``^``, ``~``); falls
-    back to ``==target`` for hard pins.
+    Poetry entries keep the original spec prefix when present (``^``,
+    ``~``). PEP 621 entries go through ``_pypi_pin_preserving_bounds``
+    so range bounds survive around the new ``==target`` pin (same
+    corridor semantics as the requirements.txt rewriter).
     """
     norm = _normalise_pypi_name(plan.name)
 
@@ -1694,8 +1808,10 @@ def _rewrite_pyproject_toml(
 
     # 2. PEP 621 list form: each entry is a quoted PEP 508 string.
     pep508_re = re.compile(r'"([A-Za-z0-9_\-.]+)\s*([<>=!~][^"]*)"')
+    pep508_declined = False
 
     def _pep508_sub(m: re.Match) -> str:
+        nonlocal pep508_declined
         if _normalise_pypi_name(m.group(1)) != norm:
             return m.group(0)
         spec_and_marker = m.group(2)
@@ -1706,15 +1822,23 @@ def _rewrite_pyproject_toml(
         else:
             spec_part = spec_and_marker
             marker_part = ""
-        if plan.floor_raise:
-            new_spec = _pypi_pin_preserving_bounds(
-                spec_part, plan.target, floor_raise=True)
-            return f'"{m.group(1)}{new_spec}{marker_part}"'
-        return f'"{m.group(1)}=={plan.target}{marker_part}"'
+        # Preserve compatible bounds around the new pin — same corridor
+        # semantics as the requirements.txt rewriter. Decline (keep the
+        # entry verbatim) when the target falls outside the declared
+        # bounds rather than emit an unsatisfiable spec.
+        new_spec = _pypi_pin_preserving_bounds(
+            spec_part, plan.target, floor_raise=plan.floor_raise)
+        if new_spec is None:
+            pep508_declined = True
+            return m.group(0)
+        return f'"{m.group(1)}{new_spec}{marker_part}"'
 
     new_text = pep508_re.sub(_pep508_sub, new_text)
 
     if new_text == text:
+        if pep508_declined:
+            return text, False, ("spec matched but not safely bumpable "
+                                 "(target outside the declared bounds)")
         return text, False, "no matching pyproject entry"
     return new_text, True, None
 

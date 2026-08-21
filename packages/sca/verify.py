@@ -156,10 +156,13 @@ def main(
         print(f"raptor-sca verify: cannot parse findings: {e}", file=sys.stderr)
         return 3
 
-    summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity)
+    summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity,
+                                  applied=applied)
     delta_md = _render_markdown(target, proposed, applied, delta, summary)
-    (out_dir / "delta.md").write_text(delta_md, encoding="utf-8")
-    (out_dir / "delta.json").write_text(
+    from ._atomic import atomic_write_text
+    atomic_write_text(out_dir / "delta.md", delta_md)
+    atomic_write_text(
+        out_dir / "delta.json",
         json.dumps({
             "applied": [str(p) for p in applied],
             "summary": summary,
@@ -168,7 +171,6 @@ def main(
             "suppression_added": delta.suppression_added,
             "suppression_lifted": delta.suppression_lifted,
         }, indent=2),
-        encoding="utf-8",
     )
 
     sys.stdout.write(delta_md)
@@ -266,28 +268,56 @@ def _apply_overlay(proposed: Path, overlay: Path) -> List[Path]:
 # ---------------------------------------------------------------------------
 
 def _verdict(
-    delta, *, severity_floor: str,
+    delta, *, severity_floor: str, applied: "Optional[List[Path]]" = None,
 ) -> "tuple[Dict[str, Any], int]":
     floor = severity_rank(severity_floor)
     triggering = [
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= floor
     ]
-    not_cleared = [
+    persistent_above = [
         r for r in delta.persistent
         if severity_rank(r.get("severity", "info")) >= floor
     ]
+    # Advisories the operator expected to clear: persistent findings in
+    # files the proposed/ patch actually rewrote. A high finding that
+    # survives in a patched manifest means the patch did NOT resolve
+    # the open advisories — the documented exit-1 contract. Persistent
+    # findings in files the patch never touched don't gate (a targeted
+    # ``fix --fix=<adv>`` must not fail on unrelated backlog).
+    not_cleared = _not_cleared_in_applied(persistent_above, applied)
     summary = {
         "resolved": len(delta.resolved),
         "new": len(delta.new),
         "regressing_above_threshold": len(triggering),
-        "persistent_above_threshold": len(not_cleared),
+        "persistent_above_threshold": len(persistent_above),
+        "not_cleared_above_threshold": len(not_cleared),
         "suppression_added": len(delta.suppression_added),
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering else 0
+    exit_code = 1 if (triggering or not_cleared) else 0
     return summary, exit_code
+
+
+def _not_cleared_in_applied(
+    rows: "List[Dict[str, Any]]", applied: "Optional[List[Path]]",
+) -> "List[Dict[str, Any]]":
+    """Subset of ``rows`` whose ``file`` is one of the overlaid
+    (patched) relative paths. Finding rows carry overlay-absolute
+    paths; ``applied`` carries proposed/-relative paths — match on
+    the relative suffix."""
+    if not applied:
+        return []
+    rels = {str(p) for p in applied}
+    out: "List[Dict[str, Any]]" = []
+    for r in rows:
+        f = r.get("file")
+        if not isinstance(f, str):
+            continue
+        if any(f == rel or f.endswith("/" + rel) for rel in rels):
+            out.append(r)
+    return out
 
 
 def _render_markdown(
@@ -304,6 +334,13 @@ def _render_markdown(
             f"**Verdict: regression** — proposed/ introduces "
             f"{summary['regressing_above_threshold']} new finding(s) "
             f"at or above {summary['severity_threshold']} severity.\n"
+        )
+    elif summary.get("not_cleared_above_threshold"):
+        lines.append(
+            f"**Verdict: not cleared** — "
+            f"{summary['not_cleared_above_threshold']} finding(s) at or "
+            f"above {summary['severity_threshold']} severity persist in "
+            f"file(s) the patch rewrote.\n"
         )
     elif summary["new"]:
         lines.append(

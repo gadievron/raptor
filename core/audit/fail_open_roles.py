@@ -114,6 +114,7 @@ TIER_A_MODULE_PREFIXES: dict[str, str] = {
     "hashlib.": "crypto",
     "crypto/": "crypto",        # Go crypto/* import path shape
     "java.security.": "crypto",
+    "crypto.": "crypto",        # Node stdlib crypto module calls
 }
 
 # Tier-A security-relevant flag/mode vocabulary — grading input for
@@ -246,6 +247,20 @@ TIER_B_FRAMEWORK_HOOKS: tuple[FrameworkHook, ...] = (
     FrameworkHook(
         "gin", "middleware",
         r"\bgin\.HandlerFunc\b|func\s*\(\s*\w+\s+\*gin\.Context\s*\)",
+    ),
+    # Express/Connect middleware mechanics (phase 3, JS/TS): the
+    # three-parameter handler signature is the registration shape —
+    # per-project middleware names stay Tier C (learned). Rust web
+    # middleware deliberately has NO Tier-B entry: tower/actix
+    # Service impls have no signature shape that separates a gate
+    # from a plain handler, so Rust role binding rides the learned
+    # surfaces and naming stems only.
+    FrameworkHook(
+        "express", "middleware",
+        r"\(\s*(?:req|request)\s*,\s*(?:res|response)\s*,\s*next\s*\)"
+        r"\s*(?:=>|\{)"
+        r"|function\s*\w*\s*\(\s*(?:req|request)\s*,\s*(?:res|response)"
+        r"\s*,\s*next\s*\)",
     ),
 )
 

@@ -78,7 +78,8 @@ def main(argv: Sequence[str]) -> int:
     if not args.no_md:
         md = _render_markdown(rows, target=target)
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md, encoding="utf-8")
+        from ._atomic import atomic_write_text
+        atomic_write_text(md_path, md)
         wrote.append(f"report.md → {md_path}")
     if not args.no_sarif:
         write_sarif(sarif_path, target=target, rows=rows)

@@ -16,10 +16,6 @@ Teeth: each asserts the EXACT cve_id kwarg the wiring sets; removing
 """
 
 from __future__ import annotations
-import pytest
-pytest.importorskip("claude_agent_sdk")
-
-import asyncio
 from unittest.mock import patch
 
 from cve_env.agent import tools
@@ -76,10 +72,8 @@ def test_async_docker_build_wrapper_threads_cve_id() -> None:
             return_value=_fake_build_result(),
         ) as m:
             # tools.docker_build is an SdkMcpTool; the coroutine is .handler
-            asyncio.run(
-                tools.docker_build.handler(
-                    {"context_dir": "/tmp/x", "image_tag": "cve-env-local:t"}
-                )
+            tools.docker_build(
+                {"context_dir": "/tmp/x", "image_tag": "cve-env-local:t"}
             )
         assert m.call_args.kwargs.get("cve_id") == "CVE-2018-7600", (
             f"async wrapper did not thread cve_id: {m.call_args}"

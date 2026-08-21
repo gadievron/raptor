@@ -564,3 +564,34 @@ class TestNoStaleVerdict:
         pack.unlink()
         assert _check(str(tmp_path)) is False
         capsys.readouterr()
+
+
+class TestExtraStripSpelling:
+    """The U+2028/U+2029 strip set must work AND stay visibly spelled.
+
+    The set was once written with the literal (invisible) characters:
+    indistinguishable in an editor from two quoted blanks, so an
+    accidental "cleanup" to real spaces would have silently disabled
+    the line-separator defence while corrupting every space in
+    sanitised output. Pin both the behaviour and the escaped source
+    spelling (matching cc_trust)."""
+
+    def test_line_separators_stripped(self):
+        from core.security.codeql_trust import _EXTRA_STRIP, _safe
+        # chr() spellings so THIS file carries no invisible
+        # literals either.
+        _ls, _ps = chr(0x2028), chr(0x2029)
+        assert _EXTRA_STRIP == {_ls, _ps}
+        assert _safe(f"a{_ls}b{_ps}c") == "a?b?c"
+        # Ordinary spaces must survive — the failure mode the literal
+        # spelling invited.
+        assert _safe("a b") == "a b"
+
+    def test_source_uses_escaped_forms(self):
+        import core.security.codeql_trust as mod
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert chr(0x2028) not in src and chr(0x2029) not in src, (
+            "codeql_trust.py contains literal U+2028/U+2029 — use "
+            "the escaped spellings so the set stays reviewable")
+        # The escaped spellings are present in the source text.
+        assert "u2028" in src and "u2029" in src

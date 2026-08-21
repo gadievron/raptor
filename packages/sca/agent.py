@@ -152,6 +152,7 @@ def run_sca_subprocess(
         result = sandbox_run(
             cmd,
             use_egress_proxy=True,
+            require_proxy_netns=True,  # 00015
             proxy_hosts=_compose_proxy_hosts(target),
             caller_label="sca-agent",
             target=str(target),
@@ -291,6 +292,7 @@ def _run_sandboxed(
         output=str(output_dir),
         profile=profile,
         use_egress_proxy=True,
+        require_proxy_netns=True,  # 00015
         proxy_hosts=_compose_proxy_hosts(target),
         caller_label="sca-agent",
         audit=audit,

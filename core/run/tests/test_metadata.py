@@ -523,6 +523,31 @@ class TestRunCoverageSnapshot(unittest.TestCase):
             self.assertTrue(any(g["file"] == "a.c"
                                 for g in view["llm_gap_functions"]))
 
+    def test_non_completion_endings_still_convert_reads(self):
+        # The LLM's reads happened regardless of how the run ended.
+        # Pre-fix only complete_run converted the manifest, so a
+        # failed/cancelled/interrupted run's reads never became coverage
+        # (nothing imports raw manifests).
+        from core.run.metadata import interrupt_run
+        for ending in (
+            lambda run: fail_run(run, error="boom"),
+            cancel_run,
+            interrupt_run,
+        ):
+            with TemporaryDirectory() as d:
+                proj = Path(d)
+                (proj / "checklist.json").write_text(self._checklist())
+                run = proj / "agentic-20260526_120000"
+                start_run(run, "agentic")
+                (run / ".reads-manifest").write_text("a.c\n")
+                ending(run)
+                self.assertTrue(
+                    (run / "coverage-read.json").exists(), ending,
+                )
+                # Manifest stays: a resume→complete re-converts it with
+                # any new reads (write_record overwrites; idempotent).
+                self.assertTrue((run / ".reads-manifest").exists())
+
     def test_standalone_run_writes_no_store(self):
         import json
         with TemporaryDirectory() as d:
@@ -883,3 +908,34 @@ class TestCorroborateTargetPath(unittest.TestCase):
             start_run(run_dir, "audit", target=Path(d))
             self.assertIsNone(corroborate_target_path(run_dir, None))
             self.assertIsNone(corroborate_target_path(run_dir, ""))
+
+
+class TestCoverageProgress(unittest.TestCase):
+    _checklist = TestRunCoverageSnapshot._checklist
+
+    def test_completion_appends_progress_row(self):
+        import json
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            (proj / "checklist.json").write_text(self._checklist())
+            for name in ("audit-1", "audit-2"):
+                run = proj / name
+                start_run(run, "audit")
+                complete_run(run)
+            progress = proj / "coverage-progress.jsonl"
+            rows = [json.loads(x) for x in
+                    progress.read_text().splitlines() if x.strip()]
+            self.assertEqual([r["run"] for r in rows],
+                             ["audit-1", "audit-2"])
+            for r in rows:
+                self.assertIn("llm_reviewed", r)
+                self.assertIn("llm_reviewable", r)
+
+    def test_standalone_run_appends_nothing(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            out.mkdir()
+            run = out / "scan-1"
+            start_run(run, "scan")
+            complete_run(run)
+            self.assertFalse((out / "coverage-progress.jsonl").exists())

@@ -21,17 +21,22 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
        [--codeql-db <path>] [--max-cost <USD>] [--deepen-reserve <fraction>] [--max-time <seconds>]
        [--review-passes <N>] [--subsystem-depth <N>] [--batch-sloc-threshold <N>]
        [--include-kinds <list>] [--max-propagation-depth <N>] [--adversarial]
-       [--no-verdict-reuse] [--schedule {cost,priority}] [--dynamic | --no-dynamic]
+       [--no-verdict-reuse] [--schedule {cost,priority}] [--prior-journal <run-dir>]
+       [--prior-claims <N>]
+       [--dynamic | --no-dynamic]
        [--binary <path> ...] [--binary-auto] [--no-binary-oracle]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
 ```
 
 - `<target_path>` — path to codebase to review (required on first run; resolved per DEFAULT TARGET DIRECTORY if omitted)
-- `--strategy <name>` — filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing
+- `--strategy <name>` — filter to one strategy: general, input_handling, concurrency, memory, auth, crypto, aliasing, integer
 - `--budget <N>` — max functions to review (default: all gaps)
 - `--scope <dir>` — restrict to a subdirectory (e.g. `ipc/`, `net/ipv4/`). Annotations and coverage still write to the project-level output dir, so successive scoped runs accumulate
+- `--pin <file:function>` — guarantee a review slot for this function ahead of the `--budget` cut (repeatable)
+- `--scope-floor` / `--no-scope-floor` — every in-scope file keeps at least one review slot under `--budget` (default: on)
+- `--pre-scan` — bounded Semgrep baseline when the run has no scan SARIF, feeding the SARIF-corroboration channels
 - `--out <dir>` — output directory (default: resolved by lifecycle)
-- `--codeql-db <path>` — path to a CodeQL database for query dispatch and pre-sweep
+- `--codeql-db <path>` — CodeQL database for query dispatch and pre-sweep (repeatable — one per language for multi-language targets; per-function dispatch routes by the file's language)
 - `--max-cost <USD>` — stop after spending this many dollars on LLM calls
 - `--deepen-reserve <fraction>` — slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables)
 - `--max-time <seconds>` — stop after this many wall-clock seconds
@@ -41,6 +46,8 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--include-kinds <list>` — comma-separated item kinds beyond functions/methods (default: `top_level`, `macro`, `global`); positive list overrides the defaults, `-kind` opts one out, `none` restricts to functions/methods only
 - `--no-verdict-reuse` — disable cross-run verdict reuse (importing prior-run journal verdicts for functions whose source is unchanged)
 - `--schedule {cost,priority}` — parallel review ordering: `cost` packs predicted-longest reviews first (shortest wall time), `priority` reviews the most promising functions first (fastest first finding)
+- `--prior-journal <run-dir>` — run directory whose `review-journal.jsonl` feeds prior finding-grade claims (/agentic per-finding analyses) into review context (repeatable). Covers journals not yet merged into the project index — the `/agentic --gap-audit` post-pass passes its parent run dir here
+- `--prior-claims <N>` — max prior finding-grade claims injected per function, newest first (default: 3; 0 disables the injection)
 - `--dynamic` / `--no-dynamic` — enable/disable dynamic validation (Frida observation / target execution) for confirmed findings; `--no-dynamic` also overrides the project's `dynamic` trust marker
 - `--binary <path>` — debug binary for binary-oracle enrichment (repeatable); `--binary-auto` auto-detects under common build dirs; `--no-binary-oracle` disables the oracle for this run
 - `--annotations-dir <path>` — annotations directory for team workflows or cross-run review (default: project-level `annotations/` for lifecycle runs, else `$OUTPUT_DIR/annotations`)
@@ -93,7 +100,7 @@ If the operator passed `--scope`, still map the full target (the map covers the 
 libexec/raptor-audit run "$TARGET_PATH" --out "$OUTPUT_DIR"
 ```
 
-Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`).
+Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
 
 The orchestrator handles everything from here: gap computation, context assembly, LLM review, tool chain dispatch, Joern background build, sweep validation, constraint propagation, Mode 2 checker synthesis, /validate post-pass, report generation, and lifecycle completion.
 
@@ -144,7 +151,7 @@ These tools are available for hypothesis validation. The orchestrator invokes th
 
 **SMT verbs:** `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `validate-path`
 
-**Orchestrator-only channels** (not `sweep --tool` choices): fail-open (`fail_open:*`), consistency (`consistency:*`, peer census + contract witnesses), API-boundary caller contracts (`api_boundary:caller-contract`), SMT invariant preservation (`smt:invariant-preservation`). See `docs/audit.md` for semantics.
+**Orchestrator-only channels** (not `sweep --tool` choices): fail-open (`fail_open:*`), consistency (`consistency:*`, peer census + contract witnesses), API-boundary caller contracts (`api_boundary:caller-contract`), SMT invariant preservation (`smt:invariant-preservation`), plus the ptr-lifecycle, lock-region, resource-bounds, release-order, and protocol-state channels. See `docs/audit.md` for semantics.
 
 **Manual sweep logging** (for tools not yet auto-executed):
 ```bash

@@ -185,3 +185,60 @@ class TestEnsureRouteForModelConfigs:
             import os
             os.environ.pop("RAPTOR_LLM_SOCKET", None)
             os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+
+
+class TestInprocessTokenTTL:
+    """The in-process route's token must out-last long runs.
+
+    The 8 h spawned-worker default decapitated the trailing phases of
+    any run longer than the TTL (observed: every Phase-2 call after
+    hour 8 of an 8.2 h run 401'd). In-process, the token store dies
+    with the process, so a run-length-outlasting TTL costs nothing.
+    """
+
+    def _issued_ttl(self, dispatcher):
+        recs = list(dispatcher._tokens.values())
+        assert len(recs) == 1
+        rec = recs[0]
+        return rec.expires_at - rec.issued_at
+
+    def test_default_ttl_outlasts_worker_default(self, monkeypatch):
+        from core.llm.dispatcher.lifecycle import (
+            _INPROCESS_TOKEN_TTL_S,
+            ensure_inprocess_dispatcher_env,
+        )
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+        monkeypatch.delenv(
+            "RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S", raising=False,
+        )
+        d = ensure_inprocess_dispatcher_env(label="test-ttl")
+        try:
+            assert d is not None
+            ttl = self._issued_ttl(d)
+            assert ttl == _INPROCESS_TOKEN_TTL_S
+            assert ttl > 8 * 60 * 60
+        finally:
+            import os
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+            if d is not None:
+                d.shutdown()
+
+    def test_operator_env_override_wins(self, monkeypatch):
+        from core.llm.dispatcher.lifecycle import (
+            ensure_inprocess_dispatcher_env,
+        )
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S", "1234")
+        d = ensure_inprocess_dispatcher_env(label="test-ttl-env")
+        try:
+            assert d is not None
+            assert self._issued_ttl(d) == 1234
+        finally:
+            import os
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+            if d is not None:
+                d.shutdown()

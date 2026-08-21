@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 
 RUN_CONFIG_FILENAME = "audit-run-config.json"
 
+#: Staged by a launcher that owns this run's validation at the
+#: pipeline level (the /agentic --gap-audit post-pass runs the audit
+#: with --no-validate and validates the findings itself). When the
+#: audit is interrupted and later resumed, that parent pipeline has
+#: long since completed — the marker lets resume tell the operator
+#: which tail steps nobody will run automatically.
+PIPELINE_TAIL_FILENAME = "pipeline-tail.json"
+
 
 # ── Run-config persistence ───────────────────────────────────────────
 
@@ -377,3 +385,38 @@ def append_resume_markers(out_dir: Path, segment: int) -> None:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
     except Exception:
         logger.debug("telemetry resume marker failed", exc_info=True)
+
+
+def pipeline_tail_hint(out_dir: Path, findings_count: int) -> str | None:
+    """Operator instructions for a resumed run's deferred pipeline tail.
+
+    Returns None when no ``pipeline-tail.json`` marker exists, the
+    marker is unreadable, or the run produced no findings (nothing to
+    validate). Best-effort — never raises.
+    """
+    marker = Path(out_dir) / PIPELINE_TAIL_FILENAME
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or findings_count <= 0:
+        return None
+    deferred = data.get("deferred") or []
+    if not deferred:
+        return None
+    findings = Path(out_dir) / "findings.json"
+    lines = [
+        "This run was launched by a pipeline that deferred "
+        f"{' + '.join(str(d) for d in deferred)} to itself; the parent "
+        "run has completed and will not perform them for this resumed "
+        "segment. To finish the tail:",
+    ]
+    if "validate" in deferred:
+        lines.append(f"  /validate <target> --findings {findings}")
+    if "feedback" in deferred:
+        lines.append(
+            "  libexec/raptor-audit feedback --validation-report "
+            "<validate-out>/findings.json --annotations-dir "
+            f"<annotations> --audit-out {Path(out_dir)}"
+        )
+    return "\n".join(lines)

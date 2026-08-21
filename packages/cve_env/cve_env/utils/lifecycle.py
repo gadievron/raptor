@@ -102,22 +102,9 @@ def cleanup_containers(cve_id: str, timeout: float = 30.0) -> int:
     ``cve_id`` would over-clean each other. The common case (sequential
     bench, single-user) is safe.
     """
-    if not cve_id:
-        return 0
-    list_result = run_with_timeout(
-        ["docker", "ps", "-aq", "--filter", f"label={CVE_LABEL}={cve_id}"],
-        timeout=timeout,
-    )
-    if list_result.returncode != 0:
-        return 0
-    ids = (list_result.stdout or "").strip().splitlines()
-    ids = [i.strip() for i in ids if i.strip()]
-    if not ids:
-        return 0
-    outcome = run_with_timeout(["docker", "rm", "-f", *ids], timeout=timeout)
-    if outcome.returncode == 0:
-        return len(ids)
-    return 0
+    from core.container.lifecycle import remove_labeled_containers
+
+    return remove_labeled_containers(CVE_LABEL, cve_id, timeout=timeout)
 
 
 def cleanup_result_images(cve_id: str, timeout: float = 30.0) -> int:
@@ -145,53 +132,24 @@ def cleanup_result_images(cve_id: str, timeout: float = 30.0) -> int:
     ``-vN`` variants). Concurrency-safe: scoped to THIS cve_id only, so a
     different concurrent CVE's image is never touched.
     """
-    if not cve_id:
-        return 0
-    tags: list[str] = []
-    # (1) label-scoped — the normal-exit path (docker_build labels the image).
-    label_result = run_with_timeout(
-        [
-            "docker",
-            "images",
-            "--filter",
-            f"label={CVE_LABEL}={cve_id}",
-            "--format",
-            "{{.Repository}}:{{.Tag}}",
-        ],
+    from core.container.lifecycle import remove_labeled_images
+
+    return remove_labeled_images(
+        CVE_LABEL,
+        cve_id,
+        tag_repo="cve-env-local",
+        tag_value=cve_id,
         timeout=timeout,
     )
-    if label_result.returncode == 0:
-        for t in (label_result.stdout or "").splitlines():
-            t = t.strip()
-            if t and "<none>" not in t:
-                tags.append(t)
-    # (2) cve-id TAG sweep — kill-path fallback for unlabeled orphans.
-    tag_result = run_with_timeout(
-        ["docker", "images", "cve-env-local", "--format", "{{.Repository}}:{{.Tag}}"],
-        timeout=timeout,
-    )
-    if tag_result.returncode == 0:
-        for t in (tag_result.stdout or "").splitlines():
-            t = t.strip()
-            if not t or "<none>" in t or ":" not in t:
-                continue
-            tagpart = t.split(":", 1)[1]
-            if tagpart == cve_id or tagpart.startswith(cve_id + "-"):
-                tags.append(t)
-    tags = list(dict.fromkeys(tags))  # dedupe, preserve order
-    if not tags:
-        return 0
-    outcome = run_with_timeout(["docker", "rmi", *tags], timeout=timeout)
-    if outcome.returncode == 0:
-        return len(tags)
-    return 0
 
 
 def prune_images(timeout: float = 30.0) -> None:
     """Prune dangling images only — safe against in-use images and current
     tag-references. For aggressive pruning, run ``docker system prune -a``
     manually."""
-    run_with_timeout(["docker", "image", "prune", "-f"], timeout=timeout)
+    from core.container.lifecycle import prune_dangling_images
+
+    prune_dangling_images(timeout=timeout)
 
 
 def stop_colima_if_idle(timeout: float = 30.0) -> bool:

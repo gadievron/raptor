@@ -18,6 +18,7 @@ shapes the design doc enumerates.
 | `chained_sanitizer.py` | `candidate_only` | falsely suppresses | Phase 3's empty output_symbols on the nested call |
 | `sanitization_overwritten.py` | `candidate_only` | undefined (no AST handling) | Phase 2's reaching-defs catch the rebind |
 | `bypass.py` | `no_suppress` | undefined | Real bug — neither suppresses |
+| `loop_rebind.py` | `candidate_only` | undefined | Converging defs: condition 3's exclusivity requirement — membership among reaching definers alone falsely suppressed this before the fix |
 | `sanitizer_in_helper.py` | `no_suppress` (intra) → `suppress` (inter, Phase 14) | undefined | Phase 14's inter-procedural synthetic binding rescues this |
 
 ## Ablation
@@ -42,3 +43,22 @@ they call `html.escape` directly or a non-sanitizing callee and
 so produce no synthetic binding. The
 `test_corpus_fixture_verdict_interproc` test and the
 `test_corpus_ablation_summary` A/B table pin this.
+
+## b19 — element-sensitive arrays + wrapper summaries
+
+| fixture | shape | expected verdict |
+| --- | --- | --- |
+| `array_element_java.java` | tracked local array, element written only by a catalog sanitizer, one scalar hop to the sink | suppress |
+| `wrapper_helper_java.java` | private static same-class wrapper returning the sanitizer applied to its argument | suppress (via synthetic wrapper binding) |
+
+The full adversarial batteries (element rebind/mismatch/aliasing/
+escape/poison shapes; wrapper depth/dispatch/overload/branch/mixed-
+param refusals) live in `sanitizer_cut_precision.py` —
+`_java_array_fixtures()` / `_java_wrapper_fixtures()`. The
+pre-existing `java_xss_array_store_escape` precision fixture was
+re-shaped at b19: its array was local, fresh, and never read, which
+element tracking legitimately proves irrelevant to the sanitized
+scalar sink; an alias line now makes the array genuinely untracked so
+the fixture keeps guarding "escaping arrays block the exemption".
+| `conduit_transparency_java.java` | sanitized value through a returns-param conduit helper — value-transparent hop | suppress (conduit transparency) |
+| `conduit_tainted_java.java` | the same conduit with the raw request value (decoy sanitizer keeps the catalog non-empty) — transparency must not launder taint | candidate_only (survives) |

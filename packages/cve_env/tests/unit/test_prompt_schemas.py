@@ -320,17 +320,14 @@ def _all_check_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(patch("cve_env.utils.run.subprocess.run", subproc))
+        stack.enter_context(patch("core.container.proc.subprocess.run", subproc))
         # HTTP (requests.request)
-        req_mock = MagicMock()
-        req_mock.return_value.status_code = 200
-        req_mock.return_value.content = b"hello"
-        req_mock.return_value.text = "hello"
-        stack.enter_context(patch("cve_env.tools.verify.requests.request", req_mock))
+        req_mock = MagicMock(return_value=(200, b"hello"))
+        stack.enter_context(patch("core.env.verify._http_exchange", req_mock))
         # TCP (socket.create_connection)
         sock_factory = MagicMock(return_value=_FakeTCPSocket(response=b"+PONG\r\n"))
         stack.enter_context(
-            patch("cve_env.tools.verify.socket.create_connection", sock_factory)
+            patch("core.env.verify.socket.create_connection", sock_factory)
         )
         # Container exec (run_in_container.run_in_container)
         exec_mock = MagicMock(

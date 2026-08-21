@@ -72,6 +72,29 @@ class TestGatherProjectAnnotations(unittest.TestCase):
             project = _FakeProject(out, [])
             assert gather_project_annotations(project) == []
 
+    def test_run_dir_vanishing_mid_gather_does_not_crash(self):
+        """A run dir deleted between the annotations-dir probe and the
+        mtime stat (`/project clean` racing the report) must not raise."""
+        import shutil
+        from unittest import mock
+
+        with TemporaryDirectory() as d:
+            project = _build_project(Path(d))
+            run_dir = project.get_run_dirs()[0]
+
+            real_stat = Path.stat
+
+            def racing_stat(self, *args, **kwargs):
+                if self == run_dir:
+                    # Simulate the clean pass winning the race.
+                    shutil.rmtree(run_dir, ignore_errors=True)
+                return real_stat(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "stat", racing_stat):
+                recs = gather_project_annotations(project)
+            # Project-level annotation still gathered; no crash.
+            assert any(r["function"] == "login" for r in recs)
+
 
 class TestRenderAnnotationsMarkdown(unittest.TestCase):
     def test_empty_renders_no_annotations(self):

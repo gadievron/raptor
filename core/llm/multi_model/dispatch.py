@@ -395,12 +395,22 @@ def _dispatch_parallel(
     A model is "failed" if task() raised, OR if every entry in its result
     list is an error dict. Empty result lists are NOT failures (the model
     just had nothing to say).
+
+    On timeout the incomplete models are marked failed and this
+    function RETURNS — it deliberately does not join hung workers
+    (``shutdown(wait=False, cancel_futures=True)``): queued tasks are
+    cancelled, but a worker thread blocked inside ``task()`` may
+    linger until its underlying call unblocks or the process exits.
+    Pre-fix the executor context manager's ``__exit__`` re-joined
+    those hung workers, so the caller stayed blocked for as long as
+    the very hang the timeout had just recorded.
     """
     per_model_raw: dict[str, list[dict[str, Any]]] = {}
     failed: list[str] = []
 
     workers = max(1, min(max_parallel, len(models)))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    ex = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {ex.submit(task, m): m for m in models}
         try:
             completed = as_completed(futures, timeout=timeout)
@@ -458,6 +468,11 @@ def _dispatch_parallel(
                     )
                     per_model_raw[model.model_name] = []
                     failed.append(model.model_name)
+    finally:
+        # Never wait on hung workers (see docstring) — cancel what's
+        # still queued and return; on the happy path everything has
+        # already completed so this is a no-op.
+        ex.shutdown(wait=False, cancel_futures=True)
 
     return per_model_raw, failed
 

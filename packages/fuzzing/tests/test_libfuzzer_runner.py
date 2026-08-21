@@ -69,6 +69,30 @@ class TestLibFuzzerRunner(unittest.TestCase):
             self.assertEqual((runner.corpus_dir / "seed0").read_bytes(), b"seed")
             self.assertTrue(str(runner.corpus_dir).startswith(str((tmp / "out").resolve())))
 
+    def test_default_output_dir_anchored_to_configured_out_dir(self):
+        # Regression: the default output dir was a literal
+        # `out/libfuzzer_*` relative to the CWD at construction time,
+        # planting run dirs inside whatever directory the operator
+        # launched from instead of the configured run base.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            harness = tmp / "fuzz_target"
+            harness.write_text("#!/bin/sh\nexit 0\n")
+            harness.chmod(0o755)
+            configured = tmp / "configured-out"
+
+            with patch(
+                "core.config.RaptorConfig.get_out_dir",
+                return_value=configured,
+            ):
+                runner = LibFuzzerRunner(harness_path=harness)
+
+            self.assertTrue(
+                str(runner.output_dir).startswith(str(configured.resolve())),
+                f"default output dir {runner.output_dir} not under the "
+                f"configured out dir {configured}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

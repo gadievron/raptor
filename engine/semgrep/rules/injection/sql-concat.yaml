@@ -27,9 +27,13 @@ rules:
       - pattern-either:
           - pattern: $DB.execute($QUERY)
           - pattern: $DB.executemany($QUERY)
+    # NOTE: sqlalchemy.text() and psycopg2.sql.SQL() are NOT
+    # sanitizers — both wrap the string verbatim, so tainted data
+    # concatenated into their argument still reaches the database
+    # as executable SQL. Genuinely parameterised calls
+    # (db.execute(query, params)) are already non-findings: the
+    # one-argument sink patterns above do not match them.
     pattern-sanitizers:
-      - pattern: psycopg2.sql.SQL(...)
-      - pattern: sqlalchemy.text(...)
+      - pattern: int(...)
     metadata:
       cwe: ["CWE-89"]
-      

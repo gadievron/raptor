@@ -25,6 +25,8 @@ You are helping the user analyse a project's third-party dependencies for known 
      What an upgrade resolves vs introduces; supports `--candidate` for multi-target tables.
    - **CI / pre-commit gate**: `libexec/raptor-sca-run <target> --skip-review --skip-triage --fail-on-severity high --fail-on-kev`
      Mechanical-only path; exits 0/1 by threshold for build hooks.
+   - **Fetch the upstream fix diffs behind the findings**: `libexec/raptor-sca-run fix-diff <out>/findings.json [--max-cves N] [--cve CVE-ID]`
+     Runs `/cve-diff` per CVE-identified advisory (agentic — costs LLM budget per CVE, capped at 5 by default); writes per-CVE run dirs + `fix-diffs/summary.json` with the discovered fix commits. Use for backport checks and as checker-synthesis / variant-hunt seeds.
 
 3. **Analyse results**:
    - Read `<out>/report.md` for a human-readable severity-sorted view.

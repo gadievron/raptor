@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 
 from cve_env.utils import lifecycle as lf
+from core.container import lifecycle as core_lf
+
 from cve_env.utils.run import RunOutcome
 
 
@@ -118,7 +120,7 @@ def test_count_other_active_builds_with_alive_other(
 def test_cleanup_containers_empty_cve_id_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Empty cve_id → no subprocess fires."""
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured))
     removed = lf.cleanup_containers("")
     assert removed == 0
     assert captured == []
@@ -127,7 +129,7 @@ def test_cleanup_containers_empty_cve_id_noop(monkeypatch: pytest.MonkeyPatch) -
 def test_cleanup_containers_no_match_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """cve_id given but `docker ps` returns no IDs → no rm call."""
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured, stdout=""))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured, stdout=""))
     removed = lf.cleanup_containers("CVE-2014-0160")
     assert removed == 0
     # Only the docker ps call fired, not docker rm.
@@ -142,8 +144,8 @@ def test_cleanup_containers_removes_matching_ids(
     """Two matching containers → docker rm -f called with both IDs."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf,
-        "run_with_timeout",
+        core_lf,
+        "run_cli",
         _mock_run_factory(captured, stdout="abc123\ndef456\n"),
     )
     removed = lf.cleanup_containers("CVE-2014-0160")
@@ -164,7 +166,7 @@ def test_cleanup_containers_filters_by_cve_id_label(
     labeled containers with its own run_id choice — filter never matched.
     """
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured, stdout=""))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured, stdout=""))
     lf.cleanup_containers("CVE-2024-12345")
     assert captured, "docker ps must have been invoked"
     ps_args = captured[0]
@@ -183,7 +185,7 @@ def test_cleanup_containers_filters_by_cve_id_label(
 def test_prune_images_calls_docker_image_prune(monkeypatch: pytest.MonkeyPatch) -> None:
     """prune_images runs `docker image prune -f` exactly once."""
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured))
     lf.prune_images()
     assert captured == [["docker", "image", "prune", "-f"]]
 
@@ -232,8 +234,8 @@ def test_cleanup_result_images_rmi_by_label_tags(
     """Lists this CVE's images by label, then `docker rmi` each tag."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf,
-        "run_with_timeout",
+        core_lf,
+        "run_cli",
         _mock_run_factory(
             captured,
             stdout="cve-env-local:CVE-2018-7600\ncve-env-local:CVE-2018-7600-v2\n",
@@ -289,7 +291,7 @@ def test_cleanup_result_images_sweeps_unlabeled_cve_id_tag(
             out = ""
         return RunOutcome(returncode=0, stdout=out, stderr="", timed_out=False)
 
-    monkeypatch.setattr(lf, "run_with_timeout", _fake)
+    monkeypatch.setattr(core_lf, "run_cli", _fake)
     n = lf.cleanup_result_images("CVE-2022-4547")
     assert n == 1, (
         f"must sweep ONLY the cve-id-tagged orphan, not the other CVE: {captured}"
@@ -305,7 +307,7 @@ def test_cleanup_result_images_empty_cve_id_noop(
 ) -> None:
     """Empty cve_id is a no-op (no docker calls, returns 0)."""
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured))
     assert lf.cleanup_result_images("") == 0
     assert captured == []
 
@@ -316,8 +318,8 @@ def test_cleanup_result_images_skips_none_and_dedupes(
     """`<none>:<none>` rows are skipped and duplicate tags deduped before rmi."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf,
-        "run_with_timeout",
+        core_lf,
+        "run_cli",
         _mock_run_factory(
             captured,
             stdout="cve-env-local:CVE-1\n<none>:<none>\ncve-env-local:CVE-1\n",
@@ -332,7 +334,7 @@ def test_cleanup_result_images_skips_none_and_dedupes(
 def test_cleanup_result_images_no_match_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """No matching images → only the list query, no rmi."""
     captured: list[list[str]] = []
-    monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured, stdout=""))
+    monkeypatch.setattr(core_lf, "run_cli", _mock_run_factory(captured, stdout=""))
     assert lf.cleanup_result_images("CVE-9999-0000") == 0
     # two list queries now (label + cve-id tag sweep), no rmi.
     assert len(captured) == 2 and all(c[:2] == ["docker", "images"] for c in captured)

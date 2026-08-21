@@ -49,10 +49,12 @@ rules:
               # Django HttpResponse constructor with headers kwarg
               - pattern: "HttpResponse(..., headers={..., $KEY: $VALUE, ...}, ...)"
           - focus-metavariable: $VALUE
+    # A sanitizer must handle BOTH \n and \r — a single-character
+    # replace (or a "\r\n" pair replace) still lets the other bare
+    # character through and the response still splits.
     pattern-sanitizers:
-      - pattern: $X.replace("\n", ...)
-      - pattern: $X.replace("\r", ...)
-      - pattern: $X.replace("\r\n", ...)
+      - pattern: $X.replace("\n", ...).replace("\r", ...)
+      - pattern: $X.replace("\r", ...).replace("\n", ...)
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -76,13 +78,20 @@ rules:
           - pattern: $REQ.PostFormValue(...)
           - pattern: $REQ.Header.Get(...)
           - pattern: $REQ.PathValue(...)
-          # gin
-          - pattern: $CTX.Query(...)
-          - pattern: $CTX.Param(...)
-          - pattern: $CTX.PostForm(...)
-          # echo
-          - pattern: $CTX.QueryParam(...)
-          - pattern: $CTX.FormValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
           # environment
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
@@ -95,9 +104,11 @@ rules:
       - patterns:
           - pattern: $W.Header().Add($NAME, $VALUE)
           - focus-metavariable: $VALUE
+    # Both \n and \r must be handled — a single ReplaceAll leaves the
+    # other character usable for splitting.
     pattern-sanitizers:
-      - pattern: strings.ReplaceAll($X, "\n", ...)
-      - pattern: strings.ReplaceAll($X, "\r", ...)
+      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\n", ...), "\r", ...)
+      - pattern: strings.ReplaceAll(strings.ReplaceAll($X, "\r", ...), "\n", ...)
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -133,10 +144,13 @@ rules:
       - patterns:
           - pattern: (HttpServletResponse $RESP).addHeader($NAME, $VALUE)
           - focus-metavariable: $VALUE
+    # Both \n and \r must be handled — the regex-class replaceAll does,
+    # single-character replaces only qualify chained in both orders.
     pattern-sanitizers:
-      - pattern: $X.replace("\n", ...)
-      - pattern: $X.replace("\r", ...)
       - pattern: $X.replaceAll("[\n\r]", ...)
+      - pattern: $X.replaceAll("[\r\n]", ...)
+      - pattern: $X.replace("\n", ...).replace("\r", ...)
+      - pattern: $X.replace("\r", ...).replace("\n", ...)
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]
@@ -155,20 +169,33 @@ rules:
     mode: taint
     pattern-sources:
       - pattern-either:
-          # Express
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.headers[...]
-          # Koa
-          - pattern: $CTX.query[...]
-          - pattern: $CTX.query.$PROP
-          - pattern: $CTX.params[...]
-          - pattern: $CTX.params.$PROP
-          - pattern: $CTX.request.body[...]
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
           # Generic
           - pattern: process.env[...]
           - pattern: process.env.$PROP
@@ -187,10 +214,14 @@ rules:
       - patterns:
           - pattern: $RES.append($NAME, $VALUE)
           - focus-metavariable: $VALUE
+    # Both \n and \r must be handled — the character-class replace
+    # does, single-character replaces only qualify chained in both
+    # orders.
     pattern-sanitizers:
       - pattern: $X.replace(/[\r\n]/g, ...)
-      - pattern: $X.replace(/\n/g, ...)
-      - pattern: $X.replace(/\r/g, ...)
+      - pattern: $X.replace(/[\n\r]/g, ...)
+      - pattern: $X.replace(/\n/g, ...).replace(/\r/g, ...)
+      - pattern: $X.replace(/\r/g, ...).replace(/\n/g, ...)
     metadata:
       cwe: ["CWE-113"]
       owasp_top_10: ["A3:2021-Injection"]

@@ -8,6 +8,9 @@
 # This is deliberately a router, not a second implementation. Project-owned
 # show/init/export/sync operations go through raptor-project-manager; build
 # operations go through raptor-agentic's threat-model-only phase.
+#
+# Exit codes: 2 is reserved for the trust-marker refusal below
+# (cc-trust-check convention); usage errors exit 3.
 
 set -euo pipefail
 
@@ -100,6 +103,6 @@ case "$cmd" in
     *)
         echo "raptor-threat-model: unknown command: $cmd" >&2
         usage >&2
-        exit 2
+        exit 3
         ;;
 esac

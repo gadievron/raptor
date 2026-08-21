@@ -23,21 +23,16 @@ ids are deterministic).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# Repo root: this script lives at core/dataflow/scripts/handlabel_seed.py,
-# three levels deep. parents[3] climbs:
-#   [0] core/dataflow/scripts/  (this file's directory)
-#   [1] core/dataflow/
-#   [2] core/
-#   [3] <repo root>
-# Inserted so direct invocation (``python3 core/dataflow/scripts/handlabel_seed.py``)
-# works without PYTHONPATH setup. Matches the pattern in this dir's
-# ``corpus-metrics`` and ``corpus-run`` scripts.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
+# path ever added to sys.path (hard lookup; KeyError if the
+# script is run outside the launcher, by design).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.dataflow.adapters.codeql import make_finding_id
 from core.dataflow.finding import Finding, Step

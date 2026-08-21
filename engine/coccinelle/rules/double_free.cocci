@@ -44,18 +44,21 @@ for _p1, _p2 in zip(p1, p2):
               "message": "Double free of '%s' — first free at line %s" % (E, _p1.line)}
         sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
-// Kernel: kfree on error path after conditional kfree
+// Kernel: kfree in a non-returning branch followed by kfree on the
+// fallthrough path. The branch must NOT return (and must not NULL the
+// pointer) after the first free — a branch that frees and returns has
+// no CFG path connecting the two frees, which is the canonical
+// error-cleanup idiom, not a double free.
 @kfree_err_double@
 expression E;
 position p1, p2;
 @@
 
-(
-if (...) { ... kfree(E@p1); ... }
-|
-if (...) { ... kfree(E@p1); ... return ...; }
-)
+if (...) { ... kfree(E@p1); ... when != return ...;
+                                when != E = NULL
+}
 ... when != E = \(\(kmalloc\|kzalloc\|kcalloc\|kvmalloc\)(...)\|NULL\)
+    when != return ...;
 * kfree(E@p2);
 
 @script:python@

@@ -76,6 +76,9 @@ CI gate (exit 1 if thresholds exceeded):
 
 Utilities:
   raptor-sca verify <path> --proposed <dir>      Confirm proposed fixes
+  raptor-sca fix-diff <findings.json>            Fetch upstream fix diffs
+                                                 via /cve-diff (LLM cost per
+                                                 CVE; capped, see --max-cves)
   raptor-sca health                              Registry reachability check
   raptor-sca purl PyPI django 4.2.10             Print canonical Package URL
   raptor-sca render <findings.json>              Re-emit report.md / SARIF

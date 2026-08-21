@@ -38,6 +38,15 @@ def _completed(rc: int, stderr: str = "",
     )
 
 
+def _clone_materialises(cmd, **kwargs) -> subprocess.CompletedProcess:
+    """side_effect for a mocked successful clone: create the destination
+    directory (last argv token) like real git would. clone_repository
+    verifies host-side materialisation after a zero exit, so a bare
+    ``return_value = _completed(0)`` no longer models success."""
+    Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+    return _completed(0)
+
+
 def test_invalid_url_raises_before_subprocess(tmp_path: Path) -> None:
     """URL that fails allowlist must NOT reach the sandboxed runner."""
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
@@ -51,7 +60,7 @@ def test_successful_clone_calls_sandbox(tmp_path: Path) -> None:
     """Allowlisted URL flows through ``run_untrusted_networked`` with the
     right flags - depth, no-tags, target/output set, proxy hosts pinned."""
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
-        mock_run.return_value = _completed(0)
+        mock_run.side_effect = _clone_materialises
         ok = clone_repository(
             "https://github.com/foo/bar", tmp_path / "out",
         )
@@ -76,7 +85,7 @@ def test_clone_engages_egress_proxy(tmp_path: Path) -> None:
     """``run_untrusted_networked`` implicitly engages the egress proxy.
     Pin ``proxy_hosts`` so future refactors can't drop it."""
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
-        mock_run.return_value = _completed(0)
+        mock_run.side_effect = _clone_materialises
         clone_repository("https://github.com/foo/bar", tmp_path / "out")
         kwargs = mock_run.call_args.kwargs
         assert "github.com" == kwargs.get("proxy_hosts", [])[0]
@@ -127,7 +136,7 @@ def test_fetch_rejects_unsafe_repo_dir_before_subprocess(
 
 def test_full_clone_drops_depth_flag(tmp_path: Path) -> None:
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
-        mock_run.return_value = _completed(0)
+        mock_run.side_effect = _clone_materialises
         clone_repository("https://github.com/foo/bar",
                           tmp_path / "out", depth=None)
         cmd = mock_run.call_args.args[0]
@@ -823,7 +832,7 @@ def test_clone_argv_carries_safe_git_pins(tmp_path: Path) -> None:
     (fsmonitor / hooksPath / credential.helper / ...) but NOT the
     strict transport refusal, which would break the https clone."""
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
-        mock_run.return_value = _completed(0)
+        mock_run.side_effect = _clone_materialises
         clone_repository("https://github.com/foo/bar", tmp_path / "out")
     pins = _pin_pairs(mock_run.call_args.args[0])
     assert "core.fsmonitor=" in pins
@@ -932,3 +941,60 @@ def test_ls_remote_no_token_leaves_env_unaugmented() -> None:
     env = mock_run.call_args.kwargs["env"]
     assert "GIT_CONFIG_COUNT" not in env
     assert "GIT_CONFIG_KEY_0" not in env
+
+
+# ---------------------------------------------------------------------------
+# Host-side materialisation post-check
+# ---------------------------------------------------------------------------
+#
+# git's exit status reports what happened INSIDE the sandbox. Under the
+# mount-ns backend the child gets a private tmpfs /tmp; a destination
+# not covered by the bind tree gets written into that tmpfs, git exits
+# 0, and the tree vanishes with the sandbox. clone_repository must not
+# report success for a clone the caller cannot see.
+
+def test_clone_zero_exit_without_host_tree_raises(tmp_path: Path) -> None:
+    """Sandbox says success but the destination never appeared on the
+    host → loud RuntimeError, never a phantom True."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.return_value = _completed(0)  # deliberately no mkdir
+        with pytest.raises(RuntimeError,
+                           match="does not exist on the host"):
+            clone_repository("https://github.com/foo/bar",
+                             tmp_path / "out")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    __import__("sys").platform != "linux",
+    reason="exercises the Linux sandbox backends (mount-ns / Landlock)",
+)
+def test_clone_through_real_sandbox_materialises_on_host(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Regression for the mount-ns /tmp-shadowing class: a sandboxed
+    clone to a host /tmp destination must materialise on the HOST, not
+    inside the sandbox's private tmpfs. Clones a local scratch repo
+    through the real clone_repository path (URL allowlist stubbed —
+    it only admits remote forges); the scratch repo lives inside
+    ``target.parent`` so the bind tree covers the read side too."""
+    src = tmp_path / "srcrepo"
+    src.mkdir()
+    env = {"GIT_TERMINAL_PROMPT": "0", "HOME": str(tmp_path),
+           "PATH": "/usr/bin:/bin",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for argv in (["git", "init", "-q"],
+                 ["git", "add", "f.txt"],
+                 ["git", "commit", "-q", "-m", "seed"]):
+        if argv[1] == "add":
+            (src / "f.txt").write_text("seed\n", encoding="utf-8")
+        subprocess.run(argv, cwd=src, env=env, check=True, timeout=30)
+
+    monkeypatch.setattr("core.git.clone.validate_repo_url",
+                        lambda url: True)
+    dst = tmp_path / "dst"
+    assert clone_repository(str(src), dst, depth=None) is True
+    # The point of the test: host-visible materialisation.
+    assert (dst / "f.txt").read_text(encoding="utf-8") == "seed\n"
+    assert (dst / ".git").is_dir()

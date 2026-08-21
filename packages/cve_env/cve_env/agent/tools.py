@@ -1,10 +1,10 @@
-"""The 10-tool belt the agent calls during one CVE build.
+"""The 11-tool belt the agent calls during one CVE build.
 
-Each tool is an MCP tool registered via :func:`claude_agent_sdk.tool`;
-the SDK drives the tool-use cycle, runs each handler in-process, and
-feeds the result back to the agent. ``ALL_TOOLS`` is the registered
-list -- ``test_tool_schemas.py`` asserts its shape as a CI gate so a tool
-can never be silently unregistered at run time.
+Each tool is a plain sync handler (``args`` dict in, JSON text out)
+plus one :class:`core.llm.tool_use.types.ToolDef` entry in
+``ALL_TOOLS`` — the engine's wire shape directly, no conversion layer.
+``test_tool_schemas.py`` asserts the belt's shape as a CI gate so a
+tool can never be silently unregistered at run time.
 
 Tool taxonomy:
 
@@ -18,17 +18,14 @@ Tool taxonomy:
 
 from __future__ import annotations
 
-import dataclasses
-import functools
 import json
 import shutil
 import tempfile
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Any
 
-from claude_agent_sdk import SdkMcpTool, tool
+from core.llm.tool_use.types import ToolDef
 
-from cve_env.agent import _activity
 from cve_env.tools import arch as _arch
 from cve_env.tools import docker_build as _docker_build
 from cve_env.tools import docker_compose_up as _docker_compose_up
@@ -62,9 +59,9 @@ cover the research need. ``cve_env/tools/web_fetch.py`` is KEPT — it's used
 internally by ``nvd_lookup`` and ``github_fetch`` for the actual HTTP GETs."""
 
 
-def _ok(payload: dict[str, Any]) -> dict[str, Any]:
-    """Wrap a JSON-serializable payload in the MCP content envelope."""
-    return {"content": [{"type": "text", "text": json.dumps(payload, sort_keys=True)}]}
+def _json(payload: dict[str, Any]) -> str:
+    """Serialize a tool payload to the loop's wire format (JSON text)."""
+    return json.dumps(payload, sort_keys=True)
 
 
 # -- nvd_lookup -----------------------------------------------------------
@@ -198,26 +195,10 @@ def _detect_kernel_cve(payload: dict[str, Any]) -> str:
     return ""
 
 
-@tool(
-    "nvd_lookup",
-    "Fetch the NVD record for a CVE (live, unauthenticated). Returns "
-    "description, CVSS severity, CPE entries (vendor/product/version), "
-    "and reference URLs. Use this first to ground the agent on what the "
-    "CVE is actually about. **Phase 35.4 (updated 39.4a): 2-call cap "
-    "per CVE — the 3rd call returns ok=false. One re-call is allowed "
-    "for legitimate recovery (e.g. after an API refusal or transport "
-    "blip); a 3rd is treated as thrashing. The CVE record is in your "
-    "context; re-using it is usually the right move when verify fails — "
-    "iterate on build/run/verify or call give_up.** **It may include "
-    "`kernel_unsupported_hint` if the CVE is Linux-kernel-only (containers "
-    "share the host kernel, not reproducible) — read and call "
-    "`give_up(reason='arch_incompatible')` immediately.**",
-    {"cve_id": Annotated[str, "the CVE identifier, e.g. CVE-2018-7600"]},
-)
-async def nvd_lookup(args: dict[str, Any]) -> dict[str, Any]:
+def nvd_lookup(args: dict[str, Any]) -> str:
     global _NVD_LOOKUP_COUNT_THIS_CVE, _LAST_CVE_GITHUB_REPO  # noqa: PLW0603 -- per-CVE state
     if _NVD_LOOKUP_COUNT_THIS_CVE >= _NVD_LOOKUP_THRESHOLD:
-        return _ok(
+        return _json(
             {
                 "ok": False,
                 "blocked": True,
@@ -260,54 +241,26 @@ async def nvd_lookup(args: dict[str, Any]) -> dict[str, Any]:
             "detail='Linux kernel CVE; containers share the host kernel, not "
             "reproducible in a Docker container')."
         )
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- github_fetch ---------------------------------------------------------
 
 
-@tool(
-    "github_fetch",
-    "Fetch a file OR list a directory from a public GitHub repo via the "
-    "Contents API. For files: returns decoded content. For directories: "
-    "returns a list of entries. Use this to retrieve e.g. vulhub compose "
-    "files (owner=vulhub, repo=vulhub, path=<product>/<cve>/docker-compose.yml) "
-    "or upstream source files. Set GITHUB_TOKEN env to raise the rate limit.",
-    {
-        "owner": Annotated[str, "GitHub org/user, e.g. 'vulhub'"],
-        "repo": Annotated[str, "repo name, e.g. 'vulhub'"],
-        "path": Annotated[str, "repo-relative path to file or directory"],
-        "ref": Annotated[
-            str,
-            "optional git ref (branch/tag/SHA); default is the repo's default branch",
-        ],
-    },
-)
-async def github_fetch(args: dict[str, Any]) -> dict[str, Any]:
+def github_fetch(args: dict[str, Any]) -> str:
     payload = _github_fetch.github_fetch_payload(
         owner=str(args["owner"]),
         repo=str(args["repo"]),
         path=str(args["path"]),
         ref=str(args.get("ref") or ""),
     )
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- image_resolve (Day 6 landing) ---------------------------------------
 
 
-@tool(
-    "image_resolve",
-    "Probe container registries for an image matching the given product/version "
-    "that is native to the host architecture. Returns a digest-pinned pullable "
-    "ref or an 'arch_incompatible' signal so the agent can escalate to source_build.",
-    {
-        "product": Annotated[str, "normalized product name, e.g. 'drupal'"],
-        "version": Annotated[str, "exact version string, e.g. '8.5.0'"],
-        "host_arch": Annotated[str, "host architecture, e.g. 'arm64' or 'amd64'"],
-    },
-)
-async def image_resolve(args: dict[str, Any]) -> dict[str, Any]:
+def image_resolve(args: dict[str, Any]) -> str:
     host = _arch.detect_host_arch()
     payload = _image_resolve.image_resolve_to_payload(
         product=str(args["product"]),
@@ -333,7 +286,7 @@ async def image_resolve(args: dict[str, Any]) -> dict[str, Any]:
             "version=...) to clone + build the vulnerable version from source. "
             "Only give_up(no_image) if source_build also fails."
         )
-    return _ok(payload)
+    return _json(payload)
 
 
 def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -396,70 +349,7 @@ def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str
 # -- dockerfile_gen (Day 5 landing) --------------------------------------
 
 
-@tool(
-    "dockerfile_gen",
-    "Render a Dockerfile from structured input. Enforces P6 (<=10 apt packages), "
-    "P14 (digest-pinned base image), and P17 (no privilege-escalating directives). "
-    "Pass `copy_ops=[{src,dst}]` to overlay plugin/extension source onto a base "
-    "image (e.g., WordPress plugin, Drupal module). "
-    "Pass `cve_named_packages=[...]` to lock the CVE's headline + transitive "
-    "package names into the validator: any bare `apt install <pkg>` of those "
-    "packages becomes a HARD reject (P20) — version pin is required. Also "
-    "rejects `apt-get update` without same-line `=<version>` pin (P21). "
-    "Returns the Dockerfile text plus a validator report.",
-    {
-        "base_image": Annotated[str, "base image ref; must be digest-pinned"],
-        "install_steps": Annotated[
-            list[str], "ordered list of shell commands for RUN stanzas"
-        ],
-        "workdir": Annotated[str, "WORKDIR value, e.g. '/app'"],
-        "cmd": Annotated[list[str], "CMD vector, e.g. ['nginx', '-g', 'daemon off;']"],
-        "ports": Annotated[list[int], "EXPOSE ports, e.g. [80, 443]"],
-        "copy_ops": Annotated[
-            list[dict[str, str]],
-            "list of {src, dst} pairs rendered as COPY directives; src is "
-            "context-relative, dst is absolute. Use to install a plugin into "
-            "a CMS base image (e.g. WordPress + plugin overlay).",
-        ],
-        "cve_named_packages": Annotated[
-            list[str],
-            "package names the CVE specifically references (headline + "
-            "transitive deps from nvd_lookup, e.g. ['log4j-core', 'spring-"
-            "beans']). Bare apt install of these is HARD-rejected (P20). "
-            "Empty list = back-compat (Phase 20.2 soft warnings only).",
-        ],
-        "apt_unsafe": Annotated[
-            bool,
-            "Phase 37.4: bypass GPG signature + valid-until checks for "
-            "apt-get update/install. Use this when a previous docker_build "
-            "failed with stderr `At least one invalid signature was "
-            "encountered` (Debian bullseye on mirror.gcr.io is the most "
-            "common case). ONLY for disposable build containers; never in "
-            "production. Default: False.",
-        ],
-        "build": Annotated[
-            bool,
-            "b1: build the rendered Dockerfile immediately (fuse render→build, "
-            "saving a turn and closing the gap where agents quit after gen). "
-            "DEFAULT: True when there are no copy_ops (FROM+RUN case — an empty "
-            "context suffices), False when copy_ops are present (stage the COPY "
-            "context first, then this builds). Set explicitly to override. The "
-            "build result is returned under the `build` field.",
-        ],
-        "context_dir": Annotated[
-            str,
-            "build context dir for the fused build (auto-created if missing). "
-            "Omit for FROM+RUN Dockerfiles (a temp context is used); set it when "
-            "copy_ops reference staged files. Ignored when build is False.",
-        ],
-        "image_tag": Annotated[
-            str,
-            "image tag for the fused build (e.g. 'cve-env-local:CVE-2024-1234'); "
-            "auto-generated when empty. Use it in the follow-up docker_run.",
-        ],
-    },
-)
-async def dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
+def dockerfile_gen(args: dict[str, Any]) -> str:
     # apt_packages not in tool schema but validated defensively — LLM may send it as an undocumented field.
     for _field in (
         "install_steps",
@@ -471,7 +361,7 @@ async def dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
     ):
         _val = args.get(_field)
         if _val is not None and not isinstance(_val, list):
-            return _ok(
+            return _json(
                 {
                     "ok": False,
                     "issues": [f"{_field} must be a list, got {type(_val).__name__}"],
@@ -489,40 +379,13 @@ async def dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
         apt_unsafe=bool(args.get("apt_unsafe") or False),
     )
     payload = _maybe_fuse_build(payload, args)
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- source_build (Week 2 landing) ---------------------------------------
 
 
-@tool(
-    "source_build",
-    "Clone an upstream GitHub repo at the vulnerable version tag, "
-    "discover a Dockerfile (or a build-config hint like maven/npm), and "
-    "return the checkout path + Dockerfile text. Use when image_resolve "
-    "reports 'not_found' but the upstream has a public GitHub repo. "
-    "Progressive clone cascade (depth=1 -> adaptive -> full) + codeload "
-    "tarball archive fallback. Result's next_step_hint tells you whether "
-    "to call docker_build directly or scaffold via dockerfile_gen first. "
-    "GitHub-only; non-GitHub URLs return ok=false.",
-    {
-        "source_url": Annotated[
-            str,
-            "public GitHub URL of the upstream repo "
-            "(https://, git://, git+https, git@ all accepted)",
-        ],
-        "product": Annotated[
-            str,
-            "normalized product name, used to name the local checkout dir",
-        ],
-        "version": Annotated[
-            str,
-            "exact vulnerable version string (e.g. '1.5' or '5.4.2') -- "
-            "matched against repo tags via 4-tier priority",
-        ],
-    },
-)
-async def source_build(args: dict[str, Any]) -> dict[str, Any]:
+def source_build(args: dict[str, Any]) -> str:
     payload = _source_build.source_build_payload(
         source_url=str(args["source_url"]),
         product=str(args["product"]),
@@ -539,33 +402,13 @@ async def source_build(args: dict[str, Any]) -> dict[str, Any]:
         payload = _maybe_fuse_build(
             payload, {"context_dir": payload["repo_dir"], "build": True}
         )
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- docker_build (Day 5 landing) ----------------------------------------
 
 
-@tool(
-    "docker_build",
-    "Run 'docker build' on a context directory. Returns the exit code, the last "
-    "~200 log lines, and -- if the failure matches a known dependency-missing "
-    "regex -- a 'suggested_patch' hint listing apt_packages to add to the "
-    "next dockerfile_gen call. **Phase 37.3 build-loop guard: if the same "
-    "image_tag previously returned a suggested_patch, this call is BLOCKED "
-    "(returns ok=false, blocked=true) — you MUST call dockerfile_gen with the "
-    "suggested apt_packages before retrying docker_build.**",
-    {
-        "context_dir": Annotated[str, "path to the Docker build context"],
-        "dockerfile_text": Annotated[
-            str,
-            "optional: raw Dockerfile text; if omitted, uses context_dir/Dockerfile",
-        ],
-        "image_tag": Annotated[
-            str, "tag to assign the built image, e.g. 'cve-env-local:build'"
-        ],
-    },
-)
-async def docker_build(args: dict[str, Any]) -> dict[str, Any]:
+def docker_build(args: dict[str, Any]) -> str:
     result = _docker_build.docker_build(
         context_dir=str(args["context_dir"]),
         image_tag=str(args.get("image_tag") or ""),
@@ -573,7 +416,7 @@ async def docker_build(args: dict[str, Any]) -> dict[str, Any]:
         platform=args.get("platform") or None,
         cve_id=_CURRENT_CVE_ID,  # label image for per-CVE cleanup
     )
-    return _ok(
+    return _json(
         {
             "ok": result.ok,
             "image_tag": result.image_tag,
@@ -592,25 +435,7 @@ async def docker_build(args: dict[str, Any]) -> dict[str, Any]:
 # -- docker_run ----------------------------------------------------------
 
 
-@tool(
-    "docker_run",
-    "Launch a single container with hardened defaults (cap-drop ALL, "
-    "no-new-privileges, ephemeral 127.0.0.1 port). Returns container_id and "
-    "the allocated host_port. Failures return a structured reason "
-    "(no_image, no_host_port, etc.) -- not an exception.",
-    {
-        "image": Annotated[str, "image reference to run"],
-        "container_port": Annotated[
-            int, "the service port inside the container, e.g. 80"
-        ],
-        "run_id": Annotated[str, "bench run identifier, used as a container label"],
-        "cve_id": Annotated[str, "CVE ID, used as a container label"],
-        "platform": Annotated[
-            str, "optional: explicit --platform value, e.g. 'linux/amd64'"
-        ],
-    },
-)
-async def docker_run(args: dict[str, Any]) -> dict[str, Any]:
+def docker_run(args: dict[str, Any]) -> str:
     image = str(args["image"])
     container_port = int(args["container_port"])
     result = _docker_run.docker_run(
@@ -632,128 +457,42 @@ async def docker_run(args: dict[str, Any]) -> dict[str, Any]:
         "stderr": result.stderr,
         "next_step_hint": result.next_step_hint,
     }
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- docker_compose_up ---------------------------------------------------
 
 
-@tool(
-    "docker_compose_up",
-    "Bring up a multi-service vulhub compose stack. Use this when "
-    "`github_fetch` returned a docker-compose.yml with multiple services, "
-    "volume mounts, or a custom `command:` -- these can't be launched via "
-    "single-container `docker_run`. First `github_fetch` the compose file, "
-    "save it locally (e.g. via a Dockerfile_gen-less write), then pass its "
-    "path. Returns the primary service's container_id + host_port so you "
-    "can proceed to `verify` or `run_in_container`. Ports are rewritten to "
-    "127.0.0.1:0 (P18 invariant); teardown is automatic per CVE.",
-    {
-        "compose_yaml_path": Annotated[
-            str,
-            "absolute path to a docker-compose.yml on the local filesystem",
-        ],
-        "cve_id": Annotated[
-            str,
-            "CVE identifier; used as the deterministic compose project name",
-        ],
-        "platform": Annotated[
-            str,
-            "optional --platform value (e.g. 'linux/amd64' for Rosetta on arm64)",
-        ],
-        "allow_devices": Annotated[
-            bool,
-            "pass True for hardware/driver CVEs that need device node access. "
-            "Default False: only safe pseudo-devices (/dev/null, /dev/urandom, "
-            "etc.) are kept; dangerous mappings are stripped",
-        ],
-    },
-)
-async def docker_compose_up(args: dict[str, Any]) -> dict[str, Any]:
+def docker_compose_up(args: dict[str, Any]) -> str:
     payload = _docker_compose_up.docker_compose_up_payload(
         compose_yaml_path=str(args["compose_yaml_path"]),
         cve_id=str(args["cve_id"]),
         platform=args.get("platform") or None,
         allow_devices=bool(args.get("allow_devices")),
     )
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- run_in_container ----------------------------------------------------
 
 
-@tool(
-    "run_in_container",
-    "Execute a shell command inside an already-launched container via "
-    "`docker exec`. Use this AFTER `docker_run` to probe vulnerabilities "
-    "that are not HTTP-observable: Redis RESP (`redis-cli eval ...`), "
-    "local setuid CVEs (compile PoC, run it, check euid), database "
-    "protocols, anything needing in-container inspection. Returns "
-    "exit_code + stdout + stderr (capped). Invariants: no --privileged, "
-    "no user override; runs as whatever user the image uses.",
-    {
-        "container_id": Annotated[
-            str,
-            "the container id returned by docker_run",
-        ],
-        "command": Annotated[
-            str,
-            "shell command; runs via `sh -c`, so pipes / redirects / env vars work",
-        ],
-        "timeout_seconds": Annotated[
-            int,
-            "max seconds to wait for the command; clamped to [1, 300]",
-        ],
-        "workdir": Annotated[
-            str,
-            "optional working directory inside the container (empty = image default)",
-        ],
-    },
-)
-async def run_in_container(args: dict[str, Any]) -> dict[str, Any]:
+def run_in_container(args: dict[str, Any]) -> str:
     payload = _run_in_container.run_in_container_payload(
         container_id=str(args["container_id"]),
         command=str(args["command"]),
         timeout_seconds=float(args.get("timeout_seconds") or 30.0),
         workdir=str(args.get("workdir") or ""),
     )
-    return _ok(payload)
+    return _json(payload)
 
 
 # -- verify --------------------------------------------------------------
 
 
-@tool(
-    "verify",
-    "Run a verification plan. Check types: container_status (auto-prepended "
-    "if missing), http_check (passive: records response_size_bytes; fails "
-    "on empty-body 200s), log_check, stability_wait (auto-bumped to 120s "
-    "for JVM images), exec_check (wraps run_in_container; passes iff "
-    "exit_code + optional stdout match — Redis RESP via redis-cli, sudo/"
-    "polkit PoCs, DB wire), http_request_check (active: POSTs/GETs an "
-    "active payload and asserts the response contains an expected "
-    "response marker — OGNL/SpEL injection, command injection, Spring4Shell-"
-    "class), and tcp_probe_check (active raw-TCP probe — sends bytes/hex, "
-    "asserts response marker; use for Redis RESP, MySQL handshake, SMTP "
-    "banner, SSH version, Memcached, Postgres startup, raw-RTSP/SIP — no "
-    "in-container client tool needed). "
-    "Returns {passed, results, reason}. Lifecycle-only 'Up' detection is banned.",
-    {
-        "container_id": Annotated[str, "container id from docker_run"],
-        "host_ip": Annotated[str, "host bind IP, usually '127.0.0.1'"],
-        "host_port": Annotated[int, "host port from docker_run"],
-        "plan": Annotated[
-            list[dict[str, Any]],
-            "ordered list of check dicts; each has a 'type' "
-            "(container_status|http_check|log_check|stability_wait|"
-            "exec_check|http_request_check|tcp_probe_check) and its args",
-        ],
-    },
-)
-async def verify(args: dict[str, Any]) -> dict[str, Any]:
+def verify(args: dict[str, Any]) -> str:
     plan = args["plan"]
     if not isinstance(plan, list):
-        return _ok(
+        return _json(
             {
                 "passed": False,
                 "results": [],
@@ -770,7 +509,7 @@ async def verify(args: dict[str, Any]) -> dict[str, Any]:
         plan=plan,
         cve_version=_CURRENT_CVE_VERSION,
     )
-    return _ok(result)
+    return _json(result)
 
 
 # Per-build CVE version context for the verify tool. Set by
@@ -809,33 +548,8 @@ def set_cve_id_context(cve_id: str) -> None:
 # -- give_up (terminal) --------------------------------------------------
 
 
-@tool(
-    "give_up",
-    "Terminal signal: the agent cannot reach verify.passed for this CVE. "
-    "Calling this stops the loop with Outcome(status='unresolvable'). "
-    "Use when stuck -- NEVER thrash. "
-    "'reason' enum: "
-    "no_image | proprietary | unresolvable_metadata | arch_incompatible | "
-    "budget. "
-    "Runtime classifiers may also set these reasons (you do not emit them, "
-    "but they appear in audit JSONLs + Outcome.give_up_reason): "
-    "silent_end_turn (was silent_end_turn_p0x, Phase 24A rename), "
-    "stuck_after_launch_intervention (Phase 8.4 era — currently dormant), "
-    "no_image_without_resolve (Phase 7.4 CF-4), "
-    "refusal_persistent (Phase 7.5 CF-6), "
-    "max_tool_attempts_<tool> (Phase 12.5 attempts cap), "
-    "stage_budget_exhausted_<stage> (Phase 12.3 hard mode).",
-    {
-        "reason": Annotated[
-            str,
-            "enum: no_image | proprietary | unresolvable_metadata | "
-            "arch_incompatible | budget",
-        ],
-        "detail": Annotated[str, "free-form explanation for the audit log"],
-    },
-)
-async def give_up(args: dict[str, Any]) -> dict[str, Any]:
-    return _ok(
+def give_up(args: dict[str, Any]) -> str:
+    return _json(
         {
             "terminal": True,
             "reason": str(args.get("reason", "")),
@@ -847,48 +561,442 @@ async def give_up(args: dict[str, Any]) -> dict[str, Any]:
 # -- registry ------------------------------------------------------------
 
 
-_RAW_TOOLS: list[SdkMcpTool[Any]] = [
-    nvd_lookup,
-    github_fetch,
-    image_resolve,
-    dockerfile_gen,
-    source_build,
-    docker_build,
-    docker_run,
-    docker_compose_up,
-    run_in_container,
-    verify,
-    give_up,
+ALL_TOOLS: list[ToolDef] = [
+    ToolDef(
+        name="nvd_lookup",
+        description="Fetch the NVD record for a CVE (live, unauthenticated). Returns "
+        "description, CVSS severity, CPE entries (vendor/product/version), "
+        "and reference URLs. Use this first to ground the agent on what the "
+        "CVE is actually about. **Phase 35.4 (updated 39.4a): 2-call cap "
+        "per CVE — the 3rd call returns ok=false. One re-call is allowed "
+        "for legitimate recovery (e.g. after an API refusal or transport "
+        "blip); a 3rd is treated as thrashing. The CVE record is in your "
+        "context; re-using it is usually the right move when verify fails — "
+        "iterate on build/run/verify or call give_up.** **It may include "
+        "`kernel_unsupported_hint` if the CVE is Linux-kernel-only (containers "
+        "share the host kernel, not reproducible) — read and call "
+        "`give_up(reason='arch_incompatible')` immediately.**",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "cve_id": {
+                    "type": "string",
+                    "description": "the CVE identifier, e.g. CVE-2018-7600"
+                }
+            },
+            "required": [
+                "cve_id"
+            ]
+        },
+        handler=nvd_lookup,
+    ),
+    ToolDef(
+        name="github_fetch",
+        description="Fetch a file OR list a directory from a public GitHub repo via the "
+        "Contents API. For files: returns decoded content. For directories: "
+        "returns a list of entries. Use this to retrieve e.g. vulhub compose "
+        "files (owner=vulhub, repo=vulhub, path=<product>/<cve>/docker-compose.yml) "
+        "or upstream source files. Set GITHUB_TOKEN env to raise the rate limit.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "string",
+                    "description": "GitHub org/user, e.g. 'vulhub'"
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "repo name, e.g. 'vulhub'"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "repo-relative path to file or directory"
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "optional git ref (branch/tag/SHA); default is the repo's default branch"
+                }
+            },
+            "required": [
+                "owner",
+                "repo",
+                "path"
+            ]
+        },
+        handler=github_fetch,
+    ),
+    ToolDef(
+        name="image_resolve",
+        description="Probe container registries for an image matching the given product/version "
+        "that is native to the host architecture. Returns a digest-pinned pullable "
+        "ref or an 'arch_incompatible' signal so the agent can escalate to source_build.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "product": {
+                    "type": "string",
+                    "description": "normalized product name, e.g. 'drupal'"
+                },
+                "version": {
+                    "type": "string",
+                    "description": "exact version string, e.g. '8.5.0'"
+                },
+                "host_arch": {
+                    "type": "string",
+                    "description": "host architecture, e.g. 'arm64' or 'amd64'"
+                }
+            },
+            "required": [
+                "product",
+                "version",
+                "host_arch"
+            ]
+        },
+        handler=image_resolve,
+    ),
+    ToolDef(
+        name="dockerfile_gen",
+        description="Render a Dockerfile from structured input. Enforces P6 (<=10 apt packages), "
+        "P14 (digest-pinned base image), and P17 (no privilege-escalating directives). "
+        "Pass `copy_ops=[{src,dst}]` to overlay plugin/extension source onto a base "
+        "image (e.g., WordPress plugin, Drupal module). "
+        "Pass `cve_named_packages=[...]` to lock the CVE's headline + transitive "
+        "package names into the validator: any bare `apt install <pkg>` of those "
+        "packages becomes a HARD reject (P20) — version pin is required. Also "
+        "rejects `apt-get update` without same-line `=<version>` pin (P21). "
+        "Returns the Dockerfile text plus a validator report.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "base_image": {
+                    "type": "string",
+                    "description": "base image ref; must be digest-pinned"
+                },
+                "install_steps": {
+                    "type": "array",
+                    "description": "ordered list of shell commands for RUN stanzas"
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "WORKDIR value, e.g. '/app'"
+                },
+                "cmd": {
+                    "type": "array",
+                    "description": "CMD vector, e.g. ['nginx', '-g', 'daemon off;']"
+                },
+                "ports": {
+                    "type": "array",
+                    "description": "EXPOSE ports, e.g. [80, 443]"
+                },
+                "copy_ops": {
+                    "type": "array",
+                    "description": "list of {src, dst} pairs rendered as COPY directives; src is context-relative, dst is absolute. Use to install a plugin into a CMS base image (e.g. WordPress + plugin overlay)."
+                },
+                "cve_named_packages": {
+                    "type": "array",
+                    "description": "package names the CVE specifically references (headline + transitive deps from nvd_lookup, e.g. ['log4j-core', 'spring-beans']). Bare apt install of these is HARD-rejected (P20). Empty list = back-compat (Phase 20.2 soft warnings only)."
+                },
+                "apt_unsafe": {
+                    "type": "boolean",
+                    "description": "Phase 37.4: bypass GPG signature + valid-until checks for apt-get update/install. Use this when a previous docker_build failed with stderr `At least one invalid signature was encountered` (Debian bullseye on mirror.gcr.io is the most common case). ONLY for disposable build containers; never in production. Default: False."
+                },
+                "build": {
+                    "type": "boolean",
+                    "description": "b1: build the rendered Dockerfile immediately (fuse render\u2192build, saving a turn and closing the gap where agents quit after gen). DEFAULT: True when there are no copy_ops (FROM+RUN case \u2014 an empty context suffices), False when copy_ops are present (stage the COPY context first, then this builds). Set explicitly to override. The build result is returned under the `build` field."
+                },
+                "context_dir": {
+                    "type": "string",
+                    "description": "build context dir for the fused build (auto-created if missing). Omit for FROM+RUN Dockerfiles (a temp context is used); set it when copy_ops reference staged files. Ignored when build is False."
+                },
+                "image_tag": {
+                    "type": "string",
+                    "description": "image tag for the fused build (e.g. 'cve-env-local:CVE-2024-1234'); auto-generated when empty. Use it in the follow-up docker_run."
+                }
+            },
+            "required": [
+                "base_image",
+                "install_steps",
+                "workdir",
+                "cmd",
+                "ports",
+                "copy_ops",
+                "cve_named_packages",
+                "apt_unsafe",
+                "build",
+                "context_dir",
+                "image_tag"
+            ]
+        },
+        handler=dockerfile_gen,
+    ),
+    ToolDef(
+        name="source_build",
+        description="Clone an upstream GitHub repo at the vulnerable version tag, "
+        "discover a Dockerfile (or a build-config hint like maven/npm), and "
+        "return the checkout path + Dockerfile text. Use when image_resolve "
+        "reports 'not_found' but the upstream has a public GitHub repo. "
+        "Progressive clone cascade (depth=1 -> adaptive -> full) + codeload "
+        "tarball archive fallback. Result's next_step_hint tells you whether "
+        "to call docker_build directly or scaffold via dockerfile_gen first. "
+        "GitHub-only; non-GitHub URLs return ok=false.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_url": {
+                    "type": "string",
+                    "description": "public GitHub URL of the upstream repo (https://, git://, git+https, git@ all accepted)"
+                },
+                "product": {
+                    "type": "string",
+                    "description": "normalized product name, used to name the local checkout dir"
+                },
+                "version": {
+                    "type": "string",
+                    "description": "exact vulnerable version string (e.g. '1.5' or '5.4.2') -- matched against repo tags via 4-tier priority"
+                }
+            },
+            "required": [
+                "source_url",
+                "product",
+                "version"
+            ]
+        },
+        handler=source_build,
+    ),
+    ToolDef(
+        name="docker_build",
+        description="Run 'docker build' on a context directory. Returns the exit code, the last "
+        "~200 log lines, and -- if the failure matches a known dependency-missing "
+        "regex -- a 'suggested_patch' hint listing apt_packages to add to the "
+        "next dockerfile_gen call. **Phase 37.3 build-loop guard: if the same "
+        "image_tag previously returned a suggested_patch, this call is BLOCKED "
+        "(returns ok=false, blocked=true) — you MUST call dockerfile_gen with the "
+        "suggested apt_packages before retrying docker_build.**",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "context_dir": {
+                    "type": "string",
+                    "description": "path to the Docker build context"
+                },
+                "dockerfile_text": {
+                    "type": "string",
+                    "description": "optional: raw Dockerfile text; if omitted, uses context_dir/Dockerfile"
+                },
+                "image_tag": {
+                    "type": "string",
+                    "description": "tag to assign the built image, e.g. 'cve-env-local:build'"
+                }
+            },
+            "required": [
+                "context_dir",
+                "image_tag"
+            ]
+        },
+        handler=docker_build,
+    ),
+    ToolDef(
+        name="docker_run",
+        description="Launch a single container with hardened defaults (cap-drop ALL, "
+        "no-new-privileges, ephemeral 127.0.0.1 port). Returns container_id and "
+        "the allocated host_port. Failures return a structured reason "
+        "(no_image, no_host_port, etc.) -- not an exception.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "image": {
+                    "type": "string",
+                    "description": "image reference to run"
+                },
+                "container_port": {
+                    "type": "integer",
+                    "description": "the service port inside the container, e.g. 80"
+                },
+                "run_id": {
+                    "type": "string",
+                    "description": "bench run identifier, used as a container label"
+                },
+                "cve_id": {
+                    "type": "string",
+                    "description": "CVE ID, used as a container label"
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "optional: explicit --platform value, e.g. 'linux/amd64'"
+                }
+            },
+            "required": [
+                "image",
+                "container_port",
+                "run_id",
+                "cve_id"
+            ]
+        },
+        handler=docker_run,
+    ),
+    ToolDef(
+        name="docker_compose_up",
+        description="Bring up a multi-service vulhub compose stack. Use this when "
+        "`github_fetch` returned a docker-compose.yml with multiple services, "
+        "volume mounts, or a custom `command:` -- these can't be launched via "
+        "single-container `docker_run`. First `github_fetch` the compose file, "
+        "save it locally (e.g. via a Dockerfile_gen-less write), then pass its "
+        "path. Returns the primary service's container_id + host_port so you "
+        "can proceed to `verify` or `run_in_container`. Ports are rewritten to "
+        "127.0.0.1:0 (P18 invariant); teardown is automatic per CVE.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "compose_yaml_path": {
+                    "type": "string",
+                    "description": "absolute path to a docker-compose.yml on the local filesystem"
+                },
+                "cve_id": {
+                    "type": "string",
+                    "description": "CVE identifier; used as the deterministic compose project name"
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "optional --platform value (e.g. 'linux/amd64' for Rosetta on arm64)"
+                },
+                "allow_devices": {
+                    "type": "boolean",
+                    "description": "pass True for hardware/driver CVEs that need device node access. Default False: only safe pseudo-devices (/dev/null, /dev/urandom, etc.) are kept; dangerous mappings are stripped"
+                }
+            },
+            "required": [
+                "compose_yaml_path",
+                "cve_id",
+                "allow_devices"
+            ]
+        },
+        handler=docker_compose_up,
+    ),
+    ToolDef(
+        name="run_in_container",
+        description="Execute a shell command inside an already-launched container via "
+        "`docker exec`. Use this AFTER `docker_run` to probe vulnerabilities "
+        "that are not HTTP-observable: Redis RESP (`redis-cli eval ...`), "
+        "local setuid CVEs (compile PoC, run it, check euid), database "
+        "protocols, anything needing in-container inspection. Returns "
+        "exit_code + stdout + stderr (capped). Invariants: no --privileged, "
+        "no user override; runs as whatever user the image uses.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "container_id": {
+                    "type": "string",
+                    "description": "the container id returned by docker_run"
+                },
+                "command": {
+                    "type": "string",
+                    "description": "shell command; runs via `sh -c`, so pipes / redirects / env vars work"
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "max seconds to wait for the command; clamped to [1, 300]"
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "optional working directory inside the container (empty = image default)"
+                }
+            },
+            "required": [
+                "container_id",
+                "command",
+                "timeout_seconds"
+            ]
+        },
+        handler=run_in_container,
+    ),
+    ToolDef(
+        name="verify",
+        description="Run a verification plan. Check types: container_status (auto-prepended "
+        "if missing), http_check (passive: records response_size_bytes; fails "
+        "on empty-body 200s), log_check, stability_wait (auto-bumped to 120s "
+        "for JVM images), exec_check (wraps run_in_container; passes iff "
+        "exit_code + optional stdout match — Redis RESP via redis-cli, sudo/"
+        "polkit PoCs, DB wire), http_request_check (active: POSTs/GETs an "
+        "active payload and asserts the response contains an expected "
+        "response marker — OGNL/SpEL injection, command injection, Spring4Shell-"
+        "class), and tcp_probe_check (active raw-TCP probe — sends bytes/hex, "
+        "asserts response marker; use for Redis RESP, MySQL handshake, SMTP "
+        "banner, SSH version, Memcached, Postgres startup, raw-RTSP/SIP — no "
+        "in-container client tool needed). "
+        "Returns {passed, results, reason}. Lifecycle-only 'Up' detection is banned.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "container_id": {
+                    "type": "string",
+                    "description": "container id from docker_run"
+                },
+                "host_ip": {
+                    "type": "string",
+                    "description": "host bind IP, usually '127.0.0.1'"
+                },
+                "host_port": {
+                    "type": "integer",
+                    "description": "host port from docker_run"
+                },
+                "plan": {
+                    "type": "array",
+                    "description": "ordered list of check dicts; each has a 'type' (container_status|http_check|log_check|stability_wait|exec_check|http_request_check|tcp_probe_check) and its args"
+                }
+            },
+            "required": [
+                "container_id",
+                "host_ip",
+                "host_port",
+                "plan"
+            ]
+        },
+        handler=verify,
+    ),
+    ToolDef(
+        name="give_up",
+        description="Terminal signal: the agent cannot reach verify.passed for this CVE. "
+        "Calling this stops the loop with Outcome(status='unresolvable'). "
+        "Use when stuck -- NEVER thrash. "
+        "'reason' enum: "
+        "no_image | proprietary | unresolvable_metadata | arch_incompatible | "
+        "budget. "
+        "Runtime classifiers may also set these reasons (you do not emit them, "
+        "but they appear in audit JSONLs + Outcome.give_up_reason): "
+        "silent_end_turn (was silent_end_turn_p0x, Phase 24A rename), "
+        "stuck_after_launch_intervention (Phase 8.4 era — currently dormant), "
+        "no_image_without_resolve (Phase 7.4 CF-4), "
+        "refusal_persistent (Phase 7.5 CF-6), "
+        "max_tool_attempts_<tool> (Phase 12.5 attempts cap), "
+        "stage_budget_exhausted_<stage> (Phase 12.3 hard mode).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "enum: no_image | proprietary | unresolvable_metadata | arch_incompatible | budget"
+                },
+                "detail": {
+                    "type": "string",
+                    "description": "free-form explanation for the audit log"
+                }
+            },
+            "required": [
+                "reason",
+                "detail"
+            ]
+        },
+        handler=give_up,
+    ),
 ]
+"""Canonical belt -- the CI gate asserts len == 11 and schema validity.
+Declared directly in the engine's wire shape
+(:class:`core.llm.tool_use.types.ToolDef`): JSON schemas, sync handlers
+returning JSON text."""
 
 
-def _with_activity_tracking(t: SdkMcpTool[Any]) -> SdkMcpTool[Any]:
-    """Stamp tool start/end into :mod:`cve_env.agent._activity` so the
-    connectivity idle-watchdog (``llm._run_query_once``) EXCLUDES tool-execution
-    time. The SDK is silent during a long in-process tool call, so without this a
-    legitimate 600-900s build would trip the breaker. Only ``handler`` is
-    wrapped; name/description/input_schema are preserved (the CI shape gate and
-    every tool's contract are unchanged)."""
-    orig = t.handler
-
-    @functools.wraps(orig)
-    async def _tracked(*args: Any, **kwargs: Any) -> Any:
-        _activity.tool_start()
-        try:
-            return await orig(*args, **kwargs)
-        finally:
-            _activity.tool_end()
-
-    return dataclasses.replace(t, handler=_tracked)
-
-
-ALL_TOOLS: list[SdkMcpTool[Any]] = [_with_activity_tracking(t) for t in _RAW_TOOLS]
-"""Canonical list -- the CI gate asserts len == 11 and schema validity. Handlers
-are wrapped for tool-activity tracking; the tool shape is unchanged."""
-
-
-def get_tool_by_name(name: str) -> SdkMcpTool[Any]:
-    """Lookup a tool by short name (not the ``mcp__<server>__<name>`` form)."""
+def get_tool_by_name(name: str) -> ToolDef:
+    """Lookup a tool by short name."""
     for t in ALL_TOOLS:
         if t.name == name:
             return t

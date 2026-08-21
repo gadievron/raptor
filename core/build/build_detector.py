@@ -606,6 +606,31 @@ class BuildDetector:
             result[language] = self.detect_build_system(language)
         return result
 
+    # Version probes run from the filesystem root — NEVER from inside
+    # the scanned repo. Build tools auto-load configuration relative
+    # to cwd (or an ancestor found by walking upward), even for bare
+    # version invocations:
+    #   * Maven's launcher discovers the project dir by walking up
+    #     from cwd and loads `.mvn/jvm.config` / `.mvn/maven.config` /
+    #     `.mvn/extensions.xml` from it — for `mvn --version` too. A
+    #     hostile repo shipping `.mvn/jvm.config` with
+    #     `-javaagent:<repo>/evil.jar` executes attacker code during
+    #     the probe, before any build is attempted.
+    #   * yarn classic honours `yarn-path` from a `.yarnrc` in cwd or
+    #     an ancestor and EXECUTES the named script for any
+    #     subcommand, `--version` included.
+    #   * dotnet consults `global.json`, bundler walks up looking for
+    #     a Gemfile — same discovery shape, lower impact.
+    # The probes only answer "is the tool installed"; they need no
+    # repo cwd at all. `os.sep` terminates every upward config walk
+    # at root-owned paths. Deliberately NOT a tempdir: /tmp is
+    # world-writable, so a walk up from a private mkdtemp would still
+    # honour a locally planted `/tmp/.mvn`. With argv a RAPTOR
+    # constant, env from get_safe_env(), and cwd neutralised, the
+    # probe has no attacker-controlled input — which is what the
+    # _run_trusted doctrine requires.
+    _PROBE_CWD: ClassVar[str] = os.sep
+
     def validate_build_command(self, build_system: BuildSystem, timeout: int = 30) -> bool:
         """
         Validate that build command can be executed.
@@ -690,16 +715,14 @@ class BuildDetector:
             )
             return False
 
-        # Pre-flight working_dir exists + is a directory. Pre-fix
-        # we passed `cwd=build_system.working_dir` directly to the
-        # subprocess; if the path was synthesised to a non-
-        # existent location (e.g. detection picked a build-system
-        # candidate whose parent was deleted between detection
-        # and validation, or a stale BuildSystem object was
-        # serialised across runs), Popen raised FileNotFoundError
-        # for the cwd — but the operator-visible error read as
-        # "build tool not found", confusing the diagnosis. Check
-        # explicitly so the warning identifies the actual issue.
+        # Pre-flight working_dir exists + is a directory. The probe
+        # itself no longer runs there (see _PROBE_CWD), but the build
+        # command being validated does — a missing working_dir (e.g.
+        # detection picked a candidate whose parent was deleted
+        # between detection and validation, or a stale BuildSystem
+        # was serialised across runs) means the actual build will
+        # fail, so report it here with a warning that names the real
+        # issue rather than the misleading "build tool not found".
         wd = Path(build_system.working_dir) if build_system.working_dir else None
         if wd is not None and not wd.is_dir():
             logger.warning(
@@ -714,7 +737,12 @@ class BuildDetector:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=timeout,
-                cwd=build_system.working_dir,
+                # SECURITY: neutral cwd — never the scanned repo.
+                # With cwd inside the target, `mvn --version` loaded
+                # a repo-shipped `.mvn/jvm.config` (-javaagent = code
+                # execution) outside every sandbox tier. See the
+                # _PROBE_CWD rationale above.
+                cwd=self._PROBE_CWD,
             )
             success = result.returncode == 0
             if success:

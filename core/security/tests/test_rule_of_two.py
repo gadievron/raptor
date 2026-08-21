@@ -200,6 +200,97 @@ class TestHITLAgentDispatchGate:
             self._run("offsec-specialist", human=False)
 
 
+class TestTtyRecency:
+    """_has_terminal_ancestor must not treat a nohup'd / detached-tmux
+    terminal as human-attended forever: where cheaply knowable, the
+    controlling tty must show recent activity (atime = keystrokes)."""
+
+    TTY_NR = 34817  # arbitrary controlling-terminal device number
+
+    def _probe(self, atime_age_s, *, rdev=None, monkeypatch=None,
+               readlink_fails=False):
+        import types
+        now = 1_700_000_000.0
+        rdev = self.TTY_NR if rdev is None else rdev
+
+        def fake_readlink(path):
+            if readlink_fails:
+                raise PermissionError(path)
+            return "/dev/pts/3"
+
+        def fake_stat(path):
+            return types.SimpleNamespace(
+                st_rdev=rdev, st_atime=now - atime_age_s,
+            )
+
+        return r2._tty_recently_active(
+            1234, self.TTY_NR,
+            _readlink=fake_readlink, _stat=fake_stat, _now=lambda: now,
+        )
+
+    @pytest.fixture(autouse=True)
+    def _default_knob(self, monkeypatch):
+        monkeypatch.delenv(r2._TTY_MAX_AGE_ENV, raising=False)
+
+    def test_recent_activity_counts(self):
+        assert self._probe(atime_age_s=60) is True
+
+    def test_stale_terminal_does_not_count(self):
+        # 3 days idle > the 24h default → detached/nohup session.
+        assert self._probe(atime_age_s=3 * 86400) is False
+
+    def test_unknowable_activity_falls_back_to_presence(self):
+        # Root-owned ancestor: /proc/<pid>/fd unreadable → presence
+        # alone counts (documented best-effort; never a lock-out).
+        assert self._probe(atime_age_s=0, readlink_fails=True) is True
+
+    def test_non_controlling_dev_file_ignored(self):
+        # The statable fd points at a different /dev node than the
+        # controlling tty → activity unknowable → presence counts.
+        assert self._probe(atime_age_s=3 * 86400,
+                           rdev=self.TTY_NR + 1) is True
+
+    def test_env_knob_tightens_threshold(self, monkeypatch):
+        monkeypatch.setenv(r2._TTY_MAX_AGE_ENV, "30")
+        assert self._probe(atime_age_s=60) is False
+        assert self._probe(atime_age_s=10) is True
+
+    def test_env_knob_zero_disables_recency(self, monkeypatch):
+        monkeypatch.setenv(r2._TTY_MAX_AGE_ENV, "0")
+        assert self._probe(atime_age_s=30 * 86400) is True
+
+    def test_env_knob_garbage_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv(r2._TTY_MAX_AGE_ENV, "not-a-number")
+        assert self._probe(atime_age_s=60) is True
+        assert self._probe(atime_age_s=3 * 86400) is False
+
+    def test_ancestor_walk_skips_stale_tty_but_keeps_walking(
+            self, monkeypatch):
+        """A stale terminal on the nearest ancestor must not end the
+        probe: an outer, recently-active terminal still counts."""
+        chain = {100: (self.TTY_NR, 200),   # stale tty
+                 200: (self.TTY_NR + 5, 300),  # fresh tty
+                 300: (0, 300)}
+        monkeypatch.setattr(r2.os, "getpid", lambda: 100)
+        monkeypatch.setattr(r2, "_proc_tty_and_ppid",
+                            lambda pid: chain.get(pid))
+        recency = {100: False, 200: True}
+        monkeypatch.setattr(
+            r2, "_tty_recently_active",
+            lambda pid, tty_nr, **kw: recency[pid],
+        )
+        assert r2._has_terminal_ancestor() is True
+
+    def test_ancestor_walk_all_stale_returns_false(self, monkeypatch):
+        chain = {100: (self.TTY_NR, 200), 200: (0, 200)}
+        monkeypatch.setattr(r2.os, "getpid", lambda: 100)
+        monkeypatch.setattr(r2, "_proc_tty_and_ppid",
+                            lambda pid: chain.get(pid))
+        monkeypatch.setattr(r2, "_tty_recently_active",
+                            lambda pid, tty_nr, **kw: False)
+        assert r2._has_terminal_ancestor() is False
+
+
 class TestSessionHumanTerminal:
 
     @pytest.fixture(autouse=True)

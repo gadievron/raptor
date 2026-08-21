@@ -58,6 +58,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `bump` | Dependency version bump operations. |
 | `fingerprint` | Compute, save or check-drift on a binary or OCI image fingerprint. Modes: compute+print (default), `--save` (store baseline), `--check` (detect drift from saved baseline). Accepts local file paths or OCI image refs. |
 | `triage` | LLM-assisted triage of supply-chain candidates (typosquat auditing). Runs automatically during scan unless `--skip-triage` is passed; this subcommand invokes it standalone. |
+| `fix-diff` | Fetch the upstream fix diffs for findings in a `findings.json` (cap with `--max-cves`). |
 
 ---
 
@@ -290,7 +291,9 @@ major bumps and exits non-zero so the pipeline can flag them. Use
 ### PR Gate: Only Fail on Regressions
 
 A turn-key workflow lives at `.github/workflows/sca-pr-gate.yml`.
-Triggered on PRs touching any manifest, lockfile, or Dockerfile, it:
+Triggered on PRs touching any manifest, lockfile,
+Dockerfile/Containerfile, docker-compose file, CI workflow, or
+pre-commit config, it:
 
 1. Scans the PR head.
 2. Scans `main` as baseline.
@@ -354,6 +357,10 @@ hygiene, supply-chain, and licence rows are preserved when re-rendering.
 
 ## Limitations
 
+- **Dependency resolution is metadata-only by design** -- resolving
+  versions never executes a package's build backend. Sdist-only
+  manifests fail the dry-run loudly; `--allow-sdist-builds` is the
+  explicit per-run risk acceptance.
 - **Library-mode floor-raise unsupported on some ecosystems** --
   `harden` refuses to corridor-pin a library's deps and emits
   `library_floor_raise_unsupported` for inline-install (Dockerfile

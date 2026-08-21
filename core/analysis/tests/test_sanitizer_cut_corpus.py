@@ -79,19 +79,74 @@ _CORPUS_CASES = [
      "y", VERDICT_CANDIDATE_ONLY),
     ("bypass.py", "CWE-79", 12, 17, VERDICT_NO_SUPPRESS, "safe",
      VERDICT_NO_SUPPRESS),
+    # Converging defs: sanitizer among the sink-arg's reaching
+    # definers but not the only one — condition 3's exclusivity
+    # requirement refuses (pre-fix this falsely suppressed).
+    ("loop_rebind.py", "CWE-79", 14, 18, VERDICT_CANDIDATE_ONLY, "y",
+     VERDICT_CANDIDATE_ONLY),
     # Phase 14 flips this one — intra-proc can't see into _sanitize.
     ("sanitizer_in_helper.py", "CWE-79", 21, 23, VERDICT_NO_SUPPRESS, "y",
      VERDICT_SUPPRESS),
 ]
 
 
-def _native_finding(fixture: str, cwe: str, source_line: int, sink_line: int):
+# Java leg (b13): same regression discipline. Source line == the
+# method header line → the resolver uses the method params as the
+# taint source. No inter-proc phase for Java, so the interproc
+# expectation equals the intra-proc one.
+_JAVA_CORPUS_CASES = [
+    ("straight_line_safe_java.java", "CWE-79", 11, 13, VERDICT_SUPPRESS,
+     "y", VERDICT_SUPPRESS),
+    # b11's exclusivity shape in Java — the sanitizer is among the
+    # sink arg's reaching definers but not the only one.
+    ("loop_rebind_java.java", "CWE-79", 9, 14, VERDICT_CANDIDATE_ONLY,
+     "y", VERDICT_CANDIDATE_ONLY),
+    # URLEncoder is deliberately not an xss catalog entry (URL/form
+    # encoding, not HTML sanitization) — no catalog match, never
+    # suppress.
+    ("wrong_class_urlencoder_java.java", "CWE-79", 9, 11,
+     VERDICT_NO_SUPPRESS, "y", VERDICT_NO_SUPPRESS),
+]
+
+
+# b19 regression pins running the FULL production path (resolver →
+# evaluate_finding with inter-proc bindings AND java_source_text) via
+# the parity wrapper — the element-exclusive pre-check and wrapper
+# summaries only engage on that path.
+# (filename, cwe, source_line, sink_line, expected_verdict)
+_JAVA_B19_CASES = [
+    # Tracked-local-array element written only by a catalog sanitizer,
+    # consumed through one exact scalar hop.
+    ("array_element_java.java", "CWE-79", 8, 12, VERDICT_SUPPRESS),
+    # Private static wrapper whose return is provably the sanitizer
+    # applied to its argument — the synthetic binding carries the cut.
+    ("wrapper_helper_java.java", "CWE-79", 12, 14, VERDICT_SUPPRESS),
+]
+
+_JAVA_B27_CASES = [
+    # Sanitized value through a returns-param conduit — transparency
+    # carries the vertex-cut through the helper hop.
+    ("conduit_transparency_java.java", "CWE-79", 11, 14,
+     VERDICT_SUPPRESS),
+    # The honesty pin: the same conduit with the raw request value
+    # must ride the taint through untouched. The decoy sanitizer call
+    # keeps a catalog match on the (single) control path, so the
+    # control-flow cut holds and the verdict is candidate_only — the
+    # finding SURVIVES to the LLM; the load-bearing assertion is that
+    # transparency never upgrades this to suppress.
+    ("conduit_tainted_java.java", "CWE-79", 12, 15,
+     "candidate_only"),
+]
+
+
+def _native_finding(fixture: str, cwe: str, source_line: int,
+                    sink_line: int, language: str = "python"):
     return {
         "cwe": cwe,
         "file_path": str(_CORPUS_DIR / fixture),
         "source_line": source_line,
         "sink_line": sink_line,
-        "language": "python",
+        "language": language,
     }
 
 
@@ -136,6 +191,117 @@ def test_corpus_fixture_verdict(
         f"{fixture}: verdict={result.verdict!r}, "
         f"expected {expected_verdict!r}. Reason: {result.reason}"
     )
+
+
+@pytest.mark.parametrize(
+    "fixture,cwe,source_line,sink_line,expected_verdict,expected_sink_arg,"
+    "_interproc",
+    _JAVA_CORPUS_CASES,
+)
+def test_java_corpus_fixture_verdict(
+    fixture, cwe, source_line, sink_line, expected_verdict,
+    expected_sink_arg, _interproc,
+):
+    """Java-leg regression pins — resolver (import-resolved callable
+    names, method-header params source) → intra-procedural gate. The
+    loop-rebind row pins b11's exclusivity condition through the Java
+    CFG's back edges; the URLEncoder row pins the deliberate catalog
+    absence of the wrong-class encoder."""
+    pytest.importorskip("tree_sitter_java")
+    finding = _native_finding(
+        fixture, cwe, source_line, sink_line, language="java",
+    )
+    resolved = resolve_finding(finding)
+    assert isinstance(resolved, ResolvedFinding), (
+        f"resolver failed on {fixture}: {resolved}"
+    )
+    assert resolved.sink_arg == expected_sink_arg
+    result = evaluate_finding(
+        resolved.cfg, [resolved.source_node], resolved.sink_node,
+        cwe=resolved.cwe, language=resolved.language,
+        source_symbols=resolved.source_symbols,
+        sink_arg=resolved.sink_arg,
+    )
+    assert result.verdict == expected_verdict, (
+        f"{fixture}: verdict={result.verdict!r}, "
+        f"expected {expected_verdict!r}. Reason: {result.reason}"
+    )
+
+
+_JAVA_B34_CASES = [
+    # b34 positional simulation through the full production path:
+    # remove(0) shifts, get(1) provably reads the trailing constant —
+    # the clean OWASP twin suppresses; the tainted twin (get(0)) is
+    # pinned must-not in the precision corpus.
+    ("positional_list_java.java", "CWE-79", 12, 19, "suppress"),
+]
+
+
+@pytest.mark.parametrize(
+    "fixture,cwe,source_line,sink_line,expected_verdict",
+    _JAVA_B34_CASES,
+)
+def test_java_b34_positional_verdict(
+    fixture, cwe, source_line, sink_line, expected_verdict,
+):
+    """b34 pin — positional list resolution through the exact
+    production entry point."""
+    pytest.importorskip("tree_sitter_java")
+    from core.dataflow.sanitizer_cut_parity import value_bound_verdict_for
+    verdict = value_bound_verdict_for({
+        "cwe": cwe,
+        "file_path": str(_CORPUS_DIR / fixture),
+        "source_line": source_line,
+        "sink_line": sink_line,
+        "language": "java",
+    })
+    assert verdict == expected_verdict
+
+
+@pytest.mark.parametrize(
+    "fixture,cwe,source_line,sink_line,expected_verdict",
+    _JAVA_B19_CASES,
+)
+def test_java_b19_full_path_verdict(
+    fixture, cwe, source_line, sink_line, expected_verdict,
+):
+    """b19 pins — element-exclusive sanitizer definitions and wrapper
+    summaries through the exact production entry point
+    (``value_bound_verdict_for``: resolver + inter-proc bindings +
+    java_source_text)."""
+    pytest.importorskip("tree_sitter_java")
+    from core.dataflow.sanitizer_cut_parity import value_bound_verdict_for
+    verdict = value_bound_verdict_for({
+        "cwe": cwe,
+        "file_path": str(_CORPUS_DIR / fixture),
+        "source_line": source_line,
+        "sink_line": sink_line,
+        "language": "java",
+    })
+    assert verdict == expected_verdict
+
+
+@pytest.mark.parametrize(
+    "fixture,cwe,source_line,sink_line,expected_verdict",
+    _JAVA_B27_CASES,
+)
+def test_java_b27_conduit_verdict(
+    fixture, cwe, source_line, sink_line, expected_verdict,
+):
+    """b27 pins — conduit transparency through the exact production
+    entry point, in both directions: the sanitized value survives the
+    helper hop (suppress) and the tainted value rides through it
+    (no_suppress)."""
+    pytest.importorskip("tree_sitter_java")
+    from core.dataflow.sanitizer_cut_parity import value_bound_verdict_for
+    verdict = value_bound_verdict_for({
+        "cwe": cwe,
+        "file_path": str(_CORPUS_DIR / fixture),
+        "source_line": source_line,
+        "sink_line": sink_line,
+        "language": "java",
+    })
+    assert verdict == expected_verdict
 
 
 @pytest.mark.parametrize(

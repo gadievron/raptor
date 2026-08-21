@@ -355,6 +355,26 @@ class TestPrepass:
         )
         assert out["telemetry"]["budget_exceeded"] is True
 
+    def test_prepass_language_derived_from_suffix(self, monkeypatch):
+        import core.audit.release_order as ro
+
+        seen: dict[str, str] = {}
+
+        def _fake_adjudicate(source, fp, name, language, **_kw):
+            seen[fp] = language
+            return ro._inconclusive(ro.REASON_FINALIZER_UNRESOLVED)
+
+        monkeypatch.setattr(ro, "_adjudicate_function", _fake_adjudicate)
+        ro.run_release_order_prepass({
+            "src/writer.cc": (
+                "int emit(BIO *out)\n{\n"
+                "    BIO_write(out, buf, n);\n"
+                "    return EVP_DigestVerifyFinal(ctx, sig, len);\n"
+                "}\n"
+            ),
+        })
+        assert seen.get("src/writer.cc") == "cpp"
+
     def test_reachability_escalator_wired(self, tmp_path):
         _write(tmp_path, "src/cms_smime.c", EFAIL)
         ctx = RoleContext(context_map={

@@ -37,13 +37,13 @@ clobber `source=human` notes.
 | `show <file> <function>` | Render one annotation |
 | `edit <file> <function>` | Open the source file's annotation .md in `$EDITOR` |
 | `rm <file> <function>` | Remove an annotation; cleans up empty .md files |
-| `stale` | List annotations whose stored source-line hash no longer matches |
+| `stale` | List annotations whose stored source-line hash no longer matches, or whose source file no longer exists |
 
 ## Add options
 
 | Option | Purpose |
 |---|---|
-| `--status VALUE` | `clean` / `suspicious` / `finding` / `error` |
+| `--status VALUE` | `clean` / `suspicious` / `finding` / `dormant` / `error`, plus the role markers `sink` / `entry_point` (consumed by IRIS spec promotion) |
 | `--cwe CWE-XX` | CWE identifier |
 | `-m, --body TEXT` | Annotation prose |
 | `--body-file PATH` | Read body from file (`-` for stdin) |

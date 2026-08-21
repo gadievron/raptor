@@ -426,7 +426,9 @@ def _write_report(cfg: RunConfig, result: RunResult) -> None:
     lines: list[str] = []
     lines.append("# RAPTOR Frida Run")
     lines.append("")
-    status = "OK" if result.ok else "FAILED"
+    # Title Case per the output style rule (never ALL-CAPS statuses
+    # in human-readable output).
+    status = "Ok" if result.ok else "Failed"
     lines.append(f"**Status:** {status}")
     if result.error:
         lines.append(f"**Error:** `{result.error}`")

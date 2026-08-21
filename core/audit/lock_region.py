@@ -176,6 +176,23 @@ def _call_arg_re(name: str) -> re.Pattern:
     )
 
 
+# Per-file memoisation for the cross-file rescans: the prepass
+# adjudicates up to MAX_PREPASS_CANDIDATES functions and both
+# _setter_witness and the unresolved-acquire branch re-walk every
+# file per candidate — without these caches that is a fresh
+# function_spans() extraction and splitlines() per file per
+# candidate.
+@lru_cache(maxsize=128)
+def _spans_cached(source: str, file_path: str) -> tuple:
+    from .field_census import function_spans
+    return tuple(function_spans(source, file_path))
+
+
+@lru_cache(maxsize=128)
+def _lines_cached(source: str) -> tuple[str, ...]:
+    return tuple(source.splitlines())
+
+
 def _normalize_lock_var(arg: str) -> str:
     return re.sub(r"[\s&()]", "", arg)
 
@@ -413,14 +430,12 @@ def _setter_witness(
     """(setter name, exported?) for the callback member: a function
     other than the invoker that assigns ``X-><member>`` from one of
     its parameters. Exported = its definition is not ``static``."""
-    from .field_census import function_spans
-
     assign_re = re.compile(
         rf"\b\w+\s*->\s*{re.escape(member)}\s*=\s*([A-Za-z_]\w*)\s*;",
     )
     for file_path, source in sorted(source_texts.items()):
-        spans = function_spans(source, file_path)
-        lines = source.splitlines()
+        spans = _spans_cached(source, file_path)
+        lines = _lines_cached(source)
         for span in spans:
             if span.name == invoking_function:
                 continue
@@ -585,21 +600,22 @@ def _adjudicate_function(
     # Unresolved acquires only: release in a callee vs missing.
     un = unresolved[0]
     rel_name = un["release"]
+    # Loop-invariant: the candidate's callee set does not depend on
+    # the file being rescanned.
+    callee_names = set(re.findall(
+        r"\b([A-Za-z_]\w*)\s*\(",
+        "\n".join(segment),
+    )) - _C_KEYWORDS
+    rel_re = re.compile(rf"\b{re.escape(rel_name)}\s*\(")
     for other_file, other_src in sorted(source_texts.items()):
-        callee_names = set(re.findall(
-            r"\b([A-Za-z_]\w*)\s*\(",
-            "\n".join(segment),
-        )) - _C_KEYWORDS
-        from .field_census import function_spans
-        for other_span in function_spans(other_src, other_file):
+        other_lines = _lines_cached(other_src)
+        for other_span in _spans_cached(other_src, other_file):
             if other_span.name not in callee_names:
                 continue
             body = "\n".join(
-                other_src.splitlines()[
-                    other_span.start - 1:other_span.end
-                ],
+                other_lines[other_span.start - 1:other_span.end],
             )
-            if re.search(rf"\b{re.escape(rel_name)}\s*\(", body):
+            if rel_re.search(body):
                 return _inconclusive(
                     REASON_REGION_SPANS_CALLEE,
                     f"{un['acquire']}() at line {un['line']} is "
@@ -781,7 +797,6 @@ def run_lock_region_prepass(
     )
 
     acquire_names = [a for a, _, _ in _lock_pairs(domain_vocab)]
-    from .field_census import function_spans
 
     for file_path in sorted(source_texts):
         if time.monotonic() - t0 > budget_s:
@@ -798,8 +813,14 @@ def run_lock_region_prepass(
         ):
             continue
         lines = source.splitlines()
-        for span in function_spans(source, file_path):
+        for span in _spans_cached(source, file_path):
             if telemetry["candidates"] >= max_candidates:
+                break
+            # Budget check inside the per-candidate loop too: one
+            # file can hold many candidates, and each adjudication
+            # may rescan the whole source set.
+            if time.monotonic() - t0 > budget_s:
+                telemetry["budget_exceeded"] = True
                 break
             segment = "\n".join(lines[span.start - 1:span.end])
             if not _INDIRECT_CALL_RE.search(segment):

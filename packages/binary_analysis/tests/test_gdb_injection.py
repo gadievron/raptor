@@ -476,3 +476,80 @@ class TestPathTraversal:
         ctx = VulnerabilityContext(finding, repo)
         result = ctx._read_code_at_location("file://app.py", 1)
         assert "vulnerable_code" in result
+
+
+class TestCrashAnalyserScriptSandboxVisibility:
+    """Debugger command scripts must live NEXT TO the binary, not /tmp.
+
+    The debugger runs under the mount-namespace sandbox which gives the
+    child a fresh tmpfs at /tmp — a script written to the host /tmp is
+    invisible there, and gdb -batch exits 0 after silently failing to
+    read it (empty analysis, no error signal). The binary's parent dir
+    is bind-mounted into the sandbox at its original path, so scripts
+    placed there stay visible. Same convention debugger.py already uses.
+    """
+
+    @staticmethod
+    def _make_analyser(tmp_path):
+        from packages.binary_analysis.crash_analyser import CrashAnalyser
+
+        binary = tmp_path / "bindir" / "target"
+        binary.parent.mkdir()
+        binary.write_bytes(b"\x7fELF")
+        analyser = CrashAnalyser.__new__(CrashAnalyser)
+        analyser.binary = binary
+        return analyser
+
+    @staticmethod
+    def _capture_script_paths(monkeypatch, flag):
+        captured = {"paths": [], "existed": []}
+
+        def fake_run(cmd, **kw):
+            for i, arg in enumerate(cmd):
+                if arg == flag and i + 1 < len(cmd):
+                    p = Path(cmd[i + 1])
+                    captured["paths"].append(p)
+                    captured["existed"].append(p.exists())
+            r = MagicMock()
+            r.stdout = "Program received signal SIGSEGV"
+            r.stderr = ""
+            r.returncode = 0
+            return r
+
+        monkeypatch.setattr(
+            "packages.binary_analysis.crash_analyser._sandbox_run", fake_run,
+        )
+        return captured
+
+    def test_gdb_script_written_in_binary_dir(self, tmp_path, monkeypatch):
+        analyser = self._make_analyser(tmp_path)
+        input_file = tmp_path / "crash.bin"
+        input_file.write_bytes(b"A")
+
+        captured = self._capture_script_paths(monkeypatch, "-x")
+        analyser._run_gdb_analysis_internal(input_file)
+
+        assert captured["paths"], "GDB was never invoked with -x <script>"
+        for p, existed in zip(captured["paths"], captured["existed"]):
+            assert p.parent == analyser.binary.parent, (
+                f"GDB script written outside the sandbox-visible binary "
+                f"dir: {p}"
+            )
+            assert existed, "script must exist while GDB runs"
+        # Cleaned up afterwards.
+        assert list(analyser.binary.parent.glob(".raptor_gdb_*")) == []
+
+    def test_lldb_scripts_written_in_binary_dir(self, tmp_path, monkeypatch):
+        analyser = self._make_analyser(tmp_path)
+        input_file = tmp_path / "crash.bin"
+        input_file.write_bytes(b"A")
+
+        captured = self._capture_script_paths(monkeypatch, "-s")
+        analyser._run_lldb_analysis(input_file)
+        analyser._run_lldb_fallback(input_file)
+
+        assert len(captured["paths"]) == 2
+        for p, existed in zip(captured["paths"], captured["existed"]):
+            assert p.parent == analyser.binary.parent
+            assert existed
+        assert list(analyser.binary.parent.glob(".raptor_lldb_*")) == []

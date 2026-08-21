@@ -107,7 +107,17 @@ def _load_patterns() -> dict[str, tuple[re.Pattern[str], ...]]:
                 continue
             try:
                 compiled.append(re.compile(stripped, flags))
-            except re.error:
+            except re.error as exc:
+                # Mirror the ReDoS branch above: a malformed pattern
+                # silently vanishing means the corpus author never
+                # learns their new attack signature isn't running —
+                # a quiet detection gap, not just a typo.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "preflight: dropping malformed pattern "
+                    "(file=%s pattern=%r error=%s)",
+                    path.name, stripped[:80], exc,
+                )
                 continue
         if compiled:
             by_file[path.stem] = tuple(compiled)

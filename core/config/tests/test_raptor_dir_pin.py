@@ -85,7 +85,7 @@ def _make_poisoned_tree(root) -> str:
     (root / "core" / "__init__.py").write_text("")
     (pkg / "__init__.py").write_text("")
     (pkg / "sweep.py").write_text(
-        "def _run_smt_verb_inner(**kwargs):\n"
+        "def _run_smt_verb_inner_json(request):\n"
         "    raise TypeError(\n"
         "        \"_run_smt_verb_inner() got an unexpected keyword \"\n"
         "        \"argument 'target_path'\"\n"
@@ -102,17 +102,21 @@ class TestSmtChildTwoTreeLayout:
         """Fixture validity: WITHOUT the pin, the poisoned env really
         does route the child into the fake tree (the pre-fix failure
         shape — child exits nonzero)."""
-        from core.audit.sweep import _SMT_VERB_CHILD_SCRIPT
+        import json
+
+        from core.audit.subproc_json import _CHILD_SCRIPT
 
         poisoned = _make_poisoned_tree(tmp_path / "tree-b")
-        import pickle
-        payload = pickle.dumps({
+        payload = json.dumps({
             "file_path": "f.c", "function_name": "f",
             "verb": "check-negative-bypass", "source": "int x;",
             "hypothesis": "nothing", "target_path": None,
-        })
+        }).encode("utf-8")
         proc = subprocess.run(
-            [sys.executable, "-c", _SMT_VERB_CHILD_SCRIPT],
+            [
+                sys.executable, "-c", _CHILD_SCRIPT,
+                "core.audit.sweep:_run_smt_verb_inner_json",
+            ],
             input=payload, capture_output=True, timeout=30,
             check=False, env={"RAPTOR_DIR": poisoned},
         )

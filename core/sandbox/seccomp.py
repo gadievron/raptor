@@ -181,6 +181,38 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "process_vm_writev",
 )
 
+# Escape-primitive subset that stays HARD-DENIED (SCMP_ACT_ERRNO)
+# even under audit mode. Audit mode exists to OBSERVE what a workload
+# does so operators can build policy — but converting these
+# particular denials into allow-and-log hands an audited child the
+# exact capability the sandbox exists to deny for the duration of the
+# audit run: ptrace/process_vm_* read same-UID host process memory
+# (credential exfil), keyctl/add_key/request_key reach the kernel
+# keyring, bpf/userfaultfd are classic container-escape primitives,
+# and io_uring_* bypasses Landlock's file hooks on pre-6.3 kernels.
+# None of these has observational value that justifies granting it —
+# unlike open/connect/stat (the _AUDIT_EXTRA/_OBSERVE_EXTRA sets) and
+# the socket-family/UDP argument rules, which stay trace-allow so the
+# tracer can report what the workload wanted.
+#
+# The blocked tty ioctls (TIOCSTI et al) get the same treatment via
+# an unconditional ERRNO action on the ioctl rules — TIOCSTI injects
+# keystrokes into the operator's shell, which is not observable-then-
+# harmless either.
+#
+# Logging residual: SCMP_ACT_ERRNO does not notify the tracer, so an
+# attempt on this set surfaces to the child as EPERM (picked up by
+# the stderr-pattern enforcement detection) rather than as a tracer
+# JSONL record. Logging AND denying in one filter would need a
+# tracer-side syscall rewrite (PTRACE_SETREGSET per arch), which is
+# not worth the complexity for syscalls that are pure attack signal.
+_AUDIT_HARD_DENY_SYSCALLS = frozenset({
+    "ptrace", "process_vm_readv", "process_vm_writev",
+    "keyctl", "add_key", "request_key",
+    "bpf", "userfaultfd",
+    "io_uring_setup", "io_uring_enter", "io_uring_register",
+})
+
 # socket() family / type values we reject (via argument filter on arg 0 / 1).
 # AF_INET/AF_INET6 continue to be allowed — namespace --net removes the
 # interfaces anyway, so allowing AF_INET costs nothing and avoids breakage
@@ -367,7 +399,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     SCMP_ACT_TRACE — the kernel pauses the tracee and notifies the
     attached ptrace tracer (core/sandbox/tracer.py) instead of erroring
     the syscall. Also adds open/openat/connect to the trace set for b3
-    filesystem + network audit coverage. CRITICAL: requires a ptrace
+    filesystem + network audit coverage. EXCEPTION: the escape-primitive
+    subset (_AUDIT_HARD_DENY_SYSCALLS — ptrace/process_vm_*, keyring,
+    bpf/userfaultfd, io_uring_*) and the blocked tty ioctls keep the
+    ERRNO action under audit too; converting THOSE denials into
+    allow-and-log would grant an audited child the very capabilities
+    the sandbox exists to deny. CRITICAL: TRACE rules require a ptrace
     tracer to be attached for the target's lifetime; without it, the
     kernel default action for unhandled TRACE is SIGSYS-kill the
     process. The caller (_spawn.py) is responsible for ensuring tracer
@@ -554,13 +591,23 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     deny = _SCMP_ACT_TRACE(0)
                 else:
                     deny = _SCMP_ACT_ERRNO(errno_eperm)
+                # Escape primitives never downgrade to allow-and-log:
+                # under audit mode the _AUDIT_HARD_DENY_SYSCALLS
+                # subset (and the blocked tty ioctls below) keeps the
+                # enforcement action while everything else in the
+                # blocklist becomes trace-observable. See the constant
+                # for the rationale + logging residual.
+                hard_deny = _SCMP_ACT_ERRNO(errno_eperm)
 
                 for name, num in resolved_blocks:
                     if num < 0:
                         # Unknown syscall on this arch — harmless to skip
                         continue
+                    act = (hard_deny
+                           if audit_mode and name in _AUDIT_HARD_DENY_SYSCALLS
+                           else deny)
                     null_args = ctypes.POINTER(_ScmpArgCmp)()
-                    ret = lib.seccomp_rule_add_array(ctx, deny, num, 0, null_args)
+                    ret = lib.seccomp_rule_add_array(ctx, act, num, 0, null_args)
                     if ret < 0:
                         _os_write(2, b"RAPTOR: seccomp add_rule failed -- "
                                      b"refusing to exec without filter\n")
@@ -687,6 +734,10 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # TIOCSCTTY). Most ioctl cmds are legitimate (FIONBIO,
                 # TIOCGWINSZ, FIONREAD, etc.) — we only filter the
                 # known-dangerous list, one rule per cmd value.
+                # hard_deny (not deny): these stay ERRNO under audit
+                # mode too — TIOCSTI queues keystrokes into the
+                # operator's shell; allow-and-log would execute the
+                # injection while recording it.
                 if ioctl_num >= 0:
                     for cmd_val in _BLOCKED_IOCTL_CMDS:
                         # MASKED_EQ low-32 on cmd — the kernel reads
@@ -697,7 +748,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                           datum_b=cmd_val)
                         arg_arr = (_ScmpArgCmp * 1)(arg)
                         ret = lib.seccomp_rule_add_array(
-                            ctx, deny, ioctl_num, 1, arg_arr,
+                            ctx, hard_deny, ioctl_num, 1, arg_arr,
                         )
                         if ret < 0:
                             _os_write(2, b"RAPTOR: seccomp ioctl rule failed -- "

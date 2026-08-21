@@ -85,7 +85,7 @@ class CampaignPlan:
             for h in self.hints:
                 lines.append(f"  - {h}")
         lines.append("")
-        lines.append(f"Can run: {'YES' if self.can_run else 'NO'}")
+        lines.append(f"Can run: {'Yes' if self.can_run else 'No'}")
         lines.append("=" * 70)
         return "\n".join(lines)
 
@@ -496,7 +496,11 @@ class FuzzingOrchestrator:
         return {
             "fuzzer": "afl",
             "crashes": crashes,
-            "crashes_dir": str(crashes_dir),
+            # None (not "None") when the campaign produced no crashes
+            # and AFL never created a crashes directory — downstream
+            # consumers (_resolve_crashes_dir, raptor_agentic) treat
+            # falsy as "no crashes dir".
+            "crashes_dir": str(crashes_dir) if crashes_dir else None,
             "stats": runner.get_stats(),
             "input_mode": getattr(runner, "input_mode", "file"),
             "telemetry": str(out_dir / "fuzz-summary.json"),

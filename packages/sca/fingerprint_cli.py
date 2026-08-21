@@ -16,8 +16,6 @@ The input can be either a local file path (any binary) OR an
 OCI image ref (``docker.io/library/alpine:3.18``) — for image
 refs the main binary is fetched via the same extractor the
 scan + bump pipelines use.
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations

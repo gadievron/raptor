@@ -1,0 +1,45 @@
+name: javascript.generic
+description: |
+  General JavaScript/TypeScript projects. Node services, web
+  frontends, npm packages. Catches any repo whose primary
+  language is JS/TS via package.json plus file-extension scoring.
+
+detection:
+  file_globs:
+    - package.json
+  file_extensions:
+    - .js
+    - .jsx
+    - .ts
+    - .tsx
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+    - xss
+  optional:
+    - secrets
+    - jwt
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - node_modules
+    - test
+    - tests
+    - docs
+    - examples
+    - dist
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+
+budget_defaults:
+  typical_findings_count: 20
+  typical_cost_per_run_usd: 20
+
+version: 1

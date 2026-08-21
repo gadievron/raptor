@@ -458,3 +458,39 @@ class TestCacheTtlDefault:
         monkeypatch.setenv("RAPTOR_LLM_CACHE_TTL_S", "tomorrow")
         from core.llm.config import LLMConfig
         assert LLMConfig().cache_ttl_seconds == 86_400.0
+
+
+class TestCacheEnableSwitch:
+    """RAPTOR_LLM_CACHE=off disables response caching for every
+    LLMConfig constructed in the process — the refire lane's cache
+    bypass (a replayed completion is invisible to reruns measuring a
+    fix, so trap verification against cache hits proves nothing)."""
+
+    def test_default_is_on(self, monkeypatch):
+        monkeypatch.delenv("RAPTOR_LLM_CACHE", raising=False)
+        from core.llm.config import LLMConfig
+        assert LLMConfig().enable_caching is True
+
+    def test_env_off_disables(self, monkeypatch):
+        for raw in ("off", "none", "0", "false", "no", "OFF", " Off "):
+            monkeypatch.setenv("RAPTOR_LLM_CACHE", raw)
+            from core.llm.config import LLMConfig
+            assert LLMConfig().enable_caching is False, raw
+
+    def test_other_values_keep_caching_on(self, monkeypatch):
+        for raw in ("on", "1", "true", ""):
+            monkeypatch.setenv("RAPTOR_LLM_CACHE", raw)
+            from core.llm.config import LLMConfig
+            assert LLMConfig().enable_caching is True, raw
+
+    def test_client_honours_the_switch(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RAPTOR_LLM_CACHE", "off")
+        from core.llm.config import LLMConfig
+        # The switch lands on the config; the client consults it on
+        # every cache read. Split assertion so a regression names the
+        # failing half. Client built via the shared substrate builder
+        # (core.testing) — see test_adoption_driftguard.
+        assert LLMConfig().enable_caching is False
+        client = _client(tmp_path, enable_caching=False)
+        assert client._get_cached_response("deadbeef") is None
+        assert client._get_cached_structured_response("deadbeef") is None

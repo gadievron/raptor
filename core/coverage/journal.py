@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,6 +118,11 @@ class ReviewJournalEntry:
     function: str
     verdict: str
     source_hash: str
+    # Receiver-qualified name (``Class.method``) when the inventory
+    # metadata carries one. Optional presentation/join identity —
+    # ``function`` stays the bare name every key derives from, so
+    # same-named methods stay auditable in reports.
+    function_qualified: str | None = None
     line_start: int = 0
     line_end: int | None = None
     cwe: str | None = None
@@ -173,18 +179,27 @@ class ReviewJournalEntry:
 
     @property
     def index_key(self) -> str:
-        """Index key: (file, function, model, strategy_hash).
+        """Index key: (file, function, model, strategy_hash, producer).
 
         Amendment §1 D1 widens the compaction key from
         ``(file, function)`` to preserve multi-model + multi-strategy
         history — otherwise Phase-5 context-aware staleness has no
         signal to work with.
+
+        The producer segment preserves multi-PRODUCER history: an
+        /agentic finding-analysis and an /audit review of the same
+        function can share model + strategy_hash (default model, empty
+        strategies), and without the segment whichever merged later
+        EVICTED the other from the index — the audit verdict was gone,
+        not merely shadowed. Old-format keys keep loading (entries
+        reconstruct from fields; a re-merge adds a row under the new
+        key and ``load_index`` collapses by timestamp).
         """
         strategy_hash = _canonical_strategy_hash(self.strategies)
         model = self.model or ""
         return (
             f"{encode_key_file(self.file)}:{self.function}"
-            f":{model}:{strategy_hash}"
+            f":{model}:{strategy_hash}:{entry_producer(self)}"
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -249,17 +264,94 @@ def now_iso() -> str:
 
 # ── Write ────────────────────────────────────────────────────────────
 
-def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
-    """Atomic single-line append to review-journal.jsonl.
+#: Serialises appends from THIS process's threads. POSIX only makes
+#: O_APPEND writes atomic up to PIPE_BUF; audit entries (full review
+#: bodies, hypotheses, study receipts) routinely exceed that, and the
+#: parallel executor appends from several worker threads through
+#: separate fds — interleaved partial writes corrupted lines.
+_append_lock = threading.Lock()
 
-    Uses a single ``write()`` call (POSIX atomicity for writes <= PIPE_BUF).
-    No per-entry fsync — the caller can ``flush_journal()`` at batch end.
+#: Hardened open flags, mirroring ``core.json.jsonl.append_jsonl``:
+#: O_NOFOLLOW refuses a symlink planted at the journal path inside a
+#: writable run dir (fails with ELOOP); O_CLOEXEC keeps the fd out of
+#: spawned children (tool subprocesses must not inherit a journal fd).
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+#: Bounded retries for the (rare) short-write path in
+#: :func:`append_entry`. Each retry re-writes the WHOLE line after
+#: rolling back the partial bytes, so a persistent failure (ENOSPC)
+#: surfaces as a raised OSError with the journal still line-intact.
+_APPEND_MAX_ATTEMPTS = 3
+
+
+def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
+    """Locked, torn-write-safe single-line append to review-journal.jsonl.
+
+    The whole encoded line is issued as ONE ``os.write`` under a
+    per-process lock plus an advisory ``flock`` (cross-fd /
+    cross-process safety — a resumed segment or a sweep can append
+    concurrently from another process). A single write() syscall on a
+    regular file is not interruptible mid-copy the way a Python-level
+    write LOOP is: the pre-fix loop could be abandoned between partial
+    writes (worker killed, exception), leaving a truncated line that
+    the NEXT append glued onto — one corrupt line AND one lost entry.
+
+    Torn-write handling (house precedent: ``core.json`` save/append
+    hardening): if the single write comes back short (ENOSPC, quota),
+    the partial bytes are rolled back with ``ftruncate`` to the
+    pre-write size — legal because ``flock`` is still held, so our
+    partial line is provably the tail of the file — and the whole
+    line is retried, bounded by ``_APPEND_MAX_ATTEMPTS``. Exhaustion
+    raises ``OSError`` with the journal left line-intact.
+
+    Raises ``OSError`` — notably ELOOP when the journal path is a
+    symlink (O_NOFOLLOW). No per-entry fsync — the caller can
+    ``flush_journal()`` at batch end.
     """
     journal_path = out_dir / JOURNAL_FILENAME
     out_dir.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
-    with open(journal_path, "a", encoding="utf-8") as f:
-        f.write(line)
+    data = (
+        json.dumps(entry.to_dict(), separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    with _append_lock:
+        fd = os.open(
+            str(journal_path),
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            | _O_NOFOLLOW | _O_CLOEXEC,
+            0o644,
+        )
+        try:
+            if _HAS_FCNTL:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                for attempt in range(1, _APPEND_MAX_ATTEMPTS + 1):
+                    size_before = os.fstat(fd).st_size
+                    written = os.write(fd, data)
+                    if written == len(data):
+                        break
+                    # Short write: roll the partial line back so the
+                    # journal never carries a torn tail. Safe under
+                    # the held flock — no cooperating writer can have
+                    # appended after our partial bytes.
+                    with contextlib.suppress(OSError):
+                        os.ftruncate(fd, size_before)
+                    logger.warning(
+                        "journal append short write (%d of %d bytes, "
+                        "attempt %d/%d) — rolled back",
+                        written, len(data), attempt, _APPEND_MAX_ATTEMPTS,
+                    )
+                    if attempt == _APPEND_MAX_ATTEMPTS:
+                        raise OSError(
+                            f"journal append failed after "
+                            f"{_APPEND_MAX_ATTEMPTS} short-write attempts "
+                            f"({written} of {len(data)} bytes)"
+                        )
+            finally:
+                if _HAS_FCNTL:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def flush_journal(out_dir: Path) -> None:
@@ -289,6 +381,7 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     entries: list[ReviewJournalEntry] = []
     lines = journal_path.read_text(encoding="utf-8").splitlines()
 
+    corrupt = 0
     for i, line in enumerate(lines):
         line = line.strip()
         if not line:
@@ -296,12 +389,13 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
         try:
             raw = json.loads(line)
         except json.JSONDecodeError:
+            corrupt += 1
             if i == len(lines) - 1:
-                logger.warning(
+                logger.debug(
                     "journal: skipping corrupt trailing line in %s", journal_path,
                 )
             else:
-                logger.warning(
+                logger.debug(
                     "journal: skipping corrupt line %d in %s", i + 1, journal_path,
                 )
             continue
@@ -311,6 +405,12 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
             logger.warning(
                 "journal: skipping malformed entry on line %d: %s", i + 1, exc,
             )
+    if corrupt:
+        logger.warning(
+            "journal: skipped %d corrupt line(s) in %s "
+            "(%d entries loaded)",
+            corrupt, journal_path, len(entries),
+        )
     return entries
 
 
@@ -332,6 +432,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         run_id=raw["run_id"],
         file=raw["file"],
         function=raw["function"],
+        function_qualified=raw.get("function_qualified"),
         verdict=raw["verdict"],
         source_hash=raw.get("source_hash", ""),
         line_start=raw.get("line_start", 0),
@@ -373,6 +474,88 @@ def reviewed_set(out_dir: Path) -> set[str]:
     the next run, not suppressed as "already reviewed".
     """
     return {e.key for e in load_entries(out_dir) if e.verdict != "error"}
+
+
+# ── Producer kind ────────────────────────────────────────────────────
+#
+# Two producers write journal entries, and they record different KINDS
+# of review. /audit entries are function-grade: the whole function was
+# examined under its inferred strategies, so the entry satisfies "this
+# function was reviewed" and may suppress gaps or be reused as a $0
+# verdict. /agentic entries are finding-grade: they record the analysis
+# of ONE scanner finding located in the function — real examination
+# evidence (they still count as tool coverage and as prior claims), but
+# never a function review. A function whose single XSS finding was
+# analysed has not been reviewed for memory, concurrency, or auth.
+
+PRODUCER_AUDIT = "audit"
+PRODUCER_AGENTIC = "agentic"
+#: /validate-derived entries (the feedback loop journaling a validated
+#: finding in a function no audit ever reviewed). Like /agentic
+#: entries these are finding-grade: a deep-dive of ONE finding is not
+#: a function review. Never inferred from run_id — only stamped
+#: explicitly by the feedback writer.
+PRODUCER_VALIDATE = "validate"
+
+#: Producers whose entries record per-FINDING work, not function
+#: reviews. Everything else (audit, unknown-but-legacy) is
+#: function-grade.
+_FINDING_GRADE_PRODUCERS = frozenset({PRODUCER_AGENTIC, PRODUCER_VALIDATE})
+
+#: run_id prefixes that identify /agentic-side producers for legacy
+#: entries written before the ``producer`` field was stamped. Matches
+#: the historical heuristic in ``core.coverage.importer``.
+_AGENTIC_RUN_PREFIXES = ("agentic", "scan")
+
+
+def entry_producer(entry: ReviewJournalEntry) -> str:
+    """Resolve which tool produced a journal entry.
+
+    Prefers the explicit ``producer`` field; legacy entries without it
+    fall back to the run-id prefix convention (any run_id starting with
+    ``agentic`` or ``scan`` labels as agentic; everything else defaults
+    to ``audit``, the historical ``checked_by`` convention).
+    """
+    if entry.producer:
+        return entry.producer
+    run_id = entry.run_id or ""
+    if run_id.startswith(_AGENTIC_RUN_PREFIXES):
+        return PRODUCER_AGENTIC
+    return PRODUCER_AUDIT
+
+
+def is_function_grade(entry: ReviewJournalEntry) -> bool:
+    """True when the entry records a function-grade review.
+
+    Finding-grade entries (/agentic analyses, /validate-derived
+    corrections for functions no audit reviewed) return False — they
+    must not suppress audit gaps or be imported as reused verdicts.
+    See the producer-kind note above.
+    """
+    return entry_producer(entry) not in _FINDING_GRADE_PRODUCERS
+
+
+def latest_function_grade_index(
+    project_dir: Path,
+) -> dict[str, ReviewJournalEntry]:
+    """Collapse the project index to latest-per-``(file, function)``
+    among FUNCTION-GRADE entries only.
+
+    :func:`load_index`'s plain collapse keeps the newest entry of any
+    kind, so a fresh /agentic finding-analysis would shadow an older
+    /audit verdict for the same function — the gap fold would then
+    either wrongly suppress on a finding-grade entry or wrongly
+    resurface a properly audited function. Kind-aware consumers (the
+    audit gap fold) use this collapse instead.
+    """
+    result: dict[str, ReviewJournalEntry] = {}
+    for entry in load_index_full(project_dir).values():
+        if not is_function_grade(entry):
+            continue
+        existing = result.get(entry.key)
+        if existing is None or entry.ts > existing.ts:
+            result[entry.key] = entry
+    return result
 
 
 def latest_entries(out_dir: Path) -> dict[str, ReviewJournalEntry]:
@@ -454,6 +637,33 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     return merged
 
 
+def merge_run_into_index(project_dir: Path, run_dir: Path) -> int:
+    """Merge a RUN's journals into the project index — root and
+    one-level tool subdirs.
+
+    Producers write journals where they run: /audit at the run root,
+    /agentic's analysis agent under ``autonomous/``. The same
+    one-level-subdir convention as ``core.coverage.record.
+    load_records`` (which globs ``coverage-*.json`` in tool subdirs).
+    Before this, run-completion merged only the root journal, so
+    /agentic per-finding entries never reached the project index —
+    cross-run consumers (prior finding-grade claims, the coverage
+    importer's index path) silently saw nothing.
+
+    Returns total entries merged.
+    """
+    run_dir = Path(run_dir)
+    merged = merge_into_index(project_dir, run_dir)
+    try:
+        subdirs = sorted(d for d in run_dir.iterdir() if d.is_dir())
+    except OSError:
+        return merged
+    for sub in subdirs:
+        if (sub / JOURNAL_FILENAME).is_file():
+            merged += merge_into_index(project_dir, sub)
+    return merged
+
+
 def load_index(project_dir: Path) -> dict[str, ReviewJournalEntry]:
     """Load the project-level journal index, collapsed to
     latest-per-``(file, function)``.
@@ -475,7 +685,8 @@ def load_index(project_dir: Path) -> dict[str, ReviewJournalEntry]:
 
 def load_index_full(project_dir: Path) -> dict[str, ReviewJournalEntry]:
     """Load the full project-level journal index — every entry
-    keyed by ``index_key`` (``file:function:model:strategy_hash``).
+    keyed by ``index_key``
+    (``file:function:model:strategy_hash:producer``).
 
     Preserves the multi-model + multi-strategy history the amendment
     §1 D1 storage layout captures. Used by consumers that need
@@ -556,9 +767,24 @@ def compute_domain_model_hash(out_dir: Path) -> str | None:
         return None
 
 
-def load_domain_model(out_dir: Path) -> dict[str, Any] | None:
-    """Load parsed domain-model.json for concept-level relevance checks."""
-    path = _find_domain_model_file(out_dir)
+def load_domain_model(
+    out_dir: Path,
+    *,
+    run_only: bool = False,
+) -> dict[str, Any] | None:
+    """Load parsed domain-model.json for concept-level relevance checks.
+
+    ``run_only=True`` restricts the search to ``out_dir`` itself — the
+    model this run's own study pass wrote — skipping the project-level
+    candidates a prior run may have left behind (cold-profile corpus
+    runs must not import accumulated knowledge).
+    """
+    if run_only:
+        path = out_dir / "domain-model.json"
+        if not path.is_file():
+            return None
+    else:
+        path = _find_domain_model_file(out_dir)
     if path is None:
         return None
     try:

@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Rules-based triage of a completed run's sandbox telemetry
+(sandbox-summary.json / proxy-events.jsonl) for escape/recon/
+credential-theft signatures, as distinct from ordinary sandbox-denial
+noise.
+
+The run lifecycle (core/run/metadata.py) already runs triage on every
+terminal-state transition; this shim re-runs it by hand for stranded
+runs or post-hoc re-classification.
+
+Usage:
+  raptor-sandbox-triage <run_dir> [--json] [--deep] [--legacy]
+
+Exit codes: 0 clean (or no telemetry), 1 error, 2 usage, 3 notable,
+4 suspicious — scriptable as a CI gate. Unstamped telemetry is treated
+as tampering by default (fail-closed for gates); pass --legacy only
+for run directories that predate provenance stamping.
+
+Implemented as a shim over core.sandbox.triage._cli_main rather than
+`python -m core.sandbox.triage` to avoid the runpy double-import warning
+that fires when core/sandbox/__init__.py transitively imports
+core.sandbox.triage's dependencies before runpy executes it as __main__.
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+from core.sandbox.triage import _cli_main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

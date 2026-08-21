@@ -30,6 +30,9 @@ core/analysis/tests/fixtures/demo
 codeql_dbs/
 .github/codeql/codeql-scoped-config.yml
 engine/semgrep/rules/registry-cache/c.p.*.json
+# Build-ID binary cache (core/audit/build_id_cache.py; default lives at
+# the install root — override with RAPTOR_BINARY_CACHE_DIR)
+/.cache/
 
 # User-local tuning (regenerate with: raptor tune default)
 tuning.json

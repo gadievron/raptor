@@ -15,6 +15,11 @@ def _label(function_id, line_start=1, expected="finding", repo="repo",
         function_id=function_id,
         bug_class="aliasing",
         expected_status=expected,
+        # _run_audit reads these attribution/mode-expectation fields off
+        # every label (FunctionLabel always carries them); the stub must
+        # match the real shape.
+        expected_mechanism="",
+        expected_mode_results={},
         source=SimpleNamespace(
             repo=repo, file=file, line_start=line_start,
             line_end=line_start + 10,

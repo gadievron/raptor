@@ -825,11 +825,60 @@ def _has_c_cpp_source(target: Path, max_files: int = 200) -> bool:
 # =====================================================================
 
 
+# Per-run signature memo. `_lookup_cached_inventory` recomputes the
+# target signature on every call so stale inventories auto-invalidate
+# across runs — but within a single analyze() run the evidence parsers
+# call `_enclosing_function` once per match (thousands on large
+# targets), and each call paid a full stat-walk of the source tree.
+# The tree is treated as stable for the dynamic extent of one
+# analyze() run: the signature is computed once per target and reused.
+# Scope-gated — the memo is inactive (depth 0, empty) outside
+# analyze(), so cross-run staleness detection is untouched.
+_SIG_MEMO: dict[str, str] = {}
+_SIG_MEMO_DEPTH = 0
+
+
+def _with_signature_memo(fn):
+    """Activate the per-run signature memo for the dynamic extent of
+    ``fn``. Re-entrant (nested analyze() on subdirectories); the memo
+    clears when the outermost scope exits."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _SIG_MEMO_DEPTH
+        with _INVENTORY_LOCK:
+            _SIG_MEMO_DEPTH += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with _INVENTORY_LOCK:
+                _SIG_MEMO_DEPTH -= 1
+                if _SIG_MEMO_DEPTH <= 0:
+                    _SIG_MEMO.clear()
+    return wrapper
+
+
+def _target_signature(target: str) -> str:
+    """``compute_target_signature`` with the per-run memo applied."""
+    from packages.source_intel.cache import compute_target_signature
+    with _INVENTORY_LOCK:
+        if _SIG_MEMO_DEPTH and target in _SIG_MEMO:
+            return _SIG_MEMO[target]
+    sig = compute_target_signature(Path(target))
+    with _INVENTORY_LOCK:
+        if _SIG_MEMO_DEPTH:
+            _SIG_MEMO[target] = sig
+    return sig
+
+
+@_with_signature_memo
 def analyze(
     target: Path,
     rules_dir: Path | None = None,
     timeout_per_rule: int = 180,
     checklist: dict[str, Any] | None = None,
+    progress: Any | None = None,
 ) -> SourceIntelResult:
     """Run shipped source_intel cocci rules against ``target``.
 
@@ -837,6 +886,13 @@ def analyze(
       * spatch not on PATH → ``skipped_reason="spatch_not_available"``
       * target has no C/C++ source → ``skipped_reason="no_c_cpp_source"``
       * shipped rules dir missing → ``skipped_reason="rules_dir_missing"``
+
+    ``progress`` is an optional callback invoked as each rule STARTS:
+    ``progress(done, total, rule_name)`` where ``done`` counts rules
+    already started across ALL axes and ``total`` is the run's full
+    rule count. Each spatch invocation can take minutes on a large C
+    target — without the callback the whole analyze() run is silent.
+    Callback failures are swallowed by the runner.
 
     Returns a :class:`SourceIntelResult` with parsed evidence. Never
     raises — failures collapse to per-rule entries in ``rules_failed``
@@ -913,11 +969,24 @@ def analyze(
     lock_site_observations: list[LockSiteEvidence] = []
     crypto_call_observations: list[CryptoCallEvidence] = []
 
+    # Global rule count across all axes so the progress callback can
+    # report ``done/total`` for the whole run, not per-directory.
+    total_rules = sum(len(list(d.glob("*.cocci"))) for d in rule_dirs)
+    rules_started = 0
+
     # spatch invocation per axis. ``no_includes=True`` matches the
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
     # trusted-mode opt-in is a future operator flag.
     for axis_dir in rule_dirs:
         effective_dir, _rules_tmp = _materialize_rules_dir(axis_dir)
+
+        on_rule = None
+        if progress is not None:
+            axis_base = rules_started
+
+            def on_rule(idx, _dir_total, rule_name, _base=axis_base):
+                progress(_base + idx, total_rules, rule_name)
+
         try:
             spatch_results = spatch_run_rules(
                 target=target,
@@ -927,10 +996,12 @@ def analyze(
                 # In-repo shipped source_intel rules (code trust) — their
                 # @script:python reporting blocks are trusted.
                 allow_scripting=True,
+                on_rule=on_rule,
             )
         finally:
             if _rules_tmp is not None:
                 _rules_tmp.cleanup()
+        rules_started += len(list(axis_dir.glob("*.cocci")))
         for result in spatch_results:
             rules_executed.append(result.rule)
             if result.errors:
@@ -1851,6 +1922,11 @@ def _register_inventory(target: Path, inventory: Any) -> None:
         return
     with _INVENTORY_LOCK:
         _INVENTORY_BY_TARGET[resolved] = (sig, inventory)
+        # Seed the per-run memo (active only inside analyze()) so the
+        # first `_lookup_cached_inventory` call doesn't re-walk the
+        # tree we just hashed.
+        if _SIG_MEMO_DEPTH:
+            _SIG_MEMO[resolved] = sig
 
 
 def clear_inventory_cache() -> None:
@@ -1864,6 +1940,7 @@ def clear_inventory_cache() -> None:
     """
     with _INVENTORY_LOCK:
         _INVENTORY_BY_TARGET.clear()
+        _SIG_MEMO.clear()
 
 
 def _maybe_register_inventory(
@@ -1948,9 +2025,10 @@ def _lookup_cached_inventory(file_path: str) -> tuple[Any | None, str | None]:
 
     # Validate freshness outside the lock — signature compute walks
     # the filesystem and would otherwise serialise concurrent
-    # lookups for unrelated targets.
-    from packages.source_intel.cache import compute_target_signature
-    current_sig = compute_target_signature(Path(best_target))
+    # lookups for unrelated targets. Routed through the per-run memo:
+    # inside an analyze() run this is O(1) after the first call
+    # instead of a full stat-walk per `_enclosing_function` query.
+    current_sig = _target_signature(best_target)
     if stored_sig != current_sig:
         # Re-check under the lock that the entry we're popping is
         # the same one we read above. A concurrent register may

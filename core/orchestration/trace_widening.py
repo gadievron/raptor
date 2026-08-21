@@ -176,10 +176,12 @@ def enrich_all_traces(
             continue
 
         enriched = enrich_trace_with_siblings(data, checklist)
-        trace_path.write_text(
-            json.dumps(enriched, indent=2),
-            encoding="utf-8",
-        )
+        # Atomic replace: the trace is rewritten in place while other
+        # consumers (/diagram, the validate bridge) may read it — an
+        # in-place write_text left a truncated JSON file visible on
+        # crash or concurrent read.
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(trace_path, json.dumps(enriched, indent=2))
         count += 1
         n_siblings = sum(
             1 for s in enriched.get("steps", []) if s.get("siblings")

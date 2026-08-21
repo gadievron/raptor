@@ -17,7 +17,9 @@ Common options:
                         a project is active, otherwise required.
 
 Add options:
-  --status VALUE        clean / suspicious / finding / error
+  --status VALUE        clean / suspicious / finding / dormant / error
+                        (plus the sink / entry_point role markers,
+                        consumed by IRIS spec promotion)
   --cwe CWE-XX          CWE identifier
   -m, --body TEXT       Annotation prose
   --body-file PATH      Read body from file (use '-' for stdin)
@@ -594,7 +596,12 @@ def cmd_stale(opts: argparse.Namespace) -> int:
             continue
         src = target / ann.file
         current = compute_function_hash(src, start, end)
-        if current and current != h:
+        if not current:
+            # Unreadable or deleted source is the strongest form of
+            # drift — pre-fix it was silently treated as FRESH and the
+            # note never surfaced here again.
+            stale.append((ann, h, "source missing"))
+        elif current != h:
             stale.append((ann, h, current))
     if not stale:
         print("(no stale annotations)")
@@ -619,7 +626,14 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument("file")
     pa.add_argument("function")
     pa.add_argument("--base")
-    pa.add_argument("--status")
+    pa.add_argument(
+        "--status",
+        choices=("clean", "suspicious", "finding", "dormant", "error",
+                 "sink", "entry_point"),
+        help="review status (see docstring for the enum semantics); "
+             "sink/entry_point are role markers consumed by IRIS "
+             "spec promotion",
+    )
     pa.add_argument("--cwe")
     pa.add_argument("-m", "--body")
     pa.add_argument("--body-file")

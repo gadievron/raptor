@@ -2,7 +2,7 @@
 
 Used by the ``source_build`` MCP tool when ``image_resolve`` returns
 ``not_found`` but the upstream has a public GitHub repo the agent can
-build from. Uses urllib only for HTTP.
+build from. HTTP rides core.http (operator-proxy-aware).
 
 Returns a :class:`SourceBuildResult`: ``repo_dir`` + optional
 ``dockerfile_text`` + optional ``build_config`` hint. The agent either
@@ -40,9 +40,7 @@ import re
 import shutil
 import tarfile
 import tempfile
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
@@ -386,19 +384,47 @@ class SourceBuilder:
         *,
         cwd: Path | None = None,
         timeout: int | None = None,
+        network: bool = False,
     ) -> RunOutcome:
-        # Strip dangerous env vars before git so a hostile GIT_SSH_COMMAND /
-        # HTTPS_PROXY in the operator's shell can't redirect the clone.
-        # Returns RunOutcome; callers check ``outcome.timed_out`` and run
-        # site-specific cleanup (logger.warning, warnings.append, shutil.rmtree).
-        from cve_env.utils.run import run_with_timeout
-        from cve_env.utils.safe_env import safe_subprocess_env
+        """Run a git command against the (untrusted) source repo.
 
+        Callers pass plain ``["git", ...]`` argv; hardening is layered
+        here from core.git. The per-invocation ``-c`` overrides
+        neutralise hostile ``.git/config`` vectors in the cloned repo
+        (fsmonitor / hooks-path — the CVE-2024-32002 family) that env
+        stripping alone cannot reach: ``safe_git_command`` for network
+        operations (clone / fetch), ``safe_git_readonly_command``
+        (every transport refused outright) for local reads and
+        checkouts. Env comes from ``get_safe_git_env``; network
+        invocations preserve the operator proxy vars — git dials the
+        remote directly here, and on mandatory-egress-proxy hosts a
+        clone has no route without them (the core.dataflow
+        walker-fetch precedent).
+
+        Returns RunOutcome; callers check ``outcome.timed_out`` and run
+        site-specific cleanup (logger.warning, warnings.append,
+        shutil.rmtree).
+        """
+        from core.git.clone import (
+            get_safe_git_env,
+            safe_git_command,
+            safe_git_readonly_command,
+        )
+
+        from cve_env.utils.run import run_with_timeout
+
+        if not args or args[0] != "git":
+            raise ValueError(f"_run_git expects plain git argv, got {args!r}")
+        argv = (
+            safe_git_command(*args[1:])
+            if network
+            else safe_git_readonly_command(*args[1:])
+        )
         return run_with_timeout(
-            args,
+            argv,
             cwd=cwd,
             timeout=timeout or self.config.clone_timeout_seconds,
-            env=safe_subprocess_env(),
+            env=get_safe_git_env(preserve_proxy=network),
         )
 
     def _progressive_clone(self, url: str, target: Path, version: str) -> _CloneOutcome:
@@ -586,7 +612,9 @@ class SourceBuilder:
         if not url.startswith(_GITHUB_HTTPS_PREFIX):
             logger.warning("refusing to clone non-GitHub URL: %s", url)
             return False
-        outcome = self._run_git(["git", "clone", "--depth", "1", url, str(target)])
+        outcome = self._run_git(
+            ["git", "clone", "--depth", "1", url, str(target)], network=True
+        )
         if outcome.timed_out:
             logger.warning(
                 "git clone timed out after %ss: %s",
@@ -604,13 +632,15 @@ class SourceBuilder:
             if new_depth == 0
             else ["git", "fetch", f"--depth={new_depth}", "--tags"]
         )
-        outcome = self._run_git(cmd, cwd=repo_dir)
+        outcome = self._run_git(cmd, cwd=repo_dir, network=True)
         if outcome.timed_out:
             return False
         return outcome.returncode == 0
 
     def _fetch_tags(self, repo_dir: Path) -> bool:
-        outcome = self._run_git(["git", "fetch", "--tags", "--depth=1"], cwd=repo_dir)
+        outcome = self._run_git(
+            ["git", "fetch", "--tags", "--depth=1"], cwd=repo_dir, network=True
+        )
         if outcome.timed_out:
             return False
         return outcome.returncode == 0
@@ -633,7 +663,7 @@ class SourceBuilder:
         if not url.startswith(_GITHUB_HTTPS_PREFIX):
             warnings.append(f"refusing to clone non-GitHub URL: {url}")
             return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=False)
-        outcome = self._run_git(["git", "clone", url, str(target)])
+        outcome = self._run_git(["git", "clone", url, str(target)], network=True)
         if outcome.timed_out:
             warnings.append(
                 f"git clone (full) timed out after "
@@ -735,21 +765,55 @@ def _github_auth_headers() -> dict[str, str]:
     return headers
 
 
-def _urlopen(req: urllib.request.Request, *, timeout: int) -> Any:
-    """Perform ``urlopen`` via an opener with ``ProxyHandler({})`` so
-    env-based proxy injection (``HTTP_PROXY`` / ``HTTPS_PROXY``) is defeated.
+_http_client_singleton = None
 
-    urllib's default behaviour reads proxy env vars at ``urlopen()`` time
-    via the global default opener. An attacker who controls the subprocess
-    environment can route GitHub API calls through a malicious proxy.
 
-    Note vs ``requests``: ``requests``'s ``proxies={}`` is a NO-OP (env
-    vars still merge); the explicit-empty-string sentinel is required there.
-    For ``urllib``, ``ProxyHandler({})`` IS sufficient to disable proxy
-    lookup — different libraries, different semantics.
+def _http_client():
+    """Lazy core.http client for the GitHub API/tarball fetches.
+
+    The constructor snapshots the OPERATOR's proxy env — on
+    mandatory-egress-proxy hosts the pre-integration ProxyHandler({})
+    opener made every API/tarball fetch fail while git (post core.git
+    swap) could reach the remote. Hostile-child proxy hygiene is a
+    subprocess concern (safe env), not an in-process transport one.
     """
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return opener.open(req, timeout=timeout)
+    global _http_client_singleton
+    if _http_client_singleton is None:
+        from core.http.urllib_backend import UrllibClient
+
+        _http_client_singleton = UrllibClient(
+            user_agent="cve-env-source-build/0.1"
+        )
+    return _http_client_singleton
+
+
+def _core_get(url: str, *, headers: dict[str, str], timeout: int,
+              max_bytes: int):
+    """Single GET through core.http. Returns the Response, or None on
+    any transport/HTTP/size failure (logged at debug) — the callers'
+    contract is 'None means fall back to the clone cascade'."""
+    from core.http import HttpError, SizeLimitExceeded
+
+    try:
+        return _http_client().request(
+            "GET",
+            url,
+            headers=headers or None,
+            timeout=timeout,
+            total_timeout=timeout,
+            retries=0,
+            max_bytes=max_bytes,
+            raise_on_status=False,
+        )
+    except SizeLimitExceeded:
+        logger.warning(
+            "source_build: response over cap %d B from %s — ignoring",
+            max_bytes, url,
+        )
+        return None
+    except HttpError as exc:
+        logger.debug("source_build: fetch failed for %s: %s", url, exc)
+        return None
 
 
 def _http_get_json(url: str, *, timeout: int) -> Any:
@@ -757,28 +821,12 @@ def _http_get_json(url: str, *, timeout: int) -> Any:
         raise ValueError(f"_http_get_json requires https:// URL, got: {url!r}")
     headers = {"Accept": "application/vnd.github+json"}
     headers.update(_github_auth_headers())
-    req = urllib.request.Request(url, headers=headers)  # noqa: S310 — scheme validated above
-    try:
-        with _urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", 200)
-            if status != 200:
-                return None
-            payload = resp.read(_MAX_JSON_BYTES + 1)
-            if len(payload) > _MAX_JSON_BYTES:
-                logger.warning(
-                    "source_build: JSON response over cap %d B from %s — ignoring",
-                    _MAX_JSON_BYTES,
-                    url,
-                )
-                return None
-    except urllib.error.HTTPError:
-        return None
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, OSError):
-            raise exc.reason from exc
+    resp = _core_get(url, headers=headers, timeout=timeout,
+                     max_bytes=_MAX_JSON_BYTES)
+    if resp is None or resp.status != 200:
         return None
     try:
-        return json.loads(payload.decode("utf-8"))
+        return json.loads(resp.body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
 
@@ -796,36 +844,17 @@ def _http_get_json_paginated(url: str, *, timeout: int) -> tuple[Any, str | None
         )
     headers = {"Accept": "application/vnd.github+json"}
     headers.update(_github_auth_headers())
-    req = urllib.request.Request(url, headers=headers)  # noqa: S310 — scheme validated above
+    resp = _core_get(url, headers=headers, timeout=timeout,
+                     max_bytes=_MAX_JSON_BYTES)
+    if resp is None or resp.status != 200:
+        return None, None
     next_url: str | None = None
+    # core.http lowercases header keys on storage.
+    m = _LINK_NEXT_RE.search(resp.headers.get("link", ""))
+    if m and m.group(1).startswith("https://"):
+        next_url = m.group(1)
     try:
-        with _urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", 200)
-            if status != 200:
-                return None, None
-            # Parse Link header for pagination.
-            link_header = resp.headers.get("Link", "")
-            m = _LINK_NEXT_RE.search(link_header)
-            if m:
-                candidate = m.group(1)
-                if candidate.startswith("https://"):
-                    next_url = candidate
-            payload = resp.read(_MAX_JSON_BYTES + 1)
-            if len(payload) > _MAX_JSON_BYTES:
-                logger.warning(
-                    "source_build: JSON response over cap %d B from %s — ignoring",
-                    _MAX_JSON_BYTES,
-                    url,
-                )
-                return None, None
-    except urllib.error.HTTPError:
-        return None, None
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, OSError):
-            raise exc.reason from exc
-        return None, None
-    try:
-        return json.loads(payload.decode("utf-8")), next_url
+        return json.loads(resp.body.decode("utf-8")), next_url
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None, None
 
@@ -833,27 +862,11 @@ def _http_get_json_paginated(url: str, *, timeout: int) -> tuple[Any, str | None
 def _http_get_bytes(url: str, *, timeout: int) -> bytes | None:
     if not url.startswith("https://"):
         raise ValueError(f"_http_get_bytes requires https:// URL, got: {url!r}")
-    req = urllib.request.Request(url, headers=_github_auth_headers())  # noqa: S310 — scheme validated above
-    try:
-        with _urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", 200)
-            if status != 200:
-                return None
-            body = resp.read(_MAX_TARBALL_BYTES + 1)
-            if len(body) > _MAX_TARBALL_BYTES:
-                logger.warning(
-                    "source_build: tarball over cap %d B from %s — falling back to clone",
-                    _MAX_TARBALL_BYTES,
-                    url,
-                )
-                return None
-    except urllib.error.HTTPError:
+    resp = _core_get(url, headers=_github_auth_headers(), timeout=timeout,
+                     max_bytes=_MAX_TARBALL_BYTES)
+    if resp is None or resp.status != 200:
         return None
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, OSError):
-            raise exc.reason from exc
-        return None
-    return body
+    return resp.body
 
 
 # -- tool payload builder --------------------------------------------------

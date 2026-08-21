@@ -57,6 +57,7 @@ _TRUTHY = ("1", "true", "on", "yes")
 _ENV_MODE = "RAPTOR_SANITIZER_CUT"
 _ENV_NO_LEXICAL = "RAPTOR_SANITIZER_CUT_NO_LEXICAL"
 _ENV_PARITY_LOG = "RAPTOR_SANITIZER_CUT_PARITY_LOG"
+_ENV_AUDIT_DIR = "RAPTOR_SANITIZER_CUT_AUDIT_DIR"
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,11 @@ class SanitizerCutConfig:
     ``lexical_fallback_enabled`` — fall back to the lexical heuristic
     when the gate can't decide. False only in ``strict``.
     ``parity_log_path`` — where to append shadow telemetry, or None.
+    ``audit_dir`` — run directory for the record-only
+    ``suppressions.jsonl`` audit records the value-bound gate writes
+    (``dropped: false`` — evidence, never a drop; the sanitizer-cut
+    witness has not earned suppression). Set when the gate is enabled
+    and the run dir is known; None disables the audit write.
     ``mode`` — the originating mode name, for introspection / audit.
     """
 
@@ -74,6 +80,7 @@ class SanitizerCutConfig:
     value_bound_enabled: bool
     lexical_fallback_enabled: bool
     parity_log_path: Optional[str]
+    audit_dir: Optional[str] = None
 
 
 # Module-level explicit configuration. None means "fall back to env".
@@ -135,6 +142,7 @@ def config_for_mode(
         value_bound_enabled=value_bound,
         lexical_fallback_enabled=lexical,
         parity_log_path=parity_path,
+        audit_dir=(run_dir if (value_bound and run_dir) else None),
     )
 
 
@@ -168,6 +176,7 @@ def _resolve_from_env() -> SanitizerCutConfig:
         mode = "off"
 
     parity_path = _resolve_parity_log(parity_raw, None, want_default=False)
+    audit_raw = os.environ.get(_ENV_AUDIT_DIR, "").strip() or None
     # An env parity log with the gate off is telemetry-only — the env
     # equivalent of shadow mode. Keep the resolved suppression mode but
     # carry the log path.
@@ -177,6 +186,7 @@ def _resolve_from_env() -> SanitizerCutConfig:
         value_bound_enabled=base.value_bound_enabled,
         lexical_fallback_enabled=base.lexical_fallback_enabled,
         parity_log_path=parity_path,
+        audit_dir=(audit_raw if base.value_bound_enabled else None),
     )
 
 
@@ -199,6 +209,10 @@ def _export_to_env(c: SanitizerCutConfig) -> None:
         os.environ["RAPTOR_SANITIZER_CUT_PARITY_LOG"] = c.parity_log_path
     else:
         os.environ.pop("RAPTOR_SANITIZER_CUT_PARITY_LOG", None)
+    if c.audit_dir:
+        os.environ[_ENV_AUDIT_DIR] = c.audit_dir
+    else:
+        os.environ.pop(_ENV_AUDIT_DIR, None)
 
 
 def configure(
@@ -247,6 +261,10 @@ def lexical_fallback_enabled() -> bool:
 
 def parity_log_path() -> Optional[str]:
     return current().parity_log_path
+
+
+def audit_dir() -> Optional[str]:
+    return current().audit_dir
 
 
 _PERSIST_NAME = "sanitizer-cut-config.json"
@@ -373,4 +391,5 @@ __all__ = [
     "value_bound_enabled",
     "lexical_fallback_enabled",
     "parity_log_path",
+    "audit_dir",
 ]

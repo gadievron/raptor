@@ -73,6 +73,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Dependency-free by design (see core/sandbox/errors.py) — safe to
+# import at module load, unlike the heavyweight core.sandbox machinery
+# _run_child defers into its try block.
+from core.sandbox.errors import SandboxSetupError
+
 CLONE_NEWUSER = 0x10000000
 CLONE_NEWNET = 0x40000000
 
@@ -385,6 +390,11 @@ def _run_child(role: str, spec: dict[str, Any], result: _ChildResult) -> None:
         strict_env = spec.get("strict_env")
         env_caller_filtered = spec.get("env_caller_filtered")
         observe = spec.get("observe")
+        rootfs = spec.get("rootfs")
+        if rootfs is not None and not isinstance(rootfs, str):
+            raise TypeError(
+                f"spec['rootfs'] must be str, got {type(rootfs).__name__}",
+            )
 
         kwargs = {
             "profile": profile,
@@ -423,6 +433,14 @@ def _run_child(role: str, spec: dict[str, Any], result: _ChildResult) -> None:
             kwargs["env_caller_filtered"] = bool(env_caller_filtered)
         if observe is not None:
             kwargs["observe"] = bool(observe)
+        if rootfs is not None:
+            # Image-rootfs run (unpacked container filesystem). The
+            # sandbox layer is fail-closed for rootfs: any spec whose
+            # posture would degrade to the host filesystem (e.g.
+            # stdin_b64 → input=, which the fork-based spawn path
+            # can't plumb) surfaces as result.error rather than
+            # silently running against the host.
+            kwargs["rootfs"] = rootfs
         r = sandbox_run(cmd, **kwargs)
         with result._lock:
             result.returncode = r.returncode
@@ -438,6 +456,16 @@ def _run_child(role: str, spec: dict[str, Any], result: _ChildResult) -> None:
                     result.sandbox_info = dict(info)
                 except (TypeError, ValueError):
                     result.sandbox_info = None
+    except SandboxSetupError as exc:
+        # Protocol boundary: SandboxSetupError is a BaseException by
+        # design (it must pierce consumer `except Exception` layers),
+        # but letting it escape HERE kills this worker thread and the
+        # JSON-on-stdout response reports returncode=None with no
+        # message. Name-catch and convert so "isolation could not
+        # engage" (e.g. a rootfs fail-closed refusal) travels to the
+        # caller as a structured error, never as a silent dead child.
+        with result._lock:
+            result.error = f"{type(exc).__name__}: {exc}"
     except Exception as exc:  # noqa: BLE001
         with result._lock:
             result.error = f"{type(exc).__name__}: {exc}"

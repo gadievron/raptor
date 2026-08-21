@@ -25,12 +25,22 @@
 // Macro set (curated; can be expanded via project-alias discovery
 // in axis-1's aliases.py mechanism — Phase 5b will plumb through):
 //   BUG, BUG_ON — Linux kernel
-//   panic — kernel + various
+//   panic — kernel + various (printf-like, often multi-arg:
+//     panic("%s", msg))
 //   abort, _Exit — POSIX userland
 //   __builtin_trap — GCC intrinsic
 //   assert — libc (NDEBUG-off behaviour; otherwise no-op)
+//   ASSERT/VERIFY family incl. the 3-arg ASSERT3U(a, ==, b) /
+//     VERIFY3P(p, !=, NULL) comparison shapes
+//
+// One variadic rule covers every arity: zero-arg (BUG()), single-arg
+// (assert(cond)), multi-arg printf-like (panic("%s", x)), and the
+// 3-arg ASSERT3U/VERIFY3-class comparison macros — spatch 1.3 binds
+// `f(...)` across all of them (verified live; the earlier
+// exactly-one-argument pattern silently dropped the multi-arg and
+// 3-arg shapes).
 
-@abort_one_arg@
+@abort_call@
 identifier abort_name = {
     BUG_ON, BUG, panic, abort, __builtin_trap, _Exit, assert,
     // ASSERT/VERIFY family — appears widely beyond its
@@ -41,35 +51,13 @@ identifier abort_name = {
     ASSERT, ASSERT3U, ASSERT3S, ASSERT3P, ASSERT0,
     VERIFY, VERIFY3U, VERIFY3S, VERIFY3P, VERIFY0
 };
-expression cond;
 position p;
 @@
-abort_name@p(cond)
+abort_name@p(...)
 
 @script:python@
-p << abort_one_arg.p;
-abort_name << abort_one_arg.abort_name;
-@@
-import json, sys
-for _p in p:
-    _m = {
-        "file": _p.file,
-        "line": int(_p.line),
-        "rule": "abort_proximate",
-        "message": "abort:" + str(abort_name),
-    }
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-
-@abort_no_args@
-identifier abort_name = { BUG, BUG_ON, panic, abort, __builtin_trap, _Exit };
-position p;
-@@
-abort_name@p()
-
-@script:python@
-p << abort_no_args.p;
-abort_name << abort_no_args.abort_name;
+p << abort_call.p;
+abort_name << abort_call.abort_name;
 @@
 import json, sys
 for _p in p:

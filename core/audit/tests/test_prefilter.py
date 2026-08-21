@@ -782,3 +782,32 @@ class TestKernelVocabViaPack:
         )
         assert not seeds_only.has_dangerous_apis
         assert with_pack.has_dangerous_apis
+
+
+class TestPrefilterSkipKnobWiring:
+    """OrchestratorConfig.prefilter_skip=False must neuter the
+    prefilter's skip_llm shortcut in the review loop (source-level
+    wiring check — the heavy review_one_function scaffolding is
+    exercised in integration tests, mirroring
+    TestPinnedGapNeverTriageSkipped)."""
+
+    def test_review_loop_guard_precedes_skip_block(self):
+        src = (Path(__file__).resolve().parents[1]
+               / "orchestrator.py").read_text()
+        idx = src.find("def review_one_function")
+        assert idx != -1
+        end = src.find("\ndef ", idx)
+        window = src[idx:end if end != -1 else len(src)]
+        guard = window.find(
+            'pf_result.skip_llm and not getattr(config, "prefilter_skip"'
+        )
+        skip_block = window.find('evidence_tool="prefilter:skip"')
+        assert guard != -1, "prefilter_skip guard missing"
+        assert skip_block != -1, "prefilter skip block missing"
+        assert guard < skip_block
+
+    def test_config_default_on(self):
+        from core.audit.orchestrator import OrchestratorConfig
+
+        cfg = OrchestratorConfig(target_path=Path("."), out_dir=Path("."))
+        assert cfg.prefilter_skip is True

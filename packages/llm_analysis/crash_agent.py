@@ -277,9 +277,65 @@ shorter and more portable. Either language is acceptable; pick what
 matches the target."""
 
 
+def _crash_feasibility_summary(crash_context: CrashContext) -> dict | None:
+    """Register-conditioned exploit-feasibility summary for a crash.
+
+    Runs the binary mitigation analysis with the crash's captured
+    registers so the one-gadget SMT ranking answers "given THIS
+    register state" rather than unconstrained satisfiability. Requires
+    a real binary path and a non-empty register dump; any failure
+    degrades to None — feasibility context is additive, the exploit
+    prompt must never be blocked on it.
+    """
+    binary = crash_context.binary_path
+    if not crash_context.registers or not binary or not Path(binary).is_file():
+        return None
+    try:
+        from packages.exploit_feasibility.api import analyze_binary
+
+        result = analyze_binary(
+            str(binary),
+            vuln_type=crash_context.crash_type or None,
+            crash_state=crash_context.registers,
+        )
+    except Exception:  # noqa: BLE001 — additive context only
+        logger.debug("crash feasibility analysis failed", exc_info=True)
+        return None
+    if not isinstance(result, dict):
+        return None
+    summary: dict = {
+        "verdict": result.get("verdict"),
+        "blockers": result.get("blockers", [])[:10],
+        "suggestions": result.get("suggestions", [])[:10],
+    }
+    paths = result.get("exploitation_paths") or {}
+    for vuln, cell in paths.items():
+        entry: dict = {"verdict": cell.get("verdict")}
+        one_gadget = (cell.get("analysis") or {}).get("one_gadget_info") or {}
+        smt = one_gadget.get("smt_feasibility")
+        if smt:
+            entry["one_gadget_smt"] = {
+                "feasible": smt.get("feasible"),
+                "conditioned_on_crash_state": smt.get(
+                    "conditioned_on_crash_state"),
+                "unsatisfied_constraints": smt.get(
+                    "unsatisfied_constraints", [])[:10],
+            }
+        summary.setdefault("exploitation_paths", {})[vuln] = entry
+    return summary
+
+
 def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
     """Build the per-crash exploit-PoC prompt as a role-separated bundle."""
     blocks = []
+
+    feasibility = _crash_feasibility_summary(crash_context)
+    if feasibility:
+        blocks.append(UntrustedBlock(
+            content=json.dumps(feasibility, indent=2),
+            kind="binary-feasibility",
+            origin=f"crash:{crash_context.crash_id}",
+        ))
 
     if crash_context.analysis:
         blocks.append(UntrustedBlock(

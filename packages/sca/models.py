@@ -214,6 +214,14 @@ class Advisory:
     # "CWE-NNN" strings. Consumed by the audit-side advisory bridge to
     # derive per-component CWE-family priors.
     cwe_ids: list[str] = field(default_factory=list)
+    # Severity label derived from a non-CVSS source (GHSA's
+    # ``database_specific.severity``) when the record's only CVSS entry
+    # is a v4 vector that couldn't be scored numerically (the optional
+    # ``cvss`` package is absent or the vector is malformed). Carries no
+    # fabricated numeric score — ``severity`` stays None. The findings
+    # layer consults this before its blanket medium degrade. Values:
+    # "none" / "low" / "medium" / "high" / "critical".
+    severity_fallback: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -127,7 +127,7 @@ The context is strategy-aware: a function taking `(char *buf, size_t len)` gets 
 - The LLM generates hypotheses and tools; deterministic analysis confirms or refutes.
 - 37.6% MORE critical vulnerabilities after 5 iterations of self-refinement without tool feedback (IEEE-ISTAS 2025). Tool grounding is mandatory, not optional.
 - A confirmed pattern should always generate a codebase-wide sweep rule (Mode 2 / KNighter pattern).
-- Coverage records accumulate across runs. The gap list shrinks each time.
+- Review coverage accumulates across runs via the project journal index (plus per-tool records). The gap list shrinks each time.
 - The review journal persists in the project directory across runs — it's the audit trail. Operator annotations (human-only, via `/annotate`) persist alongside it.
 - After each batch, run `critique` to find gaps before moving on.
 
