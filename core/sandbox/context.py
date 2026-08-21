@@ -450,6 +450,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             degraded_net_deny: bool = True,
             loopback_unix_bridges: dict | None = None,
             omit_proc_reads: bool = False,
+            require_proxy_netns: bool = False,
             rootfs: str | None = None):
     """Context manager for sandboxed subprocess execution.
 
@@ -950,6 +951,42 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "ABI %d < 4 (no TCP allowlist) — egress proxy "
                 "allowlist is advisory only on this host.",
                 _proxy_abi,
+            )
+
+        # 00015: fail closed when an untrusted-egress caller requires
+        # the netns tier but only the port-scoped Landlock tier is
+        # available. On a Linux net-yes/mount-no host the child would
+        # silently degrade to a Landlock port pin, where a direct
+        # connect() on the proxy port reaches ANY host (the hostname
+        # allowlist is bypassed). Refuse unless the operator explicitly
+        # accepts the weaker tier.
+        #
+        # Scoped to non-darwin: this is the Linux Landlock Tier-2 gap.
+        # macOS uses a different enforcement path (seatbelt SBPL, which
+        # can express address-scoped loopback egress) where _use_proxy_netns
+        # is always False, so an unscoped guard would wrongly refuse every
+        # macOS untrusted-egress caller. macOS egress scoping is out of
+        # this finding's scope and unchanged here.
+        _degraded_ok = os.environ.get(
+            'RAPTOR_ALLOW_DEGRADED_UNTRUSTED', '',
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
+        if (
+            sys.platform != 'darwin'
+            and use_egress_proxy
+            and require_proxy_netns
+            and not _use_proxy_netns
+            and not _degraded_ok
+        ):
+            from .errors import SandboxSetupError
+            raise SandboxSetupError(
+                'use_egress_proxy with require_proxy_netns=True needs the '
+                'netns egress tier, but it is unavailable on this host '
+                '(mount-ns / user-ns capability missing). The port-scoped '
+                'Landlock fallback does not enforce the hostname allowlist '
+                '(a direct connect on the proxy port reaches any host). '
+                'Install uidmap / enable unprivileged user namespaces to '
+                'restore the netns tier, or set '
+                'RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1 to accept the weaker tier.'
             )
 
         if _use_proxy_netns:
@@ -3634,6 +3671,7 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
         profile: str | None = None, disabled: bool = False, limits: dict | None = None,
         map_root: bool = False,
         use_egress_proxy: bool = False, proxy_hosts: list | None = None,
+        require_proxy_netns: bool = False,
         restrict_reads=_UNSET, readable_paths: list | None = None,
         caller_label: str | None = None,
         fake_home=_UNSET,
@@ -3667,6 +3705,7 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
                  disabled=disabled, limits=limits, map_root=map_root,
                  use_egress_proxy=use_egress_proxy,
                  proxy_hosts=proxy_hosts,
+                 require_proxy_netns=require_proxy_netns,
                  restrict_reads=restrict_reads,
                  readable_paths=readable_paths,
                  caller_label=caller_label,
@@ -4073,6 +4112,7 @@ def run_untrusted_networked(
         writable_paths=writable_paths,
         fake_home=fake_home,
         use_egress_proxy=True,
+        require_proxy_netns=True,
         proxy_hosts=list(proxy_hosts),
         allowed_tcp_ports=[443],
         omit_proc_reads=_degraded_no_pidns,

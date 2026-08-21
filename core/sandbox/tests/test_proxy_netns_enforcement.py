@@ -514,6 +514,87 @@ class TestProxyNetnsContextWiring:
         assert (self._enforcement_with(abi=3, net=True, mount=False)
                 == "landlock_tcp")
 
+    def _egress_with(self, *, abi, net, mount, require_proxy_netns):
+        """Like _enforcement_with but lets the caller set
+        require_proxy_netns; returns the chosen proxy_enforcement."""
+        from core.sandbox import sandbox
+        with mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=abi,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available", return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available", return_value=net,
+        ), mock.patch(
+            "core.sandbox.context.check_mount_available", return_value=mount,
+        ), sandbox(
+            target=self.out, output=self.out, use_egress_proxy=True,
+            proxy_hosts=["example.com"], require_proxy_netns=require_proxy_netns,
+        ) as run:
+            result = run(["echo", "x"], capture_output=True, text=True, timeout=15)
+            return result.sandbox_info.get("proxy_enforcement")
+
+    def _enter_egress(self, *, platform, net, mount, require, env=None, monkeypatch=None):
+        """Enter sandbox() with the probe/platform surface pinned and exit
+        WITHOUT running a child — exercises the 00015 setup-time guard,
+        which fires (or not) at __enter__ before any child executes."""
+        import core.sandbox.context as ctx
+        from core.sandbox import sandbox
+        if env and monkeypatch:
+            monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", env)
+        with mock.patch.object(ctx.sys, "platform", platform), mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=4,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available", return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available", return_value=net,
+        ), mock.patch(
+            "core.sandbox.context.check_mount_available", return_value=mount,
+        ):
+            with sandbox(
+                target=self.out, output=self.out, use_egress_proxy=True,
+                proxy_hosts=["example.com"], require_proxy_netns=require,
+            ):
+                pass
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_fails_closed_on_linux_degraded(self):
+        """00015: on a Linux net-yes/mount-no host, an untrusted-egress
+        caller requiring the netns tier is REFUSED (not silently port-pinned)."""
+        from core.sandbox.errors import SandboxSetupError
+        with pytest.raises(SandboxSetupError, match="netns egress tier"):
+            self._enter_egress(platform="linux", net=True, mount=False, require=True)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_override_bypasses_guard_on_linux(self, monkeypatch):
+        """The operator override lets the degraded tier through explicitly
+        (the setup-time guard does not fire)."""
+        # No SandboxSetupError('netns egress tier') should be raised.
+        self._enter_egress(platform="linux", net=True, mount=False, require=True,
+                           env="1", monkeypatch=monkeypatch)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_falsey_override_keeps_guard(self, monkeypatch):
+        """A falsey override value (0/false/off) must NOT bypass the guard —
+        the guard uses strict truthiness, matching _require_userns_or_optin."""
+        from core.sandbox.errors import SandboxSetupError
+        for val in ("0", "false", "off", "no", ""):
+            with pytest.raises(SandboxSetupError, match="netns egress tier"):
+                self._enter_egress(platform="linux", net=True, mount=False,
+                                   require=True, env=val, monkeypatch=monkeypatch)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_not_enforced_on_darwin(self):
+        """Regression (macOS blocker): macOS uses seatbelt (a different
+        enforcement path) where _use_proxy_netns is always False; the guard
+        must NOT fire there, or every macOS untrusted-egress caller breaks."""
+        # net/mount irrelevant on darwin; the guard is scoped out entirely.
+        self._enter_egress(platform="darwin", net=True, mount=False, require=True)
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_require_proxy_netns_flag_off_does_not_fire_on_linux(self):
+        """Without the flag (trusted egress callers), the guard never fires."""
+        self._enter_egress(platform="linux", net=True, mount=False, require=False)
+
     def test_tcp_path_when_netns_unavailable(self):
         """Without netns capability, ABI >= 4 falls back to the
         Landlock TCP pin tier — the pre-generalisation posture."""
