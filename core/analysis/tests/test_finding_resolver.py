@@ -396,6 +396,16 @@ class TestTraversalGuard:
         assert isinstance(result, ResolutionFailure)
         assert "'..'" in result.reason
 
+    def test_dotdot_refused_for_java_branch(self):
+        # 00092 residual: the Java branch read the file directly, skipping
+        # the ..-containment guard the Python and C++ branches route through.
+        finding = _raptor_native("../escape.java", 1, 3, language="java")
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure)
+        assert "'..'" in result.reason
+        # Refused by the guard, not by a failed read.
+        assert "cannot read" not in result.reason
+
     def test_sarif_uri_with_dotdot_refused(self):
         result = resolve_finding(_sarif_result("../../x.py", 1, 3))
         assert isinstance(result, ResolutionFailure)

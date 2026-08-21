@@ -886,11 +886,13 @@ def _resolve_from_parsed_java(parsed: _ParsedFinding) -> Resolution:
         find_enclosing_method,
     )
 
-    file_path = Path(parsed.file)
-    try:
-        source_text = file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
-        return ResolutionFailure(reason=f"cannot read {parsed.file}: {e}")
+    # Route through the ..-containment guard the Python (_resolve_from_
+    # parsed_python) and C++ (_resolve_from_parsed_cpp) branches already
+    # use; the Java branch previously read the untrusted finding path
+    # directly, skipping the check (00092 residual).
+    source_text = _read_finding_source(parsed.file)
+    if isinstance(source_text, ResolutionFailure):
+        return source_text
 
     fn_name, fn_start = find_enclosing_method(
         source_text, parsed.source_lineno, parsed.sink_lineno,
