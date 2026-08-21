@@ -275,6 +275,19 @@ def _drain_pipes_until_eof(
     fds_open = set(bufs)
     target_exited = False
     while fds_open:
+        # Enforce the caller's deadline on EVERY iteration, not only when
+        # select() returns idle: a hostile target that keeps a pipe
+        # continuously readable makes select() return non-empty each tick,
+        # so control never entered the `if not ready:` branch below where
+        # the deadline was previously the only checked (14d5c87c residual).
+        # Skip while target_exited — the final sweep is a bounded, non-
+        # blocking drain of already-buffered bytes and must not be cut.
+        if (
+            not target_exited
+            and deadline is not None
+            and time.monotonic() >= deadline
+        ):
+            break
         if target_exited:
             # Final sweep: consume whatever is already buffered in
             # the pipes, but don't block for more.
