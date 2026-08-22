@@ -11,7 +11,8 @@ from __future__ import annotations
 def _fresh_module():
     """Reimport the version module so the lru_cache starts empty and any
     patches to ``core.config`` are observed."""
-    import importlib, sys
+    import importlib
+    import sys
     name = "packages.studio.services.raptor_version"
     if name in sys.modules:
         importlib.reload(sys.modules[name])
@@ -41,7 +42,8 @@ def test_returns_empty_when_import_fails(monkeypatch):
     )
     # Patch the module's `from core.config import RaptorConfig` site by
     # removing core.config from sys.modules and blocking the import.
-    import sys, builtins
+    import sys
+    import builtins
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
@@ -55,7 +57,7 @@ def test_returns_empty_when_import_fails(monkeypatch):
 
 
 def test_returns_empty_when_version_attr_missing(monkeypatch):
-    mod = _fresh_module()
+    _fresh_module()
 
     class _StubCfg:
         OTHER = "noise"  # no VERSION
@@ -73,12 +75,13 @@ def test_returns_empty_when_version_attr_missing(monkeypatch):
 
 
 def test_strips_whitespace(monkeypatch):
-    mod = _fresh_module()
+    _fresh_module()
 
     class _StubCfg:
         VERSION = "  3.4.5  "
 
-    import sys, importlib
+    import sys
+    import importlib
     stub = type(sys)("core.config")
     stub.RaptorConfig = _StubCfg
     monkeypatch.setitem(sys.modules, "core.config", stub)

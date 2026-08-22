@@ -12,8 +12,6 @@ from pathlib import Path
 import pytest
 
 from packages.studio.services.raptor_reader import (
-    RaptorProject,
-    RaptorRun,
     list_projects,
     get_project,
 )
