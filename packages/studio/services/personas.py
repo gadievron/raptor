@@ -13,10 +13,9 @@ the Penetration Tester and Security Researcher.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 
 from packages.studio.config import RAPTOR_HOME
 

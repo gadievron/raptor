@@ -89,7 +89,7 @@ packages/studio/
 ├── services/               # 14 modules — readers, writers, job queue, worker, classifiers
 ├── templates/              # 23 Jinja2 templates (dark + light, Mermaid dataflow, markdown)
 ├── static/                 # velociraptor avatar + (reserved for future css/js)
-├── tests/                  # 17 test modules (161 tests, incl. live-subprocess worker)
+├── tests/                  # 19 test modules (216 tests, incl. live-subprocess worker)
 ├── scripts/                # seed_demo.py, process_avatar.py
 ├── docs/
 │   ├── PRD.md              # product requirements — scope, invariants, non-goals
@@ -108,7 +108,7 @@ pip install pytest httpx
 python -m pytest packages/studio/tests/
 ```
 
-Expect 160 passed, 1 skipped.
+Expect 216 passed.
 
 ## Design thesis
 

@@ -83,7 +83,7 @@ The design thesis mediating between them:
 | Zero-project first impression | One meaningful CTA, no dead KPIs, no empty tables |
 | Newcomer form load | `/projects/new` shows ≤ 5 visible fields by default |
 | Schema preservation | Projects created here round-trip cleanly through `raptor project list` and `raptor project findings` |
-| Test coverage | ≥ 140 pytest green per release (current: 160 + 1 skipped) |
+| Test coverage | ≥ 140 pytest green per release (current: 216) |
 
 ## 7. Open work (post-absorption)
 

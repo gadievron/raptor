@@ -13,7 +13,7 @@ A. The CLI is excellent for solo deep-dives and CI. It's friction for (a) browsi
 A. We built it as a companion repo first: [yesnet0/raptor-studio](https://github.com/yesnet0/raptor-studio). After ~2 weeks and 27 commits, it felt stable and useful enough to propose upstream so every raptor user gets it. If you prefer it stays a companion, we'll close this PR and keep maintaining it separately — the companion repo stays live either way.
 
 **Q. Will this become a maintenance burden?**
-A. Finite surface: 72 files, 9 KLOC, 161 tests. All deps are pure-Python (uvicorn's C extensions are optional). No server, no DB other than a local SQLite file, no external services. The services layer is provider-agnostic and doesn't import raptor's runtime except `raptor_version.py` which reads `RaptorConfig.VERSION`. If the UI regresses, the CLI keeps working unchanged.
+A. Finite surface: ~80 files, ~10 KLOC, 216 tests. All deps are pure-Python except nh3 (Rust binary wheel; sanitises rendered report HTML). No server, no DB other than a local SQLite file, no external services. The services layer is provider-agnostic and doesn't import raptor's runtime except `raptor_version.py` which reads `RaptorConfig.VERSION`. If the UI regresses, the CLI keeps working unchanged.
 
 **Q. Does this conflict with the existing `packages/web/`?**
 A. No. `packages/web/` is the **web endpoint fuzzer** (crawler + scanner for testing web apps under analysis). `packages/studio/` is the **web UI for raptor itself**. Different purposes, different users. Happy to rename if you'd prefer `packages/ui/` or similar.
@@ -38,7 +38,7 @@ A. That's raptor's existing mechanism for invoking Claude Code non-interactively
 A. Matches vulngraph's proven approach (which studio's grammar borrows from). Zero build step. Each template is one self-contained review unit. ~150 lines of CSS lives in `base.html`; per-page styles are co-located with the structure they style. Easy to extract into `static/css/main.css` later if desired.
 
 **Q. Why FastAPI's `{filename:path}` route for file-serving?**
-A. Run dirs contain nested artifacts (e.g. `afl_output/main/crashes/id:000000`); `:path` matches slashes. The handler then calls `.resolve()` and asserts the result starts with `run.directory.resolve() + "/"` — this is the primary traversal guard. Plus an extension allowlist (`.svg / .png / .md / .json / .sarif / .txt`). Tested with `..%2F..%2F..%2Fetc%2Fpasswd` → 403, `evil.sh` → 403.
+A. Run dirs contain nested artifacts (e.g. `afl_output/main/crashes/id:000000`); `:path` matches slashes. The handler then calls `.resolve()` and asserts the result starts with `run.directory.resolve() + "/"` — this is the primary traversal guard. Plus an extension allowlist (see `_ALLOWED_RUN_FILE_SUFFIXES` in app.py) and a no-script `Content-Security-Policy: sandbox` on everything served. Tested with `..%2F..%2F..%2Fetc%2Fpasswd` → 403, `evil.sh` → 403.
 
 ---
 
@@ -77,7 +77,7 @@ A. Yes — it triggers raptor subprocesses. If you skip studio's specific deps (
 ## Quality
 
 **Q. Test coverage?**
-A. 161 tests across 17 modules. ~95 % services-layer coverage. Includes 4 live-subprocess tests in `test_worker_integration` that actually `subprocess.Popen` to exercise completed / failed / cancelled / missing-executable paths. Template rendering smoke-tested via `TestClient`.
+A. 216 tests across 19 modules. ~95 % services-layer coverage. Includes 4 live-subprocess tests in `test_worker_integration` that actually `subprocess.Popen` to exercise completed / failed / cancelled / missing-executable paths. Template rendering smoke-tested via `TestClient`.
 
 **Q. What's explicitly NOT covered?**
 A. The SSE stream's reconnect behavior — we emit one event per log line with best-effort ordering; if the client drops and reconnects, they resume from the latest offset, but we don't handle log-file rotation. Raptor never rotates these logs today.

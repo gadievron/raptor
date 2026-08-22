@@ -13,7 +13,6 @@ status='pending' by default), so downstream rendering is identical.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 _SEVERITY_BY_SARIF_LEVEL = {
