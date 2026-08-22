@@ -12,8 +12,14 @@ without ever reading a response. The controls here close that class:
   token on every state-changing form route. The token is generated per
   server instance and embedded into forms server-side, so a foreign
   origin can never obtain it (same-origin policy blocks reading our HTML).
+- ``RemoteAccessProtection`` (ASGI middleware) validates the ``Host``
+  header against loopback names unless remote binding was explicitly
+  allowed (defeats DNS rebinding, which would otherwise let a foreign
+  page *read* responses — including the filesystem-browsing API), and
+  requires an access token from non-loopback clients when the launcher
+  provisioned one (``--allow-remote``).
 
-Both layers are deliberate: fetch-metadata/Origin headers cover modern
+The layers are deliberate: fetch-metadata/Origin headers cover modern
 browsers cheaply, the token covers header-less or header-spoofing clients
 and any future route someone forgets to think about.
 """
@@ -21,11 +27,15 @@ and any future route someone forgets to think about.
 from __future__ import annotations
 
 import hmac
+import ipaddress
+import os
 import secrets
+from http.cookies import SimpleCookie
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, RedirectResponse
 
 CSRF_FORM_FIELD = "csrf_token"
 
@@ -88,6 +98,110 @@ def cross_origin_reason(headers: Headers) -> str | None:
         if not origin_netloc or origin_netloc.strip().lower() != host:
             return f"cross-origin request rejected (origin: {origin})"
     return None
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    """True if a Host-header hostname can only name this machine."""
+    hostname = hostname.strip("[]")
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _client_is_loopback(scope) -> bool:
+    client = scope.get("client")
+    if not client:
+        return False
+    try:
+        return ipaddress.ip_address(client[0]).is_loopback
+    except ValueError:
+        return False
+
+
+ACCESS_TOKEN_COOKIE = "studio_auth"
+
+
+def _supplied_access_token(headers: Headers) -> str:
+    auth = headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    cookie = SimpleCookie()
+    cookie.load(headers.get("cookie") or "")
+    morsel = cookie.get(ACCESS_TOKEN_COOKIE)
+    return morsel.value if morsel else ""
+
+
+class RemoteAccessProtection:
+    """Pure-ASGI middleware guarding non-loopback access.
+
+    Two checks, both driven by env the launcher sets (see raptor_studio.py):
+
+    - Unless ``STUDIO_ALLOW_REMOTE=1``, the ``Host`` header must name
+      loopback. A DNS-rebinding page resolves its own hostname to
+      127.0.0.1 to escape the same-origin policy, but it cannot control
+      the Host header its requests carry — rejecting foreign hosts kills
+      the read primitive.
+    - When ``STUDIO_AUTH_TOKEN`` is set (remote binding), clients from
+      non-loopback addresses must present it: ``Authorization: Bearer``,
+      the ``studio_auth`` cookie, or a one-time ``?token=`` query param
+      that is exchanged for the cookie via redirect.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+
+        if os.environ.get("STUDIO_ALLOW_REMOTE") != "1":
+            host = _host_without_port(headers.get("host") or "")
+            if not _is_loopback_hostname(host):
+                response = PlainTextResponse(
+                    "invalid host header (studio is bound to loopback; "
+                    "see --allow-remote)",
+                    status_code=400,
+                )
+                await response(scope, receive, send)
+                return
+
+        expected = os.environ.get("STUDIO_AUTH_TOKEN") or ""
+        if expected and not _client_is_loopback(scope):
+            supplied = _supplied_access_token(headers)
+            if supplied and hmac.compare_digest(supplied, expected):
+                await self.app(scope, receive, send)
+                return
+            response = self._token_exchange_or_401(scope, expected)
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    def _token_exchange_or_401(scope, expected: str):
+        """Accept ?token=… once, converting it into the auth cookie."""
+        params = parse_qsl(scope.get("query_string", b"").decode("latin-1"))
+        supplied = dict(params).get("token") or ""
+        if not hmac.compare_digest(supplied, expected):
+            return PlainTextResponse(
+                "access token required (start studio with --allow-remote "
+                "to obtain one)",
+                status_code=401,
+            )
+        remaining = [(k, v) for k, v in params if k != "token"]
+        url = scope.get("path", "/")
+        if remaining:
+            url += "?" + urlencode(remaining)
+        response = RedirectResponse(url, status_code=303)
+        response.set_cookie(
+            ACCESS_TOKEN_COOKIE, expected, httponly=True, samesite="strict"
+        )
+        return response
 
 
 class CrossOriginProtection:

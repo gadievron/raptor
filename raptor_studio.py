@@ -15,6 +15,9 @@ knobs, and ``packages/studio/docs/PRD.md`` for the product rationale.
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -24,17 +27,63 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 
+def _is_loopback_bind_host(host: str) -> bool:
+    """True if binding to `host` is reachable from this machine only.
+
+    Kept dependency-free (no fastapi import) so argument validation works
+    even before studio's deps are installed. Unknown hostnames count as
+    non-loopback — conservative for a bind address.
+    """
+    host = host.strip().lower().strip("[]")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="RAPTOR Studio — web UI for raptor",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--allow-remote", action="store_true",
+                        help="permit binding to a non-loopback host; remote "
+                             "clients must then present the access token "
+                             "printed at startup")
     parser.add_argument("--reload", action="store_true",
                         help="auto-reload templates + code on change (dev only)")
     parser.add_argument("--log-level", default="info",
                         choices=["critical", "error", "warning", "info", "debug", "trace"])
     args = parser.parse_args()
+
+    if not _is_loopback_bind_host(args.host):
+        if not args.allow_remote:
+            parser.error(
+                f"refusing to bind to non-loopback host {args.host!r}: studio "
+                "is an unauthenticated single-user UI that can launch raptor "
+                "jobs and browse the filesystem. Pass --allow-remote if you "
+                "really mean to expose it beyond this machine."
+            )
+        # Provision the shared secret the app's RemoteAccessProtection
+        # middleware enforces for non-loopback clients. Env is the channel
+        # because uvicorn (re)spawns the app from an import string.
+        token = os.environ.get("STUDIO_AUTH_TOKEN") or secrets.token_urlsafe(32)
+        os.environ["STUDIO_AUTH_TOKEN"] = token
+        os.environ["STUDIO_ALLOW_REMOTE"] = "1"
+        print(
+            "\n"
+            "  WARNING: binding to a non-loopback interface. Anyone who can\n"
+            f"  reach {args.host}:{args.port} can browse this machine's files\n"
+            "  and launch raptor jobs once they hold the access token below.\n"
+            "  Prefer an SSH tunnel to 127.0.0.1 where possible.\n"
+            "\n"
+            f"  Access token (remote clients): {token}\n"
+            f"  First visit: http://<this-host>:{args.port}/?token={token}\n",
+            file=sys.stderr,
+        )
 
     try:
         import uvicorn

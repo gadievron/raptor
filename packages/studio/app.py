@@ -28,6 +28,7 @@ from packages.studio.config import (
 )
 from packages.studio.security import (
     CrossOriginProtection,
+    RemoteAccessProtection,
     csrf_token,
     require_csrf_token,
 )
@@ -91,7 +92,9 @@ templates.env.filters["md"] = render_markdown
 templates.env.globals["csrf_token"] = csrf_token
 
 app = FastAPI(title=APP_TITLE)
+# Last-added runs first: host/auth gating, then cross-origin rejection.
 app.add_middleware(CrossOriginProtection)
+app.add_middleware(RemoteAccessProtection)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
