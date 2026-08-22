@@ -274,14 +274,46 @@ def claude_cli_hint(kind: str, target: str, project_name: str) -> Optional[str]:
     return f"cd $RAPTOR_HOME\nraptor project use {project_name}\nclaude -p '{slash}'"
 
 
+_UNDERSTAND_MODES = frozenset({"map", "variants", "dataflow"})
+
+
+def _clean_prompt_value(field: str, value: str, *, url: bool = False) -> str:
+    """Validate a form value before it joins a ``claude -p`` prompt.
+
+    The bash layer quotes the whole prompt, but inside it a newline or a
+    leading ``-`` would smuggle extra instructions or flags into the
+    slash command. Only the CSRF-protected operator submits these forms,
+    so this is defence in depth against a hijacked-form pivot.
+    """
+    value = str(value)
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise ValueError(f"{field} must not contain control characters.")
+    if value.startswith("-"):
+        raise ValueError(f"{field} must not start with '-'.")
+    if url and not value.startswith(("http://", "https://")):
+        raise ValueError(f"{field} must be an http(s) URL.")
+    return value
+
+
+def _clean_count(field: str, value) -> str:
+    value = str(value)
+    if not value.isdigit():
+        raise ValueError(f"{field} must be a non-negative integer.")
+    return value
+
+
 def _compose_slash_command(
     spec: RunnableKind, target: str, values: dict, project_name: str
 ) -> str:
     """Compose the slash-command string passed to ``claude -p``."""
     parts = [spec.slash_command]
+    if target:
+        target = _clean_prompt_value("target", target)
 
     if spec.kind == "understand":
         mode = values.get("mode") or "map"
+        if mode not in _UNDERSTAND_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(sorted(_UNDERSTAND_MODES))}.")
         parts.append(f"--{mode}")
         if target:
             parts.append(target)
@@ -289,12 +321,14 @@ def _compose_slash_command(
         if target:
             parts.append(target)
         if values.get("binary"):
-            parts += ["--binary", values["binary"]]
+            parts += ["--binary", _clean_prompt_value("binary", values["binary"])]
         if values.get("vuln_type"):
-            parts += ["--vuln-type", values["vuln_type"]]
+            parts += ["--vuln-type", _clean_prompt_value("vuln_type", values["vuln_type"])]
     elif spec.kind == "oss-forensics":
-        focus = values.get("focus") or ""
+        focus = _clean_prompt_value("focus", values.get("focus") or "")
         vendor = values.get("vendor_report_url") or ""
+        if vendor:
+            vendor = _clean_prompt_value("vendor_report_url", vendor, url=True)
         url = target
         prompt_bits = [url]
         if focus:
@@ -306,15 +340,18 @@ def _compose_slash_command(
         else:
             parts.append(url)
         if values.get("max_followups"):
-            parts += ["--max-followups", str(values["max_followups"])]
+            parts += ["--max-followups", _clean_count("max_followups", values["max_followups"])]
         if values.get("max_retries"):
-            parts += ["--max-retries", str(values["max_retries"])]
+            parts += ["--max-retries", _clean_count("max_retries", values["max_retries"])]
     elif spec.kind == "crash-analysis":
         bug_url = values.get("bug_url") or ""
         repo_url = values.get("repo_url") or ""
         if not bug_url or not repo_url:
             raise ValueError("crash-analysis requires both bug_url and repo_url.")
-        parts += [bug_url, repo_url]
+        parts += [
+            _clean_prompt_value("bug_url", bug_url, url=True),
+            _clean_prompt_value("repo_url", repo_url, url=True),
+        ]
 
     return " ".join(parts)
 
