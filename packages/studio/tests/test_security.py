@@ -255,3 +255,34 @@ def test_query_token_redirect_never_leaves_site(client, remote):
     r = client.get("//evil.example/?token=sekrit-token", follow_redirects=False)
     if r.status_code == 303:
         assert not r.headers["location"].startswith("//")
+
+
+# --- run artifact serving ----------------------------------------------------
+
+def test_run_files_served_with_noscript_csp(client, tmp_path, monkeypatch):
+    # A malicious SVG in a run dir must not execute same-origin script
+    # when navigated to. CSP sandbox makes it scriptless + origin-less.
+    run_dir = tmp_path / "proj" / "scan_x"
+    run_dir.mkdir(parents=True)
+    (run_dir / "evil.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    )
+
+    class _Run:
+        name = "scan_x"
+        directory = run_dir
+
+    class _Proj:
+        name = "proj"
+
+        def runs(self):
+            return [_Run()]
+
+    monkeypatch.setattr(
+        "packages.studio.app.get_project",
+        lambda name: _Proj() if name == "proj" else None,
+    )
+    r = client.get("/projects/proj/runs/scan_x/files/evil.svg")
+    assert r.status_code == 200
+    assert r.headers["content-security-policy"] == "sandbox"
+    assert r.headers["x-content-type-options"] == "nosniff"
