@@ -35,7 +35,7 @@ class HypothesisIteration:
 
     @property
     def excerpt(self) -> str:
-        lines = [l for l in self.content.splitlines() if l.strip()][:4]
+        lines = [ln for ln in self.content.splitlines() if ln.strip()][:4]
         return "\n".join(lines)
 
 

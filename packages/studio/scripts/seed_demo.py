@@ -1,9 +1,7 @@
 """Seed a realistic raptor-studio demo project."""
 
 import json
-import os
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 
 from packages.studio.services.raptor_writer import create_project, ProjectCreateError
@@ -345,10 +343,10 @@ for proj_out in (webapp_out, fw_out, forensics_out):
         json.dumps({"timestamp": "2026-04-23 10:05:00,789", "level": "INFO", "message": "Validation complete"}),
     ]) + "\n")
 
-print(f"Demo seeded.")
+print("Demo seeded.")
 print(f"  Projects dir: {PROJECTS}")
 print(f"  Output base: {OUT_BASE}")
-print(f"  Projects:")
+print("  Projects:")
 for p in PROJECTS.glob("*.json"):
     meta = json.loads(p.read_text())
     print(f"    - {meta['name']}: {meta['target']}")
