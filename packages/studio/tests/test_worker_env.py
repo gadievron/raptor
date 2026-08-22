@@ -71,3 +71,31 @@ def test_proxy_config_preserved_for_top_level_invocations(monkeypatch):
     env = _job_env()
     assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
     assert env["NO_PROXY"] == "localhost,127.0.0.1"
+
+
+def test_loader_and_credential_helper_vars_stripped(monkeypatch):
+    # Gaps of the blocklist-era get_safe_env: PYTHONPATH injects into the
+    # job's own python process; askpass/ssh hooks are exec'd by git/ssh.
+    for name in (
+        "PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE",
+        "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
+    ):
+        monkeypatch.setenv(name, "/tmp/evil")
+    env = _job_env()
+    for name in (
+        "PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE",
+        "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
+    ):
+        assert name not in env, name
+
+
+def test_codeql_and_sage_config_preserved(monkeypatch):
+    monkeypatch.setenv("CODEQL_CLI", "/opt/codeql/codeql")
+    monkeypatch.setenv("CODEQL_QUERIES", "/opt/codeql-queries")
+    monkeypatch.setenv("SAGE_URL", "http://localhost:8090")
+    monkeypatch.setenv("SAGE_ENABLED", "true")
+    env = _job_env()
+    assert env["CODEQL_CLI"] == "/opt/codeql/codeql"
+    assert env["CODEQL_QUERIES"] == "/opt/codeql-queries"
+    assert env["SAGE_URL"] == "http://localhost:8090"
+    assert env["SAGE_ENABLED"] == "true"
