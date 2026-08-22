@@ -50,9 +50,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--allow-remote", action="store_true",
-                        help="permit binding to a non-loopback host; remote "
-                             "clients must then present the access token "
-                             "printed at startup")
+                        help="permit binding to a non-loopback host; every "
+                             "client (local browsers included) must then "
+                             "present the access token printed at startup")
     parser.add_argument("--reload", action="store_true",
                         help="auto-reload templates + code on change (dev only)")
     parser.add_argument("--log-level", default="info",
@@ -80,8 +80,15 @@ def main() -> None:
             "  and launch raptor jobs once they hold the access token below.\n"
             "  Prefer an SSH tunnel to 127.0.0.1 where possible.\n"
             "\n"
-            f"  Access token (remote clients): {token}\n"
-            f"  First visit: http://<this-host>:{args.port}/?token={token}\n",
+            "  Every client must present this token — including browsers on\n"
+            "  this machine (host-header validation is off in remote mode,\n"
+            "  so loopback gets no exemption).\n"
+            "\n"
+            f"  Access token: {token}\n"
+            f"  First visit: http://<this-host>:{args.port}/?token={token}\n"
+            "  (the token in that URL lands in browser history and access\n"
+            "  logs; treat it accordingly, or send it as an\n"
+            "  'Authorization: Bearer' header instead)\n",
             file=sys.stderr,
         )
 
