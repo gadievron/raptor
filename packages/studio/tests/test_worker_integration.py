@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from packages.studio.services import jobs as jobs_service
-from packages.studio.services.jobs import Job, JobStatus
 
 
 def _wait_terminal(job_id, db_path, timeout=15.0, poll=0.1):

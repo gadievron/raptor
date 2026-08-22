@@ -8,7 +8,6 @@ Read-write web UI for raptor projects.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -137,7 +136,7 @@ def _cli_hint(stage: str, project: RaptorProject) -> dict:
         "understand":     {"command": f"raptor project use {project.name}\nclaude\n/understand --map", "explanation": "Run inside Claude Code after selecting this project."},
         "scan":           {"command": f"raptor project use {project.name}\npython3 raptor.py scan --repo {target}", "explanation": "Static analysis with Semgrep (and CodeQL if --languages is set)."},
         "validate":       {"command": f"raptor project use {project.name}\nclaude\n/validate", "explanation": "Runs the A–F validation pipeline on existing findings."},
-        "fuzz":           {"command": f"python3 raptor_fuzzing.py --binary <path-to-binary> --autonomous --duration 3600", "explanation": "Binary fuzzing mode — provide a compiled binary, not a repo."},
+        "fuzz":           {"command": "python3 raptor_fuzzing.py --binary <path-to-binary> --autonomous --duration 3600", "explanation": "Binary fuzzing mode — provide a compiled binary, not a repo."},
         "crash-analysis": {"command": "claude\n/crash-analysis <bug-tracker-url> <git-repo-url>", "explanation": "Requires rr on Linux x86_64 and a reproducer input."},
         "oss-forensics":  {"command": "claude\n/oss-forensics <github-url>", "explanation": "Needs GOOGLE_APPLICATION_CREDENTIALS for GH Archive BigQuery."},
     }

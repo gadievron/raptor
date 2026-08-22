@@ -112,7 +112,7 @@ def test_create_project_rejects_missing_target(tmp_path: Path):
 
 def test_create_forensics_project_accepts_github_url(tmp_path: Path):
     projects_dir = tmp_path / "projects"
-    proj = create_project(
+    create_project(
         "forensics-test",
         "https://github.com/aws/aws-toolkit-vscode",
         project_type="forensics",
