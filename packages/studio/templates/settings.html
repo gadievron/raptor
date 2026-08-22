@@ -99,12 +99,10 @@
 
 <div class="card">
   <h2 style="margin: 0 0 12px;">Budget cap</h2>
-  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 12px;">
-    Raptor reads <code class="mono">RAPTOR_MAX_COST</code> (USD) at run time. Value below is informational —
-    to change it, export the env var before launching raptor.
-  </div>
-  <div class="mono" style="font-size: 13px;">
-    RAPTOR_MAX_COST = {% if budget_cap is not none %}${{ budget_cap }}{% else %}<span style="color: var(--fg3);">(unset)</span>{% endif %}
+  <div style="font-size: 12px; color: var(--fg2);">
+    Raptor's spend cap is set per run with <code class="mono">--max-cost-usd</code>
+    (or <code class="mono">max_cost_per_scan</code> in config) — there is no
+    environment variable for it.
   </div>
 </div>
 

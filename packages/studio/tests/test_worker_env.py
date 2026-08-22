@@ -28,11 +28,9 @@ def test_dangerous_host_vars_do_not_reach_jobs(monkeypatch):
 def test_provider_config_preserved_deliberately(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-a")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/creds.json")
-    monkeypatch.setenv("RAPTOR_MAX_COST", "5.0")
     env = _job_env()
     assert env["ANTHROPIC_API_KEY"] == "test-key-a"
     assert env["GOOGLE_APPLICATION_CREDENTIALS"] == "/tmp/creds.json"
-    assert env["RAPTOR_MAX_COST"] == "5.0"
 
 
 def test_unset_preserved_vars_stay_unset(monkeypatch):

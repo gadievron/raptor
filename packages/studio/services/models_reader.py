@@ -15,8 +15,7 @@ Schema (from raptor README):
 
 Raptor also respects these env vars as auto-detected fallbacks:
     ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY, OLLAMA_HOST
-and a budget cap:
-    RAPTOR_MAX_COST (float, dollars)
+(The budget cap is per-run: --max-cost-usd / max_cost_per_scan. No env var.)
 """
 
 from __future__ import annotations
@@ -133,12 +132,3 @@ def env_status() -> dict[str, dict]:
         }
     return out
 
-
-def current_budget_cap() -> Optional[float]:
-    raw = os.environ.get("RAPTOR_MAX_COST")
-    if not raw:
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        return None

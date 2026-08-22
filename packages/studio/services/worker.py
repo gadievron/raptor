@@ -57,8 +57,6 @@ _PRESERVED_HOST_ENV = (
     # shell-evaluated.
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "no_proxy",
-    # Operator budget cap honoured by raptor's cost tracking.
-    "RAPTOR_MAX_COST",
     # Raptor's own models.json path override, so a job resolves the same
     # LLM config the UI shows.
     "RAPTOR_CONFIG",
