@@ -19,10 +19,59 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from core.config import RaptorConfig
 from packages.studio.config import RAPTOR_HOME, STUDIO_DATA_DIR
 from packages.studio.services import jobs
 
 logger = logging.getLogger("raptor-studio.worker")
+
+# Host variables deliberately preserved on top of RaptorConfig.get_safe_env().
+# Everything else from the Studio process environment is dropped — jobs
+# analyse untrusted repos, and inherited env is an injection surface
+# (LD_PRELOAD, BASH_ENV, PAGER, ...). Extend this list consciously; never
+# fall back to os.environ wholesale.
+_PRESERVED_HOST_ENV = (
+    # Provider/API configuration raptor's LLM stack auto-detects
+    # (see services/models_reader.py ENV_VARS).
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "MISTRAL_API_KEY",
+    "OLLAMA_HOST",
+    # GH Archive BigQuery credentials for /oss-forensics jobs.
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    # Egress proxy config. A studio job is a top-level raptor invocation —
+    # the equivalent of the operator launching raptor from their shell,
+    # which carries these — so provider/API traffic must keep working on
+    # proxied hosts. Values are URLs consumed by HTTP libraries, not
+    # shell-evaluated.
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    # Operator budget cap honoured by raptor's cost tracking.
+    "RAPTOR_MAX_COST",
+    # Raptor/studio path config, so a job resolves the same projects,
+    # models config, and output dirs the UI shows.
+    "RAPTOR_PROJECTS_DIR",
+    "RAPTOR_MODELS_CONFIG",
+    "RAPTOR_OUTPUT_BASE",
+    "RAPTOR_HOME",
+)
+
+
+def _job_env() -> dict:
+    """Build the environment for a raptor job subprocess.
+
+    Starts from RAPTOR's sanitised baseline (get_safe_env strips loader
+    and shell-eval injection vectors) and re-adds only the named
+    provider/API and raptor path configuration jobs actually need.
+    """
+    env = RaptorConfig.get_safe_env()
+    for name in _PRESERVED_HOST_ENV:
+        value = os.environ.get(name)
+        if value is not None:
+            env[name] = value
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
 
 _stop_event = threading.Event()
 _thread: Optional[threading.Thread] = None
@@ -39,7 +88,7 @@ def _run_one_job(job: jobs.Job) -> None:
             logfile.write(f"[raptor-studio] cwd: {RAPTOR_HOME}\n")
             logfile.flush()
 
-            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+            env = _job_env()
             try:
                 proc = subprocess.Popen(
                     job.argv,
