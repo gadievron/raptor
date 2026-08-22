@@ -20,6 +20,7 @@
 {% endif %}
 
 <form method="post" action="/settings" style="display: flex; flex-direction: column; gap: 20px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 <div class="card">
   <h2 style="margin: 0 0 12px;">Analysis dispatch models</h2>

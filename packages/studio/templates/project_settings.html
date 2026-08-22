@@ -35,6 +35,7 @@
 </div>
 
 <form method="post" action="/projects/{{ project.name }}/settings" class="card" style="max-width: 720px; margin-top: 16px; display: flex; flex-direction: column; gap: 12px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Editable metadata</div>
 
   <label>
