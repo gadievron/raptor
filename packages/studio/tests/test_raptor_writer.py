@@ -176,20 +176,14 @@ def test_schema_matches_raptor_validate_project(tmp_path: Path):
     """Written JSON must pass raptor's own schema validator.
 
     Imports raptor directly to confirm the two schemas stay aligned.
-    If raptor is not available on sys.path, the test is skipped.
+    Studio ships in-tree, so core/ is importable without path games.
     """
-    import sys
-
-    from packages.studio.config import RAPTOR_HOME
-
-    if not (RAPTOR_HOME / "core" / "project" / "schema.py").is_file():
-        pytest.skip(f"raptor not available at {RAPTOR_HOME}")
-
-    sys.path.insert(0, str(RAPTOR_HOME))
     try:
+        # Current raptor privatised the validator …
+        from core.project.schema import _validate_project as validate_project
+    except ImportError:
+        # … older raptor exposes it publicly.
         from core.project.schema import validate_project  # type: ignore
-    finally:
-        sys.path.pop(0)
 
     projects_dir = tmp_path / "projects"
     create_project(
