@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
-
 import pytest
 
 
 @pytest.fixture
 def fake_personas(tmp_path, monkeypatch):
-    """Point RAPTOR_HOME at a tmp dir with synthetic persona files."""
+    """Point the personas reader at a tmp dir with synthetic persona files."""
     personas_dir = tmp_path / "tiers" / "personas"
     personas_dir.mkdir(parents=True)
     (personas_dir / "security_researcher.md").write_text("# security researcher brief")
@@ -23,13 +20,8 @@ def fake_personas(tmp_path, monkeypatch):
     (personas_dir / "patch_engineer.md").write_text("# patch brief")
     (personas_dir / "fuzzing_strategist.md").write_text("# fuzzing brief")
 
-    monkeypatch.setenv("RAPTOR_HOME", str(tmp_path))
-    from packages.studio import config
-    importlib.reload(config)
-    for mod in ("packages.studio.services.personas",):
-        if mod in sys.modules:
-            importlib.reload(sys.modules[mod])
     from packages.studio.services import personas
+    monkeypatch.setattr(personas, "RAPTOR_HOME", tmp_path)
     personas.clear_cache()
     yield personas
     personas.clear_cache()

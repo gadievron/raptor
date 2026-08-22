@@ -21,7 +21,7 @@ If you have no raptor projects yet, the Dashboard shows a Welcome card with a **
 
 ```bash
 PYTHONPATH=. python3 packages/studio/scripts/seed_demo.py
-RAPTOR_PROJECTS_DIR=~/.raptor-studio-demo/projects python3 raptor_studio.py
+STUDIO_PROJECTS_DIR=~/.raptor-studio-demo/projects python3 raptor_studio.py
 ```
 
 The seed script creates three representative projects (source analysis / binary fuzzing / OSS forensics) with realistic run artifacts.
@@ -38,12 +38,18 @@ The seed script creates three representative projects (source analysis / binary 
 
 ## Environment
 
+Studio reads raptor's own locations — the project registry from
+`core/project` (`~/.raptor/projects`), the default output base
+(`<repo>/out/projects`), and the models config (`~/.config/raptor/models.json`,
+honouring raptor's existing `RAPTOR_CONFIG` override). The repo root is
+derived from studio's in-tree location; no `RAPTOR_*` environment variables
+are introduced. Studio's own knobs:
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `RAPTOR_PROJECTS_DIR` | `~/.raptor/projects` | Where raptor stores project registry entries |
-| `RAPTOR_OUTPUT_BASE` | `out/projects` | Default base path for new projects' output dirs |
 | `STUDIO_DATA_DIR` | `~/.raptor-studio` | Job queue DB, job logs, project-extras sidecars |
-| `RAPTOR_MODELS_CONFIG` | `~/.config/raptor/models.json` | Raptor's per-role LLM config |
+| `STUDIO_PROJECTS_DIR` | (unset) | Studio-side registry view override for demo/test registries; never redirects raptor itself |
+| `STUDIO_ALLOW_REMOTE` / `STUDIO_AUTH_TOKEN` | (set by launcher) | Internal channel from `--allow-remote`; see Security model |
 
 ## Security model
 
