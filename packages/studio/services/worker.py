@@ -24,10 +24,21 @@ from packages.studio.services import jobs
 
 logger = logging.getLogger("raptor-studio.worker")
 
+# Loader / interpreter / credential-helper vars stripped from job envs on
+# top of whatever RaptorConfig.get_safe_env() removes. On raptor versions
+# where get_safe_env() is a blocklist these are the known gaps (PYTHONPATH
+# injects into the python3 job process itself; the askpass/ssh hooks are
+# exec'd by git and ssh against untrusted repos); on allowlist versions
+# they are already gone and this is belt-and-braces.
+_STRIPPED_HOST_ENV = (
+    "PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE",
+    "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
+)
+
 # Host variables deliberately preserved on top of RaptorConfig.get_safe_env().
-# Everything else from the Studio process environment is dropped — jobs
-# analyse untrusted repos, and inherited env is an injection surface
-# (LD_PRELOAD, BASH_ENV, PAGER, ...). Extend this list consciously; never
+# Jobs analyse untrusted repos, and inherited env is an injection surface
+# (LD_PRELOAD, BASH_ENV, PAGER, ...) — so nothing here may be
+# shell-evaluated or loader-consumed. Extend this list consciously; never
 # fall back to os.environ wholesale.
 _PRESERVED_HOST_ENV = (
     # Provider/API configuration raptor's LLM stack auto-detects
@@ -54,20 +65,32 @@ _PRESERVED_HOST_ENV = (
     "RAPTOR_MODELS_CONFIG",
     "RAPTOR_OUTPUT_BASE",
     "RAPTOR_HOME",
+    # Operator's custom CodeQL install; without these, studio-launched
+    # /codeql jobs silently fall back to PATH lookup.
+    "CODEQL_CLI",
+    "CODEQL_QUERIES",
 )
+
+# Prefix families preserved wholesale. SAGE_* is the persistent-memory
+# sidecar config (URL, timeouts, identity path) — plain values consumed
+# by raptor's own SAGE client, never shell-evaluated.
+_PRESERVED_HOST_ENV_PREFIXES = ("SAGE_",)
 
 
 def _job_env() -> dict:
     """Build the environment for a raptor job subprocess.
 
-    Starts from RAPTOR's sanitised baseline (get_safe_env strips loader
-    and shell-eval injection vectors) and re-adds only the named
-    provider/API and raptor path configuration jobs actually need.
+    Starts from RAPTOR's sanitisation chokepoint (get_safe_env — a strict
+    allowlist on current raptor, a blocklist on older versions), strips
+    the loader/credential-helper gaps of the blocklist variant, and
+    re-adds only the named provider/API and raptor path configuration
+    jobs actually need.
     """
     env = RaptorConfig.get_safe_env()
-    for name in _PRESERVED_HOST_ENV:
-        value = os.environ.get(name)
-        if value is not None:
+    for name in _STRIPPED_HOST_ENV:
+        env.pop(name, None)
+    for name, value in os.environ.items():
+        if name in _PRESERVED_HOST_ENV or name.startswith(_PRESERVED_HOST_ENV_PREFIXES):
             env[name] = value
     env["PYTHONUNBUFFERED"] = "1"
     return env
