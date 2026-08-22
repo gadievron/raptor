@@ -6,8 +6,9 @@ Usage:
     python3 raptor_studio.py --port 9000
     python3 raptor_studio.py --host 0.0.0.0 --reload
 
-Reads raptor projects from ``~/.raptor/projects/`` by default (configurable
-via ``RAPTOR_PROJECTS_DIR``). Job queue lives at ``~/.raptor-studio/jobs.db``.
+Reads raptor projects from raptor's own registry (``~/.raptor/projects/``;
+``STUDIO_PROJECTS_DIR`` points studio at an alternate view, e.g. the demo
+registry). Job queue lives at ``~/.raptor-studio/jobs.db``.
 See ``packages/studio/README.md`` for the full feature set and environment
 knobs, and ``packages/studio/docs/PRD.md`` for the product rationale.
 """
