@@ -19,6 +19,13 @@ from packages.studio.services import jobs  # noqa: E402
 BASE = "http://127.0.0.1:8765"
 
 
+@pytest.fixture(autouse=True)
+def _clean_remote_env(monkeypatch):
+    # Start every test from the default posture: loopback bind, no token.
+    monkeypatch.delenv("STUDIO_ALLOW_REMOTE", raising=False)
+    monkeypatch.delenv("STUDIO_AUTH_TOKEN", raising=False)
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     # Keep the cancel route's SQLite lookups inside the test tmp dir.
@@ -153,3 +160,73 @@ def test_host_without_port_variants():
     assert f("LocalHost") == "localhost"
     assert f("[::1]:8765") == "[::1]"
     assert f("[::1]") == "[::1]"
+
+
+# --- remote access: host validation ----------------------------------------
+
+def test_foreign_host_header_rejected(client, monkeypatch):
+    # DNS rebinding: browser connects to 127.0.0.1 but sends the
+    # attacker's hostname. Must not be served.
+    monkeypatch.delenv("STUDIO_ALLOW_REMOTE", raising=False)
+    r = client.get("/api/health", headers={"Host": "attacker.test:8765"})
+    assert r.status_code == 400
+
+
+def test_loopback_host_headers_accepted(client, monkeypatch):
+    monkeypatch.delenv("STUDIO_ALLOW_REMOTE", raising=False)
+    for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "127.0.0.1"):
+        r = client.get("/api/health", headers={"Host": host})
+        assert r.status_code == 200, host
+
+
+def test_foreign_host_allowed_when_remote_enabled(client, monkeypatch):
+    monkeypatch.setenv("STUDIO_ALLOW_REMOTE", "1")
+    monkeypatch.delenv("STUDIO_AUTH_TOKEN", raising=False)
+    r = client.get("/api/health", headers={"Host": "studio.internal:8765"})
+    assert r.status_code == 200
+
+
+# --- remote access: token auth ----------------------------------------------
+# TestClient's peer address is not loopback, so setting STUDIO_AUTH_TOKEN
+# exercises the remote-client path.
+
+@pytest.fixture()
+def remote(monkeypatch):
+    monkeypatch.setenv("STUDIO_ALLOW_REMOTE", "1")
+    monkeypatch.setenv("STUDIO_AUTH_TOKEN", "sekrit-token")
+
+
+def test_remote_client_without_token_unauthorized(client, remote):
+    r = client.get("/api/health")
+    assert r.status_code == 401
+
+
+def test_remote_client_with_bearer_token(client, remote):
+    r = client.get("/api/health", headers={"Authorization": "Bearer sekrit-token"})
+    assert r.status_code == 200
+
+
+def test_remote_client_with_wrong_token_unauthorized(client, remote):
+    r = client.get("/api/health", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+
+
+def test_query_token_exchanged_for_cookie(client, remote):
+    r = client.get("/api/health?token=sekrit-token", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/api/health"
+    assert "studio_auth=sekrit-token" in r.headers.get("set-cookie", "")
+    # The cookie then authenticates follow-up requests.
+    r2 = client.get("/api/health", cookies={"studio_auth": "sekrit-token"})
+    assert r2.status_code == 200
+
+
+def test_wrong_query_token_unauthorized(client, remote):
+    r = client.get("/api/health?token=wrong", follow_redirects=False)
+    assert r.status_code == 401
+
+
+def test_no_auth_required_when_token_unset(client, monkeypatch):
+    monkeypatch.delenv("STUDIO_AUTH_TOKEN", raising=False)
+    r = client.get("/api/health")
+    assert r.status_code == 200

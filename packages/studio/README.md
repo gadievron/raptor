@@ -45,6 +45,30 @@ The seed script creates three representative projects (source analysis / binary 
 | `STUDIO_DATA_DIR` | `~/.raptor-studio` | Job queue DB, job logs, project-extras sidecars |
 | `RAPTOR_MODELS_CONFIG` | `~/.config/raptor/models.json` | Raptor's per-role LLM config |
 
+## Security model
+
+Studio is a single-user tool that can launch raptor jobs and browse the
+filesystem, so its HTTP surface is locked down (`packages/studio/security.py`):
+
+- **Cross-origin writes rejected** — state-changing requests with a foreign
+  `Origin` / `Sec-Fetch-Site` are refused, and every form carries a
+  per-instance CSRF token. A malicious website in your browser cannot drive
+  the UI at `127.0.0.1`.
+- **Host-header validation** — while bound to loopback (the default), requests
+  must name a loopback host, which defeats DNS-rebinding pages that would
+  otherwise read responses cross-origin.
+- **Sanitised report rendering** — raptor report markdown is rendered through
+  `nh3`; script tags, event handlers, and `javascript:` URLs in report
+  content are stripped (reports embed model output and scanned-repo text,
+  which are untrusted).
+- **Sanitised job environment** — worker subprocesses start from
+  `RaptorConfig.get_safe_env()` plus a deliberate list of provider/API and
+  raptor path variables, not the full host environment.
+- **Remote binding is opt-in** — a non-loopback `--host` requires
+  `--allow-remote`, prints a warning, and provisions an access token that
+  non-loopback clients must present (`?token=…` once, or
+  `Authorization: Bearer`). Prefer an SSH tunnel over remote exposure.
+
 ## Structure
 
 ```
