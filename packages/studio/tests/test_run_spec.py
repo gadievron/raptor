@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from packages.studio.services.run_spec import (
-    CLAUDE_ONLY_KINDS,
     RUNNABLE_KINDS,
     UnsupportedKind,
     build_command,
