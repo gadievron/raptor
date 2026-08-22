@@ -193,7 +193,7 @@ def test_flag_injection_via_leading_dash_rejected():
         )
 
 
-def test_understand_mode_whitelisted():
+def test_understand_mode_allowlisted():
     with pytest.raises(ValueError, match="mode must be one of"):
         build_command(
             "understand", "/tmp/target", Path("/opt/raptor"),
