@@ -62,7 +62,6 @@ from packages.studio.services.models_reader import (
     ROLES,
     ModelConfig,
     ModelEntry,
-    current_budget_cap,
     env_status,
     load_models_config,
     save_models_config,
@@ -785,7 +784,6 @@ def _settings_ctx(**overrides):
         "providers": list(PROVIDERS),
         "role_descriptions": ROLE_DESCRIPTIONS,
         "env_status": env_status(),
-        "budget_cap": current_budget_cap(),
         "saved": False,
         "error": None,
     }

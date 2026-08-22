@@ -11,7 +11,6 @@ from packages.studio.services.models_reader import (
     ROLES,
     ModelConfig,
     ModelEntry,
-    current_budget_cap,
     env_status,
     load_models_config,
     save_models_config,
@@ -72,14 +71,6 @@ def test_env_status_reports_all_providers(monkeypatch):
     assert status["openai"]["is_set"] is False
     assert status["anthropic"]["env_var"] == "ANTHROPIC_API_KEY"
 
-
-def test_budget_cap_parses_env(monkeypatch):
-    monkeypatch.setenv("RAPTOR_MAX_COST", "5.00")
-    assert current_budget_cap() == 5.0
-    monkeypatch.setenv("RAPTOR_MAX_COST", "not-a-number")
-    assert current_budget_cap() is None
-    monkeypatch.delenv("RAPTOR_MAX_COST")
-    assert current_budget_cap() is None
 
 
 def test_api_key_display_preserves_env_refs():
