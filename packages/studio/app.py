@@ -748,7 +748,16 @@ def run_file(name: str, run_name: str, filename: str):
         raise HTTPException(404, "not a file")
     if target.suffix.lower() not in _ALLOWED_RUN_FILE_SUFFIXES:
         raise HTTPException(403, f"suffix {target.suffix} not allowed")
-    return FileResponse(target)
+    # Run artifacts are untrusted (SVG can carry <script>, and artifact
+    # content can be steered by a scanned repo via the LLM). CSP sandbox
+    # makes a directly-navigated artifact scriptless and origin-less, so
+    # it can't reach studio's same-origin endpoints or the CSRF token.
+    # <img>-embedded SVGs never ran scripts anyway, and styling is
+    # unaffected, so inline display keeps working.
+    return FileResponse(target, headers={
+        "Content-Security-Policy": "sandbox",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 @app.get(
