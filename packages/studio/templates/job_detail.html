@@ -23,6 +23,7 @@
     {% else %}<span class="badge b-neutral">{{ job.status.value }}</span>{% endif %}
     {% if job.status.value == "running" %}
     <form method="post" action="/jobs/{{ job.id }}/cancel" style="margin: 0;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-d" style="background: var(--crit); color: white; border-color: var(--crit);">Cancel</button>
     </form>
     {% endif %}
