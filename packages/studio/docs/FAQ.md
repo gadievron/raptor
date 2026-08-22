@@ -38,7 +38,7 @@ A. That's raptor's existing mechanism for invoking Claude Code non-interactively
 A. Matches vulngraph's proven approach (which studio's grammar borrows from). Zero build step. Each template is one self-contained review unit. ~150 lines of CSS lives in `base.html`; per-page styles are co-located with the structure they style. Easy to extract into `static/css/main.css` later if desired.
 
 **Q. Why FastAPI's `{filename:path}` route for file-serving?**
-A. Run dirs contain nested artifacts (e.g. `afl_output/main/crashes/id:000000`); `:path` matches slashes. The handler then calls `.resolve()` and asserts the result starts with `run.directory.resolve() + "/"` — this is the primary traversal guard. Plus an extension whitelist (`.svg / .png / .md / .json / .sarif / .txt`). Tested with `..%2F..%2F..%2Fetc%2Fpasswd` → 403, `evil.sh` → 403.
+A. Run dirs contain nested artifacts (e.g. `afl_output/main/crashes/id:000000`); `:path` matches slashes. The handler then calls `.resolve()` and asserts the result starts with `run.directory.resolve() + "/"` — this is the primary traversal guard. Plus an extension allowlist (`.svg / .png / .md / .json / .sarif / .txt`). Tested with `..%2F..%2F..%2Fetc%2Fpasswd` → 403, `evil.sh` → 403.
 
 ---
 
@@ -48,13 +48,13 @@ A. Run dirs contain nested artifacts (e.g. `afl_output/main/crashes/id:000000`);
 A. Studio binds to `127.0.0.1` by default and is explicitly single-user. No auth, no cross-origin, no session cookies. If you deploy it behind a tunnel to untrusted networks, you'd add a reverse proxy with auth — same model as `jupyter notebook`.
 
 **Q. Arbitrary command execution?**
-A. The worker spawns raptor subprocesses only for whitelisted kinds (`RUNNABLE_KINDS` in `services/run_spec.py`). Arguments are built from a typed `FormField` spec; user input goes through the form fields, not string interpolation. `shlex.quote` escapes everything that reaches `bash -c`. Trust model: same as running `raptor` itself — if the user can start studio, they can already run raptor.
+A. The worker spawns raptor subprocesses only for allowlisted kinds (`RUNNABLE_KINDS` in `services/run_spec.py`). Arguments are built from a typed `FormField` spec; user input goes through the form fields, not string interpolation. `shlex.quote` escapes everything that reaches `bash -c`. Trust model: same as running `raptor` itself — if the user can start studio, they can already run raptor.
 
 **Q. What if a malicious project is registered?**
 A. Project JSONs in `~/.raptor/projects/` are whatever raptor CLI creates plus what studio creates. A maliciously-crafted `project.json` with `target: "/etc/passwd"` would pass to raptor subprocesses, but raptor itself would treat it the same way as if `raptor scan --repo /etc/passwd` were invoked directly. No privilege escalation.
 
 **Q. The file-serving route — could an attacker hit `..` to read arbitrary files?**
-A. `target.resolve()` is compared against `run.directory.resolve()` after `.resolve()` eliminates `..` components. The extension whitelist is a belt-and-braces second line. See tests in `tests/test_validation_reader.py` for the resolver + whitelist enforcement.
+A. `target.resolve()` is compared against `run.directory.resolve()` after `.resolve()` eliminates `..` components. The extension allowlist is a belt-and-braces second line. See tests in `tests/test_validation_reader.py` for the resolver + allowlist enforcement.
 
 ---
 

@@ -732,7 +732,7 @@ def run_file(name: str, run_name: str, filename: str):
     """Safely serve a file from a run directory.
 
     Resolves the requested path and verifies it stays within the run
-    directory — blocks `..` traversal. Extension whitelist prevents
+    directory — blocks `..` traversal. Extension allowlist prevents
     serving arbitrary script / binary content.
     """
     proj = _require_project(name)
