@@ -43,12 +43,12 @@ def test_unset_preserved_vars_stay_unset(monkeypatch):
         assert name not in env, name
 
 
-def test_raptor_path_config_preserved(monkeypatch):
-    monkeypatch.setenv("RAPTOR_PROJECTS_DIR", "/tmp/projects")
-    monkeypatch.setenv("RAPTOR_MODELS_CONFIG", "/tmp/models.json")
+def test_raptor_models_config_override_preserved(monkeypatch):
+    # RAPTOR_CONFIG is raptor's own models.json path override; jobs must
+    # resolve the same LLM config the UI shows.
+    monkeypatch.setenv("RAPTOR_CONFIG", "/tmp/models.json")
     env = _job_env()
-    assert env["RAPTOR_PROJECTS_DIR"] == "/tmp/projects"
-    assert env["RAPTOR_MODELS_CONFIG"] == "/tmp/models.json"
+    assert env["RAPTOR_CONFIG"] == "/tmp/models.json"
 
 
 def test_python_unbuffered_always_set(monkeypatch):

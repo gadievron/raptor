@@ -59,12 +59,9 @@ _PRESERVED_HOST_ENV = (
     "http_proxy", "https_proxy", "no_proxy",
     # Operator budget cap honoured by raptor's cost tracking.
     "RAPTOR_MAX_COST",
-    # Raptor/studio path config, so a job resolves the same projects,
-    # models config, and output dirs the UI shows.
-    "RAPTOR_PROJECTS_DIR",
-    "RAPTOR_MODELS_CONFIG",
-    "RAPTOR_OUTPUT_BASE",
-    "RAPTOR_HOME",
+    # Raptor's own models.json path override, so a job resolves the same
+    # LLM config the UI shows.
+    "RAPTOR_CONFIG",
     # Operator's custom CodeQL install; without these, studio-launched
     # /codeql jobs silently fall back to PATH lookup.
     "CODEQL_CLI",
