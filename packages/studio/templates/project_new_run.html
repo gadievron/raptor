@@ -27,6 +27,7 @@
 
 <div class="card" style="max-width: 720px;">
 <form method="post" action="/projects/{{ project.name }}/{{ spec.kind }}/new" style="display: flex; flex-direction: column; gap: 14px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <label>
     <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">

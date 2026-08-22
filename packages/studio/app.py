@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,6 +25,11 @@ from packages.studio.config import (
     RAPTOR_OUTPUT_BASE,
     RAPTOR_PROJECTS_DIR,
     STUDIO_DATA_DIR,
+)
+from packages.studio.security import (
+    CrossOriginProtection,
+    csrf_token,
+    require_csrf_token,
 )
 from packages.studio.services import jobs as jobs_service
 from packages.studio.services import worker as worker_service
@@ -81,8 +86,12 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.globals["personas_for"] = personas_for_finding
 # Markdown filter: `{{ some_md_text | md | safe }}` — for raptor reports.
 templates.env.filters["md"] = render_markdown
+# CSRF synchronizer token — every state-changing form embeds it and every
+# state-changing route validates it (see packages/studio/security.py).
+templates.env.globals["csrf_token"] = csrf_token
 
 app = FastAPI(title=APP_TITLE)
+app.add_middleware(CrossOriginProtection)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
@@ -187,7 +196,7 @@ def new_project_form(request: Request):
     return templates.TemplateResponse(request, "new_project.html", _new_project_ctx())
 
 
-@app.post("/projects/new")
+@app.post("/projects/new", dependencies=[Depends(require_csrf_token)])
 async def new_project_submit(request: Request):
     form = await request.form()
     raw = {k: (form.get(k) or "").strip() for k in (
@@ -381,7 +390,7 @@ def project_settings(request: Request, name: str, save_ok: int = 0):
     )
 
 
-@app.post("/projects/{name}/settings")
+@app.post("/projects/{name}/settings", dependencies=[Depends(require_csrf_token)])
 def project_settings_save(
     name: str,
     description: str = Form(""),
@@ -457,7 +466,7 @@ def new_run_form(request: Request, name: str, kind: str):
     )
 
 
-@app.post("/projects/{name}/{kind}/new")
+@app.post("/projects/{name}/{kind}/new", dependencies=[Depends(require_csrf_token)])
 async def new_run_submit(request: Request, name: str, kind: str):
     if not is_runnable(kind):
         raise HTTPException(404, f"Kind '{kind}' cannot be launched from the UI.")
@@ -527,7 +536,7 @@ def job_detail(request: Request, job_id: str):
     )
 
 
-@app.post("/jobs/{job_id}/cancel")
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_csrf_token)])
 def job_cancel(request: Request, job_id: str):
     job = jobs_service.get(job_id)
     if job is None:
@@ -791,7 +800,7 @@ def glossary_page(request: Request):
     return templates.TemplateResponse(request, "glossary.html", _ctx())
 
 
-@app.post("/settings")
+@app.post("/settings", dependencies=[Depends(require_csrf_token)])
 async def settings_save(request: Request):
     form = await request.form()
     entries: list[ModelEntry] = []
