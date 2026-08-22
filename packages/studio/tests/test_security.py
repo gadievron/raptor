@@ -187,8 +187,8 @@ def test_foreign_host_allowed_when_remote_enabled(client, monkeypatch):
 
 
 # --- remote access: token auth ----------------------------------------------
-# TestClient's peer address is not loopback, so setting STUDIO_AUTH_TOKEN
-# exercises the remote-client path.
+# When STUDIO_AUTH_TOKEN is set, every client must authenticate —
+# loopback included (see RemoteAccessProtection docstring).
 
 @pytest.fixture()
 def remote(monkeypatch):
@@ -230,3 +230,28 @@ def test_no_auth_required_when_token_unset(client, monkeypatch):
     monkeypatch.delenv("STUDIO_AUTH_TOKEN", raising=False)
     r = client.get("/api/health")
     assert r.status_code == 200
+
+
+def test_loopback_client_also_needs_token_in_remote_mode(remote):
+    # Regression for the DNS-rebinding chain in --allow-remote mode: a
+    # rebound page in a browser ON the studio host connects from
+    # loopback, with its own hostname as Host and a matching Origin.
+    # Host validation is off in remote mode, so the token must gate it —
+    # the rebound hostname's cookie jar can never hold studio_auth.
+    rebound = TestClient(
+        app, base_url="http://attacker.test:8765", client=("127.0.0.1", 5555)
+    )
+    r = rebound.get("/api/fs/list?path=/")
+    assert r.status_code == 401
+    r = rebound.get("/api/health")
+    assert r.status_code == 401
+    # With the token it works, proving 401 came from auth, not routing.
+    r = rebound.get("/api/health", headers={"Authorization": "Bearer sekrit-token"})
+    assert r.status_code == 200
+
+
+def test_query_token_redirect_never_leaves_site(client, remote):
+    # A protocol-relative path must not become an off-site redirect.
+    r = client.get("//evil.example/?token=sekrit-token", follow_redirects=False)
+    if r.status_code == 303:
+        assert not r.headers["location"].startswith("//")

@@ -111,16 +111,6 @@ def _is_loopback_hostname(hostname: str) -> bool:
         return False
 
 
-def _client_is_loopback(scope) -> bool:
-    client = scope.get("client")
-    if not client:
-        return False
-    try:
-        return ipaddress.ip_address(client[0]).is_loopback
-    except ValueError:
-        return False
-
-
 ACCESS_TOKEN_COOKIE = "studio_auth"
 
 
@@ -144,10 +134,15 @@ class RemoteAccessProtection:
       127.0.0.1 to escape the same-origin policy, but it cannot control
       the Host header its requests carry — rejecting foreign hosts kills
       the read primitive.
-    - When ``STUDIO_AUTH_TOKEN`` is set (remote binding), clients from
-      non-loopback addresses must present it: ``Authorization: Bearer``,
-      the ``studio_auth`` cookie, or a one-time ``?token=`` query param
-      that is exchanged for the cookie via redirect.
+    - When ``STUDIO_AUTH_TOKEN`` is set (remote binding), EVERY client —
+      loopback included — must present it: ``Authorization: Bearer``, the
+      ``studio_auth`` cookie, or a one-time ``?token=`` query param that
+      is exchanged for the cookie via redirect. Loopback gets no
+      exemption because in remote mode the Host check is off, and a
+      DNS-rebinding page in a browser on the studio host connects *from*
+      loopback with its own hostname as both Host and Origin. It still
+      cannot authenticate: browsers key cookies by host, so the rebound
+      hostname's cookie jar never holds ``studio_auth``.
     """
 
     def __init__(self, app) -> None:
@@ -171,7 +166,7 @@ class RemoteAccessProtection:
                 return
 
         expected = os.environ.get("STUDIO_AUTH_TOKEN") or ""
-        if expected and not _client_is_loopback(scope):
+        if expected:
             supplied = _supplied_access_token(headers)
             if supplied and hmac.compare_digest(supplied, expected):
                 await self.app(scope, receive, send)
@@ -195,6 +190,10 @@ class RemoteAccessProtection:
             )
         remaining = [(k, v) for k, v in params if k != "token"]
         url = scope.get("path", "/")
+        if url.startswith("//"):
+            # A protocol-relative path would turn the 303 into an
+            # off-site redirect. Collapse it to a local absolute path.
+            url = "/" + url.lstrip("/")
         if remaining:
             url += "?" + urlencode(remaining)
         response = RedirectResponse(url, status_code=303)

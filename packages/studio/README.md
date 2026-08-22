@@ -66,8 +66,13 @@ filesystem, so its HTTP surface is locked down (`packages/studio/security.py`):
   raptor path variables, not the full host environment.
 - **Remote binding is opt-in** — a non-loopback `--host` requires
   `--allow-remote`, prints a warning, and provisions an access token that
-  non-loopback clients must present (`?token=…` once, or
-  `Authorization: Bearer`). Prefer an SSH tunnel over remote exposure.
+  every client must present (`?token=…` once, exchanged for a cookie, or
+  `Authorization: Bearer`). Local browsers are not exempt: host-header
+  validation is off in remote mode, and the token is what keeps a
+  DNS-rebound page in a local browser out (its hostname's cookie jar
+  can never hold the auth cookie). Note the `?token=` first-visit URL
+  lands in browser history and access logs. Prefer an SSH tunnel over
+  remote exposure.
 
 ## Structure
 
