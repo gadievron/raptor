@@ -180,7 +180,7 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/ask` | Send a free-form prompt to any configured LLM model | Stable |
 | `/scorecard` | Inspect per-model reliability across decision classes | Stable |
 | `/frida` | Dynamic instrumentation via Frida | Alpha |
-| `/web` | Web application scanning | Alpha/stub |
+| `/web` | Web application scanning: crawl, ffuf/nuclei integration, oracle-verified injection, blind SSRF callbacks | Beta |
 
 ---
 
@@ -541,7 +541,7 @@ See `docs/README.md` for the full index. Key guides:
 
 RAPTOR is open source. Good places to start if you want to contribute:
 
-- A proper web exploitation module (the current one is a stub)
+- Browser-engine crawling and DOM XSS coverage for the web scanner (Playwright is pinned but unused)
 - SSRF rule coverage for annotation-driven frameworks (Spring `@RequestParam`, FastAPI typed params) — semgrep cannot match these sources, so alternative approaches are welcome
 - YARA signature generation
 - Ports to other AI coding tools (Cursor, Windsurf, Copilot, Cline)
