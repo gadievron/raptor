@@ -40,6 +40,7 @@ CWE_BY_VULN_TYPE = {
     "ssti": "CWE-1336",
     "command_injection": "CWE-78",
     "path_traversal": "CWE-22",
+    "ssrf": "CWE-918",
 }
 
 _OUTCOME_BY_STATUS = {

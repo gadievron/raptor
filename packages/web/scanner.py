@@ -87,8 +87,24 @@ WEB_INJECTION_CWE = {
     "ssti": "CWE-1336",
     "command_injection": "CWE-78",
     "path_traversal": "CWE-22",
+    "ssrf": "CWE-918",
 }
 
+
+def _parse_oob_listen(spec: str) -> tuple[str, int]:
+    """'PORT' or 'HOST:PORT' -> (bind_host, port); raises ValueError."""
+    host, _, port_text = spec.rpartition(":")
+    if not host:
+        host = "0.0.0.0"  # noqa: S104 - callback listener binds wide by design
+    try:
+        port = int(port_text)
+    except ValueError:
+        msg = f"--oob-listen expects PORT or HOST:PORT, got {spec!r}"
+        raise ValueError(msg) from None
+    if not 0 <= port <= 65535:
+        msg = f"--oob-listen port out of range: {port}"
+        raise ValueError(msg)
+    return host, port
 
 _FINDING_VULN_MAP = {
     "V2":    "authn_bypass",
@@ -139,6 +155,9 @@ class WebScanner:
         access_control: bool = False,
         ffuf_wordlist_dir: Path | None = None,
         ffuf_api_wordlist: Path | None = None,
+        oob_listen: str | None = None,
+        oob_callback_host: str | None = None,
+        oob_grace: float = 10.0,
     ) -> None:
         import time
 
@@ -167,6 +186,16 @@ class WebScanner:
         self.access_control = access_control
         self.ffuf_wordlist_dir = ffuf_wordlist_dir
         self.ffuf_api_wordlist = ffuf_api_wordlist
+        self.oob_grace = oob_grace
+        self.oob_listener = None
+        if oob_listen:
+            from packages.web.oob import OobListener
+            bind_host, bind_port = _parse_oob_listen(oob_listen)
+            self.oob_listener = OobListener(
+                bind_host=bind_host,
+                port=bind_port,
+                callback_host=oob_callback_host,
+            )
         self._client_kwargs: dict[str, bool] = {
             "verify_ssl": verify_ssl,
             "reveal_secrets": reveal_secrets,
@@ -259,6 +288,8 @@ class WebScanner:
             )
             self._phases_completed.append("verification")
             self._annotate_findings_with_verification(injection_findings)
+
+        all_findings.extend(self._phase_oob())
 
         if self.run_validate:
             all_findings = self._phase_validate(all_findings)
@@ -842,6 +873,7 @@ class WebScanner:
                 target_url, param, vulnerability_types=list(_INJECTION_VULN_TYPES),
             ):
                 _record(raw.get("url", target_url), param, raw, "query_param")
+        self._oob_inject(cells)
 
         for form in forms:
             endpoint = form.get("action", self.base_url)
@@ -1043,6 +1075,192 @@ class WebScanner:
                         op.url, ".".join(field_path), finding,
                         "json_body_sweep",
                     )
+
+    def _oob_inject(self, cells: list[tuple[str, str]]) -> None:
+        """Blind-SSRF canaries: one minted callback URL per fuzz cell.
+
+        Runs inside Phase 6 under its existing active-tier
+        authorization. Injection only plants tokens — nothing is
+        concluded here; correlation and replay verification happen in
+        _phase_oob after the grace window.
+        """
+        if self.oob_listener is None:
+            return
+        from packages.web.oob import OobContext
+        try:
+            self.oob_listener.start()
+        except OSError as e:
+            logger.warning(
+                "OOB listener failed to start (%s) — blind-SSRF probes "
+                "skipped", self._redact(str(e)),
+            )
+            self.oob_listener = None
+            return
+        injected = 0
+        for url, param in cells:
+            try:
+                canary = self.oob_listener.mint(
+                    OobContext(url=url, param=param),
+                )
+                self.client.get(url, params={param: canary})
+                injected += 1
+            except Exception:
+                logger.debug("OOB canary injection failed", exc_info=True)
+        logger.info(
+            "Phase 6: %d blind-SSRF canary URL(s) injected (callback base "
+            "%s)", injected, self.oob_listener.callback_base,
+        )
+
+    def _phase_oob(self) -> list[WebFinding]:
+        """Phase 6o: correlate callbacks, replay-verify, mint findings.
+
+        One recorded callback proves nothing — crawler bots and
+        security appliances fetch URLs they see. Verification re-injects
+        with a FRESH token; only a new callback on that token upgrades
+        the finding to verified. Everything else stays inconclusive and
+        needs_review.
+        """
+        import time as _time
+
+        listener = self.oob_listener
+        if listener is None:
+            return []
+        from packages.web.attempts import (
+            build_web_attempt,
+            write_web_attempts,
+        )
+        from packages.web.oob import OobContext, OobHit, token_of
+        from packages.web.oracle import VerificationResult
+        findings: list[WebFinding] = []
+        attempts = []
+        try:
+            stats = listener.stats
+            if not stats["tokens_minted"]:
+                return []
+            logger.info(
+                "Phase 6o: waiting %.0fs for out-of-band callbacks "
+                "(%d canary token(s) live)",
+                self.oob_grace, stats["tokens_minted"],
+            )
+            _time.sleep(self.oob_grace)
+            for context, hit in listener.correlated():
+                fresh = listener.mint(OobContext(
+                    url=context.url, param=context.param, kind="ssrf-replay",
+                ))
+                replay_hit: OobHit | None = None
+                try:
+                    self.client.get(
+                        context.url, params={context.param: fresh},
+                    )
+                    replay_hit = listener.wait_for(
+                        token_of(fresh), timeout=max(5.0, self.oob_grace / 2),
+                    )
+                except Exception:
+                    logger.debug("OOB replay leg failed", exc_info=True)
+                verified = replay_hit is not None
+
+                def _hit_record(h: OobHit) -> dict[str, Any]:
+                    return {
+                        "method": h.method,
+                        "path": h.path,
+                        "source_ip": h.source_ip,
+                        "user_agent": h.user_agent,
+                        "received_at": h.received_at,
+                    }
+
+                result = VerificationResult(
+                    status="verified" if verified else "inconclusive",
+                    evidence_type="oob_callback",
+                    requests_used=2,
+                    observations={
+                        "first_callback": _hit_record(hit),
+                        "replay_callback": (
+                            _hit_record(replay_hit) if replay_hit else None
+                        ),
+                    },
+                    reason=(
+                        "fresh-token replay produced a new callback"
+                        if verified else
+                        "initial callback not reproduced with a fresh token"
+                    ),
+                )
+                attempts.append(build_web_attempt(
+                    url=context.url, param=context.param,
+                    payload="oob-canary-url", vuln_type="ssrf",
+                    method=context.method, result=result,
+                    reveal_secrets=self.reveal_secrets,
+                ))
+                findings.append(
+                    self._oob_finding(context, hit, replay_hit, verified),
+                )
+            if findings:
+                write_web_attempts(attempts, self.out_dir)
+            stats = listener.stats
+            if stats["unknown_token_requests"]:
+                logger.info(
+                    "Phase 6o: %d request(s) with unknown/absent tokens "
+                    "ignored", stats["unknown_token_requests"],
+                )
+            logger.info(
+                "Phase 6o complete: %d callback finding(s) from %d minted "
+                "token(s)", len(findings), stats["tokens_minted"],
+            )
+            self._phases_completed.append("oob")
+        finally:
+            listener.stop()
+        return findings
+
+    def _oob_finding(
+        self, context, hit, replay_hit, verified: bool,
+    ) -> WebFinding:
+        auth_ctx = "authenticated" if self.session else "unauthenticated"
+        self._finding_counter += 1
+        replay_note = (
+            f"Replay with a fresh token called back from "
+            f"{replay_hit.source_ip} (User-Agent: {replay_hit.user_agent})"
+            if replay_hit else
+            "Replay with a fresh token produced no callback"
+        )
+        return WebFinding(
+            id=f"WEB-{self._finding_counter:04d}",
+            title="Blind SSRF -- server fetched an out-of-band canary URL",
+            severity="high",
+            confidence="high" if verified else "low",
+            status="confirmed" if verified else "needs_review",
+            url=context.url,
+            evidence=(
+                f"Canary URL injected into parameter '{context.param}' was "
+                f"fetched server-side: {hit.method} {hit.path} from "
+                f"{hit.source_ip} (User-Agent: {hit.user_agent}). "
+                f"{replay_note}."
+            ),
+            description=(
+                f"Parameter '{context.param}' caused the server to issue "
+                "an outbound HTTP request to an attacker-controllable URL "
+                "(server-side request forgery)."
+            ),
+            recommendation=(
+                "Validate and allowlist outbound request destinations "
+                "server-side; resolve and re-check redirects; block "
+                "link-local and internal address ranges."
+            ),
+            vuln_type="ssrf",
+            asvs_category="V12", check_id="V12.6.1",
+            auth_context=auth_ctx,
+            cwe_id=WEB_INJECTION_CWE["ssrf"],
+            confirmed=verified,
+            target_url=context.url,
+            confirmation_payload="oob-canary-url",
+            response_evidence=(
+                f"callback from {hit.source_ip}: {hit.method} {hit.path}"
+            ),
+            attack_vector="oob_callback",
+            method=context.method,
+            affected_parameters=[context.param],
+            oracle_signal=(
+                "oob_callback_replayed" if verified else "oob_callback_once"
+            ),
+        )
 
     def _sage_attach_priors(self) -> None:
         """Attach per-target SAGE recall to the fuzzer — hint tier only.
@@ -2009,6 +2227,30 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--oob-listen",
+        help=(
+            "Start the in-process out-of-band callback listener on "
+            "PORT or HOST:PORT (0 = ephemeral) and inject blind-SSRF "
+            "canary URLs during fuzzing; callbacks are replay-verified "
+            "with fresh tokens before a finding is confirmed"
+        ),
+    )
+    parser.add_argument(
+        "--oob-callback-host",
+        help=(
+            "Externally reachable HOST[:PORT] the target should call "
+            "back to, when it differs from the bind address (NAT, "
+            "container, port-forward)"
+        ),
+    )
+    parser.add_argument(
+        "--oob-grace",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for out-of-band callbacks after fuzzing "
+             "(default 10)",
+    )
+    parser.add_argument(
         "--ffuf-calibration-strategy",
         choices=("basic", "advanced"),
         help="ffuf auto-calibration strategy (-acs); advanced helps recursion",
@@ -2309,6 +2551,11 @@ def main():
         parser.error(
             f"ffuf: --ffuf-api-sweep wordlist not found: {args.ffuf_api_sweep}"
         )
+    if args.oob_listen is not None:
+        try:
+            _parse_oob_listen(args.oob_listen)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     # Auth manager + nuclei knobs fail at parse time too, for the same
     # reason as the ffuf preflight: a bad flag combination must not cost
@@ -2422,6 +2669,9 @@ def main():
         access_control=bool(args.access_control),
         ffuf_wordlist_dir=args.ffuf_wordlist_dir,
         ffuf_api_wordlist=args.ffuf_api_sweep,
+        oob_listen=args.oob_listen,
+        oob_callback_host=args.oob_callback_host,
+        oob_grace=args.oob_grace,
     )
 
     try:

@@ -88,6 +88,13 @@ python3 raptor.py web --url https://target --ffuf-wordlist sleep-payloads.txt \
 # Secret hunting in response bodies
 python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
   --ffuf-match-regex 'AKIA[0-9A-Z]{16}'
+
+# Blind SSRF via out-of-band callbacks: the listener runs INSIDE the
+# scanner process (trusted code, never sandboxed — callbacks are
+# inbound from the target). One callback proves nothing; findings are
+# confirmed only when a replay with a FRESH token calls back too.
+python3 raptor.py web --url https://target --oob-listen 8880 \
+  --oob-callback-host scanner.reachable.example:8880
 ```
 
 Operational notes:
