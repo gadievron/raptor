@@ -14,8 +14,11 @@ import ipaddress
 import socket
 import time
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
+
+if TYPE_CHECKING:
+    from packages.web.execution_policy import WebExecutionPolicy
 
 import requests
 import urllib3
@@ -56,7 +59,8 @@ class WebClient:
 
     def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
                  verify_ssl: bool = True, reveal_secrets: bool = False,
-                 block_private_ips: bool = True) -> None:
+                 block_private_ips: bool = True,
+                 execution_policy: "WebExecutionPolicy | None" = None) -> None:
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
@@ -64,6 +68,7 @@ class WebClient:
         self.verify_ssl = verify_ssl
         self.reveal_secrets = reveal_secrets
         self.block_private_ips = block_private_ips
+        self.execution_policy = execution_policy
 
         # Session for cookie management
         self.session = requests.Session()
@@ -194,6 +199,15 @@ class WebClient:
         if not self._is_in_scope(url):
             msg = f"URL outside configured target scope: {url}"
             raise ValueError(msg)
+        if self.execution_policy is not None:
+            # Same guardrail external tools get: every live request is an
+            # authorized, audited decision — not just an origin check.
+            self.execution_policy.authorize(
+                tool_id="raptor-http",
+                url=url,
+                risk="passive",
+                action="http_request",
+            )
         return url
 
     def _resolve_redirect(self, current_url: str, response: requests.Response) -> str | None:
@@ -205,6 +219,13 @@ class WebClient:
         if not self._is_in_scope(next_url):
             msg = f"Blocked redirect outside configured target scope: {next_url}"
             raise ValueError(msg)
+        if self.execution_policy is not None:
+            self.execution_policy.authorize(
+                tool_id="raptor-http",
+                url=next_url,
+                risk="passive",
+                action="follow_redirect",
+            )
         return next_url
 
     def _rate_limit_wait(self) -> None:
