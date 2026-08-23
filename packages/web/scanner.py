@@ -89,6 +89,7 @@ WEB_INJECTION_CWE = {
     "path_traversal": "CWE-22",
 }
 
+
 _FINDING_VULN_MAP = {
     "V2":    "authn_bypass",
     "V3":    "session_management",
@@ -198,6 +199,8 @@ class WebScanner:
         self._phases_completed: list[str] = []
         self._finding_counter = 0
         self._external_tool_results: list[dict] = []
+        self._ffuf_wordlist_used: str | None = None
+        self._ffuf_hit_count = 0
         self._external_validation_results: list[dict] = []
         self._raw_injection_hits: list[dict] = []
         self._external_sensitive_candidates: list[tuple[str, str]] = []
@@ -222,6 +225,7 @@ class WebScanner:
 
         self._phase_auth()
         discovery = self._phase_discovery()
+        self._sage_attach_priors()
         self._phase_external_discovery(discovery)
         crawl_data = self._phase_crawl(discovery)
         if self.mine_params:
@@ -428,6 +432,10 @@ class WebScanner:
                 reveal_secrets=self.reveal_secrets,
             ).run(ffuf_config)
             self._external_tool_results.append(result)
+            # Wordlist-effectiveness prior for SAGE: name only, never
+            # the operator's filesystem path.
+            self._ffuf_wordlist_used = ffuf_config.wordlist.name
+            self._ffuf_hit_count = int(result.get("result_count") or 0)
             hit_urls = []
             for entry in result.get("results", []):
                 url = entry.get("url")
@@ -1036,6 +1044,62 @@ class WebScanner:
                         "json_body_sweep",
                     )
 
+    def _sage_attach_priors(self) -> None:
+        """Attach per-target SAGE recall to the fuzzer — hint tier only.
+
+        Recall reorders vulnerability classes and enriches payload
+        prompts; it never suppresses a check or demotes a finding.
+        Memory can prioritize; only this run's oracle can conclude.
+        """
+        try:
+            from core.sage.hooks import recall_context_for_web_scan
+            rows = recall_context_for_web_scan(self.base_url)
+        except Exception:
+            logger.debug("SAGE web recall unavailable", exc_info=True)
+            return
+        if not rows:
+            return
+        text = " | ".join(
+            str(row.get("content") or "")[:300] for row in rows[:3]
+        )
+        self.fuzzer.set_sage_prior_recall(text, rows)
+        logger.info(
+            "SAGE prior: %d web recall row(s) attached (hint tier)",
+            len(rows),
+        )
+
+    def _sage_store_observations(
+        self, findings: list[WebFinding], discovery,
+    ) -> None:
+        """Store this run's web observations for future recalls."""
+        try:
+            from core.sage.hooks import store_web_scan_observations
+            refuted_probes = [
+                {
+                    "vuln_type": hit.get("vulnerability_type"),
+                    "endpoint": hit.get("endpoint"),
+                }
+                for hit in self._raw_injection_hits
+                if (hit.get("verification") or {}).get("status") == "refuted"
+            ]
+            store_web_scan_observations(
+                self.base_url,
+                fingerprint=dict(
+                    getattr(discovery, "fingerprint", None) or {},
+                ),
+                findings=[f.to_dict() for f in findings],
+                refuted_probes=refuted_probes,
+                wordlist_stats=self._wordlist_stats(),
+            )
+        except Exception:
+            logger.debug("SAGE web store unavailable", exc_info=True)
+
+    def _wordlist_stats(self) -> dict[str, int]:
+        """Discovery hits per external wordlist run, for SAGE priors."""
+        if self._ffuf_wordlist_used is None:
+            return {}
+        return {self._ffuf_wordlist_used: self._ffuf_hit_count}
+
     def _grouped_hit_to_finding(
         self, endpoint: str, vuln_type: str, hit: dict, auth_ctx: str,
     ) -> WebFinding:
@@ -1501,6 +1565,7 @@ class WebScanner:
 
     def _phase_report(self, findings, discovery, crawl_data) -> dict[str, Any]:
         logger.info("Phase 7: Report")
+        self._sage_store_observations(findings, discovery)
         findings_dicts = [f.to_dict() for f in findings]
         save_json(self.out_dir / "web_findings.json", {"findings": findings_dicts})
         # Core-schema findings.json: this is what /project findings, diff,

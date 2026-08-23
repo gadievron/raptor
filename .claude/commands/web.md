@@ -92,6 +92,12 @@ python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
 
 Operational notes:
 
+- When the SAGE sidecar is running, the scan recalls per-target priors
+  at discovery (fingerprint, previously confirmed classes, wordlist
+  effectiveness) and stores fresh observations at report time. Priors
+  are hint tier only: they reorder vulnerability classes and bias
+  payload prompts, and never suppress a check or demote a finding —
+  only the current run's oracle concludes.
 - Recursion and clusterbomb apply a default `-rate 50` unless
   `--ffuf-rate` is set; recursion also caps each sub-job with
   `-maxtime-job`.

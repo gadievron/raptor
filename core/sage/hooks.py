@@ -296,7 +296,7 @@ def pick_strongest_recall_row(
 
 
 def _merge_recall_rows(
-    *hit_lists: list[list[dict[str, Any]]],
+    *hit_lists: list[dict[str, Any]],
     top_k: int | None = None,
 ) -> list[dict[str, Any]]:
     """Merge SAGE query rows from multiple domains with stable priority.
@@ -2506,3 +2506,152 @@ def recall_cve_fix_pointer(cve_id: str) -> dict[str, str] | None:
     except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE cve fix pointer recall failed: %s", e)
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Web scanning — per-target priors (hint tier ONLY)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _web_domain(target_url: str) -> str:
+    return f"raptor-web-{_repo_key(target_url)}"
+
+
+def recall_context_for_web_scan(target_url: str) -> list[dict[str, Any]]:
+    """Prior web-scan knowledge for this target — hint tier only.
+
+    Consumers may reorder vulnerability classes, bias payload prompts,
+    or prefer wordlists on recall; they must never suppress a check or
+    demote a finding because of it. Memory prioritizes; only the
+    current run's oracle concludes.
+    """
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        from urllib.parse import urlparse
+        _metric_inc("recall_attempted")
+        host = urlparse(target_url).netloc or target_url
+        results = client.query(
+            text=(
+                f"What is known about the web target {host}: framework "
+                "fingerprint, confirmed vulnerability classes, probes "
+                "that verification refuted, and which wordlists "
+                "produced discovery hits?"
+            ),
+            domain_tag=_web_domain(target_url),
+            top_k=5,
+            min_confidence=0.5,
+        )
+        methodology = client.query(
+            text=(
+                "Web scanning methodology: injection class selection, "
+                "soft-404 calibration, and replay/control verification "
+                "discipline."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=2,
+            min_confidence=0.5,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=6)
+        _metric_inc("recall_hits", len(merged))
+        return merged
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE web recall failed: %s", e)
+        return []
+
+
+def store_web_scan_observations(
+    target_url: str,
+    *,
+    fingerprint: dict[str, Any],
+    findings: list[dict[str, Any]],
+    refuted_probes: list[dict[str, Any]] | None = None,
+    wordlist_stats: dict[str, int] | None = None,
+) -> None:
+    """Store one web run's observations (called at report time).
+
+    Three bounded observation rows per run at most: the target's
+    fingerprint, the confirmed vulnerability classes, and wordlist
+    effectiveness. Refuted probes store as FP-prone HINTS — recall-side
+    consumers must treat them as prioritization signal, never as
+    suppression (the docstring contract recall_context_for_web_scan
+    states).
+    """
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(target_url).netloc or target_url
+        domain = _web_domain(target_url)
+
+        if fingerprint:
+            pairs = ", ".join(
+                f"{key}={_sanitise_delim(str(value))[:80]}"
+                for key, value in sorted(fingerprint.items()) if value
+            )[:400]
+            _propose_redacted(
+                client=client,
+                content=f"Web target {host} fingerprint: {pairs}.",
+                memory_type="observation",
+                domain_tag=domain,
+                confidence=0.85,
+                tags=["web", "fingerprint"],
+            )
+
+        confirmed = [
+            f for f in findings
+            if f.get("confirmed") is True or f.get("status") == "confirmed"
+        ]
+        if confirmed:
+            from urllib.parse import urlparse as _parse
+            summary = "; ".join(sorted({
+                f"{f.get('vuln_type', 'unknown')} at "
+                f"{_parse(str(f.get('url') or '')).path or '/'}"
+                for f in confirmed
+            }))[:400]
+            _propose_redacted(
+                client=client,
+                content=(
+                    f"Confirmed vulnerability classes on {host}: {summary}."
+                ),
+                memory_type="observation",
+                domain_tag=domain,
+                confidence=0.9,
+                tags=["web", "confirmed"],
+            )
+
+        if refuted_probes:
+            summary = "; ".join(sorted({
+                f"{p.get('vuln_type', 'unknown')} at "
+                f"{p.get('endpoint', '')}".strip()
+                for p in refuted_probes
+            }))[:400]
+            _propose_redacted(
+                client=client,
+                content=(
+                    f"Verification refuted probes on {host}: {summary}. "
+                    "Treat matching future signals as FP-prone — a hint "
+                    "for prioritization only, never suppression."
+                ),
+                memory_type="observation",
+                domain_tag=domain,
+                confidence=0.8,
+                tags=["web", "refuted"],
+            )
+
+        if wordlist_stats:
+            summary = ", ".join(
+                f"{_sanitise_delim(name)}: {hits} hit(s)"
+                for name, hits in sorted(wordlist_stats.items())
+            )[:300]
+            _propose_redacted(
+                client=client,
+                content=f"Wordlist effectiveness on {host}: {summary}.",
+                memory_type="observation",
+                domain_tag=domain,
+                confidence=0.7,
+                tags=["web", "wordlist"],
+            )
+    except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
+        logger.debug("SAGE web store failed: %s", e)
