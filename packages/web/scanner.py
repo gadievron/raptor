@@ -196,6 +196,7 @@ class WebScanner:
         self._external_tool_results: list[dict] = []
         self._external_validation_results: list[dict] = []
         self._raw_injection_hits: list[dict] = []
+        self._external_sensitive_candidates: list[tuple[str, str]] = []
 
         logger.info(
             "Web scanner initialized for %s (verify_ssl=%s, max_depth=%s, max_pages=%s)",
@@ -334,10 +335,30 @@ class WebScanner:
                 reveal_secrets=self.reveal_secrets,
             ).run(self.ffuf_config)
             self._external_tool_results.append(result)
+            hit_urls = []
             for entry in result.get("results", []):
                 url = entry.get("url")
-                if url and url not in discovery.urls:
+                if not url:
+                    continue
+                hit_urls.append(url)
+                if url not in discovery.urls:
                     discovery.urls.append(url)
+            # Sensitive-looking hits become re-verification CANDIDATES for
+            # SensitiveFileCheck — never findings by themselves. Paths the
+            # common-paths probe already covered are excluded (they were
+            # probed first-party in Phase 2).
+            from packages.web.sensitive_paths import sensitive_candidates
+            already = set(discovery.common_paths_found or [])
+            self._external_sensitive_candidates = [
+                (path, label)
+                for path, label in sensitive_candidates(hit_urls)
+                if path not in already
+            ]
+            if self._external_sensitive_candidates:
+                logger.info(
+                    "Phase 2a: %d sensitive-path candidate(s) handed to checks",
+                    len(self._external_sensitive_candidates),
+                )
             self._write_discovery_artifact(discovery)
             self._phases_completed.append("external_discovery")
         except (ValueError, OSError, WebPolicyError) as e:
@@ -423,6 +444,7 @@ class WebScanner:
                 list(discovery_ctx.get("forms", []))
                 + list(crawl_data.get("discovered_forms", []))
             )
+        discovery_ctx["external_paths"] = list(self._external_sensitive_candidates)
         return discovery_ctx
 
     def _phase_passive_checks(

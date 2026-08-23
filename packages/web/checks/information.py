@@ -25,28 +25,6 @@ _STACK_TRACE_PATTERNS = [
     re.compile(r"RuntimeError|ValueError|KeyError|AttributeError", re.I),
 ]
 
-_DEBUG_PATHS = [
-    ("/.git/HEAD", "Git repository exposed"),
-    ("/.git/config", "Git config exposed"),
-    ("/phpinfo.php", "PHP info page exposed"),
-    ("/info.php", "PHP info page exposed"),
-    ("/test.php", "PHP test page exposed"),
-    ("/server-status", "Apache mod_status exposed"),
-    ("/server-info", "Apache mod_info exposed"),
-    ("/nginx_status", "nginx stub_status exposed"),
-    ("/.env", ".env file exposed"),
-    ("/actuator/env", "Spring Boot env actuator exposed"),
-    ("/actuator/heapdump", "Spring Boot heap dump exposed"),
-    ("/actuator/threaddump", "Spring Boot thread dump exposed"),
-    ("/debug/vars", "Go debug vars exposed"),
-    ("/debug/pprof", "Go pprof endpoint exposed"),
-    ("/config.php", "Config file exposed"),
-    ("/wp-config.php", "WordPress config exposed"),
-    ("/database.yml", "Database credentials file exposed"),
-    ("/secrets.json", "Secrets file exposed"),
-]
-
-
 @registry.register(CheckCategory.INFORMATION, "V7.4.1", "Stack trace in error response")
 class StackTraceCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
@@ -85,9 +63,22 @@ class StackTraceCheck(Check):
 
 @registry.register(CheckCategory.INFORMATION, "V8.3.4", "Sensitive files and debug endpoints exposed")
 class SensitiveFileCheck(Check):
+    """Probes the shared sensitive-path catalog PLUS any external-
+    discovery candidates (ffuf hits classified by sensitive_paths):
+    external tools nominate, this check verifies with first-party
+    request/response evidence."""
+
     def run(self, client, target_url, session=None, discovery=None):
+        from packages.web.sensitive_paths import SENSITIVE_PATHS
+
         findings = []
-        for path, label in _DEBUG_PATHS:
+        probes = list(SENSITIVE_PATHS.items())
+        external = (discovery or {}).get("external_paths") or []
+        known = {path for path, _label in probes}
+        probes.extend(
+            (path, label) for path, label in external if path not in known
+        )
+        for path, label in probes:
             try:
                 resp = client.get(path)
                 if resp.status_code in (200, 403):

@@ -691,3 +691,60 @@ class TestParamMiningPhase(unittest.TestCase):
             result = scanner.scan()
 
         self.assertNotIn("param_mining", result["phases_completed"])
+
+
+class TestSensitiveCandidateHandoff(unittest.TestCase):
+    """ffuf hits classified sensitive become check candidates, never
+    findings by themselves."""
+
+    @patch("packages.web.scanner.FfufRunner")
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_ffuf_hits_reach_sensitive_file_check(
+        self, mock_client_cls, mock_crawler_cls, mock_ffuf_cls,
+    ):
+        from packages.web.ffuf import FfufConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wordlist = Path(tmpdir) / "words.txt"
+            wordlist.write_text("env\n", encoding="utf-8")
+            mock_ffuf_cls.return_value.run.return_value = {
+                "tool": "ffuf",
+                "returncode": 0,
+                "result_count": 2,
+                "results": [
+                    {"url": "http://example.com/.env.backup", "status": 200},
+                    {"url": "http://example.com/blog", "status": 200},
+                ],
+            }
+            scanner = WebScanner(
+                "http://example.com", None, Path(tmpdir),
+                ffuf_config=FfufConfig(wordlist=wordlist),
+            )
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 0},
+                "discovered_parameters": [],
+                "pages": [],
+            }
+            seen_ctx = {}
+
+            class _SpyCheck:
+                def __init__(self, llm=None):
+                    pass
+
+                def run(self, client, target_url, session=None, discovery=None):
+                    seen_ctx.update(discovery or {})
+                    return []
+
+            with patch(
+                "packages.web.scanner.registry.unauthenticated",
+                return_value=[_SpyCheck],
+            ):
+                scanner.scan()
+
+        candidates = dict(seen_ctx.get("external_paths") or [])
+        # The dotfile-backup hit is a candidate; the ordinary page is not.
+        self.assertIn("/.env.backup", candidates)
+        self.assertNotIn("/blog", candidates)
