@@ -222,7 +222,7 @@ class ExternalValidatorRunner:
         if config.store_responses:
             # Full request/response transcripts: the
             # evidence-or-it-didn't-happen artifact class.
-            cmd.extend(["-sr", "-srd", str(run_dir / "nuclei-responses")])
+            cmd.extend(["-sresp", "-srd", str(run_dir / "nuclei-responses")])
         if not any(self._is_private_host(url) for url in targets):
             # Keep templates from pivoting into RFC1918 space — but only
             # when the TARGET itself is not private (lab scans).
