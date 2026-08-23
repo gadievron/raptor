@@ -32,6 +32,7 @@ def probe_api_specs(client: "WebClient", base_url: str) -> Dict:
     result: Dict = {
         "openapi_spec": None,
         "graphql_schema": None,
+        "graphql_endpoint": None,
         "spec_urls": [],
     }
 
@@ -67,6 +68,7 @@ def probe_api_specs(client: "WebClient", base_url: str) -> Dict:
                     if "data" in data and "__schema" in str(data):
                         logger.info("GraphQL introspection enabled at %s", path)
                         result["graphql_schema"] = json.dumps(data, indent=2)[:4096]
+                        result["graphql_endpoint"] = path
                         result["spec_urls"].append(base_url.rstrip("/") + path)
                         break
                 except Exception:

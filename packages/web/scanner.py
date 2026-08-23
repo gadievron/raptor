@@ -234,7 +234,9 @@ class WebScanner:
         if self.run_understand:
             context_map = self._phase_understand(crawl_data, discovery)
 
-        injection_findings = self._phase_injection(crawl_data, context_map=context_map)
+        injection_findings = self._phase_injection(
+            crawl_data, context_map=context_map, discovery=discovery,
+        )
         all_findings.extend(injection_findings)
 
         verification_summary = None
@@ -591,6 +593,7 @@ class WebScanner:
         self,
         crawl_data: dict,
         context_map: dict | None = None,
+        discovery: DiscoveryResult | None = None,
     ) -> list[WebFinding]:
         logger.info("Phase 6: Injection and fuzzing")
         try:
@@ -733,6 +736,36 @@ class WebScanner:
                 ):
                     _record(endpoint, field_name, raw, attack_vector)
 
+        # Spec-driven API surface: parameters at their DOCUMENTED
+        # locations. OpenAPI GET query params and string-typed JSON body
+        # fields fuzz through the same three-gate oracle; GraphQL string
+        # arguments probe via a fuzz-time full introspection.
+        if discovery is not None and discovery.openapi_spec:
+            from packages.web.api_testing import operations_from_openapi
+
+            operations = operations_from_openapi(
+                dict(discovery.openapi_spec), self.base_url,
+            )[: self.max_fuzz_urls]
+            logger.info(
+                "Phase 6 API: %d OpenAPI operation(s) under test", len(operations),
+            )
+            for op in operations:
+                for param in op.query_params[: self.max_fuzz_params]:
+                    for raw in self.fuzzer.fuzz_parameter(
+                        op.url, param,
+                        vulnerability_types=list(_INJECTION_VULN_TYPES),
+                        method="GET" if op.method == "GET" else "POST",
+                    ):
+                        _record(op.url, param, raw, "api_query")
+                if op.body_template:
+                    for field_path in op.string_body_fields[: self.max_fuzz_params]:
+                        for raw in self.fuzzer.fuzz_json_field(
+                            op.url, op.body_template, field_path,
+                        ):
+                            _record(op.url, ".".join(field_path), raw, "json_body")
+        if discovery is not None and discovery.graphql_endpoint:
+            self._graphql_subpass(discovery.graphql_endpoint, _record)
+
         # Surface the memoisation win so operators can see the
         # redundant-probe reduction in the run log.
         try:
@@ -756,6 +789,37 @@ class WebScanner:
         )
         self._phases_completed.append("injection")
         return findings
+
+    def _graphql_subpass(self, endpoint: str, record) -> None:
+        """Fuzz-time full introspection + string-argument injection."""
+        from packages.web.api_testing import (
+            graphql_probes_from_schema,
+            run_graphql_probes,
+        )
+
+        introspection = (
+            "{__schema{queryType{name} types{name fields{name "
+            "args{name type{name ofType{name}}}}}}}"
+        )
+        try:
+            resp = self.client.post(
+                endpoint, json_data={"query": introspection},
+            )
+            schema = resp.json()
+        except Exception as e:
+            logger.debug(
+                "GraphQL introspection failed: %s", self._redact(str(e)),
+            )
+            return
+        probes = graphql_probes_from_schema(schema)
+        if not probes:
+            return
+        logger.info("Phase 6 API: %d GraphQL probe(s)", len(probes))
+        for raw in run_graphql_probes(self.fuzzer, endpoint, probes):
+            record(
+                raw.get("url", endpoint), raw.get("parameter", ""),
+                raw, "graphql_argument",
+            )
 
     def _grouped_hit_to_finding(
         self, endpoint: str, vuln_type: str, hit: dict, auth_ctx: str,

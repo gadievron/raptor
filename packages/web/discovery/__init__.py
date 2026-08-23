@@ -29,6 +29,7 @@ class DiscoveryResult:
     fingerprint: Dict[str, str] = field(default_factory=dict)
     openapi_spec: Optional[dict] = None
     graphql_schema: Optional[str] = None
+    graphql_endpoint: Optional[str] = None
     common_paths_found: List[str] = field(default_factory=list)
     robots_disallow: List[str] = field(default_factory=list)
 
@@ -90,6 +91,7 @@ class Discoverer:
         api_result = probe_api_specs(self.client, base_url)
         result.openapi_spec = api_result.get("openapi_spec")
         result.graphql_schema = api_result.get("graphql_schema")
+        result.graphql_endpoint = api_result.get("graphql_endpoint")
         for url in api_result.get("spec_urls", []):
             _add_url(url)
 

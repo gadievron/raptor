@@ -43,6 +43,19 @@ if TYPE_CHECKING:
 
 logger = get_logger()
 
+
+def _set_json_field(template: dict, field_path: tuple[str, ...], value: str) -> dict:
+    """A deep copy of *template* with *value* at *field_path*."""
+    import copy
+
+    body = copy.deepcopy(template)
+    node = body
+    for key in field_path[:-1]:
+        node = node.setdefault(key, {})
+    if field_path:
+        node[field_path[-1]] = value
+    return body
+
 # Signal prefix per marker class, carried into finding evidence so the
 # verified-outcomes projection never has to scrape prose.
 _SIGNAL_PREFIX = {
@@ -374,6 +387,90 @@ class WebFuzzer:
                 redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
             )
 
+        return None
+
+    def fuzz_json_field(
+        self,
+        url: str,
+        body_template: dict,
+        field_path: tuple[str, ...],
+        vulnerability_types: list[str] | None = None,
+    ) -> list[dict]:
+        """Fuzz one string field inside a JSON request body (POST).
+
+        Same three-gate oracle as query/form fuzzing: a baseline body
+        precedes every attack body, the attack response must carry
+        class evidence, and baseline-present signals are vetoed. Used
+        by OpenAPI-driven testing where the field's location and type
+        are documented rather than guessed.
+        """
+        if vulnerability_types is None:
+            vulnerability_types = ['sqli', 'xss', 'ssti', 'command_injection', 'path_traversal']
+        vulnerability_types = self._order_vulnerability_types_by_sage(
+            list(vulnerability_types),
+        )
+        field_name = field_path[-1] if field_path else ""
+        findings = []
+        for vuln_type in vulnerability_types:
+            payloads = self._generate_payloads(field_name, "json", vuln_type)
+            for payload in payloads:
+                finding = self._test_json_payload(
+                    url, body_template, field_path, payload, vuln_type,
+                )
+                if finding:
+                    findings.append(finding)
+                    self.findings.append(finding)
+                    break
+        return findings
+
+    def _test_json_payload(
+        self,
+        url: str,
+        body_template: dict,
+        field_path: tuple[str, ...],
+        payload: str,
+        vuln_type: str,
+    ) -> dict | None:
+        """Three-gate test of one payload at one JSON body field."""
+        try:
+            field_name = field_path[-1] if field_path else ""
+            baseline_body = _set_json_field(
+                body_template, field_path, self._baseline_value(field_name),
+            )
+            attack_body = _set_json_field(body_template, field_path, payload)
+            baseline = self.client.post(url, json_data=baseline_body)
+            response = self.client.post(url, json_data=attack_body)
+            confirmation = self._analyze_response(response, payload, vuln_type)
+            if confirmation and self._passes_three_gate_oracle(
+                baseline, response, confirmation,
+            ):
+                logger.warning(
+                    "Potential %s found in JSON field %s",
+                    vuln_type, ".".join(field_path),
+                )
+                return {
+                    'url': redact_secrets(url, reveal_secrets=self.client.reveal_secrets),
+                    'parameter': ".".join(field_path),
+                    'payload': payload,
+                    'vulnerability_type': vuln_type,
+                    'method': "POST",
+                    'attack_vector': "json_body",
+                    'status_code': response.status_code,
+                    'response_length': len(response.content),
+                    'baseline_status_code': baseline.status_code,
+                    'baseline_response_length': len(baseline.content),
+                    'confirmed': True,
+                    'response_evidence': confirmation["snippet"],
+                    'attack_evidence': confirmation["snippet"],
+                    'baseline_evidence': self._response_summary(baseline),
+                    'diff_summary': self._diff_summary(baseline, response, confirmation["signal"]),
+                    'oracle_signal': confirmation["signal"],
+                }
+        except Exception as e:
+            logger.debug(
+                "Error testing JSON payload: %s",
+                redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
+            )
         return None
 
     def _send_payload(self, url: str, param_name: str, value: str, method: str):
