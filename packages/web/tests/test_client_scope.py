@@ -62,7 +62,7 @@ def _base_url(server):
 
 def test_rejects_absolute_url_outside_base_origin():
     with _server() as (target, _):
-        client = WebClient(_base_url(target), block_private_ips=False)
+        client = WebClient(_base_url(target), block_private_ips=False, rate_limit=0)
 
         with pytest.raises(ValueError, match="outside configured target scope"):
             client.get("http://example.invalid/off-scope")
@@ -70,7 +70,7 @@ def test_rejects_absolute_url_outside_base_origin():
 
 def test_rejects_protocol_relative_url_outside_base_origin():
     with _server() as (target, _):
-        client = WebClient(_base_url(target), block_private_ips=False)
+        client = WebClient(_base_url(target), block_private_ips=False, rate_limit=0)
 
         with pytest.raises(ValueError, match="outside configured target scope"):
             client.get("//example.invalid/off-scope")
@@ -95,7 +95,7 @@ def test_follows_same_origin_redirect():
             self.wfile.write(b"redirected")
 
     with _server(handler_class=SameOriginRedirectHandler) as (server, handler):
-        client = WebClient(_base_url(server), block_private_ips=False)
+        client = WebClient(_base_url(server), block_private_ips=False, rate_limit=0)
 
         response = client.get("/")
 
@@ -109,7 +109,7 @@ def test_blocks_cross_origin_redirect_before_requesting_new_host():
     with _server() as (off_scope, off_scope_handler):
         redirect_headers = {"Location": f"{_base_url(off_scope)}/internal-metadata"}
         with _server(status=302, headers=redirect_headers) as (target, _):
-            client = WebClient(_base_url(target), block_private_ips=False)
+            client = WebClient(_base_url(target), block_private_ips=False, rate_limit=0)
 
             with pytest.raises(ValueError, match="redirect outside configured target scope"):
                 client.get("/")
@@ -121,7 +121,7 @@ def test_cross_origin_redirect_does_not_receive_configured_cookies():
     with _server() as (off_scope, off_scope_handler):
         redirect_headers = {"Location": f"{_base_url(off_scope)}/cookie-sink"}
         with _server(status=302, headers=redirect_headers) as (target, _):
-            client = WebClient(_base_url(target), block_private_ips=False)
+            client = WebClient(_base_url(target), block_private_ips=False, rate_limit=0)
             client.set_cookies({"sessionid": "COOKIELEAKMARKER"})
 
             with pytest.raises(ValueError, match="redirect outside configured target scope"):
@@ -132,7 +132,7 @@ def test_cross_origin_redirect_does_not_receive_configured_cookies():
 
 def test_same_origin_absolute_url_is_allowed():
     with _server() as (target, handler):
-        client = WebClient(_base_url(target), block_private_ips=False)
+        client = WebClient(_base_url(target), block_private_ips=False, rate_limit=0)
 
         response = client.get(f"{_base_url(target)}/same-origin")
 
@@ -164,7 +164,7 @@ def test_preserves_post_method_and_body_for_307_and_308_redirects():
     for path in ("/temporary", "/permanent"):
         PreserveMethodRedirectHandler.hits = []
         with _server(handler_class=PreserveMethodRedirectHandler) as (server, handler):
-            client = WebClient(_base_url(server), block_private_ips=False)
+            client = WebClient(_base_url(server), block_private_ips=False, rate_limit=0)
 
             response = client.post(path, data={"marker": "preserve-me"})
 
@@ -190,7 +190,7 @@ def test_raises_too_many_redirects_after_limit_is_exhausted():
             self.end_headers()
 
     with _server(handler_class=RedirectLoopHandler) as (server, handler):
-        client = WebClient(_base_url(server), block_private_ips=False)
+        client = WebClient(_base_url(server), block_private_ips=False, rate_limit=0)
 
         with pytest.raises(requests.exceptions.TooManyRedirects, match="Exceeded"):
             client.get("/loop")
@@ -211,7 +211,7 @@ def test_dns_pinning_prevents_rebind_toctou():
     import socket as _socket
     with _server() as (target, handler):
         host, port = target.server_address
-        client = WebClient(f"http://{host}:{port}", block_private_ips=False)
+        client = WebClient(f"http://{host}:{port}", block_private_ips=False, rate_limit=0)
 
         _real_gai = _socket.getaddrinfo
         call_count = [0]

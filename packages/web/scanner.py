@@ -1249,7 +1249,11 @@ class WebScanner:
                         context.url, params={context.param: fresh},
                     )
                     replay_hit = listener.wait_for(
-                        token_of(fresh), timeout=max(5.0, self.oob_grace / 2),
+                        token_of(fresh),
+                        # Same patience as the operator's grace window,
+                        # bounded: a --oob-grace 0.5 quick scan should
+                        # not inherit a hard five-second floor per hit.
+                        timeout=min(5.0, max(1.0, self.oob_grace)),
                     )
                 except Exception:
                     logger.debug("OOB replay leg failed", exc_info=True)

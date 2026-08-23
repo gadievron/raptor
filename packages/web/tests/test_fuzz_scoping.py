@@ -115,7 +115,6 @@ def _fake_target():
 
 class TestParamScopedFuzzing:
 
-    @pytest.mark.slow
     def test_parameters_fuzzed_only_where_discovered(self, tmp_path: Path):
         pytest.importorskip("requests")
         pytest.importorskip("bs4")
@@ -126,6 +125,7 @@ class TestParamScopedFuzzing:
                 base_url, llm=None, out_dir=tmp_path,
                 max_depth=2, max_pages=10,
                 block_private_ips=False,
+                rate_limit=0,  # loopback fixture; politeness is real-target manners
             )
             recording = _RecordingFuzzer()
             scanner.fuzzer = recording
@@ -154,7 +154,7 @@ class TestParamScopedFuzzing:
         from packages.web.crawler import WebCrawler
 
         with _fake_target() as base_url:
-            client = WebClient(base_url, block_private_ips=False)
+            client = WebClient(base_url, block_private_ips=False, rate_limit=0)
             crawler = WebCrawler(client, max_depth=2, max_pages=10)
             results = crawler.crawl(base_url)
             client.close()
