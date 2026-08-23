@@ -383,7 +383,7 @@ class TableShapeTests(unittest.TestCase):
         """Adding a KnownFP entry requires updating this count.
         If this test fails, you added a suppression — update the
         expected count after confirming the new entry is justified."""
-        self.assertEqual(len(mod.KNOWN_FP_RULES), 3)
+        self.assertEqual(len(mod.KNOWN_FP_RULES), 4)
 
     def test_sanitizer_fp_count_pinned(self):
         """Adding a SanitizerFP entry requires updating this count."""

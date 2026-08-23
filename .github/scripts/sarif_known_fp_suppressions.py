@@ -68,6 +68,22 @@ class SanitizerFP:
 #   3. Open a PR adding the entry — review checks the triage is sound.
 KNOWN_FP_RULES: tuple[KnownFP, ...] = (
     KnownFP(
+        rule_id="py/insecure-protocol",
+        sink_file_prefixes=(
+            "packages/web/checks/cache.py",
+        ),
+        justification=(
+            "Request-smuggling probe socket: scanner semantics, not "
+            "client semantics. The raw probe exists to elicit a "
+            "parsing differential from whatever stack the TARGET "
+            "runs, legacy TLS included — there is no transport "
+            "privacy to protect and nothing of ours on the wire. The "
+            "floor is pinned explicitly (TLSVersion.TLSv1) with the "
+            "rationale in a code comment at the context construction. "
+            "Intended behavior."
+        ),
+    ),
+    KnownFP(
         rule_id="py/clear-text-logging-sensitive-data",
         sink_file_prefixes=(
             "core/sandbox/context.py",
