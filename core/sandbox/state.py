@@ -87,6 +87,7 @@ _unshare_path_cache = None
 _prlimit_path_cache = None
 _mount_path_cache = None
 _mkdir_path_cache = None
+_sandbox_exec_path_cache = None
 # newuidmap/newgidmap gate the mount-ns tier and are EXECUTED (setuid)
 # in the unsandboxed parent; getcap vouches for the raptor-gidmap-allow
 # helper. Same trusted-dirs resolution as the util-linux binaries above.

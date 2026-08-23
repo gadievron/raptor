@@ -263,6 +263,34 @@ RUNTIME_PRIVILEGE_FUNCS: frozenset[str] = frozenset({
 })
 
 
+# === Detection surface — audit / security-event emission ===
+# Platform APIs that WRITE the security audit trail or system security
+# log. A function selecting audit masks or emitting audit records is
+# detection surface: a defect there is an audit-evasion primitive
+# (events silently dropped or misattributed), which is invisible to
+# memory-safety-oriented sink vocabularies — a confirmed audit-evasion
+# defect was triage-skipped as "no sink path, no dangerous callees"
+# precisely because none of these names counted as sinks. Platform
+# (POSIX/Solaris-BSM/Linux-audit) families only; PROJECT-specific
+# detection APIs belong to the learned study/IRIS channel.
+DETECTION_SURFACE_FUNCS: frozenset[str] = frozenset({
+    # Solaris / illumos / macOS BSM audit
+    "au_open", "au_write", "au_close", "au_user_mask",
+    "getacna", "getacflg", "getauditflagsbin",
+    "getaudit", "getaudit_addr", "setaudit", "setaudit_addr",
+    "auditon", "auditctl", "audit",
+    # Linux audit netlink
+    "audit_open", "audit_log_user_message",
+    "audit_log_acct_message", "audit_log_user_avc_message",
+    # syslog family — the generic security-event channel
+    "syslog", "vsyslog", "openlog",
+    # Login accounting records (utmp/wtmp/lastlog/btmp writers):
+    # failed-login and session evidence
+    "pututline", "pututxline", "updwtmp", "updwtmpx",
+    "logwtmp", "login", "logout",
+})
+
+
 # === Kernel tracing / observability hijack ===
 # Symbols associated with kernel-level tracing, performance
 # counters, or cross-process memory inspection — the substrate

@@ -50,7 +50,17 @@ Policy
   explicitly allowlisted sockets owned by this sandbox instance (its
   egress-proxy lane). Everything else — the rw output bind included —
   gets EPERM. Symlinked paths are refused (RESOLVE_NO_SYMLINKS), so a
-  child cannot bounce through /tmp into the output dir.
+  child cannot bounce through /tmp into the output dir. Private-tmpfs
+  identity is the PINNED device-id set captured inside the child
+  after mount setup and BEFORE the target execs (shipped alongside
+  the notify fd) — never re-resolved from the child's live mount
+  view: seccomp deliberately leaves the mount family unblocked and
+  pre-6.15 Landlock does not freeze mount topology, so a nested
+  mount-ns child could bind the shared rw output over /tmp and have
+  a live-resolution st_dev comparison reclassify shared-bind sockets
+  as private. A device id pinned pre-exec cannot be steered that way
+  (st_dev identifies the superblock; the child cannot give a foreign
+  file the private tmpfs's device id).
 - Relative sockaddr paths are refused (no legitimate in-sandbox user;
   resolving them against a racing cwd is not worth the surface).
 
@@ -382,9 +392,23 @@ class UnixScopeSupervisor:
                  allowed_socket_paths: list[str] | None = None,
                  label: str = "sandbox",
                  allowed_tcp_ports: list[int] | None = None,
-                 netns_isolated: bool = False) -> None:
+                 netns_isolated: bool = False,
+                 private_tmpfs_devs: frozenset[int] | None = None) -> None:
         self._fd = notify_fd
         self._label = label
+        # Device ids of the child's private tmpfs mounts (/tmp, /run,
+        # /dev/shm), captured INSIDE the child after mount setup and
+        # before the target execs (shipped with the notify fd — see
+        # seccomp.py's export block). This is the ONLY private-tmpfs
+        # identity evidence: it is never re-resolved from the child's
+        # live mount view, which the target can rearrange (bind the
+        # rw output over /tmp) on kernels where Landlock does not
+        # freeze mount topology. None or empty ⇒ no pathname connect
+        # is "private tmpfs"; only the allowlisted instance sockets
+        # remain reachable (fail closed).
+        self._private_tmpfs_devs: frozenset[int] = (
+            frozenset(private_tmpfs_devs) if private_tmpfs_devs else
+            frozenset())
         self._closed = threading.Event()
         self._inflight = threading.Semaphore(_MAX_INFLIGHT)
         # Per-notification deadlines, swept by serve_forever's poll
@@ -799,7 +823,7 @@ class UnixScopeSupervisor:
             st = os.fstat(target_fd)
             if not stat_mod.S_ISSOCK(st.st_mode):
                 return -errno.ECONNREFUSED, 0
-            if not self._target_allowed(rootfd, st):
+            if not self._target_allowed(st):
                 logger.warning(
                     "unix-scope[%s]: denied AF_UNIX connect to %r from "
                     "pid %d — target is outside the sandbox's private "
@@ -817,22 +841,18 @@ class UnixScopeSupervisor:
                 os.close(target_fd)
             os.close(rootfd)
 
-    def _target_allowed(self, rootfd: int, st) -> bool:
+    def _target_allowed(self, st) -> bool:
         if (st.st_dev, st.st_ino) in self._allowed_inodes:
             return True
-        # Private tmpfs devices of the CHILD's mount view. On the
-        # mount-ns path /tmp, /run and /dev/shm are per-sandbox tmpfs
-        # by construction (setup_mount_ns steps 5/7) — anything the
-        # child can reach there, it (or its descendants) created.
-        for sub in (b"tmp", b"run", b"dev/shm"):
-            try:
-                dfd = _openat2(rootfd, sub, os.O_PATH | os.O_CLOEXEC,
-                               _RESOLVE_IN_ROOT | _RESOLVE_NO_SYMLINKS)
-            except OSError:
-                continue
-            try:
-                if os.fstat(dfd).st_dev == st.st_dev:
-                    return True
-            finally:
-                os.close(dfd)
-        return False
+        # Private tmpfs mounts of the child's SETUP-TIME view (/tmp,
+        # /run, /dev/shm — per-sandbox tmpfs by construction,
+        # setup_mount_ns steps 5/7): anything living on those
+        # superblocks, the child (or its descendants) created. The
+        # device ids were pinned before the target ran; a target that
+        # later rebinds /tmp (nested mount-ns, pre-6.15 kernels)
+        # changes what a live resolution would see but cannot change
+        # which superblocks these ids name, so a socket on the shared
+        # rw output bind never classifies as private. A target-created
+        # NESTED tmpfs is deliberately not honoured either — its
+        # sockets are refused like any other unpinned location.
+        return st.st_dev in self._private_tmpfs_devs

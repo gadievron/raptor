@@ -21,7 +21,8 @@
  *      (the operator who granted the capability), and must not be
  *      writable by untrusted parties: other-write is always refused;
  *      group-write is refused UNLESS the file's group is the file
- *      OWNER's primary group (getpwuid(st_uid)->pw_gid). On
+ *      OWNER's primary group (per /etc/passwd — NSS-free lookup,
+ *      see owner_primary_gid). On
  *      user-private-group systems (the Debian/Ubuntu default, umask
  *      002) a file group-writable by the owner's own single-member
  *      group is equivalent to owner-writable — no trust weakening —
@@ -68,9 +69,31 @@
  * residual privilege is "uid 0 inside the new user-namespace", which only
  * matters for operations on objects owned by that user-namespace (the
  * fresh netns and any user-namespace-scoped IPC the coordinator creates).
- * After step 8 the exec'd interpreter is bounded by AT_SECURE (set because
- * we had file caps, regardless of whether the operator used setcap or an
- * LSM grant) which strips LD_PRELOAD / LD_LIBRARY_PATH / etc.
+ * After step 8 the exec'd interpreter starts from the fixed minimal
+ * environment constructed in step 7 — the caller's LD_PRELOAD /
+ * LD_LIBRARY_PATH / PYTHONPATH classes are gone by construction. In the
+ * setcap and SELinux grant modes the interpreter's exec ALSO carries
+ * AT_SECURE (file caps were present at OUR exec and secure-execution
+ * state survives into what we exec only via the environment, which we
+ * cleared anyway); in the AppArmor grant mode there are no file caps and
+ * no AT_SECURE anywhere — the clearenv() is the load-bearing control.
+ *
+ * THE LAUNCHER'S OWN exec is the reason this binary is STATICALLY
+ * linked (-static-pie, enforced by the Makefile): in the AppArmor grant
+ * mode the profile attaches by path with no file capabilities, so
+ * exec of the launcher does NOT set AT_SECURE and a dynamic loader
+ * would honour the INVOKER's LD_PRELOAD/LD_AUDIT/LD_LIBRARY_PATH —
+ * running a local user's constructor inside the profiled process,
+ * with the profile's userns+capability grant, BEFORE main() and the
+ * invoker-identity gate ever execute. Static linking removes the
+ * dynamic loader from the picture entirely: there is no pre-main
+ * interpreter to honour those variables, so the LD_* injection class
+ * dies by construction (a blocklist-scrub of loader variables cannot
+ * run early enough — the loader runs before any launcher code).
+ * Accepted trade-off: libc security updates no longer reach the
+ * launcher via the shared library — rebuild (make) after libc
+ * updates. `make check` flags a dynamically-linked (stale, pre-static)
+ * launcher binary.
  *
  * Operator grant options (the launcher accepts any of these — pick the
  * one your distro's hardening mechanism uses):
@@ -125,6 +148,34 @@
  * — compiled into the `make test` harness as well as this binary).     */
 /* ------------------------------------------------------------------ */
 
+/* Owner's primary gid via fgetpwent(3) on /etc/passwd — deliberately
+ * NOT getpwuid(3): this binary is statically linked (see the header
+ * comment) and glibc's getpwuid dlopen()s NSS modules at runtime,
+ * which a static binary cannot rely on (glibc emits a link-time
+ * warning and the lookup silently fails on version-mismatched hosts).
+ * fgetpwent parses the stream directly with no NSS involvement.
+ * Owners not present in /etc/passwd (e.g. LDAP-only accounts) return
+ * -1 and the caller stays fail-closed for group-writable files, with
+ * a refusal message naming the condition. */
+static int owner_primary_gid(uid_t uid, gid_t *gid_out) {
+    FILE *f = fopen("/etc/passwd", "re");
+    if (f == NULL) {
+        return -1;
+    }
+    struct passwd *pw;
+    int rc = -1;
+    while ((pw = fgetpwent(f)) != NULL) {
+        if (pw->pw_uid == uid) {
+            *gid_out = pw->pw_gid;
+            rc = 0;
+            break;
+        }
+    }
+    fclose(f);
+    return rc;
+}
+
+
 int check_trusted_path(const char *path, uid_t trusted_uid, int expect_dir,
                        const char *what, char *err, size_t errsz) {
     struct stat st;
@@ -156,13 +207,15 @@ int check_trusted_path(const char *path, uid_t trusted_uid, int expect_dir,
         /* Group-write is acceptable only when the group IS the file
          * owner's primary group (user-private-group layout, umask 002):
          * that is equivalent to owner-write. Group-write by any shared
-         * group — or by an owner unknown to passwd — stays refused. */
-        struct passwd *pw = getpwuid(st.st_uid);
-        if (pw == NULL || pw->pw_gid != st.st_gid) {
+         * group — or by an owner unknown to /etc/passwd — stays
+         * refused. NSS-free lookup: see owner_primary_gid. */
+        gid_t owner_gid;
+        if (owner_primary_gid(st.st_uid, &owner_gid) != 0
+                || owner_gid != st.st_gid) {
             snprintf(err, errsz,
                      "trusted-path: %s %s is group-writable by a group "
                      "(gid %u) that is not the owner's primary group "
-                     "(mode %04o) — refusing",
+                     "per /etc/passwd (mode %04o) — refusing",
                      what, path, (unsigned)st.st_gid,
                      (unsigned)(st.st_mode & 07777));
             return -1;
@@ -573,8 +626,10 @@ int main(int argc, char **argv) {
 
     /* execv the CANONICALISED interpreter+script from validation — not
      * the raw argv — so the validated paths are the executed paths.
-     * AT_SECURE will be set (we had file caps) which strips
-     * LD_PRELOAD/LD_LIBRARY_PATH — fine for Python. */
+     * The interpreter starts from the fixed environment built above:
+     * clearenv() removed the caller's LD_ and PYTHONPATH classes, so no
+     * AT_SECURE reliance is needed here (and none exists in the
+     * AppArmor grant mode — no file caps; see the header comment). */
     char *exec_argv[] = { interp, script, NULL };
     execv(interp, exec_argv);
     /* Show which interpreter we failed to exec — operator's first

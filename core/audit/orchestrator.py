@@ -6638,13 +6638,29 @@ def _run_audit_body(
     _schedule = getattr(config, "schedule", "cost")
     if resolved_workers <= 1:
         _schedule = "priority"
+    # Soft dependencies: glance-tier and vendored-verdict callees
+    # neither gate their callers nor inherit caller rank (see
+    # TaskGraph.from_workqueue). Keys use the graph's lined form.
+    _soft_keys = frozenset(
+        k for k, tr in (triage_results or {}).items()
+        if tr.bucket == TriageBucket.GLANCE
+        or any(r.startswith(("generated code (", "vendored code ("))
+               for r in tr.reasons)
+    )
     graph = TaskGraph.from_workqueue(
         workqueue,
         call_edges,
         max_workers=resolved_workers,
         duration_hints=_review_duration_hints(workqueue, triage_results),
         schedule=_schedule,
+        soft_dep_keys=_soft_keys,
     )
+    if _soft_keys:
+        logger.info(
+            "task graph: %d glance/vendored callees demoted to soft "
+            "dependencies (no caller gating, no rank inheritance)",
+            len(_soft_keys),
+        )
     reviewed_outcomes = _LockedOutcomes()
 
     # --- Cross-run verdict reuse: import prior verdicts at $0 ---

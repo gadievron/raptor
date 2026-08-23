@@ -7,6 +7,7 @@ by the orchestrator but doesn't reference its mutable state.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from collections import deque
@@ -445,6 +446,202 @@ def load_presweep_status(out_dir) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+#: Pre-sweep flow cache, relative to the run dir. The standard-sinks
+#: taint sweep is a pure function of the CPG (content-hash cached) and
+#: the rendered sink list, so its result is persisted across resumed
+#: segments — the live query against the shared single-threaded server
+#: (timeout windows, re-queue waits, restarts) is the flakiest and one
+#: of the slowest prep components, and re-running it on an unchanged
+#: tree buys nothing.
+PRESWEEP_FLOWS_CACHE_RELPATH = str(Path("prep-cache") / "joern-presweep-flows.json")
+
+_PRESWEEP_FLOWS_CACHE_VERSION = 1
+
+#: Byte cap for the cache read (house bounded-JSON policy): the cache
+#: is self-written but lives in a run dir — treat it with the same
+#: trust class as any sibling-run JSON import.
+_PRESWEEP_FLOWS_CACHE_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
+    """(cpg_hash, sink_hash) identity of a pre-sweep result, or None.
+
+    ``cpg_hash`` covers every axis the CPG build cache invalidates on
+    (see :func:`packages.joern.runner.load_cached_cpg`): the content
+    key (:func:`packages.joern.runner._target_content_hash` — source
+    file set + content, mtime-invariant), the frontend-args
+    fingerprint recovered from compile_commands.json (a regenerated
+    build database with different -D/-I flags changes the
+    preprocessed code, and thus the flows, without touching the
+    source hash), and the exclusion rule. ``sink_hash`` covers the
+    query side: the standard_sinks.sc script body plus the rendered
+    sink list substituted into it — a query-logic change across a
+    framework upgrade must not serve flows computed by the old query.
+    """
+    try:
+        from packages.joern.lang_config import (
+            STANDARD_SWEEP_SINKS,
+            scala_string_list,
+        )
+        from packages.joern.runner import (
+            CPG_EXCLUDE_REGEX,
+            _target_content_hash,
+            discover_frontend_args,
+        )
+
+        target = Path(target_path)
+        if not target.is_dir():
+            return None
+        cpg_hash = hashlib.sha256("\n".join((
+            _target_content_hash(target),
+            discover_frontend_args(target).fingerprint(),
+            CPG_EXCLUDE_REGEX,
+        )).encode("utf-8")).hexdigest()
+
+        import packages.joern as _joern_pkg
+        script = (
+            Path(_joern_pkg.__file__).parent / "queries" / "standard_sinks.sc"
+        )
+        rendered = scala_string_list(STANDARD_SWEEP_SINKS)
+        sink_hash = hashlib.sha256(
+            script.read_bytes() + b"\x00" + rendered.encode("utf-8"),
+        ).hexdigest()
+    except Exception:  # noqa: BLE001 — cache identity must not cost the sweep
+        logger.debug("pre-sweep flow-cache identity failed", exc_info=True)
+        return None
+    return (cpg_hash, sink_hash)
+
+
+def load_presweep_flows_cache(
+    out_dir, identity: tuple[str, str],
+) -> dict[str, list] | None:
+    """Reload cached pre-sweep flows for a matching identity.
+
+    Returns the reconstructed ``flows_by_key`` mapping (values are
+    :class:`packages.joern.models.TaintFlow`) on an identity match, or
+    None when the cache is absent, stale, marked partial, or corrupt —
+    every non-hit path falls back to the live query.
+    """
+    if not out_dir:
+        return None
+    path = Path(out_dir) / PRESWEEP_FLOWS_CACHE_RELPATH
+    if not path.is_file():
+        return None
+    try:
+        # Bounded read (house JSON policy): the cache is self-written
+        # but lives in a run dir — same trust class as the sibling
+        # joern-flows import above, so the same stat-gated cap.
+        from core.json import load_json
+        data = load_json(
+            path, max_bytes=_PRESWEEP_FLOWS_CACHE_MAX_BYTES,
+        )
+    except Exception:  # noqa: BLE001 — any unreadable cache re-queries
+        logger.warning(
+            "joern pre-sweep flow cache unreadable at %s — re-running "
+            "the live sweep", path,
+        )
+        return None
+    if data is None:
+        logger.warning(
+            "joern pre-sweep flow cache unreadable/oversized at %s — "
+            "re-running the live sweep", path,
+        )
+        return None
+    if (
+        not isinstance(data, dict)
+        or data.get("version") != _PRESWEEP_FLOWS_CACHE_VERSION
+        or data.get("partial")
+        or not isinstance(data.get("flows_by_key"), dict)
+    ):
+        logger.warning(
+            "joern pre-sweep flow cache at %s malformed or marked "
+            "partial — re-running the live sweep", path,
+        )
+        return None
+    if (data.get("cpg_hash"), data.get("sink_hash")) != identity:
+        logger.info(
+            "joern pre-sweep flow cache stale (CPG or sink-list hash "
+            "changed) — re-running the live sweep",
+        )
+        return None
+    try:
+        from packages.joern.models import TaintFlow
+
+        flows_by_key: dict[str, list] = {}
+        for key, entries in data["flows_by_key"].items():
+            flows_by_key[str(key)] = [
+                TaintFlow.from_dict(entry) for entry in entries
+            ]
+    except Exception:  # noqa: BLE001 — corrupt entries mean requery, not crash
+        logger.warning(
+            "joern pre-sweep flow cache at %s failed to deserialise — "
+            "re-running the live sweep", path, exc_info=True,
+        )
+        return None
+    logger.info(
+        "joern pre-sweep flows reloaded from prep cache (CPG hash "
+        "match) — %d flow groups", len(flows_by_key),
+    )
+    return flows_by_key
+
+
+def save_presweep_flows_cache(
+    out_dir, identity: tuple[str, str],
+    flows: dict[str, list] | None, status: dict,
+) -> None:
+    """Persist a COMPLETE pre-sweep result for later segments.
+
+    Refuses to write anything from an interrupted or errored sweep:
+    a lost query window returns whatever flows arrived before the
+    restart, and caching that would let an incomplete flow set
+    silently masquerade as the full sweep on every later segment.
+    Skip-case results (joern unavailable — ``completed`` never set)
+    are equally uncacheable. Best-effort: failures log and move on.
+    """
+    if not out_dir:
+        return
+    if (
+        not status.get("completed")
+        or status.get("errors")
+        or (status.get("interrupted") and not status.get("recovered"))
+    ):
+        logger.debug(
+            "pre-sweep flow cache not written (incomplete sweep): %s",
+            {k: status.get(k) for k in
+             ("completed", "interrupted", "recovered", "errors")},
+        )
+        return
+    try:
+        serialised: dict[str, list] = {}
+        for key, group in (flows or {}).items():
+            entries = []
+            for flow in group:
+                to_dict = getattr(flow, "to_dict", None)
+                if to_dict is None:
+                    logger.debug(
+                        "pre-sweep flow cache not written: flow object "
+                        "under %r has no to_dict", key,
+                    )
+                    return
+                entries.append(to_dict())
+            serialised[key] = entries
+
+        from datetime import datetime, timezone
+
+        from core.json import save_json
+        save_json(Path(out_dir) / PRESWEEP_FLOWS_CACHE_RELPATH, {
+            "version": _PRESWEEP_FLOWS_CACHE_VERSION,
+            "cpg_hash": identity[0],
+            "sink_hash": identity[1],
+            "partial": False,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "flow_groups": len(serialised),
+            "flows_by_key": serialised,
+        })
+    except Exception:  # noqa: BLE001 — bookkeeping must not cost the sweep
+        logger.debug("pre-sweep flow cache write failed", exc_info=True)
+
+
 def build_joern_evidence(
     target_path, out_dir, joern_overrides=None,
     on_progress: Callable | None = None,
@@ -456,6 +653,10 @@ def build_joern_evidence(
     outcome (re-queued and recovered, or lost) is persisted to
     ``joern-presweep-status.json`` in the run dir for the summary and
     critique — a lost taint window must not be a log-only event.
+
+    Completed sweeps are persisted to the run dir's prep cache keyed
+    by (CPG content hash, sink-list hash); a resumed segment on an
+    unchanged tree reloads instead of re-running the live query.
     """
     try:
         from .sweep import run_joern_pre_sweep
@@ -465,6 +666,13 @@ def build_joern_evidence(
     tunables = joern_tunables(overrides=joern_overrides)
     if tunables is None:
         return None
+
+    identity = _presweep_flows_identity(target_path)
+    if identity is not None:
+        cached = load_presweep_flows_cache(out_dir, identity)
+        if cached is not None:
+            return cached or None
+
     cache_dir = resolve_cpg_cache_dir(out_dir)
     status: dict = {}
     flows = run_joern_pre_sweep(
@@ -486,6 +694,8 @@ def build_joern_evidence(
             len(v) for v in (flows or {}).values()
         )
         _write_presweep_status(out_dir, status)
+    if identity is not None:
+        save_presweep_flows_cache(out_dir, identity, flows, status)
     return flows or None
 
 

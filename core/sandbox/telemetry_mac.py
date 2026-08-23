@@ -354,6 +354,25 @@ def triage_report_fields(report_sha256: str, run: str) -> dict:
     }
 
 
+def triage_deep_fields(report_sha256: str, run: str) -> dict:
+    """MAC fields for sandbox-triage-deep.json (the advisory LLM pass).
+
+    Same construction as ``triage_report_fields``: the run binding
+    stops cross-run replay of a validly-stamped deep report, and
+    ``report_sha256`` covers the WHOLE canonical report minus the
+    token — assessments text, model, overall_note and
+    triage_report_integrity included — so none of it can be rewritten
+    under a surviving token. The artifact is advisory-by-design
+    (rules_verdict is restated, never recomputed), but an operator
+    reads the assessment prose; its provenance must not be weaker
+    than the report it annotates."""
+    return {
+        "kind": "sandbox-triage-deep",
+        "run": run,
+        "report_sha256": report_sha256,
+    }
+
+
 def summary_fields(total_denials: int, denials_sha256: str, run: str,
                    corrupt_lines: int = 0,
                    inode_mismatch: bool = False,

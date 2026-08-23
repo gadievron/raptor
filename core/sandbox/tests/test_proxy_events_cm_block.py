@@ -161,6 +161,26 @@ class TestSandboxContextBlockEventCapture(unittest.TestCase):
             def add_hosts(self, hosts):
                 pass
 
+            # Lane surface: the Landlock-TCP tier now FAILS CLOSED
+            # when the per-context lane cannot bind (no silent
+            # fallback to the shared listener's union allowlist), so
+            # the fake must provide a working lane like the real
+            # proxy does.
+            def bind_tcp_lane(self, *, label="sandbox",
+                              allowed_hosts=None, allowed_ports=None):
+                self.calls.append(("bind_tcp_lane", label))
+                return 18081
+
+            def close_tcp_lane(self, port):
+                self.calls.append(("close_tcp_lane", port))
+
+            def set_lane_audit(self, key, value):
+                self.calls.append(("set_lane_audit", key, value))
+                return True
+
+            def update_idle_timeout(self, seconds):
+                pass
+
         return _Fake()
 
     def test_block_token_registered_when_audit_engages(self):

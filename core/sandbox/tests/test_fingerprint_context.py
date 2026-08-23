@@ -151,6 +151,145 @@ def test_top_level_run_forwards_kwargs_to_sandbox():
                      require_sanitisation=True)
 
 
+def test_apply_overlay_strict_missing_target_raises(tmp_path):
+    """require_sanitisation rides on the persona: a missing overlay
+    target must ABORT setup instead of skip-and-continue — a
+    fail-closed persona request silently running with host-real
+    /proc/cpuinfo is exactly the half-state the flag forbids."""
+    from core.sandbox.fingerprint import Persona, apply_overlay
+    src = tmp_path / "cpuinfo"
+    src.write_text("persona-cpuinfo")
+    root = tmp_path / "root"
+    root.mkdir()
+    persona = Persona(files={"/proc/cpuinfo": str(src)},
+                      cpu_count=2, strict=True)
+    with pytest.raises(OSError, match="require_sanitisation"):
+        apply_overlay(persona, root_prefix=str(root))
+
+
+def test_apply_overlay_strict_bind_failure_raises(tmp_path, monkeypatch):
+    from core.sandbox import fingerprint as fp
+    from core.sandbox import mount_ns as mns
+    src = tmp_path / "cpuinfo"
+    src.write_text("persona-cpuinfo")
+    root = tmp_path / "root" / "proc"
+    root.mkdir(parents=True)
+    (root / "cpuinfo").write_text("host")
+
+    def _bind_fails(*a, **k):
+        raise OSError(1, "Operation not permitted")
+
+    monkeypatch.setattr(mns, "_mount", _bind_fails)
+    persona = fp.Persona(files={"/proc/cpuinfo": str(src)},
+                         cpu_count=2, strict=True)
+    with pytest.raises(OSError, match="require_sanitisation"):
+        fp.apply_overlay(persona, root_prefix=str(tmp_path / "root"))
+
+
+def test_apply_overlay_nonstrict_keeps_partial_coverage(tmp_path):
+    """The default posture is unchanged: missing targets skip with a
+    debug log (partial coverage beats none)."""
+    from core.sandbox.fingerprint import Persona, apply_overlay
+    src = tmp_path / "cpuinfo"
+    src.write_text("persona-cpuinfo")
+    root = tmp_path / "root"
+    root.mkdir()
+    persona = Persona(files={"/proc/cpuinfo": str(src)}, cpu_count=2)
+    apply_overlay(persona, root_prefix=str(root))  # must not raise
+
+
+def test_required_sanitisation_refuses_landlock_degrade(
+        monkeypatch, tmp_path):
+    """A mount-ns setup failure ('M' status — where a strict
+    per-overlay failure lands) must raise under require_sanitisation
+    instead of degrading to the Landlock-only retry, which cannot
+    apply the persona at all."""
+    import subprocess
+
+    import core.sandbox._spawn as _sp
+    import core.sandbox.context as ctx
+    import core.sandbox.fingerprint as _fp
+    from core.sandbox.errors import SandboxSetupError
+
+    monkeypatch.setattr(_sp, "mount_ns_available", lambda: True)
+    monkeypatch.setattr(_fp, "is_supported", lambda: True)
+    monkeypatch.setattr(ctx, "check_net_available", lambda: True)
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: True)
+
+    def _fake_run_sandboxed(cmd, **_kw):
+        cp = subprocess.CompletedProcess(
+            args=list(cmd), returncode=126, stdout="", stderr="")
+        cp._setup_status = (
+            "M", "fingerprint overlay bind failed under "
+                 "require_sanitisation")
+        return cp
+
+    monkeypatch.setattr(_sp, "run_sandboxed", _fake_run_sandboxed)
+    with pytest.raises(SandboxSetupError,
+                       match="require_sanitisation"):
+        with ctx.sandbox(target=str(tmp_path), output=str(tmp_path),
+                         sanitise_host_fingerprint=True,
+                         require_sanitisation=True) as _run:
+            _run(["/bin/true"])
+
+
+def _required_sanitisation_ctx(monkeypatch, tmp_path):
+    """Common monkeypatch set for the pre-spawn demotion gates: the
+    mount-ns backend reports available (so the context-entry gate
+    passes) and the persona builds for real."""
+    import core.sandbox._spawn as _sp
+    import core.sandbox.context as ctx
+    import core.sandbox.fingerprint as _fp
+
+    monkeypatch.setattr(_sp, "mount_ns_available", lambda: True)
+    monkeypatch.setattr(_fp, "is_supported", lambda: True)
+    monkeypatch.setattr(ctx, "check_net_available", lambda: True)
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: True)
+    return ctx
+
+
+def test_required_sanitisation_refuses_input_kwarg_demotion(
+        monkeypatch, tmp_path):
+    """input= routes the call to the Landlock-only subprocess path
+    (spawn_eligible=False), where the persona never applies — a
+    require_sanitisation caller must get a refusal, not a silent
+    host-real run."""
+    ctx = _required_sanitisation_ctx(monkeypatch, tmp_path)
+    from core.sandbox.errors import SandboxSetupError
+    with pytest.raises(SandboxSetupError,
+                       match="require_sanitisation"):
+        with ctx.sandbox(target=str(tmp_path), output=str(tmp_path),
+                         sanitise_host_fingerprint=True,
+                         require_sanitisation=True) as _run:
+            _run(["/bin/cat"], input=b"host-real?")
+
+
+def test_required_sanitisation_refuses_speculative_cache_demotion(
+        monkeypatch, tmp_path):
+    """A speculative-failure-cache hit (poisonable by an earlier
+    NON-strict failure of the same binary in this process) silently
+    skipped mount-ns — and the persona with it."""
+    import os
+
+    from core.sandbox import state as sbx_state
+
+    ctx = _required_sanitisation_ctx(monkeypatch, tmp_path)
+    from core.sandbox.errors import SandboxSetupError
+    import shutil as _shutil
+    _resolved = _shutil.which("true") or "/usr/bin/true"
+    monkeypatch.setitem(
+        sbx_state._speculative_failure_cache, _resolved, True)
+    monkeypatch.setitem(
+        sbx_state._speculative_failure_cache,
+        os.path.realpath(_resolved), True)
+    with pytest.raises(SandboxSetupError,
+                       match="require_sanitisation"):
+        with ctx.sandbox(target=str(tmp_path), output=str(tmp_path),
+                         sanitise_host_fingerprint=True,
+                         require_sanitisation=True) as _run:
+            _run(["true"])
+
+
 def test_persona_tmpdir_cleaned_up_on_exit(monkeypatch):
     """The tmpdir created for persona files in sandbox() must be
     removed on context exit. Catches a class of bug where a long-lived

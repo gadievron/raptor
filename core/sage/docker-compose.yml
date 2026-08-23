@@ -79,7 +79,7 @@ services:
       - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
 
   sage:
-    image: ghcr.io/l33tdawg/sage:11.18.18@sha256:406bf5dd3aafa539b22b9e5b99bbcfae288016dafef254026935885aeed95af6
+    image: ghcr.io/l33tdawg/sage:11.19.0@sha256:2016e2eed34cbd8e8c259197b11b0a6d1e588a6d8db13d84e1932ee058f301f6
     ports:
       # Loopback-bound: see the ollama mapping above.
       - "127.0.0.1:8090:8080"

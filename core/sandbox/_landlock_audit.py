@@ -81,6 +81,13 @@ _DRAIN_IDLE_POLL_S = 30.0
 # parent's memory.
 _DRAIN_MAX_BYTES_PER_FD = 32 * 1024 * 1024
 
+# Budget for the post-target-exit final sweep. Normally the sweep ends
+# at the first empty poll (already-buffered bytes only), but a
+# grandchild that inherited the write end and keeps writing can hold
+# the pipe readable indefinitely — the sweep must not extend the run
+# past the target's own lifetime by more than this.
+_DRAIN_FINAL_SWEEP_S = 2.0
+
 # Linux prctl(2) constants for PR_SET_PTRACER. Not in stdlib;
 # duplicated here from the kernel headers.
 _PR_SET_PTRACER = 0x59616d61
@@ -247,16 +254,22 @@ def _drain_pipes_until_eof(
     blocking ``waitpid`` with the pipes never read again, while the
     child blocks writing to a full pipe buffer.
 
-    On each idle tick we instead check whether the target is still
-    alive via ``waitid(..., WNOWAIT)`` — which does NOT reap, so the
-    caller's own ``waitpid`` still observes the exit status.
-    Draining stops when:
+    We instead check whether the target is still alive via
+    ``waitid(..., WNOWAIT)`` — which does NOT reap, so the caller's
+    own ``waitpid`` still observes the exit status. The liveness probe
+    runs on a TIME schedule (every ``_DRAIN_IDLE_POLL_S``), not only
+    on idle ticks: a grandchild that inherited the write end and
+    writes continuously keeps ``select()`` non-empty forever, so an
+    idle-branch-only probe never noticed the target's exit and a
+    ``timeout=None`` run (legitimate callers exist — host.py) never
+    finished draining. Draining stops when:
 
       * EOF is seen on every fd (normal case), or
       * ``deadline`` expires (caller kills the child and raises), or
       * the target has exited and the pipes have gone silent — a
         stray grandchild inherited the write end; don't wait for
-        its EOF forever.
+        its EOF forever — or kept chattering past the bounded
+        final sweep (``_DRAIN_FINAL_SWEEP_S``).
 
     Accumulation is byte-bounded per fd (``_DRAIN_MAX_BYTES_PER_FD``):
     a hostile or runaway child writing without limit must not OOM the
@@ -271,6 +284,21 @@ def _drain_pipes_until_eof(
     truncated: set[int] = set()
     fds_open = set(bufs)
     target_exited = False
+    sweep_deadline: float | None = None
+    # First liveness probe fires one poll interval in; a chattering
+    # pipe must not defer it past that (see the docstring).
+    next_exit_probe = time.monotonic() + _DRAIN_IDLE_POLL_S
+
+    def _probe_target_exited() -> bool:
+        try:
+            res = os.waitid(
+                os.P_PID, target_pid,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except (ChildProcessError, OSError):
+            return True
+        return res is not None
+
     while fds_open:
         # Enforce the caller's deadline on EVERY iteration, not only when
         # select() returns idle: a hostile target that keeps a pipe
@@ -285,12 +313,35 @@ def _drain_pipes_until_eof(
             and time.monotonic() >= deadline
         ):
             break
+        # Liveness probe on a TIME schedule (same 14d5c87c lesson as the
+        # deadline above): a continuously-readable pipe starves the idle
+        # branch, and with timeout=None the probe there was the ONLY
+        # exit condition — a chattering grandchild made the drain (and
+        # the run) hang forever after the target exited.
+        if not target_exited and time.monotonic() >= next_exit_probe:
+            next_exit_probe = time.monotonic() + _DRAIN_IDLE_POLL_S
+            if _probe_target_exited():
+                target_exited = True
+        if target_exited and sweep_deadline is None:
+            # Bounded final sweep: consume what the pipes still hold,
+            # but a grandchild that KEEPS writing must not extend the
+            # drain indefinitely — the run is over.
+            sweep_deadline = time.monotonic() + _DRAIN_FINAL_SWEEP_S
         if target_exited:
+            if (sweep_deadline is not None
+                    and time.monotonic() >= sweep_deadline):
+                logger.warning(
+                    "audit drain: target exited but a grandchild kept "
+                    "its stdio pipe busy past the %.1fs final sweep — "
+                    "abandoning the remaining stream", _DRAIN_FINAL_SWEEP_S,
+                )
+                break
             # Final sweep: consume whatever is already buffered in
             # the pipes, but don't block for more.
             wait = 0.0
         else:
-            wait = _DRAIN_IDLE_POLL_S
+            wait = min(_DRAIN_IDLE_POLL_S,
+                       max(0.0, next_exit_probe - time.monotonic()))
             if deadline is not None:
                 wait = min(wait, max(0.0, deadline - time.monotonic()))
         ready, _, _ = select.select(list(fds_open), [], [], wait)
@@ -299,14 +350,7 @@ def _drain_pipes_until_eof(
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 break
-            try:
-                res = os.waitid(
-                    os.P_PID, target_pid,
-                    os.WEXITED | os.WNOHANG | os.WNOWAIT,
-                )
-            except (ChildProcessError, OSError):
-                break
-            if res is not None:
+            if _probe_target_exited():
                 target_exited = True
             continue
         for fd in ready:

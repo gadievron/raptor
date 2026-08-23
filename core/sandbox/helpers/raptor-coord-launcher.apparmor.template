@@ -42,6 +42,15 @@
 # absolute checkout path. If you relocate the checkout, re-render and
 # re-install — the stale profile stops matching and the launcher fails
 # LOUD (grant missing), never open.
+#
+# PRE-MAIN INJECTION: unlike the setcap grant, a path-attached profile
+# sets no file capabilities, so exec of the launcher does NOT get
+# AT_SECURE — a dynamic loader would honour the invoker's LD_PRELOAD
+# under this profile's userns+capability grant, before any launcher
+# code runs. The launcher is therefore STATICALLY linked (enforced by
+# the Makefile): with no dynamic loader in the process, the LD_*
+# variable class has nothing to act on. Do not attach this profile to
+# a dynamically-linked launcher build (`make check` flags one).
 
 abi <abi/5.0>,
 include <tunables/global>

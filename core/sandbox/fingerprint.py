@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util as _ctypes_util
+import errno
 import hashlib
 import heapq
 import logging
@@ -242,9 +243,15 @@ class Persona:
     cpu_count: int
     hostname: str = _HOSTNAME
     domainname: str = _DOMAINNAME
+    # Fail-closed switch, set from sandbox(require_sanitisation=True):
+    # apply_overlay treats a missing target or a failed bind as a
+    # setup FAILURE (raise → mount-ns 'M' status) instead of skipping.
+    # Riding on the persona keeps the whole spawn plumbing unchanged.
+    strict: bool = False
 
 
-def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
+def build_persona(tmpdir: Path, cpu_count: int,
+                  strict: bool = False) -> Persona:
     """Materialise persona files under `tmpdir` and return the Persona.
 
     cpu_count must be >= 1 OR the HOST_CPU_COUNT sentinel. When the
@@ -381,7 +388,7 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
         f"0.08 0.12 0.10 1/{fake_processes // 100} {fake_processes}\n",
     )
 
-    return Persona(files=files, cpu_count=cpu_count)
+    return Persona(files=files, cpu_count=cpu_count, strict=strict)
 
 
 def _now() -> float:
@@ -570,6 +577,15 @@ def apply_overlay(persona: Persona, root_prefix: str = "") -> None:
     continues. Partial coverage is better than no coverage, and some
     kernels/configs may not support bind-over for specific paths.
     Tests assert per-file content visibility under a full setup.
+
+    EXCEPT under ``persona.strict`` (sandbox(require_sanitisation=
+    True)): a fail-closed persona request must not silently run with
+    host-real /proc/cpuinfo etc., so a missing target or a failed
+    bind RAISES. This runs pre-exec in the mount-ns child — the raise
+    propagates through setup_mount_ns to the spawn child's setup
+    handler, which reports the typed 'M' setup status; context.py
+    refuses the Landlock-only degrade for a required persona and
+    surfaces SandboxSetupError instead.
     """
     # Use the same _mount wrapper as mount_ns.py to keep OSError
     # semantics identical across the module boundary.
@@ -577,6 +593,12 @@ def apply_overlay(persona: Persona, root_prefix: str = "") -> None:
     for target, source in persona.files.items():
         inside = f"{root_prefix}{target}"
         if not os.path.exists(inside):
+            if persona.strict:
+                raise FileNotFoundError(
+                    errno.ENOENT,
+                    f"fingerprint overlay target missing under "
+                    f"require_sanitisation: {inside}",
+                )
             logger.debug(
                 "fingerprint: target %s does not exist; "
                 "skipping bind-mount", inside,
@@ -585,6 +607,12 @@ def apply_overlay(persona: Persona, root_prefix: str = "") -> None:
         try:
             _mount(source, inside, None, MS_BIND)
         except OSError as e:
+            if persona.strict:
+                raise OSError(
+                    e.errno or 0,
+                    f"fingerprint overlay bind failed under "
+                    f"require_sanitisation: {source} -> {inside}: {e}",
+                ) from e
             logger.debug(
                 "fingerprint: bind %s → %s failed: %s",
                 source, inside, e,

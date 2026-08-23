@@ -161,6 +161,63 @@ class TestDeepAnalyse:
         assert deep_mod.deep_analyse(tmp_path) is None
 
 
+class TestDeepReportProvenance:
+    """The deep report's token must bind the RUN and the WHOLE content
+    — the previous 3-field set (kind + rules_verdict +
+    assessments_count) verified after cross-run replay and after free
+    alteration of the assessment prose."""
+
+    def _minted(self, tmp_path):
+        _suspicious_run(tmp_path)
+        deep = deep_mod.deep_analyse(tmp_path, client=_FakeClient(_reply()))
+        assert deep is not None and "mac" in deep
+        return json.loads((tmp_path / deep_mod.DEEP_FILE).read_text())
+
+    def test_legacy_3field_set_no_longer_verifies(self, tmp_path):
+        from core.sandbox import telemetry_mac
+        on_disk = self._minted(tmp_path)
+        assert not telemetry_mac.verify({
+            "kind": "sandbox-triage-deep",
+            "rules_verdict": on_disk["rules_verdict"] or "",
+            "assessments_count": len(on_disk["assessments"]),
+        }, on_disk["mac"]), (
+            "token still minted over the run-unbound 3-field set — "
+            "cross-run replay and content alteration verify fine"
+        )
+
+    def test_genuine_report_verifies(self, tmp_path):
+        on_disk = self._minted(tmp_path)
+        assert deep_mod.verify_deep_report(on_disk, tmp_path) == "verified"
+
+    def test_assessment_text_alteration_fails_verification(self, tmp_path):
+        on_disk = self._minted(tmp_path)
+        on_disk["assessments"][0]["rationale"] = (
+            "all these signals are known tool noise")
+        assert deep_mod.verify_deep_report(on_disk, tmp_path) == "tampered"
+
+    def test_overall_note_alteration_fails_verification(self, tmp_path):
+        on_disk = self._minted(tmp_path)
+        on_disk["overall_note"] = "nothing to see here"
+        assert deep_mod.verify_deep_report(on_disk, tmp_path) == "tampered"
+
+    def test_cross_run_replay_fails_verification(self, tmp_path):
+        run_a = tmp_path / "run-a"
+        run_b = tmp_path / "run-b"
+        run_a.mkdir()
+        run_b.mkdir()
+        on_disk = self._minted(run_a)
+        # Same install, same key — the token is genuine; only the run
+        # binding distinguishes the directories.
+        (run_b / deep_mod.DEEP_FILE).write_text(json.dumps(on_disk))
+        replayed = json.loads((run_b / deep_mod.DEEP_FILE).read_text())
+        assert deep_mod.verify_deep_report(replayed, run_b) == "tampered"
+
+    def test_unstamped_report_is_legacy(self, tmp_path):
+        assert deep_mod.verify_deep_report(
+            {"rules_verdict": "suspicious"}, tmp_path) == "legacy"
+        assert deep_mod.verify_deep_report(None, tmp_path) == "tampered"
+
+
 class TestPromptConstruction:
     def test_untrusted_content_enveloped_not_in_system(self, tmp_path):
         report = _suspicious_run(tmp_path)

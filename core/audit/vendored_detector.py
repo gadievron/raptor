@@ -99,6 +99,21 @@ _ANCHORED_BANNER_MARKERS: list[re.Pattern[str]] = [
     re.compile(r"generated with the following", re.IGNORECASE),
     re.compile(r"this file is generated", re.IGNORECASE),
 ]
+# Vendored-provenance banners: an upstream import pinned to a
+# revision/version ("Extracted from libcrux revision c46481…",
+# "Imported from tinyxml2 version 9.0"). BOTH the verb-from-project
+# shape AND a pin token are required — prose like "extracted from the
+# packet" never carries "revision <id>", so the family stays precise.
+# Target-controlled text: earns the vendored GLANCE tier only, never
+# a skip (same trust model as every other banner).
+_VENDORED_BANNER_MARKERS: list[re.Pattern[str]] = [
+    re.compile(
+        r"(?:extracted|imported|copied|derived|adapted) from\s+\S+.{0,40}?"
+        r"(?:revision|commit|version|snapshot|release|tag)[:\s]\s*\S+",
+        re.IGNORECASE,
+    ),
+]
+
 _FLOATING_BANNER_MARKERS: list[re.Pattern[str]] = [
     re.compile(r"do not edit", re.IGNORECASE),
     re.compile(r"do not modify(?: this file)? (?:by hand|manually)",
@@ -269,7 +284,19 @@ def classify_file(
             corroborated=corroborated,
         )
 
-    # 3. Vendored-path convention.
+    # 3. Vendored-provenance banner (upstream import pinned to a
+    #    revision) — the vendoring convention of projects that copy
+    #    dependencies flat into the tree instead of under vendor/
+    #    directories, where the path convention below never fires.
+    vendored_banner = _vendored_banner_marker(text)
+    if vendored_banner:
+        return VendorVerdict(
+            kind=KIND_VENDORED,
+            signal="banner",
+            detail=f"vendored-provenance banner: {vendored_banner!r}",
+        )
+
+    # 4. Vendored-path convention.
     segment = _vendored_segment(file_path)
     if segment:
         return VendorVerdict(
@@ -278,7 +305,7 @@ def classify_file(
             detail=f"vendored path segment {segment!r}",
         )
 
-    # 4. Structural signatures (target-controlled — glance tier only).
+    # 5. Structural signatures (target-controlled — glance tier only).
     structure = _structure_detail(text, gaps)
     if structure:
         return VendorVerdict(
@@ -326,6 +353,24 @@ def _banner_marker(text: str) -> str:
                 return m.group(0)[:60]
         for marker in _FLOATING_BANNER_MARKERS:
             m = marker.search(raw)
+            if m:
+                return m.group(0)[:60]
+    return ""
+
+
+def _vendored_banner_marker(text: str) -> str:
+    """First vendored-provenance banner match inside a comment line
+    within the header window, or "" when none. Anchored: the phrase
+    must start the comment text, mirroring the generator banners."""
+    if not text:
+        return ""
+    window = text[:_BANNER_MAX_BYTES]
+    for raw in window.splitlines()[:_BANNER_MAX_LINES]:
+        if not _COMMENT_RE.match(raw):
+            continue
+        comment_text = _COMMENT_LEADER_RE.sub("", raw)
+        for marker in _VENDORED_BANNER_MARKERS:
+            m = marker.match(comment_text)
             if m:
                 return m.group(0)[:60]
     return ""

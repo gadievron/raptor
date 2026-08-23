@@ -36,6 +36,19 @@ class TestIsDangerous:
         assert _is_dangerous(["loadstring"]) == "loadstring"
         assert _is_dangerous(["dofile"]) == "dofile"
 
+    def test_detection_surface_family(self):
+        # Incident regression: audit/security-event writers were not
+        # sinks, so a function selecting BSM audit masks looked
+        # "sink-unreachable" and a confirmed audit-evasion defect in
+        # it was triage-skipped without any LLM review.
+        assert _is_dangerous(["au_user_mask"]) == "au_user_mask"
+        assert _is_dangerous(["getacna"]) == "getacna"
+        assert _is_dangerous(["syslog"]) == "syslog"
+        assert _is_dangerous(["updwtmp"]) == "updwtmp"
+        assert _is_dangerous(["audit_log_user_message"]) == (
+            "audit_log_user_message"
+        )
+
     def test_not_dangerous(self):
         assert _is_dangerous(["print"]) is None
         assert _is_dangerous(["os", "path", "join"]) is None

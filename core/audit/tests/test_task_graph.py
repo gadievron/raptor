@@ -937,3 +937,53 @@ class TestPriorityPropagation:
         # l2 inherits ~10 through two levels and beats the score-5 leaf.
         first = g.pop_ready(1)[0]
         assert first.key == "a.c:l2:1"
+
+
+class TestSoftDependencies:
+    """Incident regression: a top-ranked caller's large vendored callee
+    subtree inherited near-caller rank AND gated the caller, so a
+    cost-capped run paid the whole vendored wave at full price before
+    any standalone first-party function. Glance/vendored callees are
+    now soft dependencies: no caller gating, no rank inheritance."""
+
+    def _graph(self, soft):
+        wq = [
+            {"file": "vnd.h", "name": "vnd_helper", "line_start": 1,
+             "priority_score": 0.0},
+            {"file": "kex.c", "name": "handler", "line_start": 1,
+             "priority_score": 12.0},
+            {"file": "misc.c", "name": "standalone", "line_start": 1,
+             "priority_score": 9.0},
+        ]
+        edges = [{
+            "caller_file": "kex.c", "caller": "handler",
+            "callee_file": "vnd.h", "callee": "vnd_helper",
+        }]
+        return TaskGraph.from_workqueue(
+            wq, edges, schedule="priority",
+            soft_dep_keys=frozenset({"vnd.h:vnd_helper:1"}) if soft
+            else frozenset(),
+        )
+
+    def test_soft_callee_does_not_gate_caller(self):
+        g = self._graph(soft=True)
+        first = g.pop_ready(1)[0]
+        assert first.key == "kex.c:handler:1", (
+            "the caller must be ready without draining its vendored callee"
+        )
+
+    def test_soft_callee_keeps_its_own_rank(self):
+        g = self._graph(soft=True)
+        g.mark_complete(g.pop_ready(1)[0].key)   # handler
+        second = g.pop_ready(1)[0]
+        assert second.key == "misc.c:standalone:1", (
+            "no rank inheritance into the soft callee — the standalone "
+            "score-9 function outranks it"
+        )
+
+    def test_hard_dependency_behaviour_unchanged(self):
+        g = self._graph(soft=False)
+        first = g.pop_ready(1)[0]
+        assert first.key == "vnd.h:vnd_helper:1", (
+            "without softening, the callee inherits rank and gates"
+        )

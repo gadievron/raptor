@@ -118,6 +118,61 @@ def test_drain_stops_when_child_exited_and_pipe_held_elsewhere(monkeypatch):
         child.wait(timeout=10)
 
 
+def test_drain_stops_when_grandchild_chatters_after_target_exit(
+        monkeypatch):
+    """A grandchild that inherited the write end and writes
+    CONTINUOUSLY keeps select() non-empty on every tick, so the
+    idle-branch liveness probe never ran — with timeout=None
+    (legitimate callers exist, e.g. host.py) the drain, and with it
+    the whole run, hung forever after the target exited. The probe
+    must run on a time schedule and the post-exit final sweep must be
+    bounded even against a still-chattering pipe."""
+    monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
+    # raising=False: the constant does not exist on pre-fix code, and
+    # the test must still reach (and demonstrate) the pre-fix hang.
+    monkeypatch.setattr(mod, "_DRAIN_FINAL_SWEEP_S", 0.3, raising=False)
+    out_r, out_w = os.pipe()
+
+    # Target: fork a detached writer that inherits the pipe write end
+    # and chatters forever, then exit immediately.
+    child = _spawn_child(
+        "import os, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    while True:\n"
+        f"        os.write({out_w}, b'x' * 4096)\n"
+        "        time.sleep(0.005)\n"
+        "os._exit(0)\n",
+        out_w,
+    )
+    os.close(out_w)
+    # The pre-fix behaviour is an unbounded hang, so the drain runs on
+    # a worker thread with a generous join budget; the main thread
+    # keeps control either way.
+    import threading
+    result: dict = {}
+
+    def _drain() -> None:
+        result["drained"] = mod._drain_pipes_until_eof(
+            (out_r,), child.pid, deadline=None)
+
+    t = threading.Thread(target=_drain, daemon=True)
+    try:
+        t.start()
+        t.join(8.0)
+        hung = t.is_alive()
+    finally:
+        # Closing the read end EPIPEs the chattering grandchild on its
+        # next write, so nothing outlives the test either way.
+        os.close(out_r)
+        child.wait(timeout=10)
+    assert not hung, (
+        "drain hung on a chattering grandchild after the target "
+        "exited (timeout=None run)"
+    )
+    assert result["drained"][out_r].startswith(b"x"), "no bytes collected"
+
+
 def test_drain_respects_deadline(monkeypatch):
     """A live-but-silent child must not pin the drain past the
     caller's deadline — the caller kills and raises TimeoutExpired."""

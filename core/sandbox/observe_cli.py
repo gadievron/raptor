@@ -148,7 +148,17 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     single path because real probes can produce hundreds (claude
     enumerates many candidate config locations) and the tail is rarely
     useful at a glance.
+
+    Every path / connect target / category name in the profile is
+    ATTACKER-CHOSEN (the probed binary picked what to touch), so each
+    is routed through the same terminal sanitiser the credential
+    banner uses (seatbelt_audit._announce_credential_path_touch):
+    ascii/replace alone keeps ESC/CR/BEL, which are ASCII — a crafted
+    filename could otherwise inject terminal control sequences into
+    the operator's terminal. The ``--json`` mode needs no equivalent:
+    json.dumps escapes all control characters by construction.
     """
+    from core.security.log_sanitisation import sanitise_for_terminal
     SAMPLE = 10
     parts = []
     parts.append(f"command exit code: {return_code}")
@@ -176,7 +186,10 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
         )
         for cat, n in sorted(profile.dropped_by_category.items()):
             if n > 0:
-                parts.append(f"   dropped {n} record(s) of category {cat!r}")
+                parts.append(
+                    f"   dropped {n} record(s) of category "
+                    f"{sanitise_for_terminal(str(cat), max_len=64)!r}"
+                )
         parts.append(
             "   re-run with --audit-budget=<larger N> to capture "
             "every event."
@@ -187,7 +200,8 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
         if not items:
             parts.append(f"  (none — binary did no {total_label})")
             return
-        parts.extend(f"  {p}" for p in items[:SAMPLE])
+        parts.extend(f"  {sanitise_for_terminal(str(p))}"
+                     for p in items[:SAMPLE])
         if len(items) > SAMPLE:
             parts.append(
                 f"  ... (+{len(items) - SAMPLE} more; "
@@ -203,7 +217,10 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     if not profile.connect_targets:
         parts.append("  (none — binary made no connect() calls)")
     else:
-        parts.extend(f"  {t.ip}:{t.port} ({t.family})" for t in profile.connect_targets)
+        parts.extend(
+            f"  {sanitise_for_terminal(str(t.ip), max_len=64)}:{t.port}"
+            f" ({sanitise_for_terminal(str(t.family), max_len=32)})"
+            for t in profile.connect_targets)
     return "\n".join(parts)
 
 

@@ -105,9 +105,39 @@ class TestTruncateGapWarning(unittest.TestCase):
                 ll._make_landlock_preexec(["/tmp"])
 
     def test_no_warning_on_abi3(self):
+        # ABI 3 has TRUNCATE, so no truncate-gap warning; the
+        # unrelated scoping notice (needs ABI 6) is latched out so
+        # this test keeps pinning only the truncate contract.
         from core.sandbox import landlock as ll
         with patch.object(ll, "_truncate_warned", False), \
+             patch.object(ll, "_scoping_warned", True), \
              patch.object(ll, "_get_landlock_abi", return_value=3), \
+             self.assertNoLogs("core.sandbox.landlock", level="WARNING"):
+            ll._make_landlock_preexec(["/tmp"])
+
+
+class TestScopingGapWarning(unittest.TestCase):
+    def test_warns_once_below_abi6(self):
+        from core.sandbox import landlock as ll
+        with patch.object(ll, "_scoping_warned", False), \
+             patch.object(ll, "_truncate_warned", True), \
+             patch.object(ll, "_get_landlock_abi", return_value=3):
+            with self.assertLogs(
+                    "core.sandbox.landlock", level="WARNING") as logs:
+                ll._make_landlock_preexec(["/tmp"])
+            self.assertEqual(
+                len([m for m in logs.output
+                     if "scoping unavailable" in m]), 1)
+            # latched: a second build emits nothing further
+            with self.assertNoLogs(
+                    "core.sandbox.landlock", level="WARNING"):
+                ll._make_landlock_preexec(["/tmp"])
+
+    def test_no_scoping_warning_at_abi6(self):
+        from core.sandbox import landlock as ll
+        with patch.object(ll, "_scoping_warned", False), \
+             patch.object(ll, "_truncate_warned", True), \
+             patch.object(ll, "_get_landlock_abi", return_value=6), \
              self.assertNoLogs("core.sandbox.landlock", level="WARNING"):
             ll._make_landlock_preexec(["/tmp"])
 

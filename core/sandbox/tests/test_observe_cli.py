@@ -145,6 +145,47 @@ class TestFormatSummary:
                               kept=True, return_code=0)
         assert f"audit-run-dir kept at: {tmp_path}" in out
 
+    def test_summary_sanitises_attacker_chosen_strings(self, tmp_path):
+        """Every path / connect target / drop category in the profile
+        is attacker-chosen (the probed binary picked what to touch) —
+        the summary is operator-terminal output and must route them
+        through the credential-banner sanitiser: ascii alone keeps
+        ESC/CR/BEL, so a crafted filename could inject terminal
+        control sequences (title-set, cursor games, screen clear)
+        into the operator's terminal."""
+        evil = "\x1b]0;pwned\x07/etc/passwd\rCLEAN"
+        prof = ObserveProfile(
+            paths_read=[evil],
+            paths_written=["\x1b[2J/tmp/x"],
+            paths_stat=["/ok\x07bel"],
+            connect_targets=[
+                ConnectTarget(ip="\x1b[31m1.2.3.4", port=443,
+                              family="AF\x1bINET"),
+            ],
+            budget_truncated=True,
+            dropped_by_category={"file-read\x1b[0m": 3},
+        )
+        out = _format_summary(prof, run_dir=tmp_path, kept=False,
+                              return_code=0)
+        for ch, name in ((chr(0x1B), "ESC"), ("\r", "CR"),
+                         ("\x07", "BEL")):
+            assert ch not in out, (
+                f"raw {name} reached the operator terminal via the "
+                f"observe summary"
+            )
+        # The content itself survives, escaped and readable.
+        assert "/etc/passwd" in out
+        assert "1.2.3.4" in out
+
+    def test_summary_bounds_pathological_path_length(self, tmp_path):
+        """A 100KB 'path' must not flood the terminal — the sanitiser
+        truncates with an explicit elision marker."""
+        prof = ObserveProfile(paths_read=["/" + "A" * 100_000])
+        out = _format_summary(prof, run_dir=tmp_path, kept=False,
+                              return_code=0)
+        assert len(out) < 10_000
+        assert "chars]" in out  # elision marker
+
     def test_summary_empty_profile_communicates_clearly(self, tmp_path):
         out = _format_summary(ObserveProfile(), run_dir=tmp_path,
                               kept=False, return_code=0)

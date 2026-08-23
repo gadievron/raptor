@@ -225,6 +225,17 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
 # which stay trace-allow so the tracer can report what the workload
 # wanted.
 #
+# INVARIANT (pinned by test_seccomp_audit): every _SECCOMP_BLOCK_ALWAYS
+# entry appears here. That set is by definition "no legitimate use in a
+# target build or a debugger" — converting any of it to allow-and-log
+# hands the audited child the primitive for the run's duration. The
+# omission this closes: perf_event_open (side channels / kernel attack
+# surface), pidfd_getfd (descriptor theft from same-UID host processes
+# on a Landlock-only, no-pid-ns audit run), kcmp (cross-process
+# side-channel probe), open_by_handle_at / name_to_handle_at
+# (path-check bypass by filesystem handle) were TRACE under audit while
+# being classified "DEFINITELY blocked in every filter mode".
+#
 # The blocked tty ioctls (TIOCSTI et al) get the same treatment via
 # an unconditional ERRNO action on the ioctl rules — TIOCSTI injects
 # keystrokes into the operator's shell, which is not observable-then-
@@ -250,9 +261,7 @@ _SECCOMP_BLOCK_UNLESS_DEBUG = (
 # not worth the complexity for syscalls that are pure attack signal.
 _AUDIT_HARD_DENY_SYSCALLS = frozenset({
     "ptrace", "process_vm_readv", "process_vm_writev",
-    "keyctl", "add_key", "request_key",
-    "bpf", "userfaultfd",
-    "io_uring_setup", "io_uring_enter", "io_uring_register",
+    *_SECCOMP_BLOCK_ALWAYS,
 })
 
 # socket() family / type values we reject (via argument filter on arg 0 / 1).
@@ -474,8 +483,8 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     attached ptrace tracer (core/sandbox/tracer.py) instead of erroring
     the syscall. Also adds open/openat/connect to the trace set for b3
     filesystem + network audit coverage. EXCEPTION: the escape-primitive
-    subset (_AUDIT_HARD_DENY_SYSCALLS — ptrace/process_vm_*, keyring,
-    bpf/userfaultfd, io_uring_*), the blocked tty ioctls, AND the
+    subset (_AUDIT_HARD_DENY_SYSCALLS — ptrace/process_vm_* plus the
+    whole _SECCOMP_BLOCK_ALWAYS set), the blocked tty ioctls, AND the
     socket()-argument rules (blocked families, SOCK_RAW, the
     SCTP/DCCP/MPTCP kernel-bypass transports, the UDP block)
     keep the ERRNO action under audit too; converting THOSE denials
@@ -1064,8 +1073,32 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     try:
                         import array as _array
                         import socket as _socket
+                        # Pin the private-tmpfs device ids NOW — after
+                        # setup_mount_ns (step 9) and before the target
+                        # ever runs — and ship them with the notify fd.
+                        # The supervisor treats this pinned set as the
+                        # ONLY private-tmpfs identity evidence: a
+                        # live re-resolution of the child's /tmp would
+                        # follow whatever the target later bind-mounts
+                        # there (mount(2) is deliberately unblocked at
+                        # the seccomp layer and pre-6.15 Landlock does
+                        # not freeze mount topology), letting the
+                        # shared rw output bind classify as private.
+                        # Payload: b"F2" + 1-byte count + count
+                        # little-endian u64 device ids. os.stat only —
+                        # fork-safe (see the module contract).
+                        _devs = bytearray()
+                        _ndev = 0
+                        for _tp in (b"/tmp", b"/run", b"/dev/shm"):
+                            try:
+                                _sd = os.stat(_tp).st_dev
+                            except OSError:
+                                continue
+                            _devs += _sd.to_bytes(8, "little")
+                            _ndev += 1
                         unix_scope_export_sock.sendmsg(
-                            [b"F"],
+                            [b"F2" + _ndev.to_bytes(1, "little")
+                             + bytes(_devs)],
                             [(_socket.SOL_SOCKET, _socket.SCM_RIGHTS,
                               _array.array("i", [_nfd]))],
                         )

@@ -2893,6 +2893,12 @@ def run_joern_pre_sweep(
                     continue
                 key = f"{step_file}:{flow.source_method}"
                 flows_by_key.setdefault(key, []).append(flow)
+        if status_out is not None:
+            # The taint query ran through to a flow set — distinguishes
+            # a genuinely empty sweep (cacheable) from the early-return
+            # skip cases above (joern missing, no script), which leave
+            # status_out untouched.
+            status_out["completed"] = True
         return flows_by_key
 
     build_kwargs: dict[str, Any] = {
@@ -2925,6 +2931,8 @@ def run_joern_pre_sweep(
         )
         if result.errors:
             logger.warning("joern pre-sweep errors: %s", result.errors)
+        if status_out is not None:
+            status_out["errors"] = [str(e) for e in (result.errors or [])]
 
         flows_by_key: dict[str, list] = {}
         for flow in result.flows:
@@ -2936,6 +2944,8 @@ def run_joern_pre_sweep(
                 key = f"{step_file}:{flow.source_method}"
                 flows_by_key.setdefault(key, []).append(flow)
 
+        if status_out is not None:
+            status_out["completed"] = True
         return flows_by_key
     finally:
         cleanup_cpg(cpg)

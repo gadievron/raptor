@@ -46,8 +46,20 @@ SAFETY_CFLAGS  = -O2 -std=c11 -Wall -Wextra -Werror -Wshadow -Wformat=2 \
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
     SAFETY_LDFLAGS =
+    COORD_SAFETY_LDFLAGS =
 else
     SAFETY_LDFLAGS = -pie -Wl,-z,now -Wl,-z,relro -Wl,-z,noexecstack
+    # The coord launcher is STATICALLY linked (static PIE). In the
+    # AppArmor grant mode the profile attaches by path with no file
+    # capabilities, so exec of the launcher does not set AT_SECURE and
+    # a dynamic loader would honour the INVOKER's LD_PRELOAD/LD_AUDIT/
+    # LD_LIBRARY_PATH — running a local user's constructor inside the
+    # profiled process (userns + capability grant) before main() and
+    # the invoker-identity gate. No dynamic loader ⇒ that injection
+    # class is inert by construction. Trade-off (accepted, documented
+    # in the .c header): libc security updates require a rebuild.
+    COORD_SAFETY_LDFLAGS = -static-pie -Wl,-z,now -Wl,-z,relro \
+                           -Wl,-z,noexecstack
 endif
 
 CFLAGS  ?=
@@ -67,7 +79,18 @@ TEST_SRC     := helpers_test.c
 all: $(COORD_BIN) $(GIDMAP_BIN)
 
 $(COORD_BIN): $(COORD_SRC) $(VALIDATE_HDR)
-	$(CC) $(CFLAGS) $(SAFETY_CFLAGS) $(LDFLAGS) $(SAFETY_LDFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(SAFETY_CFLAGS) $(LDFLAGS) $(COORD_SAFETY_LDFLAGS) -o $@ $<
+ifneq ($(UNAME_S),Darwin)
+	@if command -v readelf >/dev/null 2>&1; then \
+	    if readelf -l $@ 2>/dev/null | grep -q 'INTERP'; then \
+	        echo "ERROR: $@ is dynamically linked (PT_INTERP present)" \
+	             "— the static-pie hardening did not apply; the" \
+	             "AppArmor grant mode would honour the invoker's" \
+	             "LD_PRELOAD pre-main. Refusing the build."; \
+	        rm -f $@; exit 1; \
+	    fi; \
+	fi
+endif
 
 $(GIDMAP_BIN): $(GIDMAP_SRC) $(VALIDATE_HDR)
 	$(CC) $(CFLAGS) $(SAFETY_CFLAGS) $(LDFLAGS) $(SAFETY_LDFLAGS) -o $@ $<
@@ -135,6 +158,18 @@ help:
 
 # Capability inspection. Doesn't validate apparmor or selinux state.
 check:
+	@if [ -e $(COORD_BIN) ] && [ "$(UNAME_S)" != "Darwin" ] \
+	    && command -v readelf >/dev/null 2>&1; then \
+	    if readelf -l $(COORD_BIN) 2>/dev/null | grep -q 'INTERP'; then \
+	        echo "  WARNING: $(COORD_BIN) is DYNAMICALLY linked — a stale"; \
+	        echo "  pre-static build. The AppArmor grant mode honours the"; \
+	        echo "  invoker's LD_PRELOAD at its exec. Rebuild: make clean all"; \
+	    fi; \
+	    if [ $(COORD_BIN) -ot $(COORD_SRC) ]; then \
+	        echo "  WARNING: $(COORD_BIN) is older than its source —"; \
+	        echo "  rebuild: make clean all"; \
+	    fi; \
+	fi
 	@if [ -e $(COORD_BIN) ]; then \
 	    if command -v getcap >/dev/null 2>&1; then \
 	        caps="$$(getcap $(COORD_BIN) 2>/dev/null || true)"; \

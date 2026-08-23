@@ -113,6 +113,20 @@ def built(tmp_path_factory) -> Path:
         os.chown(p, -1, _primary_gid())
     r = _run(["make", "-C", str(helpers)], timeout=120)
     if r.returncode != 0:
+        # The coord launcher links -static-pie, which needs the static
+        # libc archive (glibc-static is not installed by default on
+        # RHEL-family hosts). That is a missing OPTIONAL toolchain
+        # component, not a code regression — skip like the cc/make
+        # gate does. Any other build failure stays loud.
+        _static_markers = ("cannot find -lc", "rcrt1.o",
+                           "cannot find crt", "static-pie")
+        blob = f"{r.stdout}\n{r.stderr}"
+        if any(m in blob for m in _static_markers):
+            pytest.skip(
+                "C toolchain lacks static-libc support "
+                "(glibc-static not installed) — cannot build the "
+                "static-pie coord launcher here"
+            )
         pytest.fail(f"helper build failed:\n{r.stdout}\n{r.stderr}")
     for name in ("raptor-coord-launcher", "raptor-gidmap-allow"):
         binary = helpers / name
@@ -163,6 +177,111 @@ class TestBuild:
         assert r.returncode == 0, f"harness failed:\n{r.stdout}\n{r.stderr}"
         assert "FAIL" not in r.stdout
         assert "all helper contract checks passed" in r.stdout
+
+
+def _elf_program_headers(binary: Path) -> tuple[bytes, list[tuple[int, int, int]]]:
+    """(raw bytes, [(p_type, p_offset, p_filesz), ...]) for a 64-bit
+    little-endian ELF. Pure-Python so the assertion doesn't depend on
+    readelf being installed."""
+    import struct
+
+    data = binary.read_bytes()
+    assert data[:4] == b"\x7fELF", "not an ELF binary"
+    if data[4] != 2 or data[5] != 1:
+        pytest.skip("static-link ELF check written for ELFCLASS64 LSB")
+    e_phoff = struct.unpack_from("<Q", data, 0x20)[0]
+    e_phentsize = struct.unpack_from("<H", data, 0x36)[0]
+    e_phnum = struct.unpack_from("<H", data, 0x38)[0]
+    headers = []
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        p_type = struct.unpack_from("<I", data, off)[0]
+        p_offset = struct.unpack_from("<Q", data, off + 0x08)[0]
+        p_filesz = struct.unpack_from("<Q", data, off + 0x20)[0]
+        headers.append((p_type, p_offset, p_filesz))
+    return data, headers
+
+
+class TestCoordLauncherStaticLink:
+    """The coord launcher must be STATICALLY linked.
+
+    In the AppArmor grant mode the profile attaches by path and grants
+    userns+capability with NO file capabilities, so exec of the
+    launcher does not set AT_SECURE — a dynamically-linked launcher
+    would honour the INVOKER's LD_PRELOAD/LD_AUDIT/LD_LIBRARY_PATH and
+    run a local user's constructor inside the profiled process BEFORE
+    main() and the invoker-identity gate. Static linking removes the
+    dynamic loader, so the variable class has nothing to act on.
+    """
+
+    _PT_INTERP = 3
+    _PT_DYNAMIC = 2
+    _DT_NEEDED = 1
+
+    def test_no_program_interpreter(self, built: Path) -> None:
+        _, headers = _elf_program_headers(built / "raptor-coord-launcher")
+        assert not any(t == self._PT_INTERP for t, _o, _s in headers), (
+            "raptor-coord-launcher carries PT_INTERP (dynamically "
+            "linked) — the invoker's LD_PRELOAD would run pre-main "
+            "under the AppArmor profile's userns+capability grant"
+        )
+
+    def test_no_dt_needed_dependencies(self, built: Path) -> None:
+        import struct
+
+        data, headers = _elf_program_headers(
+            built / "raptor-coord-launcher")
+        needed = 0
+        for p_type, p_offset, p_filesz in headers:
+            if p_type != self._PT_DYNAMIC:
+                continue
+            for off in range(p_offset, p_offset + p_filesz, 16):
+                d_tag = struct.unpack_from("<Q", data, off)[0]
+                if d_tag == 0:  # DT_NULL — end of dynamic section
+                    break
+                if d_tag == self._DT_NEEDED:
+                    needed += 1
+        assert needed == 0, (
+            f"raptor-coord-launcher lists {needed} DT_NEEDED shared-"
+            f"library dependencies — not a static link"
+        )
+
+    def test_ld_preload_constructor_is_inert(self, built: Path,
+                                             tmp_path: Path) -> None:
+        """Behavioural pin: a constructor .so named in LD_PRELOAD must
+        NOT run when the launcher executes (the pre-main injection the
+        static link exists to kill). Exercised via the refusal path —
+        no grant needed; a dynamic launcher runs the constructor even
+        while refusing its argv."""
+        ctor_src = tmp_path / "ctor.c"
+        ctor_src.write_text(
+            "#include <stdio.h>\n"
+            "#include <stdlib.h>\n"
+            "__attribute__((constructor)) static void pwn(void) {\n"
+            "    const char *m = getenv(\"RAPTOR_TEST_CTOR_MARKER\");\n"
+            "    if (m) { FILE *f = fopen(m, \"w\");\n"
+            "             if (f) fclose(f); }\n"
+            "}\n"
+        )
+        ctor_so = tmp_path / "ctor.so"
+        r = _run(["cc", "-shared", "-fPIC", "-o", str(ctor_so),
+                  str(ctor_src)])
+        assert r.returncode == 0, f"ctor build failed: {r.stderr}"
+        marker = tmp_path / "ctor-ran"
+        env = dict(_ENV)
+        env["LD_PRELOAD"] = str(ctor_so)
+        env["RAPTOR_TEST_CTOR_MARKER"] = str(marker)
+        r = subprocess.run(
+            [str(built / "raptor-coord-launcher")],
+            capture_output=True, text=True, timeout=30,
+            check=False, env=env,
+        )
+        assert r.returncode == 3  # argv-contract refusal, as ever
+        assert not marker.exists(), (
+            "LD_PRELOAD constructor executed inside the launcher — "
+            "pre-main injection is live; the binary must be statically "
+            "linked"
+        )
 
 
 class TestCoordLauncherContract:

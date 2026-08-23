@@ -56,7 +56,11 @@ def _resolve_sandbox_binary(name: str) -> str:
     """
     import os
     with state._cache_lock:
-        cache_attr = f"_{name}_path_cache"
+        # Attribute-safe name: tool names may carry hyphens
+        # (sandbox-exec) — the state module declares these caches as
+        # identifiers, and the test-suite snapshot guard enumerates
+        # them, so the attr must be a valid declared identifier.
+        cache_attr = f"_{name.replace('-', '_')}_path_cache"
         cached = getattr(state, cache_attr, None)
         if cached is not None:
             if cached is False:

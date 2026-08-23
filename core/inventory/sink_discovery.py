@@ -247,12 +247,20 @@ def _build_dangerous_set() -> frozenset[str]:
     combined = set(_SOURCE_LEVEL_SINKS)
     try:
         from core.function_taxonomy import (
+            DETECTION_SURFACE_FUNCS,
             EXEC_FUNCS,
             MEMORY_COPY_FUNCS,
             SCAN_FAMILY_FUNCS,
             STRING_OVERFLOW_FUNCS,
         )
-        combined |= EXEC_FUNCS | MEMORY_COPY_FUNCS | SCAN_FAMILY_FUNCS | STRING_OVERFLOW_FUNCS
+        # DETECTION_SURFACE_FUNCS: audit/security-event writers are
+        # sinks too — a defect on the path to them is audit evasion,
+        # and without them a confirmed audit-evasion defect looked
+        # "sink-unreachable" to triage and was skipped unreviewed.
+        combined |= (
+            EXEC_FUNCS | MEMORY_COPY_FUNCS | SCAN_FAMILY_FUNCS
+            | STRING_OVERFLOW_FUNCS | DETECTION_SURFACE_FUNCS
+        )
     except ImportError:
         pass
     return frozenset(combined)

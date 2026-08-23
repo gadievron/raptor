@@ -1033,7 +1033,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                  True and sanitisation cannot engage (unsupported
                  platform, no mount-ns, no target/output), raise
                  RuntimeError instead of logging the degradation
-                 warning.
+                 warning. Also binds PER-RUN coverage: a per-overlay
+                 bind failure or missing target inside the mount-ns
+                 child aborts setup (instead of skip-and-continue),
+                 and a mount-ns setup/exec failure raises
+                 SandboxSetupError instead of degrading to the
+                 Landlock-only fallback (which cannot apply the
+                 persona at all).
         etc_overlay: Dict mapping in-sandbox /etc paths (e.g.
                  "/etc/sudoers") to host source files bind-mounted
                  over them during mount-ns init (mount-ns backend
@@ -1501,9 +1507,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # Dedicated per-context lane: attribution for the audit
             # decision, and the Landlock/SBPL pin keeps this context's
             # children off the shared main listener entirely. On bind
-            # failure fall back to the shared port — connections there
-            # carry no lane, so gate 1 stays ENFORCING for them (audit
-            # leniency degrades, the posture does not).
+            # failure FAIL THE CONTEXT: the shared listener's gate 1
+            # enforces the process-global UNION of every registered
+            # context's hosts, so falling back there silently widens a
+            # lane-failed context from its own allowlist to whatever
+            # its concurrent siblings declared — and lane-bind failure
+            # is plausibly forceable (fd/port exhaustion by a sibling
+            # child). Mirrors the loopback_unix_bridges fail-closed
+            # shape below; the caller decides whether to retry.
             try:
                 _proxy_tcp_lane_port = proxy_instance.bind_tcp_lane(
                     label=caller_label or "sandbox",
@@ -1511,17 +1522,18 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     allowed_hosts=proxy_hosts,
                     allowed_ports=proxy_allowed_ports,
                 )
-            except Exception as _lane_exc:  # noqa: BLE001 — fail closed to enforcing
-                _proxy_tcp_lane_port = None
-                logger.warning(
-                    "Sandbox: proxy tcp lane bind failed (%s); "
-                    "children use the shared listener — audit "
-                    "leniency unavailable for this context.",
-                    _lane_exc,
+            except Exception as _lane_exc:  # noqa: BLE001 — any bind failure is fail-closed
+                from .errors import SandboxSetupError
+                msg = (
+                    "egress-proxy TCP lane bind failed for this "
+                    "context — refusing to fall back to the shared "
+                    "listener, whose connect gate enforces the union "
+                    "of ALL registered contexts' allowlists rather "
+                    "than this context's own. Free up local "
+                    "ports/file descriptors and retry."
                 )
-            allowed_tcp_ports = [
-                _proxy_tcp_lane_port or proxy_instance.port
-            ]
+                raise SandboxSetupError(msg) from _lane_exc
+            allowed_tcp_ports = [_proxy_tcp_lane_port]
             # Operator-visible engagement notice for tier 2, once per
             # process (mirrors the tier-3 advisory warning above).
             # Pre-fix this tier engaged with only DEBUG lines, yet it
@@ -2290,8 +2302,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             _persona_tmpdir = _tf.mkdtemp(prefix="raptor-persona-")
             _effective_cpu_count = cpu_count if cpu_count is not None else 4
             try:
+                # strict rides ON the persona: apply_overlay (in the
+                # mount-ns child) treats per-target failures as setup
+                # failures instead of skip-and-continue, so a
+                # fail-closed persona request cannot silently run
+                # with host-real identity files.
                 _persona = build_persona(
                     Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
+                    strict=bool(require_sanitisation),
                 )
             except BaseException:
                 _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
@@ -3252,6 +3270,38 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "reasonable mount-ns bind set; audit can't engage "
                     "for this tool. Other tools in the same workflow "
                     "still audit normally.")
+        # Persona fail-closed gate (pre-spawn arm): every route that
+        # abandons the mount-ns spawn path — pass_fds/input= kwarg
+        # compat, the B fallback (cmd[0] outside the bind tree), a
+        # speculative-failure-cache hit, or a per-call
+        # skip_mount_ns=True — runs the command WITHOUT the
+        # fingerprint persona (it only rides run_sandboxed's mount-ns
+        # setup). A require_sanitisation caller must get a refusal,
+        # not a silent host-real run. Mirrors rootfs gate #2 above;
+        # the post-spawn M/X arm is gated separately below.
+        if (_persona is not None and require_sanitisation
+                and (not spawn_eligible or _skip_mount_ns)):
+            from .errors import SandboxSetupError
+            _reason = (
+                _b_fallback_reason
+                or ("per-call skip_mount_ns=True bypasses the "
+                    "mount-ns backend" if _skip_mount_ns else
+                    "pass_fds=/input= are not plumbed through the "
+                    "fork-based spawn path")
+            )
+            msg_0 = (
+                f"sandbox(require_sanitisation=True).run() cannot "
+                f"engage the mount-ns spawn backend for this call "
+                f"({_reason}) — refusing the Landlock-only path, "
+                f"which cannot apply the fingerprint persona."
+            )
+            raise SandboxSetupError(
+                msg_0,
+                _b_fallback_instr
+                or "drop pass_fds=/input=/skip_mount_ns= for this "
+                   "call, or drop require_sanitisation= to accept "
+                   "host-real identity surfaces on degrade.",
+            )
         # Audit mode (b2/b3) requires the _spawn path because the
         # tracer needs to PTRACE_SEIZE a target the parent forked
         # itself. The Landlock-only fallback uses bare subprocess.run
@@ -3667,6 +3717,33 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     "present) and cmd[0] names a path "
                                     "that exists INSIDE the image.",
                                 )
+                            # Persona fail-closed gate: the Landlock-
+                            # only retry below runs WITHOUT mount-ns,
+                            # so the fingerprint persona (bind-mounts
+                            # + UTS) silently does not apply — the
+                            # exact half-state require_sanitisation
+                            # forbids. This is also where a strict
+                            # apply_overlay per-target failure lands
+                            # ('M' status from the spawn child).
+                            if _persona is not None and require_sanitisation:
+                                from .errors import SandboxSetupError
+                                msg_0 = (
+                                    f"sandbox(require_sanitisation="
+                                    f"True): mount-ns setup or exec "
+                                    f"failed ({_setup_status[0]}: "
+                                    f"{_setup_status[1]}) — refusing "
+                                    f"the Landlock-only fallback, "
+                                    f"which cannot apply the "
+                                    f"fingerprint persona."
+                                )
+                                raise SandboxSetupError(
+                                    msg_0,
+                                    "fix the mount-ns failure (see "
+                                    "the child diagnostic above) or "
+                                    "drop require_sanitisation= to "
+                                    "accept host-real identity "
+                                    "surfaces on degrade.",
+                                )
                             # Populate the per-cmd cache so future
                             # calls for the same binary skip mount-ns
                             # directly (saves the doubled subprocess
@@ -3897,6 +3974,32 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             "degrades gracefully (e.g. `--sandbox "
                             "full`). RAPTOR will not silently "
                             "downgrade for you.",
+                        )
+                    # Persona fail-closed gate (catch-all arm): the
+                    # Landlock-only path never applies the fingerprint
+                    # persona, so any demotion reaching here —
+                    # including mid-setup spawn errors and an
+                    # availability flap after the context-entry check
+                    # — is the host-real half-state
+                    # require_sanitisation forbids. The early gates
+                    # (pre-spawn kwarg/B-fallback/cache/skip_mount_ns,
+                    # post-spawn M/X) give more specific messages;
+                    # this one backstops every other route.
+                    if _persona is not None and require_sanitisation:
+                        from .errors import SandboxSetupError
+                        _demote_why = (
+                            _mount_ns_degraded or _b_fallback_reason
+                            or "mount-ns spawn was demoted for this "
+                               "call")
+                        raise SandboxSetupError(
+                            "sandbox(require_sanitisation=True): this "
+                            "call was demoted from the mount-ns "
+                            f"backend ({_demote_why}) — refusing the "
+                            "Landlock-only path, which cannot apply "
+                            "the fingerprint persona.",
+                            "fix the demotion cause, or drop "
+                            "require_sanitisation= to accept "
+                            "host-real identity surfaces on degrade.",
                         )
                     if restrict_reads and not exclude_tmp_baseline:
                         import tempfile as _tempfile_dem
@@ -4840,8 +4943,12 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
     """Run a single command in a sandbox. Convenience wrapper.
 
     Use this instead of subprocess.run() for any command that processes
-    untrusted content. Applies get_safe_env(), resource limits, and
-    namespace isolation automatically.
+    untrusted content — and prefer run_untrusted() when the COMMAND
+    ITSELF comes from or is influenced by the analysed target: it is
+    the fail-closed variant (refuses to execute when the sandbox
+    cannot engage, where this wrapper degrades with a warning).
+    Applies get_safe_env(), resource limits, and namespace isolation
+    automatically.
 
     Accepts the same sandbox-configuration kwargs as sandbox() — forwards
     them into a one-shot context.
@@ -5144,8 +5251,11 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     TypeError because they would relax the untrusted-execution contract
     this helper exists to enforce. Also forbidden via TypeError:
     `block_network` and `allowed_tcp_ports` — run_untrusted's contract
-    is namespace-level network block, no TCP allowlist; callers
-    needing varied network policy use sandbox() directly.
+    is namespace-level network block, no TCP allowlist — and
+    `start_new_session` — setsid is part of the same contract (no
+    controlling tty, so /dev/tty cannot read the operator's
+    keystrokes); callers needing varied network/session policy use
+    sandbox() directly.
     """
     # Truthy check — `target=""` and `output=""` must also be rejected,
     # otherwise the caller thinks they engaged Landlock but got no
@@ -5165,10 +5275,18 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     _degraded_no_pidns = _require_userns_or_optin(
         "run_untrusted", restrict_reads,
     )
+    # start_new_session is deliberately NOT accepted: the setsid
+    # detachment below is part of the untrusted-execution contract
+    # (without it /dev/tty resolves to the operator's controlling
+    # terminal and a sandboxed target polls their keystrokes), so a
+    # caller-supplied False would silently reopen that channel.
+    # Callers that genuinely need a controlling tty (interactive gdb
+    # under /crash-analysis) use sandbox() directly, per the setsid
+    # rationale comment below.
     _UNTRUSTED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
         "encoding", "errors",
-        "stdin", "input", "start_new_session", "pass_fds",
+        "stdin", "input", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir", "audit_required",
         "observe", "exclude_tmp_baseline",
@@ -5221,9 +5339,9 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     # a new session leader with no controlling tty, so /dev/tty returns
     # ENXIO. Callers who actually want a controlling tty (interactive
     # gdb under /crash-analysis) must use sandbox() directly and can
-    # pass start_new_session=False explicitly.
-    if "start_new_session" not in kwargs:
-        kwargs["start_new_session"] = True
+    # pass start_new_session=False explicitly — this helper refuses
+    # the kwarg outright (allowlist above), so setsid is unconditional.
+    kwargs["start_new_session"] = True
     # macOS has no private mount view: unless excluded, Seatbelt seeds
     # host-shared /private/tmp into the write exceptions (and, under
     # restrict_reads, the read allowlist), so same-UID cross-run temp
@@ -5448,10 +5566,13 @@ def run_untrusted_networked(
     _degraded_no_pidns = _require_userns_or_optin(
         "run_untrusted_networked", restrict_reads,
     )
+    # start_new_session refused for the same reason as run_untrusted:
+    # setsid detachment is contract, not preference (see the rationale
+    # there).
     _NETWORKED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
         "encoding", "errors",
-        "stdin", "input", "start_new_session", "pass_fds",
+        "stdin", "input", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir", "audit_required",
         "observe", "exclude_tmp_baseline",
@@ -5467,8 +5588,7 @@ def run_untrusted_networked(
         raise TypeError(msg)
     if "stdin" not in kwargs and "input" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
-    if "start_new_session" not in kwargs:
-        kwargs["start_new_session"] = True
+    kwargs["start_new_session"] = True
     if keep_trust_markers:
         # The unshare fallback routes the env through the pid1 shim,
         # which strips both markers unconditionally before exec'ing

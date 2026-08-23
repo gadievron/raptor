@@ -2183,7 +2183,7 @@ def run_sandboxed(
                 fds = _array.array("i")
                 try:
                     msg, ancdata, _fl, _ad = sp.recvmsg(
-                        1, _socket_mod2.CMSG_SPACE(fds.itemsize))
+                        64, _socket_mod2.CMSG_SPACE(fds.itemsize))
                 except (OSError, TimeoutError):
                     return
                 if not msg:
@@ -2198,6 +2198,35 @@ def run_sandboxed(
                     return
                 notify_fd = fds[0]
                 os.set_inheritable(notify_fd, False)
+                # Private-tmpfs device ids pinned by the child AFTER
+                # mount setup and BEFORE the target exec (payload:
+                # b"F2" + count byte + count u64 LE device ids). This
+                # pinned set is the supervisor's only private-tmpfs
+                # identity evidence — a malformed/short payload yields
+                # the EMPTY set (pathname connects then fail closed to
+                # the allowlisted instance sockets), never a live
+                # re-resolution of the child's rearrangeable view.
+                _tmpfs_devs: frozenset[int] = frozenset()
+                if len(msg) >= 3 and msg[:2] == b"F2":
+                    _want = 3 + 8 * msg[2]
+                    while len(msg) < _want:
+                        try:
+                            _more = sp.recv(_want - len(msg))
+                        except (OSError, TimeoutError):
+                            break
+                        if not _more:
+                            break
+                        msg += _more
+                    if len(msg) >= _want:
+                        _tmpfs_devs = frozenset(
+                            int.from_bytes(msg[i:i + 8], "little")
+                            for i in range(3, _want, 8))
+                if not _tmpfs_devs:
+                    logger.warning(
+                        "unix-scope: no private-tmpfs device pins "
+                        "arrived with the notify fd — pathname "
+                        "AF_UNIX connects will be limited to the "
+                        "allowlisted instance sockets (fail closed).")
                 from ._unix_scope import UnixScopeSupervisor
                 _allowed = [p for p in ([proxy_unix_socket]
                                         + [b[1] for b in
@@ -2216,7 +2245,8 @@ def run_sandboxed(
                     allowed_tcp_ports=(list(allowed_tcp_ports)
                                        if allowed_tcp_ports else None),
                     netns_isolated=bool(block_network
-                                        and not inherit_netns))
+                                        and not inherit_netns),
+                    private_tmpfs_devs=_tmpfs_devs)
                 _unix_scope_supervisor.append(sup)
                 sup.serve_forever()
             except Exception:  # noqa: BLE001 — supervisor thread must never propagate

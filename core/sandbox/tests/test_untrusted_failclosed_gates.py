@@ -166,3 +166,46 @@ class TestUntrustedRequiresSeccomp(unittest.TestCase):
              patch.object(ctx._seccomp, "check_seccomp_available",
                           return_value=False):
             self.assertFalse(self._call())
+
+
+class TestStartNewSessionIsContract(unittest.TestCase):
+    """setsid detachment is part of the untrusted-execution contract:
+    without it /dev/tty resolves to the operator's controlling
+    terminal and a sandboxed target polls their keystrokes. The
+    hardened helpers previously ACCEPTED start_new_session=False
+    through their kwargs allowlist — forwarding the suppression the
+    setsid rationale comment says requires sandbox() — so any
+    internal caller could reopen the channel. Both helpers must
+    refuse the kwarg via TypeError, like block_network."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="raptor-snsg-")
+        self.addCleanup(self._tmp.cleanup)
+        # The host-capability preflight is irrelevant to the kwarg
+        # contract — neutralise it so the tests are hermetic on
+        # namespace-less CI hosts.
+        p = patch.object(ctx, "_require_userns_or_optin",
+                         lambda *a, **k: False)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_run_untrusted_refuses_false(self):
+        with self.assertRaises(TypeError) as cm:
+            ctx.run_untrusted(["/bin/true"], target=self._tmp.name,
+                              start_new_session=False)
+        self.assertIn("start_new_session", str(cm.exception))
+
+    def test_run_untrusted_refuses_even_true(self):
+        # Policy is fixed, not negotiable — accepting the harmless
+        # spelling would keep the kwarg discoverable and one default
+        # change away from regressing.
+        with self.assertRaises(TypeError):
+            ctx.run_untrusted(["/bin/true"], target=self._tmp.name,
+                              start_new_session=True)
+
+    def test_run_untrusted_networked_refuses_false(self):
+        with self.assertRaises(TypeError) as cm:
+            ctx.run_untrusted_networked(
+                ["/bin/true"], proxy_hosts=["example.com"],
+                target=self._tmp.name, start_new_session=False)
+        self.assertIn("start_new_session", str(cm.exception))

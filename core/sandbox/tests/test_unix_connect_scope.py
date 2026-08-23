@@ -304,6 +304,94 @@ class TestLegitimateUsesKeepWorking(_Base):
         self.assertIn("OK sp", r.stdout)
 
 
+class TestPrivateTmpfsPinning(unittest.TestCase):
+    """Private-tmpfs classification must come from the device ids
+    PINNED before the target exec — never from a live resolution of
+    the child's mount view.
+
+    Attack shape closed here: seccomp deliberately leaves the mount
+    family unblocked and pre-6.15 Landlock does not freeze mount
+    topology, so a nested-mount-ns child (ns-root, CAP_SYS_ADMIN in
+    its own userns) can bind the shared rw OUTPUT dir over /tmp.
+    A live st_dev comparison against the child's /tmp then matches
+    every socket on the shared bind — reclassifying host-reachable
+    sockets as "private tmpfs by construction". Unit-level
+    reproduction against the supervisor's classifier; the E2E
+    connect batteries above pin the legitimate private-/tmp path.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="raptor-pin-")
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(os.path.realpath(self._tmp.name))
+        # The child's view after the rebind: root/tmp is on the SAME
+        # superblock as the shared output bind (the host fs).
+        (root / "tmp").mkdir()
+        (root / "out").mkdir()
+        self.sock_path = str(root / "out" / "hostsock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(self.sock_path)
+        self.addCleanup(srv.close)
+        self.root = root
+
+    def _supervisor(self, **kw):
+        from core.sandbox._unix_scope import UnixScopeSupervisor
+        fd = os.open("/dev/null", os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        return UnixScopeSupervisor(fd, **kw)
+
+    def test_rebound_tmp_cannot_reclassify_shared_bind_socket(self):
+        """The NV shape: the socket's st_dev equals the (rebound)
+        child-view /tmp's st_dev, but the PINNED set names the real
+        private tmpfs — the shared-bind socket must stay denied."""
+        st = os.stat(self.sock_path)
+        # Pinned ids of the genuine private tmpfs mounts — by
+        # construction distinct superblocks from the host fs the
+        # socket lives on.
+        sup = self._supervisor(
+            private_tmpfs_devs=frozenset({st.st_dev + 1}))
+        self.assertFalse(
+            sup._target_allowed(st),
+            "socket on the shared rw output bind classified as "
+            "private tmpfs — a /tmp rebind reclassified it")
+
+    def test_no_pins_fails_closed(self):
+        """Without pinned device ids (malformed/absent payload) no
+        pathname target is 'private tmpfs' — only allowlisted
+        instance sockets pass. Signature-agnostic call so the pre-fix
+        code exercises its REAL decision (live resolution of the
+        child view via rootfd), which allowed the shared-bind socket
+        (st_dev match with the rebound root/tmp)."""
+        import inspect
+        st = os.stat(self.sock_path)
+        sup = self._supervisor()
+        if "rootfd" in inspect.signature(
+                sup._target_allowed).parameters:  # pre-pinning code
+            rootfd = os.open(self.root, os.O_PATH | os.O_CLOEXEC)
+            self.addCleanup(os.close, rootfd)
+            allowed = sup._target_allowed(rootfd, st)
+        else:
+            allowed = sup._target_allowed(st)
+        self.assertFalse(
+            allowed,
+            "shared-bind socket classified as private tmpfs — live "
+            "mount-view resolution followed the /tmp rebind")
+
+    def test_pinned_dev_still_admits_private_sockets(self):
+        """The legitimate forkserver shape survives pinning: a socket
+        whose st_dev IS in the pinned set stays allowed."""
+        st = os.stat(self.sock_path)
+        sup = self._supervisor(
+            private_tmpfs_devs=frozenset({st.st_dev}))
+        self.assertTrue(sup._target_allowed(st))
+
+    def test_allowlisted_instance_socket_unaffected(self):
+        st = os.stat(self.sock_path)
+        sup = self._supervisor(
+            allowed_socket_paths=[self.sock_path])
+        self.assertTrue(sup._target_allowed(st))
+
+
 class TestThreadedCallers(_Base):
     """connect(2) from a spawned thread notifies with the THREAD's tid.
 

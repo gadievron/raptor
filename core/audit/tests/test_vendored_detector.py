@@ -338,3 +338,41 @@ class TestDetectVendoredFiles:
             pass
         else:  # pragma: no cover
             raise AssertionError("VendorVerdict must be frozen")
+
+
+class TestVendoredProvenanceBanner:
+    """Incident regression: OpenSSH vendors libcrux flat at the source
+    root with an "Extracted from libcrux revision <sha>" header — no
+    vendor/ path segment, no generator banner — so the detector saw
+    nothing and ~200 vendored crypto internals were reviewed at full
+    price. The vendored-provenance banner family (verb-from-project
+    plus a revision/version pin, both required) closes it."""
+
+    def test_extracted_from_revision_is_vendored(self):
+        text = (
+            "/* Extracted from libcrux revision "
+            "c46481ce3cd1cc8315e90db114581d8c992c3d7d */\n"
+            "int f(void) { return 1; }\n"
+        )
+        v = classify_file("libcrux_internal.h", text)
+        assert v is not None
+        assert v.kind == KIND_VENDORED
+        assert v.signal == "banner"
+        assert not v.corroborated
+
+    def test_imported_from_version_is_vendored(self):
+        text = "// Imported from tinyxml2 version 9.0.0\nint g(void);\n"
+        v = classify_file("tinyxml2.cc", text)
+        assert v is not None
+        assert v.kind == KIND_VENDORED
+
+    def test_prose_extraction_without_pin_is_not_vendored(self):
+        text = (
+            "/* the value is extracted from the packet header */\n"
+            "int h(void) { return 2; }\n"
+        )
+        assert classify_file("misc.c", text) is None
+
+    def test_pin_word_without_from_phrase_is_not_vendored(self):
+        text = "/* bump the revision 3 counter on rekey */\nint k(void);\n"
+        assert classify_file("kex.c", text) is None

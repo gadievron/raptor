@@ -1353,11 +1353,6 @@
     "count": 17,
     "kind": "literal"
   },
-  "core/sandbox/seccomp.py::_AUDIT_HARD_DENY_SYSCALLS": {
-    "count": 11,
-    "kind": "literal",
-    "note": "Linux syscall names (kernel ABI escape primitives kept SCMP_ACT_ERRNO under audit mode), not target API name vocabulary \u2014 fixed security policy, same class as the seccomp blocklists"
-  },
   "core/sandbox/seccomp.py::_AUDIT_EXTRA_TRACE_SYSCALLS": {
     "count": 27,
     "kind": "literal",

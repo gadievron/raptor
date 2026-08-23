@@ -112,6 +112,20 @@ class TestAuditHardDenySet:
         overlap = extras & seccomp._AUDIT_HARD_DENY_SYSCALLS
         assert overlap == set()
 
+    def test_block_always_set_fully_hard_denied_under_audit(self):
+        # _SECCOMP_BLOCK_ALWAYS is by definition "no legitimate use in
+        # a target build or a debugger — blocked in EVERY filter mode".
+        # Any entry missing from the audit hard-deny set becomes
+        # allow-and-log for the duration of an audit run: e.g.
+        # pidfd_getfd on a Landlock-only (no-pid-ns) audit run hands
+        # the child descriptor theft against same-UID host processes.
+        missing = (set(seccomp._SECCOMP_BLOCK_ALWAYS)
+                   - seccomp._AUDIT_HARD_DENY_SYSCALLS)
+        assert missing == set(), (
+            f"block-always syscalls downgraded to allow-and-log under "
+            f"audit mode: {sorted(missing)}"
+        )
+
     def _run_syscall_in_audit_child(self, syscall_name, *args,
                                     block_udp=False):
         """Fork a child, install the audit-mode filter (NO tracer),
@@ -191,6 +205,35 @@ class TestAuditHardDenySet:
         assert err == _errno.EPERM, (
             f"keyctl under audit mode returned errno {err}; expected "
             f"EPERM — the escape primitive was allow-and-logged")
+
+    @pytest.mark.skipif(_sys.platform != "linux", reason="Linux-only")
+    def test_pidfd_getfd_denied_with_eperm_under_audit(self):
+        # Sharpest of the block-always omissions: on a Landlock-only
+        # (no pid-ns) audit run, an allow-and-logged pidfd_getfd gives
+        # the audited child descriptor theft against same-UID host
+        # processes. ENOSYS here means the rule carries the TRACE
+        # action again (no tracer attached in this harness) — the
+        # allow-and-log downgrade.
+        import errno as _errno
+        rc, res, err = self._run_syscall_in_audit_child(
+            "pidfd_getfd", 0, 0, 0)
+        assert rc == 0, f"child died by signal {-rc}"
+        assert res == -1
+        assert err == _errno.EPERM, (
+            f"pidfd_getfd under audit mode returned errno {err}; "
+            f"expected EPERM — the block-always escape primitive was "
+            f"allow-and-logged")
+
+    @pytest.mark.skipif(_sys.platform != "linux", reason="Linux-only")
+    def test_perf_event_open_denied_with_eperm_under_audit(self):
+        import errno as _errno
+        rc, res, err = self._run_syscall_in_audit_child(
+            "perf_event_open", 0, 0, 0, 0, 0)
+        assert rc == 0, f"child died by signal {-rc}"
+        assert res == -1
+        assert err == _errno.EPERM, (
+            f"perf_event_open under audit mode returned errno {err}; "
+            f"expected EPERM")
 
     @pytest.mark.skipif(_sys.platform != "linux", reason="Linux-only")
     def test_af_unix_socket_denied_with_eperm_under_audit(self):

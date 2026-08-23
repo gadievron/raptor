@@ -276,6 +276,65 @@ class TestContextWiring:
         )
 
 
+class TestTcpLaneBindFailureFailsClosed:
+    """A context whose dedicated TCP lane cannot bind must NOT fall
+    back to the shared main listener: the shared listener's gate 1
+    enforces the process-global UNION of every registered context's
+    hosts, so the fallback silently widened a lane-failed context
+    from its own allowlist to its siblings' — and lane-bind failure
+    is plausibly forceable (fd/port exhaustion by a sibling child).
+    Mirrors the loopback_unix_bridges fail-closed shape."""
+
+    def test_lane_bind_failure_raises_instead_of_shared_fallback(
+            self, tmp_path, monkeypatch):
+        import core.sandbox.context as ctx
+        from core.sandbox.errors import SandboxSetupError
+
+        class _LaneBindFails:
+            port = 18080
+
+            def __init__(self):
+                self.calls = []
+
+            def bind_tcp_lane(self, *, label="sandbox",
+                              allowed_hosts=None, allowed_ports=None):
+                self.calls.append(("bind_tcp_lane", label))
+                msg = "address already in use"
+                raise OSError(msg)
+
+            def register_sandbox(self, caller_label=None, lane_key=None,
+                                 host_recon_threshold=None):
+                self.calls.append(("register", caller_label))
+                return 1
+
+            def unregister_sandbox(self, token):
+                self.calls.append(("unregister", token))
+                return []
+
+            def add_hosts(self, hosts):
+                self.calls.append(("add_hosts", tuple(sorted(hosts))))
+
+            def update_idle_timeout(self, seconds):
+                pass
+
+        fake = _LaneBindFails()
+        monkeypatch.setattr(proxy_mod, "get_proxy", lambda *a, **k: fake)
+        # Force the Landlock-TCP tier: no netns capability.
+        monkeypatch.setattr(ctx, "check_net_available", lambda: False)
+        ran = []
+        with pytest.raises(SandboxSetupError, match="shared listener"):
+            with ctx.sandbox(use_egress_proxy=True,
+                             proxy_hosts=["allowed.example"],
+                             output=str(tmp_path)) as run:
+                ran.append(run)
+        assert ("bind_tcp_lane", "sandbox") in fake.calls
+        assert not ran, (
+            "sandbox context yielded a runner despite the lane bind "
+            "failure — children would ride the shared listener's "
+            "union allowlist"
+        )
+
+
 class TestLaneScopedEventBuffers:
     """Event buffers subscribe by lane. Pre-fix every event fanned
     into EVERY registered buffer, so concurrent runs saw each other's

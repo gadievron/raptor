@@ -214,6 +214,29 @@ def _parse_assessments(text: str, report: dict) -> tuple:
     return assessments, note, dropped
 
 
+def verify_deep_report(deep: dict | None, run_dir: Path) -> str:
+    """Provenance state of a loaded sandbox-triage-deep.json:
+    ``verified`` / ``legacy`` (no token) / ``tampered``.
+
+    Mirrors ``triage.verify_triage_report``: the run binding is
+    recomputed from the directory the report was READ from, so a deep
+    report replayed from another run fails verification even though
+    its token was validly minted, and the whole-content hash makes any
+    post-mint edit (assessment prose included) fail."""
+    from core.sandbox.triage import _report_sha256
+    if not isinstance(deep, dict):
+        return "tampered"
+    token = deep.get("mac")
+    if not token:
+        return "legacy"
+    fields = telemetry_mac.triage_deep_fields(
+        _report_sha256(deep),
+        run=telemetry_mac.run_binding(run_dir),
+    )
+    return ("verified" if telemetry_mac.verify(fields, token)
+            else "tampered")
+
+
 def deep_analyse(run_dir: Path, *, client=None,
                  allow_legacy: bool = False) -> dict | None:
     """Run the LLM pass over ``<run_dir>/sandbox-triage.json``.
@@ -287,11 +310,18 @@ def deep_analyse(run_dir: Path, *, client=None,
         "overall_note": note,
         "ungrounded_dropped": dropped,
     }
-    token = telemetry_mac.mint({
-        "kind": "sandbox-triage-deep",
-        "rules_verdict": deep["rules_verdict"] or "",
-        "assessments_count": len(assessments),
-    })
+    # Full-provenance token: run binding (cross-run replay of a
+    # validly-stamped deep report must fail) + a whole-content hash
+    # (same canonicalisation as the triage report's own token), so
+    # the assessment prose, model, overall_note and integrity marker
+    # cannot be rewritten under a surviving token. The previous
+    # 3-field set (kind + rules_verdict + assessments_count) verified
+    # after both.
+    from core.sandbox.triage import _report_sha256
+    token = telemetry_mac.mint(telemetry_mac.triage_deep_fields(
+        _report_sha256(deep),
+        run=telemetry_mac.run_binding(run_dir),
+    ))
     if token:
         deep["mac"] = token
     write_text_atomically(

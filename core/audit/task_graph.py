@@ -244,6 +244,7 @@ class TaskGraph:
         max_workers: int = 1,
         duration_hints: dict[str, float] | None = None,
         schedule: str = "priority",
+        soft_dep_keys: frozenset[str] = frozenset(),
     ) -> TaskGraph:
         scores = priority_scores or {}
         if schedule not in ("priority", "cost"):
@@ -304,6 +305,21 @@ class TaskGraph:
         graph = cls()
         graph._schedule = schedule
         graph._duration_hints = dict(duration_hints or {})
+
+        # Soft dependencies: edges INTO glance-tier / vendored-verdict
+        # callees neither gate their callers nor receive inherited
+        # priority. A glance summary adds little caller context, and
+        # gating on a large vendored callee subtree makes a
+        # cost-capped run pay the whole subtree at inherited
+        # near-caller rank before any standalone first-party function
+        # (observed live: ~200 vendored crypto internals reviewed
+        # ahead of a top-decile first-party function). The callees
+        # stay in the graph at their own rank and review normally.
+        if soft_dep_keys:
+            for caller, callees in caller_to_callees.items():
+                softened = callees & soft_dep_keys
+                if softened:
+                    callees -= softened
 
         for key, gap in gaps_by_key.items():
             deps = frozenset(caller_to_callees.get(key, set()))
