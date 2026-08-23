@@ -78,7 +78,7 @@ class WebExecutionPolicy:
         self.receipt = receipt
         self._allowed_origins = {_origin(origin) for origin in receipt.allowed_origins}
         self._approved_tools = set(receipt.approved_tools)
-        self._audit = deque(maxlen=audit_limit)
+        self._audit: deque[dict[str, str]] = deque(maxlen=audit_limit)
         self._counts: Counter[str] = Counter()
 
     @classmethod
