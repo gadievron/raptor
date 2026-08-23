@@ -133,6 +133,7 @@ class WebScanner:
         verify_findings: bool = True,
         max_verifications: int = 25,
         rank: bool = False,
+        mine_params: bool = False,
     ) -> None:
         import time
 
@@ -156,6 +157,7 @@ class WebScanner:
         self.verify_findings = verify_findings
         self.max_verifications = max_verifications
         self.rank = rank
+        self.mine_params = mine_params
 
         self.execution_policy = WebExecutionPolicy.for_target(
             self.base_url,
@@ -207,6 +209,8 @@ class WebScanner:
         discovery = self._phase_discovery()
         self._phase_external_discovery(discovery)
         crawl_data = self._phase_crawl(discovery)
+        if self.mine_params:
+            self._phase_param_mining(crawl_data)
         all_findings.extend(self._phase_passive_checks(discovery, crawl_data))
 
         if self.session and self.session.authenticated:
@@ -344,6 +348,46 @@ class WebScanner:
         logger.info("Crawl stats: %s", crawl_results.get('stats', {}))
         self._phases_completed.append("crawl")
         return crawl_results
+
+    def _phase_param_mining(self, crawl_data: dict) -> None:
+        """Phase 3b: chunked differential mining of hidden parameters.
+
+        Discovered names join crawl_data's parameter view so the checks
+        and Phase 6 fuzz-cell construction see them like any crawled
+        parameter. Unstable targets refuse to mine (differentials on a
+        page that changes every request are noise, not parameters).
+        """
+        from packages.web.discovery.param_mining import mine_parameters
+
+        logger.info("Phase 3b: Hidden-parameter mining")
+        try:
+            self.execution_policy.authorize(
+                tool_id="raptor-http",
+                url=self.base_url,
+                risk="active",
+                action="param_mining",
+            )
+        except WebPolicyError as e:
+            logger.info("Phase 3b: skipped by execution policy -- %s", e)
+            return
+        known = set(crawl_data.get("discovered_parameters") or [])
+        targets = list(dict.fromkeys(
+            crawl_data.get("discovered_urls")
+            or crawl_data.get("visited_urls")
+            or [self.base_url]
+        ))[:3]
+        mined: set[str] = set()
+        for url in targets:
+            result = mine_parameters(self.client, url, known=known | mined)
+            mined.update(result.discovered)
+            if not result.stable:
+                logger.info("Phase 3b: %s unstable; skipping", self._redact(url))
+        if mined:
+            crawl_data["discovered_parameters"] = sorted(known | mined)
+            crawl_data.setdefault("mined_parameters", sorted(mined))
+            stats = crawl_data.setdefault("stats", {})
+            stats["total_parameters"] = len(crawl_data["discovered_parameters"])
+        self._phases_completed.append("param_mining")
 
     def _merged_discovery_ctx(
         self, discovery: DiscoveryResult, crawl_data: dict | None,
@@ -1574,6 +1618,14 @@ Examples:
         help="Skip LLM payload generation; the fuzzer uses static payloads",
     )
     parser.add_argument(
+        "--mine-params",
+        action="store_true",
+        help=(
+            "Chunked differential mining of hidden parameters after the "
+            "crawl (active; ~60 requests per mined URL, first 3 URLs)"
+        ),
+    )
+    parser.add_argument(
         "--rank",
         action="store_true",
         help=(
@@ -1843,6 +1895,7 @@ def main():
         verify_findings=not args.no_verify,
         max_verifications=args.max_verifications,
         rank=bool(args.rank),
+        mine_params=bool(args.mine_params),
     )
 
     try:

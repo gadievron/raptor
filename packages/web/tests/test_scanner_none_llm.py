@@ -635,3 +635,59 @@ class TestRankingIntegration(unittest.TestCase):
                 scanner.scan()
 
             mock_rank.assert_not_called()
+
+
+class TestParamMiningPhase(unittest.TestCase):
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_mined_parameters_join_the_fuzz_surface(
+        self, mock_client_cls, mock_crawler_cls,
+    ):
+        from packages.web.discovery.param_mining import ParamMiningResult
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com", None, Path(tmpdir), mine_params=True,
+            )
+            scanner.fuzzer = MagicMock()
+            fuzzed_params = set()
+
+            def record(url, param, **kwargs):
+                fuzzed_params.add(param)
+                return []
+
+            scanner.fuzzer.fuzz_parameter.side_effect = record
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 1},
+                "discovered_parameters": ["q"],
+                "discovered_urls": ["http://example.com/app"],
+                "pages": [],
+            }
+
+            with patch(
+                "packages.web.discovery.param_mining.mine_parameters",
+                return_value=ParamMiningResult(
+                    url="http://example.com/app", discovered=["debug"],
+                ),
+            ):
+                result = scanner.scan()
+
+        self.assertIn("param_mining", result["phases_completed"])
+        self.assertIn("debug", fuzzed_params)
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_mining_off_by_default(self, mock_client_cls, mock_crawler_cls):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner("http://example.com", None, Path(tmpdir))
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 0},
+                "discovered_parameters": [],
+                "pages": [],
+            }
+
+            result = scanner.scan()
+
+        self.assertNotIn("param_mining", result["phases_completed"])
