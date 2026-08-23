@@ -13,7 +13,7 @@ from __future__ import annotations
 import abc
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
 if TYPE_CHECKING:
@@ -37,13 +37,13 @@ class AuthSession:
     """
 
     mode: str                               # form | bearer | cookie | basic
-    username: Optional[str] = None
-    token: Optional[str] = None
-    cookies: Dict[str, str] = field(default_factory=dict)
-    session_cookie_name: Optional[str] = None
-    pre_login_cookies: Dict[str, str] = field(default_factory=dict)
-    login_url: Optional[str] = None
-    logout_url: Optional[str] = None
+    username: str | None = None
+    token: str | None = None
+    cookies: dict[str, str] = field(default_factory=dict)
+    session_cookie_name: str | None = None
+    pre_login_cookies: dict[str, str] = field(default_factory=dict)
+    login_url: str | None = None
+    logout_url: str | None = None
     authenticated: bool = False
 
 
@@ -79,8 +79,8 @@ class FormAuthManager(AuthManager):
         password: str,
         username_field: str = "username",
         password_field: str = "password",
-        success_indicator: Optional[str] = None,
-        logout_url: Optional[str] = None,
+        success_indicator: str | None = None,
+        logout_url: str | None = None,
     ) -> None:
         self.login_url = login_url
         self.username = username
@@ -93,7 +93,7 @@ class FormAuthManager(AuthManager):
     def authenticate(self, client: "WebClient") -> AuthSession:
         from bs4 import BeautifulSoup
 
-        pre_login_cookies = dict(client.session.cookies)
+        pre_login_cookies = client.get_cookies()
         parsed = urlparse(self.login_url)
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
@@ -129,7 +129,7 @@ class FormAuthManager(AuthManager):
                 "check credentials and ensure no MFA is required"
             )
 
-        post_cookies = dict(client.session.cookies)
+        post_cookies = client.get_cookies()
         session_cookie = self._detect_session_cookie(post_cookies)
 
         logger.info("Form authentication succeeded for %s", self.username)
@@ -193,7 +193,7 @@ class FormAuthManager(AuthManager):
         )
         return not has_password_field
 
-    def _detect_session_cookie(self, cookies: dict) -> Optional[str]:
+    def _detect_session_cookie(self, cookies: dict) -> str | None:
         known = ("session", "sessionid", "jsessionid", "phpsessid",
                  "asp.net_sessionid", "connect.sid", "sid", "auth",
                  "token", "jwt")
@@ -248,7 +248,7 @@ class CookieAuthManager(AuthManager):
 
     def __init__(
         self,
-        cookies: Dict[str, str],
+        cookies: dict[str, str],
         verify_url: str = "/",
     ) -> None:
         self.cookies = cookies
@@ -316,7 +316,7 @@ class BasicAuthManager(AuthManager):
             return False
 
 
-def parse_cookie_string(cookie_str: str) -> Dict[str, str]:
+def parse_cookie_string(cookie_str: str) -> dict[str, str]:
     """Parse a browser-style cookie string into a dict.
 
     Accepts the format produced by browser devtools' 'Copy as cURL':
@@ -334,16 +334,16 @@ def parse_cookie_string(cookie_str: str) -> Dict[str, str]:
 def make_auth_manager(
     mode: str,
     *,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
-    token: Optional[str] = None,
-    cookies: Optional[str] = None,
-    login_url: Optional[str] = None,
-    logout_url: Optional[str] = None,
+    username: str | None = None,
+    password: str | None = None,
+    token: str | None = None,
+    cookies: str | None = None,
+    login_url: str | None = None,
+    logout_url: str | None = None,
     username_field: str = "username",
     password_field: str = "password",
     verify_url: str = "/",
-) -> Optional[AuthManager]:
+) -> AuthManager | None:
     """Factory: instantiate the right AuthManager from CLI arguments.
 
     Returns None for mode='none' (unauthenticated scan).
