@@ -134,6 +134,8 @@ class WebScanner:
         max_verifications: int = 25,
         rank: bool = False,
         mine_params: bool = False,
+        second_auth_manager: AuthManager | None = None,
+        access_control: bool = False,
     ) -> None:
         import time
 
@@ -158,6 +160,14 @@ class WebScanner:
         self.max_verifications = max_verifications
         self.rank = rank
         self.mine_params = mine_params
+        self.second_auth_manager = second_auth_manager
+        self.access_control = access_control
+        self._client_kwargs: dict[str, bool] = {
+            "verify_ssl": verify_ssl,
+            "reveal_secrets": reveal_secrets,
+            "block_private_ips": block_private_ips,
+        }
+        self._client_rate_limit = rate_limit
 
         self.execution_policy = WebExecutionPolicy.for_target(
             self.base_url,
@@ -215,6 +225,10 @@ class WebScanner:
 
         if self.session and self.session.authenticated:
             all_findings.extend(self._phase_auth_checks(discovery, crawl_data))
+        if self.access_control:
+            all_findings.extend(
+                self._phase_access_control(discovery, crawl_data)
+            )
 
         context_map = None
         if self.run_understand:
@@ -461,6 +475,112 @@ class WebScanner:
                 )
         logger.info("Phase 5 complete: %d findings", len(findings))
         self._phases_completed.append("auth_checks")
+        return findings
+
+    def _make_principal_client(self) -> WebClient:
+        """A fresh client (separate cookie jar) sharing the scan's scope."""
+        client = WebClient(
+            self.base_url,
+            verify_ssl=self._client_kwargs["verify_ssl"],
+            reveal_secrets=self._client_kwargs["reveal_secrets"],
+            block_private_ips=self._client_kwargs["block_private_ips"],
+        )
+        client.execution_policy = self.execution_policy
+        client.rate_limit = self._client_rate_limit
+        return client
+
+    def _phase_access_control(
+        self, discovery: DiscoveryResult, crawl_data: dict,
+    ) -> list[WebFinding]:
+        """Phase 5b: principal-differential access control (IDOR / 403).
+
+        Always runs anonymous-vs-session-A when the scan authenticated;
+        adds session B when a second credential set was supplied. All
+        evidence is mechanical per-principal differentials — findings
+        land as needs_review, never auto-confirmed.
+        """
+        from packages.web.access_control import (
+            Principal,
+            run_access_differential,
+        )
+
+        logger.info("Phase 5b: Access-control differential")
+        if not (self.session and self.session.authenticated):
+            logger.info("Phase 5b: skipped — no authenticated session to differ against")
+            return []
+
+        principals = [
+            Principal("session_a", self.client, authenticated=True),
+            Principal("anonymous", self._make_principal_client(), authenticated=False),
+        ]
+        if self.second_auth_manager is not None:
+            try:
+                second_client = self._make_principal_client()
+                self.second_auth_manager.authenticate(second_client)
+                principals.append(
+                    Principal("session_b", second_client, authenticated=True)
+                )
+            except AuthenticationError as e:
+                logger.warning(
+                    "Phase 5b: second principal authentication failed: %s",
+                    self._redact(str(e)),
+                )
+
+        merged = self._merged_discovery_ctx(discovery, crawl_data)
+        result = run_access_differential(
+            principals=principals,
+            urls=list(merged.get("urls") or []),
+            parameters=list(merged.get("parameters") or []),
+            policy=self.execution_policy,
+        )
+        save_json(self.out_dir / "access-control-differential.json", {
+            "targets_tested": result.targets_tested,
+            "requests_used": result.requests_used,
+            "findings": result.findings,
+        })
+
+        findings = []
+        for hit in result.findings:
+            self._finding_counter += 1
+            if hit["kind"] == "idor_candidate":
+                title = f"Object access not principal-scoped ({hit['other']})"
+                detail = (
+                    f"An object-scoped resource returned {hit['primary']}'s "
+                    f"content unchanged to {hit['other']}."
+                )
+                check_id = "V4.2.1"
+            else:
+                title = f"Forbidden-resource bypass via {hit['primitive']}"
+                detail = (
+                    "A resource forbidden to the anonymous principal opened "
+                    f"under the {hit['primitive']} rewrite primitive."
+                )
+                check_id = "V4.1.1"
+            findings.append(WebFinding(
+                id=f"WEB-{self._finding_counter:04d}",
+                title=title,
+                severity="high",
+                confidence="medium",
+                status="needs_review",
+                url=hit["url"],
+                evidence=str(hit["evidence"]),
+                description=detail,
+                recommendation=(
+                    "Enforce object-level authorization server-side for every "
+                    "principal on every request; normalize paths before "
+                    "authorization decisions and ignore client-supplied "
+                    "routing override headers."
+                ),
+                vuln_type="access_control",
+                asvs_category="V4",
+                check_id=check_id,
+                auth_context="differential",
+                cwe_id="CWE-639" if hit["kind"] == "idor_candidate" else "CWE-863",
+                target_url=hit.get("bypass_url") or hit["url"],
+                method="GET",
+            ))
+        logger.info("Phase 5b complete: %d findings", len(findings))
+        self._phases_completed.append("access_control")
         return findings
 
     # ------------------------------------------------------------------
@@ -1671,6 +1791,16 @@ Examples:
         help="Second-opinion external validator to run on findings (repeatable)",
     )
 
+    parser.add_argument(
+        "--access-control",
+        action="store_true",
+        help=(
+            "Principal-differential access-control testing (IDOR / 403 "
+            "bypass): session-A vs anonymous, plus session-B when the "
+            "second-credential group is set. Requires an authenticated scan."
+        ),
+    )
+
     ag = parser.add_argument_group("authentication")
     ag.add_argument(
         "--auth-mode",
@@ -1688,6 +1818,15 @@ Examples:
                     help="Login form username field name (default: username)")
     ag.add_argument("--password-field", default="password",
                     help="Login form password field name (default: password)")
+
+    bg = parser.add_argument_group("second principal (access-control differential)")
+    bg.add_argument("--auth-b-mode", default="none",
+                    choices=("none", "form", "bearer", "cookie", "basic"),
+                    help="Second principal's authentication mode")
+    bg.add_argument("--auth-b-username", help="Second principal username")
+    bg.add_argument("--auth-b-password", help="Second principal password")
+    bg.add_argument("--auth-b-token", help="Second principal bearer token")
+    bg.add_argument("--auth-b-cookies", help="Second principal cookie string")
 
     adv = parser.add_argument_group("advanced pipeline")
     adv.add_argument(
@@ -1819,6 +1958,20 @@ def main():
         )
     except ValueError as exc:
         parser.error(f"auth: {exc}")
+    try:
+        second_auth_manager = make_auth_manager(
+            args.auth_b_mode,
+            username=args.auth_b_username,
+            password=args.auth_b_password,
+            token=args.auth_b_token,
+            cookies=args.auth_b_cookies,
+            login_url=args.login_url,
+            logout_url=args.logout_url,
+            username_field=args.username_field,
+            password_field=args.password_field,
+        )
+    except ValueError as exc:
+        parser.error(f"auth-b: {exc}")
     nuclei_config = None
     if "nuclei" in (args.validator or []):
         if not args.nuclei_templates or not Path(args.nuclei_templates).is_dir():
@@ -1896,6 +2049,8 @@ def main():
         max_verifications=args.max_verifications,
         rank=bool(args.rank),
         mine_params=bool(args.mine_params),
+        second_auth_manager=second_auth_manager,
+        access_control=bool(args.access_control),
     )
 
     try:
