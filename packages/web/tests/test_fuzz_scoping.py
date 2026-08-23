@@ -114,6 +114,8 @@ def _fake_target():
 
 
 class TestParamScopedFuzzing:
+
+    @pytest.mark.slow
     def test_parameters_fuzzed_only_where_discovered(self, tmp_path: Path):
         pytest.importorskip("requests")
         pytest.importorskip("bs4")
