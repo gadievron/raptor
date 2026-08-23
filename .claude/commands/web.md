@@ -74,6 +74,12 @@ python3 raptor.py web --url https://target \
 python3 raptor.py web --url https://target --ffuf-wordlist payloads.txt \
   --ffuf-request request.txt
 
+# Automatic OpenAPI body sweep: the scan generates a raw request per
+# documented JSON operation, ffuf sweeps the payload wordlist through
+# each string field matching static error signatures, and every hit is
+# re-verified first-party through the three-gate oracle
+python3 raptor.py web --url https://target --ffuf-api-sweep payloads.txt
+
 # Blind-timing probe: sleep-payload wordlist + response-time matcher
 python3 raptor.py web --url https://target --ffuf-wordlist sleep-payloads.txt \
   --ffuf-path 'search?q=FUZZ' --ffuf-match-time '>3000' --ffuf-rate 5

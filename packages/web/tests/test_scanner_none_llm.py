@@ -8,7 +8,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 try:
@@ -181,13 +180,19 @@ class TestWebScannerNoneLlm(unittest.TestCase):
         mock_crawler_cls,
         mock_ffuf_run,
     ):
+        from packages.web.ffuf import FfufConfig
+
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner(
                 "http://example.com",
                 None,
                 Path(tmpdir),
-                ffuf_config=SimpleNamespace(
-                    extensions=(), headers=("X-Op: set",), cookies=(),
+                ffuf_config=FfufConfig(
+                    wordlist=Path(tmpdir) / "w.txt",
+                    headers=("X-Op: set",),
+                    # Pin a filter so enrichment skips its soft-404
+                    # probes (the mocked client returns MagicMocks).
+                    filter_size=0,
                 ),
             )
             mock_ffuf_run.return_value = {

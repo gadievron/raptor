@@ -137,6 +137,7 @@ class WebScanner:
         second_auth_manager: AuthManager | None = None,
         access_control: bool = False,
         ffuf_wordlist_dir: Path | None = None,
+        ffuf_api_wordlist: Path | None = None,
     ) -> None:
         import time
 
@@ -164,6 +165,7 @@ class WebScanner:
         self.second_auth_manager = second_auth_manager
         self.access_control = access_control
         self.ffuf_wordlist_dir = ffuf_wordlist_dir
+        self.ffuf_api_wordlist = ffuf_api_wordlist
         self._client_kwargs: dict[str, bool] = {
             "verify_ssl": verify_ssl,
             "reveal_secrets": reveal_secrets,
@@ -366,26 +368,46 @@ class WebScanner:
                     "Phase 2a: fingerprint-recommended extensions %s",
                     ",".join(recommended),
                 )
+        if not config.headers and not config.cookies:
+            updates.update(self._session_ffuf_credentials())
         if (
-            self.session
-            and self.session.authenticated
-            and not config.headers
-            and not config.cookies
+            config.filter_size is None
+            and config.filter_words is None
+            and config.filter_regex is None
         ):
-            if self.session.mode == "bearer" and self.session.token:
-                updates["headers"] = (
-                    f"Authorization: Bearer {self.session.token}",
+            from packages.web.discovery.calibration import (
+                derive_soft404_filters,
+            )
+            derived = derive_soft404_filters(self.client, self.base_url)
+            if derived:
+                updates.update(derived)
+                logger.info(
+                    "Phase 2a: soft-404 wildcard probes derived %s",
+                    ", ".join(f"{k}={v}" for k, v in derived.items()),
                 )
-                logger.info("Phase 2a: ffuf reuses the session bearer token")
-            elif self.session.mode in ("form", "cookie"):
-                jar = self.client.get_cookies()
-                if jar:
-                    cookie = "; ".join(f"{k}={v}" for k, v in sorted(jar.items()))
-                    updates["cookies"] = (cookie,)
-                    logger.info(
-                        "Phase 2a: ffuf reuses %d session cookie(s)", len(jar),
-                    )
         return _replace(config, **updates) if updates else config
+
+    def _session_ffuf_credentials(self) -> dict:
+        """ffuf header/cookie updates carrying the live session's auth.
+
+        The scan already authenticated; ffuf should not fuzz logged-out.
+        """
+        if not (self.session and self.session.authenticated):
+            return {}
+        if self.session.mode == "bearer" and self.session.token:
+            logger.info("Phase 2a: ffuf reuses the session bearer token")
+            return {"headers": (
+                f"Authorization: Bearer {self.session.token}",
+            )}
+        if self.session.mode in ("form", "cookie"):
+            jar = self.client.get_cookies()
+            if jar:
+                cookie = "; ".join(f"{k}={v}" for k, v in sorted(jar.items()))
+                logger.info(
+                    "Phase 2a: ffuf reuses %d session cookie(s)", len(jar),
+                )
+                return {"cookies": (cookie,)}
+        return {}
 
     def _phase_external_discovery(self, discovery: DiscoveryResult) -> None:
         """Run opt-in external discovery tools and seed the crawl."""
@@ -842,6 +864,7 @@ class WebScanner:
             logger.info(
                 "Phase 6 API: %d OpenAPI operation(s) under test", len(operations),
             )
+            self._api_scale_sweep(operations, _record)
             for op in operations:
                 for param in op.query_params[: self.max_fuzz_params]:
                     for raw in self.fuzzer.fuzz_parameter(
@@ -913,6 +936,105 @@ class WebScanner:
                 raw.get("url", endpoint), raw.get("parameter", ""),
                 raw, "graphql_argument",
             )
+
+    def _api_scale_sweep(self, operations: list, record) -> None:
+        """ffuf-scale payload sweep over documented JSON body fields.
+
+        Opt-in via --ffuf-api-sweep <payload-wordlist>. Per operation, a
+        generated raw request file positions the keyword inside the
+        first string body field — the spot -u/-d cannot express — and
+        ffuf sweeps the operator's payload wordlist against it, matching
+        only the static error-signature markers (classes whose signal
+        needs a baseline leg are left to the in-Python oracle). Matched
+        payloads are candidates, never findings: each replays first-party
+        through the fuzzer's three-gate oracle, so a finding this path
+        records carries the same evidence as native fuzzing. Payloads
+        that break the JSON framing simply fail the match and cost
+        nothing but a probe.
+        """
+        if self.ffuf_api_wordlist is None:
+            return
+        from packages.web.api_testing import (
+            build_raw_request,
+            sweep_match_regex,
+        )
+
+        eligible = [
+            op for op in operations
+            if op.body_template and op.string_body_fields
+        ]
+        if not eligible:
+            return
+        logger.info(
+            "Phase 6 API: ffuf payload sweep over %d operation(s)",
+            len(eligible),
+        )
+        try:
+            self.execution_policy.authorize(
+                tool_id="ffuf",
+                url=self.base_url,
+                risk="active",
+                action="api_sweep",
+            )
+        except WebPolicyError as e:
+            logger.warning("API sweep skipped: %s", self._redact(str(e)))
+            return
+        credentials = self._session_ffuf_credentials()
+        for index, op in enumerate(eligible):
+            field_path = op.string_body_fields[0]
+            raw = build_raw_request(op, self.base_url, field_path)
+            if raw is None:
+                continue
+            request_file = self.out_dir / f"api-sweep-{index:02d}.request"
+            fd = os.open(
+                request_file,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(raw)
+            config = FfufConfig(
+                wordlist=self.ffuf_api_wordlist,
+                request_file=request_file,
+                match_status=None,
+                match_regex=sweep_match_regex(),
+                max_runtime=120,
+                report_limit=20,
+                **credentials,
+            )
+            try:
+                result = FfufRunner(
+                    self.base_url,
+                    self.out_dir,
+                    reveal_secrets=self.reveal_secrets,
+                ).run(config)
+            except (ValueError, OSError) as e:
+                logger.warning(
+                    "API sweep skipped %s: %s", op.url, self._redact(str(e)),
+                )
+                continue
+            payloads = [
+                entry["input"]["FUZZ"]
+                for entry in result.get("results", [])
+                if isinstance(entry.get("input"), dict)
+                and entry["input"].get("FUZZ")
+            ]
+            if not payloads:
+                continue
+            logger.info(
+                "Phase 6 API sweep: %d candidate payload(s) at %s field %s "
+                "— re-verifying first-party",
+                len(payloads), op.url, ".".join(field_path),
+            )
+            for payload in payloads:
+                finding = self.fuzzer.verify_json_candidate(
+                    op.url, op.body_template, field_path, payload,
+                )
+                if finding:
+                    record(
+                        op.url, ".".join(field_path), finding,
+                        "json_body_sweep",
+                    )
 
     def _grouped_hit_to_finding(
         self, endpoint: str, vuln_type: str, hit: dict, auth_ctx: str,
@@ -1812,6 +1934,16 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--ffuf-api-sweep",
+        type=Path,
+        help=(
+            "Payload wordlist for the OpenAPI body sweep: ffuf fuzzes "
+            "each documented JSON string field via a generated raw "
+            "request, matching static error signatures; hits are "
+            "re-verified first-party before they can become findings"
+        ),
+    )
+    parser.add_argument(
         "--ffuf-calibration-strategy",
         choices=("basic", "advanced"),
         help="ffuf auto-calibration strategy (-acs); advanced helps recursion",
@@ -2106,6 +2238,12 @@ def main():
             ).build_command(ffuf_config, Path("ffuf-preflight.json"))
     except (ValueError, FileNotFoundError) as exc:
         parser.error(f"ffuf: {exc}")
+    if args.ffuf_api_sweep is not None and not args.ffuf_api_sweep.is_file():
+        # Same parse-time rule as the main ffuf preflight: the sweep
+        # runs after crawl+fuzz, far too late to discover a bad path.
+        parser.error(
+            f"ffuf: --ffuf-api-sweep wordlist not found: {args.ffuf_api_sweep}"
+        )
 
     # Auth manager + nuclei knobs fail at parse time too, for the same
     # reason as the ffuf preflight: a bad flag combination must not cost
@@ -2218,6 +2356,7 @@ def main():
         second_auth_manager=second_auth_manager,
         access_control=bool(args.access_control),
         ffuf_wordlist_dir=args.ffuf_wordlist_dir,
+        ffuf_api_wordlist=args.ffuf_api_sweep,
     )
 
     try:

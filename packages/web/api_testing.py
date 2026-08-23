@@ -161,6 +161,93 @@ def _fill_body(
             string_fields.append((*prefix, str(name)))
 
 
+# Classes whose response markers are static error signatures, safe to
+# match at ffuf scale without a baseline leg. ssti's arithmetic marker
+# and xss's reflection signal are deliberately absent — both need the
+# baseline/containment legs only the in-Python oracle has, so at the
+# sweep layer they would be pure noise. Flags reproduce each Python
+# pattern's compile flags as Go/RE2 inline groups.
+_SWEEP_MARKER_FLAGS: dict[str, str] = {
+    "sqli": "i",
+    "command_injection": "im",
+    "path_traversal": "ims",
+}
+
+
+def sweep_match_regex() -> str:
+    """One Go-regexp alternation of the static error-signature markers.
+
+    Built from ``markers.MARKER_RES`` so the ffuf pre-filter and the
+    verification oracle can never drift apart on what counts as a
+    signal; the marker patterns use only RE2-compatible syntax (no
+    lookarounds, no backreferences).
+    """
+    from packages.web.markers import MARKER_RES
+
+    return "|".join(
+        f"(?{flags}:{MARKER_RES[name].pattern})"
+        for name, flags in _SWEEP_MARKER_FLAGS.items()
+    )
+
+
+_RAW_REQUEST_TOKEN = "__RAPTOR_SWEEP_POSITION__"
+
+
+def build_raw_request(
+    op: ApiOperation,
+    base_url: str,
+    field_path: tuple[str, ...],
+    keyword: str = "FUZZ",
+) -> str | None:
+    """A raw HTTP request file body fuzzing one JSON string field.
+
+    The keyword is spliced into the JSON-encoded body as the field's
+    string value, which is exactly the position ``-u``/``-d`` cannot
+    express for nested fields. Query parameters ride along with benign
+    values so operations that require them do not 400 every probe.
+    The output satisfies the engine's strict scope parser: path-only
+    request line, exactly one ``Host`` header, blank-line-terminated
+    header section. Content-Length is omitted deliberately — ffuf
+    recomputes it per substituted payload.
+
+    Returns None for operations without a JSON body template (nothing
+    to splice into).
+    """
+    from urllib.parse import urlencode, urlparse
+
+    import json
+
+    if not op.body_template or not field_path:
+        return None
+    parsed = urlparse(op.url)
+    base = urlparse(base_url)
+    if (parsed.scheme, parsed.netloc) != (base.scheme, base.netloc):
+        return None
+    path = parsed.path or "/"
+    if op.query_params:
+        path += "?" + urlencode({name: "1" for name in op.query_params})
+
+    body_obj = json.loads(json.dumps(op.body_template))
+    node: Any = body_obj
+    for key in field_path[:-1]:
+        node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return None
+    if not isinstance(node, dict) or field_path[-1] not in node:
+        return None
+    node[field_path[-1]] = _RAW_REQUEST_TOKEN
+    body = json.dumps(body_obj).replace(_RAW_REQUEST_TOKEN, keyword)
+
+    return (
+        f"{op.method} {path} HTTP/1.1\n"
+        f"Host: {base.netloc}\n"
+        "Content-Type: application/json\n"
+        "Accept: */*\n"
+        "\n"
+        f"{body}"
+    )
+
+
 @dataclass
 class GraphQLProbe:
     """One string-argument query field worth injecting into."""

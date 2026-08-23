@@ -71,6 +71,14 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         if path == "/login":
             self._respond(200, b"login ok")
             return
+        if path == "/v1/users":
+            # Simulated injectable JSON endpoint for the API sweep: a
+            # quote in the body breaks the imaginary SQL statement.
+            if "'" in record["body"]:
+                self._respond(500, b"You have an error in your SQL syntax")
+            else:
+                self._respond(200, b"created")
+            return
         self._respond(404, b"nope")
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
@@ -391,3 +399,53 @@ def test_live_calibration_strategy_accepted(
     )
 
     assert result["returncode"] == 0, result["stderr"]
+
+
+def test_live_api_sweep_funnel_recovers_matched_payload(
+    tmp_path: Path, fixture_server, direct_ffuf
+):
+    """The whole pre-filter funnel on the wire: a generated raw request
+    file is accepted by real ffuf, the sweep marker regex is valid Go
+    regexp, and the matched payload comes back through the input map."""
+    from packages.web.api_testing import (
+        ApiOperation,
+        build_raw_request,
+        sweep_match_regex,
+    )
+
+    base_url, _records = fixture_server
+    op = ApiOperation(
+        method="POST",
+        url=f"{base_url}/v1/users",
+        body_template={"name": "raptor-baseline"},
+        string_body_fields=[("name",)],
+    )
+    request_file = tmp_path / "api-sweep-00.request"
+    request_file.write_text(
+        build_raw_request(op, base_url, ("name",)), encoding="utf-8",
+    )
+    wordlist = _wordlist(
+        tmp_path, "payloads.txt", ["benign-value", "x' OR 'a'='a"],
+    )
+
+    runner = FfufRunner(base_url, tmp_path)
+    result = runner.run(
+        FfufConfig(
+            wordlist=wordlist,
+            request_file=request_file,
+            match_status=None,
+            match_regex=sweep_match_regex(),
+            auto_calibration=False,
+            threads=1,
+            timeout=5,
+            max_runtime=30,
+        )
+    )
+
+    assert result["returncode"] == 0, result["stderr"]
+    matched = {
+        entry["input"]["FUZZ"]
+        for entry in result["results"]
+        if "input" in entry
+    }
+    assert matched == {"x' OR 'a'='a"}, result["results"]

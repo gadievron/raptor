@@ -423,6 +423,37 @@ class WebFuzzer:
                     break
         return findings
 
+    def verify_json_candidate(
+        self,
+        url: str,
+        body_template: dict,
+        field_path: tuple[str, ...],
+        payload: str,
+        vulnerability_types: list[str] | None = None,
+    ) -> dict | None:
+        """First-party three-gate verification of one external payload.
+
+        The ffuf API sweep matches static error signatures at scale but
+        has no baseline leg, so its hits are candidates only. This
+        replays exactly the candidate payload through the same
+        baseline/attack/diff oracle as native fuzzing; the finding it
+        returns is indistinguishable in evidence quality from one the
+        fuzzer generated itself.
+        """
+        if vulnerability_types is None:
+            vulnerability_types = [
+                'sqli', 'ssti', 'command_injection', 'path_traversal',
+            ]
+        for vuln_type in vulnerability_types:
+            finding = self._test_json_payload(
+                url, body_template, field_path, payload, vuln_type,
+            )
+            if finding:
+                finding['attack_vector'] = "json_body_sweep"
+                self.findings.append(finding)
+                return finding
+        return None
+
     def _test_json_payload(
         self,
         url: str,
