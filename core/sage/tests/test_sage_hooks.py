@@ -2393,5 +2393,44 @@ class TestForceCpuToggle(unittest.TestCase):
         self.assertIsNone(self._get_client_with("enable"))
 
 
+class TestStoreTeachConcepts(unittest.TestCase):
+    """store_teach_concepts drives the REAL model dataclasses.
+
+    The store/read sites both expect Invariant.mechanism_tags (it is
+    optional in the TEACH-4 JSON schema); faked model classes in the
+    other tests let a missing model field hide until runtime."""
+
+    @patch("core.sage.hooks._get_client")
+    def test_teach_json_invariants_with_mechanism_tags_store(self, mock_gc):
+        client = MagicMock()
+        client.propose.return_value = True
+        mock_gc.return_value = client
+
+        from core.sage.hooks import store_teach_concepts
+        stored = store_teach_concepts("/repo", {
+            "subject": "page ownership",
+            "source_root": "/repo",
+            "concepts": [{
+                "id": "page_ownership",
+                "description": "TX owns until handoff",
+                "confidence": "traced",
+                "evidence": [],
+            }],
+            "invariants": [{
+                "id": "inv1",
+                "concept": "page_ownership",
+                "statement": "refcount held across queue",
+                "negation": "drop before dequeue",
+                "mechanism_tags": ["lifetime", "refcount"],
+            }],
+            "contracts": [],
+        })
+
+        self.assertEqual(stored, 1)
+        tags = client.propose.call_args.kwargs["tags"]
+        self.assertIn("lifetime", tags)
+        self.assertIn("refcount", tags)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,9 @@ class Invariant:
     confidence: str = "inferred"
     mechanical_rule: str | None = None
     relevant_cwes: list[str] = field(default_factory=list)
+    # Optional per the teach JSON schema (teach.md TEACH-4); the SAGE
+    # store surfaces the first few as row tags.
+    mechanism_tags: list[str] = field(default_factory=list)
     provenance: str = ""
     receipt: dict[str, Any] | None = None
 
