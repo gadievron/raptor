@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
-from core.verified_outcome.types import Oracle, OutcomeStatus, VerifiedOutcome
+from core.labeled_attempts import Oracle, OutcomeStatus, VerifiedOutcome
 from packages.web.models import WebFinding
 
 
-def _has_exploit_oracle_evidence(data: dict) -> bool:
+def has_exploit_oracle_evidence(data: dict) -> bool:
     """Return whether a web finding is backed by a real exploitation oracle.
 
     Passive observations such as missing headers or exposed metadata are still
@@ -31,13 +31,13 @@ def from_web_finding(
     finding: WebFinding,
     *,
     authorization: str = "operator_authorized_live_web_scan",
-) -> Optional[VerifiedOutcome]:
+) -> VerifiedOutcome | None:
     """Map a confirmed live HTTP finding into the shared oracle record."""
 
     data = finding.to_dict()
     if data.get("oracle") != "web" or not data.get("confirmed"):
         return None
-    if not _has_exploit_oracle_evidence(data):
+    if not has_exploit_oracle_evidence(data):
         return None
 
     evidence = {
@@ -76,9 +76,8 @@ def verified_outcomes_for_findings(
     *,
     authorization: str = "operator_authorized_live_web_scan",
 ) -> list[VerifiedOutcome]:
-    outcomes = [
+    return [
         outcome
         for finding in findings
         if (outcome := from_web_finding(finding, authorization=authorization))
     ]
-    return outcomes

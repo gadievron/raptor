@@ -37,6 +37,7 @@ logger = get_logger()
 CWE_BY_VULN_TYPE = {
     "sqli": "CWE-89",
     "xss": "CWE-79",
+    "ssti": "CWE-1336",
     "command_injection": "CWE-78",
     "path_traversal": "CWE-22",
 }
@@ -98,6 +99,79 @@ def build_web_attempt(
         web_evidence=evidence,
         producing_model="web-oracle",
         tools_used=("web-oracle",),
+        reproducible=False,  # live-HTTP point-in-time
+    )
+
+
+def build_attempt_from_confirmed_finding(
+    finding: Any,
+    *,
+    reveal_secrets: bool = False,
+) -> LabeledAttempt | None:
+    """A three-gate-confirmed WebFinding → a LabeledAttempt, or None.
+
+    The gate is the same oracle-proof rule the VerifiedOutcome adapter
+    applies (packages.web.verified_outcomes.has_exploit_oracle_evidence):
+    only findings carrying the full payload/response/oracle chain enter
+    the labeled-attempts pool — a passive check marked "confirmed" never
+    does. outcome is "success" by construction, since the three-gate
+    oracle already required baseline/attack differential evidence.
+    """
+    from packages.web.verified_outcomes import has_exploit_oracle_evidence
+
+    data = finding.to_dict()
+    if data.get("oracle") != "web" or not data.get("confirmed"):
+        return None
+    if not has_exploit_oracle_evidence(data):
+        return None
+
+    vuln_type = str(data.get("vuln_type") or "")
+    cwe = str(data.get("cwe_id") or CWE_BY_VULN_TYPE.get(vuln_type, "CWE-20"))
+    target = str(data.get("target_url") or data.get("url") or "")
+    parsed = urlparse(target)
+    params = list(data.get("affected_parameters") or [])
+    param = params[0] if params else "-"
+    signature = compute_finding_signature(
+        cwe=cwe,
+        file_path=parsed.path or "/",
+        function=param,
+        line=0,
+        vuln_type=vuln_type,
+    )
+    safe_url = redact_secrets(target, reveal_secrets=reveal_secrets)
+    response_evidence: dict[str, Any] = {
+        "verification_status": "verified",
+        "oracle_signal": data.get("oracle_signal"),
+        "response_evidence": data.get("response_evidence"),
+        "baseline_evidence": data.get("baseline_evidence"),
+        "attack_evidence": data.get("attack_evidence"),
+        "diff_summary": data.get("diff_summary"),
+        "affected_parameters": params,
+        "reason": "three-gate oracle: baseline/attack differential with class signal",
+    }
+
+    evidence = WebEvidence(
+        target_url=safe_url,
+        http_request={
+            "method": str(data.get("method") or "GET").upper(),
+            "url": safe_url,
+            "param": param,
+            "payload": str(data.get("confirmation_payload") or ""),
+        },
+        response_evidence={
+            k: v for k, v in response_evidence.items() if v is not None
+        },
+        evidence_type=str(data.get("oracle_signal") or "web").partition(":")[0],
+        timestamp_iso=datetime.now(timezone.utc).isoformat(),
+    )
+    return LabeledAttempt(
+        finding_id=str(data.get("finding_id") or data.get("id") or ""),
+        finding_signature=signature,
+        cwe=cwe,
+        outcome="success",
+        web_evidence=evidence,
+        producing_model="raptor-web",
+        tools_used=("web-three-gate-oracle",),
         reproducible=False,  # live-HTTP point-in-time
     )
 
