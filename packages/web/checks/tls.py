@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 
 @registry.register(CheckCategory.TLS, "V9.1.1", "HTTP not redirected to HTTPS")
@@ -19,8 +18,6 @@ class HttpsRedirectCheck(Check):
         if parsed.scheme == "https":
             # Check if HTTP version redirects
             http_url = urlunparse(parsed._replace(scheme="http"))
-            http_parsed = urlparse(http_url)
-            http_path = http_parsed.path or "/"
             try:
                 # Use a fresh session to avoid auth cookies interfering
                 import requests

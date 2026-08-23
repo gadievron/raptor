@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 _STACK_TRACE_PATTERNS = [
     re.compile(r"traceback \(most recent call last\)", re.I),
@@ -150,7 +149,7 @@ class DirectoryListingCheck(Check):
 class VerbosHttpMethodsCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         try:
-            resp = client.get("/", headers={"X-HTTP-Method-Override": "OPTIONS"})
+            client.get("/", headers={"X-HTTP-Method-Override": "OPTIONS"})
             # Also try a real OPTIONS request
             import requests as req_lib
             from urllib.parse import urlparse
