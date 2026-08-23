@@ -10,14 +10,13 @@ indicators in common headers. All probes use safe internal targets
 from __future__ import annotations
 
 import re
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 # Parameter names commonly used to pass URLs into the server
 _URL_PARAM_NAMES = {

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import List, TYPE_CHECKING
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from typing import TYPE_CHECKING
+from urllib.parse import urlparse, parse_qs
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 _OAUTH_PATHS = [
     "/oauth/authorize", "/oauth2/authorize", "/auth/oauth",
@@ -50,7 +49,6 @@ class OAuthOpenRedirectCheck(Check):
                     },
                 )
 
-                body = resp.text if isinstance(resp.text, str) else ""
                 location = resp.headers.get("Location", "")
 
                 if resp.status_code in (301, 302, 307, 308):

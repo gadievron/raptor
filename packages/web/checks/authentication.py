@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import time
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 _KNOWN_USERNAMES = ["admin", "administrator", "user", "test", "guest"]
 

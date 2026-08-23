@@ -14,10 +14,17 @@ from packages.web.checks.base import (
 
 # Import all check modules to populate the registry
 from packages.web.checks import (
+    api,
+    authentication,
+    cache,
     cors,
     headers,
+    host_header,
     information,
+    oauth,
+    prototype_pollution,
     session,
+    ssrf,
     tls,
 )
 
@@ -26,10 +33,17 @@ __all__ = [
     "CheckCategory",
     "CheckRegistry",
     "CheckResult",
+    "api",
+    "authentication",
+    "cache",
     "cors",
     "headers",
+    "host_header",
     "information",
+    "oauth",
+    "prototype_pollution",
     "registry",
     "session",
+    "ssrf",
     "tls",
 ]

@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import json
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from packages.web.checks.base import Check, CheckCategory, CheckResult, registry
+from packages.web.checks.base import Check, CheckCategory, registry
 
 if TYPE_CHECKING:
-    from packages.web.client import WebClient
-    from packages.web.auth import AuthSession
+    pass
 
 
 @registry.register(CheckCategory.API, "V13.1.1", "GraphQL introspection enabled in production")
 class GraphQLIntrospectionCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
         # Use discovery data if available, else probe known paths
-        graphql_urls = []
         if discovery and discovery.get("graphql_schema"):
             return [self._result(
                 passed=False, url=target_url,
