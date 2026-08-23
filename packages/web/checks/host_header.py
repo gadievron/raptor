@@ -26,6 +26,7 @@ _OVERRIDE_HEADERS = [
 
 @registry.register(CheckCategory.INJECTION, "V5.1.10", "Host header reflected in response body")
 class HostHeaderInjectionCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         findings = []
 
@@ -86,6 +87,7 @@ class HostHeaderInjectionCheck(Check):
 
 @registry.register(CheckCategory.INJECTION, "V5.1.11", "Password reset link susceptible to host header poisoning")
 class PasswordResetPoisoningCheck(Check):
+    risk = "intrusive"
     def run(self, client, target_url, session=None, discovery=None):
         # Find a password reset / forgot-password endpoint
         candidates = [

@@ -110,3 +110,49 @@ def test_write_web_pocs_writes_private_files(tmp_path: Path):
         assert path.stat().st_mode & 0o777 == 0o600
     names = {p.name for p in written}
     assert names == {"web-0001-reproducer.sh", "web-0001-replay.yaml"}
+
+
+def test_reproducer_shell_quotes_hostile_values():
+    """URLs come from crawling the hostile target and the operator is
+    invited to RUN the script: $(…), backticks, and quotes must be
+    inert (json.dumps-as-shell-quoting left $() live inside double
+    quotes), and newlines in comment-interpolated fields must not
+    terminate the comment."""
+    import shlex
+    import subprocess
+
+    marker = "/tmp/raptor-poc-quote-marker"
+    Path(marker).unlink(missing_ok=True)
+    hostile = _proven(
+        target_url=(
+            f"https://example.test/x$(touch {marker})/`id`/p?lang=en"
+        ),
+        title="line one\nrm -rf /\nline two",
+        oracle_signal="sig\r\ncurl evil",
+        diff_summary="diff`id`",
+    )
+
+    script = build_reproducer(hostile)
+
+    assert script is not None
+    # The command line round-trips through shlex with the URL intact.
+    command_line = script.rstrip("\n").rsplit("\n", 1)[-1]
+    words = shlex.split(command_line)
+    assert words[0] == "curl"
+    assert any("$(touch" in word for word in words)
+    # Comment fields are single lines: total line count is fixed.
+    lines = script.split("\n")
+    assert all(
+        line.startswith("#") or line.startswith("curl") or line == ""
+        for line in lines
+    ), lines
+    # Empirical: running the script cannot execute the injected command
+    # (curl fails against the fake host; the marker must not appear).
+    # Runners without curl still exercise the quoting assertions above.
+    import shutil
+    if shutil.which("curl") and shutil.which("sh"):
+        subprocess.run(
+            ["sh", "-c", script], capture_output=True, timeout=30,
+            check=False,
+        )
+        assert not Path(marker).exists()

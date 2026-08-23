@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 @registry.register(CheckCategory.API, "V13.1.1", "GraphQL introspection enabled in production")
 class GraphQLIntrospectionCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         # Use discovery data if available, else probe known paths
         if discovery and discovery.get("graphql_schema"):
@@ -129,6 +130,7 @@ class SwaggerExposureCheck(Check):
 
 @registry.register(CheckCategory.API, "V13.2.5", "API returns verbose error details")
 class ApiVerboseErrorCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         import re
         api_paths = ["/api", "/api/v1", "/api/v2"]
@@ -176,6 +178,7 @@ class ApiVerboseErrorCheck(Check):
 @registry.register(CheckCategory.API, "V13.3.1", "Mass assignment via JSON body",
                    requires_auth=True)
 class MassAssignmentCheck(Check):
+    risk = "intrusive"
     def run(self, client, target_url, session=None, discovery=None):
         if not session:
             return []

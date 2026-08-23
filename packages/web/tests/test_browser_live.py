@@ -148,3 +148,97 @@ class TestBrowserEngineLive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOriginGateHardening(unittest.TestCase):
+    """Redirects and WebSockets — the two egress paths context.route
+    does not cover by itself."""
+
+    @classmethod
+    def setUpClass(cls):
+        class _EvilHandler(BaseHTTPRequestHandler):
+            hits: list[str] = []
+
+            def do_GET(self):  # noqa: N802
+                type(self).hits.append(self.path)
+                body = b"evil"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        class _TargetHandler(BaseHTTPRequestHandler):
+            evil_port = 0
+
+            def do_GET(self):  # noqa: N802
+                if self.path == "/redirect-out":
+                    self.send_response(302)
+                    self.send_header(
+                        "Location",
+                        f"http://127.0.0.1:{type(self).evil_port}/redirect-hop",
+                    )
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path == "/ws-page":
+                    body = (
+                        "<html><body><script>"
+                        f"new WebSocket('ws://127.0.0.1:{type(self).evil_port}/ws');"
+                        "</script></body></html>"
+                    ).encode()
+                else:
+                    body = b"<html><body>ok</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        cls.evil_handler = _EvilHandler
+        cls.evil = ThreadingHTTPServer(("127.0.0.1", 0), _EvilHandler)
+        _TargetHandler.evil_port = cls.evil.server_port
+        cls.target = ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+        cls.base = f"http://127.0.0.1:{cls.target.server_port}"
+        cls.threads = [
+            threading.Thread(target=s.serve_forever, daemon=True)
+            for s in (cls.evil, cls.target)
+        ]
+        for t in cls.threads:
+            t.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        for s in (cls.evil, cls.target):
+            s.shutdown()
+        for t in cls.threads:
+            t.join(timeout=5)
+
+    def test_redirect_hop_cannot_leave_origin(self):
+        """continue_() lets Chromium follow redirects internally where
+        the gate never sees the hop; the fetch-and-fulfill gate makes
+        every hop a fresh gated request."""
+        self.evil_handler.hits.clear()
+        with BrowserEngine(self.base) as engine:
+            engine.render(f"{self.base}/redirect-out")
+            blocked = engine.blocked_requests
+
+        self.assertEqual(
+            [h for h in self.evil_handler.hits if "redirect-hop" in h], [],
+        )
+        self.assertGreaterEqual(blocked, 1)
+
+    def test_websocket_cannot_leave_origin(self):
+        self.evil_handler.hits.clear()
+        with BrowserEngine(self.base) as engine:
+            engine.render(f"{self.base}/ws-page")
+            blocked = engine.blocked_requests
+
+        # The evil server must never see the Upgrade request.
+        self.assertEqual(self.evil_handler.hits, [])
+        self.assertGreaterEqual(blocked, 1)

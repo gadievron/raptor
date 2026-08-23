@@ -172,3 +172,81 @@ class TestScannerOobFunnel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestListenerHardening(unittest.TestCase):
+    """The listener faces the hostile network: idle-connection floods
+    must not pin unbounded threads, and wire values must not smuggle
+    control characters into finding evidence."""
+
+    def setUp(self):
+        self.listener = OobListener(bind_host="127.0.0.1", port=0)
+        self.listener.start()
+        self.addCleanup(self.listener.stop)
+
+    def test_idle_connection_flood_stays_bounded_and_responsive(self):
+        import socket
+        import threading
+
+        baseline = threading.active_count()
+        idlers = []
+        try:
+            for _ in range(120):
+                sock = socket.create_connection(
+                    ("127.0.0.1", self.listener.port), timeout=5,
+                )
+                idlers.append(sock)  # held open, never written to
+            # Over-cap connections are dropped, in-cap ones pin at most
+            # _MAX_LIVE_CONNECTIONS handler threads.
+            from packages.web.oob import _MAX_LIVE_CONNECTIONS
+            self.assertLessEqual(
+                threading.active_count() - baseline,
+                _MAX_LIVE_CONNECTIONS + 8,
+            )
+            # And once flood connections drop off, their slots free up
+            # and a real callback gets through — the flood degrades
+            # service while it holds slots, it must not wedge the
+            # listener permanently.
+            import time
+            for sock in idlers[:16]:
+                sock.close()
+            canary = self.listener.mint(
+                OobContext(url="https://t", param="p"),
+            )
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    if _fetch(canary) == 200:
+                        break
+                except OSError:
+                    time.sleep(0.2)
+            self.assertTrue(self.listener.hits_for(token_of(canary)))
+        finally:
+            for sock in idlers:
+                sock.close()
+
+    def test_folded_header_cannot_smuggle_crlf_into_evidence(self):
+        """Python's header parser preserves obs-fold continuations —
+        the recorded value must still be a single control-free line."""
+        import socket
+
+        canary = self.listener.mint(OobContext(url="https://t", param="p"))
+        token = token_of(canary)
+        request = (
+            f"GET /{token} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.listener.port}\r\n"
+            "User-Agent: legit\r\n"
+            " INJECTED Blind-SSRF CONFIRMED by operator\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        )
+        with socket.create_connection(
+            ("127.0.0.1", self.listener.port), timeout=5,
+        ) as sock:
+            sock.sendall(request.encode())
+            sock.recv(1024)
+
+        hits = self.listener.hits_for(token)
+        self.assertEqual(len(hits), 1)
+        self.assertNotRegex(hits[0].user_agent, r"[\r\n\x00-\x1f]")
+        self.assertIn("INJECTED", hits[0].user_agent)  # content kept, flat

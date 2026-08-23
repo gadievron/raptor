@@ -59,6 +59,13 @@ class Check(abc.ABC):
     check_name: str = ""
     category: CheckCategory = CheckCategory.HEADERS
     requires_auth: bool = False
+    # Scope-receipt tier this check's requests need: "passive" =
+    # benign requests + response inspection only; "active" = crafted
+    # probe values (attack-shaped headers/params/bodies); "intrusive"
+    # = may change target state (lockouts, resets, object creation).
+    # The scanner authorizes per check against the run's receipt and
+    # skips checks the operator's approval level does not cover.
+    risk: str = "passive"
 
     def __init__(self, llm: "LLMClient | None" = None) -> None:
         self.llm = llm

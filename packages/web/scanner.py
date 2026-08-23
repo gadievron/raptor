@@ -592,9 +592,9 @@ class WebScanner:
     def _phase_passive_checks(
         self, discovery: DiscoveryResult, crawl_data: dict | None = None,
     ) -> list[WebFinding]:
-        logger.info("Phase 4: Passive security checks (unauthenticated)")
+        logger.info("Phase 4: Security checks (unauthenticated)")
         findings = []
-        check_classes = registry.unauthenticated()
+        check_classes = self._authorized_checks(registry.unauthenticated())
         logger.info("Running %d unauthenticated checks", len(check_classes))
         discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
 
@@ -612,6 +612,37 @@ class WebScanner:
         self._phases_completed.append("passive_checks")
         return findings
 
+    def _authorized_checks(self, check_classes: list) -> list:
+        """Checks the run's scope receipt covers, by declared risk tier.
+
+        Every check declares the tier its REQUESTS need (passive =
+        benign observation, active = crafted probe values, intrusive =
+        may change target state). The receipt is consulted per check;
+        what the operator's approval level does not cover is skipped
+        loudly, never silently.
+        """
+        allowed = []
+        skipped: dict[str, list[str]] = {}
+        for cls in check_classes:
+            risk = getattr(cls, "risk", "passive")
+            try:
+                self.execution_policy.authorize(
+                    tool_id="raptor-web-checks",
+                    url=self.base_url,
+                    risk=risk,
+                    action=getattr(cls, "check_id", "") or cls.__name__,
+                )
+            except WebPolicyError:
+                skipped.setdefault(risk, []).append(cls.__name__)
+                continue
+            allowed.append(cls)
+        for risk, names in sorted(skipped.items()):
+            logger.info(
+                "Scope receipt excludes %d %s check(s): %s",
+                len(names), risk, ", ".join(sorted(names)),
+            )
+        return allowed
+
     def _phase_auth_checks(
         self, discovery: DiscoveryResult, crawl_data: dict | None = None,
     ) -> list[WebFinding]:
@@ -622,7 +653,7 @@ class WebScanner:
             logger.warning("Session expired before authenticated checks -- skipping")
             return []
         findings = []
-        check_classes = registry.authenticated()
+        check_classes = self._authorized_checks(registry.authenticated())
         logger.info("Running %d authenticated checks", len(check_classes))
         discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
 
@@ -671,6 +702,18 @@ class WebScanner:
         )
 
         logger.info("Phase 5b: Access-control differential")
+        try:
+            # Replaying one principal's object references as another is
+            # a crafted-probe activity, not observation.
+            self.execution_policy.authorize(
+                tool_id="raptor-web-checks",
+                url=self.base_url,
+                risk="active",
+                action="access_control_differential",
+            )
+        except WebPolicyError as e:
+            logger.info("Phase 5b: skipped — %s", self._redact(str(e)))
+            return []
         if not (self.session and self.session.authenticated):
             logger.info("Phase 5b: skipped — no authenticated session to differ against")
             return []
@@ -1233,21 +1276,28 @@ class WebScanner:
         )
         return WebFinding(
             id=f"WEB-{self._finding_counter:04d}",
-            title="Blind SSRF -- server fetched an out-of-band canary URL",
+            title=(
+                "Blind SSRF -- out-of-band fetch of an injected canary URL"
+            ),
             severity="high",
             confidence="high" if verified else "low",
             status="confirmed" if verified else "needs_review",
             url=context.url,
             evidence=(
-                f"Canary URL injected into parameter '{context.param}' was "
-                f"fetched server-side: {hit.method} {hit.path} from "
+                f"A canary URL injected into parameter '{context.param}' "
+                f"was fetched out-of-band: {hit.method} {hit.path} from "
                 f"{hit.source_ip} (User-Agent: {hit.user_agent}). "
-                f"{replay_note}."
+                f"{replay_note}. The callback proves an agent observing "
+                "the request fetched exactly this URL; the source "
+                "address and User-Agent above tell you whether that "
+                "agent is the application server or a traffic-inspecting "
+                "appliance/bot."
             ),
             description=(
-                f"Parameter '{context.param}' caused the server to issue "
-                "an outbound HTTP request to an attacker-controllable URL "
-                "(server-side request forgery)."
+                f"Injecting a fresh canary URL into parameter "
+                f"'{context.param}' repeatably triggers an outbound HTTP "
+                "fetch of exactly that URL (server-side request forgery "
+                "class behavior)."
             ),
             recommendation=(
                 "Validate and allowlist outbound request destinations "

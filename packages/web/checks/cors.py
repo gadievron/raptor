@@ -18,6 +18,7 @@ _PROBE_ORIGINS = [
 
 @registry.register(CheckCategory.CORS, "V14.5.1", "CORS allows arbitrary origin with credentials")
 class CorsWildcardWithCredentialsCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         findings = []
         for probe_origin in _PROBE_ORIGINS:
@@ -87,6 +88,7 @@ class CorsWildcardWithCredentialsCheck(Check):
 
 @registry.register(CheckCategory.CORS, "V14.5.2", "CORS allows null origin")
 class CorsNullOriginCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         try:
             resp = client.get("/", headers={"Origin": "null"})
@@ -116,6 +118,7 @@ class CorsNullOriginCheck(Check):
 
 @registry.register(CheckCategory.CORS, "V14.5.3", "Sensitive headers exposed via CORS")
 class CorsSensitiveHeadersCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         try:
             resp = client.get("/", headers={"Origin": "https://test.example.com"})

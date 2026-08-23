@@ -138,6 +138,7 @@ class DirectoryListingCheck(Check):
 
 @registry.register(CheckCategory.INFORMATION, "V7.1.1", "Verbose HTTP methods enabled")
 class VerbosHttpMethodsCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         try:
             client.get("/", headers={"X-HTTP-Method-Override": "OPTIONS"})

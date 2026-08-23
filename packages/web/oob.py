@@ -40,6 +40,39 @@ _MAX_TOKENS = 4096
 # Recorded hits are bounded so a hostile target cannot balloon memory
 # by hammering the listener.
 _MAX_HITS_PER_TOKEN = 20
+# Idle-connection reap + live-connection cap: the listener faces the
+# hostile network by design, and every held-open connection pins a
+# handler thread — without these, a slowloris peer kills the scan.
+_CONNECTION_TIMEOUT_S = 10
+_MAX_LIVE_CONNECTIONS = 64
+
+
+def _strip_ctl(value: str, limit: int) -> str:
+    """Header/path values recorded off the wire feed finding evidence
+    and reports — control characters (obs-fold smuggles raw CRLF
+    through Python's header parser) become spaces."""
+    return re.sub(r"[\x00-\x1f\x7f]", " ", value)[:limit]
+
+
+class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._conn_slots = threading.BoundedSemaphore(_MAX_LIVE_CONNECTIONS)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._conn_slots.acquire(blocking=False):
+            # Over the cap: drop immediately rather than queue a thread.
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_slots.release()
 
 
 @dataclass
@@ -102,6 +135,10 @@ class OobListener:
         listener = self
 
         class _Handler(BaseHTTPRequestHandler):
+            # Reap idle connections: BaseHTTPRequestHandler treats a
+            # socket timeout as end-of-conversation.
+            timeout = _CONNECTION_TIMEOUT_S
+
             def _serve(self) -> None:
                 listener._record(self)
                 body = b"ok"
@@ -118,7 +155,7 @@ class OobListener:
             def log_message(self, *_args: object) -> None:
                 pass
 
-        self._server = ThreadingHTTPServer(
+        self._server = _BoundedThreadingHTTPServer(
             (self._bind_host, self._requested_port), _Handler,
         )
         self._thread = threading.Thread(
@@ -177,12 +214,12 @@ class OobListener:
                 return
             hits.append(OobHit(
                 token=token,
-                path=str(handler.path)[:256],
-                method=str(handler.command)[:16],
+                path=_strip_ctl(str(handler.path), 256),
+                method=_strip_ctl(str(handler.command), 16),
                 source_ip=str(handler.client_address[0]),
-                user_agent=str(
-                    handler.headers.get("User-Agent", ""),
-                )[:256],
+                user_agent=_strip_ctl(
+                    str(handler.headers.get("User-Agent", "")), 256,
+                ),
                 received_at=time.time(),
             ))
 

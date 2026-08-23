@@ -115,9 +115,18 @@ class BrowserEngine:
         if proxy:
             launch_kwargs["proxy"] = proxy
         self._browser = self._pw.chromium.launch(**launch_kwargs)
-        self._context = self._browser.new_context(ignore_https_errors=True)
+        # service_workers="block": a worker's fetches bypass page-level
+        # routing; nothing the scan renders needs one.
+        self._context = self._browser.new_context(
+            ignore_https_errors=True,
+            service_workers="block",
+        )
         self._context.set_default_timeout(self._timeout_ms)
         self._context.route("**/*", self._route_gate)
+        # WebSocket connections never enter context.route — gate them
+        # separately: same-origin sockets proxy through to the target,
+        # off-origin sockets never connect anywhere.
+        self._context.route_web_socket("**/*", self._websocket_gate)
         if self._extra_headers:
             self._context.set_extra_http_headers(self._extra_headers)
         if self._cookies:
@@ -163,16 +172,83 @@ class BrowserEngine:
 
     # -- scope gate ------------------------------------------------------
 
-    def _same_origin(self, url: str) -> bool:
+    def _same_origin(self, url: str, *, scheme_map: dict | None = None) -> bool:
         parsed = urlparse(url)
-        return (parsed.scheme.lower(), parsed.netloc.lower()) == self._origin
+        scheme = parsed.scheme.lower()
+        if scheme_map:
+            scheme = scheme_map.get(scheme, scheme)
+        return (scheme, parsed.netloc.lower()) == self._origin
+
+    _MAX_REDIRECT_HOPS = 5
 
     def _route_gate(self, route: Any) -> None:
-        if self._same_origin(route.request.url):
-            route.continue_()
+        """Origin-gate every request INCLUDING redirect hops.
+
+        Chromium follows redirects internally in two ways this gate
+        would never see again: continue_() lets the network stack
+        follow them, and even fulfilling a raw 3xx makes the renderer
+        follow the Location without a fresh interceptable request
+        (verified against a live fixture). So the gate consumes
+        redirects itself — fetch with following disabled, walk the
+        Location chain manually with an origin check per hop, and hand
+        the renderer only the final non-redirect response.
+        """
+        from urllib.parse import urljoin
+
+        if not self._same_origin(route.request.url):
+            self._blocked_requests += 1
+            route.abort()
             return
+        try:
+            response = route.fetch(max_redirects=0)
+            current_url = route.request.url
+            hops = 0
+            while 300 <= response.status < 400:
+                location = response.headers.get("location")
+                if not location:
+                    break
+                target = urljoin(current_url, location)
+                hops += 1
+                if hops > self._MAX_REDIRECT_HOPS or not self._same_origin(
+                    target,
+                ):
+                    self._blocked_requests += 1
+                    route.abort()
+                    return
+                if response.status in (307, 308):
+                    # Method/body-preserving redirects: replay the
+                    # original request shape at the new URL.
+                    response = self._context.request.fetch(
+                        target,
+                        method=route.request.method,
+                        data=route.request.post_data,
+                        max_redirects=0,
+                    )
+                else:
+                    response = self._context.request.get(
+                        target, max_redirects=0,
+                    )
+                current_url = target
+            route.fulfill(response=response)
+        except Exception:
+            logger.debug("gated fetch failed", exc_info=True)
+            try:
+                route.abort()
+            except Exception:
+                logger.debug("route abort failed", exc_info=True)
+
+    def _websocket_gate(self, ws_route: Any) -> None:
+        # ws/wss map onto the http/https origin for the compare.
+        if self._same_origin(
+            ws_route.url, scheme_map={"ws": "http", "wss": "https"},
+        ):
+            ws_route.connect_to_server()
+            return
+        # NOT calling connect_to_server() leaves the page-side socket
+        # attached to a dead-end mock: nothing ever connects out.
+        # (close() here would deadlock — the sync handler runs on the
+        # event loop that close() needs to make progress.)
         self._blocked_requests += 1
-        route.abort()
 
     @property
     def blocked_requests(self) -> int:

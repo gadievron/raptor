@@ -21,6 +21,7 @@ _SENTINEL = "raptor_pp_probe_value_8472"
 
 @registry.register(CheckCategory.INJECTION, "V5.3.1", "Server-side prototype pollution")
 class ServerSidePrototypePollutionCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         # Try __proto__ injection in JSON POST body
         api_paths = ["/api", "/api/v1", "/api/v2"]

@@ -20,6 +20,7 @@ _OAUTH_PATHS = [
 
 @registry.register(CheckCategory.AUTHN, "V3.7.1", "OAuth redirect_uri allows open redirect")
 class OAuthOpenRedirectCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         # Find OAuth authorization endpoints
         auth_endpoints = []

@@ -46,6 +46,7 @@ def _is_cached(headers: dict) -> bool:
 
 @registry.register(CheckCategory.INJECTION, "V5.1.12", "Web cache poisoning via unkeyed headers")
 class CachePoisoningCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         # First check if there is a cache at all
         try:
@@ -99,6 +100,7 @@ class CachePoisoningCheck(Check):
 
 @registry.register(CheckCategory.INJECTION, "V5.1.13", "Web cache deception risk")
 class CacheDeceptionCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         if not session or not session.authenticated:
             return []
@@ -157,6 +159,7 @@ class CacheDeceptionCheck(Check):
 
 @registry.register(CheckCategory.INJECTION, "V5.1.14", "HTTP request smuggling probe (CL.TE)")
 class RequestSmugglingCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         import socket
         import ssl

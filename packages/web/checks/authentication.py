@@ -14,6 +14,7 @@ _KNOWN_USERNAMES = ["admin", "administrator", "user", "test", "guest"]
 
 @registry.register(CheckCategory.AUTHN, "V2.2.1", "Account enumeration via login response differences")
 class AccountEnumerationCheck(Check):
+    risk = "active"
     """Check if the login endpoint leaks whether a username exists.
 
     Makes at most 2 login attempts with obviously invalid credentials.
@@ -86,6 +87,7 @@ class AccountEnumerationCheck(Check):
 
 @registry.register(CheckCategory.AUTHN, "V2.2.2", "Brute-force protection absent")
 class BruteForceProtectionCheck(Check):
+    risk = "intrusive"
     """Check if the login endpoint rate-limits repeated failures.
 
     Makes at most 5 login attempts. Does NOT perform an actual dictionary attack.
@@ -154,6 +156,7 @@ class BruteForceProtectionCheck(Check):
 
 @registry.register(CheckCategory.AUTHN, "V2.1.1", "Weak default credentials accepted")
 class DefaultCredentialsCheck(Check):
+    risk = "active"
     """Try a small set of well-known default credentials.
 
     Deliberately conservative -- at most 3 attempts against common combos.

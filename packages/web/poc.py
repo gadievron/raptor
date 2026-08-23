@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -86,21 +87,40 @@ def _confirmation_request(finding: WebFinding) -> tuple[str, str, str | None]:
     return method, target, None
 
 
+def _comment_text(value: object) -> str:
+    """One shell-comment-safe line: control characters (above all a
+    newline, which would END the comment and start a command) become
+    spaces."""
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(value))
+
+
 def build_reproducer(finding: WebFinding) -> str | None:
-    """A curl reproducer script for one oracle-proven finding."""
+    """A curl reproducer script for one oracle-proven finding.
+
+    Every interpolated value is attacker-influenced (URLs come from
+    crawling the hostile target; payloads and signals from its
+    responses) and the operator is INVITED to run this script — so
+    argv words get real shell quoting (shlex.quote: json.dumps leaves
+    $(…) and backticks live inside double quotes) and comment text is
+    flattened to single control-character-free lines.
+    """
     data = finding.to_dict()
     if not has_exploit_oracle_evidence(data):
         return None
     method, url, body = _confirmation_request(finding)
-    curl = ["curl", "-sk", "-X", method, json.dumps(url)]
+    curl = ["curl", "-sk", "-X", shlex.quote(method), shlex.quote(url)]
     if body is not None:
-        curl += ["--data", json.dumps(body)]
-    signal = str(data.get("oracle_signal") or "")
-    diff = str(data.get("diff_summary") or "")
+        curl += ["--data", shlex.quote(body)]
+    header = _comment_text(
+        f"{data.get('finding_id')}: {data.get('title')}",
+    )
+    klass = _comment_text(f"{data.get('vuln_type')} ({data.get('cwe_id')})")
+    signal = _comment_text(data.get("oracle_signal") or "")
+    diff = _comment_text(data.get("diff_summary") or "")
     return (
         "#!/bin/sh\n"
-        f"# RAPTOR reproducer — {data.get('finding_id')}: {data.get('title')}\n"
-        f"# Class: {data.get('vuln_type')} ({data.get('cwe_id')})\n"
+        f"# RAPTOR reproducer — {header}\n"
+        f"# Class: {klass}\n"
         f"# Oracle signal to expect in the response: {signal}\n"
         f"# Baseline/attack differential at confirmation: {diff}\n"
         "# Live-target replay requires fresh operator authorisation.\n"

@@ -48,6 +48,7 @@ _SSRF_INDICATORS = [
 
 @registry.register(CheckCategory.INJECTION, "V10.3.1", "SSRF via URL parameter")
 class SsrfParameterCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         findings = []
         tested: set = set()
@@ -105,6 +106,7 @@ class SsrfParameterCheck(Check):
 
 @registry.register(CheckCategory.INJECTION, "V10.3.2", "Blind SSRF via common headers")
 class BlindSsrfHeaderCheck(Check):
+    risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
         # Probe headers that some applications use for outbound requests
         # We look for timing differences or error messages as confirmation
