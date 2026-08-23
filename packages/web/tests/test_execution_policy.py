@@ -63,3 +63,21 @@ def test_policy_requires_explicit_approval_for_intrusive_tools():
     )
     assert approved.report()["summary"]["allowed_actions"] == 1
 
+
+
+def test_client_records_authorized_requests_in_policy_audit(tmp_path):
+    from packages.web.client import WebClient
+    from packages.web.execution_policy import WebExecutionPolicy
+
+    policy = WebExecutionPolicy.for_target("https://example.test")
+    client = WebClient("https://example.test", execution_policy=policy)
+    try:
+        url = client._build_url("login")
+    finally:
+        client.close()
+
+    assert url == "https://example.test/login"
+    report = policy.report()
+    assert report["summary"]["allowed_actions"] == 1
+    assert report["recent_decisions"][0]["action"] == "http_request"
+    assert report["recent_decisions"][0]["tool_id"] == "raptor-http"
