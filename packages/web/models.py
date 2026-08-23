@@ -8,7 +8,6 @@ type that individual checks produce.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -33,19 +32,19 @@ class WebFinding:
     asvs_category: str      # e.g. "V14.4"
     check_id: str           # e.g. "V14.4.3"
     auth_context: str = "unauthenticated"
-    cwe_id: Optional[str] = None
-    cvss_score_estimate: Optional[float] = None
-    confirmed: Optional[bool] = None
-    target_url: Optional[str] = None
-    confirmation_payload: Optional[str] = None
-    response_evidence: Optional[str] = None
-    baseline_evidence: Optional[str] = None
-    attack_evidence: Optional[str] = None
-    diff_summary: Optional[str] = None
-    attack_vector: Optional[str] = None
-    method: Optional[str] = None
+    cwe_id: str | None = None
+    cvss_score_estimate: float | None = None
+    confirmed: bool | None = None
+    target_url: str | None = None
+    confirmation_payload: str | None = None
+    response_evidence: str | None = None
+    baseline_evidence: str | None = None
+    attack_evidence: str | None = None
+    diff_summary: str | None = None
+    attack_vector: str | None = None
+    method: str | None = None
     affected_parameters: list[str] = field(default_factory=list)
-    oracle_signal: Optional[str] = None
+    oracle_signal: str | None = None
     oracle: str = "web"
     reproducible: bool = False
 
