@@ -186,7 +186,9 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 "http://example.com",
                 None,
                 Path(tmpdir),
-                ffuf_config=SimpleNamespace(),
+                ffuf_config=SimpleNamespace(
+                    extensions=(), headers=("X-Op: set",), cookies=(),
+                ),
             )
             mock_ffuf_run.return_value = {
                 "tool": "ffuf",

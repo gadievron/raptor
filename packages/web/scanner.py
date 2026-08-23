@@ -136,6 +136,7 @@ class WebScanner:
         mine_params: bool = False,
         second_auth_manager: AuthManager | None = None,
         access_control: bool = False,
+        ffuf_wordlist_dir: Path | None = None,
     ) -> None:
         import time
 
@@ -162,6 +163,7 @@ class WebScanner:
         self.mine_params = mine_params
         self.second_auth_manager = second_auth_manager
         self.access_control = access_control
+        self.ffuf_wordlist_dir = ffuf_wordlist_dir
         self._client_kwargs: dict[str, bool] = {
             "verify_ssl": verify_ssl,
             "reveal_secrets": reveal_secrets,
@@ -317,9 +319,78 @@ class WebScanner:
             "has_graphql": result.graphql_schema is not None,
         })
 
+    def _enriched_ffuf_config(
+        self, discovery: DiscoveryResult,
+    ) -> FfufConfig | None:
+        """The run's ffuf config, enriched from the scan's own state.
+
+        Fills only what the operator left empty — explicit flags always
+        win: auth headers/cookies derive from the live session (the
+        scan already authenticated; ffuf should not fuzz logged-out),
+        extensions derive from the fingerprint, and when no wordlist
+        was given but a wordlist DIRECTORY was, a conventionally-named
+        list is selected per fingerprint. Every enrichment is logged.
+        """
+        from dataclasses import replace as _replace
+
+        from packages.web.discovery.wordlists import (
+            recommend_extensions,
+            select_wordlist,
+        )
+
+        config = self.ffuf_config
+        if config is None and self.ffuf_wordlist_dir is not None:
+            chosen = select_wordlist(
+                discovery.fingerprint or {}, self.ffuf_wordlist_dir,
+            )
+            if chosen is None:
+                logger.info(
+                    "Phase 2a: no wordlist matched under %s — ffuf stays off",
+                    self.ffuf_wordlist_dir,
+                )
+                return None
+            logger.info(
+                "Phase 2a: fingerprint-selected wordlist %s (fingerprint: %s)",
+                chosen.name, discovery.fingerprint or {},
+            )
+            config = FfufConfig(wordlist=chosen)
+        if config is None:
+            return None
+
+        updates: dict = {}
+        if not config.extensions:
+            recommended = recommend_extensions(discovery.fingerprint or {})
+            if recommended:
+                updates["extensions"] = recommended
+                logger.info(
+                    "Phase 2a: fingerprint-recommended extensions %s",
+                    ",".join(recommended),
+                )
+        if (
+            self.session
+            and self.session.authenticated
+            and not config.headers
+            and not config.cookies
+        ):
+            if self.session.mode == "bearer" and self.session.token:
+                updates["headers"] = (
+                    f"Authorization: Bearer {self.session.token}",
+                )
+                logger.info("Phase 2a: ffuf reuses the session bearer token")
+            elif self.session.mode in ("form", "cookie"):
+                jar = self.client.get_cookies()
+                if jar:
+                    cookie = "; ".join(f"{k}={v}" for k, v in sorted(jar.items()))
+                    updates["cookies"] = (cookie,)
+                    logger.info(
+                        "Phase 2a: ffuf reuses %d session cookie(s)", len(jar),
+                    )
+        return _replace(config, **updates) if updates else config
+
     def _phase_external_discovery(self, discovery: DiscoveryResult) -> None:
         """Run opt-in external discovery tools and seed the crawl."""
-        if not self.ffuf_config:
+        ffuf_config = self._enriched_ffuf_config(discovery)
+        if not ffuf_config:
             return
         logger.info("Phase 2a: External content discovery (ffuf)")
         try:
@@ -333,7 +404,7 @@ class WebScanner:
                 self.base_url,
                 self.out_dir,
                 reveal_secrets=self.reveal_secrets,
-            ).run(self.ffuf_config)
+            ).run(ffuf_config)
             self._external_tool_results.append(result)
             hit_urls = []
             for entry in result.get("results", []):
@@ -1366,7 +1437,7 @@ class WebScanner:
         save_json(self.out_dir / "scope-receipt.json", execution_policy["scope_receipt"])
         save_json(self.out_dir / "web-execution-policy.json", execution_policy)
         selected_adapters = ["raptor-http", "raptor-crawler", "raptor-web-oracle"]
-        if self.ffuf_config:
+        if self.ffuf_config or self.ffuf_wordlist_dir:
             selected_adapters.append("ffuf")
         selected_adapters.extend(self.external_validators)
         adapter_report = web_tool_adapter_report(selected_adapters)
@@ -1824,6 +1895,15 @@ Examples:
         help="Skip LLM payload generation; the fuzzer uses static payloads",
     )
     parser.add_argument(
+        "--ffuf-wordlist-dir",
+        type=Path,
+        help=(
+            "Operator wordlist directory (e.g. a SecLists checkout): when "
+            "no --ffuf-wordlist is given, a conventionally-named list is "
+            "selected per the target's fingerprint"
+        ),
+    )
+    parser.add_argument(
         "--mine-params",
         action="store_true",
         help=(
@@ -2137,6 +2217,7 @@ def main():
         mine_params=bool(args.mine_params),
         second_auth_manager=second_auth_manager,
         access_control=bool(args.access_control),
+        ffuf_wordlist_dir=args.ffuf_wordlist_dir,
     )
 
     try:
