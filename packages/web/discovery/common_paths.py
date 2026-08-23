@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, List
-from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
