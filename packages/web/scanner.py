@@ -1431,6 +1431,17 @@ class WebScanner:
                 logger.debug("labeled-attempt build failed", exc_info=True)
 
         written = write_web_attempts(attempts, self.out_dir)
+        # Self-labeling: the oracle verdicts double as ground truth for
+        # the payload model's scorecard cells — no human labels needed.
+        try:
+            from packages.web.scorecard_bridge import (
+                record_web_oracle_outcomes,
+            )
+            record_web_oracle_outcomes(
+                self.llm, [context[0] for context in probe_contexts],
+            )
+        except Exception:
+            logger.debug("web scorecard bridge failed", exc_info=True)
         summary = dict(counts)
         summary["requests_used"] = oracle.requests_used
         summary["transport_errors"] = oracle.errors
@@ -1775,6 +1786,15 @@ class WebScanner:
             "evidence": data.get("evidence"),
             "description": data.get("description"),
             "recommendation": data.get("recommendation"),
+            # Web stage profile (validation skill): stages that read
+            # source files instead replay these HTTP facts — see
+            # .claude/skills/exploitability-validation/web-profile.md.
+            "target_kind": "web",
+            "method": data.get("method"),
+            "parameter": (data.get("affected_parameters") or [None])[0],
+            "confirmation_payload": data.get("confirmation_payload"),
+            "oracle_signal": data.get("oracle_signal"),
+            "cwe_id": data.get("cwe_id"),
         }
 
     # ------------------------------------------------------------------

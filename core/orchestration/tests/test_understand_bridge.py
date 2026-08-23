@@ -1973,3 +1973,63 @@ class TestMapFlowIds:
         stats = ub._import_unchecked_flow_conditions(context_map, validate_dir)
         # EP-1 flow already present under the legacy ID; EP-9 is new.
         assert stats["imported_as_paths"] == 1
+
+
+class TestUrlTargets:
+    """Web scans validate URL targets — no resolve(), no disk hashing."""
+
+    def test_tier2_matches_url_target_by_string(self, tmp_path):
+        validate_dir = tmp_path / "validate"
+        validate_dir.mkdir()
+        _make_understand_dir(
+            tmp_path,
+            checklist={"target_path": "https://app.example.test/"},
+        )
+
+        result_dir, stale = find_understand_output(
+            validate_dir, target_path="https://app.example.test",
+        )
+        assert result_dir is not None
+        assert stale == set()  # URL targets never hash-stale
+
+    def test_url_target_never_matches_filesystem_run(self, tmp_path):
+        validate_dir = tmp_path / "validate"
+        validate_dir.mkdir()
+        _make_understand_dir(
+            tmp_path, checklist={"target_path": str(tmp_path / "src")},
+        )
+
+        result_dir, _ = find_understand_output(
+            validate_dir, target_path="https://app.example.test",
+        )
+        assert result_dir is None
+
+    def test_url_target_picks_newest_without_hash_penalty(self, tmp_path):
+        """Pre-fix, Path('https://x')/rel escaped containment and every
+        web candidate ranked maximally stale; now recency decides."""
+        import os
+
+        validate_dir = tmp_path / "validate"
+        validate_dir.mkdir()
+        old = _make_understand_dir(
+            tmp_path, name="understand-20260401-090000",
+            checklist={
+                "target_path": "https://app.example.test",
+                "files": [{"path": "ignored.py", "sha256": "0" * 64}],
+            },
+        )
+        new = _make_understand_dir(
+            tmp_path, name="understand-20260401-110000",
+            checklist={
+                "target_path": "https://app.example.test",
+                "files": [{"path": "ignored.py", "sha256": "1" * 64}],
+            },
+        )
+        os.utime(old, (1_000_000_000, 1_000_000_000))
+        os.utime(new, (2_000_000_000, 2_000_000_000))
+
+        result_dir, stale = find_understand_output(
+            validate_dir, target_path="https://app.example.test",
+        )
+        assert result_dir == new
+        assert stale == set()

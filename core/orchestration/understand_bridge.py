@@ -72,6 +72,11 @@ _VALID_PROFILE_NAMES = frozenset({
 # ---------------------------------------------------------------------------
 
 
+def _is_url_target(target: str | None) -> bool:
+    """Web targets are URLs, not paths — no resolve(), no disk hashing."""
+    return bool(target) and "://" in str(target)
+
+
 def find_understand_output(
     validate_dir: Path,
     target_path: str | None = None,
@@ -199,8 +204,11 @@ def _rank_candidates(
             )
             return 0
 
-    if not target_path:
-        # No target — can't hash on disk, just pick newest.
+    if not target_path or _is_url_target(target_path):
+        # No target, or a URL target (web scan) — file-hash freshness is
+        # unknowable (nothing on disk to hash; a live site has no
+        # checklist SHA), so just pick newest rather than marking every
+        # web candidate maximally stale.
         # Use mtime_ns for sub-second resolution; directory name breaks ties.
         candidates.sort(key=lambda d: (_safe_mtime_ns(d), d.name), reverse=True)
         return candidates[0], set()
@@ -338,9 +346,16 @@ def _search_understand_dirs(
     if not parent_dir.is_dir():
         return []
 
-    target_resolved = (
-        str(Path(require_target).resolve()) if require_target else None
-    )
+    # URL targets (web scans) compare as normalized strings —
+    # Path.resolve() on a URL yields "$CWD/https:/host", which can
+    # never match and silently disabled cross-run matching for web.
+    target_resolved: str | None
+    if require_target and _is_url_target(require_target):
+        target_resolved = require_target.strip().rstrip("/")
+    else:
+        target_resolved = (
+            str(Path(require_target).resolve()) if require_target else None
+        )
 
     results = []
     try:
@@ -386,8 +401,13 @@ def _search_understand_dirs(
             checklist = load_json(d / "checklist.json")
             if not checklist:
                 continue
-            d_target = checklist.get("target_path", "")
-            if not d_target or str(Path(d_target).resolve()) != target_resolved:
+            d_target = str(checklist.get("target_path", "") or "")
+            if not d_target:
+                continue
+            if _is_url_target(d_target) or _is_url_target(target_resolved):
+                if d_target.strip().rstrip("/") != target_resolved:
+                    continue
+            elif str(Path(d_target).resolve()) != target_resolved:
                 continue
 
         results.append(d)
@@ -558,7 +578,7 @@ def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any]
         return context_map
 
     files_by_path = {
-        fi.get("path"): fi
+        str(fi.get("path")): fi
         for fi in _list_at(checklist, "files")
         if isinstance(fi, dict) and fi.get("path")
     }
@@ -649,7 +669,7 @@ def _augment_library_surface(context_map: dict[str, Any],
     for fi in _list_at(checklist, "files"):
         if not isinstance(fi, dict):
             continue
-        lang = fi.get("language")
+        lang = str(fi.get("language") or "")
         path = fi.get("path")
         if not isinstance(path, str):
             continue
