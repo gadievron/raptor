@@ -132,6 +132,7 @@ class WebScanner:
         approved_tools: list[str] | None = None,
         verify_findings: bool = True,
         max_verifications: int = 25,
+        rank: bool = False,
     ) -> None:
         import time
 
@@ -154,6 +155,7 @@ class WebScanner:
         self.nuclei_config = nuclei_config
         self.verify_findings = verify_findings
         self.max_verifications = max_verifications
+        self.rank = rank
 
         self.execution_policy = WebExecutionPolicy.for_target(
             self.base_url,
@@ -329,7 +331,13 @@ class WebScanner:
 
     def _phase_crawl(self, discovery: DiscoveryResult) -> dict:
         logger.info("Phase 3: Crawl")
-        for url in discovery.urls[:50]:
+        seed_urls = self._maybe_rank(
+            list(discovery.urls),
+            "Which of these URLs are most worth crawling on a web security "
+            "assessment? Prefer admin/API/dynamic endpoints with parameters "
+            "over static assets and boilerplate.",
+        )
+        for url in seed_urls[:50]:
             self.crawler.discovered_urls.add(url)
         crawl_results = self.crawler.crawl(self.base_url)
         save_json(self.out_dir / "crawl_results.json", crawl_results)
@@ -498,7 +506,13 @@ class WebScanner:
             crawl_data.get("discovered_parameters", []),
             context_map=context_map,
         )[:self.max_fuzz_params]
-        target_urls = self._prioritise_urls(target_urls, global_params)
+        target_urls = self._maybe_rank(
+            self._prioritise_urls(target_urls, global_params),
+            "Which of these URLs are most likely to expose injection "
+            "vulnerabilities (SQLi, XSS, SSTI, command injection, path "
+            "traversal)? Prefer endpoints whose query parameters reach "
+            "interpreters, filesystems, or shells.",
+        )
         selected_urls = target_urls[:self.max_fuzz_urls]
 
         param_urls = crawl_data.get("parameter_urls")
@@ -509,8 +523,12 @@ class WebScanner:
         seen_cells: set[tuple[str, str]] = set()
         for target_url in selected_urls:
             own = self._query_parameters(target_url)
-            candidates = self._prioritise_parameters(
-                own + global_params, context_map=context_map,
+            candidates = self._maybe_rank(
+                self._prioritise_parameters(
+                    own + global_params, context_map=context_map,
+                ),
+                "Which of these HTTP parameter names most likely reach an "
+                "interpreter, shell, filesystem, or database when fuzzed?",
             )[:self.max_fuzz_params]
             for param in candidates:
                 mapped = param_urls.get(param)
@@ -767,6 +785,15 @@ class WebScanner:
         except ImportError:
             return findings
 
+        needs_review = self._maybe_rank(
+            needs_review,
+            "Which of these web findings are most likely real and "
+            "exploitable, and most worth validation effort?",
+            render=lambda f: (
+                f"{f.vuln_type} {f.title} at {f.url} "
+                f"oracle={f.oracle_signal or '-'}"
+            )[:300],
+        )
         logger.info("Phase 7a: Validating %d needs_review findings", len(needs_review))
         try:
             import shutil
@@ -973,6 +1000,39 @@ class WebScanner:
             for name, _value in parse_qsl(urlparse(url).query, keep_blank_values=True)
             if name
         ]
+
+    def _maybe_rank(
+        self,
+        items: list,
+        query: str,
+        render=None,
+    ) -> list:
+        """Listwise-rank *items* when --rank is on and an LLM is present.
+
+        Ordering only — the heuristic pre-order is the input, budgets and
+        verdicts stay authoritative, and any ranking failure keeps the
+        heuristic order. Rendered content is attacker-influenced (URLs,
+        parameter names), so renders are size-capped per the ranking
+        module's threat-model caveat.
+        """
+        if not self.rank or not self.llm or len(items) < 3:
+            return items
+        try:
+            from core.llm.ranking import rank_items
+
+            result = rank_items(
+                items,
+                query,
+                client=self.llm,
+                render=render or (lambda item: str(item)[:200]),
+            )
+            return [ranked.item for ranked in result.ranked]
+        except Exception as e:
+            logger.warning(
+                "Ranking unavailable, keeping heuristic order: %s",
+                self._redact(str(e)),
+            )
+            return items
 
     def _web_finding_to_agentic_result(self, finding: WebFinding) -> dict[str, Any]:
         data = finding.to_dict()
@@ -1501,6 +1561,14 @@ Examples:
         help="Skip LLM payload generation; the fuzzer uses static payloads",
     )
     parser.add_argument(
+        "--rank",
+        action="store_true",
+        help=(
+            "Listwise LLM ranking of crawl seeds, fuzz targets, and "
+            "findings before each budget cap (ordering only; needs an LLM)"
+        ),
+    )
+    parser.add_argument(
         "--rate-limit",
         type=float,
         default=0.5,
@@ -1761,6 +1829,7 @@ def main():
         approved_tools=list(args.approve_tool or []),
         verify_findings=not args.no_verify,
         max_verifications=args.max_verifications,
+        rank=bool(args.rank),
     )
 
     try:

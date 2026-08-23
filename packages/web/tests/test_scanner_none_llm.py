@@ -532,3 +532,106 @@ class TestProjectFindingsCitizenship(unittest.TestCase):
             self.assertTrue(
                 any(f.get("vuln_type") == "sqli" for f in merged)
             )
+
+
+class TestRankingIntegration(unittest.TestCase):
+    """--rank reorders within budgets; never gates, never fatal."""
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_rank_reorders_fuzz_urls_within_budget(
+        self, mock_client_cls, mock_crawler_cls,
+    ):
+        from core.llm.ranking import RankedItem, RankingResult, RankingStats
+
+        ranked_calls = []
+
+        def fake_rank(items, query, **kwargs):
+            ranked_calls.append(query)
+            reordered = list(reversed(items))
+            return RankingResult(
+                ranked=[
+                    RankedItem(rank=i + 1, index=i, item=item, score=0.0,
+                               iterations=1)
+                    for i, item in enumerate(reordered)
+                ],
+                stats=RankingStats(),
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com", MagicMock(), Path(tmpdir),
+                max_fuzz_urls=1, rank=True,
+            )
+            scanner.fuzzer = MagicMock()
+            fuzzed_urls = []
+
+            def record_fuzz(url, param, **kwargs):
+                fuzzed_urls.append(url)
+                return []
+
+            scanner.fuzzer.fuzz_parameter.side_effect = record_fuzz
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 2, "total_parameters": 1},
+                "discovered_parameters": ["q"],
+                "discovered_urls": [
+                    "http://example.com/a?q=1",
+                    "http://example.com/b?q=1",
+                ],
+                "pages": [],
+            }
+
+            with patch("core.llm.ranking.rank_items", side_effect=fake_rank):
+                scanner.scan()
+
+        # Ranking ran at the fuzz-URL gate (the only gate with >= 3
+        # candidates in this fixture; smaller queues skip the spend).
+        self.assertGreaterEqual(len(ranked_calls), 1)
+        # Budget cap (1 URL) applied AFTER the rank reordering.
+        self.assertEqual(len(set(fuzzed_urls)), 1)
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_rank_failure_keeps_heuristic_order(
+        self, mock_client_cls, mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com", MagicMock(), Path(tmpdir), rank=True,
+            )
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 1},
+                "discovered_parameters": ["q"],
+                "discovered_urls": ["http://example.com/a?q=1"] * 4,
+                "pages": [],
+            }
+
+            with patch(
+                "core.llm.ranking.rank_items",
+                side_effect=RuntimeError("model down"),
+            ):
+                result = scanner.scan()
+
+        self.assertIn("injection", result["phases_completed"])
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_no_rank_flag_means_no_ranking_calls(
+        self, mock_client_cls, mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner("http://example.com", MagicMock(), Path(tmpdir))
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 1},
+                "discovered_parameters": ["q"],
+                "pages": [],
+            }
+
+            with patch("core.llm.ranking.rank_items") as mock_rank:
+                scanner.scan()
+
+            mock_rank.assert_not_called()
