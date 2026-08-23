@@ -40,6 +40,18 @@ def derive_soft404_filters(client: Any, base_url: str) -> dict[str, int]:
         except Exception as e:
             logger.debug("soft-404 probe failed: %s", e)
             return {}
+    if any(getattr(r, "history", None) for r in responses):
+        # The scan client follows redirects; ffuf does not. Deriving a
+        # filter from the post-redirect page would measure the wrong
+        # response layer entirely (and could hide any real page the
+        # same size as the login/redirect target). Say so instead of
+        # logging a filter that filters nothing.
+        logger.info(
+            "soft-404 probes: wildcard paths redirect — no filter "
+            "derived (ffuf sees the redirect responses themselves; "
+            "consider --ffuf-filter-status or matcher tuning)",
+        )
+        return {}
     statuses = {r.status_code for r in responses}
     if statuses == {404}:
         return {}

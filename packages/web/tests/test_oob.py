@@ -170,9 +170,6 @@ class TestScannerOobFunnel(unittest.TestCase):
             self.assertEqual(scanner._phase_oob(), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestListenerHardening(unittest.TestCase):
     """The listener faces the hostile network: idle-connection floods
@@ -250,3 +247,42 @@ class TestListenerHardening(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertNotRegex(hits[0].user_agent, r"[\r\n\x00-\x1f]")
         self.assertIn("INJECTED", hits[0].user_agent)  # content kept, flat
+
+
+class TestListenerLifecycle(unittest.TestCase):
+    def test_listener_stops_when_the_scan_segment_dies(self):
+        """The listener starts inside Phase 6; a failure before Phase
+        6o must not leave the bound socket alive past the scan."""
+        import socket
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from packages.web.scanner import WebScanner
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("packages.web.scanner.WebClient"), patch(
+                "packages.web.scanner.WebCrawler"
+            ):
+                scanner = WebScanner(
+                    "https://t.example", None, Path(tmpdir),
+                    oob_listen="127.0.0.1:0",
+                )
+            scanner.oob_listener.start()
+            port = scanner.oob_listener.port
+            self.assertEqual(
+                socket.socket().connect_ex(("127.0.0.1", port)), 0,
+            )
+
+            scanner.close()
+
+            sock = socket.socket()
+            try:
+                self.assertNotEqual(
+                    sock.connect_ex(("127.0.0.1", port)), 0,
+                )
+            finally:
+                sock.close()
+
+if __name__ == "__main__":
+    unittest.main()

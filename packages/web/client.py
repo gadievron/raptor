@@ -430,7 +430,11 @@ class WebClient:
 
     def get_cookies(self) -> dict[str, str]:
         """Get current session cookies."""
-        return dict(self.session.cookies)
+        return {
+            name: value
+            for name, value in self.session.cookies.get_dict().items()
+            if value is not None
+        }
 
     def set_cookies(self, cookies: dict[str, str]) -> None:
         """Set session cookies."""

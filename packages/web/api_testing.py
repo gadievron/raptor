@@ -161,12 +161,9 @@ def _fill_body(
             string_fields.append((*prefix, str(name)))
 
 
-# Classes whose response markers are static error signatures, safe to
-# match at ffuf scale without a baseline leg. ssti's arithmetic marker
-# and xss's reflection signal are deliberately absent — both need the
-# baseline/containment legs only the in-Python oracle has, so at the
-# sweep layer they would be pure noise. Flags reproduce each Python
-# pattern's compile flags as Go/RE2 inline groups.
+# Go/RE2 inline-flag translation per static-signature class (the
+# class list itself is markers.STATIC_SIGNATURE_CLASSES — single
+# source with the fuzzer's candidate re-verification).
 _SWEEP_MARKER_FLAGS: dict[str, str] = {
     "sqli": "i",
     "command_injection": "im",
@@ -182,11 +179,11 @@ def sweep_match_regex() -> str:
     signal; the marker patterns use only RE2-compatible syntax (no
     lookarounds, no backreferences).
     """
-    from packages.web.markers import MARKER_RES
+    from packages.web.markers import MARKER_RES, STATIC_SIGNATURE_CLASSES
 
     return "|".join(
-        f"(?{flags}:{MARKER_RES[name].pattern})"
-        for name, flags in _SWEEP_MARKER_FLAGS.items()
+        f"(?{_SWEEP_MARKER_FLAGS[name]}:{MARKER_RES[name].pattern})"
+        for name in STATIC_SIGNATURE_CLASSES
     )
 
 

@@ -45,6 +45,17 @@ MARKER_RES: dict[str, re.Pattern] = {
     "ssti": re.compile(r"\b(?:49|7777777)\b"),
 }
 
+# The classes whose markers are STATIC error signatures — safe to
+# match without a baseline leg (ffuf-scale pre-filters, external
+# replay templates). ssti's arithmetic marker and xss's reflection
+# signal are deliberately absent: both are meaningless without the
+# baseline/containment legs only the in-Python oracle runs.
+STATIC_SIGNATURE_CLASSES: tuple[str, ...] = (
+    "sqli",
+    "command_injection",
+    "path_traversal",
+)
+
 
 def marker_present(vuln_type: str, text: str) -> bool:
     """True when *text* carries the class marker for *vuln_type*.

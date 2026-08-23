@@ -18,11 +18,12 @@ from packages.web.discovery.calibration import derive_soft404_filters
 from packages.web.ffuf import FfufConfig, FfufRunner
 
 
-def _response(status: int, body: str) -> MagicMock:
+def _response(status: int, body: str, history: list | None = None) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status
     resp.content = body.encode()
     resp.text = body
+    resp.history = list(history or [])
     return resp
 
 
@@ -120,6 +121,18 @@ class TestSoft404Calibration(unittest.TestCase):
         self.assertEqual(
             derive_soft404_filters(client, "https://example.test"),
             {"filter_words": 3},
+        )
+
+    def test_redirecting_wildcard_derives_nothing(self):
+        """The scan client follows redirects; ffuf does not. A filter
+        derived from the post-redirect page measures the wrong response
+        layer and silently filters nothing."""
+        client = MagicMock()
+        client.get.return_value = _response(
+            200, "login page", history=[_response(302, "")],
+        )
+        self.assertEqual(
+            derive_soft404_filters(client, "https://example.test"), {},
         )
 
     def test_honest_404_and_instability_derive_nothing(self):
@@ -228,3 +241,87 @@ class TestScannerSweepPhase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVerifyClassAttribution(unittest.TestCase):
+    """Class labels must not outrun the evidence: only static-signature
+    classes are candidates, ordered by the payload's own shape."""
+
+    def _fuzzer(self, confirming: set[str]):
+        from packages.web.fuzzer import WebFuzzer
+
+        fuzzer = WebFuzzer(MagicMock(), None)
+        fuzzer._test_json_payload = MagicMock(
+            side_effect=lambda u, b, f, p, vt: (
+                {"vulnerability_type": vt, "attack_vector": "json_body"}
+                if vt in confirming else None
+            ),
+        )
+        return fuzzer
+
+    def test_passwd_dump_from_traversal_payload_labels_traversal(self):
+        # /etc/passwd content satisfies BOTH the command-output and the
+        # file-content markers; the ../ payload shape disambiguates.
+        fuzzer = self._fuzzer({"command_injection", "path_traversal"})
+        finding = fuzzer.verify_json_candidate(
+            "https://t/api", {"f": "x"}, ("f",), "../../../etc/passwd",
+        )
+        self.assertEqual(finding["vulnerability_type"], "path_traversal")
+
+    def test_command_shaped_payload_prefers_command_injection(self):
+        fuzzer = self._fuzzer({"command_injection", "path_traversal"})
+        finding = fuzzer.verify_json_candidate(
+            "https://t/api", {"f": "x"}, ("f",), "; cat /tmp/x | id",
+        )
+        self.assertEqual(
+            finding["vulnerability_type"], "command_injection",
+        )
+
+    def test_ssti_is_never_a_default_candidate(self):
+        """The sweep's matcher cannot fire on ssti's arithmetic marker,
+        so an ssti label here would fabricate evidence (any page
+        containing a standalone '49' would 'confirm')."""
+        fuzzer = self._fuzzer(set())
+        fuzzer.verify_json_candidate(
+            "https://t/api", {"f": "x"}, ("f",), "' OR 1=1--",
+        )
+        tried = {
+            call.args[4] for call in fuzzer._test_json_payload.call_args_list
+        }
+        from packages.web.markers import STATIC_SIGNATURE_CLASSES
+        self.assertEqual(tried, set(STATIC_SIGNATURE_CLASSES))
+        self.assertNotIn("ssti", tried)
+
+
+class TestReplayShapePartition(unittest.TestCase):
+    def test_json_and_graphql_hits_never_reach_the_replay_oracle(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from packages.web.scanner import WebScanner
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                patch("packages.web.scanner.WebClient"), \
+                patch("packages.web.scanner.WebCrawler"):
+            scanner = WebScanner("https://t.example", None, Path(tmpdir))
+        hits = [
+            {"attack_vector": "query_param", "endpoint": "https://t/a",
+             "parameter": "q", "method": "GET"},
+            {"attack_vector": "request_body", "endpoint": "https://t/b",
+             "parameter": "f", "method": "POST"},
+            {"attack_vector": "json_body", "endpoint": "https://t/c",
+             "parameter": "user.name", "method": "POST"},
+            {"attack_vector": "json_body_sweep", "endpoint": "https://t/c",
+             "parameter": "user.name", "method": "POST"},
+            {"attack_vector": "graphql_argument", "endpoint": "https://t/g",
+             "parameter": "search.q", "method": "POST"},
+        ]
+
+        contexts, skipped = scanner._partition_replayable_hits(hits)
+
+        self.assertEqual(len(contexts), 2)
+        self.assertEqual(skipped, 3)
+        for hit in hits[2:]:
+            self.assertEqual(hit["verification"]["status"], "skipped")
+            self.assertIn("shape", hit["verification"]["reason"])

@@ -301,6 +301,8 @@ class WebCrawler:
             # Discover links
             for link in soup.find_all("a", href=True):
                 href = link["href"]
+                if not isinstance(href, str):
+                    continue
                 absolute_url = urljoin(url, href)
 
                 # Scope-check against `base_url`, not the

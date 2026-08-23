@@ -16,7 +16,7 @@ evidence tiers.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, TYPE_CHECKING
+from typing import Any, Literal, TYPE_CHECKING
 from urllib.parse import urlparse
 
 from core.labeled_attempts.store import write as store_write
@@ -43,7 +43,7 @@ CWE_BY_VULN_TYPE = {
     "ssrf": "CWE-918",
 }
 
-_OUTCOME_BY_STATUS = {
+_OUTCOME_BY_STATUS: dict[str, Literal["success", "reasoned_failure", "uncertain"]] = {
     VERIFIED: "success",
     REFUTED: "reasoned_failure",
     # inconclusive (flaky replay / transport errors / mixed controls)

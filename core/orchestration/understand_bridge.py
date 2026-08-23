@@ -77,6 +77,25 @@ def _is_url_target(target: str | None) -> bool:
     return bool(target) and "://" in str(target)
 
 
+def _normalize_url_target(target: str) -> str:
+    """Comparison form of a URL target: scheme and host case-folded,
+    scheme-default port dropped, trailing slash stripped — so
+    https://X:443/ and https://x match the way a filesystem
+    Path.resolve() comparison would have."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(target.strip())
+    scheme = parts.scheme.lower()
+    netloc = parts.netloc.lower()
+    default_port = {"http": ":80", "https": ":443"}.get(scheme)
+    if default_port and netloc.endswith(default_port):
+        netloc = netloc[: -len(default_port)]
+    normalized = f"{scheme}://{netloc}{parts.path}".rstrip("/")
+    if parts.query:
+        normalized += f"?{parts.query}"
+    return normalized
+
+
 def find_understand_output(
     validate_dir: Path,
     target_path: str | None = None,
@@ -351,7 +370,7 @@ def _search_understand_dirs(
     # never match and silently disabled cross-run matching for web.
     target_resolved: str | None
     if require_target and _is_url_target(require_target):
-        target_resolved = require_target.strip().rstrip("/")
+        target_resolved = _normalize_url_target(require_target)
     else:
         target_resolved = (
             str(Path(require_target).resolve()) if require_target else None
@@ -405,7 +424,7 @@ def _search_understand_dirs(
             if not d_target:
                 continue
             if _is_url_target(d_target) or _is_url_target(target_resolved):
-                if d_target.strip().rstrip("/") != target_resolved:
+                if _normalize_url_target(d_target) != target_resolved:
                     continue
             elif str(Path(d_target).resolve()) != target_resolved:
                 continue

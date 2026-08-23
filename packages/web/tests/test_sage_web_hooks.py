@@ -88,10 +88,16 @@ class TestStore(unittest.TestCase):
         joined = "\n".join(contents)
         self.assertIn("fingerprint: framework=Django, server=nginx/1.24",
                       joined)
-        self.assertIn("Confirmed vulnerability classes", joined)
-        self.assertIn("sqli at /search", joined)
-        # The unconfirmed xss finding must NOT appear as confirmed.
-        self.assertNotIn("xss at /echo;", joined.split("refuted")[0])
+        confirmed_rows = [
+            content for content in contents
+            if content.startswith("Confirmed vulnerability classes")
+        ]
+        self.assertEqual(len(confirmed_rows), 1)
+        self.assertIn("sqli at /search", confirmed_rows[0])
+        # The unconfirmed xss finding must NOT appear as confirmed —
+        # asserted against the confirmed row itself, not a substring
+        # heuristic over the joined blob.
+        self.assertNotIn("xss", confirmed_rows[0])
         self.assertIn("common.txt: 12 hit(s)", joined)
         # Hint-tier contract stated ON the stored row, so any future
         # consumer reading it back sees the boundary.

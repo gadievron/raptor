@@ -277,27 +277,48 @@ class WebScanner:
         if self.run_understand:
             context_map = self._phase_understand(crawl_data, discovery)
 
-        injection_findings = self._phase_injection(
-            crawl_data, context_map=context_map, discovery=discovery,
-        )
-        all_findings.extend(injection_findings)
-
-        verification_summary = None
-        if self.verify_findings and self._raw_injection_hits:
-            verification_summary = self._verify_findings(
-                [
-                    (hit, hit.get("endpoint", ""), hit.get("parameter", ""),
-                     hit.get("method", "GET"))
-                    for hit in self._raw_injection_hits
-                ],
+        try:
+            injection_findings = self._phase_injection(
+                crawl_data, context_map=context_map, discovery=discovery,
             )
-            self._phases_completed.append("verification")
-            self._annotate_findings_with_verification(injection_findings)
+            all_findings.extend(injection_findings)
 
-        if self.use_browser:
-            all_findings.extend(
-                self._phase_browser_xss(injection_findings, crawl_data),
-            )
+            verification_summary = None
+            if self.verify_findings and self._raw_injection_hits:
+                # The replay oracle only speaks query-string and
+                # form-encoded shapes; JSON-body and GraphQL hits would
+                # replay through the wrong request shape and burn their
+                # request budget on guaranteed-inconclusive legs. Those
+                # vectors were verified first-party at detection (the
+                # three-gate oracle ran on the real JSON shape) — mark
+                # them honestly instead of pretending to re-verify.
+                probe_contexts, shape_skipped = (
+                    self._partition_replayable_hits(self._raw_injection_hits)
+                )
+                verification_summary = self._verify_findings(probe_contexts)
+                if shape_skipped:
+                    verification_summary["skipped_vector_shape"] = (
+                        shape_skipped
+                    )
+                    logger.info(
+                        "Phase 6v: %d JSON/GraphQL hit(s) not replayed — "
+                        "detection-time oracle is their verification",
+                        shape_skipped,
+                    )
+                self._phases_completed.append("verification")
+                self._annotate_findings_with_verification(injection_findings)
+
+            if self.use_browser:
+                all_findings.extend(
+                    self._phase_browser_xss(injection_findings, crawl_data),
+                )
+        except BaseException:
+            # The OOB listener starts inside Phase 6; if anything
+            # between injection and Phase 6o dies, the bound socket
+            # must not outlive the scan.
+            if self.oob_listener is not None:
+                self.oob_listener.stop()
+            raise
 
         all_findings.extend(self._phase_oob())
 
@@ -1086,11 +1107,24 @@ class WebScanner:
             )
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(raw)
+            if len(op.string_body_fields) > 1:
+                logger.info(
+                    "API sweep %s: sweeping first of %d string body "
+                    "field(s) — remaining fields covered by the "
+                    "precision fuzzer only",
+                    op.url, len(op.string_body_fields),
+                )
             config = FfufConfig(
                 wordlist=self.ffuf_api_wordlist,
                 request_file=request_file,
                 match_status=None,
                 match_regex=sweep_match_regex(),
+                # -ac can nondeterministically misattribute the input
+                # keyword to a calibration probe, which this consumer
+                # reads as the candidate payload — and the sweep
+                # matches on the error-signature regex alone, so
+                # calibration adds nothing here.
+                auto_calibration=False,
                 max_runtime=120,
                 report_limit=20,
                 **credentials,
@@ -1106,6 +1140,12 @@ class WebScanner:
                     "API sweep skipped %s: %s", op.url, self._redact(str(e)),
                 )
                 continue
+            omitted = int(result.get("omitted_result_count") or 0)
+            if omitted:
+                logger.info(
+                    "API sweep %s: %d additional match(es) beyond the "
+                    "report cap were dropped", op.url, omitted,
+                )
             payloads = [
                 entry["input"]["FUZZ"]
                 for entry in result.get("results", [])
@@ -1401,8 +1441,12 @@ class WebScanner:
                 blocked = engine.blocked_requests
         except Exception as e:
             logger.warning(
-                "Rendered crawl failed: %s", self._redact(str(e)),
+                "Rendered crawl failed after +%d URL(s), +%d form(s): %s",
+                new_urls, new_forms, self._redact(str(e)),
             )
+            # Partial merges already happened — record that the phase
+            # ran rather than letting its effects look unattributed.
+            self._phases_completed.append("browser_crawl")
             return
         logger.info(
             "Phase 3b complete: +%d URL(s), +%d form(s) from the rendered "
@@ -1479,8 +1523,12 @@ class WebScanner:
                         )
         except Exception as e:
             logger.warning(
-                "Browser XSS phase failed: %s", self._redact(str(e)),
+                "Browser XSS phase failed after %d finding(s): %s",
+                len(new_findings), self._redact(str(e)),
             )
+            # Upgrades applied before the failure persist on the
+            # finding objects — record the phase as run.
+            self._phases_completed.append("browser_xss")
             return new_findings
         logger.info(
             "Phase 6b complete: %d execution upgrade(s), %d DOM sink "
@@ -1652,6 +1700,41 @@ class WebScanner:
     # Phase 6v — mechanical verification (replay + control differential)
     # ------------------------------------------------------------------
 
+    _REPLAYABLE_VECTORS = frozenset({
+        "query_param", "request_body", "api_query",
+    })
+
+    def _partition_replayable_hits(
+        self, hits: list[dict],
+    ) -> tuple[list, int]:
+        """(replay contexts, count annotated as shape-skipped).
+
+        The replay oracle only speaks query-string and form-encoded
+        shapes; a JSON-body or GraphQL hit would replay through the
+        wrong request shape and burn its budget on guaranteed-
+        inconclusive legs. Those were verified first-party at
+        detection — annotate them honestly instead.
+        """
+        contexts = []
+        skipped = 0
+        for hit in hits:
+            if hit.get("attack_vector") in self._REPLAYABLE_VECTORS:
+                contexts.append((
+                    hit, hit.get("endpoint", ""),
+                    hit.get("parameter", ""), hit.get("method", "GET"),
+                ))
+            else:
+                skipped += 1
+                hit["verification"] = {
+                    "status": "skipped",
+                    "reason": (
+                        "replay oracle has no request shape for vector "
+                        f"{hit.get('attack_vector')}; the detection-time "
+                        "three-gate oracle is the verification of record"
+                    ),
+                }
+        return contexts, skipped
+
     def _verify_findings(self, probe_contexts: list) -> dict[str, Any]:
         """Replay/control verification of injection hits.
 
@@ -1709,7 +1792,9 @@ class WebScanner:
                 record_web_oracle_outcomes,
             )
             record_web_oracle_outcomes(
-                self.llm, [context[0] for context in probe_contexts],
+                self.llm,
+                [context[0] for context in probe_contexts],
+                run_id=self.out_dir.name,
             )
         except Exception:
             logger.debug("web scorecard bridge failed", exc_info=True)
@@ -2324,8 +2409,10 @@ class WebScanner:
         return redact_secrets(value, reveal_secrets=self.reveal_secrets)
 
     def close(self) -> None:
-        """Release the underlying HTTP client resources."""
+        """Release the HTTP client and any live OOB listener."""
         self.client.close()
+        if self.oob_listener is not None:
+            self.oob_listener.stop()
 
     def __enter__(self) -> Self:
         return self

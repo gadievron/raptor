@@ -439,11 +439,31 @@ class WebFuzzer:
         baseline/attack/diff oracle as native fuzzing; the finding it
         returns is indistinguishable in evidence quality from one the
         fuzzer generated itself.
+
+        Class attribution: only the static-signature classes are
+        candidates (the sweep's matcher cannot have fired on anything
+        else — an ssti label here would fabricate evidence), and they
+        are tried in payload-shape order because the markers overlap
+        (/etc/passwd content satisfies both the command-output and the
+        file-content patterns; the payload's own shape is the best
+        available disambiguator).
         """
         if vulnerability_types is None:
-            vulnerability_types = [
-                'sqli', 'ssti', 'command_injection', 'path_traversal',
-            ]
+            from packages.web.markers import STATIC_SIGNATURE_CLASSES
+            vulnerability_types = list(STATIC_SIGNATURE_CLASSES)
+
+        shape_hints = {
+            "path_traversal": ("../", "..\\", "%2e%2e", "etc/passwd"),
+            "command_injection": (";", "|", "&&", "`", "$(", "%0a"),
+            "sqli": ("'", '"', " or ", "union", "--", "sleep("),
+        }
+        lowered = payload.lower()
+
+        def _affinity(vt: str) -> int:
+            hints = shape_hints.get(vt, ())
+            return 0 if any(h in lowered for h in hints) else 1
+
+        vulnerability_types = sorted(vulnerability_types, key=_affinity)
         for vuln_type in vulnerability_types:
             finding = self._test_json_payload(
                 url, body_template, field_path, payload, vuln_type,

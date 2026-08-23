@@ -116,6 +116,12 @@ Operational notes:
 - Recursion and clusterbomb apply a default `-rate 50` unless
   `--ffuf-rate` is set; recursion also caps each sub-job with
   `-maxtime-job`.
+- Soft-404 calibration derives `-fs`/`-fw` from wildcard probes when
+  you set no filters. Inherent `-fs` semantics: a real resource whose
+  body happens to be exactly the soft-404's size is filtered with it.
+  When the wildcard redirects, no filter is derived (ffuf sees the
+  redirect layer; the scan client sees the destination) — tune
+  matchers manually on redirect-to-login targets.
 - Every run is capped by ffuf's own `-maxtime` (`--ffuf-max-runtime`,
   default 300s) so partial results are always flushed; `timed_out` in
   the report marks a run the backstop had to kill.

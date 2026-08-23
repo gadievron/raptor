@@ -89,3 +89,66 @@ class TestRecordWebOracleOutcomes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGroundTruthGranularity(unittest.TestCase):
+    """Contradictory verdicts on distinct payloads must BOTH land, and
+    a later scan of the same target must be able to record a flipped
+    verdict — the idempotency key is per (run, payload), never
+    forever-per-endpoint."""
+
+    def _llm(self, tmpdir: str) -> _FakeLlm:
+        from core.llm.scorecard.scorecard import ModelScorecard
+
+        return _FakeLlm(ModelScorecard(Path(tmpdir) / "scorecard.json"))
+
+    def test_contradictory_verdicts_on_distinct_payloads_both_record(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            llm = self._llm(tmpdir)
+            verified = _hit("sqli", "verified")
+            verified["payload"] = "' OR 1=1--"
+            refuted = _hit("sqli", "refuted")
+            refuted["payload"] = "'; SELECT pg_sleep(0)--"
+
+            self.assertEqual(
+                record_web_oracle_outcomes(
+                    llm, [verified, refuted], run_id="run-a",
+                ),
+                2,
+            )
+
+    def test_rescan_can_record_a_flipped_verdict(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            llm = self._llm(tmpdir)
+            hit = _hit("sqli", "verified")
+            hit["payload"] = "' OR 1=1--"
+            self.assertEqual(
+                record_web_oracle_outcomes(llm, [hit], run_id="run-a"), 1,
+            )
+            # Same run re-records nothing (in-run idempotency)…
+            self.assertEqual(
+                record_web_oracle_outcomes(llm, [hit], run_id="run-a"), 0,
+            )
+            # …but the fixed-site rescan with the flipped verdict lands.
+            flipped = dict(hit)
+            flipped["verification"] = {"status": "refuted"}
+            self.assertEqual(
+                record_web_oracle_outcomes(
+                    llm, [flipped], run_id="run-b",
+                ),
+                1,
+            )
+
+    def test_specialized_generation_model_gets_the_credit(self):
+        from types import SimpleNamespace as NS
+
+        from packages.web.scorecard_bridge import _payload_model_name
+
+        class _Config:
+            primary_model = NS(model_name="primary-model")
+
+            def get_model_for_task(self, task_type):
+                return NS(model_name="codegen-model")
+
+        llm = NS(config=_Config())
+        self.assertEqual(_payload_model_name(llm), "codegen-model")
