@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ class WebToolAdapter:
     execution: str  # builtin | external | planned
     evidence_kinds: tuple[str, ...]
     validates: tuple[str, ...] = ()
-    binary: Optional[str] = None
+    binary: str | None = None
     parser_status: str = "structured"  # structured | text | planned
     notes: str = ""
 
