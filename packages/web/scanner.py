@@ -645,7 +645,10 @@ class WebScanner:
         allowed = []
         skipped: dict[str, list[str]] = {}
         for cls in check_classes:
-            risk = getattr(cls, "risk", "passive")
+            # Fail closed: a check that somehow lacks the inherited
+            # risk attribute needs the HIGHEST approval, not a free
+            # pass as passive.
+            risk = getattr(cls, "risk", None) or "intrusive"
             try:
                 self.execution_policy.authorize(
                     tool_id="raptor-web-checks",

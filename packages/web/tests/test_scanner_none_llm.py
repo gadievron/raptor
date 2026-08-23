@@ -738,6 +738,11 @@ class TestSensitiveCandidateHandoff(unittest.TestCase):
             seen_ctx = {}
 
             class _SpyCheck:
+                # Doubles declare their tier like real checks — an
+                # object without one is treated as intrusive
+                # (fail-closed) and never runs at the default level.
+                risk = "passive"
+
                 def __init__(self, llm=None):
                     pass
 

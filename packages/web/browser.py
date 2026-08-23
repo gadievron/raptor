@@ -24,6 +24,13 @@ The outbound proxy environment (HTTPS_PROXY/HTTP_PROXY/NO_PROXY) is
 passed through explicitly: Chromium ignores proxy env vars unless told,
 which would silently break proxied deployments while working on
 loopback fixtures.
+
+Known fidelity limit of the redirect-consuming gate: the renderer
+receives the final response under the ORIGINAL request URL, so the
+document base of a post-redirect page is the pre-redirect path and
+relative links there may resolve against the wrong directory. That is
+the cost of never letting the renderer see a 3xx (which it would
+follow ungated); it degrades crawl coverage, never scope.
 """
 
 from __future__ import annotations
@@ -215,18 +222,29 @@ class BrowserEngine:
                     self._blocked_requests += 1
                     route.abort()
                     return
+                hop_headers = {
+                    name: value
+                    for name, value in route.request.headers.items()
+                    # fetch recomputes framing; the host belongs to
+                    # the hop target.
+                    if name.lower() not in ("content-length", "host")
+                }
                 if response.status in (307, 308):
                     # Method/body-preserving redirects: replay the
-                    # original request shape at the new URL.
+                    # original request shape (headers included — the
+                    # content type must survive or form posts arrive
+                    # as octet-stream) at the new URL.
                     response = self._context.request.fetch(
                         target,
                         method=route.request.method,
                         data=route.request.post_data,
+                        headers=hop_headers,
                         max_redirects=0,
                     )
                 else:
+                    hop_headers.pop("content-type", None)
                     response = self._context.request.get(
-                        target, max_redirects=0,
+                        target, headers=hop_headers, max_redirects=0,
                     )
                 current_url = target
             route.fulfill(response=response)
