@@ -9,7 +9,7 @@ import pytest
 # packages/codeql/tests/test_build_synthesis.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.codeql.build_detector import BuildDetector
+from core.build.build_detector import BuildDetector
 
 
 def _find_script(tmp_path):

@@ -8,7 +8,12 @@ and harness generation.
 from .afl_runner import AFLRunner
 from .crash_collector import CrashCollector, Crash
 from .corpus_manager import CorpusManager
-from .seed_corpus import DEFAULT_MAX_FILE_SIZE, SeedCorpusOptions, prepare_seed_corpus
+from .seed_corpus import (
+    DEFAULT_MAX_FILE_SIZE,
+    SeedCorpusOptions,
+    prepare_builtin_seed_corpus,
+    prepare_seed_corpus,
+)
 from .capability import CapabilityReport, probe as probe_capabilities, select_fuzzer
 from .target_detector import TargetInfo, detect as detect_target
 from .orchestrator import FuzzingOrchestrator, CampaignPlan
@@ -23,31 +28,32 @@ from packages.binary_analysis import (
 )
 
 __all__ = [
-    "AFLRunner",
-    "CrashCollector",
-    "Crash",
-    "CorpusManager",
     "DEFAULT_MAX_FILE_SIZE",
-    "SeedCorpusOptions",
-    "prepare_seed_corpus",
-    "CapabilityReport",
-    "probe_capabilities",
-    "select_fuzzer",
-    "TargetInfo",
-    "detect_target",
-    "FuzzingOrchestrator",
-    "CampaignPlan",
-    "LibFuzzerRunner",
-    "LibFuzzerResult",
-    "LibFuzzerStats",
-    "HarnessGenerator",
-    "HarnessSpec",
-    "GeneratedHarness",
-    "FuzzingTelemetry",
-    "CampaignStats",
-    "FuzzEvent",
-    "BinaryUnderstand",
+    "AFLRunner",
     "BinaryContextMap",
     "BinaryFunctionInfo",
+    "BinaryUnderstand",
+    "CampaignPlan",
+    "CampaignStats",
+    "CapabilityReport",
+    "CorpusManager",
+    "Crash",
+    "CrashCollector",
+    "FuzzEvent",
+    "FuzzingOrchestrator",
+    "FuzzingTelemetry",
+    "GeneratedHarness",
+    "HarnessGenerator",
+    "HarnessSpec",
+    "LibFuzzerResult",
+    "LibFuzzerRunner",
+    "LibFuzzerStats",
+    "SeedCorpusOptions",
+    "TargetInfo",
     "analyse_binary_context",
+    "detect_target",
+    "prepare_builtin_seed_corpus",
+    "prepare_seed_corpus",
+    "probe_capabilities",
+    "select_fuzzer",
 ]

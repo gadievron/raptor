@@ -16,7 +16,8 @@ adapter is sandbox-free because it never spawns a subprocess.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 
 @dataclass
@@ -44,10 +45,10 @@ class ToolCapability:
     """
 
     name: str
-    good_for: List[str] = field(default_factory=list)
-    bad_for: List[str] = field(default_factory=list)
+    good_for: list[str] = field(default_factory=list)
+    bad_for: list[str] = field(default_factory=list)
     syntax_example: str = ""
-    languages: List[str] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -65,12 +66,10 @@ class ToolCapability:
             lines.append(f"Languages: {', '.join(self.languages)}")
         if self.good_for:
             lines.append("Good for:")
-            for item in self.good_for:
-                lines.append(f"  - {item}")
+            lines.extend(f"  - {item}" for item in self.good_for)
         if self.bad_for:
             lines.append("Not for:")
-            for item in self.bad_for:
-                lines.append(f"  - {item}")
+            lines.extend(f"  - {item}" for item in self.bad_for)
         if self.syntax_example:
             lines.append("Example:")
             lines.append("```")
@@ -91,7 +90,7 @@ class ToolInvocation:
     tool: str
     rule: str
     target: str
-    args: Dict[str, Any] = field(default_factory=dict)
+    args: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -114,7 +113,7 @@ class ToolEvidence:
     tool: str
     rule: str
     success: bool
-    matches: List[Dict[str, Any]] = field(default_factory=list)
+    matches: list[dict[str, Any]] = field(default_factory=list)
     summary: str = ""
     error: str = ""
 
@@ -137,7 +136,7 @@ class ToolEvidence:
 def make_sandbox_runner(
     *,
     target: Path,
-    output: Optional[Path] = None,
+    output: Path | None = None,
     block_network: bool = True,
     caller_label: str = "hypothesis-validation",
 ) -> Callable:
@@ -148,9 +147,13 @@ def make_sandbox_runner(
     input). Suitable to pass as `subprocess_runner=` to
     packages/coccinelle and packages/semgrep run_rule.
 
-    Falls back to subprocess.run when core.sandbox is unavailable
-    (non-Linux/macOS hosts) — the underlying runners still get the safe
-    env from the adapter's run() method, so this is degrade-not-fail.
+    Fail-closed when core.sandbox is unavailable: raises
+    ``core.run.sandbox_policy.SandboxUnavailableError`` naming the
+    remedy. Hosts that genuinely lack sandbox support can explicitly
+    opt into a bare-subprocess fallback with
+    ``RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1`` (loud warning + security
+    event); the underlying runners still get the safe env from the
+    adapter's run() method in that degraded mode.
 
     Args:
         target: Scan target path. Used by the sandbox to set Landlock
@@ -168,10 +171,18 @@ def make_sandbox_runner(
     import subprocess
 
     try:
-        from core.sandbox import run as sandbox_run  # type: ignore
-    except Exception:
-        # Sandbox unavailable on this platform / install. Fall back to
-        # subprocess.run; the safe env from the adapter still applies.
+        from core.sandbox import run as sandbox_run  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001 — any import failure means no isolation
+        # Fail-closed: no silent bare-subprocess fallback. The tools
+        # this runner feeds (semgrep / coccinelle / codeql on
+        # LLM-generated rules over untrusted targets) are exactly the
+        # ones that must not run unisolated. Explicit dev-host opt-in
+        # via RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1 (loud warning +
+        # security event) is the only degraded path.
+        from core.run.sandbox_policy import require_sandbox_or_optout
+        require_sandbox_or_optout(
+            f"{caller_label} (make_sandbox_runner)", exc,
+        )
         return subprocess.run
 
     def _runner(cmd, **kwargs):
@@ -179,6 +190,7 @@ def make_sandbox_runner(
             "block_network": block_network,
             "target": str(target),
             "caller_label": caller_label,
+            "env_caller_filtered": True,
         }
         if output is not None:
             sandbox_kwargs["output"] = str(output)
@@ -218,7 +230,7 @@ class ToolAdapter(ABC):
         target: Path,
         *,
         timeout: int = 300,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> ToolEvidence:
         """Run a rule against a target and return evidence.
 

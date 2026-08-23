@@ -3,7 +3,7 @@
 Labeled dataflow findings used to measure the validator pipeline.
 
 This corpus is the prerequisite for every PR in the dataflow
-sanitizer-bypass work (see `~/design/dataflow-sanitizer-bypass.md`).
+sanitizer-bypass work.
 Each PR's exit criteria is a corpus delta — precision/recall/F1
 against this fixed label set, with a per-FP-category breakdown.
 

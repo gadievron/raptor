@@ -6,6 +6,7 @@ the startup banner, writes .startup-output, and sets up CLAUDE_ENV_FILE.
 Entry point: `python3 -m core.startup.init`
 """
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -16,7 +17,15 @@ from pathlib import Path
 from . import REPO_ROOT
 from .banner import format_banner, read_logo, read_random_quote
 
-sys.path.insert(0, str(REPO_ROOT))
+# Byte budgets for the small local records init reads: the
+# tool-versions probe cache and the operator's models.json config.
+_MAX_CACHE_BYTES = 1024 * 1024
+_MAX_CONFIG_BYTES = 8 * 1024 * 1024
+
+# No sys.path mutation here: this module is only importable when the
+# repo root is already importable (relative imports above prove it),
+# so the former module-level insert was pure global state pollution
+# for every importer.
 OUTPUT_FILE = REPO_ROOT / ".startup-output"
 
 
@@ -27,42 +36,206 @@ OUTPUT_FILE = REPO_ROOT / ".startup-output"
 def check_tools() -> tuple[list, list, set]:
     """Check for required external tools.
 
-    Returns (results, warnings, unavailable_features).
+    Returns (results, warnings, unavailable_features). Each result is
+    ``(display_name, found)`` — the display name carries a version
+    suffix for the version-gated tools (see the version-display
+    convention at ``RaptorConfig.TOOL_DEPS``); a missing tool is
+    always the bare TOOL_DEPS key, which doctor's install-hint lookup
+    relies on.
     """
     from core.config import RaptorConfig
 
     results = []
     available = set()
     for name in sorted(RaptorConfig.TOOL_DEPS):
-        found = bool(shutil.which(RaptorConfig.TOOL_DEPS[name]["binary"]))
-        results.append((name, found))
+        dep = RaptorConfig.TOOL_DEPS[name]
+        if "module" in dep:
+            # Python-module dependency (e.g. z3) — no binary to probe.
+            # find_spec locates without importing, so a broken module
+            # can't crash the banner. Trade-off: a present-but-broken
+            # wheel shows ✓ here and fails at first import; doctor
+            # (not the banner — startup stays fast) verifies module
+            # deps actually import.
+            found = importlib.util.find_spec(dep["module"]) is not None
+        else:
+            found = bool(shutil.which(dep["binary"]))
+        display = name
         if found:
             available.add(name)
+            ver = _tool_version(name)
+            if ver:
+                display = f"{name} {ver}"
+        results.append((display, found))
 
     warnings = []
     unavailable_features = set()
 
     # Group checks (e.g., need at least one scanner)
+    satisfied_groups = set()
     for group_name, group in RaptorConfig.TOOL_GROUPS.items():
         members = sorted(n for n, d in RaptorConfig.TOOL_DEPS.items() if d.get("group") == group_name)
-        if not any(m in available for m in members):
+        if any(m in available for m in members):
+            satisfied_groups.add(group_name)
+        else:
             warnings.append(f"{group['affects']} unavailable — no scanner ({' or '.join(members)})")
             for cmd in group["affects"].split(", "):
                 unavailable_features.add(cmd.strip())
 
-    # Individual checks (skip group members)
+    # Individual checks. Warnings name the missing BINARY (what the
+    # operator must install / what doctor's install-hint lookup keys
+    # on), not the TOOL_DEPS key — "spatch not found", not
+    # "coccinelle not found".
     for name in sorted(RaptorConfig.TOOL_DEPS):
         dep = RaptorConfig.TOOL_DEPS[name]
-        if name in available or dep.get("group"):
+        if name in available:
+            continue
+        binary = dep.get("binary", name)
+        group = dep.get("group")
+        if group:
+            # Group totally absent → the group warning above already
+            # covers it. Group satisfied by another member → this
+            # tool's OWN commands are still affected (codeql missing
+            # while semgrep present used to be silent); warn.
+            if group in satisfied_groups:
+                warnings.append(f"{dep['affects']} limited — {binary} not found")
             continue
         severity = dep.get("severity", "degrades")
         label = "unavailable" if severity == "required" else "limited"
-        warnings.append(f"{dep['affects']} {label} — {name} not found")
+        warnings.append(f"{dep['affects']} {label} — {binary} not found")
         if severity == "required":
             for cmd in dep["affects"].split(", "):
                 unavailable_features.add(cmd.strip())
 
     return results, warnings, unavailable_features
+
+
+# ---------------------------------------------------------------------------
+# Tool-version probes (version-gated tools only — see the convention
+# at RaptorConfig.TOOL_DEPS)
+# ---------------------------------------------------------------------------
+
+def _tool_version(name: str) -> str | None:
+    """Version string for the version-gated TOOL_DEPS entries.
+
+    Returns None for every other tool (presence-only display) and on
+    any probe failure — never raises into the banner.
+    """
+    try:
+        if name == "semgrep":
+            return _semgrep_version()
+        if name == "joern":
+            return _joern_version()
+    except Exception:
+        logging.getLogger("core.startup").debug(
+            "%s version probe failed", name, exc_info=True
+        )
+    return None
+
+
+def _semgrep_version() -> str | None:
+    """Semgrep version — behaviour varies across releases (CI pins one).
+
+    Prefers the pip-installed distribution metadata (free, no
+    subprocess). A pipx / standalone install is invisible to
+    importlib.metadata, so fall back to a disk-cached CLI probe —
+    ``semgrep --version`` costs ~1s of Python CLI startup, too slow
+    to pay on every banner.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("semgrep")
+    except PackageNotFoundError:
+        return _cached_cli_version("semgrep")
+
+
+def _joern_version() -> str | None:
+    """Joern version via the distribution's jar names — a directory
+    glob, never a JVM boot (startup budget). ``prereqs.version()``
+    is NOT used here: its fallback path launches the JVM.
+    """
+    from packages.joern.prereqs import _joern_path, _version_from_dist
+
+    joern = _joern_path()
+    return _version_from_dist(joern) if joern else None
+
+
+def _cached_cli_version(binary: str) -> str | None:
+    """Disk-cached ``<binary> --version`` probe for startup-hot paths.
+
+    Cache key is the resolved binary's realpath + mtime_ns + size, so
+    upgrades and reinstalls invalidate naturally. Cache file:
+    ``$XDG_CACHE_HOME/raptor/tool-versions.json`` (default
+    ``~/.cache/raptor/``, alongside the sandbox calibration cache).
+    Never raises; probe failures return None and are not cached.
+    """
+    import json
+    import re
+    import subprocess
+    import tempfile
+
+    path = shutil.which(binary)
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    try:
+        st = os.stat(real)
+    except OSError:
+        return None
+    key = f"{real}:{st.st_mtime_ns}:{st.st_size}"
+
+    cache_dir = Path(
+        os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    ) / "raptor"
+    cache_file = cache_dir / "tool-versions.json"
+    from core.json import load_json
+
+    cache: dict = {}
+    loaded = load_json(cache_file, max_bytes=_MAX_CACHE_BYTES)
+    if isinstance(loaded, dict):
+        cache = loaded
+    hit = cache.get(binary)
+    if isinstance(hit, dict) and hit.get("key") == key \
+            and isinstance(hit.get("version"), str):
+        return hit["version"]
+
+    try:
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+    except Exception:  # noqa: BLE001
+        env = None
+    try:
+        proc = subprocess.run(
+            [real, "--version"], capture_output=True, text=True,
+            check=False, timeout=15, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (proc.stdout or proc.stderr or "").strip()
+    first = out.splitlines()[0] if out else ""
+    m = re.search(r"\d+\.\d+(?:\.\d+)*", first)
+    if proc.returncode != 0 or not m:
+        return None
+    ver = m.group(0)
+
+    # Best-effort atomic cache write (tempfile + rename); losing the
+    # cache only costs the next banner one probe.
+    cache[binary] = {"key": key, "version": ver}
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(cache_dir), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh)
+            os.replace(tmp, cache_file)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return ver
 
 
 def _tighten_config_perms(path: Path) -> str | None:
@@ -121,10 +294,10 @@ def _tighten_config_perms(path: Path) -> str | None:
     try:
         os.fchmod(fd, 0o600)
     except OSError as e:
-        os.close(fd)
         return (f"⚠ {path} mode {oct(st.st_mode)[-3:]} and chmod failed: {e}. "
                 f"Run: chmod 600 {path}")
-    os.close(fd)
+    finally:
+        os.close(fd)
 
     return (f"tightened {path} permissions to 600 "
             f"(was {oct(st.st_mode)[-3:]}; contains API keys)")
@@ -138,7 +311,6 @@ def check_llm() -> tuple[list, list]:
 
     Returns (lines, warnings).
     """
-    import json
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     lines = []
@@ -153,11 +325,10 @@ def check_llm() -> tuple[list, list]:
             notice = _tighten_config_perms(config_path)
             if notice:
                 warnings.append(notice)
-            try:
-                data = json.loads(config_path.read_text())
+            from core.json import load_json
+            data = load_json(config_path, max_bytes=_MAX_CONFIG_BYTES)
+            if data is not None:
                 models = data.get("models", []) if isinstance(data, dict) else data
-            except (json.JSONDecodeError, OSError):
-                pass
 
         # Also check env vars for providers not in models.json
         env_keys = {
@@ -217,14 +388,16 @@ def check_llm() -> tuple[list, list]:
                     # Wrap each `future.result()` in its own
                     # per-task `timeout=5` so each provider gets a
                     # full 5-second budget independent of others.
-                    # The outer as_completed's timeout still bounds
-                    # total wall-clock at ~5×N seconds worst case
-                    # (acceptable for startup banner).
+                    # as_completed itself has no timeout; the
+                    # per-future result(timeout=5) (plus _test_key's
+                    # own request timeout) bounds total wall-clock
+                    # at ~5×N seconds worst case (acceptable for
+                    # startup banner).
                     for future in as_completed(futures):
                         provider = futures[future]
                         try:
                             key_status[provider] = future.result(timeout=5)
-                        except Exception:
+                        except Exception:  # noqa: BLE001
                             key_status[provider] = False
 
             # Build output lines (same format as before). Dedupe
@@ -266,7 +439,7 @@ def check_llm() -> tuple[list, list]:
         if shutil.which("claude"):
             lines.append("        claude code ✓")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         lines.append("   llm: detection error")
         warnings.append(f"LLM detection: {e}")
 
@@ -290,7 +463,7 @@ def _validator_available() -> bool:
         return False
 
 
-def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
+def _test_key(provider: str, api_key: str, api_base: str | None = None) -> bool:
     """Lightweight API key smoke test — no SDK imports."""
     import requests
 
@@ -318,7 +491,7 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
                 timeout=timeout,
             )
             return r.status_code == 200
-        elif provider == "openai":
+        if provider == "openai":
             base = (api_base or "https://api.openai.com").rstrip("/")
             r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 f"{base}/v1/models",
@@ -326,31 +499,36 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
                 timeout=timeout,
             )
             return r.status_code == 200
-        elif provider == "anthropic":
+        if provider == "anthropic":
             r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 "https://api.anthropic.com/v1/models",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
                 timeout=timeout,
             )
             return r.status_code == 200
-        elif provider == "mistral":
+        if provider == "mistral":
             r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 "https://api.mistral.ai/v1/models",
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=timeout,
             )
             return r.status_code == 200
-        elif provider == "ollama":
+        if provider == "ollama":
             base = (api_base or "http://localhost:11434").rstrip("/")
-            r = requests.get(f"{base}/api/tags", timeout=timeout)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+            # loopback_safe_get: bypasses proxy env for loopback URLs
+            # — a plain requests.get routed localhost through the
+            # corporate proxy on mandatory-proxy hosts and the probe
+            # always failed. Remote Ollama bases keep proxy-env
+            # behaviour.
+            from core.llm.egress import loopback_safe_get
+            r = loopback_safe_get(f"{base}/api/tags", timeout=timeout)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
             return r.status_code == 200
-        else:
-            return True  # Unknown provider — can't test, assume OK
+        return True  # Unknown provider — can't test, assume OK
     except requests.RequestException:
         return False
 
 
-def _key_source(provider: str, model_entry: dict = None) -> str:
+def _key_source(provider: str, model_entry: dict | None = None) -> str:
     if provider == "ollama":
         return "local"
     env_keys = {
@@ -368,7 +546,10 @@ def _key_source(provider: str, model_entry: dict = None) -> str:
 
 
 def check_env(unavailable_features: set) -> tuple[list, list]:
-    """Check environment: output dir, disk, config vars, tree-sitter.
+    """Check environment: output dir, disk, config vars.
+
+    Tree-sitter language support is checked separately by
+    :func:`check_lang`.
 
     Returns (env_parts, warnings).
     """
@@ -391,7 +572,7 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     # "wrong Python" instead of a deep import trace.
     import platform
     py_version_str = platform.python_version()
-    if sys.version_info < (3, 10):
+    if sys.version_info < (3, 10):  # noqa: UP036 — deliberate runtime guard: surface "wrong Python" to operators on old interpreters
         parts.append(f"Python {py_version_str} ✗")
         warnings.append(
             f"Python {py_version_str} at {sys.executable} — RAPTOR "
@@ -501,8 +682,10 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
                 )
         else:
             from core.sandbox import (
-                check_net_available, check_mount_available,
-                check_landlock_available, check_seccomp_available,
+                check_landlock_available,
+                check_mount_available,
+                check_net_available,
+                check_seccomp_available,
             )
             net_ok = check_net_available()
             mount_ok = check_mount_available() if net_ok else False
@@ -513,12 +696,31 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
                 features.append("net")
             if mount_ok:
                 features.append("mount")
+            landlock_abi = 0
             if landlock_ok:
-                features.append("landlock")
+                # Surface the kernel's Landlock capability tier once
+                # at startup — the per-run sandbox warnings (egress
+                # allowlist advisory on ABI < 4, scoping absent on
+                # ABI < 6) otherwise repeat on every run with no
+                # single place to see the host tier. Reads the cache
+                # check_landlock_available() just populated — free.
+                from core.sandbox import _get_landlock_abi
+                landlock_abi = _get_landlock_abi()
+                features.append(
+                    f"landlock:abi{landlock_abi}" if landlock_abi
+                    else "landlock"
+                )
             if seccomp_ok:
                 features.append("seccomp")
             if features:
                 parts.append(f"sandbox ✓ ({'+'.join(features)})")
+                if landlock_ok and 0 < landlock_abi < 4:
+                    warnings.append(
+                        f"Landlock ABI {landlock_abi} < 4 — no kernel "
+                        f"TCP allowlist; on runs without a network-"
+                        f"namespace bridge the sandbox egress "
+                        f"allowlist is advisory only"
+                    )
                 # Partial-sandbox warnings — name what's missing so users
                 # can decide whether the gap matters for their use case.
                 # (The banner's feature list already shows what IS active.)
@@ -549,20 +751,125 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
             "sandbox availability probe failed", exc_info=True
         )
 
+    parts_cap, warnings_cap = _check_analyzer_capabilities()
+    parts.extend(parts_cap)
+    warnings.extend(warnings_cap)
+
     return parts, warnings
 
 
-def check_lang() -> str | None:
-    """Check language support (tree-sitter). Returns formatted line or None."""
+def _check_analyzer_capabilities() -> tuple[list, list]:
+    """Probe compiler-analyzer capability and the z3 version.
+
+    /audit's compiler corroboration channel needs gcc >= 10 with
+    ``-fanalyzer`` (or clang) — plain binary presence is not enough,
+    so this reuses ``core.audit.compiler_sweep``'s cached capability
+    probes. When neither works the channel silently degrades recall;
+    surface that at run start instead. z3 presence is already covered
+    by TOOL_DEPS; this adds the version (SMT feature coverage is
+    version-gated) without importing the module.
+
+    Never raises; returns ``([], [...])`` shaped like check_env parts.
+    """
+    parts: list = []
+    warnings: list = []
+
+    try:
+        from core.audit.compiler_sweep import _clang_path, _gcc_analyzer
+
+        gcc = _gcc_analyzer()
+        clang = _clang_path()
+        if gcc is not None:
+            # gcc is version-gated (-fanalyzer needs gcc >= 10; see
+            # the convention at RaptorConfig.TOOL_DEPS) — show which
+            # gcc actually passed the probe. clang stays presence-
+            # only: no clang version gate exists.
+            gcc_ver = _gcc_version(gcc[0])
+            if gcc_ver:
+                parts.append(f"analyzer ✓ (gcc {gcc_ver} -fanalyzer)")
+            else:
+                parts.append("analyzer ✓ (gcc -fanalyzer)")
+        elif clang is not None:
+            parts.append("analyzer ✓ (clang --analyze)")
+        else:
+            # No ✗ part: a missing analyzer degrades (warning), it is
+            # not a startup failure like a broken sandbox.
+            warnings.append(
+                "/audit compiler-analyzer corroboration limited — no "
+                "gcc -fanalyzer (needs gcc >= 10) or clang on PATH"
+            )
+    except Exception:
+        logging.getLogger("core.startup").debug(
+            "compiler-analyzer capability probe failed", exc_info=True
+        )
+
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            parts.append(f"z3 {version('z3-solver')} ✓")
+        except PackageNotFoundError:
+            # Absent z3 is already warned about via TOOL_DEPS.
+            logging.getLogger("core.startup").debug("z3-solver not installed")
+    except Exception:
+        logging.getLogger("core.startup").debug(
+            "z3 version probe failed", exc_info=True
+        )
+
+    return parts, warnings
+
+
+def _gcc_version(gcc_path: str) -> str | None:
+    """``gcc -dumpfullversion`` — one cheap native exec (~10 ms),
+    negligible next to the -fanalyzer probes that already ran.
+    Never raises; None on any failure.
+    """
+    import re
+    import subprocess
+
+    try:
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+    except Exception:  # noqa: BLE001
+        env = None
+    try:
+        proc = subprocess.run(
+            [gcc_path, "-dumpfullversion"], capture_output=True,
+            text=True, check=False, timeout=5, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.strip()
+    if proc.returncode == 0 and re.fullmatch(r"\d+(\.\d+)*", out):
+        return out
+    return None
+
+
+def check_lang() -> tuple[str | None, list]:
+    """Check language support (tree-sitter).
+
+    Returns ``(formatted line or None, warnings)``. Zero installed
+    grammars is a warning, not just a ✗ glyph: the inventory silently
+    degrades to regex extraction (fewer functions, no line_end, so
+    span-based slicing across /audit, /agentic and /understand loses
+    fidelity) — a state operators repeatedly failed to notice from
+    the glyph alone.
+    """
+    warnings: list = []
     try:
         from core.inventory.extractors import _get_ts_languages
         ts_langs = _get_ts_languages()
         if ts_langs:
-            return f"  lang: tree-sitter ✓ ({', '.join(ts_langs)})"
-        else:
-            return "  lang: tree-sitter ✗"
-    except Exception:
-        return None
+            return f"  lang: tree-sitter ✓ ({', '.join(ts_langs)})", warnings
+        warnings.append(
+            "no tree-sitter grammars installed — inventory degrades "
+            "to regex extraction (fewer functions, no spans); "
+            "install the grammar wheels listed in requirements.txt "
+            "(tree-sitter, tree-sitter-python, tree-sitter-c, ...)"
+        )
+        return "  lang: tree-sitter ✗", warnings
+    except Exception:  # noqa: BLE001
+        return None, warnings
 
 
 def check_active_project() -> str | None:
@@ -596,7 +903,7 @@ def check_active_project() -> str | None:
             except OSError:
                 pass
         return f"Project: {name} ({proj_target}) — `/project none` to clear"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -620,32 +927,33 @@ def check_active_project() -> str | None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     from core.config import RaptorConfig
 
     logo = read_logo(RaptorConfig.effective_version())
     quote = read_random_quote()
 
     try:
-        logging.disable(logging.WARNING)
-
-        tool_results, tool_warnings, unavailable = check_tools()
-        llm_lines, llm_warnings = check_llm()
-        env_parts, env_warnings = check_env(unavailable)
-        lang_line = check_lang()
-        project_line = check_active_project()
-
-        logging.disable(logging.NOTSET)
+        try:
+            logging.disable(logging.WARNING)
+            tool_results, tool_warnings, unavailable = check_tools()
+            llm_lines, llm_warnings = check_llm()
+            env_parts, env_warnings = check_env(unavailable)
+            lang_line, lang_warnings = check_lang()
+            project_line = check_active_project()
+        finally:
+            logging.disable(logging.NOTSET)
 
         output = format_banner(
             logo, quote, tool_results, tool_warnings,
-            llm_lines, llm_warnings, env_parts, env_warnings,
+            llm_lines, llm_warnings, env_parts,
+            env_warnings + lang_warnings,
             project_line, lang_line,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         output = f"{logo}\n\nraptor:~$ {quote}"
 
-    OUTPUT_FILE.write_text(output)
+    OUTPUT_FILE.write_text(output, encoding="utf-8")
     print(output)
 
 

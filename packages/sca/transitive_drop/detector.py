@@ -24,11 +24,16 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
 
-from packages.sca.models import (
-    Dependency, SupplyChainFinding, VulnFinding,
-)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from packages.sca.models import (
+        Dependency,
+        SupplyChainFinding,
+        VulnFinding,
+    )
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,7 @@ class DropOnBumpFinding:
     bumping its parent. Pipeline wraps it into a
     SupplyChainFinding for the wider system."""
 
+    ecosystem: str
     transitive_name: str
     transitive_version: str
     transitive_finding_severity: str   # severity inherited from the
@@ -47,7 +53,7 @@ class DropOnBumpFinding:
     parent_current_version: str
     parent_latest_version: str
     transitive_status_in_latest: str   # "extras-gated" | "removed"
-    extra_name: Optional[str]          # which extra it moved behind
+    extra_name: str | None          # which extra it moved behind
 
 
 def detect_droppable_transitives(
@@ -63,7 +69,7 @@ def detect_droppable_transitives(
     rubygems_client=None,
     maven_client=None,
     nuget_client=None,
-) -> List[DropOnBumpFinding]:
+) -> list[DropOnBumpFinding]:
     """For each finding on a cascade-sourced transitive dep,
     check whether a parent bump would drop the dep entirely
     (or move it behind an optional/feature/scope gate).
@@ -101,7 +107,7 @@ def detect_droppable_transitives(
     deps_list = list(deps)
     # Index findings by their dep coordinate so we know which
     # transitives have issues worth proposing a bump for.
-    issue_keys: Dict[Tuple[str, str], str] = {}
+    issue_keys: dict[tuple[str, str], str] = {}
     for f in vuln_findings:
         d = f.dependency
         if d is not None:
@@ -122,10 +128,10 @@ def detect_droppable_transitives(
             sev = getattr(f, "severity", "info")
             issue_keys[key] = _max_severity(issue_keys.get(key), sev)
 
-    findings: List[DropOnBumpFinding] = []
+    findings: list[DropOnBumpFinding] = []
     seen_pairs: set = set()
     # Map (ecosystem, name) → list of (dep, parents).
-    by_eco_name: Dict[Tuple[str, str], List[Dependency]] = {}
+    by_eco_name: dict[tuple[str, str], list[Dependency]] = {}
     for d in deps_list:
         if d.ecosystem not in clients:
             continue
@@ -142,7 +148,7 @@ def detect_droppable_transitives(
 
     # Direct deps indexed by (ecosystem, canonical name) — we need
     # their currently-pinned version when querying parent metadata.
-    direct_versions: Dict[Tuple[str, str], str] = {}
+    direct_versions: dict[tuple[str, str], str] = {}
     for d in deps_list:
         if d.direct and d.version and d.ecosystem in clients:
             canon = _canonical_name(d.ecosystem, d.name)
@@ -217,6 +223,7 @@ def detect_droppable_transitives(
                     transitive_status = "removed"
                     extra_name = None
                 findings.append(DropOnBumpFinding(
+                    ecosystem=sample.ecosystem,
                     transitive_name=sample.name,
                     transitive_version=sample.version or "",
                     transitive_finding_severity=underlying_sev,
@@ -246,11 +253,11 @@ def _canonical_name(ecosystem: str, name: str) -> str:
 _SEVERITY_ORDER = ("info", "low", "medium", "high", "critical")
 
 
-def _max_severity(a: Optional[str], b: str) -> str:
+def _max_severity(a: str | None, b: str) -> str:
     if a is None:
         return b
     try:
-        return max(a, b, key=lambda s: _SEVERITY_ORDER.index(s))
+        return max(a, b, key=_SEVERITY_ORDER.index)
     except ValueError:
         return b
 
@@ -260,7 +267,7 @@ _STABLE_RE = re.compile(
 )
 
 
-def _version_key(v: str) -> Tuple[int, ...]:
+def _version_key(v: str) -> tuple[int, ...]:
     m = _STABLE_RE.match(v)
     if not m:
         return (0,)
@@ -273,7 +280,7 @@ def _version_lt(a: str, b: str) -> bool:
 
 def _latest_stable_version(
     ecosystem: str, client, name: str,
-) -> Optional[str]:
+) -> str | None:
     """Return the highest stable version per the ecosystem's
     metadata shape. Dispatches because each registry exposes
     versions slightly differently:
@@ -290,7 +297,7 @@ def _latest_stable_version(
         if hasattr(client, "get_metadata") else None
     if not isinstance(meta, dict):
         return None
-    candidates: List[str] = []
+    candidates: list[str] = []
     if ecosystem == "npm":
         candidates = list((meta.get("versions") or {}).keys())
     elif ecosystem == "Packagist":
@@ -313,7 +320,7 @@ def _latest_stable_version(
 def _dep_state_in_version(
     ecosystem: str, client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Dispatch per-ecosystem dep-state extraction. Returns:
 
       None — couldn't fetch / unsupported ecosystem
@@ -359,21 +366,15 @@ def _dep_state_in_version(
 def _dep_state_pypi(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     requires_dist = _requires_dist_for_version_pypi(
         client, parent_name, parent_version,
     )
     if requires_dist is None:
-        meta = client.get_metadata(parent_name)
-        if not isinstance(meta, dict):
-            return None
-        info = meta.get("info") or {}
-        requires_dist = info.get("requires_dist") or []
-        if not isinstance(requires_dist, list):
-            return None
+        return None
 
     transitive_canon = transitive_name.lower().replace("_", "-")
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = False
     for req in requires_dist:
         if not isinstance(req, str):
@@ -398,7 +399,7 @@ def _dep_state_pypi(
 
 def _requires_dist_for_version_pypi(
     client, name: str, version: str,
-) -> Optional[List[str]]:
+) -> list[str] | None:
     """Fetch requires_dist for a SPECIFIC PyPI version."""
     if hasattr(client, "get_version_metadata"):
         meta = client.get_version_metadata(name, version)
@@ -417,7 +418,7 @@ def _requires_dist_for_version_pypi(
 def _dep_state_npm(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """npm's per-version metadata lives inline in the packument
     (``versions[<ver>]``). Check for the transitive in ALL four
     dep keys: ``dependencies`` (required), ``optionalDependencies``,
@@ -427,12 +428,14 @@ def _dep_state_npm(
     if not isinstance(meta, dict):
         return None
     versions = meta.get("versions") or {}
+    if not isinstance(versions, dict):
+        return None
     pkg_meta = versions.get(parent_version)
     if not isinstance(pkg_meta, dict):
         return None
 
     transitive_canon = transitive_name.lower()
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = False
     if (pkg_meta.get("dependencies") or {}).get(transitive_name) or \
        (pkg_meta.get("dependencies") or {}).get(transitive_canon):
@@ -457,7 +460,7 @@ def _dep_state_npm(
 def _dep_state_cargo(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """crates.io exposes per-version deps at
     ``/api/v1/crates/<crate>/<ver>/dependencies`` returning a list
     of ``{name, kind, optional, features, default_features}`` rows.
@@ -478,7 +481,7 @@ def _dep_state_cargo(
     if not isinstance(deps, list):
         return None
     transitive_canon = transitive_name.lower().replace("_", "-")
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = False
     for d in deps:
         if not isinstance(d, dict):
@@ -506,7 +509,7 @@ def _dep_state_cargo(
 def _dep_state_composer(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Packagist's API returns per-version ``require`` /
     ``require-dev`` / ``suggest`` blocks. Moving a dep from
     ``require`` to ``require-dev`` or ``suggest`` is the
@@ -517,6 +520,8 @@ def _dep_state_composer(
         return None
     # Packagist /p2 returns ``{packages: {<name>: [{version, ...}, ...]}}``
     packages = meta.get("packages") or {}
+    if not isinstance(packages, dict):
+        return None
     versions = packages.get(parent_name) or []
     pkg_meta = None
     for v in versions:
@@ -543,7 +548,7 @@ def _dep_state_composer(
             (k or "").lower() == transitive_canon for k in block
         )
 
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = _has("require")
     if _has("require-dev"):
         extras.append("require-dev")
@@ -559,7 +564,7 @@ def _dep_state_composer(
 def _dep_state_rubygems(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """rubygems.org's per-version endpoint returns
     ``dependencies: {runtime: [...], development: [...]}``.
     Moving from runtime → development is the gating shift."""
@@ -569,15 +574,14 @@ def _dep_state_rubygems(
     if not isinstance(meta, dict):
         return None
     deps = meta.get("dependencies") or {}
+    if not isinstance(deps, dict):
+        return None
     transitive_canon = transitive_name.lower()
-    extras: List[str] = []
     unconditional = False
     for d in deps.get("runtime") or []:
         if isinstance(d, dict) and (d.get("name") or "").lower() == transitive_canon:
             unconditional = True
-    for d in deps.get("development") or []:
-        if isinstance(d, dict) and (d.get("name") or "").lower() == transitive_canon:
-            extras.append("development")
+    extras: list[str] = ["development" for d in deps.get("development") or [] if isinstance(d, dict) and (d.get("name") or "").lower() == transitive_canon]
     return {"required": unconditional, "extras": extras}
 
 
@@ -588,7 +592,7 @@ def _dep_state_rubygems(
 def _dep_state_maven(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Maven POMs declare ``<scope>`` (default ``compile``) and
     ``<optional>true</optional>``. ``parent_name`` is
     ``groupId:artifactId``.
@@ -602,10 +606,10 @@ def _dep_state_maven(
     if not hasattr(client, "get_pom"):
         return None
     pom = client.get_pom(parent_name, parent_version)
-    if not pom:
+    if not isinstance(pom, dict):
         return None
     transitive_canon = transitive_name.strip()  # case-sensitive
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = False
     for dep in pom.get("dependencies") or []:
         if not isinstance(dep, dict):
@@ -631,16 +635,16 @@ def _dep_state_maven(
 def _dep_state_nuget(
     client, parent_name: str, parent_version: str,
     transitive_name: str,
-) -> Optional[dict]:
+) -> dict | None:
     """NuGet nuspec files declare per-TFM dependency groups.
     A dep that appears in fewer TFM groups in a newer version is
-    the closest analog to "moved to optional" — we conservatively
-    report "required=True" when the dep appears in AT LEAST ONE
-    group, "extras-gated" when it appears in only some groups but
-    not all of the ones it appeared in the current version.
+    the closest analog to "moved to optional", but per-TFM gating
+    is not modelled in v1.
 
-    For v1 we keep it simple: required if listed in ANY TFM group,
-    extras-gated only if NO TFM has it.
+    For v1 we keep it simple: required if listed in ANY TFM group;
+    otherwise ``required=False`` with an always-empty ``extras``
+    list, which the consumer maps to "removed" (NuGet drops are
+    never labelled "extras-gated" — conservative direction).
     """
     if not hasattr(client, "get_nuspec"):
         return None
@@ -648,7 +652,7 @@ def _dep_state_nuget(
     if not nuspec:
         return None
     transitive_canon = transitive_name.lower()
-    extras: List[str] = []
+    extras: list[str] = []
     unconditional = False
     for group in nuspec.get("dependency_groups") or []:
         for dep in group.get("dependencies") or []:
@@ -656,35 +660,3 @@ def _dep_state_nuget(
                 unconditional = True
                 break
     return {"required": unconditional, "extras": extras}
-
-
-def _requires_dist_for_version(
-    pypi_client, name: str, version: str,
-) -> Optional[List[str]]:
-    """Fetch ``requires_dist`` for a SPECIFIC version.
-
-    Prefers ``pypi_client.get_version_metadata(name, version)``
-    when available (the standard PyPIClient surface from
-    Phase-3.f). Falls back to the aggregate ``get_metadata(name)``
-    when only that's available AND its reported version matches —
-    useful for in-memory test stubs that don't implement the
-    per-version method.
-    """
-    if hasattr(pypi_client, "get_version_metadata"):
-        meta = pypi_client.get_version_metadata(name, version)
-        if isinstance(meta, dict):
-            info = meta.get("info") or {}
-            rd = info.get("requires_dist")
-            if isinstance(rd, list):
-                return rd
-    # Fallback for older stubs / clients without the per-version
-    # method: try the aggregate, accept its data only if it
-    # happens to be the version we want.
-    meta = pypi_client.get_metadata(name)
-    if not isinstance(meta, dict):
-        return None
-    info = meta.get("info") or {}
-    if info.get("version") != version:
-        return None
-    rd = info.get("requires_dist")
-    return rd if isinstance(rd, list) else None

@@ -15,7 +15,7 @@ class WaybackClient:
     AVAILABILITY_URL = "https://archive.org/wayback/available"
     ARCHIVE_URL = "https://web.archive.org/web"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._session: Any = None
 
     @property
@@ -59,7 +59,7 @@ class WaybackClient:
             return []
 
         headers = data[0]
-        return [dict(zip(headers, row)) for row in data[1:]]
+        return [dict(zip(headers, row, strict=True)) for row in data[1:]]
 
     def get_snapshot(self, url: str, timestamp: str) -> str | None:
         """Fetch archived page content."""

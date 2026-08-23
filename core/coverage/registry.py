@@ -16,7 +16,6 @@ deep coverage. The mapping is intentionally small and easy to extend.
 
 from __future__ import annotations
 
-from typing import Tuple
 
 CATEGORY_STATIC = "static"
 CATEGORY_LLM = "llm"
@@ -48,6 +47,15 @@ _REGISTRY = {
     # no distinct "mapped" rung and the review axis is depth's only consumer.)
     "understand": (CATEGORY_LLM, DEPTH_SCANNED),
     "audit": (CATEGORY_LLM, DEPTH_ANALYSED),
+    # "journal" = a coverage record derived from review-journal entries
+    # (build_from_journal; /agentic writes coverage-journal.json). Every
+    # functions_analysed entry is a per-function LLM review verdict, so the
+    # label is review-grade. Pre-registration it fell to the unknown/scanned
+    # default and journal-derived function marks never counted as reviewed.
+    "journal": (CATEGORY_LLM, DEPTH_ANALYSED),
+    # "mark" = an operator/agent --mark journaled as a review assertion
+    # (producer="mark" flows through import_journal as the store label).
+    "mark": (CATEGORY_LLM, DEPTH_ANALYSED),
     # checked_by source_labels are command:stage (all LLM-driven; scanners
     # use the file-level coverage records, not checked_by).
     "validate": (CATEGORY_LLM, DEPTH_ANALYSED),
@@ -62,20 +70,21 @@ _REGISTRY = {
     # binary-coverage tracers, addr2line/DWARF-resolved to source.
     "bincov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "drcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "frida": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "sancov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     # Python-test runtime (coverage.py / pytest-cov).
     "coverage.py": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "coverage": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "pytest": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
 }
-_DEFAULT: Tuple[str, str] = (CATEGORY_UNKNOWN, DEPTH_SCANNED)
+_DEFAULT: tuple[str, str] = (CATEGORY_UNKNOWN, DEPTH_SCANNED)
 
 
 def _base(tool_label: str) -> str:
     return tool_label.split(":", 1)[0]
 
 
-def classify(tool_label: str) -> Tuple[str, str]:
+def classify(tool_label: str) -> tuple[str, str]:
     """Return ``(category, depth)`` for a tool label."""
     return _REGISTRY.get(_base(tool_label), _DEFAULT)
 

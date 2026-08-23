@@ -29,8 +29,8 @@ Initial consumer:
   * ``raptor_audit.py`` Phase A driver — picks strategies per
     function, renders prompts, dispatches to ``LLMClient``.
 
-Companion design: ``~/design/audit.md``,
-"Adaptive review strategies" section.
+Companion design: the design memo, "Adaptive review strategies"
+section.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ from .prompts import (
 
 __all__ = [
     "DEFAULT_MAX_BYTES",
-    "Exemplar",
     "GENERAL",
+    "Exemplar",
     "Signals",
     "Strategy",
     "StrategyLoadError",

@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import os
 import platform
+from typing import ClassVar
 
 import pytest
 
-from core.sandbox import probes
-from core.sandbox import ptrace_probe
+from core.sandbox import audit_budget, probes, ptrace_probe
+from core.sandbox import evidence as evidence_mod
 from core.sandbox import tracer as tracer_mod
-from core.sandbox import audit_budget
-
 
 pytestmark = pytest.mark.skipif(
     not tracer_mod._is_supported_arch(),
@@ -42,9 +41,9 @@ class TestTracerCoversAllBlockedSyscalls:
 
     def test_x86_64_tracer_table_covers_seccomp_blocklist(self):
         from core.sandbox.seccomp import (
+            _AUDIT_EXTRA_TRACE_SYSCALLS,
             _SECCOMP_BLOCK_ALWAYS,
             _SECCOMP_BLOCK_UNLESS_DEBUG,
-            _AUDIT_EXTRA_TRACE_SYSCALLS,
         )
         from core.sandbox.tracer import _X86_64_SYSCALL_NAMES
 
@@ -61,21 +60,25 @@ class TestTracerCoversAllBlockedSyscalls:
         )
 
     def test_aarch64_tracer_table_covers_seccomp_blocklist(self):
-        # NOTE: aarch64 has no `open` syscall (only `openat`), so
-        # `open` is intentionally absent from _AARCH64_SYSCALL_NAMES.
-        # We exclude it from the expected set on aarch64.
+        # NOTE: aarch64 is an at-only ABI — the legacy non-at path
+        # syscalls (open, unlink, rename, link, symlink, mkdir,
+        # mknod, chmod, chown, lchown) do not exist there; libseccomp
+        # resolves them to -1 and the install loop skips them, so the
+        # tracer can never see them. Exclude them from the expected
+        # set on aarch64.
         from core.sandbox.seccomp import (
+            _AUDIT_EXTRA_TRACE_SYSCALLS,
             _SECCOMP_BLOCK_ALWAYS,
             _SECCOMP_BLOCK_UNLESS_DEBUG,
-            _AUDIT_EXTRA_TRACE_SYSCALLS,
         )
         from core.sandbox.tracer import _AARCH64_SYSCALL_NAMES
 
         expected = (set(_SECCOMP_BLOCK_ALWAYS)
                     | set(_SECCOMP_BLOCK_UNLESS_DEBUG)
                     | set(_AUDIT_EXTRA_TRACE_SYSCALLS))
-        # aarch64 doesn't have plain `open` — only `openat`.
-        expected.discard("open")
+        # Legacy non-at syscalls absent from the aarch64 ABI.
+        expected -= {"open", "unlink", "rename", "link", "symlink",
+                     "mkdir", "mknod", "chmod", "chown", "lchown"}
         known = set(_AARCH64_SYSCALL_NAMES.values())
         missing = expected - known
         assert missing == set(), (
@@ -103,6 +106,7 @@ class TestAuditSystemRoMatchesContext:
         # functions (which require ptrace/landlock context).
         import inspect
         import re
+
         from core.sandbox import _spawn, context
 
         spawn_src = inspect.getsource(_spawn.run_sandboxed)
@@ -153,6 +157,7 @@ class TestTracerExitCodesAgreeAcrossDocs:
     def test_actual_returns_match_docstrings(self):
         import inspect
         import re
+
         from core.sandbox import tracer
 
         src = inspect.getsource(tracer)
@@ -262,8 +267,8 @@ class TestJsonlFilenameConstantAgrees:
     Pin both constants are byte-identical."""
 
     def test_tracer_and_summary_filename_constants_match(self):
-        from core.sandbox.tracer import _DENIALS_FILENAME
         from core.sandbox.summary import DENIALS_FILE
+        from core.sandbox.tracer import _DENIALS_FILENAME
         assert _DENIALS_FILENAME == DENIALS_FILE, (
             f"JSONL filename divergence: tracer writes "
             f"{_DENIALS_FILENAME!r}, summary reads {DENIALS_FILE!r}"
@@ -279,7 +284,7 @@ class TestProxyEventResultVocabulary:
     Drift class:
       - Proxy emits a NEW result string but the canonical set
         (_PROXY_EVENT_RESULTS) doesn't list it → test queries that
-        whitelist by canonical set silently miss the event.
+        allowlist by canonical set silently miss the event.
       - Proxy renames an existing result (e.g., `denied_host` to
         `host_denied`) → all consumer filters break silently.
 
@@ -290,6 +295,7 @@ class TestProxyEventResultVocabulary:
     def test_every_emitted_result_is_in_canonical_set(self):
         import inspect
         import re
+
         from core.sandbox import proxy
 
         src = inspect.getsource(proxy)
@@ -322,6 +328,7 @@ class TestProxyEventResultVocabulary:
         # emitting it or it's documentation-only — either way, drift.
         import inspect
         import re
+
         from core.sandbox import proxy
 
         src = inspect.getsource(proxy)
@@ -352,6 +359,7 @@ class TestSeccompIoctlCmdsMatchKernelUapi:
 
     def test_tiocsti_matches_kernel(self):
         import termios
+
         from core.sandbox import seccomp
         assert seccomp._TIOCSTI == termios.TIOCSTI, (
             f"_TIOCSTI={seccomp._TIOCSTI:#x} != termios.TIOCSTI="
@@ -361,11 +369,13 @@ class TestSeccompIoctlCmdsMatchKernelUapi:
 
     def test_tioccons_matches_kernel(self):
         import termios
+
         from core.sandbox import seccomp
         assert seccomp._TIOCCONS == termios.TIOCCONS
 
     def test_tiocsctty_matches_kernel(self):
         import termios
+
         from core.sandbox import seccomp
         # TIOCSCTTY may not be defined as _TIOCSCTTY in seccomp;
         # check the constant by-name via reflection.
@@ -380,6 +390,7 @@ class TestAtFdcwdValue:
 
     def test_at_fdcwd_matches_uapi_header(self):
         import re
+
         import pytest
         candidate_paths = [
             "/usr/include/fcntl.h",
@@ -424,6 +435,7 @@ class TestOpenFlagsMatchKernelUapi:
 
     def test_open_flags_match_os_module(self):
         import os
+
         from core.sandbox import tracer
         # Each constant must match os.O_*
         assert tracer._O_WRONLY == os.O_WRONLY, (
@@ -476,11 +488,11 @@ class TestArchSupportDivergence:
     contributor accidentally REMOVING aarch64 from mount_ns gets
     flagged."""
 
-    EXPECTED_TRACER_ARCHES = {"x86_64", "aarch64"}
+    EXPECTED_TRACER_ARCHES: ClassVar[set] = {"x86_64", "aarch64"}
 
     def test_tracer_arches_are_subset_of_mount_ns_arches(self):
-        from core.sandbox.tracer import _ARCH_INFO
         from core.sandbox.mount_ns import _PIVOT_ROOT_SYSCALL_NR
+        from core.sandbox.tracer import _ARCH_INFO
         tracer_arches = set(_ARCH_INFO.keys())
         mount_arches = set(_PIVOT_ROOT_SYSCALL_NR.keys())
         unsupported_in_mount = tracer_arches - mount_arches
@@ -523,6 +535,7 @@ class TestTracerArgvContract:
     def test_spawn_argv_matches_cli_main_parse(self):
         import inspect
         import re
+
         from core.sandbox import _spawn, tracer
 
         # Extract spawn's argv literal.
@@ -584,7 +597,7 @@ class TestTracerArgvContract:
 
 class TestDenialTypeStringsAgreeAcrossModules:
     """Finding U: the denial_type string vocabulary
-    {"network", "write", "seccomp"} is duplicated across at least
+    {"network", "write", "seccomp", "udp"} is duplicated across at least
     five modules:
       - tracer.py:_NAME_TO_TYPE values + _denial_type fallback
       - proxy.py: hard-coded "network" in record_denial call
@@ -597,7 +610,7 @@ class TestDenialTypeStringsAgreeAcrossModules:
     aggregation breaks silently. Pin the canonical set here so
     drift is caught fast."""
 
-    CANONICAL_TYPES = {"network", "write", "seccomp"}
+    CANONICAL_TYPES: ClassVar[set] = {"network", "write", "seccomp", "udp"}
 
     def test_tracer_name_to_type_values_within_canonical(self):
         from core.sandbox.tracer import _NAME_TO_TYPE
@@ -654,7 +667,7 @@ class TestConftestSnapshotMatchesState:
     # Names that are deliberately excluded from snapshotting. Update
     # this set ONLY with a comment explaining why; consider whether
     # the exclusion is still right.
-    DOCUMENTED_EXCLUSIONS = {
+    DOCUMENTED_EXCLUSIONS: ClassVar[set] = {
         "_landlock_cache",  # forking probe; cache persists per-process
         # Snapshotted in conftest.py but via a separate dict-deep-copy
         # mechanism (saved_spec_cache = dict(mod._speculative_failure_cache))
@@ -671,6 +684,7 @@ class TestConftestSnapshotMatchesState:
     def test_every_state_var_is_snapshotted_or_excluded(self):
         import re
         from pathlib import Path
+
         from core.sandbox import state
         # Pull the snapshot list literal from conftest source. Absolute,
         # __file__-anchored so it survives a sibling suite leaving the
@@ -814,8 +828,6 @@ class TestAuditExtrasHaveHandlers:
     act on them."""
 
     def test_every_audit_extra_has_a_handler(self):
-        from core.sandbox.seccomp import _AUDIT_EXTRA_TRACE_SYSCALLS
-        from core.sandbox.tracer import _path_arg_index
         import inspect
 
         # Per-syscall: must be either path-bearing (path_arg_index
@@ -823,6 +835,8 @@ class TestAuditExtrasHaveHandlers:
         # function. Today the only non-path one is connect, which
         # is decoded via decode_sockaddr — pin that explicit case.
         from core.sandbox import tracer
+        from core.sandbox.seccomp import _AUDIT_EXTRA_TRACE_SYSCALLS
+        from core.sandbox.tracer import _path_arg_index
         dispatch_src = inspect.getsource(tracer._handle_waitpid_event)
 
         unhandled = []
@@ -853,7 +867,7 @@ class TestAuditExtrasHaveHandlers:
         # Each audit-extra needs a sensible denial_type so summary
         # aggregation classifies it correctly (write/network/seccomp).
         from core.sandbox.seccomp import _AUDIT_EXTRA_TRACE_SYSCALLS
-        from core.sandbox.tracer import _denial_type, _NAME_TO_TYPE
+        from core.sandbox.tracer import _NAME_TO_TYPE, _denial_type
 
         valid_types = {"write", "network", "seccomp"}
         for syscall in _AUDIT_EXTRA_TRACE_SYSCALLS:
@@ -892,6 +906,7 @@ class TestAuditConfigSchemaAgree:
     def test_audit_config_keys_match(self):
         import inspect
         import re
+
         from core.sandbox import _spawn, tracer
 
         spawn_src = inspect.getsource(_spawn.run_sandboxed)
@@ -959,10 +974,10 @@ class TestAfInetConstantsAgree:
     def test_af_inet_matches_across_seccomp_and_tracer(self):
         # Read seccomp's literals via inspection (they're module-level
         # constants).
-        from core.sandbox import seccomp
-        from core.sandbox import tracer
         import inspect
         import re
+
+        from core.sandbox import seccomp, tracer
 
         # tracer's _decode_sockaddr defines AF_INET/AF_INET6 as
         # function-local constants. Pull them via source.
@@ -992,6 +1007,7 @@ class TestAfInetConstantsAgree:
         # on Linux; pin against socket module which reads them from
         # the kernel headers at install time.
         import socket
+
         from core.sandbox import seccomp
         assert seccomp._AF_INET == socket.AF_INET
         assert seccomp._AF_INET6 == socket.AF_INET6
@@ -1380,13 +1396,15 @@ class TestEndToEndAuditVsAuditVerbose:
 
         # Filtered: 0 or near-zero records (python opens only system
         # paths).
-        f_jsonl = run_filtered / tracer_mod._DENIALS_FILENAME
-        f_count = (sum(1 for _ in open(f_jsonl)) if f_jsonl.exists()
-                   else 0)
+        f_jsonl = (run_filtered / evidence_mod.AUDIT_SUBDIR
+                   / tracer_mod._DENIALS_FILENAME)
+        f_count = (len(f_jsonl.read_text().splitlines())
+                   if f_jsonl.exists() else 0)
         # Verbose: many records (Python startup is open-heavy).
-        v_jsonl = run_verbose / tracer_mod._DENIALS_FILENAME
+        v_jsonl = (run_verbose / evidence_mod.AUDIT_SUBDIR
+                   / tracer_mod._DENIALS_FILENAME)
         assert v_jsonl.exists()
-        v_count = sum(1 for _ in open(v_jsonl))
+        v_count = len(v_jsonl.read_text().splitlines())
 
         # Verbose should have at least 5x more records than filtered.
         # (Real ratio is more like 30-100x; 5x is a lower bound.)

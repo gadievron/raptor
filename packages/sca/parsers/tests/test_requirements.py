@@ -41,6 +41,44 @@ def test_compatible_release_is_tilde(tmp_path: Path) -> None:
     assert deps[0].version == "2.3.0"
 
 
+def test_inclusive_lower_bound_records_operand(tmp_path: Path) -> None:
+    """``>=X`` keeps X as the conservative version guess."""
+    deps = parse(_write(tmp_path, "requests>=2.31\n"))
+    assert deps[0].pin_style is PinStyle.RANGE
+    assert deps[0].version == "2.31"
+
+
+def test_exclusion_bound_records_no_version(tmp_path: Path) -> None:
+    """``!=X`` excludes X — recording it as the installed version
+    produced findings for the one version guaranteed NOT installed."""
+    deps = parse(_write(tmp_path, "requests!=2.31.0\n"))
+    assert deps[0].pin_style is PinStyle.RANGE
+    assert deps[0].version is None
+
+
+def test_exclusive_bounds_record_no_version(tmp_path: Path) -> None:
+    for body in ("requests<2.0\n", "requests>1.0\n"):
+        deps = parse(_write(tmp_path, body))
+        assert deps[0].pin_style is PinStyle.RANGE
+        assert deps[0].version is None, body
+
+
+def test_spec_bounds_drop_unparseable_versions() -> None:
+    """An unparseable bound operand is dropped, not coerced to 0 —
+    coercion let a garbage operand win min(uppers) as a bogus ceiling."""
+    from types import SimpleNamespace
+
+    from packages.sca.parsers.requirements import _spec_bounds
+    spec = [
+        SimpleNamespace(operator="<", version="not-a-version"),
+        SimpleNamespace(operator="<", version="2.0"),
+        SimpleNamespace(operator=">=", version="also-bad"),
+    ]
+    floor, ceiling = _spec_bounds(spec)
+    assert ceiling == "2.0"
+    assert floor is None
+
+
 def test_unpinned_is_wildcard(tmp_path: Path) -> None:
     deps = parse(_write(tmp_path, "click\n"))
     assert deps[0].pin_style is PinStyle.WILDCARD
@@ -137,3 +175,9 @@ def test_unparseable_line_is_skipped(tmp_path: Path) -> None:
     deps = parse(_write(tmp_path, body))
     names = [d.name for d in deps]
     assert names == ["valid"]
+
+
+def test_empty_requirement_value_no_crash(tmp_path: Path) -> None:
+    body = "--requirement=\ndjango==4.2.7\n"
+    deps = parse(_write(tmp_path, body))
+    assert [d.name for d in deps] == ["django"]

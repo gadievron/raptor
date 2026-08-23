@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -18,9 +18,9 @@ class SelectionCase:
     """
 
     name: str
-    signals: Dict[str, Any]
-    expect_selected: Tuple[str, ...] = ()
-    expect_not_selected: Tuple[str, ...] = ()
+    signals: dict[str, Any]
+    expect_selected: tuple[str, ...] = ()
+    expect_not_selected: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -28,9 +28,9 @@ class SelectionOutcome:
     """Result of running one SelectionCase through the picker."""
 
     case: SelectionCase
-    picked: Tuple[str, ...]
-    missing: Tuple[str, ...]     # expect_selected names absent from picked
-    overfired: Tuple[str, ...]   # expect_not_selected names present in picked
+    picked: tuple[str, ...]
+    missing: tuple[str, ...]     # expect_selected names absent from picked
+    overfired: tuple[str, ...]   # expect_not_selected names present in picked
 
     @property
     def passed(self) -> bool:

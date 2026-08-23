@@ -288,3 +288,65 @@ class TestComputePythonToolPaths:
         assert str(lib_dir) in result, \
             f"stdlib dir missing from {result!r}"
 
+
+class TestValidatePolicyGroups:
+    """Unknown policy groups are an argparse-level hard error, not a
+    mid-scan warning — operators copying a bad example must find out
+    before the scan silently runs without the intended rules."""
+
+    def _parser(self):
+        import argparse
+        return argparse.ArgumentParser(prog="scanner-test")
+
+    def _rules_base(self, tmp_path, groups=("injection", "crypto")):
+        base = tmp_path / "rules"
+        for g in groups:
+            (base / g).mkdir(parents=True)
+        (base / "registry-cache").mkdir()
+        return base
+
+    def test_unknown_group_is_hard_error(self, tmp_path, capsys):
+        import pytest
+        base = self._rules_base(tmp_path)
+        with patch.object(
+            _scanner_mod.RaptorConfig, "SEMGREP_RULES_DIR", base,
+        ):
+            with pytest.raises(SystemExit) as exc:
+                _scanner_mod._validate_policy_groups(
+                    self._parser(), "injction",
+                )
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "injction" in err
+        assert "injection" in err  # valid groups are listed
+        assert "crypto" in err
+
+    def test_reserved_group_is_hard_error(self, tmp_path):
+        import pytest
+        base = self._rules_base(tmp_path)
+        with patch.object(
+            _scanner_mod.RaptorConfig, "SEMGREP_RULES_DIR", base,
+        ):
+            with pytest.raises(SystemExit):
+                _scanner_mod._validate_policy_groups(
+                    self._parser(), "registry-cache",
+                )
+
+    def test_valid_groups_pass(self, tmp_path):
+        base = self._rules_base(tmp_path)
+        with patch.object(
+            _scanner_mod.RaptorConfig, "SEMGREP_RULES_DIR", base,
+        ):
+            _scanner_mod._validate_policy_groups(
+                self._parser(), "injection, crypto",
+            )
+            _scanner_mod._validate_policy_groups(self._parser(), "all")
+
+    def test_unreadable_rules_dir_does_not_error(self, tmp_path):
+        with patch.object(
+            _scanner_mod.RaptorConfig, "SEMGREP_RULES_DIR",
+            tmp_path / "missing",
+        ):
+            _scanner_mod._validate_policy_groups(
+                self._parser(), "whatever",
+            )

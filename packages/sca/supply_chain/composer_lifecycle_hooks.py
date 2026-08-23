@@ -1,18 +1,20 @@
-"""Composer (PHP) ``composer.json`` lifecycle-hook scanner.
+r"""Composer (PHP) ``composer.json`` lifecycle-hook scanner.
 
 Composer's ``scripts`` block declares hooks that fire at well-defined
-points in the dependency-management lifecycle.  The install-time
-ones are the supply-chain attack surface:
+points in the dependency-management lifecycle.  The ones that fire
+automatically from routine composer commands are the supply-chain
+attack surface:
 
   * ``pre-install-cmd``, ``post-install-cmd``
   * ``pre-update-cmd``, ``post-update-cmd``
   * ``pre-package-install``, ``post-package-install``
   * ``pre-package-update``, ``post-package-update``
   * ``pre-autoload-dump``, ``post-autoload-dump``
+  * ``pre-status-cmd``, ``post-status-cmd``
 
 Each entry can be a string (single shell command), a list of
 strings (multiple commands), or a PHP method reference
-(``Vendor\\Class::method``).  We scan the shell-shaped forms; the
+(``Vendor\Class::method``).  We scan the shell-shaped forms; the
 PHP-class form is out of scope (it requires loading the class to
 analyse, which is a different regime).
 
@@ -25,11 +27,15 @@ from __future__ import annotations
 import json as _json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, List, Optional
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..parsers import _safe_read
 from . import _hook_patterns
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +54,7 @@ _LIFECYCLE_KEYS = (
 class ComposerLifecycleHit:
     script_key: str
     script_body: str
-    reasons: List[str]
+    reasons: list[str]
     reads_credentials: bool
     has_publish_action: bool
 
@@ -64,8 +70,8 @@ class ComposerLifecycleFinding:
 def scan_manifests(
     manifests: Iterable[Manifest],
     deps: Iterable[Dependency],
-) -> List[ComposerLifecycleFinding]:
-    out: List[ComposerLifecycleFinding] = []
+) -> list[ComposerLifecycleFinding]:
+    out: list[ComposerLifecycleFinding] = []
     deps_list = list(deps)
     for m in manifests:
         if m.ecosystem != "Composer":
@@ -79,14 +85,10 @@ def scan_manifests(
 
 def _scan_one(
     path: Path, host: Dependency,
-) -> List[ComposerLifecycleFinding]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug(
-            "sca.supply_chain.composer_lifecycle_hooks: %s read failed: %s",
-            path, e,
-        )
+) -> list[ComposerLifecycleFinding]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         data = _json.loads(text)
@@ -97,7 +99,7 @@ def _scan_one(
     scripts = data.get("scripts")
     if not isinstance(scripts, dict):
         return []
-    out: List[ComposerLifecycleFinding] = []
+    out: list[ComposerLifecycleFinding] = []
     for key in _LIFECYCLE_KEYS:
         entries = scripts.get(key)
         if entries is None:
@@ -159,10 +161,22 @@ def _scan_one(
 
 
 def _host_dep(
-    deps: List[Dependency], manifest: Manifest,
-) -> Optional[Dependency]:
+    deps: list[Dependency], manifest: Manifest,
+) -> Dependency | None:
+    text = _safe_read.read_bounded(manifest.path, follow_symlinks=False)
+    if text is None:
+        return None
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    project_name = data.get("name")
+    if not isinstance(project_name, str) or not project_name:
+        return None
     for d in deps:
-        if d.declared_in == manifest.path:
+        if d.ecosystem == "Composer" and d.name == project_name:
             return d
     return None
 

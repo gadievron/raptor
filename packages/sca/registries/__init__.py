@@ -17,7 +17,7 @@ shape-translation local.
 
 from __future__ import annotations
 
-from typing import List, Protocol
+from typing import Protocol
 
 
 class RegistryClient(Protocol):
@@ -30,7 +30,7 @@ class RegistryClient(Protocol):
 
     ecosystem: str
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         """List published versions of ``name`` from this ecosystem.
 
         Order: newest first (registries typically return arbitrary order;

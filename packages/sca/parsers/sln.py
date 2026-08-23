@@ -33,7 +33,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path, PurePosixPath
-from typing import List, Optional, Set
 
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -60,9 +59,9 @@ _PROJECT_SUFFIXES = {".csproj", ".fsproj", ".vbproj"}
 
 
 def find_sln_referenced_csprojs(
-    sln_path: Path, *, repo_root: Optional[Path] = None,
-) -> List[Path]:
-    """Read a ``.sln`` file and return absolute paths to every
+    sln_path: Path, *, repo_root: Path | None = None,
+) -> list[Path]:
+    r"""Read a ``.sln`` file and return absolute paths to every
     referenced csproj / fsproj / vbproj.
 
     Empty list when:
@@ -79,13 +78,13 @@ def find_sln_referenced_csprojs(
 
     Path resolution:
       * Each project path is relative to the .sln's parent dir.
-      * Windows-style ``\\`` separators are normalised to ``/``.
+      * Windows-style ``\`` separators are normalised to ``/``.
       * Absolute paths are rejected up-front (``/`` prefix or
-        Windows drive-letter — ``C:\\...``).
-      * UNC paths (``\\\\server\\share``) and URL-encoded /
+        Windows drive-letter — ``C:\...``).
+      * UNC paths (``\\server\share``) and URL-encoded /
         percent-encoded segments are rejected. A hostile .sln
         line carrying ``%2e%2e/etc/passwd`` survives the
-        ``.replace("\\", "/")`` normalisation but is caught
+        ``.replace("\", "/")`` normalisation but is caught
         here.
       * Literal ``..`` segments are rejected up-front BEFORE
         the ``(parent / rel).resolve()`` call, so a .sln cannot
@@ -109,15 +108,14 @@ def find_sln_referenced_csprojs(
     # ``.sln`` files often carry a UTF-8 BOM. ``read_bounded``
     # returns the raw decoded string; strip a leading BOM so the
     # first Project line still matches the line-anchored regex.
-    if text.startswith("﻿"):
-        text = text[1:]
+    text = text.removeprefix("﻿")
     parent = sln_path.parent.resolve()
     if repo_root is not None:
         try:
             repo_root = repo_root.resolve()
         except OSError:
             repo_root = None
-    found: Set[Path] = set()
+    found: set[Path] = set()
     for match in _PROJECT_LINE_RE.finditer(text):
         rel = match.group("path").replace("\\", "/").strip()
         if not rel:
@@ -156,7 +154,21 @@ def find_sln_referenced_csprojs(
                 escape_nonprintable(str(sln_path)),
             )
             continue
-        candidate = (parent / rel).resolve()
+        unresolved = parent / rel
+        # Reject symlinked final candidates BEFORE resolving — a
+        # target with ``X.csproj -> /etc/passwd`` would leak the
+        # target's contents into the XML parser's error logs.
+        try:
+            if unresolved.is_symlink():
+                logger.debug(
+                    "sca.parsers.sln: %s is a symlink; skipping "
+                    "(hostile-symlink defence)",
+                    escape_nonprintable(str(unresolved)),
+                )
+                continue
+        except OSError:
+            continue
+        candidate = unresolved.resolve()
         # Path-traversal defence: ``repo_root`` is preferred when
         # the caller supplies it (discovery does). Fall back to
         # the .sln's grandparent for legacy callers — strictly
@@ -173,19 +185,6 @@ def find_sln_referenced_csprojs(
             )
             continue
         if candidate.suffix.lower() not in _PROJECT_SUFFIXES:
-            continue
-        # Reject symlinked final candidates — a target with
-        # ``X.csproj -> /etc/passwd`` would leak the target's
-        # contents into the XML parser's error logs.
-        try:
-            if candidate.is_symlink():
-                logger.debug(
-                    "sca.parsers.sln: %s is a symlink; skipping "
-                    "(hostile-symlink defence)",
-                    escape_nonprintable(str(candidate)),
-                )
-                continue
-        except OSError:
             continue
         if not candidate.is_file():
             continue

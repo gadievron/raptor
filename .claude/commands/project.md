@@ -18,10 +18,15 @@ Manage projects — named workspaces that corral analysis runs into one director
 | Command | Description |
 |---------|-------------|
 | `help [subcommand]` | Show help (detailed if subcommand given) |
-| `create <name> --target <path> [-d <desc>]` | Create a new project |
+| `create <name> --target <path> [-d <desc>] [--output-dir <dir>] [--binary <path> ...] [--require-target-type <kind>]` | Create a new project |
 | `list` | Show all projects (* marks active) |
 | `status [<name>]` | Show project summary with run history |
-| `coverage [<name>] [--detailed]` | Show tool coverage summary (or per-file table) |
+| `coverage [<name>] [--detailed] [--fail-under <pct>]` | Show tool coverage summary (or per-file table; `--fail-under` gates CI) |
+| `binary <add\|remove\|list\|clear> [<path>]` | Manage persisted debug binaries for binary-oracle enrichment |
+| `provenance [<name>]` | Provenance rollup across all runs |
+| `show <run>` | One run's provenance detail |
+| `threat-model <action> [args]` | Manage the project threat-model artefact |
+| `correlate [<name>]` | Cross-run finding correlation |
 | `findings [<name>] [--detailed]` | Show merged findings (or per-finding detail) |
 | `annotations [<name>] [--status S] [--source S] [--file PATH] [--cwe X] [--rule-id P] [--grep T] [--since 7d]` | List annotations across all runs (project-level overrides run-level) |
 | `annotations-diff <run-a> <run-b>` | Compare annotation state between two runs |
@@ -30,15 +35,20 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |
 | `rename <old> <new>` | Rename a project |
 | `notes <name> [<text>] [--file <path>]` | View or update notes |
-| `description <name> [<text>]` | View or update description |
-| `add <name> <dir> [--target <path>]` | Add existing runs to a project |
+| `add <name> <dir> [--target <path>]` | Add existing runs to a project (target-validated; journal index + coverage projections re-run) |
+| `adopt <name> <run-or-dir>... [--target <path>]` | Retro-create a project around existing run(s) — create-if-missing + add; target inferred from the run's metadata |
 | `remove <name> <run> --to <path>` | Move a run out of the project |
 | `report [<name>]` | Generate merged report across all runs |
 | `diff <name> <run1> <run2>` | Compare findings between two runs |
 | `merge [<name>] [--type <type>] [--yes]` | Merge runs per command type (destructive) |
-| `clean [<name>] [--keep <n>] [--dry-run] [--yes]` | Delete old runs, keep latest n |
+| `clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]` | Delete old runs, keep latest n |
 | `export <name> <path> [--force]` | Export project as zip (prints sha256) |
 | `import <path> [--force] [--sha256 <hash>]` | Import project from zip |
+| `trust [<marker>] [<name>]` | List trust assertions (markers + binaries count), or set a marker: `config` / `build` / `dynamic` |
+| `untrust <marker> [<name>]` | Remove a trust marker |
+| `set [<key> <value>] [<name>]` | List settings, or set a registry key (`description`, `notes`, `threat-model`, `target-kind`, `build-command[.<lang>]`) |
+| `unset <key> [<name>]` | Remove a setting |
+| `get <key> [<name>]` | Print one setting's bare value (exit 1 when unset) |
 
 ## Execution
 
@@ -48,7 +58,25 @@ Run project commands via the Bash tool:
 libexec/raptor-project-manager <subcommand> [args]
 ```
 
-For destructive commands (`merge`, `clean`, `delete --purge`), confirm with the user before running with `--yes`.
+## Destructive commands
+
+`merge`, `clean`, and `delete --purge` delete data. Never pass `--yes` without an explicit confirmation. In an interactive session, take the confirmation as a structured choice (see CLAUDE.md § INTERACTIVE PROMPTS): run `libexec/raptor-may-ask` first; only if it prints `interactive` AND the AskUserQuestion tool is available, ask as below. Otherwise apply the non-interactive fallback.
+
+**`clean`** — first run the same command with `--dry-run` (never deletes; prints the per-type breakdown, MB to free, and any coverage-loss warnings) and `/project status` (the full run list with names and dates). The deletion set is every run beyond the latest `--keep <n>` per command type. Then ask — "Delete these runs?" — options:
+
+1. **Cancel (Recommended)** — delete nothing.
+2. **Delete the listed runs** — build this option's preview from the `/project status` + `--dry-run` output: the exact run directories that will be deleted, one per line, plus the MB freed and any found-then-lost coverage warnings. On selection, re-run the command with `--yes`.
+3. **Keep more runs** — re-run `--dry-run` with a higher `--keep <n>` and ask again.
+
+**`create` over an existing directory** — before creating, check whether the output directory (`--output-dir`, or the default `out/projects/<name>`) already exists and is non-empty. If it does, ask — options:
+
+1. **Choose a different name/dir (Recommended)** — pick a fresh directory; nothing is adopted.
+2. **Adopt the existing directory** — proceed; `create` reuses the directory, and existing run dirs inside it join the project's views (`status`, `findings`, `report`). Preview: list the directory's existing contents.
+3. **Cancel** — do not create the project.
+
+**`merge` / `delete --purge`** — same pattern: show exactly what will be merged or removed (from `/project status`), ask with a Cancel-first option, and pass `--yes` only after an explicit selection.
+
+**Non-interactive fallback:** current behavior — never pass `--yes`. For `clean`/`merge`/`delete --purge`, run at most the `--dry-run` / read-only preview, report what would be deleted, and stop — deletion requires an interactive confirmation or an operator-supplied `--yes`. For `create`, proceed as today (the existing directory is reused); note the adoption in your output.
 
 ## Output
 

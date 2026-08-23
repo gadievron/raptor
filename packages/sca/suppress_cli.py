@@ -23,20 +23,27 @@ edit flow works fine for the common case)."""
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 import sys
 from datetime import date
 from pathlib import Path
-from typing import List, Sequence
+
+from core.json import load_json
 
 from .suppressions import (
     SUPPRESS_FILENAME,
     SuppressionEntry,
     load,
 )
+from typing import TYPE_CHECKING
 
-logger = logging.getLogger(__name__)
+from core.json import dumps_display
+
+# findings.json artifacts are RAPTOR-written run output — the
+# findings-class budget.
+_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def main(argv: Sequence[str]) -> int:
@@ -96,7 +103,7 @@ def _cmd_list(target: Path, *, emit_json: bool) -> int:
         return 1
     entries = load(suppress_path)
     if emit_json:
-        print(json.dumps(
+        print(dumps_display(
             [_entry_to_dict(e) for e in entries], indent=2,
         ))
         return 0
@@ -108,7 +115,7 @@ def _cmd_list(target: Path, *, emit_json: bool) -> int:
           f"{suppress_path}")
     for e in entries:
         kind, target_label = _describe_entry(e)
-        bits: List[str] = [kind, target_label]
+        bits: list[str] = [kind, target_label]
         if e.expires:
             note = ("EXPIRED" if e.is_expired(today)
                      else f"until {e.expires}")
@@ -132,16 +139,26 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
     if not entries:
         print(f"raptor-sca suppress: {suppress_path} has no entries.")
         return 0
-    rows = json.loads(findings_path.read_text(encoding="utf-8"))
+    try:
+        rows = load_json(
+            findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+        )
+        if rows is None:
+            # Strict load_json soft-returns None for a missing file.
+            raise FileNotFoundError(findings_path)
+    except (OSError, ValueError) as exc:
+        print(f"raptor-sca suppress: cannot read {findings_path}: {exc}",
+              file=sys.stderr)
+        return 2
     if not isinstance(rows, list):
         print("raptor-sca suppress: findings.json top-level is not a "
               "list", file=sys.stderr)
         return 2
 
     today = date.today()
-    expired: List[SuppressionEntry] = []
-    matched: List[SuppressionEntry] = []
-    orphan: List[SuppressionEntry] = []
+    expired: list[SuppressionEntry] = []
+    matched: list[SuppressionEntry] = []
+    orphan: list[SuppressionEntry] = []
     for e in entries:
         if e.is_expired(today):
             expired.append(e)
@@ -175,7 +192,7 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
     return 1 if (orphan or expired) else 0
 
 
-def _describe_entry(e: SuppressionEntry) -> "tuple[str, str]":
+def _describe_entry(e: SuppressionEntry) -> tuple[str, str]:
     if e.finding_id:
         return ("finding_id", e.finding_id)
     if e.advisory_id:

@@ -8,6 +8,7 @@ generic ``core.json.cache`` location.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -83,13 +84,27 @@ def test_subdirectory_keys(tmp_path: Path) -> None:
     assert cache.get("vulns/GHSA-xxx", ttl_seconds=60) == {"id": "GHSA-xxx"}
 
 
-def test_path_traversal_in_key_is_blocked(tmp_path: Path) -> None:
+def test_path_traversal_in_key_is_refused(tmp_path: Path) -> None:
+    # Degenerate segments are refused loudly rather than normalised:
+    # silently dropping them made distinct keys collide onto one file
+    # ("foo/.." used to alias "foo"), letting one entry shadow another.
     cache = JsonCache(root=tmp_path)
-    cache.put("../escape", "should-not-escape", ttl_seconds=60)
-    # Either the file lives inside the cache root, or the put silently
-    # discarded the segment; either way, no escape.
+    with pytest.raises(ValueError):
+        cache.put("../escape", "should-not-escape", ttl_seconds=60)
     assert not (tmp_path.parent / "escape.json").exists()
-    assert (tmp_path / "escape.json").exists()
+    assert not (tmp_path / "escape.json").exists()
+
+
+def test_degenerate_segments_cannot_alias_another_key(tmp_path: Path) -> None:
+    cache = JsonCache(root=tmp_path)
+    cache.put("npm-meta:lodash", {"ok": True}, ttl_seconds=60)
+    for alias in ("npm-meta:lodash/..", "npm-meta:lodash/.",
+                  "npm-meta:lodash//", "./npm-meta:lodash"):
+        with pytest.raises(ValueError):
+            cache.put(alias, None, ttl_seconds=60)
+        with pytest.raises(ValueError):
+            cache.get(alias, ttl_seconds=60)
+    assert cache.get("npm-meta:lodash", ttl_seconds=60) == {"ok": True}
 
 
 def test_empty_key_after_sanitisation_raises(tmp_path: Path) -> None:
@@ -236,7 +251,8 @@ def test_non_json_serialisable_value_does_not_leak_tempfile(tmp_path: Path) -> N
     # datetime is not JSON-serialisable by default; json.dump will raise
     # TypeError. Older versions of this code only caught OSError, leaking
     # the partial tempfile.
-    cache.put("k", datetime.datetime.now(), ttl_seconds=60)
+    cache.put("k", datetime.datetime.now(tz=datetime.timezone.utc),
+              ttl_seconds=60)
     # Tempfile leak = .tmp.<pid>[.<tid>] shaped leftovers. The reaper's
     # rate-limit sentinel (``.reap_last_run``) is cache infrastructure,
     # not a leak — exclude it from the assertion.
@@ -366,32 +382,21 @@ def test_reaper_skipped_when_sentinel_is_fresh(
     )
 
 
-def test_reaper_runs_when_sentinel_is_stale(
-    tmp_path: Path, monkeypatch,
-) -> None:
+def test_reaper_runs_when_sentinel_is_stale(tmp_path: Path) -> None:
     """When the sentinel's mtime is older than the rate-limit window,
-    the reaper must run again."""
-    JsonCache(root=tmp_path)
+    the reaper must run again — verified by checking the sentinel's
+    mtime is updated to ~now after construction."""
     sentinel = tmp_path / ".reap_last_run"
-    # Make the sentinel old enough to fall outside the rate-limit
-    # window (default 3600s; backdate by 2 hours for safety).
+    sentinel.touch()
     old = time.time() - 7200
-    import os as _os
-    _os.utime(sentinel, (old, old))
+    os.utime(sentinel, (old, old))
 
-    from core.json import cache as cache_mod
-    calls: list = []
-    original = cache_mod._iter_tempfile_candidates
-
-    def spy(root, **kwargs):
-        calls.append(str(root))
-        return original(root, **kwargs)
-
-    monkeypatch.setattr(cache_mod, "_iter_tempfile_candidates", spy)
+    before = time.time()
     JsonCache(root=tmp_path)
-    cache_walks = [c for c in calls if str(tmp_path) in c]
-    assert len(cache_walks) == 1, (
-        f"reaper did not run on stale sentinel: {cache_walks}"
+    new_mtime = sentinel.stat().st_mtime
+    assert new_mtime >= before - 1, (
+        f"reaper did not update sentinel on stale mtime: "
+        f"sentinel_mtime={new_mtime:.1f}, expected>={before - 1:.1f}"
     )
 
 

@@ -23,8 +23,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +117,8 @@ def _iter_files(root: Path) -> Iterable[Path]:
         try:
             if p.is_file():
                 yield p
-        except OSError:
+        except OSError as e:
+            logger.debug("sca.cache_eviction: is_file %s failed: %s", p, e)
             continue
 
 

@@ -10,29 +10,39 @@ Categorise each (project_pair, wheel) outcome:
   * ``libc_too_new`` — wheel for the right arch exists but
     requires a newer libc than the project's base image
     supplies (the canonical z3-solver==4.16.0.0 case)
+  * ``macos_too_new`` — same shape for macOS: every same-arch
+    macOS wheel requires a newer macOS than the project's
+    declared runner version
   * ``sdist_only`` — no platform-specific wheel, only ``any``
     or sdist; needs build environment in the install path
+  * ``variant_mismatch`` — same-arch wheels exist but none
+    matches the pair (e.g. cross-libc-family) and no sdist
   * ``uninstallable`` — no wheel AND no sdist
 
-The verdict ladder for emitting findings:
-  ok           → no finding
-  sdist_only   → info-tier hygiene note
-  libc_too_new → high-tier hygiene finding (the canonical bite)
-  arch_gap     → medium-tier hygiene finding
-  uninstallable→ high-tier hygiene finding
+The verdict ladder for emitting findings (``_FINDING_TIER`` in
+``scan.py``; verdicts not listed there default to low):
+  ok               → no finding
+  sdist_only       → low-tier hygiene note
+  libc_too_new     → high-tier hygiene finding (the canonical bite)
+  arch_gap         → medium-tier hygiene finding
+  uninstallable    → high-tier hygiene finding
+  macos_too_new    → low-tier (default)
+  variant_mismatch → low-tier (default)
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Optional, Tuple
 
-from packages.sca.platform_matrix import PlatformPair, ProjectPlatformMatrix
-from packages.sca.platform_matrix.glibc_db import LibcVersion
 from packages.sca.wheel_compat.wheel_tags import (
     WheelTag, parse_wheel_filename,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from packages.sca.platform_matrix.glibc_db import LibcVersion
+    from packages.sca.platform_matrix import PlatformPair, ProjectPlatformMatrix
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +57,7 @@ class CompatVerdict:
     pair: PlatformPair
     verdict: str                       # "ok" | "arch_gap" | "libc_too_new" | …
     reason: str                        # human-readable
-    matching_wheel: Optional[str] = None  # filename of best fit when ok
+    matching_wheel: str | None = None  # filename of best fit when ok
 
 
 @dataclass
@@ -57,7 +67,7 @@ class WheelMatrix:
 
     name: str
     version: str
-    wheel_tags: List[WheelTag]
+    wheel_tags: list[WheelTag]
     has_sdist: bool
 
     def __bool__(self) -> bool:
@@ -66,7 +76,7 @@ class WheelMatrix:
 
 def wheel_matrix_for_version(
     pypi_client, name: str, version: str,
-) -> Optional[WheelMatrix]:
+) -> WheelMatrix | None:
     """Build the wheel matrix for ``name==version`` by fetching
     its PyPI metadata + parsing each release-file's wheel name.
 
@@ -88,13 +98,13 @@ def wheel_matrix_for_version(
     if not isinstance(files, list) or not files:
         return None
 
-    wheel_tags: List[WheelTag] = []
+    wheel_tags: list[WheelTag] = []
     has_sdist = False
     for f in files:
         filename = f.get("filename") if isinstance(f, dict) else None
         if not isinstance(filename, str):
             continue
-        if filename.endswith(".tar.gz") or filename.endswith(".zip"):
+        if filename.endswith((".tar.gz", ".zip")):
             has_sdist = True
             continue
         if filename.endswith(".whl"):
@@ -107,8 +117,8 @@ def wheel_matrix_for_version(
 
 
 def _best_match(
-    pair: PlatformPair, wheel_tags: List[WheelTag],
-) -> Optional[WheelTag]:
+    pair: PlatformPair, wheel_tags: list[WheelTag],
+) -> WheelTag | None:
     """For one (arch, libc) project pair, return the wheel-tag
     that best satisfies it, or None if none does.
 
@@ -122,7 +132,7 @@ def _best_match(
         if w.arch == "any" and w.os == "any":
             candidates.append(w)
             continue
-        if w.arch != pair.arch:
+        if w.arch not in (pair.arch, "any", "universal2"):
             continue
         # OS-family check. macOS / Windows tags don't satisfy a
         # Linux project pair and vice-versa. The platform_matrix
@@ -308,10 +318,10 @@ def _verdict_for_pair(
             reason=reason,
         )
     return CompatVerdict(
-        pair=pair, verdict="arch_gap",
+        pair=pair, verdict="variant_mismatch",
         reason=(
-            f"{wm.name}=={wm.version} has no wheel compatible "
-            f"with {pair.as_str()}"
+            f"{wm.name}=={wm.version} has {pair.arch} wheels "
+            f"but none compatible with {pair.as_str()}"
         ),
     )
 
@@ -319,7 +329,7 @@ def _verdict_for_pair(
 def check_compat(
     matrix: ProjectPlatformMatrix,
     wm: WheelMatrix,
-) -> List[CompatVerdict]:
+) -> list[CompatVerdict]:
     """For every project pair, decide the compat verdict against
     the wheel matrix."""
     return [_verdict_for_pair(pair, wm) for pair in matrix]
@@ -334,14 +344,19 @@ def check_compat(
 # the same answer. Key omits ``PlatformPair.source`` (diagnostic-only
 # text that varies between matrix builds but doesn't affect the
 # recommendation).
-_RECOMMENDATION_CACHE: Dict[
-    Tuple[str, FrozenSet[Tuple[str, Optional["LibcVersion"]]]],
-    Optional[str],
+_RECOMMENDATION_CACHE: dict[
+    tuple[
+        str,
+        frozenset[
+            tuple[str, LibcVersion | None, tuple[int, int] | None]
+        ],
+    ],
+    str | None,
 ] = {}
 
 
-def _matrix_cache_key(matrix: ProjectPlatformMatrix) -> FrozenSet[
-    Tuple[str, Optional[LibcVersion], Optional[Tuple[int, int]]]
+def _matrix_cache_key(matrix: ProjectPlatformMatrix) -> frozenset[
+    tuple[str, LibcVersion | None, tuple[int, int] | None]
 ]:
     """Build a cache key that ignores ``PlatformPair.source``.
 
@@ -375,7 +390,7 @@ def find_compatible_version(
     matrix: ProjectPlatformMatrix,
     *,
     max_versions_walked: int = 20,
-) -> Optional[str]:
+) -> str | None:
     """Walk a package's PyPI release history newest → oldest and
     return the highest version with NO platform-compat findings
     against ``matrix``. Returns None if no compatible version is
@@ -415,7 +430,7 @@ def find_compatible_version(
         return None
 
     stable = [
-        v for v in releases.keys()
+        v for v in releases
         if _is_stable_version(v)
     ]
     stable.sort(key=_version_key, reverse=True)
@@ -436,7 +451,7 @@ def find_compatible_version(
 
 
 _STABLE_VERSION_RE = __import__("re").compile(
-    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?$"
+    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:\.post\d+)?$"
 )
 
 

@@ -17,7 +17,6 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
@@ -48,17 +47,17 @@ class Metrics:
     fp_categories: Counter = field(default_factory=Counter)
 
     @property
-    def precision(self) -> Optional[float]:
+    def precision(self) -> float | None:
         denom = self.tp + self.fp
         return None if denom == 0 else self.tp / denom
 
     @property
-    def recall(self) -> Optional[float]:
+    def recall(self) -> float | None:
         denom = self.tp + self.fn
         return None if denom == 0 else self.tp / denom
 
     @property
-    def f1(self) -> Optional[float]:
+    def f1(self) -> float | None:
         p, r = self.precision, self.recall
         if p is None or r is None or (p + r) == 0:
             return None
@@ -67,7 +66,7 @@ class Metrics:
 
 def compute(csv_path: Path) -> Metrics:
     m = Metrics()
-    with csv_path.open() as f:
+    with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             m.total += 1
@@ -92,7 +91,7 @@ def compute(csv_path: Path) -> Metrics:
 
 
 def render(m: Metrics) -> str:
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"Total findings: {m.total}")
     tp_total = m.tp + m.fn
     fp_total = m.fp + m.tn
@@ -127,12 +126,12 @@ def render(m: Metrics) -> str:
     else:
         total_fps = sum(m.fp_categories.values())
         for cat, count in m.fp_categories.most_common():
-            pct = count / total_fps * 100
+            pct = count / total_fps * 100 if total_fps else 0.0
             lines.append(f"  {cat}: {count} ({pct:.1f}%)")
     return "\n".join(lines)
 
 
-def check_pivot_gate(m: Metrics) -> Tuple[bool, str]:
+def check_pivot_gate(m: Metrics) -> tuple[bool, str]:
     """Return ``(ok, message)``. ``ok`` is True iff
     ``missing_sanitizer_model`` accounts for at least
     :data:`PIVOT_GATE_THRESHOLD` of the labelled FPs.
@@ -153,7 +152,7 @@ def check_pivot_gate(m: Metrics) -> Tuple[bool, str]:
     )
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path, help="CSV from run_corpus.py")
     # Python 3.14's argparse eagerly validates help strings via

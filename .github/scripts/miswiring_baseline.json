@@ -1,0 +1,654 @@
+{
+  "_comment": "Accepted miswiring-detector findings. Keys are class:kind:file:symbol (no line numbers). Add an entry ONLY with a note explaining why the finding is accepted; prefer fixing. check_miswiring.py fails CI on any finding not listed here and warns on stale entries.",
+  "entries": {
+    "artifacts:orphan_reader::*-metadata.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*.osv.json": {
+      "note": "external-input pattern: cve_bridge.load_cve_run consumes an operator-supplied /cve-diff output directory via glob(\"*.osv.json\"); the writers (packages/cve_diff cli/main.py, cli/bench.py) spell the name f\"{cve_id}.osv.json\", which the artifact indexer normalises to a different key, so the glob reader looks orphaned"
+    },
+    "artifacts:orphan_reader::*.txt": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*.yaml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*.yml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*_exploit_context.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::*exploit*context*.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::.raptor.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::README.txt": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::c.*.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::c.p.*.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::codeql-database.yml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::codeql-pack.lock.yml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::codeql.log": {
+      "note": "externally produced input: written by the CodeQL CLI in the run dir, read by the audit log-inspection path"
+    },
+    "artifacts:orphan_reader::coverage-*.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::coverage-audit.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::coverage-codeql.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::coverage-read.json": {
+      "note": "writer exists but constructs the name dynamically: core/coverage/record.py write_record(tool_name=\"read\") emits coverage-<tool>.json; the store_summary reader added by coverage-uplift names it literally. Deliberate plugin-writes/core-reads design, invisible to the literal-name index."
+    },
+    "artifacts:orphan_reader::coverage-semgrep.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::database-create-*.log": {
+      "note": "externally produced input: the CodeQL CLI writes log/database-create-*.log; database_manager salvages it on creation failure"
+    },
+    "artifacts:orphan_reader::diagram-stdout.log": {
+      "note": "self-test harness log: ctx.run() writes per-case logs dynamically as f\"{name}.log\"; case_diagram_stdout reads its own log back to assert diagram output — write side invisible to the static pass"
+    },
+    "artifacts:orphan_reader::exploit-context.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::flow.jsonl": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::flow.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::inventory.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::joern-flows.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::layer0-findings.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::lifecycle.log": {
+      "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
+    },
+    "artifacts:orphan_reader::linux_kernel.json": {
+      "note": "shipped data pack (core/audit/data/vocab_packs/linux_kernel.json) read by the resource_bounds channel — checked into the tree, never written at runtime by design"
+    },
+    "artifacts:orphan_reader::manifest.yml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::pnpm-workspace.yaml": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::raptor-audit-cfg-*.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::raptor-project.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::raptor_*.jsonl": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::requirements*.txt": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::-postfix.json": {
+      "note": "raptor-recall-measure cvefix-manifest output: generated fp-only twin manifest ({cve}-postfix.json); same operator hand-off as the -prefix recall manifest — consumed via the --manifest path flag, no literal filename at the read site"
+    },
+    "artifacts:write_only_artifact::-prefix.json": {
+      "note": "raptor-recall-measure cvefix-manifest output: generated recall manifest ({cve}-prefix.json) for the operator to hand-verify, then feed back through the explicit --manifest path flag (reader carries no literal filename)"
+    },
+    "artifacts:write_only_artifact::.line-check.json": {
+      "note": "operator-facing sidecar next to a crash-analysis report (blamed_lines.check_report): the same summary dict is returned in-process and stamped into the report .md; the sidecar exists for humans/jq, same class as suppressions.jsonl"
+    },
+    "artifacts:write_only_artifact::.model.yml": {
+      "note": "CodeQL data-extension model written into the generated extension pack (core/dataflow/extension_pack.py); consumed by the external codeql CLI when the pack is loaded, not by repo python"
+    },
+    "artifacts:write_only_artifact::.project.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::.stdout.log": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::_dataflow_instructions.txt": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::_exploit_context.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::adversarial-matrix.json": {
+      "note": "operator-facing run artifact from --adversarial (adversarial_test.write_matrix); surfaced when the atomic-write idiom became visible to the writer classifier"
+    },
+    "artifacts:write_only_artifact::agentic-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::aggregation.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::annotations.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::annotations.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::autonomous_summary.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::baseline-delta.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::baseline-delta.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::bench_report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::binary-analysis-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::boost-evidence.jsonl": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::bug-chains.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::candidates.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::candidates.post-apply.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::capability_report.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::cascade.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::cc-proxy-spend.json": {
+      "note": "operator-facing per-run settlement record (reconciled credential-proxy token spend vs budget), same class as suppressions.jsonl: consumed by humans/jq from the run dir, deliberately not by production code."
+    },
+    "artifacts:write_only_artifact::census.json": {
+      "note": "raptor-recall-measure census subcommand output: machine-readable dual of census.md, for humans/jq; the rendered markdown is also printed to stdout, same class as suppressions.jsonl"
+    },
+    "artifacts:write_only_artifact::census.md": {
+      "note": "raptor-recall-measure census subcommand output: operator-facing clean-region FP ranking, also printed to stdout at the end of the run"
+    },
+    "artifacts:write_only_artifact::changes.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::changes.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::changes.pr-comment.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::cocci.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::compiler.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::config-resolved.sarif": {
+      "note": "config-resolved stage SARIF: run_config_resolved_stage returns the path and the scan merges it into combined.sarif via merge_sarif (path argument, so the reader carries no literal filename)"
+    },
+    "artifacts:write_only_artifact::correlation.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::crashes_for_validation.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::crawl_results.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::dark-verify-results.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::defense-telemetry.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::delta.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::delta.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::disagreements.json": {
+      "note": "operator-facing layer-resolution audit trail (layer_resolution.write_disagreements); surfaced when the atomic-write idiom became visible to the writer classifier"
+    },
+    "artifacts:write_only_artifact::expanded_semgrep.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::exploitation-report.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::extra-rule.yml": {
+      "note": "self-test scratch fixture: case_scan_extra_config writes the rule file and passes it to a spawned raptor.py scan --extra-config subprocess — the read happens in the child process via CLI arg, not a static in-repo read"
+    },
+    "artifacts:write_only_artifact::findings.jsonl": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::fn-census.json": {
+      "note": "raptor-recall-measure fn-census subcommand output: machine-readable dual of fn-census.md, for humans/jq; the rendered markdown is also printed to stdout, same class as the census.json entry"
+    },
+    "artifacts:write_only_artifact::fn-census.md": {
+      "note": "raptor-recall-measure fn-census subcommand output: operator-facing per-function miss census, also printed to stdout at the end of the run"
+    },
+    "artifacts:write_only_artifact::frida-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::fuzzing_plan.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::fuzzing_report.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::generated-corpus.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::graduated.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::harness-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::harness-spec.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::hash-pin.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::matches.jsonl": {
+      "note": "raptor-variant-sweep output (replay_sweep.write_report): ranked sweep matches for operator review; the path is printed at the end of the run, same class as suppressions.jsonl"
+    },
+    "artifacts:write_only_artifact::merged.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::observation-status.json": {
+      "note": "operator-facing layer-resolution audit trail; surfaced when the atomic-write idiom became visible to the writer classifier"
+    },
+    "artifacts:write_only_artifact::oracle_summary.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::phase2-classifications.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::pipeline-summary.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::pipeline-tail.json": {
+      "note": "reader exists: core/audit/resume.py reads it via the PIPELINE_TAIL_FILENAME constant, so the literal name appears only at the constant definition — same dynamic-name pattern as coverage-read.json"
+    },
+    "artifacts:write_only_artifact::post-loop-findings.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::pr-comment.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::protocol-state.json": {
+      "note": "operator-facing run artifact: protocol_state channel prepass receipts (core/audit/protocol_state.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
+    },
+    "artifacts:write_only_artifact::provenance.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::r.yml": {
+      "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
+    },
+    "artifacts:write_only_artifact::recon.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::release-order.json": {
+      "note": "operator-facing run artifact: release_order channel prepass receipts (core/audit/release_order.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
+    },
+    "artifacts:write_only_artifact::report.json": {
+      "note": "operator-facing run reports: raptor-recall-measure writes it and its own census/warm/compare subcommands read it back via the explicit --report flag (path argument, so the reader carries no literal filename); sanitizer-cut-precision writes its gate report under the same name with the verdict also carried in the exit code"
+    },
+    "artifacts:write_only_artifact::resource-bounds.json": {
+      "note": "operator-facing run artifact: resource_bounds channel prepass receipts (core/audit/resource_bounds.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
+    },
+    "artifacts:write_only_artifact::results.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::return-census.json": {
+      "note": "operator-facing receipt from the consistency channel (return-usage census); read by /review workflows, no in-repo production reader yet"
+    },
+    "artifacts:write_only_artifact::rule-eval-results.json": {
+      "note": "rule_eval outputs: operator-facing results JSON and human summary for the corpus rule-verification runner; read by the operator, never by production code"
+    },
+    "artifacts:write_only_artifact::rule-eval-summary.txt": {
+      "note": "rule_eval outputs: operator-facing results JSON and human summary for the corpus rule-verification runner; read by the operator, never by production code"
+    },
+    "artifacts:write_only_artifact::rule.yml": {
+      "note": "generated Semgrep rule artifact for operator inspection / external semgrep invocation"
+    },
+    "artifacts:write_only_artifact::rules.yaml": {
+      "note": "generated source-wrapper semgrep rules under the run output dir (scanner.run_source_wrapper_stage); consumed by the external semgrep process via the path handed to run_rule, not read back by repo python"
+    },
+    "artifacts:write_only_artifact::sarif_merge.stderr.log": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::scan-manifest.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::seed-corpus.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::source-binary-map.json": {
+      "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
+    },
+    "artifacts:write_only_artifact::stderr.log": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::stdout.log": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::study-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::study-stale.json": {
+      "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
+    },
+    "artifacts:write_only_artifact::summary.json": {
+      "note": "raptor-variant-sweep output (replay_sweep.write_report): per-rule totals + errors for operator review (\"see summary.json\" is printed when a sweep records errors)"
+    },
+    "artifacts:write_only_artifact::summary.txt": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::threat-model-candidates.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::threat-model-drift.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::threat-model-lint.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::threat-model-report.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::threats.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::tier-diagnostics.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::tool-matrix.txt": {
+      "note": "operator-facing output: raptor-self-test tool-sandbox matrix report"
+    },
+    "artifacts:write_only_artifact::triage-summary.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::triage.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::upgrade-impact.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::validate-against.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::validation-error.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::validation.sarif": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::verification.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::verify-enforced.json": {
+      "note": "raptor-recall-measure verify-enforced subcommand output: machine-readable dual of verify-enforced.md; the review verdict also rides the exit code (non-clean set exits 1)"
+    },
+    "artifacts:write_only_artifact::verify-enforced.md": {
+      "note": "raptor-recall-measure verify-enforced subcommand output: operator-facing enforced-suppression audit, also printed to stdout"
+    },
+    "artifacts:write_only_artifact::warm.json": {
+      "note": "raptor-recall-measure warm subcommand output: machine-readable dual of warm.md (would-suppress scoring of suppression evidence), for humans/jq"
+    },
+    "artifacts:write_only_artifact::warm.md": {
+      "note": "raptor-recall-measure warm subcommand output: operator-facing would-suppress report, also printed to stdout at the end of the run"
+    },
+    "artifacts:write_only_artifact::web_scan_report.json": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::wrappers.json": {
+      "note": "provenance sidecar of the source-wrapper stage: records the mechanically-derived wrapper vocabulary for the run; the in-run consumer receives the same names in-process via the stage's return value (extra_source_patterns), same class as suppressions.jsonl"
+    },
+    "dead:dead_class:packages/exploit_feasibility/constants.py:AddressSpace": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_class:packages/exploit_feasibility/constants.py:FormatWriteLimits": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_class:packages/exploit_feasibility/constants.py:GadgetSearch": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_class:packages/exploit_feasibility/constants.py:TargetPriority": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_function:core/analysis/lifecycle_collector.py:collect_read_site": {
+      "note": "kept: feature seed — lifecycle/UAF audit pass (guard-annotated read-site collector, pair of collect_write_site; roadmap decision 2026-08-17)"
+    },
+    "dead:dead_function:core/analysis/lifecycle_collector.py:collect_write_site": {
+      "note": "kept: feature seed — lifecycle/UAF audit pass (guard-annotated write-site collector; roadmap decision 2026-08-17)"
+    },
+    "dead:dead_function:core/analysis/taint_approx.py:format_transitive_taint": {
+      "note": "kept: feature seed — transitive-taint LLM prompt wiring (prose renderer awaiting a prompt consumer; roadmap decision 2026-08-17)"
+    },
+    "dead:dead_function:core/audit/_util.py:extract_sink_sets": {
+      "note": "kept: feature seed — sink catalog (splitter for the pending discovered-sinks.json reader flow; the /understand map import consumes the artifact without this helper; wire both or drop both; roadmap decision 2026-08-17)"
+    },
+    "dead:dead_function:core/audit/callsite_consistency.py:_find_deviations": {
+      "note": "superseded by the consistency channel's census adjudicator (consistency_verify); deletion deferred to the next dead-code sweep"
+    },
+    "dead:dead_function:core/audit/checker_library.py:checker_from_synthesis": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/audit/checker_library.py:graduate_checkers": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/audit/checker_library.py:load_library": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/audit/struct_accessor_index.py:build_index_from_joern": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/iris/api.py:load_project_assumptions": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_binary_exploitability": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_function:packages/exploit_feasibility/errors.py:reset_error_collector": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_function:packages/exploit_feasibility/schema.py:validate_context_file": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:core/audit/checker_library.py:CheckerLibrary.active_checkers": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
+      "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
+    },
+    "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.async_auth_flow": {
+      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
+    },
+    "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.sync_auth_flow": {
+      "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() — no in-repo caller names them (same pattern as any httpx.Auth override)"
+    },
+    "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.generate_mutated_seed": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.learn_from_crash": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.optimize_corpus": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/exploit_validator.py:ExploitValidator.quick_syntax_check": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/goal_planner.py:GoalPlanner.adapt_fuzzing_strategy": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/goal_planner.py:GoalPlanner.should_continue_towards_goal": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/goal_planner.py:GoalPlanner.update_goal_progress": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/planner.py:FuzzingPlanner.should_continue_fuzzing": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/autonomous/planner.py:FuzzingState.is_finding_crashes": {
+      "note": "kept: feature seed — autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
+    },
+    "dead:dead_method:packages/exploit_feasibility/analyzer.py:FeasibilityAnalyzer.quick_check": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/context.py:BinaryContext.rank_write_targets": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_binary_error": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_parse_error": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_permission_error": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_tool_failed": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_tool_timeout": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.get_by_category": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.get_by_component": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.has_critical": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.has_errors": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/exploit_context.py:ExploitContext.get_with_meta": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/mitigations.py:GlibcMitigations.get_mitigations_for_vuln": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/mitigations.py:KernelMitigations.get_mitigations_for_vuln": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.is_kernel": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.mitigation_analysis_relevant": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/profiles.py:TargetProfile.needs_remote_enumeration": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/targets.py:BinarySpecificAnalysis.get_targets_for_technique": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.is_enabling": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.is_memory_corruption": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_format_string_analysis": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_heap_analysis": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/exploit_feasibility/vuln_types.py:VulnerabilityType.needs_stack_analysis": {
+      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers — revisit"
+    },
+    "dead:dead_method:packages/fuzzing/corpus_manager.py:CorpusManager.add_seeds": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/fuzzing/corpus_manager.py:CorpusManager.create_from_directory": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/web/client.py:WebClient.get_cookies": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/web/client.py:WebClient.set_auth": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/web/client.py:WebClient.set_bearer_token": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_method:packages/web/fuzzer.py:WebFuzzer.get_findings": {
+      "note": "public accessor on the alpha WebFuzzer API, kept as deliberate surface; previously kept alive only by a stale doc line about the unrelated core.sarif get_findings, removed in the docs curation pass"
+    },
+    "dead:dead_method:packages/web/fuzzer.py:WebFuzzer.set_sage_prior_recall": {
+      "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "imports:import_missing_symbol:packages/cve_env/cve_env/cli.py:cve_env:config": {
+      "note": "nested src-layout false positive: pytest.ini's pythonpath entry (and the launcher shim's sys.path entry) is packages/cve_env, so bare `cve_env` resolves at runtime to the inner package packages/cve_env/cve_env/ where config.py exists; the indexer's packages/<pkg> alias rule maps `cve_env` to the outer __init__.py, a namespace anchor that exists only so pytest importlib mode namespaces the test tree"
+    },
+    "imports:import_missing_symbol:packages/cve_env/tests/unit/conftest.py:cve_env:config": {
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
+    },
+    "imports:import_missing_symbol:packages/cve_env/tests/unit/test_cli.py:cve_env:cli": {
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
+    },
+    "imports:import_missing_symbol:packages/cve_env/tests/unit/test_cve_id_label_threading.py:cve_env:config": {
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries config.py)"
+    },
+    "imports:import_missing_symbol:packages/cve_env/tests/unit/test_facade_contract.py:cve_env:cli": {
+      "note": "nested src-layout false positive — same resolution as the cli.py:cve_env:config entry (inner package carries cli.py)"
+    },
+    "imports:import_missing_symbol:packages/sca/osv.py:cvss:CVSS4": {
+      "note": "deliberate optional dependency: 'from cvss import CVSS4' targets the third-party cvss PyPI package (CVSS v4.0 reference scorer), not the in-repo packages/cvss module the resolver maps it to; the import is ImportError-guarded and degrades to the database-provided severity label when the package is absent"
+    },
+    "kwargs:unknown_kwarg:packages/joern/tests/test_server.py:packages.joern.server:JoernServer.__init__:nonexistent_kwarg": {
+      "note": "deliberate bad kwarg: TestTeardownWithoutInit regression test constructs a JoernServer whose __init__ raises TypeError before its body runs, pinning that __del__ -> stop() stays quiet on a never-initialised instance"
+    },
+    "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
+      "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
+    },
+    "plumbing:orphan_config_field:core/binary/elf.py:_SectionHeader.sh_link": {
+      "note": "kept: spec-defined ELF section-header member (2026-08-17 config-orphan pass). The canonical .dynstr resolution is sections[dynsym.sh_link]; today elf.py matches by name+type (elf.py:198-205), which fails on renamed sections from exotic toolchains — sh_link is the upgrade path. Struct unpack offsets come from the format string, so the field is layout-inert."
+    },
+    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
+      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
+    "plumbing:orphan_config_field:packages/autonomous/planner.py:FuzzingState.last_coverage_increase": {
+      "note": "kept: autonomous fuzzing loop feature seed (operator decision 2026-08-16; re-affirmed 2026-08-17 config-orphan pass — goal_progress and strategies_tried deleted as shadowed by Goal.progress / successful_strategies). This is the natural input the wired loop derives coverage_plateau_duration from."
+    }
+  },
+  "version": 1
+}

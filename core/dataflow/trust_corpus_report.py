@@ -34,7 +34,6 @@ import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 
 # Status / backend constants — mirror cvefix_bridge.
@@ -74,8 +73,8 @@ class CorpusReport:
     sound_by_backend: Counter = field(default_factory=Counter)   # "smt" / "codeql"
 
     # Per-CWE and per-language breakdowns: status -> backend -> count.
-    by_cwe: Dict[str, Dict[str, Counter]] = field(default_factory=dict)
-    by_language: Dict[str, Dict[str, Counter]] = field(default_factory=dict)
+    by_cwe: dict[str, dict[str, Counter]] = field(default_factory=dict)
+    by_language: dict[str, dict[str, Counter]] = field(default_factory=dict)
 
     # not_sound detail-shape distribution: e.g. "suppress_fp_failed",
     # "preserve_tp_failed", "both", "other".  Tells us whether the Tier 2
@@ -83,19 +82,19 @@ class CorpusReport:
     not_sound_modes: Counter = field(default_factory=Counter)
 
     # Sample of not_sound finding_ids for spot-checking (capped).
-    not_sound_samples: List[Tuple[str, str, str, str]] = field(
+    not_sound_samples: list[tuple[str, str, str, str]] = field(
         default_factory=list,
     )                                                # (cve_id, cwe, lang, detail)
 
     @property
-    def suppression_rate(self) -> Optional[float]:
+    def suppression_rate(self) -> float | None:
         """``sound / (sound + not_sound)``.  None when nothing reached a
         verdict yet (in-flight run, very early)."""
         denom = self.sound + self.not_sound
         return self.sound / denom if denom else None
 
     @property
-    def tier0_share_of_sound(self) -> Optional[float]:
+    def tier0_share_of_sound(self) -> float | None:
         """Fraction of sound verdicts that came from Tier 0 (free SMT).
         Headline: how much of the suppression cost us zero LLM tokens."""
         if not self.sound:
@@ -150,9 +149,9 @@ def analyze(synth_db: Path) -> CorpusReport:
         ))
     except sqlite3.OperationalError:
         # Table doesn't exist yet (bridge hasn't written its first row).
-        con.close()
         return rep
-    con.close()
+    finally:
+        con.close()
 
     for cve_id, cwe, lang, status, backend, detail in rows:
         if status in _PIPELINE_ERRORS:
@@ -198,7 +197,7 @@ def _fmt_rate(n: int, d: int) -> str:
 def render_text(rep: CorpusReport) -> str:
     """Plain-text report suitable for terminal display while the bridge
     is still running."""
-    out: List[str] = []
+    out: list[str] = []
 
     out.append("== Trust-witness corpus report ==")
     out.append("")
@@ -221,7 +220,7 @@ def render_text(rep: CorpusReport) -> str:
     if rep.sound:
         for backend in ("smt", "codeql", ""):
             n = rep.sound_by_backend.get(backend, 0)
-            label = backend if backend else "<unknown>"
+            label = backend or "<unknown>"
             out.append(f"  {label:8s} : {_fmt_rate(n, rep.sound)}")
         attempts = rep.tier0_attempts_saved()
         out.append(

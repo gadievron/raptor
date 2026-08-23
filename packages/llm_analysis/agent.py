@@ -12,43 +12,53 @@ This agent provides TRUE agentic behaviour with NO templates:
 """
 
 import argparse
+import contextlib
 import json
+import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-# Also run as standalone subprocess: python3 packages/llm_analysis/agent.py
-sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
+if __name__ == "__main__":
+    # Standalone subprocess (python3 packages/llm_analysis/agent.py,
+    # spawned by raptor.py which pins RAPTOR_DIR into the child env).
+    # Hard lookup by policy — KeyError if unset; never a guessed
+    # fallback path (see CLAUDE.md: Python path safety).
+    sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.json import load_json, save_json
+from core.json import dumps_display
 from core.config import RaptorConfig
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
-from core.llm.task_types import TaskType
-from core.logging import get_logger
-from core.progress import HackerProgress
-from core.run.output import unique_run_suffix
-from core.sarif.parser import parse_sarif_findings, deduplicate_findings
 from core.inventory.lookup import lookup_function as _lookup_function
+from core.json import load_json, save_json
 from core.llm.client import LLMClient, _is_auth_error
 from core.llm.config import LLMConfig
 from core.llm.detection import detect_llm_availability
 from core.llm.providers import ClaudeCodeProvider
+from core.llm.task_types import TaskType
+from core.logging import get_logger
+from core.paths import strip_file_uri
+from core.progress import HackerProgress
+from core.run.output import unique_run_suffix
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.sarif.parser import deduplicate_findings, parse_sarif_findings
+from packages.llm_analysis.cc_dispatch import _safe_id
 
 logger = get_logger()
 
 
-def _file_matches_globs(file_path: str, globs: List[str]) -> bool:
+def _file_matches_globs(file_path: str, globs: list[str]) -> bool:
     """True if ``file_path`` matches any glob in ``globs`` (fnmatch OR)."""
     import fnmatch as _fnmatch
     return any(_fnmatch.fnmatch(file_path or "", g) for g in globs)
 
 
 def apply_prefer_globs(
-    findings: List[Dict[str, Any]],
-    prefer_globs: Optional[List[str]],
-) -> List[Dict[str, Any]]:
+    findings: list[dict[str, Any]],
+    prefer_globs: list[str] | None,
+) -> list[dict[str, Any]]:
     """Re-bucket findings: matches sort to the front, others keep their
     relative order. Stable within each bucket so existing ordering
     (dataflow-prioritised, then SARIF-order) survives — operator can
@@ -61,8 +71,8 @@ def apply_prefer_globs(
     """
     if not prefer_globs:
         return findings
-    preferred: List[Dict[str, Any]] = []
-    others: List[Dict[str, Any]] = []
+    preferred: list[dict[str, Any]] = []
+    others: list[dict[str, Any]] = []
     for f in findings:
         if _file_matches_globs(f.get("file_path", ""), prefer_globs):
             preferred.append(f)
@@ -88,8 +98,8 @@ def _dir_to_glob(d: str) -> str:
 
 
 def resolve_prefer_globs(
-    operator_globs: Optional[List[str]],
-    repo_path: Optional[Path],
+    operator_globs: list[str] | None,
+    repo_path: Path | None,
 ) -> tuple:
     """Resolve the effective attack-surface prefer-globs for an
     /agentic run. Operator-supplied globs win unconditionally;
@@ -126,9 +136,9 @@ def resolve_prefer_globs(
 
 
 def apply_exclude_dir_globs(
-    findings: List[Dict[str, Any]],
-    exclude_globs: Optional[List[str]],
-) -> List[Dict[str, Any]]:
+    findings: list[dict[str, Any]],
+    exclude_globs: list[str] | None,
+) -> list[dict[str, Any]]:
     """Drop findings whose ``file_path`` matches any glob in
     ``exclude_globs``. Order-preserving. Operator escape hatch for
     cases the structural filters (binary-oracle, dataflow priority)
@@ -150,7 +160,7 @@ def apply_exclude_dir_globs(
 
 
 def _enrich_finding_with_ast_view(
-    finding: Dict[str, Any], repo_path: Path,
+    finding: dict[str, Any], repo_path: Path,
 ) -> None:
     """Attach a compact per-function AST view to ``finding["ast_view"]``.
 
@@ -207,7 +217,7 @@ def _enrich_finding_with_ast_view(
         fv = _view(fp, function_name, at_line=fline)
         if fv is not None:
             finding["ast_view"] = fv.to_dict()
-    except Exception:                                       # noqa: BLE001
+    except Exception:
         logger.debug(
             "ast_view enrichment failed for %s:%s %s",
             fpath, fline, function_name,
@@ -215,19 +225,10 @@ def _enrich_finding_with_ast_view(
         )
 
 
-def get_vuln_type(rule_id: str) -> Optional[str]:
-    """Map SARIF rule_id to vulnerability type for mitigation checks."""
-    try:
-        from packages.exploit_feasibility import get_vuln_type_for_rule
-        return get_vuln_type_for_rule(rule_id)
-    except ImportError:
-        return None
-
-
 class VulnerabilityContext:
     """Represents a vulnerability with full context for autonomous analysis."""
 
-    def __init__(self, finding: Dict[str, Any], repo_path: Path):
+    def __init__(self, finding: dict[str, Any], repo_path: Path) -> None:
         self.finding = finding
         self.repo_path = repo_path
         self.finding_id = finding.get("finding_id")
@@ -243,26 +244,30 @@ class VulnerabilityContext:
 
         # Dataflow analysis fields
         self.has_dataflow: bool = finding.get("has_dataflow", False)
-        self.dataflow_path: Optional[Dict[str, Any]] = finding.get("dataflow_path")
-        self.dataflow_source: Optional[Dict[str, Any]] = None
-        self.dataflow_sink: Optional[Dict[str, Any]] = None
-        self.dataflow_steps: List[Dict[str, Any]] = []
-        self.sanitizers_found: List[str] = []
+        self.dataflow_path: dict[str, Any] | None = finding.get("dataflow_path")
+        self.dataflow_source: dict[str, Any] | None = None
+        self.dataflow_sink: dict[str, Any] | None = None
+        self.dataflow_steps: list[dict[str, Any]] = []
+        self.sanitizers_found: list[str] = []
 
         # Function metadata from inventory (if available)
-        self.metadata: Optional[Dict[str, Any]] = finding.get("metadata")
+        self.metadata: dict[str, Any] | None = finding.get("metadata")
+        self.function_name: str | None = None
 
         # Feasibility data from validation pipeline (if available)
         from packages.exploitability_validation.models import Feasibility
-        self.feasibility: Dict[str, Any] = Feasibility.from_dict(finding.get("feasibility")).to_dict()
-        self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref")
+        self.feasibility: dict[str, Any] = (
+            Feasibility.from_dict(finding.get("feasibility"))
+            .to_dict()
+        )
+        self.attack_path_ref: str | None = self.feasibility.get("attack_path_ref")
 
         # Will be populated by LLM analysis
-        self.full_code: Optional[str] = None
-        self.surrounding_context: Optional[str] = None
+        self.full_code: str | None = None
+        self.surrounding_context: str | None = None
         self.exploitable: bool = False
         self.exploitability_score: float = 0.0
-        self.exploit_code: Optional[str] = None
+        self.exploit_code: str | None = None
         # Compilation-verification result for ``exploit_code``. ``None``
         # means verification was not attempted (no LLM exploit emitted,
         # or compiler unavailable / skipped); ``True`` / ``False``
@@ -273,8 +278,8 @@ class VulnerabilityContext:
         # refinement loop) can see why the LLM's exploit didn't
         # build. Empty list means "no errors observed" or
         # "compilation not attempted".
-        self.exploit_compiled: Optional[bool] = None
-        self.exploit_compile_errors: List[str] = []
+        self.exploit_compiled: bool | None = None
+        self.exploit_compile_errors: list[str] = []
         # Intent-match verdict on ``exploit_code`` — whether the
         # LLM-emitted exploit targets THIS finding or hit a
         # different bug / didn't engage at all. Produced by
@@ -283,22 +288,42 @@ class VulnerabilityContext:
         # ``to_dict()`` can serialise it cleanly. ``None`` means the
         # judge was not invoked (no exploit produced, or
         # ``--no-judge-intent`` opt-out).
-        self.intent_match: Optional[Dict[str, Any]] = None
-        self.patch_code: Optional[str] = None
-        self.analysis: Optional[Dict[str, Any]] = None
+        self.intent_match: dict[str, Any] | None = None
+        # Sandboxed-execution oracle for ``exploit_code`` (P9). String
+        # form of ``core.witness.WitnessOutcome`` plus the structured
+        # detail dict (signal / sanitizer / blocked ...). ``None``
+        # means execution was not attempted — gate off, compile
+        # failed, or the oracle errored.
+        self.execute_outcome: str | None = None
+        self.execute_detail: dict[str, Any] = {}
+        self.patch_code: str | None = None
+        # Mechanical patch-gate annotations for ``patch_code`` —
+        # ``GateResult.to_dict()`` from packages.llm_analysis.patch_gate.
+        # ``None`` means the gate never ran (no patch generated, or the
+        # gate itself errored and was skipped best-effort).
+        self.patch_gate: dict[str, Any] | None = None
+        self.analysis: dict[str, Any] | None = None
 
-    def get_full_file_path(self) -> Optional[Path]:
+    def get_full_file_path(self) -> Path | None:
         """Get absolute path to vulnerable file."""
         if not self.file_path:
             return None
-        clean_path = self.file_path.replace("file://", "")
-        return self.repo_path / clean_path
+        # strip_file_uri drops only a LEADING file:// scheme — the old
+        # substring-replace corrupted paths containing file:// mid-string.
+        clean_path = strip_file_uri(self.file_path)
+        resolved = (self.repo_path / clean_path).resolve()
+        try:
+            resolved.relative_to(self.repo_path.resolve())
+        except ValueError:
+            logger.warning("Path traversal blocked: %s", self.file_path)
+            return None
+        return resolved
 
     def read_vulnerable_code(self) -> bool:
         """Read the actual vulnerable code from the file."""
         file_path = self.get_full_file_path()
         if not file_path or not file_path.exists():
-            logger.warning(f"Cannot read file: {file_path}")
+            logger.warning("Cannot read file: %s", file_path)
             return False
 
         # Cap source-file read at 10 MB. Pre-fix `f.readlines()`
@@ -313,13 +338,11 @@ class VulnerabilityContext:
         # the agent can analyse the visible portion.
         _MAX_SOURCE_BYTES = 10 * 1024 * 1024
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 content = f.read(_MAX_SOURCE_BYTES + 1)
             if len(content) > _MAX_SOURCE_BYTES:
                 logger.warning(
-                    f"Source file {file_path} exceeded "
-                    f"{_MAX_SOURCE_BYTES}-byte cap; analysis sees "
-                    f"truncated content"
+                    "Source file %s exceeded %s-byte cap; analysis sees truncated content", file_path, _MAX_SOURCE_BYTES
                 )
                 content = content[:_MAX_SOURCE_BYTES]
             lines = content.splitlines(keepends=True)
@@ -340,11 +363,13 @@ class VulnerabilityContext:
                 self.surrounding_context = self.full_code
 
             return True
-        except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Error reading file %s: %s", file_path, e)
             return False
 
-    def _read_code_at_location(self, file_uri: str, line: int, context_lines: int = 5) -> str:
+    def _read_code_at_location(
+        self, file_uri: str, line: int, context_lines: int = 5,
+    ) -> str:
         """
         Read code at a specific location with surrounding context.
 
@@ -357,8 +382,10 @@ class VulnerabilityContext:
             Code snippet with context
         """
         try:
-            # Clean up the file URI and validate path stays within repo
-            clean_path = file_uri.replace("file://", "")
+            # Clean up the file URI (leading scheme only — substring
+            # replace corrupted mid-string file://) and validate the
+            # path stays within the repo.
+            clean_path = strip_file_uri(file_uri)
             file_path = (self.repo_path / clean_path).resolve()
 
             try:
@@ -373,7 +400,7 @@ class VulnerabilityContext:
             # rationale: bound the in-flight memory regardless of
             # source-file size.
             _MAX_SOURCE_BYTES = 10 * 1024 * 1024
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 content = f.read(_MAX_SOURCE_BYTES + 1)
             if len(content) > _MAX_SOURCE_BYTES:
                 content = content[:_MAX_SOURCE_BYTES]
@@ -390,7 +417,7 @@ class VulnerabilityContext:
 
             return "\n".join(context)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return f"[Error reading code: {e}]"
 
     def _is_sanitizer(self, label: str) -> bool:
@@ -403,14 +430,11 @@ class VulnerabilityContext:
         Returns:
             True if this looks like a sanitizer
         """
-        sanitizer_keywords = [
-            'sanitiz', 'validat', 'filter', 'escape', 'encode',
-            'clean', 'strip', 'remove', 'replace', 'whitelist',
-            'blacklist', 'check', 'verify', 'safe'
-        ]
-
-        label_lower = label.lower()
-        return any(keyword in label_lower for keyword in sanitizer_keywords)
+        return bool(re.search(
+            r'\b(?:sanitiz|validat|filter|escape|encode|clean|strip'
+            r'|remove|replace|whitelist|blacklist|check|verify|safe)\b',
+            label, re.IGNORECASE,
+        ))
 
     def extract_dataflow(self) -> bool:
         """
@@ -466,14 +490,18 @@ class VulnerabilityContext:
                 if is_sanitizer:
                     self.sanitizers_found.append(step["label"])
 
-            logger.info(f"✓ Extracted dataflow: {len(self.dataflow_steps)} steps, {len(self.sanitizers_found)} sanitizers")
+            logger.info(
+                "✓ Extracted dataflow: %d steps, %d sanitizers",
+                len(self.dataflow_steps),
+                len(self.sanitizers_found),
+            )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to extract dataflow: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to extract dataflow: %s", e)
             return False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialisation."""
         result = {
             "finding_id": self.finding_id,
@@ -503,6 +531,13 @@ class VulnerabilityContext:
                 result["exploit_compile_errors"] = list(
                     self.exploit_compile_errors
                 )
+            # Execution-oracle verdict (P9). Only emitted when the
+            # sandboxed run actually happened — None encodes "not
+            # attempted" and needs no key.
+            if self.execute_outcome is not None:
+                result["execute_outcome"] = self.execute_outcome
+                if self.execute_detail:
+                    result["execute_detail"] = dict(self.execute_detail)
 
         # Surface the intent-match verdict when present. Only emit
         # when actually populated — None means the judge wasn't
@@ -510,6 +545,14 @@ class VulnerabilityContext:
         # there's no value in encoding that absence.
         if self.intent_match is not None:
             result["intent_match"] = dict(self.intent_match)
+
+        # Mechanical patch-gate annotations — only present when a patch
+        # was generated and the gate ran over it.
+        if self.patch_gate is not None:
+            result["patch_gate"] = dict(self.patch_gate)
+
+        if self.function_name:
+            result["function_name"] = self.function_name
 
         # Add function metadata if available (from inventory checklist)
         if self.metadata:
@@ -522,7 +565,8 @@ class VulnerabilityContext:
             result["surrounding_context"] = self.surrounding_context
 
         # Add feasibility data if present (always a dict, check for non-default)
-        if self.feasibility.get("status", "pending") != "pending" or self.feasibility.get("verdict"):
+        feas_status = self.feasibility.get("status", "pending")
+        if feas_status != "pending" or self.feasibility.get("verdict"):
             result["feasibility"] = self.feasibility
 
         # Add dataflow information if present
@@ -538,17 +582,28 @@ class VulnerabilityContext:
         else:
             result["has_dataflow"] = False
 
+        # Mechanical evidence tier — derived from the receipts already
+        # in this dict (SMT witness, mechanical dataflow validation,
+        # execution oracle). Only stamped once an analysis verdict
+        # exists: in prep-only mode there is no verdict to tier.
+        if self.analysis is not None:
+            from packages.llm_analysis.verification_tier import (
+                derive_verification_tier,
+            )
+            result["verification_tier"] = derive_verification_tier(result)
+
         return result
 
 
-def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
+def convert_validated_to_agent_format(data: dict) -> list[dict[str, Any]]:
     """Convert validation pipeline findings.json to VulnerabilityContext format.
 
     Skips ruled_out, confirmed_blocked, and unlikely-verdict findings.
     Normalizes status fields in-place before filtering (idempotent).
     """
     from packages.exploitability_validation.models import (
-        Finding, EXPLOITABLE_FINAL_STATUSES,
+        EXPLOITABLE_FINAL_STATUSES,
+        Finding,
     )
 
     try:
@@ -593,8 +648,17 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
             "startLine": f.line,
             "endLine": f.line,
             "snippet": f.proof.vulnerable_code,
-            "message": f.candidate_reasoning or f.message or f.rule_id or f"{f.vuln_type} in {f.function or 'unknown'}",
-            "level": "error" if f.final_status in EXPLOITABLE_FINAL_STATUSES else "warning",
+            "message": (
+                f.candidate_reasoning
+                or f.message
+                or f.rule_id
+                or f"{f.vuln_type} in {f.function or 'unknown'}"
+            ),
+            "level": (
+                "error"
+                if f.final_status in EXPLOITABLE_FINAL_STATUSES
+                else "warning"
+            ),
             "has_dataflow": bool(f.proof.flow),
             "feasibility": feasibility_d,
             "attack_path_ref": f.feasibility.attack_path_ref,
@@ -607,13 +671,21 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 
 
 class AutonomousSecurityAgentV2:
-    def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
-                 prep_only: bool = False,
+    def __init__(
+        self, repo_path: Path, out_dir: Path,
+        llm_config: LLMConfig | None = None,
+        prep_only: bool = False,
                  synthesise_checkers: bool = True,
+                 refine_checkers: bool = True,
+                 generate_exploits: bool = True,
+                 generate_patches: bool = True,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
                  record_witnesses: bool = True,
-                 use_verified_exemplars: bool = True):
+                 use_verified_exemplars: bool = True,
+                 execute_exploits: bool = False,
+                 execute_timeout: int = 5,
+                 execute_sanitizers: list | None = None) -> None:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -622,6 +694,9 @@ class AutonomousSecurityAgentV2:
         # for variants found across the codebase. Default on; opt out
         # via ``--no-checker-synthesis`` for cost-sensitive runs.
         self.synthesise_checkers = synthesise_checkers
+        self.refine_checkers = refine_checkers
+        self.generate_exploits = generate_exploits
+        self.generate_patches = generate_patches
         # Compile-verify every LLM-emitted exploit by shelling out to
         # gcc in a sandboxed temp dir. Default on; opt out via
         # ``--no-verify-exploits`` for time-sensitive runs. Wall-clock
@@ -662,6 +737,24 @@ class AutonomousSecurityAgentV2:
         # prompts are unchanged.
         self.use_verified_exemplars = use_verified_exemplars
         self._verified_outcomes = None  # lazy, collected once per run
+        # P9 execution oracle: compile AND run the LLM-emitted exploit
+        # in the sandbox (same posture as crash-agent's
+        # --execute-exploits and /audit's dark-verify: network blocked,
+        # safe env, sanitizer/signal outcome classified via
+        # core.witness). Default OFF — the CLI resolves the effective
+        # value through core.project.trust.resolve_dynamic_validation
+        # (explicit --execute-exploits / --no-execute-exploits wins,
+        # else the project 'dynamic' trust marker, else off). Never
+        # widens who may execute what: the same trust gate that
+        # authorises /audit's dynamic channels authorises this.
+        self.execute_exploits = execute_exploits
+        self.execute_timeout = execute_timeout
+        self.execute_sanitizers = execute_sanitizers
+        # P23 guard-dominance chokepoint: lazy warm-CPG Joern server.
+        # ``_probed`` distinguishes "never tried" from "tried, cold
+        # cache" so a run without a CPG pays the probe exactly once.
+        self._gd_server = None
+        self._gd_server_probed = False
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -670,21 +763,28 @@ class AutonomousSecurityAgentV2:
             # Phase 3 prep — read code, build structured findings
             self.llm_config = None
             self.llm = ClaudeCodeProvider()
-            logger.debug(f"Prep mode: {repo_path} → {out_dir}")
+            logger.debug("Prep mode: %s → %s", repo_path, out_dir)
         elif availability.external_llm:
             # External LLM configured — use LLMClient
             self.llm_config = llm_config or LLMConfig()
             self.llm = LLMClient(self.llm_config)
 
             logger.info("RAPTOR Autonomous Security Agent initialised")
-            logger.info(f"Repository: {repo_path}")
-            logger.info(f"Output: {out_dir}")
-            logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+            logger.info("Repository: %s", repo_path)
+            logger.info("Output: %s", out_dir)
+            pm = self.llm_config.primary_model
+            logger.info("LLM: %s/%s", pm.provider, pm.model_name)
 
             # Also print to console so user can see
-            print(f"\n🤖 Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
-            if self.llm_config.primary_model.cost_per_1k_tokens > 0:
-                print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            print(
+                f"\n🤖 Using LLM: {pm.provider}"
+                f"/{pm.model_name}"
+            )
+            if pm.cost_per_1k_tokens > 0:
+                print(
+                    f"💰 Cost: ${pm.cost_per_1k_tokens:.4f}"
+                    " per 1K tokens"
+                )
             else:
                 print("💰 Cost: FREE (self-hosted model)")
 
@@ -692,9 +792,19 @@ class AutonomousSecurityAgentV2:
             if "ollama" in self.llm_config.primary_model.provider.lower():
                 print()
                 print("IMPORTANT: You are using an Ollama model.")
-                print("   • Vulnerability analysis and patching: Works well with Ollama models")
-                print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
-                print("   • Ollama models may generate invalid/non-compilable exploit code")
+                print(
+                    "   • Vulnerability analysis and "
+                    "patching: Works well with Ollama models"
+                )
+                print(
+                    "   • Exploit generation: Requires "
+                    "frontier models (Anthropic Claude "
+                    "/ OpenAI GPT-4)"
+                )
+                print(
+                    "   • Ollama models may generate "
+                    "invalid/non-compilable exploit code"
+                )
                 print()
                 print("   For production-quality exploits, use:")
                 print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
@@ -706,16 +816,48 @@ class AutonomousSecurityAgentV2:
             self.llm = ClaudeCodeProvider()
 
             logger.info("RAPTOR Autonomous Security Agent initialised (prep-only mode)")
-            logger.info(f"Repository: {repo_path}")
-            logger.info(f"Output: {out_dir}")
+            logger.info("Repository: %s", repo_path)
+            logger.info("Output: %s", out_dir)
 
             if availability.claude_code:
-                print("\n🤖 No external LLM configured — Claude Code will handle analysis")
+                print(
+                    "\n🤖 No external LLM configured — "
+                    "Claude Code will handle analysis"
+                )
             else:
-                print("\n⚠️  No LLM available — producing structured findings for manual review")
+                print(
+                    "\n⚠️  No LLM available — producing "
+                    "structured findings for manual review",
+                    file=sys.stderr,
+                )
             print()
 
-    def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
+    def _prompt_budget(self) -> int:
+        try:
+            from core.llm.prompt_budget import (
+                context_budget_for_model,
+                estimate_tokens,
+            )
+            from packages.llm_analysis.prompts import (
+                ANALYSIS_SYSTEM_PROMPT,
+                ANALYSIS_TASK_INSTRUCTIONS,
+            )
+            if self.llm_config and self.llm_config.primary_model:
+                model = self.llm_config.primary_model.model_name
+            else:
+                model = ""
+            sys_text = (
+                ANALYSIS_SYSTEM_PROMPT + "\n\n"
+                + ANALYSIS_TASK_INSTRUCTIONS
+            )
+            sys_tokens = estimate_tokens(sys_text)
+            return context_budget_for_model(
+                model, system_prompt_tokens=sys_tokens,
+            )
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _load_attack_path(self, ref: str) -> dict[str, Any] | None:
         """Load attack path from a ref like 'attack-paths.json#PATH-001'.
 
         `ref` is read from finding JSON which may originate from
@@ -752,9 +894,9 @@ class AutonomousSecurityAgentV2:
                 return None
             # Search in validation directory — check multiple likely locations
             candidates = [
-                self.out_dir.parent / "validation" / file_name,    # Normal pipeline layout
-                self.out_dir / file_name,                           # Same directory as findings
-                self.out_dir.parent / file_name,                    # One level up
+                self.out_dir.parent / "validation" / file_name,
+                self.out_dir / file_name,
+                self.out_dir.parent / file_name,
             ]
             for search_path in candidates:
                 paths = load_json(search_path)
@@ -762,14 +904,15 @@ class AutonomousSecurityAgentV2:
                     return next((p for p in paths if p.get("id") == path_id), None)
             return None
         except (json.JSONDecodeError, OSError, StopIteration) as e:
-            logger.debug(f"Failed to load attack path from '{ref}': {e}")
+            logger.debug("Failed to load attack path from '%s': %s", ref, e)
             return None
 
-    def validate_dataflow(self, vuln: VulnerabilityContext) -> Dict[str, Any]:
+    def validate_dataflow(self, vuln: VulnerabilityContext) -> dict[str, Any]:
         """
         Deep validation of dataflow path using LLM to assess true exploitability.
 
-        This is the CRITICAL step that separates real vulnerabilities from false positives.
+        This is the CRITICAL step that separates real
+        vulnerabilities from false positives.
 
         Args:
             vuln: VulnerabilityContext with extracted dataflow
@@ -786,8 +929,8 @@ class AutonomousSecurityAgentV2:
         logger.info("=" * 70)
 
         from packages.llm_analysis.prompts import (
-            build_dataflow_validation_bundle,
             DATAFLOW_VALIDATION_SCHEMA,
+            build_dataflow_validation_bundle,
         )
 
         bundle = build_dataflow_validation_bundle(
@@ -817,7 +960,8 @@ class AutonomousSecurityAgentV2:
                 return {}
 
             from core.llm.response_validation import (
-                attempt_quality_retry, validate_structured_response,
+                attempt_quality_retry,
+                validate_structured_response,
             )
             validated = validate_structured_response(raw_validation, validation_schema)
             # Single-retry uplift: if the LLM's first response is missing
@@ -831,73 +975,120 @@ class AutonomousSecurityAgentV2:
             )
             validation = validated.data
             if validated.quality < 0.5:
-                logger.warning(f"Low-quality dataflow validation (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
+                logger.warning(
+                    "Low-quality dataflow validation "
+                    "(q=%.2f), incomplete: %s",
+                    validated.quality, validated.incomplete,
+                )
 
             logger.info("✓ Dataflow validation complete:")
-            logger.info(f"  Source attacker-controlled: {validation.get('source_attacker_controlled')}")
-            logger.info(f"  Sanitizers effective: {validation.get('sanitizers_effective')}")
-            logger.info(f"  Path reachable: {validation.get('path_reachable')}")
-            logger.info(f"  Is exploitable: {validation.get('is_exploitable')}")
+            logger.info(
+                "  Source attacker-controlled: %s",
+                validation.get("source_attacker_controlled"),
+            )
+            logger.info(
+                "  Sanitizers effective: %s",
+                validation.get("sanitizers_effective"),
+            )
+            logger.info("  Path reachable: %s", validation.get('path_reachable'))
+            logger.info("  Is exploitable: %s", validation.get('is_exploitable'))
             # `.get(key, default)` only fires the default for MISSING keys;
             # an explicit `null` from the LLM passes through as None, then
             # `f"{None:.2f}"` raises TypeError mid-log-write and aborts
             # the whole validate_dataflow call. Coalesce explicitly.
             _conf = validation.get('exploitability_confidence')
-            logger.info(f"  Confidence: {(_conf if _conf is not None else 0):.2f}")
-            logger.info(f"  Attack complexity: {validation.get('attack_complexity')}")
-            logger.info(f"  False positive: {validation.get('false_positive')}")
+            logger.info("  Confidence: %.2f", _conf if _conf is not None else 0)
+            logger.info("  Attack complexity: %s", validation.get('attack_complexity'))
+            logger.info("  False positive: %s", validation.get('false_positive'))
 
             if validation.get('sanitizer_details'):
                 logger.info("\n  Sanitizer Analysis:")
                 for san_detail in validation.get('sanitizer_details', []):
-                    logger.info(f"    - {san_detail.get('name')}")
-                    logger.info(f"      Purpose: {san_detail.get('purpose')}")
-                    logger.info(f"      Bypassable: {san_detail.get('bypass_possible')}")
+                    logger.info("    - %s", san_detail.get('name'))
+                    logger.info("      Purpose: %s", san_detail.get('purpose'))
+                    logger.info(
+                        "      Bypassable: %s",
+                        san_detail.get("bypass_possible"),
+                    )
                     if san_detail.get('bypass_method'):
-                        logger.info(f"      Bypass: {san_detail.get('bypass_method')[:100]}")
+                        bm = san_detail.get(
+                            "bypass_method"
+                        )[:100]
+                        logger.info(
+                            "      Bypass: %s", bm,
+                        )
 
             if validation.get('attack_payload_concept'):
                 logger.info("\n  Attack Payload Concept:")
-                logger.info(f"    {validation.get('attack_payload_concept')[:200]}")
+                logger.info("    %s", validation.get('attack_payload_concept')[:200])
 
             # Save validation details
-            validation_file = self.out_dir / "validation" / f"{vuln.finding_id}_validation.json"
+            val_name = f"{_safe_id(vuln.finding_id)}_validation.json"
+            validation_file = (
+                self.out_dir / "validation" / val_name
+            )
             save_json(validation_file, validation)
 
             return validation
 
-        except Exception as e:
-            logger.error(f"✗ Dataflow validation failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("✗ Dataflow validation failed: %s", e)
             return {}
 
-    def analyze_vulnerability(self, vuln: VulnerabilityContext) -> bool:
+    def analyze_vulnerability(
+        self,
+        vuln: VulnerabilityContext,
+        extra_context_blocks: tuple = (),
+    ) -> bool:
+        """Run LLM analysis on one finding.
+
+        ``extra_context_blocks`` is an optional tuple of
+        ``UntrustedBlock`` objects appended to the prompt envelope —
+        used by the variant-review pass to carry the originating
+        hypothesis of the synthesised checker's seed finding.
+        """
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
 
         if is_prep:
-            logger.debug(f"Prepping: {vuln.rule_id} at {vuln.file_path}:{vuln.start_line}")
+            logger.debug(
+                "Prepping: %s at %s:%s",
+                vuln.rule_id, vuln.file_path, vuln.start_line,
+            )
         else:
             logger.info("=" * 70)
-            logger.info(f"Analysing vulnerability: {vuln.rule_id}")
-            logger.info(f"  File: {vuln.file_path}:{vuln.start_line}")
-            logger.info(f"  Severity: {vuln.level}")
-            logger.info(f"  Has dataflow: {'Yes' if vuln.has_dataflow else 'No'}")
-            logger.info(f"  Message: {vuln.message[:100]}..." if len(vuln.message) > 100 else f"  Message: {vuln.message}")
+            logger.info("Analysing vulnerability: %s", vuln.rule_id)
+            logger.info("  File: %s:%s", vuln.file_path, vuln.start_line)
+            logger.info("  Severity: %s", vuln.level)
+            logger.info("  Has dataflow: %s", 'Yes' if vuln.has_dataflow else 'No')
+            msg = vuln.message or ""
+            if len(msg) > 100:
+                logger.info("  Message: %s...", msg[:100])
+            else:
+                logger.info("  Message: %s", msg)
 
         # Read the actual vulnerable code
         if not vuln.read_vulnerable_code():
-            logger.error(f"✗ Cannot read code for {vuln.finding_id}")
+            logger.error("✗ Cannot read code for %s", vuln.finding_id)
             return False
 
         if not is_prep:
-            logger.info(f"✓ Read vulnerable code ({len(vuln.full_code)} chars)")
-            logger.info(f"✓ Read context ({len(vuln.surrounding_context)} chars)")
+            logger.info("✓ Read vulnerable code (%d chars)", len(vuln.full_code))
+            logger.info("✓ Read context (%d chars)", len(vuln.surrounding_context))
 
         # Extract dataflow path if available
         if vuln.has_dataflow:
             if vuln.extract_dataflow():
-                logger.info(f"✓ Dataflow path: {vuln.dataflow_path.get('total_steps', 0)} total steps")
+                total = vuln.dataflow_path.get(
+                    "total_steps", 0,
+                )
+                logger.info(
+                    "✓ Dataflow path: %d total steps",
+                    total,
+                )
                 if vuln.sanitizers_found:
-                    logger.info(f"  ⚠️  Sanitizers detected: {', '.join(vuln.sanitizers_found)}")
+                    slist = ", ".join(vuln.sanitizers_found)
+                    logger.info(
+                        "  ⚠️  Sanitizers detected: %s", slist)
             else:
                 logger.warning("⚠️  Failed to extract dataflow path")
 
@@ -934,9 +1125,28 @@ class AutonomousSecurityAgentV2:
             tm_block = threat_model_untrusted_block(Path(vuln.repo_path))
             if tm_block:
                 extra_blocks.append(tm_block)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("threat_model_untrusted_block failed: %s", exc)
+        # Flow-trace + caller call-site context (cached per repo by
+        # flow_context_inject.prepare_flow_context). () when the
+        # finding is off every traced flow and has no caller data.
+        try:
+            from packages.llm_analysis.flow_context_inject import (
+                context_blocks_for_finding,
+            )
+            extra_blocks.extend(context_blocks_for_finding({
+                "repo_path": str(vuln.repo_path),
+                "file_path": vuln.file_path,
+                "metadata": meta,
+            }))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("flow-context injection failed: %s", exc)
+        extra_blocks.extend(extra_context_blocks)
 
+        # Filled by the bundle builder when L3-retrieved exemplars land
+        # in the prompt; persisted onto the analysis record below so
+        # A/B attribution can join exemplars to outcomes.
+        exemplar_usage: dict = {}
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
             level=vuln.level,
@@ -961,6 +1171,8 @@ class AutonomousSecurityAgentV2:
                 self._get_verified_outcomes()
                 if self.use_verified_exemplars else ()
             ),
+            budget_tokens=self._prompt_budget(),
+            exemplar_usage=exemplar_usage,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -982,7 +1194,8 @@ class AutonomousSecurityAgentV2:
                 return False
 
             from core.llm.response_validation import (
-                attempt_quality_retry, validate_structured_response,
+                attempt_quality_retry,
+                validate_structured_response,
             )
             validated = validate_structured_response(raw_analysis, analysis_schema)
             # See validate_dataflow above for the retry rationale.
@@ -993,37 +1206,81 @@ class AutonomousSecurityAgentV2:
             )
             analysis = validated.data
             if validated.quality < 0.5:
-                logger.warning(f"Low-quality LLM response (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
+                logger.warning(
+                    "Low-quality LLM response "
+                    "(q=%.2f), incomplete: %s",
+                    validated.quality, validated.incomplete,
+                )
 
-            vuln.exploitable = analysis.get("is_exploitable", False)
-            vuln.exploitability_score = analysis.get("exploitability_score", 0.0)
+            vuln.exploitable = analysis.get("is_exploitable") or False
+            vuln.exploitability_score = analysis.get("exploitability_score") or 0.0
+            if exemplar_usage.get("exemplars_used"):
+                # Which L3 exemplars primed this analysis — persisted
+                # with the finding so exemplar contribution is
+                # attributable (LabeledAttempt.exemplars_used shape).
+                analysis.setdefault(
+                    "exemplars_used", exemplar_usage["exemplars_used"],
+                )
             vuln.analysis = analysis
 
             logger.info("✓ LLM analysis complete:")
-            logger.info(f"  True Positive: {analysis.get('is_true_positive', False)}")
-            logger.info(f"  Exploitable: {vuln.exploitable}")
-            logger.info(f"  Exploitability Score: {vuln.exploitability_score:.2f}")
-            logger.info(f"  Severity Assessment: {analysis.get('severity_assessment', 'unknown')}")
+            logger.info("  True Positive: %s", analysis.get('is_true_positive', False))
+            logger.info("  Exploitable: %s", vuln.exploitable)
+            logger.info("  Exploitability Score: %.2f", vuln.exploitability_score)
+            logger.info(
+                "  Severity Assessment: %s",
+                analysis.get("severity_assessment", "unknown"),
+            )
             # Compute CVSS score from vector if provided
             from packages.cvss import score_finding
             score_finding(analysis)
-            if analysis.get("cvss_score_estimate"):
-                logger.info(f"  CVSS: {analysis['cvss_score_estimate']} ({analysis.get('severity_assessment', '?')}) from {analysis.get('cvss_vector')}")
+            if analysis.get("cvss_score_estimate") is not None:
+                cvss = analysis["cvss_score_estimate"]
+                sev = analysis.get("severity_assessment", "?")
+                vec = analysis.get("cvss_vector")
+                logger.info(
+                    "  CVSS: %s (%s) from %s", cvss, sev, vec
+                )
             else:
-                logger.info(f"  CVSS Estimate: {analysis.get('cvss_score_estimate', 'N/A')}")
+                logger.info(
+                    "  CVSS Estimate: %s",
+                    analysis.get("cvss_score_estimate", "N/A"),
+                )
 
             # Log dataflow-specific analysis
             if vuln.has_dataflow and 'source_attacker_controlled' in analysis:
                 logger.info("\n  Dataflow Analysis:")
-                logger.info(f"    Source attacker-controlled: {analysis.get('source_attacker_controlled', 'N/A')}")
-                logger.info(f"    Sanitizers effective: {analysis.get('sanitizers_effective', 'N/A')}")
+                logger.info(
+                    "    Source attacker-controlled: %s",
+                    analysis.get(
+                        "source_attacker_controlled", "N/A",
+                    ),
+                )
+                logger.info(
+                    "    Sanitizers effective: %s",
+                    analysis.get("sanitizers_effective", "N/A"),
+                )
                 if analysis.get('sanitizer_bypass_technique'):
-                    logger.info(f"    Bypass technique: {(analysis.get('sanitizer_bypass_technique') or '')[:100]}...")
-                logger.info(f"    Dataflow exploitable: {analysis.get('dataflow_exploitable', 'N/A')}")
+                    bypass = (
+                        analysis.get(
+                            "sanitizer_bypass_technique"
+                        ) or ""
+                    )[:100]
+                    logger.info(
+                        "    Bypass technique: %s...", bypass
+                    )
+                logger.info(
+                    "    Dataflow exploitable: %s",
+                    analysis.get("dataflow_exploitable", "N/A"),
+                )
 
-            logger.info(f"\n  Reasoning: {(analysis.get('reasoning') or '')[:150]}...")
+            reasoning = (analysis.get("reasoning") or "")[:150]
+            logger.info("\n  Reasoning: %s...", reasoning)
             if analysis.get('attack_scenario'):
-                logger.info(f"  Attack Scenario: {analysis.get('attack_scenario')[:150]}...")
+                scenario = analysis.get("attack_scenario")[:150]
+                logger.info(
+                    "  Attack Scenario: %s...", scenario,
+                )
 
             # Deep dataflow validation for high-confidence findings
             if vuln.has_dataflow and vuln.exploitable:
@@ -1038,10 +1295,7 @@ class AutonomousSecurityAgentV2:
                 gate = self._tier1_pre_flight(vuln)
                 if gate == "refuted":
                     logger.info(
-                        f"⚠️  IRIS Tier 1 refuted dataflow for "
-                        f"{vuln.rule_id} at "
-                        f"{vuln.file_path}:{vuln.start_line} — "
-                        f"skipping LLM deep validation"
+                        "⚠️  IRIS Tier 1 refuted dataflow for %s at %s:%s — skipping LLM deep validation", vuln.rule_id, vuln.file_path, vuln.start_line
                     )
                     vuln.exploitable = False
                     vuln.exploitability_score = 0.0
@@ -1061,7 +1315,7 @@ class AutonomousSecurityAgentV2:
                         "is_exploitable": False,
                     }
                 else:
-                    logger.info("\n" + "─" * 70)
+                    logger.info("\n%s", "─" * 70)
                     logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
                     logger.info("─" * 70)
 
@@ -1070,13 +1324,31 @@ class AutonomousSecurityAgentV2:
                     if validation:
                         # Update exploitability based on validation
                         if validation.get('false_positive'):
-                            logger.info("⚠️  Validation marked as FALSE POSITIVE:")
-                            logger.info(f"    Reason: {validation.get('false_positive_reason')}")
+                            logger.info(
+                                "⚠️  Validation marked as "
+                                "False Positive:"
+                            )
+                            logger.info(
+                                "    Reason: %s",
+                                validation.get(
+                                    "false_positive_reason"
+                                ),
+                            )
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
                         elif not validation.get('is_exploitable'):
-                            logger.info("⚠️  Validation determined NOT EXPLOITABLE:")
-                            logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
+                            logger.info(
+                                "⚠️  Validation determined "
+                                "Not Exploitable:"
+                            )
+                            reason = (
+                                validation.get(
+                                    "exploitability_reasoning"
+                                ) or ""
+                            )[:150]
+                            logger.info(
+                                "    Reason: %s", reason,
+                            )
                             vuln.exploitable = False
                             # Same null-vs-missing distinction as the
                             # log site above — explicit None from the
@@ -1087,7 +1359,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info("✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms Exploitable")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
@@ -1102,7 +1374,7 @@ class AutonomousSecurityAgentV2:
                         analysis['dataflow_validation'] = validation
 
             # Save detailed analysis
-            analysis_file = self.out_dir / "analysis" / f"{vuln.finding_id}.json"
+            analysis_file = self.out_dir / "analysis" / f"{_safe_id(vuln.finding_id)}.json"
             save_json(analysis_file, {
                 "finding_id": vuln.finding_id,
                 "rule_id": vuln.rule_id,
@@ -1112,10 +1384,15 @@ class AutonomousSecurityAgentV2:
 
             return True
 
-        except Exception as e:
-            logger.error(f"✗ LLM analysis failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("✗ LLM analysis failed: %s", e)
             if _is_auth_error(e):
-                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+                print(
+                    "⚠️  LLM authentication failed — "
+                    "check your API key. Falling back to "
+                    "heuristic analysis.",
+                    file=sys.stderr,
+                )
             else:
                 logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
@@ -1162,8 +1439,8 @@ class AutonomousSecurityAgentV2:
                     discover_codeql_databases,
                 )
                 self._codeql_dbs = discover_codeql_databases(self.out_dir) or {}
-            except Exception as e:
-                logger.debug(f"Tier 1 gate: DB discovery failed: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Tier 1 gate: DB discovery failed: %s", e)
                 self._codeql_dbs = {}
         if not self._codeql_dbs:
             return "no_check"
@@ -1173,9 +1450,9 @@ class AutonomousSecurityAgentV2:
             )
             return tier1_check_finding(vuln.finding, self._codeql_dbs,
                                        target_path=self.repo_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # The gate must never break the pipeline. Log and proceed.
-            logger.debug(f"Tier 1 gate: check raised: {e}")
+            logger.debug("Tier 1 gate: check raised: %s", e)
             return "no_check"
 
     def _smt_pre_flight(self, vuln: VulnerabilityContext) -> str:
@@ -1223,13 +1500,13 @@ class AutonomousSecurityAgentV2:
         try:
             from packages.exploit_feasibility.smt_path import validate_path
         except ImportError as e:
-            logger.debug(f"SMT pre-flight: substrate unavailable: {e}")
+            logger.debug("SMT pre-flight: substrate unavailable: %s", e)
             return "no_check"
 
         try:
             smt = validate_path(conditions, profile=profile)
-        except Exception as e:
-            logger.debug(f"SMT pre-flight: check raised: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("SMT pre-flight: check raised: %s", e)
             return "no_check"
 
         if not smt.get("smt_available"):
@@ -1258,9 +1535,7 @@ class AutonomousSecurityAgentV2:
         gate = self._tier1_pre_flight(vuln)
         if gate == "refuted":
             logger.info(
-                f"⊘ Skipping exploit generation: IRIS Tier 1 refuted the "
-                f"dataflow claim for {vuln.rule_id} at "
-                f"{vuln.file_path}:{vuln.start_line}"
+                "⊘ Skipping exploit generation: IRIS Tier 1 refuted the dataflow claim for %s at %s:%s", vuln.rule_id, vuln.file_path, vuln.start_line
             )
             vuln.analysis = (vuln.analysis or {})
             vuln.analysis["exploit_skipped_reason"] = (
@@ -1279,9 +1554,7 @@ class AutonomousSecurityAgentV2:
         smt_gate = self._smt_pre_flight(vuln)
         if smt_gate == "refuted":
             logger.info(
-                f"⊘ Skipping exploit generation: SMT proved path "
-                f"conditions unsatisfiable for {vuln.rule_id} at "
-                f"{vuln.file_path}:{vuln.start_line}"
+                "⊘ Skipping exploit generation: SMT proved path conditions unsatisfiable for %s at %s:%s", vuln.rule_id, vuln.file_path, vuln.start_line
             )
             vuln.analysis = (vuln.analysis or {})
             vuln.analysis["exploit_skipped_reason"] = (
@@ -1291,8 +1564,8 @@ class AutonomousSecurityAgentV2:
             return False
 
         logger.info("─" * 70)
-        logger.info(f"Generating exploit PoC for {vuln.rule_id}")
-        logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
+        logger.info("Generating exploit PoC for %s", vuln.rule_id)
+        logger.info("   Target: %s:%s", vuln.file_path, vuln.start_line)
 
         from packages.llm_analysis.prompts.exploit import build_exploit_prompt_bundle
         from packages.llm_analysis.source_intel_inject import (
@@ -1340,12 +1613,15 @@ class AutonomousSecurityAgentV2:
                 vuln.exploit_code = exploit_code
 
                 # Save exploit
-                exploit_file = self.out_dir / "exploits" / f"{vuln.finding_id}_exploit.cpp"
+                exploit_name = f"{_safe_id(vuln.finding_id)}_exploit.cpp"
+                exploit_file = (
+                    self.out_dir / "exploits" / exploit_name
+                )
                 exploit_file.parent.mkdir(exist_ok=True, parents=True)
                 exploit_file.write_text(exploit_code)
 
-                logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
-                logger.info(f"   ✓ Saved to: {exploit_file.name}")
+                logger.info("   ✓ Exploit generated: %d bytes", len(exploit_code))
+                logger.info("   ✓ Saved to: %s", exploit_file.name)
 
                 # Compile-verify the LLM's output. Pre-fix, exploit_code
                 # was saved unconditionally with no signal about whether
@@ -1359,7 +1635,16 @@ class AutonomousSecurityAgentV2:
                 # "exploit compiled" rates per run. Gated on
                 # ``self.verify_exploits`` so operators with tight
                 # time budgets can opt out via constructor / CLI flag.
-                if self.verify_exploits:
+                # When ``execute_exploits`` is on (dynamic trust
+                # granted), the unified compile-and-execute path runs
+                # instead so the binary is reachable for the sandboxed
+                # run before tempdir cleanup. Execution requires the
+                # compile prerequisite: ``execute_exploits=True,
+                # verify_exploits=False`` falls back to compile-only
+                # semantics (same rule as crash-agent).
+                if self.verify_exploits and self.execute_exploits:
+                    self._compile_and_execute_exploit(vuln, exploit_code)
+                elif self.verify_exploits:
                     self._verify_exploit_compiles(vuln, exploit_code)
 
                 # Intent-match judgement on the (possibly compile-
@@ -1383,12 +1668,11 @@ class AutonomousSecurityAgentV2:
                     self._record_exploit_witness(vuln, exploit_code)
 
                 return True
-            else:
-                logger.warning("   ✗ LLM response did not contain valid code")
-                return False
+            logger.warning("   ✗ LLM response did not contain valid code")
+            return False
 
-        except Exception as e:
-            logger.error(f"   ✗ Exploit generation failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("   ✗ Exploit generation failed: %s", e)
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
@@ -1430,6 +1714,61 @@ class AutonomousSecurityAgentV2:
         vuln.exploit_compiled = compiled
         vuln.exploit_compile_errors = errors
 
+    def _compile_and_execute_exploit(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Compile-verify AND sandbox-execute the LLM-emitted exploit.
+
+        The P9 execution oracle for /agentic: same
+        ``exploit_verify.compile_and_execute`` machinery the
+        crash-agent uses (sandboxed run, network blocked, outcome
+        classified via ``core.witness.outcome_from_sandbox_info``).
+        The raw outcome is NOT unforgeable — a hostile target binary
+        can print a fake sanitizer report or exit(139) into the shared
+        stream — so ``execute_detail.evidence_grade`` carries the
+        waitstatus-oracle tier and only ``"mechanical"`` may reach the
+        CONFIRMED verification tier. Threads the outcome onto the
+        finding as ``execute_outcome`` / ``execute_detail``; the
+        witness recorder upgrades the Witness from NOT_RUN to the
+        observed outcome.
+
+        Failures are non-fatal — any error path leaves
+        ``execute_outcome=None`` and behaves like compile-only.
+        """
+        from packages.llm_analysis.exploit_verify import compile_and_execute
+
+        compiled, errors, outcome, detail = compile_and_execute(
+            exploit_code,
+            vuln.file_path,
+            vuln.finding_id,
+            target_binary_path=None,
+            timeout=self.execute_timeout,
+            logger=logger,
+            sanitizers=self.execute_sanitizers,
+        )
+        vuln.exploit_compiled = compiled
+        vuln.exploit_compile_errors = errors
+        if outcome is not None:
+            vuln.execute_outcome = outcome.value
+            vuln.execute_detail = detail
+
+    @staticmethod
+    def _resolve_execute_outcome(value: str | None):
+        """Map the string form on the finding back to WitnessOutcome.
+
+        Same defensive re-lift as the crash-agent's recorder: unknown
+        strings map to ``UNKNOWN`` rather than raising so a future
+        writer of an unrecognised value cannot break the witness
+        record.
+        """
+        if not value:
+            return None
+        from core.witness import WitnessOutcome
+        try:
+            return WitnessOutcome(value)
+        except ValueError:
+            return WitnessOutcome.UNKNOWN
+
     def _judge_exploit_intent(
         self, vuln: VulnerabilityContext, exploit_code: str,
     ) -> None:
@@ -1455,8 +1794,7 @@ class AutonomousSecurityAgentV2:
             is_tp = vuln.analysis.get("is_true_positive")
             if is_tp is False:
                 logger.debug(
-                    f"   · Skipping intent-match for {vuln.finding_id} "
-                    "(analysis is_true_positive=False)"
+                    "   · Skipping intent-match for %s (analysis is_true_positive=False)", vuln.finding_id
                 )
                 return
 
@@ -1469,6 +1807,7 @@ class AutonomousSecurityAgentV2:
             function_name = None
 
         from dataclasses import asdict
+
         from packages.llm_analysis.intent_match import intent_match
 
         verdict = intent_match(
@@ -1485,22 +1824,117 @@ class AutonomousSecurityAgentV2:
 
         if verdict.verdict == "matches":
             logger.info(
-                f"   ✓ Intent-match: matches "
-                f"(confidence={verdict.confidence:.2f}, "
-                f"used_llm={verdict.used_llm})"
+                "   ✓ Intent-match: matches "
+                "(confidence=%.2f, used_llm=%s)",
+                verdict.confidence,
+                verdict.used_llm,
             )
         elif verdict.verdict == "off_target":
             logger.info(
-                f"   ⚠ Intent-match: off_target "
-                f"(confidence={verdict.confidence:.2f}, "
-                f"used_llm={verdict.used_llm}) — "
-                "exploit may have hit a different bug"
+                "   ⚠ Intent-match: off_target "
+                "(confidence=%.2f, used_llm=%s) — "
+                "exploit may have hit a different bug",
+                verdict.confidence,
+                verdict.used_llm,
             )
         else:
             logger.info(
-                f"   · Intent-match: uncertain "
-                f"(used_llm={verdict.used_llm})"
+                "   · Intent-match: uncertain (used_llm=%s)", verdict.used_llm
             )
+
+    def _guard_dominance_refute(self, finding: dict) -> dict | None:
+        """P23 pre-LLM refuter for missing-check-shaped findings.
+
+        Binds (identifier, sink) from the finding's claim text; when a
+        warm CPG exists, asks Joern whether a condition on the
+        identifier dominates every matched sink call site. Returns the
+        dominator receipt when the claim is refuted, else ``None``
+        (no binding / cold CPG / not refuted). The Joern server is
+        started lazily on the FIRST finding that binds and reused for
+        the rest of the run — zero cost when nothing binds or no
+        cached CPG exists.
+        """
+        from core.orchestration.guard_dominance import (
+            missing_check_binding,
+            refute_finding,
+        )
+        if missing_check_binding(finding) is None:
+            return None
+        server = self._acquire_guard_dominance_server()
+        if server is None:
+            return None
+        return refute_finding(finding, Path(self.repo_path), server)
+
+    def _acquire_guard_dominance_server(self):
+        """Lazy warm-CPG Joern server; probed at most once per run."""
+        if self._gd_server_probed:
+            return self._gd_server
+        self._gd_server_probed = True
+        from core.orchestration.guard_dominance import acquire_warm_server
+        out_dir = Path(self.out_dir)
+        # /agentic analysis child writes to <run>/autonomous — the
+        # cached CPG lives under the run dir or the project dir.
+        self._gd_server = acquire_warm_server(
+            Path(self.repo_path), out_dir.parent, out_dir.parent.parent,
+        )
+        return self._gd_server
+
+    def _stop_guard_dominance_server(self) -> None:
+        if getattr(self, "_gd_server", None) is not None:
+            # JoernServer.stop() can leak OSError from signalling and
+            # subprocess.TimeoutExpired from the post-SIGKILL wait.
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                self._gd_server.stop()
+        self._gd_server = None
+        self._gd_server_probed = False
+
+    def _fail_open_adjudicate(self, finding: dict) -> dict | None:
+        """Fail-open channel receipt for one finding, or ``None``.
+
+        The channel adjudicates role × handler outcome × fallibility
+        mechanically (no server, no subprocess) and returns a receipt
+        dict only for a ``refuted`` or ``confirmed`` verdict; the
+        caller decides skip-vs-corroborate. Claim-shape binding and
+        the per-run cap are the caller's (they gate whether this is
+        called at all).
+        """
+        from core.orchestration.fail_open_channel import (
+            adjudicate_finding,
+        )
+        return adjudicate_finding(
+            finding, Path(self.repo_path), out_dir=self.out_dir,
+        )
+
+    _SYNTHESIZED_RULE_PREFIX = "synthesized:"
+
+    def _record_graduated_rule_feedback(self, vuln) -> None:
+        """Feed an analysis verdict back to the rule library (P7).
+
+        Graduated-rule findings carry ``rule_id =
+        "synthesized:<library_rule_id>"`` (stamped by the scanner's
+        graduated stage). When the LLM analysis reached a
+        true/false-positive verdict, record it via
+        ``RuleLibrary.record_match`` so per-rule precision keeps
+        updating after graduation — rules that decay below the
+        retirement threshold get archived on the next /audit pass.
+        """
+        rule_id = getattr(vuln, "rule_id", "") or ""
+        if not rule_id.startswith(self._SYNTHESIZED_RULE_PREFIX):
+            return
+        analysis = vuln.analysis if isinstance(vuln.analysis, dict) else {}
+        is_tp = analysis.get("is_true_positive")
+        if is_tp is None:
+            return  # no verdict, nothing to record
+        library_rule_id = rule_id[len(self._SYNTHESIZED_RULE_PREFIX):]
+        from packages.checker_synthesis.library import RuleLibrary
+        # Default library dir — the same resolution /audit's
+        # graduation pass uses, so feedback lands on the same
+        # manifest the rule graduated from.
+        RuleLibrary().record_match(library_rule_id, is_tp=bool(is_tp))
+        logger.debug(
+            "graduated-rule feedback: %s is_tp=%s",
+            library_rule_id, bool(is_tp),
+        )
 
     def _get_verified_outcomes(self):
         """Collect (once per run) the verified-outcome corpus visible to this
@@ -1515,19 +1949,19 @@ class AutonomousSecurityAgentV2:
             return self._verified_outcomes
         outcomes = []
         try:
-            from core.verified_outcome import collect_outcomes
+            from core.labeled_attempts.view import collect_outcomes
             project_root = None
             try:
                 from core.run.output import _resolve_active_project
                 active = _resolve_active_project()
                 if active:
                     project_root = Path(active[0])
-            except Exception:
+            except Exception:  # noqa: BLE001
                 project_root = None
             outcomes = collect_outcomes(self.out_dir, project_root=project_root)
         except Exception as e:
             logger.debug(
-                f"verified-outcome collection skipped: {e}", exc_info=True,
+                "verified-outcome collection skipped: %s", e, exc_info=True,
             )
             outcomes = []
         self._verified_outcomes = outcomes
@@ -1565,11 +1999,9 @@ class AutonomousSecurityAgentV2:
             intent_verdict = None
             intent_confidence = None
             if vuln.intent_match is not None:
-                intent_verdict = getattr(
-                    vuln.intent_match, "verdict", None,
-                )
-                intent_confidence = getattr(
-                    vuln.intent_match, "confidence", None,
+                intent_verdict = vuln.intent_match.get("verdict")
+                intent_confidence = vuln.intent_match.get(
+                    "confidence",
                 )
             witness, data = witness_from_exploit(
                 exploit_code,
@@ -1584,33 +2016,47 @@ class AutonomousSecurityAgentV2:
                 intent_verdict=intent_verdict,
                 intent_confidence=intent_confidence,
                 target_source_path=target_source_path,
+                # P9: when the execution oracle ran, upgrade the
+                # Witness's observed_outcome from NOT_RUN to the
+                # observed one (same as the crash-agent recorder).
+                # Class-qualified call + getattr so duck-typed agent
+                # stand-ins (tests) and pre-P9 finding shapes keep
+                # working.
+                executed_outcome=(
+                    AutonomousSecurityAgentV2._resolve_execute_outcome(
+                        getattr(vuln, "execute_outcome", None),
+                    )
+                ),
+                executed_detail=getattr(vuln, "execute_detail", None) or None,
             )
             self._witness_store.put(witness, data)
             logger.debug(
-                f"   · Recorded witness {witness.bytes_hash[:12]} "
-                f"({witness.bytes_len}B)"
+                "   · Recorded witness %s (%sB)", witness.bytes_hash[:12], witness.bytes_len
             )
         except Exception as e:  # noqa: BLE001 — best-effort
             logger.warning(
-                f"   · Witness record failed for "
-                f"{vuln.finding_id}: {type(e).__name__}: {e}"
+                "   · Witness record failed for %s: %s: %s", vuln.finding_id, type(e).__name__, e
             )
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
         logger.info("─" * 70)
-        logger.info(f"🔧 Generating secure patch for {vuln.rule_id}")
-        logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
+        logger.info("Generating secure patch for %s", vuln.rule_id)
+        logger.info("   Target: %s:%s", vuln.file_path, vuln.start_line)
 
         # Read full file content for better context
         file_path = vuln.get_full_file_path()
         if not file_path or not file_path.exists():
-            logger.error(f"   ✗ File not found: {file_path}")
+            logger.error("   ✗ File not found: %s", file_path)
             return False
 
         logger.info("   ✓ Reading full file for context...")
 
-        with open(file_path) as f:
-            full_file_content = f.read()
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
+                full_file_content = f.read()
+        except OSError as e:
+            logger.error("   ✗ Failed to read source: %s", e)
+            return False
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
         from packages.llm_analysis.source_intel_inject import (
@@ -1660,19 +2106,51 @@ class AutonomousSecurityAgentV2:
 
             patch_content = response.content
 
+            # Mechanical patch-validation gate — annotates the saved
+            # artifact (format / scope / detector / control / compile),
+            # never blocks the save and never applies anything. Gate
+            # failures degrade to a warning so patch generation keeps
+            # its existing behaviour.
+            gate_block = ""
+            try:
+                from packages.llm_analysis.patch_gate import (
+                    render_gate_block,
+                    run_patch_gate,
+                )
+                gate = run_patch_gate(
+                    patch_content,
+                    repo_path=vuln.repo_path,
+                    file_path=vuln.file_path or "",
+                    start_line=vuln.start_line or 0,
+                    end_line=vuln.end_line or vuln.start_line or 0,
+                    rule_id=vuln.rule_id or "",
+                    tool=vuln.tool or "",
+                    checkers_dir=self.out_dir / "checkers",
+                )
+                vuln.patch_gate = gate.to_dict()
+                gate_block = "\n" + render_gate_block(gate)
+                logger.info(
+                    "   · Patch gate: format=%s scope=%s detector=%s "
+                    "control=%s",
+                    gate.format, gate.scope, gate.detector, gate.control,
+                )
+            except Exception as e:  # noqa: BLE001 — gate is annotate-only
+                logger.warning("   · Patch gate skipped: %s", e)
+
             # Save patch
-            patch_file = self.out_dir / "patches" / f"{vuln.finding_id}_patch.md"
+            patch_file = self.out_dir / "patches" / f"{_safe_id(vuln.finding_id)}_patch.md"
             patch_file.parent.mkdir(exist_ok=True, parents=True)
 
             from core.reporting.formatting import display_rule_id
-            patch_content_formatted = f"""# Security Patch for {display_rule_id(vuln.rule_id)}
+            rule_display = display_rule_id(vuln.rule_id)
+            patch_content_formatted = f"""# Security Patch for {rule_display}
 
 **File:** {vuln.file_path}
 **Lines:** {vuln.start_line}-{vuln.end_line}
 **Severity:** {vuln.level}
-
+{gate_block}
 ## Vulnerability Analysis
-{json.dumps(vuln.analysis, indent=2)}
+{dumps_display(vuln.analysis, indent=2)}
 
 ## Patch
 
@@ -1686,12 +2164,12 @@ class AutonomousSecurityAgentV2:
             patch_file.write_text(patch_content_formatted)
             vuln.patch_code = patch_content
 
-            logger.info(f"   ✓ Patch generated: {len(patch_content)} bytes")
-            logger.info(f"   ✓ Saved to: {patch_file.name}")
+            logger.info("   ✓ Patch generated: %d bytes", len(patch_content))
+            logger.info("   ✓ Saved to: %s", patch_file.name)
             return True
 
-        except Exception as e:
-            logger.error(f"   ✗ Patch generation failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("   ✗ Patch generation failed: %s", e)
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
@@ -1712,7 +2190,7 @@ class AutonomousSecurityAgentV2:
         re.MULTILINE | re.DOTALL,
     )
 
-    def _extract_code(self, content: str) -> Optional[str]:
+    def _extract_code(self, content: str) -> str | None:
         """Extract code from LLM response (handles markdown code blocks).
 
         Preference order: ```cpp > ```c > ```python > untagged
@@ -1726,7 +2204,7 @@ class AutonomousSecurityAgentV2:
         # Find every fenced block and choose by language tag.
         blocks = list(self._CODE_FENCE_RE.finditer(content))
         if blocks:
-            by_lang: Dict[str, str] = {}
+            by_lang: dict[str, str] = {}
             for m in blocks:
                 lang = (m.group("lang") or "").lower()
                 # First occurrence per language wins (preserve order).
@@ -1741,7 +2219,7 @@ class AutonomousSecurityAgentV2:
         # No code block — return content as-is.
         return content.strip()
 
-    def _load_validated_findings(self, findings_path: str) -> List[Dict[str, Any]]:
+    def _load_validated_findings(self, findings_path: str) -> list[dict[str, Any]]:
         """Load pre-validated findings from the validation pipeline's findings.json.
 
         Skips ruled_out findings and unlikely verdict findings.
@@ -1749,43 +2227,69 @@ class AutonomousSecurityAgentV2:
         """
         data = load_json(findings_path, strict=True)
         if data is None:
-            raise FileNotFoundError(f"Findings file not found: {findings_path}")
+            msg = f"Findings file not found: {findings_path}"
+            raise FileNotFoundError(msg)
 
         converted = convert_validated_to_agent_format(data)
 
-        logger.info(f"Loaded {len(converted)} findings from {Path(findings_path).name} "
-                    f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
+        skipped = len(data.get("findings", [])) - len(converted)
+        logger.info(
+            "Loaded %s findings from %s (skipped %s ruled out/unlikely)", len(converted), Path(findings_path).name, skipped
+        )
         return converted
 
-    def _emit_finding_annotation(
+    def _emit_journal_entry(
         self, vuln: "VulnerabilityContext",
-        checklist: Optional[Dict[str, Any]],
-    ) -> Optional[Path]:
-        """Emit a per-function annotation for ``vuln`` after analysis
-        completes. Best-effort — any exception is logged at DEBUG and
-        swallowed so annotation failures cannot break the analysis loop.
+        checklist: dict[str, Any] | None,
+    ) -> bool:
+        """Emit a ``ReviewJournalEntry`` for ``vuln`` after analysis.
 
-        Returns the annotation path on success, or ``None`` if the
-        emit was skipped (no checklist, no inventory match, manual
-        annotation already present, or an error was swallowed).
-        Caller can use the return value for telemetry.
+        Delegates to ``packages.llm_analysis.journal_emit`` (the shared
+        finding-grade emitter, also used by the Phase-4 orchestration
+        tail). Best-effort — any exception is logged and swallowed so
+        journal failures cannot break the analysis loop.
+
+        Returns True if an entry was written, False otherwise.
         """
         try:
-            from packages.llm_analysis.annotation_emit import (
-                emit_finding_annotation,
+            from packages.llm_analysis.journal_emit import (
+                emit_finding_journal_entry,
             )
-            return emit_finding_annotation(
-                vuln,
-                base_dir=self.out_dir / "annotations",
+
+            model_name = None
+            if self.llm_config and self.llm_config.primary_model:
+                model_name = self.llm_config.primary_model.model_name
+
+            name = emit_finding_journal_entry(
+                out_dir=self.out_dir,
+                repo_path=Path(self.repo_path),
                 checklist=checklist,
-                repo_root=self.repo_path,
+                file_path=getattr(vuln, "file_path", None),
+                start_line=getattr(vuln, "start_line", None),
+                analysis=getattr(vuln, "analysis", None) or {},
+                cwe_id=getattr(vuln, "cwe_id", None),
+                tool=getattr(vuln, "tool", None),
+                message=getattr(vuln, "message", None),
+                model=model_name,
+                has_dataflow=getattr(vuln, "has_dataflow", False),
             )
+            if name is None:
+                return False
+            vuln.function_name = name
+            return True
         except Exception:
-            logger.debug("annotation emit error", exc_info=True)
-            return None
+            logger.debug("journal entry emit error", exc_info=True)
+            return False
+
+    @staticmethod
+    def _derive_verdict(analysis: dict[str, Any] | None) -> str:
+        """Map the analysis dict's verdict bools to the journal
+        verdict enum (delegates to the shared emitter)."""
+        from packages.llm_analysis.journal_emit import derive_verdict
+        return derive_verdict(analysis)
 
     def _resolve_prefer_globs(
-        self, operator_globs: Optional[List[str]],
+        self, operator_globs: list[str] | None,
     ) -> tuple:
         """Instance-method wrapper around module-level
         ``resolve_prefer_globs`` — passes the agent's
@@ -1793,18 +2297,99 @@ class AutonomousSecurityAgentV2:
         ``process_findings`` stays brief."""
         return resolve_prefer_globs(operator_globs, self.repo_path)
 
-    def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
-                         max_findings: int = 10, checklist: Dict[str, Any] = None,
-                         emit_annotations: bool = True,
-                         prefer_globs: Optional[List[str]] = None,
-                         exclude_globs: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _review_variant_matches(
+        self,
+        checklist: dict[str, Any] | None,
+        *,
+        exclude_keys: set | frozenset = frozenset(),
+        emit_journal: bool = True,
+    ) -> dict[str, Any]:
+        """Analyse checker-synthesis variant matches in the same run.
+
+        Reads ``checker-matches.jsonl`` back as bounded, checklist-
+        resolved candidate findings and pushes each through
+        ``analyze_vulnerability`` with the originating hypothesis
+        wrapped in an ``UntrustedBlock``. Provenance is marked on the
+        finding (``tool=checker-synthesis``,
+        ``metadata.from_synthesis``). Best-effort per candidate.
+        """
+        stats: dict[str, Any] = {
+            "candidates": 0,
+            "analyzed": 0,
+            "exploitable": 0,
+            "journal_entries": 0,
+            "results": [],
+        }
+        from packages.llm_analysis.checker_followup import (
+            load_variant_candidates,
+        )
+
+        candidates = load_variant_candidates(
+            self.out_dir,
+            checklist=checklist,
+            repo_root=self.repo_path,
+            exclude_keys=exclude_keys,
+        )
+        stats["candidates"] = len(candidates)
+        if not candidates:
+            return stats
+        logger.info(
+            "Variant review pass: %d candidate(s) from synthesized "
+            "checkers",
+            len(candidates),
+        )
+
+        for finding in candidates:
+            try:
+                context_text = finding.pop("synthesis_context", "")
+                vuln = VulnerabilityContext(finding, self.repo_path)
+                blocks: tuple = ()
+                if context_text:
+                    from core.security.prompt_envelope import (
+                        UntrustedBlock,
+                    )
+                    blocks = (
+                        UntrustedBlock(
+                            content=context_text,
+                            kind="synthesis-variant-context",
+                            origin="checker-synthesis",
+                        ),
+                    )
+                if not self.analyze_vulnerability(
+                    vuln, extra_context_blocks=blocks,
+                ):
+                    continue
+                stats["analyzed"] += 1
+                if vuln.exploitable:
+                    stats["exploitable"] += 1
+                if emit_journal and self._emit_journal_entry(
+                    vuln, checklist,
+                ):
+                    stats["journal_entries"] += 1
+                stats["results"].append(vuln.to_dict())
+            except Exception:
+                logger.warning(
+                    "variant review error for %s",
+                    finding.get("finding_id", "?"),
+                    exc_info=True,
+                )
+        return stats
+
+    def process_findings(
+        self, sarif_paths: list[str] | None = None,
+        findings_path: str | None = None,
+        max_findings: int = 10,
+        checklist: dict[str, Any] | None = None,
+        emit_journal: bool = True,
+        prefer_globs: list[str] | None = None,
+        exclude_globs: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Process findings with full LLM-powered autonomous workflow.
 
-        ``emit_annotations``: when False, skip the per-finding
-        annotation emit and the end-of-run coverage record. Useful
-        for operators who want analysis without the side effect of
-        modifying the annotation tree (e.g. CI runs that compare
-        scanner output rather than persist review state).
+        ``emit_journal``: when False, skip the per-finding journal
+        entry emit and the end-of-run coverage record. Useful for
+        operators who want analysis without persisting review state
+        (e.g. CI runs that compare scanner output).
 
         ``prefer_globs``: optional list of fnmatch globs against each
         finding's ``file_path``. Matching findings sort to the front
@@ -1837,7 +2422,10 @@ class AutonomousSecurityAgentV2:
             all_findings = []
             for sarif_path in (sarif_paths or []):
                 findings = parse_sarif_findings(Path(sarif_path))
-                logger.info(f"Loaded {len(findings)} findings from {Path(sarif_path).name}")
+                logger.info(
+                    "Loaded %d findings from %s",
+                    len(findings), Path(sarif_path).name,
+                )
                 all_findings.extend(findings)
 
             unique_findings = deduplicate_findings(all_findings)
@@ -1854,13 +2442,15 @@ class AutonomousSecurityAgentV2:
             dropped = before - len(unique_findings)
             if dropped and not is_prep_only:
                 logger.info(
-                    f"--exclude-dir filtered {dropped} of {before} "
-                    f"findings ({exclude_globs})"
+                    "--exclude-dir filtered %s of %s findings (%s)", dropped, before, exclude_globs
                 )
 
         # Prioritize findings with dataflow paths (for better validation coverage)
         findings_with_dataflow = [f for f in unique_findings if f.get('has_dataflow')]
-        findings_without_dataflow = [f for f in unique_findings if not f.get('has_dataflow')]
+        findings_without_dataflow = [
+            f for f in unique_findings
+            if not f.get('has_dataflow')
+        ]
 
         # Put dataflow findings first, then others
         prioritized_findings = findings_with_dataflow + findings_without_dataflow
@@ -1890,9 +2480,7 @@ class AutonomousSecurityAgentV2:
             )
             if matched and not is_prep_only:
                 logger.info(
-                    f"attack-surface ranking ({prefer_source}): "
-                    f"{matched} of {total_before} findings match "
-                    f"{effective_globs} (sorted to front)"
+                    "attack-surface ranking (%s): %s of %s findings match %s (sorted to front)", prefer_source, matched, total_before, effective_globs
                 )
 
         if not is_prep_only:
@@ -1900,12 +2488,19 @@ class AutonomousSecurityAgentV2:
             prioritized_findings = prioritized_findings[:max_findings]
 
         if is_prep_only:
-            logger.debug(f"Dedup: {len(unique_findings)} unique, {len(findings_with_dataflow)} with dataflow")
+            logger.debug(
+                "Dedup: %d unique, %d with dataflow",
+                len(unique_findings),
+                len(findings_with_dataflow),
+            )
         else:
-            logger.info(f"After deduplication: {len(unique_findings)} unique findings")
-            logger.info(f"  With dataflow: {len(findings_with_dataflow)}")
-            logger.info(f"  Without dataflow: {len(findings_without_dataflow)}")
-            logger.info(f"Processing top {max_findings} findings (dataflow prioritized)")
+            logger.info("After deduplication: %d unique findings", len(unique_findings))
+            logger.info("  With dataflow: %d", len(findings_with_dataflow))
+            logger.info("  Without dataflow: %d", len(findings_without_dataflow))
+            logger.info(
+                "Processing top %d findings "
+                "(dataflow prioritized)", max_findings,
+            )
             logger.info("=" * 70)
 
         unique_findings = prioritized_findings
@@ -1934,7 +2529,9 @@ class AutonomousSecurityAgentV2:
                 from packages.llm_analysis.source_intel_inject import (
                     prepare_source_intel,
                 )
-                prepare_source_intel(self.repo_path)
+                prepare_source_intel(
+                    self.repo_path, checklist=checklist,
+                )
             except Exception as e:  # noqa: BLE001
                 # Surface at INFO so the failure path is visible in
                 # operator logs — gap-#2 verification on /agentic
@@ -1960,8 +2557,8 @@ class AutonomousSecurityAgentV2:
         patches_generated = 0
         dataflow_validated = 0
         false_positives_found = 0
-        annotations_emitted = 0
-        variant_annotations = 0
+        journal_entries_emitted = 0
+        variant_matches = 0
         # D-1 fixture-detection pre-flight metrics. Counts of
         # findings the pre-flight saw and how it ruled. Surfaced
         # in the autonomous report so operators can see whether
@@ -1973,41 +2570,61 @@ class AutonomousSecurityAgentV2:
         # module_aborts / lexical_dead). Counted separately so the operator
         # can see the savings split across the two short-circuit paths.
         reachability_skipped_llm_calls = 0
-        idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
+        sage_fp_skipped_llm_calls = 0
+        # Guard-dominance chokepoint (P23) LLM-call skips.
+        guard_dominance_skipped_llm_calls = 0
+        # Fail-open channel chokepoint: refutation skips + confirmed
+        # corroboration receipts attached, and the dispatch count that
+        # enforces the per-run cap.
+        fail_open_skipped_llm_calls = 0
+        fail_open_corroborated = 0
+        fail_open_checked = 0
+        sage_fp_stored = 0
+        idx = 0  # prevent UnboundLocalError when empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
 
-        with HackerProgress(total=len(unique_findings), operation="Analyzing vulnerabilities",
-                            disabled=is_prep) as progress:
+        with HackerProgress(
+            total=len(unique_findings),
+            operation="Analyzing vulnerabilities",
+            disabled=is_prep,
+        ) as progress:
             for idx, finding in enumerate(unique_findings, 1):
-                progress.update(current=idx, message=f"{finding.get('rule_id', 'unknown')}")
+                rule = finding.get("rule_id", "unknown")
+                progress.update(current=idx, message=rule)
 
                 if is_prep and idx % 10 == 0:
                     print(f"  Preparing... {idx}/{len(unique_findings)}", flush=True)
 
                 if not is_prep:
                     logger.info("")
-                    logger.info(f"{'█' * 70}")
-                    logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
-                    logger.info(f"{'█' * 70}")
+                    logger.info("%s", '█' * 70)
+                    logger.info("VULNERABILITY %d/%d", idx, len(unique_findings))
+                    logger.info("%s", '█' * 70)
 
-                # Attach function metadata from inventory checklist
-                if checklist and not finding.get("metadata"):
+                # Attach function metadata from inventory checklist.
+                # Gate on missing "name" (not missing metadata dict):
+                # upstream parsers may pre-populate metadata with
+                # class/attribute fields but omit the function name,
+                # and synthesis needs name to build a seed.
+                existing_meta = finding.get("metadata") or {}
+                if checklist and not existing_meta.get("name"):
                     fpath = finding.get("file_path") or finding.get("file") or ""
-                    fline = finding.get("start_line") if finding.get("start_line") is not None else finding.get("startLine", 0)
+                    sl = finding.get("start_line")
+                    fline = (
+                        sl if sl is not None
+                        else finding.get("startLine", 0)
+                    )
                     func = _lookup_function(
                         checklist, fpath, fline,
                         repo_root=str(self.repo_path),
                     )
-                    if func and func.get("metadata"):
-                        finding["metadata"] = dict(func["metadata"])
-                    # If /understand --map enriched the checklist, also surface
-                    # the priority markers so the analysis prompt can mention
-                    # the function's architectural role (entry_point / sink).
-                    # Use ``or {}`` (not setdefault) — finding["metadata"] can
-                    # be explicitly None from upstream SARIF parsers, and
-                    # setdefault would return None in that case, then
-                    # None["priority"] = ... raises TypeError.
+                    if func:
+                        inv_meta = func.get("metadata") or {}
+                        merged = {**existing_meta, **inv_meta}
+                        if func.get("name"):
+                            merged["name"] = func["name"]
+                        finding["metadata"] = merged
                     if func and func.get("priority"):
                         metadata = finding.get("metadata") or {}
                         metadata["priority"] = func["priority"]
@@ -2072,9 +2689,8 @@ class AutonomousSecurityAgentV2:
                         )
                         if verdict.likely_test_harness == "true":
                             # Synthesise a deterministic clean
-                            # analysis. _derive_status (in
-                            # annotation_emit) maps
-                            # is_true_positive=False to status=
+                            # analysis. _derive_verdict maps
+                            # is_true_positive=False to verdict=
                             # clean automatically; the
                             # ``fixture_demotion`` tag flags the
                             # reason for the operator's review.
@@ -2109,9 +2725,8 @@ class AutonomousSecurityAgentV2:
                 if fixture_skipped_this:
                     analyzed += 1
                     fixture_skipped_llm_calls += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
                     continue  # skip LLM analyze + exploit + patch
 
                 # 0b. Reachability chokepoint — SOUND, corpus-earned
@@ -2130,7 +2745,7 @@ class AutonomousSecurityAgentV2:
                 reach_skipped_this = False
                 if checklist:
                     try:
-                        from core.inventory.reach_chokepoint import (
+                        from core.analysis.reach_chokepoint import (
                             check_suppress,
                         )
                         rel = (finding.get("file_path")
@@ -2162,17 +2777,17 @@ class AutonomousSecurityAgentV2:
                             # one-stop ``suppressions.jsonl`` so an
                             # operator can ``jq`` / count instead of
                             # walking each per-finding annotation.
-                            # Best-effort; never blocks.
-                            try:
-                                from core.inventory.reach_chokepoint \
-                                    import record_suppression
+                            # Best-effort on IO only; the callee
+                            # already swallows its own OSErrors.
+                            with contextlib.suppress(OSError):
+                                from core.analysis.reach_chokepoint import (
+                                    record_suppression,
+                                )
                                 record_suppression(
                                     self.out_dir,
                                     finding=finding,
                                     verdict=verdict, reason=reason,
                                 )
-                            except Exception:  # noqa: BLE001
-                                pass
                     except Exception as e:  # noqa: BLE001
                         logger.debug(
                             "reachability pre-flight failed on %s: %s",
@@ -2183,20 +2798,250 @@ class AutonomousSecurityAgentV2:
                 if reach_skipped_this:
                     analyzed += 1
                     reachability_skipped_llm_calls += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
+                # 0c. SAGE prior-verdict suppression — if a prior run
+                # already classified this finding as FP / not-exploitable
+                # and the source around the finding hasn't changed, skip
+                # the LLM call entirely.
+                sage_fp_skipped_this = False
+                try:
+                    from core.analysis.reach_chokepoint import (
+                        coerce_manual_override,
+                    )
+                    from core.sage.hooks import (
+                        compute_finding_source_hash,
+                        recall_prior_finding_verdict,
+                    )
+                    _rel = (finding.get("file_path")
+                            or finding.get("file") or "")
+                    _fn = (finding.get("function")
+                           or (finding.get("metadata") or {}).get(
+                               "function_name", ""))
+                    _rule = (finding.get("rule_id")
+                             or finding.get("check_id") or "")
+                    _line = int(finding.get("line") or 0)
+                    # Per-finding operator opt-out — the same
+                    # manual_override the sibling chokepoints honour
+                    # (reachability suppression); previously only the
+                    # run-wide env kill switch applied here.
+                    if coerce_manual_override(
+                            finding.get("manual_override")):
+                        _rel = ""
+                    if _rel and _fn and _rule and _line > 0:
+                        _src_hash = compute_finding_source_hash(
+                            Path(self.repo_path) / _rel, _line)
+                        if _src_hash:
+                            prior = recall_prior_finding_verdict(
+                                str(self.repo_path), _rule,
+                                _rel, _fn, _src_hash,
+                            )
+                            if prior is not None:
+                                vuln.analysis = {
+                                    "is_true_positive": False,
+                                    "is_exploitable": False,
+                                    "reasoning": (
+                                        f"SAGE prior verdict: "
+                                        f"{prior['verdict']} "
+                                        f"(confidence "
+                                        f"{prior['confidence']:.2f})"
+                                    ),
+                                    "sage_fp_suppression": True,
+                                    "sage_verdict": prior["verdict"],
+                                }
+                                sage_fp_skipped_this = True
+                                # Best-effort on IO only; the callee
+                                # already swallows its own OSErrors.
+                                with contextlib.suppress(OSError):
+                                    from core.analysis.reach_chokepoint import (
+                                        record_suppression,
+                                    )
+                                    record_suppression(
+                                        self.out_dir,
+                                        finding=finding,
+                                        verdict=f"sage_{prior['verdict']}",
+                                        reason=(
+                                            "SAGE prior-verdict "
+                                            "suppression: source "
+                                            "unchanged"
+                                        ),
+                                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(
+                        "SAGE FP pre-flight failed on %s: %s",
+                        finding.get("finding_id") or finding.get("id"),
+                        e,
+                    )
+
+                if sage_fp_skipped_this:
+                    analyzed += 1
+                    sage_fp_skipped_llm_calls += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
+                # 0d. Guard-dominance chokepoint (P23) — for
+                # missing-check-shaped findings when a warm CPG
+                # exists: a condition on the claimed identifier
+                # dominating every matched sink call site refutes the
+                # claim mechanically. Skips the LLM call with the
+                # dominator receipt in the analysis record (explicit
+                # disqualifier, never a silent drop). Zero cost when
+                # no cached CPG exists — the server is only started
+                # lazily for the first finding that binds.
+                gd_skipped_this = False
+                if not finding.get("manual_override"):
+                    try:
+                        gd_evidence = self._guard_dominance_refute(finding)
+                        if gd_evidence is not None:
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": (
+                                    "Guard-dominance refutation: "
+                                    + gd_evidence.get("reason", "")
+                                    + " (CFG dominance via Joern — see "
+                                    "guard_dominance for the dominator "
+                                    "sites). To override, set "
+                                    "``manual_override: true`` on the "
+                                    "finding and re-run."
+                                ),
+                                "guard_dominance_refutation": True,
+                                "guard_dominance": gd_evidence,
+                            }
+                            gd_skipped_this = True
+                            # Best-effort on IO only; the callee
+                            # already swallows its own OSErrors.
+                            with contextlib.suppress(OSError):
+                                from core.analysis.reach_chokepoint import (
+                                    record_suppression,
+                                )
+                                record_suppression(
+                                    self.out_dir,
+                                    finding=finding,
+                                    verdict="guard_dominance_refuted",
+                                    reason=gd_evidence.get("reason", ""),
+                                )
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "guard-dominance pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if gd_skipped_this:
+                    analyzed += 1
+                    guard_dominance_skipped_llm_calls += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
+                # 0e. Fail-open channel chokepoint — for findings whose
+                # claim reads as a fail-open / swallowed-error shape:
+                # the mechanical channel adjudicates role x handler
+                # outcome x fallibility with receipts (no server, no
+                # subprocess — one parse per checked finding). A
+                # refuted claim skips the LLM call with the receipt in
+                # the analysis record (explicit disqualifier, never a
+                # silent drop); a confirmed one rides onto the finding
+                # as tool corroboration — evidence, never a verdict.
+                # Mirrors the guard-dominance (P23) consumption shape.
+                fo_skipped_this = False
+                if not finding.get("manual_override"):
+                    try:
+                        from core.orchestration.fail_open_channel import (
+                            FAIL_OPEN_CHANNEL_CAP,
+                            fail_open_binding,
+                        )
+                        fo_receipt = None
+                        if fail_open_binding(finding) is not None \
+                                and fail_open_checked \
+                                < FAIL_OPEN_CHANNEL_CAP:
+                            fail_open_checked += 1
+                            fo_receipt = self._fail_open_adjudicate(
+                                finding,
+                            )
+                        if fo_receipt \
+                                and fo_receipt.get("outcome") == "refuted":
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": (
+                                    "Fail-open channel refutation: "
+                                    + fo_receipt.get("reason", "")
+                                    + " (mechanical handler/site "
+                                    "receipts — see fail_open). To "
+                                    "override, set ``manual_override:"
+                                    " true`` on the finding and "
+                                    "re-run."
+                                ),
+                                "fail_open_refutation": True,
+                                "fail_open": fo_receipt,
+                            }
+                            fo_skipped_this = True
+                            # Best-effort on IO only; the callee
+                            # already swallows its own OSErrors.
+                            with contextlib.suppress(OSError):
+                                from core.analysis.reach_chokepoint import (
+                                    record_suppression,
+                                )
+                                record_suppression(
+                                    self.out_dir,
+                                    finding=finding,
+                                    verdict="fail_open_refuted",
+                                    reason=fo_receipt.get("reason", ""),
+                                )
+                        elif fo_receipt and fo_receipt.get(
+                                "outcome") == "confirmed":
+                            # Corroboration receipt: the LLM still
+                            # rules; verification_tier grades the
+                            # reported verdict tool_backed.
+                            finding["fail_open"] = fo_receipt
+                            fail_open_corroborated += 1
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "fail-open pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if fo_skipped_this:
+                    analyzed += 1
+                    fail_open_skipped_llm_calls += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
                     continue  # skip LLM analyze + exploit + patch
 
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
-                    if emit_annotations:
-                        if self._emit_finding_annotation(vuln, checklist):
-                            annotations_emitted += 1
+                    if emit_journal and self._emit_journal_entry(vuln, checklist):
+                        journal_entries_emitted += 1
+                    # P7 precision loop: analysis verdicts on findings
+                    # produced by graduated synthesized rules feed
+                    # RuleLibrary.record_match so graduation /
+                    # retirement keeps tracking real-world precision
+                    # (a scan hit judged FP must count against the
+                    # rule). Best-effort against manifest IO failures
+                    # — never blocks analysis; RuleLibrary handles
+                    # corrupt-manifest shapes itself. ImportError too:
+                    # the helper imports packages.checker_synthesis
+                    # lazily, and one synthesized: finding in an env
+                    # without that package must degrade to "no
+                    # feedback recorded", not crash the whole
+                    # analysis loop mid-run.
+                    with contextlib.suppress(OSError, ImportError):
+                        self._record_graduated_rule_feedback(vuln)
 
                     # Track dataflow validation
-                    if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
+                    has_dv = (
+                        vuln.has_dataflow
+                        and vuln.analysis
+                        and "dataflow_validation" in vuln.analysis
+                    )
+                    if has_dv:
                         dataflow_validated += 1
                         validation = vuln.analysis['dataflow_validation']
                         if validation.get('false_positive'):
@@ -2206,64 +3051,158 @@ class AutonomousSecurityAgentV2:
                         exploitable += 1
 
                         # 2. Generate exploit using LLM
-                        if self.generate_exploit(vuln):
+                        if self.generate_exploits and self.generate_exploit(vuln):
                             exploits_generated += 1
 
                         # 3. Generate patch using LLM (only for exploitable)
-                        if self.generate_patch(vuln):
+                        if self.generate_patches and self.generate_patch(vuln):
                             patches_generated += 1
 
                         # 4. KNighter follow-up: synthesise a checker
                         # rule for the confirmed pattern, run across
-                        # the codebase, emit suspicious annotations
-                        # for variant matches. One bug → N candidate
+                        # the codebase, record variant matches in
+                        # checker-matches.jsonl. One bug → N candidate
                         # variants. Best-effort — failures don't break
                         # the analysis loop.
                         if (
-                            emit_annotations
+                            emit_journal
                             and getattr(self, "synthesise_checkers", True)
                         ):
                             try:
                                 from packages.llm_analysis.checker_followup import (
-                                    emit_variant_annotations_for_finding,
+                                    emit_variant_matches_for_finding,
                                 )
-                                n_variants = emit_variant_annotations_for_finding(
+                                n_variants = emit_variant_matches_for_finding(
                                     vuln,
                                     out_dir=self.out_dir,
                                     checklist=checklist,
                                     repo_root=self.repo_path,
                                     llm_client=self.llm,
+                                    refine=self.refine_checkers,
                                 )
-                                variant_annotations += n_variants
+                                variant_matches += n_variants
                             except Exception:
-                                logger.debug(
+                                logger.warning(
                                     "checker followup error", exc_info=True,
                                 )
                     else:
                         logger.debug("⊘ Skipping patch generation (not exploitable)")
+
+                # Post-LLM: store verdict to SAGE for cross-run
+                # FP suppression.  Best-effort — never blocks.
+                if vuln.analysis and not sage_fp_skipped_this:
+                    try:
+                        from core.sage.hooks import (
+                            compute_finding_source_hash,
+                            store_finding_verdict,
+                        )
+                        _rel = (finding.get("file_path")
+                                or finding.get("file") or "")
+                        _fn = (finding.get("function")
+                               or (finding.get("metadata") or {}).get(
+                                   "function_name", ""))
+                        _rule = (finding.get("rule_id")
+                                 or finding.get("check_id") or "")
+                        _line = int(finding.get("line") or 0)
+                        if _rel and _fn and _rule and _line > 0:
+                            _src_hash = compute_finding_source_hash(
+                                Path(self.repo_path) / _rel, _line)
+                            if _src_hash:
+                                is_tp = vuln.analysis.get(
+                                    "is_true_positive", False)
+                                is_ex = vuln.analysis.get(
+                                    "is_exploitable", False)
+                                if not is_tp:
+                                    _v = "false_positive"
+                                elif is_ex:
+                                    _v = "exploitable"
+                                else:
+                                    _v = "not_exploitable"
+                                if store_finding_verdict(
+                                    str(self.repo_path), _rule,
+                                    _rel, _fn, _src_hash, _v,
+                                ):
+                                    sage_fp_stored += 1
+                    except Exception:
+                        logger.debug("SAGE verdict storage failed", exc_info=True)
 
                 # Always include finding in results (with or without LLM analysis)
                 results.append(vuln.to_dict())
 
             # Show progress
             if isinstance(self.llm, ClaudeCodeProvider):
-                logger.debug(f"Progress: {idx}/{len(unique_findings)} prepped")
+                logger.debug("Progress: %d/%d prepped", idx, len(unique_findings))
             else:
                 logger.info("")
-                logger.info(f"Progress: {idx}/{len(unique_findings)} analyzed, "
-                           f"{exploitable} exploitable, "
-                           f"{exploits_generated} exploits, "
-                           f"{patches_generated} patches, "
-                           f"{dataflow_validated} dataflow validated")
+                logger.info("Progress: %d/%d analyzed, "
+                           "%d exploitable, "
+                           "%d exploits, "
+                           "%d patches, "
+                           "%d dataflow validated",
+                           idx, len(unique_findings),
+                           exploitable,
+                           exploits_generated,
+                           patches_generated,
+                           dataflow_validated)
+
+        # Guard-dominance server (if the chokepoint lazily started one)
+        # is per-process; release it as soon as the loop is done.
+        self._stop_guard_dominance_server()
+
+        # Same-run variant analysis (Mode 2 second pass): the checker
+        # rules synthesised above swept the codebase and recorded
+        # variant matches — analyse a bounded number of them NOW, with
+        # the originating hypothesis as context, instead of leaving
+        # the file for a hypothetical next run. Best-effort.
+        variant_review_stats: dict[str, Any] = {
+            "candidates": 0, "analyzed": 0, "exploitable": 0,
+        }
+        if (
+            variant_matches > 0
+            and getattr(self, "synthesise_checkers", True)
+            and not isinstance(self.llm, ClaudeCodeProvider)
+        ):
+            try:
+                analyzed_keys = {
+                    (
+                        f.get("file") or f.get("file_path") or "",
+                        (f.get("metadata") or {}).get("name") or "",
+                    )
+                    for f in unique_findings
+                }
+                variant_review_stats = self._review_variant_matches(
+                    checklist,
+                    exclude_keys=analyzed_keys,
+                    emit_journal=emit_journal,
+                )
+                results.extend(variant_review_stats.pop("results", []))
+                exploitable += variant_review_stats.get("exploitable", 0)
+                journal_entries_emitted += variant_review_stats.get(
+                    "journal_entries", 0,
+                )
+            except Exception:
+                logger.warning("variant review pass error", exc_info=True)
 
         execution_time = time.time() - start_time
 
         # Get LLM stats from client (aggregates all provider stats)
         llm_stats = self.llm.get_stats()
 
-        # Determine mode: full (external LLM did analysis) or prep_only (mechanical prep,
-        # Claude Code or manual review handles reasoning)
+        # Determine mode: full (external LLM did analysis)
+        # or prep_only (mechanical prep, Claude Code or
+        # manual review handles reasoning)
         is_prep_only = isinstance(self.llm, ClaudeCodeProvider)
+
+        # Evidence tiering: mechanically corroborated verdicts surface
+        # first (stable within tier); untiered prep-only entries keep
+        # their order at the end. Labeling/ordering only — nothing is
+        # dropped or demoted by tier.
+        from packages.llm_analysis.verification_tier import (
+            sort_results_by_tier,
+            tier_counts,
+        )
+        results = sort_results_by_tier(results)
+        verification_tiers = tier_counts(results)
 
         report = {
             "mode": "prep_only" if is_prep_only else "full",
@@ -2275,12 +3214,30 @@ class AutonomousSecurityAgentV2:
             "patches_generated": patches_generated,
             "dataflow_validated": dataflow_validated,
             "false_positives_caught": false_positives_found,
-            "annotations_emitted": annotations_emitted,
-            "variant_annotations": variant_annotations,
+            "journal_entries_emitted": journal_entries_emitted,
+            "variant_matches": variant_matches,
+            "variant_reviews": {
+                "candidates": variant_review_stats.get("candidates", 0),
+                "analyzed": variant_review_stats.get("analyzed", 0),
+                "exploitable": variant_review_stats.get("exploitable", 0),
+            },
             "fixture_detection_metrics": {
                 "prep_outcomes": fixture_prep_outcomes,
                 "skipped_llm_calls": fixture_skipped_llm_calls,
             },
+            "sage_fp_suppression": {
+                "skipped_llm_calls": sage_fp_skipped_llm_calls,
+                "verdicts_stored": sage_fp_stored,
+            },
+            "guard_dominance": {
+                "skipped_llm_calls": guard_dominance_skipped_llm_calls,
+            },
+            "fail_open_channel": {
+                "checked": fail_open_checked,
+                "skipped_llm_calls": fail_open_skipped_llm_calls,
+                "corroborated": fail_open_corroborated,
+            },
+            "verification_tiers": verification_tiers,
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -2290,66 +3247,110 @@ class AutonomousSecurityAgentV2:
         report_file = self.out_dir / "autonomous_analysis_report.json"
         save_json(report_file, report)
 
-        # Emit a coverage record from the annotations tree, so
+        # Emit a coverage record from the review journal, so
         # ``raptor-coverage-summary`` picks them up as reviewed
         # functions. Best-effort — coverage record failures should
-        # not break the analysis report. Skipped when annotation
+        # not break the analysis report. Skipped when journal
         # emission was suppressed.
-        if emit_annotations:
+        if emit_journal:
             try:
                 from core.coverage.record import (
-                    build_from_annotations, write_record,
+                    build_from_journal,
+                    write_record,
                 )
-                ann_record = build_from_annotations(self.out_dir / "annotations")
-                if ann_record:
-                    write_record(self.out_dir, ann_record, tool_name="annotations")
+                journal_record = build_from_journal(self.out_dir)
+                if journal_record:
+                    write_record(
+                        self.out_dir, journal_record, tool_name="journal",
+                    )
             except Exception:
-                logger.debug("annotation coverage record failed", exc_info=True)
+                logger.debug("journal coverage record failed", exc_info=True)
 
         if is_prep_only:
-            logger.debug(f"Prep complete: {len(unique_findings)} findings")
+            logger.debug("Prep complete: %d findings", len(unique_findings))
         else:
-            logger.info(f"✓ Processed: {len(unique_findings)} findings")
-            logger.info(f"✓ Analyzed: {analyzed} with LLM")
-            logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
-            logger.info(f"✓ Exploits generated: {exploits_generated}")
-            logger.info(f"✓ Patches generated: {patches_generated}")
-            if annotations_emitted > 0:
+            logger.info("✓ Processed: %d findings", len(unique_findings))
+            logger.info("✓ Analyzed: %d with LLM", analyzed)
+            logger.info("✓ Exploitable: %d vulnerabilities", exploitable)
+            if verification_tiers:
                 logger.info(
-                    f"✓ Annotations emitted: {annotations_emitted} "
-                    f"(in {self.out_dir / 'annotations'})"
+                    "✓ Evidence tiers: %d confirmed / %d tool_backed "
+                    "/ %d llm_only",
+                    verification_tiers.get("confirmed", 0),
+                    verification_tiers.get("tool_backed", 0),
+                    verification_tiers.get("llm_only", 0),
                 )
-            if variant_annotations > 0:
+            logger.info("✓ Exploits generated: %d", exploits_generated)
+            logger.info("✓ Patches generated: %d", patches_generated)
+            if journal_entries_emitted > 0:
                 logger.info(
-                    f"✓ Checker-synthesised variants: {variant_annotations} "
-                    f"(suspicious annotations from KNighter follow-up)"
+                    "✓ Journal entries: %d (in %s)",
+                    journal_entries_emitted,
+                    self.out_dir / 'review-journal.jsonl',
+                )
+            if variant_matches > 0:
+                logger.info(
+                    "✓ Checker-synthesised variants: %d (in %s)",
+                    variant_matches,
+                    self.out_dir / 'checker-matches.jsonl',
+                )
+            if variant_review_stats.get("analyzed", 0) > 0:
+                logger.info(
+                    "✓ Variant matches analysed this run: %d "
+                    "(%d exploitable)",
+                    variant_review_stats["analyzed"],
+                    variant_review_stats["exploitable"],
                 )
             if fixture_skipped_llm_calls > 0:
                 logger.info(
-                    f"✓ Fixture-detection (D-1): "
-                    f"{fixture_skipped_llm_calls} LLM call(s) skipped "
-                    f"(test-harness circularity); prep outcomes "
-                    f"{fixture_prep_outcomes}"
+                    "✓ Fixture-detection (D-1): "
+                    "%d LLM call(s) skipped "
+                    "(test-harness circularity); prep outcomes "
+                    "%s",
+                    fixture_skipped_llm_calls,
+                    fixture_prep_outcomes,
+                )
+            if sage_fp_skipped_llm_calls > 0:
+                logger.info(
+                    "✓ SAGE prior-verdict suppression: "
+                    "%d LLM call(s) skipped, "
+                    "%d verdict(s) stored",
+                    sage_fp_skipped_llm_calls,
+                    sage_fp_stored,
+                )
+            if guard_dominance_skipped_llm_calls > 0:
+                logger.info(
+                    "✓ Guard-dominance refutation: "
+                    "%d LLM call(s) skipped (dominating check found)",
+                    guard_dominance_skipped_llm_calls,
+                )
+            if fail_open_skipped_llm_calls > 0 or fail_open_corroborated > 0:
+                logger.info(
+                    "✓ Fail-open channel: %d LLM call(s) skipped "
+                    "(claim mechanically refuted), %d finding(s) "
+                    "corroborated with receipts",
+                    fail_open_skipped_llm_calls,
+                    fail_open_corroborated,
                 )
             logger.info("")
             if dataflow_validated > 0:
                 logger.info("Dataflow Validation:")
-                logger.info(f"   Deep validated: {dataflow_validated} dataflow paths")
-                logger.info(f"   False positives caught: {false_positives_found}")
+                logger.info("   Deep validated: %d dataflow paths", dataflow_validated)
+                logger.info("   False positives caught: %d", false_positives_found)
                 logger.info("")
             logger.info("LLM Statistics:")
-            logger.info(f"   Total requests: {llm_stats['total_requests']}")
-            logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
-            logger.info(f"   Execution time: {execution_time:.1f}s")
+            logger.info("   Total requests: %s", llm_stats['total_requests'])
+            logger.info("   Total cost: $%.4f", llm_stats['total_cost'])
+            logger.info("   Execution time: %.1fs", execution_time)
         if not is_prep_only:
             logger.info("")
-            logger.info(f"Report saved: {report_file}")
+            logger.info("Report saved: %s", report_file)
             logger.info("=" * 70)
 
         return report
 
 
-def find_validation_artifacts(workdir: Path = None) -> Optional[Path]:
+def find_validation_artifacts(workdir: Path | None = None) -> Path | None:
     """Search for validation artifacts from recent pipeline runs.
 
     Checks:
@@ -2387,9 +3388,16 @@ def main() -> None:
     )
     ap.add_argument("--repo", required=True, help="Repository path")
     ap.add_argument("--sarif", nargs="+", help="SARIF files")
-    ap.add_argument("--findings", help="Validated findings.json from exploitability validation pipeline")
+    ap.add_argument(
+        "--findings",
+        help="Validated findings.json from exploitability "
+             "validation pipeline",
+    )
     ap.add_argument("--out", help="Output directory")
-    ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
+    ap.add_argument(
+        "--max-findings", type=int, default=10,
+        help="Max findings to process",
+    )
     ap.add_argument(
         "--prefer", action="append", default=None, metavar="GLOB",
         help=(
@@ -2409,21 +3417,33 @@ def main() -> None:
             "--exclude-dir '**/tests/*'``"
         ),
     )
-    ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
     ap.add_argument(
-        "--no-annotations",
+        "--checklist",
+        help="Inventory checklist.json for function "
+             "metadata lookup",
+    )
+    ap.add_argument(
+        "--no-journal",
         action="store_true",
-        help="Skip per-finding annotation emission and the "
-             "annotation-derived coverage record",
+        dest="no_journal",
+        help="Skip per-finding journal entry emission and the "
+             "journal-derived coverage record",
     )
     ap.add_argument(
         "--no-checker-synthesis",
         action="store_true",
-        help="Skip the KNighter follow-up: don't synthesise a "
-             "checker rule per confirmed finding, don't emit "
-             "variant annotations. Use to cut LLM cost on confirmed "
+        help="Skip checker synthesis entirely: don't synthesise a "
+             "rule per confirmed finding, don't emit variant "
+             "annotations. Use to cut LLM cost on confirmed "
              "exploitable findings — at the price of losing variant "
              "discovery.",
+    )
+    ap.add_argument(
+        "--no-checker-refinement",
+        action="store_true",
+        help="Run checker synthesis in single-shot mode instead of "
+             "the iterative FP-elimination loop (up to 5 rounds). "
+             "Faster but rules may have higher false-positive rates.",
     )
     ap.add_argument(
         "--no-verify-exploits",
@@ -2433,6 +3453,24 @@ def main() -> None:
              "benchmarks / CI surfaces where every second counts. "
              "When disabled, exploit_compiled stays unset on each "
              "finding (None — verification not attempted).",
+    )
+    ap.add_argument(
+        "--execute-exploits",
+        action="store_true",
+        help="Run compiled LLM-emitted exploits in the sandbox and "
+             "record the observed outcome (sanitizer report / crash "
+             "signal / clean run) on each finding — the P9 execution "
+             "oracle. Same posture as crash-agent's flag: network "
+             "blocked, safe env, compile prerequisite required. "
+             "Without an explicit flag the project 'dynamic' trust "
+             "marker decides; default off.",
+    )
+    ap.add_argument(
+        "--no-execute-exploits",
+        action="store_true",
+        help="Explicitly disable sandboxed exploit execution for this "
+             "run, overriding the project 'dynamic' trust marker. "
+             "Takes precedence over --execute-exploits.",
     )
     ap.add_argument(
         "--no-judge-intent",
@@ -2470,9 +3508,25 @@ def main() -> None:
              "no prior corpus; the opt-out exists for cost control and "
              "byte-for-byte run comparison.",
     )
-    ap.add_argument("--prep-only", action="store_true",
-                    help="Skip LLM analysis; produce structured findings for external orchestration")
-    ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
+    ap.add_argument(
+        "--prep-only", action="store_true",
+        help="Skip LLM analysis; produce structured "
+             "findings for external orchestration",
+    )
+    ap.add_argument(
+        "--max-parallel", type=int, default=0,
+        help="Max parallel dispatch threads (0 = auto from model RPM)",
+    )
+    ap.add_argument(
+        "--no-exploits",
+        action="store_true",
+        help="Skip LLM exploit generation for exploitable findings.",
+    )
+    ap.add_argument(
+        "--no-patches",
+        action="store_true",
+        help="Skip LLM patch generation for exploitable findings.",
+    )
 
     model_group = ap.add_argument_group(
         "multi-model analysis",
@@ -2524,12 +3578,18 @@ def main() -> None:
         getattr(args, "aggregate", None),
     ])
 
+    try:
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+    except ImportError:
+        pass
+
     # Suggest --findings if validation artifacts exist nearby
     if args.sarif and not args.findings:
         out_path = Path(args.out).resolve() if args.out else None
         nearby = find_validation_artifacts(out_path)
         if nearby:
-            logger.info(f"Validation artifacts found at {nearby}")
+            logger.info("Validation artifacts found at %s", nearby)
             logger.info("Use --findings for enriched analysis with feasibility data")
 
     repo_path = Path(args.repo).resolve()
@@ -2539,16 +3599,37 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
+    # P9 execution-oracle gate. Explicit per-run flags win in both
+    # directions; else the project's 'dynamic' trust marker; else off.
+    # This is the SAME gate that authorises /audit's dynamic channels
+    # (core.project.trust) — no new authority is introduced here.
+    _execute_explicit: bool | None = None
+    if args.no_execute_exploits:
+        _execute_explicit = False
+    elif args.execute_exploits:
+        _execute_explicit = True
+    try:
+        from core.project.trust import resolve_dynamic_validation
+        execute_exploits = resolve_dynamic_validation(
+            _execute_explicit, target_path=repo_path,
+        )
+    except ImportError:
+        execute_exploits = bool(_execute_explicit)
+
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
     agent = AutonomousSecurityAgentV2(
         repo_path, out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
+        refine_checkers=not args.no_checker_refinement,
         verify_exploits=not args.no_verify_exploits,
         judge_intent=not args.no_judge_intent,
         record_witnesses=not args.no_record_witnesses,
         use_verified_exemplars=not args.no_verified_exemplars,
+        generate_exploits=not args.no_exploits,
+        generate_patches=not args.no_patches,
+        execute_exploits=execute_exploits,
     )
 
     # Load checklist for metadata lookup
@@ -2557,31 +3638,38 @@ def main() -> None:
         # Non-strict: checklist is optional metadata, pipeline continues without it
         checklist = load_json(args.checklist)
         if checklist:
-            logger.info(f"Loaded inventory checklist: {args.checklist}")
+            logger.info("Loaded inventory checklist: %s", args.checklist)
         else:
-            logger.warning(f"Could not load checklist: {args.checklist}")
+            logger.warning("Could not load checklist: %s", args.checklist)
 
     # Process findings - route based on input type
-    emit_annotations = not args.no_annotations
+    emit_journal = not args.no_journal
     if args.findings:
-        report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
-                                        checklist=checklist,
-                                        emit_annotations=emit_annotations,
-                                        prefer_globs=args.prefer,
-                                        exclude_globs=args.exclude_dir)
+        report = agent.process_findings(
+            findings_path=args.findings,
+            max_findings=args.max_findings,
+            checklist=checklist,
+            emit_journal=emit_journal,
+            prefer_globs=args.prefer,
+            exclude_globs=args.exclude_dir,
+        )
     else:
-        report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
-                                        checklist=checklist,
-                                        emit_annotations=emit_annotations,
-                                        prefer_globs=args.prefer,
-                                        exclude_globs=args.exclude_dir)
+        report = agent.process_findings(
+            sarif_paths=args.sarif,
+            max_findings=args.max_findings,
+            checklist=checklist,
+            emit_journal=emit_journal,
+            prefer_globs=args.prefer,
+            exclude_globs=args.exclude_dir,
+        )
 
     # Orchestrated path: role flags → prep then parallel dispatch
     if _has_role_flags and report.get("mode") == "prep_only":
         prep_report_path = out_dir / "autonomous_analysis_report.json"
         if prep_report_path.exists():
             from packages.llm_analysis.orchestrator import (
-                build_llm_config_from_flags, orchestrate,
+                build_llm_config_from_flags,
+                orchestrate,
             )
             llm_config = build_llm_config_from_flags(
                 models=args.model or [],
@@ -2596,9 +3684,12 @@ def main() -> None:
                     out_dir=out_dir,
                     max_parallel=args.max_parallel,
                     max_findings=args.max_findings,
+                    no_exploits=args.no_exploits,
+                    no_patches=args.no_patches,
                     llm_config=llm_config,
                     deep_validate=getattr(args, "deep_validate", False),
                     deep_validate_disabled=getattr(args, "no_deep_validate", False),
+                    checklist=checklist,
                 )
                 if result:
                     return

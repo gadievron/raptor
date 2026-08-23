@@ -24,9 +24,9 @@ corpus, so cheap to run on every commit.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
-from typing import List
 
 # Field names that would indicate raw exploit content. Any
 # calibration JSON containing a key that matches (case-insensitive)
@@ -53,10 +53,10 @@ _REQUIRED_SOURCE_FIELDS = frozenset({"license", "url"})
 _GENERATED_REPORT_SUBTREES = frozenset({"refit", "validation"})
 
 
-def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
+def check(corpus_dir: Path, attribution_md: Path) -> list[str]:
     """Return a list of violation strings (empty when corpus is
     compliant)."""
-    violations: List[str] = []
+    violations: list[str] = []
     if not corpus_dir.is_dir():
         violations.append(
             f"calibration dir not found: {corpus_dir}"
@@ -82,37 +82,36 @@ def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
                 f"{rel}: failed to read/parse JSON ({e})"
             )
             continue
-        if not isinstance(data, dict):
-            # Lists are valid for some snapshot shapes but the
-            # corpus convention is dict-with-_source. Tighten as
-            # needed; for now lists are permitted.
-            continue
-        # Rule 1: ``_source`` block.
-        src = data.get("_source")
-        if not isinstance(src, dict):
-            violations.append(
-                f"{rel}: missing or non-dict ``_source`` block"
-            )
-        else:
-            missing = _REQUIRED_SOURCE_FIELDS - set(src.keys())
-            if missing:
+        # Lists are valid for some snapshot shapes but the
+        # corpus convention is dict-with-_source. Tighten as
+        # needed; for now lists are permitted.
+        if isinstance(data, dict):
+            # Rule 1: ``_source`` block.
+            src = data.get("_source")
+            if not isinstance(src, dict):
                 violations.append(
-                    f"{rel}: ``_source`` missing fields: "
-                    f"{sorted(missing)}"
+                    f"{rel}: missing or non-dict ``_source`` block"
                 )
+            else:
+                missing = _REQUIRED_SOURCE_FIELDS - set(src.keys())
+                if missing:
+                    violations.append(
+                        f"{rel}: ``_source`` missing fields: "
+                        f"{sorted(missing)}"
+                    )
         # Rule 2: forbidden fields (anywhere in the document).
         bad = _walk_for_forbidden(data, path=())
-        for trail in bad:
-            violations.append(
-                f"{rel}: forbidden field at {'.'.join(trail)} "
-                f"(license-restricted content)"
-            )
+        violations.extend(f"{rel}: forbidden field at {'.'.join(trail)} "
+                f"(license-restricted content)" for trail in bad)
         # Rule 3: ATTRIBUTION.md mentions the file.
-        if attribution_text and rel.name not in attribution_text:
+        if attribution_text and not re.search(
+            r'(?<![a-zA-Z0-9._\-])' + re.escape(rel.name) + r'(?![a-zA-Z0-9._\-])',
+            attribution_text,
+        ):
             # Project-sample files are bulky; reference the
             # parent directory in ATTRIBUTION.md, individual
             # filenames not required.
-            if "project_samples" not in str(rel):
+            if "project_samples" not in rel.parts:
                 violations.append(
                     f"{rel}: not referenced in ATTRIBUTION.md "
                     f"(add a section citing source + license)"
@@ -120,8 +119,8 @@ def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
     return violations
 
 
-def _walk_for_forbidden(node, path: tuple) -> List[tuple]:
-    out: List[tuple] = []
+def _walk_for_forbidden(node, path: tuple) -> list[tuple]:
+    out: list[tuple] = []
     if isinstance(node, dict):
         for k, v in node.items():
             if isinstance(k, str) and k.lower() in _FORBIDDEN_FIELDS:

@@ -121,16 +121,20 @@ def test_multi_path_uses_require_any_for_union_semantics(tmp_path):
     assert "(require-not (require-any " in p, (
         f"expected (require-not (require-any ...)) idiom; got:\n{p}"
     )
-    # Three exception paths: /private/tmp + output + extra → all
-    # three (subpath ...) must live inside ONE require-any clause.
+    # Three dir exception paths: /private/tmp + output + extra as
+    # (subpath ...) plus device-node (literal ...) entries, all
+    # inside ONE require-any clause.
     import re
     require_any_match = re.search(
-        r"\(require-any\s+((?:\(subpath [^)]+\)\s*)+)\)", p
+        r"\(require-any\s+((?:\((?:subpath|literal) [^)]+\)\s*)+)\)", p
     )
-    assert require_any_match, "no (require-any (subpath ...) ...) found"
+    assert require_any_match, "no (require-any ...) found"
     inside = require_any_match.group(1)
     assert inside.count("(subpath ") == 3, (
         f"expected 3 subpaths inside require-any, got: {inside}"
+    )
+    assert "(literal \"/dev/null\")" in inside, (
+        f"/dev/null literal missing from require-any: {inside}"
     )
     # Regression catch for form (b): we should NOT see multiple
     # (require-not ...) clauses on the same deny (each holding one
@@ -234,6 +238,47 @@ def test_egress_proxy_emits_both_v4_and_v6():
     assert "tcp6" in p
 
 
+def test_egress_proxy_lane_port_never_gets_wildcard_rule():
+    """The proxy lane port is folded into allowed_tcp_ports by the
+    context layer (TCP-only path — always taken on darwin), so
+    pre-fix the builder emitted BOTH the loopback-scoped lane rules
+    AND a wildcard `(remote tcp "*:<laneport>")` for the same port —
+    letting a child read the port from HTTPS_PROXY and dial
+    attacker-host:<laneport> directly, bypassing the hostname
+    allowlist and proxy telemetry. The loopback tcp4/tcp6 rules
+    already cover the lane; the wildcard must be suppressed for the
+    lane port while caller-declared non-lane ports keep theirs."""
+    lane = 4567
+    p = seatbelt.build_profile(
+        use_egress_proxy=True,
+        proxy_port=lane,
+        allowed_tcp_ports=[lane, 8443],
+    )
+    # Loopback-scoped lane rules stay (both address families).
+    assert f'(remote tcp4 "localhost:{lane}")' in p
+    assert f'(remote tcp6 "localhost:{lane}")' in p
+    # No any-address wildcard for the lane port.
+    assert f'"*:{lane}"' not in p
+    # A declared non-lane port keeps its wildcard rule.
+    assert '(allow network-outbound (remote tcp "*:8443"))' in p
+
+
+def test_egress_proxy_lane_only_ports_list_emits_no_wildcard():
+    """The production darwin shape: allowed_tcp_ports == [lane_port]
+    exactly (context.py replaces the caller list with the lane).
+    The profile must contain NO wildcard network-outbound rule at
+    all — only the loopback pair."""
+    lane = 4567
+    p = seatbelt.build_profile(
+        use_egress_proxy=True,
+        proxy_port=lane,
+        allowed_tcp_ports=[lane],
+    )
+    assert '(remote tcp "*:' not in p
+    assert f'localhost:{lane}' in p
+    assert "(deny network*)" in p
+
+
 def test_allowed_tcp_ports_emitted():
     """Caller-supplied port allowlist (e.g. allowed_tcp_ports=[443])
     becomes (allow network-outbound (remote tcp "*:443")) clauses."""
@@ -243,6 +288,34 @@ def test_allowed_tcp_ports_emitted():
     )
     assert '"*:443"' in p
     assert '"*:8443"' in p
+
+
+def test_ports_alone_emit_scoped_tcp_deny():
+    """A standalone allowed_tcp_ports config must emit a network
+    section (was: silently allow-default on macOS while Linux Landlock
+    enforced the same kwargs). The deny is scoped to outbound TCP so
+    UDP/DNS and bind/listen stay untouched (listening is unrestricted
+    by design)."""
+    p = seatbelt.build_profile(block_network=False, use_egress_proxy=False,
+                               allowed_tcp_ports=[443, 8443])
+    assert '(deny network-outbound (remote tcp "*:*"))' in p
+    assert '(allow network-outbound (remote tcp "*:443"))' in p
+    assert '(allow network-outbound (remote tcp "*:8443"))' in p
+    # Scoped deny only — bind/listen and UDP stay untouched.
+    assert "(deny network*)" not in p
+
+
+def test_block_network_with_ports_branch_unchanged():
+    p = seatbelt.build_profile(block_network=True,
+                               allowed_tcp_ports=[443])
+    assert "(deny network*)" in p
+    assert '(allow network-outbound (remote tcp "*:443"))' in p
+
+
+def test_no_network_kwargs_no_network_section():
+    p = seatbelt.build_profile(block_network=False,
+                               use_egress_proxy=False)
+    assert "deny network" not in p
 
 
 def test_restrict_reads_emits_deny_read_with_exceptions(tmp_path):
@@ -421,6 +494,74 @@ def test_seccomp_profile_full_emits_process_info_deny():
     assert "(deny process-info-pidfdinfo (target others))" in p
 
 
+def test_seccomp_profile_full_emits_iokit_deny():
+    """`(deny iokit-open)` rides the full profile: userland driver /
+    device access is the macOS analogue of Linux's blocked
+    device-capability escapes, and the 2026-08-15 probe battery
+    showed the deny is free (clang/make/git/python/venv/tar all
+    pass). The sibling candidate `(deny sysctl-write)` must NOT be
+    emitted — it breaks Apple's linker and ensurepip."""
+    p = seatbelt.build_profile(seccomp_profile="full")
+    assert "(deny iokit-open)" in p
+    assert "sysctl-write" not in p
+
+
+def test_seccomp_profile_full_audit_reports_iokit():
+    """Audit mode observes instead of blocking — iokit-open becomes
+    allow-with-report alongside process-info*."""
+    p = seatbelt.build_profile(seccomp_profile="full", audit_mode=True)
+    assert "(allow iokit-open (with report))" in p
+    assert "(deny iokit-open)" not in p
+
+
+def test_debug_profile_omits_iokit_deny():
+    """debug keeps debugger primitives functional — the introspection
+    hardening set (incl. iokit-open) must not engage."""
+    p = seatbelt.build_profile(seccomp_profile="debug")
+    assert "iokit-open" not in p
+
+
+def test_strict_profile_emits_macos_strict_extras():
+    """profile_name='strict' layers the probe-validated extras: scoped
+    signal deny, nvram deny, and the curated mach-lookup allowlist.
+    All three passed the 2026-08-15 toolchain battery (mach even as a
+    blanket deny — the allowlist is deliberate headroom)."""
+    p = seatbelt.build_profile(seccomp_profile="full",
+                               profile_name="strict")
+    assert "(deny signal (target others))" in p
+    assert "(deny nvram*)" in p
+    assert "(deny mach-lookup (require-not (require-any" in p
+    for svc in seatbelt.MACOS_STRICT_MACH_SERVICES:
+        assert svc in p
+
+
+def test_full_profile_omits_strict_extras():
+    """full stays the compatible default — no strict extras."""
+    p = seatbelt.build_profile(seccomp_profile="full",
+                               profile_name="full")
+    assert "mach-lookup" not in p
+    assert "nvram" not in p
+    assert "(deny signal" not in p
+
+
+def test_strict_extras_report_under_audit():
+    """Audit observes instead of blocking, strict extras included."""
+    p = seatbelt.build_profile(seccomp_profile="full",
+                               profile_name="strict", audit_mode=True)
+    assert "(allow mach-lookup (with report))" in p
+    assert "(deny mach-lookup" not in p
+    assert "(allow signal (with report))" in p
+
+
+def test_restrict_reads_allows_homebrew_prefixes():
+    """Homebrew trees must be readable under restrict_reads —
+    Homebrew-installed interpreters die at dyld stage otherwise
+    (observed: python3 "Library not loaded", bash via libreadline)."""
+    p = seatbelt.build_profile(output="/tmp", restrict_reads=True)
+    assert '(subpath "/opt/homebrew")' in p
+    assert '(subpath "/usr/local")' in p
+
+
 def test_seccomp_profile_none_string_omits_deny():
     """`seccomp_profile="none"` is the explicit "no syscall filter"
     sentinel — must NOT engage the macOS hardening either."""
@@ -546,3 +687,22 @@ def test_audit_verbose_compatible_with_restrict_reads():
                                 restrict_reads=True, output="/tmp/x")
     assert "(allow file-read* (with report))" in p
     assert "(allow file-read-data (with report))" in p
+
+
+class TestExcludeTmpBaseline:
+    """exclude_tmp_baseline strips the /private/tmp writable seed
+    (Linux writable_paths=[] parity); the spawn layer pairs it with a
+    TMPDIR redirect into {output}/.tmp. Enforcement semantics were
+    validated live on an arm64 macOS host."""
+
+    def test_seed_present_by_default(self):
+        from core.sandbox.seatbelt import build_profile
+        prof = build_profile(output="/x/out")
+        assert '(subpath "/private/tmp")' in prof
+
+    def test_seed_stripped_when_excluded(self):
+        from core.sandbox.seatbelt import build_profile
+        prof = build_profile(output="/x/out", exclude_tmp_baseline=True)
+        assert '"/private/tmp"' not in prof
+        # Output stays writable — that's where TMPDIR redirects.
+        assert '(subpath "/x/out")' in prof

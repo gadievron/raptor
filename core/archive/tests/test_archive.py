@@ -9,6 +9,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from core.archive import (
     DecompressionLimitExceeded,
@@ -121,6 +122,78 @@ class TestExtract(unittest.TestCase):
                 extract_to_dir(p, Path(d) / "out")
 
 
+class TestPlainTarStreaming(unittest.TestCase):
+    """The plain (uncompressed) tar branch must stream the archive
+    member-by-member instead of materialising the whole file with
+    ``read_bytes()`` — otherwise the per-member / entry-count /
+    running-total caps only apply to bytes already resident in RAM and
+    a large plain tar becomes a memory-spike DoS."""
+
+    def test_plain_tar_never_materialised_via_read_bytes(self):
+        # The regression mechanism: src.read_bytes() loaded the whole tar
+        # before any cap. Prove the branch no longer touches read_bytes.
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "a.tar", {"dir/x.txt": b"hello", "y.txt": b"world"})
+            out = d / "out"
+            with mock.patch.object(
+                    Path, "read_bytes",
+                    side_effect=AssertionError("plain tar must stream")):
+                stats = extract_to_dir(d / "a.tar", out)
+            self.assertEqual(stats["format"], "tar")
+            self.assertEqual(_files(out), ["dir/x.txt", "y.txt"])
+            self.assertEqual((out / "dir/x.txt").read_bytes(), b"hello")
+            self.assertEqual((out / "y.txt").read_bytes(), b"world")
+
+    def test_plain_tar_total_bytes_cap_still_enforced(self):
+        # Streaming must not weaken the aggregate-size bomb defense.
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "big.tar", {"a": b"x" * 100, "b": b"y" * 100})
+            with self.assertRaises(DecompressionLimitExceeded):
+                extract_to_dir(d / "big.tar", d / "out", max_total_bytes=150)
+
+    def test_plain_tar_entry_count_cap_still_enforced(self):
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "many.tar", {f"f{i}": b"x" for i in range(6)})
+            with self.assertRaises(DecompressionLimitExceeded):
+                extract_to_dir(d / "many.tar", d / "out", max_files=3)
+
+    def test_plain_tar_member_cap_bounds_resident_bytes(self):
+        # A member over max_member_bytes is skipped by the primitive's
+        # safety gate rather than read into memory.
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "a.tar", {"small": b"ok", "huge": b"z" * 4096})
+            out = d / "out"
+            extract_to_dir(d / "a.tar", out, max_member_bytes=1024)
+            self.assertEqual(_files(out), ["small"])
+
+
+class TestIterFileChunks(unittest.TestCase):
+
+    def test_chunks_are_bounded_and_lossless(self):
+        from core.archive.extract import _iter_file_chunks
+        with TemporaryDirectory() as d:
+            p = Path(d) / "blob"
+            content = bytes(range(256)) * 40 + b"tail"
+            p.write_bytes(content)
+            with open(p, "rb") as fh:
+                chunks = list(_iter_file_chunks(fh, chunk_bytes=1000))
+            self.assertTrue(all(0 < len(c) <= 1000 for c in chunks))
+            self.assertGreater(len(chunks), 1)
+            self.assertEqual(b"".join(chunks), content)
+
+    def test_empty_file_yields_nothing(self):
+        from core.archive.extract import _iter_file_chunks
+        with TemporaryDirectory() as d:
+            p = Path(d) / "empty"
+            p.write_bytes(b"")
+            with open(p, "rb") as fh:
+                self.assertEqual(list(_iter_file_chunks(fh)), [])
+
+
 class TestHardening(unittest.TestCase):
 
     def test_zip_slip_member_not_written_outside_dest(self):
@@ -179,6 +252,144 @@ class TestHardening(unittest.TestCase):
             stats = _write_members({"a\x00b": b"x", "good.txt": b"ok"}, out, 1 << 20, 100)
             self.assertEqual(stats["files"], 1)
             self.assertTrue((out / "good.txt").exists())
+
+
+class TestFailClosedCorruptArchives(unittest.TestCase):
+    """A corrupt/truncated tar REFUSES (typed) instead of returning an
+    empty success summary that consumers treat as a complete extraction."""
+
+    def test_corrupt_tar_raises_archive_error(self) -> None:
+        with TemporaryDirectory() as td:
+            src = Path(td) / "corrupt.tar"
+            # Valid-looking 512-byte header block then garbage: detected
+            # as tar, unreadable as one.
+            info = tarfile.TarInfo("a.txt")
+            info.size = 4
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tf:
+                tf.addfile(info, io.BytesIO(b"data"))
+            src.write_bytes(buf.getvalue()[:600] + b"\x00garbage" * 40)
+            with self.assertRaises(ArchiveError):
+                extract_to_dir(src, Path(td) / "out")
+
+    def test_truncated_tar_gz_raises(self) -> None:
+        with TemporaryDirectory() as td:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tf:
+                info = tarfile.TarInfo("f.txt")
+                payload = b"x" * 4096
+                info.size = len(payload)
+                tf.addfile(info, io.BytesIO(payload))
+            whole = gzip.compress(buf.getvalue())
+            src = Path(td) / "trunc.tar.gz"
+            src.write_bytes(whole[: len(whole) // 2])
+            with self.assertRaises(ArchiveError):
+                extract_to_dir(src, Path(td) / "out")
+
+    def test_summary_reports_dropped_members(self) -> None:
+        with TemporaryDirectory() as td:
+            src = Path(td) / "ok.tar"
+            with tarfile.open(src, mode="w") as tf:
+                info = tarfile.TarInfo("good.txt")
+                info.size = 2
+                tf.addfile(info, io.BytesIO(b"ok"))
+            stats = extract_to_dir(src, Path(td) / "out")
+            self.assertEqual(stats["files"], 1)
+            self.assertEqual(stats["dropped"], 0)
+
+class TestStreamingExtraction(unittest.TestCase):
+    """Members must stream to disk — never accumulate in a dict up to
+    the multi-GiB aggregate budget — and the single-file decompressor
+    must read in bounded chunks, never one budget-sized allocation."""
+
+    def test_tar_paths_never_route_through_write_members(self):
+        # Structural streaming assertion: the dict-buffering writer is
+        # off-limits for tar-shaped inputs (zip legitimately keeps it —
+        # its primitive is seek-based and returns member bytes).
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "a.tar", {"x.txt": b"plain"}, mode="w")
+            _tar(d / "a.tar.gz", {"y.txt": b"compressed"}, mode="w:gz")
+            with mock.patch(
+                    "core.archive.extract._write_members",
+                    side_effect=AssertionError("tar members must stream")):
+                stats = extract_to_dir(d / "a.tar", d / "out1")
+                self.assertEqual(stats["files"], 1)
+                stats = extract_to_dir(d / "a.tar.gz", d / "out2")
+                self.assertEqual(stats["files"], 1)
+            self.assertEqual((d / "out1" / "x.txt").read_bytes(), b"plain")
+            self.assertEqual((d / "out2" / "y.txt").read_bytes(),
+                             b"compressed")
+
+    def test_decompression_reads_are_chunked(self):
+        # No single read() against the lazy decompressor may request
+        # more than the chunk size — the retired implementation asked
+        # for max_bytes + 1 (up to 1 GiB + 1) in one call.
+        from core.archive.compression import (
+            _CHUNK_BYTES,
+            _OPENERS,
+            decompress_single,
+        )
+        content = b"z" * (3 * _CHUNK_BYTES // 2)
+        requested = []
+        real_open = _OPENERS["gz"]
+
+        class _Recorder:
+            def __init__(self, fh):
+                self._fh = fh
+
+            def read(self, n=-1):
+                requested.append(n)
+                return self._fh.read(n)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._fh.close()
+                return False
+
+        with TemporaryDirectory() as d:
+            p = Path(d) / "big.gz"
+            with gzip.open(p, "wb") as f:
+                f.write(content)
+            with mock.patch.dict(
+                    _OPENERS,
+                    {"gz": lambda path, mode="rb":
+                        _Recorder(real_open(path, mode))}):
+                data = decompress_single(p, "gz", max_bytes=1 << 30)
+        self.assertEqual(data, content)
+        self.assertTrue(requested)
+        self.assertLessEqual(max(requested), _CHUNK_BYTES)
+
+    def test_multichunk_single_file_round_trips(self):
+        # The streamed single-file writer must reassemble multi-chunk
+        # output byte-for-byte and report accurate stats.
+        from core.archive.compression import _CHUNK_BYTES
+        content = bytes(range(256)) * ((2 * _CHUNK_BYTES) // 256 + 17)
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            with gzip.open(d / "blob.bin.gz", "wb") as f:
+                f.write(content)
+            stats = extract_to_dir(d / "blob.bin.gz", d / "out")
+            self.assertEqual(stats["files"], 1)
+            self.assertEqual(stats["bytes"], len(content))
+            self.assertEqual((d / "out" / "blob.bin").read_bytes(), content)
+
+    def test_streamed_tar_budget_and_count_caps_hold(self):
+        # Streaming must keep the aggregate-byte and file-count caps
+        # with the same error type.
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            _tar(d / "big.tar.gz", {"a": b"x" * 100, "b": b"y" * 100},
+                 mode="w:gz")
+            with self.assertRaises(DecompressionLimitExceeded):
+                extract_to_dir(d / "big.tar.gz", d / "o1",
+                               max_total_bytes=150)
+            _tar(d / "many.tar.gz", {f"f{i}": b"x" for i in range(6)},
+                 mode="w:gz")
+            with self.assertRaises(DecompressionLimitExceeded):
+                extract_to_dir(d / "many.tar.gz", d / "o2", max_files=3)
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ def _report(
 class TestShortInt:
     def test_thousands(self):
         assert _short_int(52_000) == "52k"
-        assert _short_int(1_500) == "1k"  # truncates
+        assert _short_int(1_500) == "2k"  # rounds (float division)
 
     def test_millions(self):
         assert _short_int(1_500_000) == "1.5M"
@@ -273,7 +273,7 @@ class TestBuildDescribeReport:
         # Catalog preview present + populated for a known entry.
         assert report.target_type_defaults is not None
         assert "security-audit" in report.target_type_defaults.semgrep_packs
-        assert report.estimate_summary is not None
+        assert report.estimate_summary is None
 
     def test_unmatched_target_surfaces_generic_defaults(self, tmp_path):
         # Empty tree → falls back to ``generic``. The generic

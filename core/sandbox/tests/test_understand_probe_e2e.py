@@ -56,6 +56,7 @@ class TestUnderstandProbeFlowE2E(unittest.TestCase):
                 and check_ptrace_available()):
             self.skipTest("observe prerequisites unavailable")
 
+    @pytest.mark.slow
     def test_full_probe_flow_correlates_entry_points(self):
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (

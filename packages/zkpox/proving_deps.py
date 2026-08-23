@@ -64,7 +64,7 @@ def require_proving_stack() -> None:
     the missing-deps error.
     """
     if not proving_stack_available():
-        raise ProvingStackUnavailable(
+        msg = (
             "ZKPoX Tier 2/3 proving requires the SP1 / RISC-V "
             "proving toolchain, which isn't installed on this host. "
             "Tiers 0/1 and 1.5 (eligibility, bundle assembly, native "
@@ -72,3 +72,4 @@ def require_proving_stack() -> None:
             "Install the proving toolchain to enable `prove` / "
             "`verify`."
         )
+        raise ProvingStackUnavailable(msg)

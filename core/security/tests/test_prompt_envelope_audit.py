@@ -183,6 +183,115 @@ def test_rule_skips_untrustedblock_constructor(tmp_path):
     assert vs == []
 
 
+def test_rule_catches_messagepart_fstring(tmp_path):
+    """``MessagePart`` is a zero-sanitisation dataclass whose content
+    ships to the model verbatim — it is NOT an envelope-constructor
+    exemption, so f-string interpolation into its ``content`` fires."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import MessagePart\n"
+        "def f(finding):\n"
+        "    return MessagePart(role='user', content=f'{finding.message}')\n"
+    )
+    vs = audit_file(src)
+    assert any(v.attr == "message" for v in vs)
+
+
+def test_rule_catches_taintedstring_trusted_label(tmp_path):
+    """``TaintedString(value=f'{...}', trust='trusted')`` routes attacker
+    text through the light trusted-rendering path — it must fire."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def f(finding):\n"
+        "    return TaintedString(value=f'{finding.message}', trust='trusted')\n"
+    )
+    vs = audit_file(src)
+    assert any(v.attr == "message" for v in vs)
+
+
+def test_rule_skips_taintedstring_untrusted_label(tmp_path):
+    """Only a literal ``trust='untrusted'`` exempts a TaintedString."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def f(finding):\n"
+        "    return TaintedString(value=f'{finding.message}', trust='untrusted')\n"
+    )
+    assert audit_file(src) == []
+
+
+def test_rule_catches_taintedstring_nonliteral_trust(tmp_path):
+    """A trust label the AST can't prove is treated conservatively —
+    it fires and needs an explicit allowlist entry."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def f(finding, label):\n"
+        "    return TaintedString(value=f'{finding.message}', trust=label)\n"
+    )
+    vs = audit_file(src)
+    assert any(v.attr == "message" for v in vs)
+
+
+def test_rule_catches_taintedstring_missing_trust(tmp_path):
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def f(finding):\n"
+        "    return TaintedString(value=f'{finding.message}')\n"
+    )
+    vs = audit_file(src)
+    assert any(v.attr == "message" for v in vs)
+
+
+def test_rule_checks_taintedstring_positional_trust(tmp_path):
+    """The trust label may be passed positionally — both dataclass
+    fields are positional-or-keyword."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def ok(finding):\n"
+        "    return TaintedString(f'{finding.message}', 'untrusted')\n"
+        "def bad(finding):\n"
+        "    return TaintedString(f'{finding.message}', 'trusted')\n"
+    )
+    vs = audit_file(src)
+    assert [v.func_name for v in vs] == ["bad"]
+
+
+def test_rule_checks_taintedstring_trust_on_percent_format(tmp_path):
+    """The trust-label check also applies on the ``.format()`` /
+    %-format paths, where the interpolation inside the constructor
+    kwarg is reached via the enclosing-constructor walk."""
+    from core.security.prompt_envelope_audit import audit_file
+
+    src = tmp_path / "fake_prompt_builder.py"
+    src.write_text(
+        "from core.security.prompt_envelope import TaintedString\n"
+        "def bad(finding):\n"
+        "    return TaintedString(value='x: %s' % finding.message,\n"
+        "                         trust='trusted')\n"
+        "def ok(finding):\n"
+        "    return TaintedString(value='x: %s' % finding.message,\n"
+        "                         trust='untrusted')\n"
+    )
+    vs = audit_file(src)
+    assert [v.func_name for v in vs] == ["bad"]
+
+
 def test_rule_skips_explicit_sanitisation(tmp_path):
     """Wrapping in ``neutralize_tag_forgery`` /
     ``_sanitize_for_prompt`` removes the violation."""

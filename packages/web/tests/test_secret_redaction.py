@@ -371,17 +371,20 @@ class RecordingLogger:
     def __init__(self):
         self.messages = []
 
-    def info(self, message, **kwargs):
-        self.messages.append(message)
+    def _record(self, message, *args, **kwargs):
+        self.messages.append(message % args if args else message)
 
-    def warning(self, message, **kwargs):
-        self.messages.append(message)
+    def info(self, message, *args, **kwargs):
+        self._record(message, *args, **kwargs)
 
-    def error(self, message, **kwargs):
-        self.messages.append(message)
+    def warning(self, message, *args, **kwargs):
+        self._record(message, *args, **kwargs)
 
-    def debug(self, message, **kwargs):
-        self.messages.append(message)
+    def error(self, message, *args, **kwargs):
+        self._record(message, *args, **kwargs)
+
+    def debug(self, message, *args, **kwargs):
+        self._record(message, *args, **kwargs)
 
 
 def test_web_client_redacts_timeout_urls_in_logs(monkeypatch):
@@ -390,7 +393,7 @@ def test_web_client_redacts_timeout_urls_in_logs(monkeypatch):
 
     redaction_probe = "api-" + "g" * 24
     recorder = RecordingLogger()
-    client = WebClient("https://example.test")
+    client = WebClient("https://example.test", block_private_ips=False)
     monkeypatch.setattr(client_module, "logger", recorder)
 
     def raise_timeout(*args, **kwargs):
@@ -414,7 +417,7 @@ def test_web_client_redacts_request_exception_urls_in_logs(monkeypatch):
 
     redaction_probe = "access-" + "h" * 24
     recorder = RecordingLogger()
-    client = WebClient("https://example.test")
+    client = WebClient("https://example.test", block_private_ips=False)
     monkeypatch.setattr(client_module, "logger", recorder)
 
     def raise_error(*args, **kwargs):

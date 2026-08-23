@@ -107,3 +107,28 @@ def test_capture_isolates_between_runs(tmp_path: Path) -> None:
 
     assert len(failures_a) == 1
     assert failures_b == []
+
+
+def test_capture_captures_oversize_manifest_refusal(tmp_path: Path) -> None:
+    """``read_bounded``'s oversize refusal must reach the structured
+    ``parse_failures`` like a malformed manifest does — otherwise an
+    over-cap manifest is skipped with only a log-stream warning and
+    the run report shows no trace of the lost coverage. Sparse
+    truncate: the stat gate fires before any read, so no 50 MB of
+    data is materialised."""
+    import os
+
+    from packages.sca.parsers._safe_read import _MAX_PARSER_BYTES
+
+    lock = tmp_path / "package-lock.json"
+    lock.write_text('{"packages": {}}', encoding="utf-8")
+    os.truncate(lock, _MAX_PARSER_BYTES + 1)
+
+    with capture_parse_failures() as failures:
+        parse_manifest(_manifest(lock, ecosystem="npm"))
+
+    assert len(failures) == 1
+    f = failures[0]
+    assert isinstance(f, ParseFailure)
+    assert f.path == lock
+    assert "size=" in f.reason

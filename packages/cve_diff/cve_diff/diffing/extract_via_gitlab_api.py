@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import functools
 import re
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from urllib.parse import quote as _urlquote
 
 from core.http import HttpError
@@ -44,7 +44,7 @@ _USER_AGENT = "cve-diff-gitlab/0.1"
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> "EgressClient":
+def _client() -> EgressClient:
     """Allowlisted egress client (curated GitLab hosts only).
 
     Pre-2026-05-04 this returned a bare UrllibClient with no host
@@ -83,7 +83,7 @@ _GITLAB_HOST_RE = re.compile(
 )
 
 
-def _gitlab_host_and_slug(repo_url: str) -> tuple[Optional[str], Optional[str]]:
+def _gitlab_host_and_slug(repo_url: str) -> tuple[str | None, str | None]:
     """Return ``(host, slug)`` for a GitLab URL, or ``(None, None)``.
 
     Recognises ``gitlab.com`` and self-hosted GitLab (any host whose
@@ -98,8 +98,7 @@ def _gitlab_host_and_slug(repo_url: str) -> tuple[Optional[str], Optional[str]]:
     host, hostname, slug = m.group(1), m.group(2).lower(), m.group(3)
     if hostname not in _GITLAB_ALLOWED_HOSTS:
         return None, None
-    if slug.endswith(".git"):
-        slug = slug[:-4]
+    slug = slug.removesuffix(".git")
     return host, slug
 
 
@@ -120,17 +119,19 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
     """
     host, slug = _gitlab_host_and_slug(ref.repository_url)
     if host is None or slug is None:
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: extract_via_gitlab_api supports gitlab URLs only "
             f"(got {ref.repository_url!r})"
         )
+        raise AnalysisError(msg)
 
     sha = (ref.fix_commit or "").strip().lower()
     if sha in _INVALID_LITERALS or not _SHA_RE.fullmatch(sha):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: extract_via_gitlab_api refused — fix_commit "
             f"{ref.fix_commit!r} is not a SHA"
         )
+        raise AnalysisError(msg)
     encoded = _urlquote(slug, safe="")
     base = f"{host}/api/v4/projects/{encoded}/repository/commits/{sha}"
 
@@ -139,27 +140,27 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
             "GET", base, timeout=_TIMEOUT_S, retries=0,
         )
     except HttpError as exc:
-        raise AnalysisError(
-            f"{cve_id}: GitLab commit API error for {slug}@{sha[:12]}: {exc}"
-        ) from exc
+        msg = f"{cve_id}: GitLab commit API error for {slug}@{sha[:12]}: {exc}"
+        raise AnalysisError(msg) from exc
     if meta_resp.status != 200:
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: GitLab commit API returned http {meta_resp.status} "
             f"for {slug}@{sha[:12]}"
         )
+        raise AnalysisError(msg)
     try:
         meta = meta_resp.json()
     except Exception as exc:
-        raise AnalysisError(
-            f"{cve_id}: GitLab commit API returned non-JSON for {slug}@{sha[:12]}"
-        ) from exc
+        msg = f"{cve_id}: GitLab commit API returned non-JSON for {slug}@{sha[:12]}"
+        raise AnalysisError(msg) from exc
 
     parents = meta.get("parent_ids") or []
     if not parents or not isinstance(parents[0], str):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: commit {slug}@{sha[:12]} has no parent — "
             f"can't compute fix^..fix via API (root commit)"
         )
+        raise AnalysisError(msg)
     parent_sha = parents[0].lower()
 
     try:
@@ -167,25 +168,23 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
             "GET", f"{base}/diff", timeout=_TIMEOUT_S, retries=0,
         )
     except HttpError as exc:
-        raise AnalysisError(
-            f"{cve_id}: GitLab diff API error: {exc}"
-        ) from exc
+        msg = f"{cve_id}: GitLab diff API error: {exc}"
+        raise AnalysisError(msg) from exc
     if diff_resp.status != 200:
-        raise AnalysisError(
-            f"{cve_id}: GitLab diff API returned http {diff_resp.status}"
-        )
+        msg = f"{cve_id}: GitLab diff API returned http {diff_resp.status}"
+        raise AnalysisError(msg)
     try:
         diff_entries = diff_resp.json()
     except Exception as exc:
-        raise AnalysisError(
-            f"{cve_id}: GitLab diff API returned non-JSON"
-        ) from exc
+        msg = f"{cve_id}: GitLab diff API returned non-JSON"
+        raise AnalysisError(msg) from exc
 
     if not isinstance(diff_entries, list):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: GitLab diff API response was not a list "
             f"(got {type(diff_entries).__name__})"
         )
+        raise AnalysisError(msg)
 
     diff_chunks: list[str] = []
     file_names: list[str] = []
@@ -214,9 +213,8 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
 
     diff_text = "\n".join(diff_chunks)
     if not file_names and not diff_text:
-        raise AnalysisError(
-            f"{cve_id}: GitLab diff API returned 0 file changes for {slug}@{sha[:12]}"
-        )
+        msg = f"{cve_id}: GitLab diff API returned 0 file changes for {slug}@{sha[:12]}"
+        raise AnalysisError(msg)
 
     # Shape classification: shape_dynamic.classify expects a `fetch`
     # callback for `/languages`; for GitLab we don't have that endpoint

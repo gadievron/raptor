@@ -19,9 +19,11 @@ untouched.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
 
-from core.dockerfile.parser import Instruction
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.dockerfile.parser import Instruction
 
 # Debian release codenames (recent + current + announced) and the suite
 # aliases madison accepts.
@@ -43,7 +45,7 @@ _NUMBER_TO_CODENAME = {
 }
 
 
-def debian_suite_from_image(image_ref: str) -> Optional[str]:
+def debian_suite_from_image(image_ref: str) -> str | None:
     """Return the Debian suite token a base image pins to, or ``None``.
 
     The token is a codename (``bookworm``) or alias (``stable``) suitable
@@ -77,7 +79,7 @@ def debian_suite_from_image(image_ref: str) -> Optional[str]:
     return None
 
 
-def _from_image_ref(args: str) -> Optional[str]:
+def _from_image_ref(args: str) -> str | None:
     """The image reference of a ``FROM`` instruction's args.
 
     Skips a leading ``--platform=…`` flag and stops at an ``AS`` clause;
@@ -92,7 +94,7 @@ def _from_image_ref(args: str) -> Optional[str]:
     return None
 
 
-def stage_image_map(instructions: List[Instruction]) -> Dict[Optional[str], str]:
+def stage_image_map(instructions: list[Instruction]) -> dict[str | None, str]:
     """Map each build stage to the image ref of its governing ``FROM``.
 
     The key is the stage name (``None`` for a ``FROM`` with no ``AS``).
@@ -100,8 +102,8 @@ def stage_image_map(instructions: List[Instruction]) -> Dict[Optional[str], str]
     ``RUN apt-get install`` in a stage built ``FROM builder`` resolves to
     ``builder``'s base image.
     """
-    raw: Dict[Optional[str], str] = {}
-    order: List[Optional[str]] = []
+    raw: dict[str | None, str] = {}
+    order: list[str | None] = []
     for inst in instructions:
         if inst.directive != "FROM":
             continue
@@ -111,15 +113,17 @@ def stage_image_map(instructions: List[Instruction]) -> Dict[Optional[str], str]
         raw[inst.stage_name] = img
         order.append(inst.stage_name)
 
-    stage_names = set(raw)
-    resolved: Dict[Optional[str], str] = {}
+    resolved: dict[str | None, str] = {}
+    defined_so_far: set = set()
     for stage in order:
         img = raw[stage]
         seen: set = set()
-        while img in stage_names and img not in seen:
+        while img in defined_so_far and img not in seen:
             seen.add(img)
             img = raw[img]
         resolved[stage] = img
+        if stage is not None:
+            defined_so_far.add(stage)
     return resolved
 
 

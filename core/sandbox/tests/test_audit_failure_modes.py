@@ -12,17 +12,17 @@ from __future__ import annotations
 import json
 import os
 import platform
+import time
 from pathlib import Path
 
 import pytest
 
-from core.sandbox import probes
-from core.sandbox import ptrace_probe
+from core.sandbox import evidence as evidence_mod
+from core.sandbox import probes, ptrace_probe
 from core.sandbox import proxy as proxy_mod
 from core.sandbox import tracer as tracer_mod
 from core.sandbox._spawn import run_sandboxed
 from core.sandbox.context import sandbox
-
 
 pytestmark = [
     pytest.mark.skipif(
@@ -60,7 +60,7 @@ class TestAuditWithDisabled:
             r = run(["true"], capture_output=True, text=True, timeout=5)
         assert r.returncode == 0
         # No JSONL — tracer wasn't engaged.
-        jsonl = out / tracer_mod._DENIALS_FILENAME
+        jsonl = out / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME
         assert not jsonl.exists(), (
             "audit machinery wrongly engaged under disabled=True — "
             "unnecessary tracer fork + ptrace cost"
@@ -150,7 +150,7 @@ class TestAuditWithoutPtraceAvailable:
             audit_mode=True, audit_run_dir=str(run_dir),
         )
         assert result.returncode == 0
-        jsonl = run_dir / tracer_mod._DENIALS_FILENAME
+        jsonl = run_dir / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME
         assert not jsonl.exists()
 
 
@@ -186,10 +186,11 @@ class TestTracerJsonlFailureModes:
             ok = tracer_mod._write_record(
                 tmp_path, "openat", 257, [0]*6, target_pid=1, path="/x",
             )
-        # OSError caught by tracer's broad except — returns False
+        # OSError caught by the append helper — returns False
         assert ok is False
-        # Debug log line about the failure
-        assert any("write_record failed" in r.message
+        # Debug log line about the failure (shared append helper —
+        # "evidence append failed" — since the evidence relocation).
+        assert any("append failed" in r.message
                    for r in caplog.records), (
             f"expected debug log on write failure: "
             f"{[r.message for r in caplog.records]}"
@@ -211,7 +212,7 @@ class TestRedactionInTracerRecord:
         )
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
+            (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
             if line
         ]
         r = records[0]
@@ -229,7 +230,7 @@ class TestRedactionInTracerRecord:
         )
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
+            (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
             if line
         ]
         # Non-URL paths preserved verbatim.
@@ -250,7 +251,7 @@ class TestRedactionInTracerRecord:
         )
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
+            (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
             if line
         ]
         # Filename preserved verbatim — no false-positive redaction.
@@ -268,7 +269,7 @@ class TestRedactionInTracerRecord:
         )
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
+            (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
             if line
         ]
         assert "Z" * 20 in records[0]["path"]
@@ -289,7 +290,7 @@ class TestTracerSecurityProperties:
             tmp_path, "openat", 257, [0]*6, target_pid=1,
             path=f"{tmp_path}/{evil}",
         )
-        raw_bytes = (tmp_path / tracer_mod._DENIALS_FILENAME).read_bytes()
+        raw_bytes = (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_bytes()
         # No raw ESC bytes in on-disk JSON — encoded as 
         assert b"\x1b" not in raw_bytes, (
             f"raw terminal escape in JSONL — operator catting "
@@ -323,7 +324,7 @@ class TestTracerSecurityProperties:
         )
         records = [
             json.loads(line) for line in
-            (tmp_path / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
+            (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_text().splitlines()
             if line
         ]
         # After JSON decode, the path field must NOT contain raw \x1b
@@ -348,7 +349,7 @@ class TestTracerSecurityProperties:
         tracer_mod._write_record(
             tmp_path, "openat", 257, [0]*6, target_pid=1, path=weird,
         )
-        raw = (tmp_path / tracer_mod._DENIALS_FILENAME).read_bytes()
+        raw = (tmp_path / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME).read_bytes()
         # Must still be valid JSON
         records = [
             json.loads(line) for line in raw.decode().splitlines() if line
@@ -427,17 +428,60 @@ def _count_self_children() -> int:
     return total
 
 
+def _warn_once_flags():
+    from core.sandbox import state
+    return [
+        name for name in vars(state)
+        if name.startswith("_") and "warned" in name
+    ]
+
+
 class TestWarnOnceTypoDefense:
-    """Finding NN: state.warn_once used getattr() with no fallback,
-    so a typo'd flag name would raise an opaque AttributeError from
-    inside state.py — call site has to dig through stack frames to
-    find the typo. Defensive: emit a clear, named error pointing to
-    the offending flag."""
+    """state.warn_once used getattr() with no fallback, so a typo'd
+    flag name would raise an opaque AttributeError from inside
+    state.py — call site has to dig through stack frames to find the
+    typo. Defensive: emit a clear, named error pointing to the
+    offending flag, with a naming hint whose majority claim must
+    match the actual flag census."""
+
+    def _hint(self) -> str:
+        from core.sandbox import state
+        with pytest.raises(AttributeError) as exc:
+            state.warn_once("_definitely_not_a_flag_warned")
+        return str(exc.value)
 
     def test_typo_in_flag_name_raises_clear_error(self):
         from core.sandbox import state
         with pytest.raises(AttributeError, match="warn_once"):
             state.warn_once("_definitely_not_a_real_flag_xyz")
+
+    def test_unknown_flag_error_names_flag_and_module(self):
+        msg = self._hint()
+        assert "_definitely_not_a_flag_warned" in msg
+        assert "core/sandbox/state.py" in msg
+
+    def test_hint_mentions_both_orderings(self):
+        msg = self._hint()
+        assert "_<feature>_<reason>_warned" in msg
+        assert "_<feature>_warned_<reason>" in msg
+
+    def test_hint_majority_claim_matches_reality(self):
+        # If the hint singles out one pattern as the majority ("most
+        # as ..."), the flag census must agree with it.
+        import re
+        msg = self._hint()
+        m = re.search(r"most as `([^`]+)`", msg)
+        assert m is not None, "hint should name the majority ordering"
+        majority_pattern = m.group(1)
+
+        flags = _warn_once_flags()
+        warned_last = [f for f in flags if f.endswith("_warned")]
+        warned_middle = [f for f in flags
+                         if "_warned_" in f and not f.endswith("_warned")]
+        if len(warned_last) >= len(warned_middle):
+            assert majority_pattern == "_<feature>_<reason>_warned"
+        else:
+            assert majority_pattern == "_<feature>_warned_<reason>"
 
     def test_real_flag_still_works(self):
         from core.sandbox import state
@@ -448,22 +492,36 @@ class TestWarnOnceTypoDefense:
         # Second call returns False.
         assert state.warn_once("_audit_warned_no_spawn") is False
 
+    def test_known_flag_still_test_and_sets(self):
+        from core.sandbox import state
+        saved = state._audit_warned_no_spawn
+        try:
+            state._audit_warned_no_spawn = False
+            assert state.warn_once("_audit_warned_no_spawn") is True
+            assert state.warn_once("_audit_warned_no_spawn") is False
+        finally:
+            state._audit_warned_no_spawn = saved
+
 
 class TestStaleAuditConfigSweep:
-    """Finding MM: audit-config tempfiles in /tmp/raptor-audit-cfg-*
+    """Audit-config tempfiles in /tmp/raptor-audit-cfg-*
     leak when the parent process gets SIGKILL'd mid-audit (OOM, etc.).
     The normal lifecycle paths unlink them, but SIGKILL bypasses
-    finally blocks. Sweep on first engaged-audit per process."""
+    finally blocks. Sweep runs on every engaged-audit spawn, gated by
+    an age floor so a concurrent spawn's just-minted config (alive for
+    the seconds between mkstemp and the tracer parsing it) is never
+    deleted."""
 
     def test_sweep_removes_same_uid_stale_files(self, tmp_path):
         # Create some fake stale config files (own UID).
-        from core.sandbox._spawn import _sweep_stale_audit_configs
         # Put them where the sweep actually looks: tempfile.gettempdir()
         # (TMPDIR-aware), NOT a hardcoded "/tmp". On a box with
         # TMPDIR=/tmp/<something> the sweep globs $TMPDIR while a hardcoded
         # /tmp would never match — the test would fail spuriously even
         # though the sweep is correct.
         import tempfile
+
+        from core.sandbox._spawn import _sweep_stale_audit_configs
         stale_paths = []
         for _ in range(3):
             fd, p = tempfile.mkstemp(
@@ -472,6 +530,10 @@ class TestStaleAuditConfigSweep:
             )
             os.write(fd, b"{}")
             os.close(fd)
+            # Age past the sweep's floor — fresh files are presumed to
+            # belong to a live concurrent spawn and must survive.
+            old = time.time() - 2 * 3600
+            os.utime(p, (old, old))
             stale_paths.append(p)
         try:
             # Now sweep — same-UID files matching the glob should go.
@@ -488,6 +550,55 @@ class TestStaleAuditConfigSweep:
                 except OSError:
                     pass
 
+
+    def test_sweep_keeps_fresh_files(self):
+        # A just-minted config may belong to a concurrent spawn — the
+        # age floor must protect it no matter how often the sweep runs.
+        import tempfile
+
+        from core.sandbox._spawn import _sweep_stale_audit_configs
+        fd, p = tempfile.mkstemp(
+            prefix="raptor-audit-cfg-test-", suffix=".json",
+            dir=tempfile.gettempdir(),
+        )
+        os.write(fd, b"{}")
+        os.close(fd)
+        try:
+            _sweep_stale_audit_configs()
+            assert os.path.exists(p), "sweep deleted a fresh config"
+        finally:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+    def test_tracer_unlinks_parsed_config(self, tmp_path, monkeypatch):
+        # The tracer deletes the parent-minted config right after
+        # parsing it, so a later SIGKILL of the parent can no longer
+        # strand it. Operator-supplied config files (different name
+        # shape) are kept.
+        import json
+
+        from core.sandbox import tracer as tracer_mod
+
+        monkeypatch.setattr(tracer_mod, "trace",
+                            lambda *a, **kw: 0)
+        cfg = tmp_path / "raptor-audit-cfg-abc123.json"
+        cfg.write_text(json.dumps({"mode": "filtered"}))
+        rc = tracer_mod._cli_main(
+            ["1", str(tmp_path), "3", str(cfg)],
+        )
+        assert rc == 0
+        assert not cfg.exists(), "tracer left the parsed config behind"
+
+        keep = tmp_path / "my-operator-config.json"
+        keep.write_text("{}")
+        rc = tracer_mod._cli_main(
+            ["1", str(tmp_path), "3", str(keep)],
+        )
+        assert rc == 0
+        assert keep.exists(), "tracer deleted an operator-supplied config"
+
     def test_sweep_is_idempotent_when_nothing_to_clean(self):
         from core.sandbox._spawn import _sweep_stale_audit_configs
         # Should be a no-op (the prior test's tempfiles, if any,
@@ -498,22 +609,21 @@ class TestStaleAuditConfigSweep:
 
 
 class TestAuditConfigWriteFailureHandling:
-    """Finding LL: audit-config file is mkstemp'd in /tmp, JSON
-    written, then handed to the tracer subprocess via execvpe argv.
-    If the write fails (disk full, EIO, partial write), the tracer
-    would later read an empty/partial file → JSONDecodeError → exit
-    1 → parent times out waiting for ready signal → audit silently
-    disabled. Worse: operator gets an ambiguous 'tracer failed to
-    attach' error rather than the actual cause.
+    """The audit config is serialised into an anonymous fd (memfd) and handed
+    to the tracer subprocess as /proc/self/fd/N. If the write fails
+    (EIO, memfd limits, partial write), the tracer would later read an
+    empty/partial JSON → decode error → exit 1 → parent times out
+    waiting for ready signal → audit silently disabled. Worse:
+    operator gets an ambiguous 'tracer failed to attach' error rather
+    than the actual cause.
 
-    Fix: write loops until done; any partial-write/EIO unlinks the
-    file, propagates the error immediately, and clears the engaged
-    state so the parent's audit cleanup paths don't double-unlink.
+    Fix: the write loops until done; any partial-write/EIO propagates
+    the error immediately at spawn time and clears the engaged state
+    so the parent's audit cleanup paths don't double-release.
     """
 
     def test_partial_write_propagates_oserror(self, monkeypatch, tmp_path):
-        from core.sandbox import _spawn
-        from core.sandbox import probes
+        from core.sandbox import _spawn, probes
         if not probes.check_net_available():
             pytest.skip()
         if not probes.check_mount_available():
@@ -526,11 +636,13 @@ class TestAuditConfigWriteFailureHandling:
         sentinel_paths = []
 
         def selective_write(fd, data):
-            # Only intercept writes to the audit-config tempfile.
-            # Use /proc/self/fd/<fd> to check the symlink target.
+            # Only intercept writes to the audit-config anonymous fd.
+            # Use /proc/self/fd/<fd> to check the symlink target —
+            # for the memfd it reads "/memfd:raptor-audit-cfg
+            # (deleted)".
             try:
                 target = os.readlink(f"/proc/self/fd/{fd}")
-                if "raptor-audit-cfg-" in target:
+                if "raptor-audit-cfg" in target:
                     sentinel_paths.append(target)
                     return 0  # simulate disk-full
             except OSError:
@@ -540,7 +652,7 @@ class TestAuditConfigWriteFailureHandling:
 
         out = tmp_path / "out"
         out.mkdir()
-        with pytest.raises(OSError, match="audit-config"):
+        with pytest.raises(OSError, match="anonymous-fd|audit-config"):
             _spawn.run_sandboxed(
                 ["true"],
                 target=str(tmp_path), output=str(tmp_path),
@@ -551,36 +663,40 @@ class TestAuditConfigWriteFailureHandling:
                 env=None, cwd=None, timeout=10,
                 audit_mode=True, audit_run_dir=str(out),
             )
-        # Confirm the tempfile got unlinked despite the failure.
+        # The intercept must actually have fired on the config fd —
+        # otherwise the raise above came from somewhere else.
+        assert sentinel_paths, "config-fd write intercept never fired"
+        # Anonymous fds have no filesystem name; nothing can leak on
+        # disk regardless of the failure path.
         for p in sentinel_paths:
             assert not os.path.exists(p), (
-                f"audit-config tempfile leaked after write failure: {p}"
+                f"audit config unexpectedly exists on disk: {p}"
             )
 
 
 class TestAuditMissingOutputBehaviour:
-    """Finding KK + agentic-pass discovery: handling depends on origin
-    of the audit signal:
+    """Handling depends on origin of the audit signal:
       - Per-call kwarg `audit=True` + no output= → ValueError (caller
         explicitly asked for audit on a call with no output dir; that's
         an operator-level mistake worth surfacing).
       - CLI flag `--audit` + no output= → silently demote audit for
         this call only (operator's intent is process-wide; internal
         helper sandboxes without output should NOT block the workflow).
-        Discovered by the real agentic-pass against /tmp/vulns where
-        scanner's git-init helper sandbox has no output dir but
-        CLI-flag audit got applied to it, killing the workflow."""
+        Real-world shape: a scanner's git-init helper sandbox has no
+        output dir; blanket CLI-flag audit applied to it would kill
+        the workflow."""
 
     def test_explicit_kwarg_audit_no_output_raises(self):
         from core.sandbox.context import sandbox
-        with sandbox(audit=True) as run:
-            with pytest.raises(ValueError, match="output="):
-                run(["true"])
+        with sandbox(audit=True) as run, \
+                pytest.raises(ValueError, match="output="):
+            run(["true"])
 
     def test_cli_flag_audit_no_output_silently_demotes(self, monkeypatch):
         # CLI --audit set, but THIS sandbox call has no output= →
         # don't kill the workflow; just skip audit for this call.
-        from core.sandbox import state, context as ctx
+        from core.sandbox import context as ctx
+        from core.sandbox import state
         monkeypatch.setattr(state, "_cli_sandbox_audit", True)
         # Call sandbox WITHOUT explicit audit= kwarg — just CLI flag.
         # Should NOT raise on the run() call.
@@ -596,7 +712,7 @@ class TestAuditMissingOutputBehaviour:
                         "CLI --audit + no output= should silently "
                         "demote audit for THIS call, not raise — "
                         "internal helper sandboxes break under audit "
-                        "otherwise (real agentic-pass discovery)"
+                        "otherwise"
                     )
                 # Other ValueError unrelated to audit: re-raise
                 raise
@@ -622,7 +738,7 @@ class TestAuditMissingOutputBehaviour:
 
 
 class TestAuditDegradationWarning:
-    """Real agentic-pass discovery: the degradation warning at line ~935
+    """The degradation warning at line ~935
     of context.py was checking the original `audit_mode` instead of
     `nonlocal_audit_mode` (the per-call effective state). For internal
     helper sandboxes that we ALREADY silently demote at line ~620,
@@ -641,7 +757,9 @@ class TestAuditDegradationWarning:
         omission of target/output is a deliberate caller choice
         (helper sandbox), not an audit prereq failure."""
         import logging
-        from core.sandbox import state, context as ctx
+
+        from core.sandbox import context as ctx
+        from core.sandbox import state
         # Simulate CLI --audit set process-wide.
         monkeypatch.setattr(state, "_cli_sandbox_audit", True)
         # Reset warn-once so the test is independent of suite ordering.
@@ -746,8 +864,8 @@ class TestAuditRunDirKwarg:
         run_sandboxed entry point — the kwargs that arrive there tell
         us exactly what Landlock will see.
         """
-        from core.sandbox import context as ctx
         from core.sandbox import _spawn as _spawn_mod
+        from core.sandbox import context as ctx
         captured = {}
 
         def fake_run_sandboxed(*args, **kwargs):
@@ -797,8 +915,8 @@ class TestAuditRunDirKwarg:
         audit_run_dir=, audit JSONL still lands at output (the
         pre-existing behaviour). audit_run_dir= is a NEW option,
         not a replacement."""
-        from core.sandbox import context as ctx
         from core.sandbox import _spawn as _spawn_mod
+        from core.sandbox import context as ctx
         from core.sandbox.probes import check_mount_available
         # mount_ns_available() alone is insufficient — see comment in
         # test_audit_run_dir_does_not_add_to_writable_paths above.
@@ -833,7 +951,7 @@ class TestAuditRunDirKwarg:
 
 
 class TestAuditAcquireOrdering:
-    """Finding I: the proxy audit ref-count must be acquired AT THE
+    """The proxy audit ref-count must be acquired AT THE
     YIELD, not earlier in setup. If acquire happened in the middle
     of setup, an exception in subsequent setup code would leave the
     count incremented forever (the contextmanager's try/finally only
@@ -850,13 +968,14 @@ class TestAuditAcquireOrdering:
         # between the `try:` that wraps the yield and the `yield run`
         # itself — no other meaningful code can fail between them.
         import inspect
+
         from core.sandbox import context as ctx
         src = inspect.getsource(ctx.sandbox)
         # Find the exact two lines and assert ordering.
         lines = src.splitlines()
         acquire_lines = [
             i for i, line in enumerate(lines)
-            if "acquire_audit_log_only" in line
+            if "set_lane_audit" in line
         ]
         yield_lines = [
             i for i, line in enumerate(lines)
@@ -866,20 +985,24 @@ class TestAuditAcquireOrdering:
             i for i, line in enumerate(lines)
             if line.strip() == "finally:"
         ]
-        assert acquire_lines, "no acquire_audit_log_only call found"
+        assert acquire_lines, "no set_lane_audit engagement found"
         assert yield_lines, "no yield run found"
 
         # Acquire must be BEFORE the yield (obviously), and there
         # must be a finally clause AFTER the yield that handles
         # release. The acquire-yield gap must be small (≤10 lines)
         # to keep the leak window minimal.
-        last_acquire = max(acquire_lines)
+        # The teardown also calls set_lane_audit (clearing the
+        # bit); consider only the engagement sites BEFORE the yield.
         last_yield = max(yield_lines)
-        assert last_acquire < last_yield, (
-            "acquire must precede yield"
-        )
+        pre_yield = [i for i in acquire_lines if i < last_yield]
+        assert pre_yield, "engagement must precede yield"
+        last_acquire = max(pre_yield)
         gap = last_yield - last_acquire
-        assert gap < 10, (
+        # Between engagement and yield sits only the fail-closed
+        # else-branch (a logger.warning) — nothing that can raise
+        # under normal operation. Keep the window bounded regardless.
+        assert gap < 20, (
             f"acquire is {gap} lines before yield — too far. Setup "
             f"code between acquire and yield could raise and leak "
             f"the ref-count. Move acquire closer to yield."
@@ -931,7 +1054,7 @@ class TestAuditComposesWithDebugProfile:
         )
 
         # Tracer JSONL exists: tracer was engaged despite debug profile.
-        jsonl = out / tracer_mod._DENIALS_FILENAME
+        jsonl = out / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME
         assert jsonl.exists(), (
             "debug+audit didn't produce audit JSONL — refactor broke "
             "the new debug+audit composition"
@@ -964,7 +1087,7 @@ class TestAuditWithExistingSandboxFlows:
             r = run(["true"], capture_output=True, text=True, timeout=5)
         assert r.returncode == 0
         # Critical: no audit signal because disabled took precedence.
-        jsonl = out / tracer_mod._DENIALS_FILENAME
+        jsonl = out / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME
         assert not jsonl.exists()
 
     def test_cli_audit_overrides_library(
@@ -973,7 +1096,8 @@ class TestAuditWithExistingSandboxFlows:
         # code didn't pass `audit=True`. Prompt-injection-safe
         # contract: target repo can't disable audit if operator
         # asked for it.
-        from core.sandbox import state, context as ctx
+        from core.sandbox import context as ctx
+        from core.sandbox import state
         ok, reason = _audit_prereqs_ok()
         if not ok:
             pytest.skip(reason)
@@ -996,13 +1120,13 @@ class TestAuditWithExistingSandboxFlows:
                     capture_output=True, text=True, timeout=15)
         assert r.returncode == 0
         # CLI's --audit took effect: tracer JSONL exists.
-        jsonl = out / tracer_mod._DENIALS_FILENAME
+        jsonl = out / evidence_mod.AUDIT_SUBDIR / tracer_mod._DENIALS_FILENAME
         assert jsonl.exists(), (
             "CLI --audit was ignored — prompt-injection safety violation"
         )
 
     def test_audit_kwarg_with_disabled_kwarg_does_not_acquire_proxy(self):
-        # Finding D: per-call audit=True + disabled=True must NOT
+        # Per-call audit=True + disabled=True must NOT
         # acquire the proxy audit ref-count (sandbox is effectively
         # disabled, so audit-mode is incoherent and silently no-ops).
         from core.sandbox.context import sandbox
@@ -1077,10 +1201,18 @@ class TestProxyAuditAcquireReleaseIntegration:
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
             ):
-                assert proxy_inst._audit_count == 1
-                assert proxy_inst._audit_log_only is True
+                # Lane-scoped: exactly this context's lane carries
+                # the audit bit; the GLOBAL flag stays untouched so
+                # concurrent sandboxes / in-process consumers keep
+                # enforcing semantics.
+                lanes = (list(proxy_inst._unix_lanes.values())
+                         + list(proxy_inst._tcp_lanes.values()))
+                assert [ln.audit_log_only for ln in lanes] == [True]
+                assert proxy_inst._audit_count == 0
+                assert proxy_inst._audit_log_only is False
 
-            assert proxy_inst._audit_count == 0
+            assert not proxy_inst._unix_lanes
+            assert not proxy_inst._tcp_lanes
             assert proxy_inst._audit_log_only is False
         finally:
             proxy_mod._reset_for_tests()
@@ -1090,17 +1222,20 @@ class TestProxyAuditAcquireReleaseIntegration:
         try:
             proxy_inst = proxy_mod.get_proxy(["api.example.com"])
 
-            with pytest.raises(RuntimeError, match="simulated"):
-                with sandbox(
-                    audit=True,
-                    use_egress_proxy=True,
-                    proxy_hosts=["api.example.com"],
-                ):
-                    assert proxy_inst._audit_count == 1
-                    raise RuntimeError("simulated workflow failure")
+            with pytest.raises(RuntimeError, match="simulated"), sandbox(
+                audit=True,
+                use_egress_proxy=True,
+                proxy_hosts=["api.example.com"],
+            ):
+                lanes = (list(proxy_inst._unix_lanes.values())
+                         + list(proxy_inst._tcp_lanes.values()))
+                assert [ln.audit_log_only for ln in lanes] == [True]
+                raise RuntimeError("simulated workflow failure")
 
-            # Cleanup ran despite the exception
-            assert proxy_inst._audit_count == 0
+            # Cleanup ran despite the exception: lane gone, global
+            # flag never touched.
+            assert not proxy_inst._unix_lanes
+            assert not proxy_inst._tcp_lanes
             assert proxy_inst._audit_log_only is False
         finally:
             proxy_mod._reset_for_tests()

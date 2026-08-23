@@ -27,10 +27,13 @@ on top of any CVE-tagged finding without depending on SCA-specific code.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Iterable, List, Optional
 
-from core.json import JsonCache
 from core.http import HttpClient, HttpError
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.json import JsonCache
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +68,7 @@ class EpssClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def scores(self, cves: Iterable[str]) -> Dict[str, float]:
+    def scores(self, cves: Iterable[str]) -> dict[str, float]:
         """Return ``{cve: probability}`` for any IDs we can resolve.
 
         Missing IDs (no EPSS coverage, network failure, etc.) are simply
@@ -73,8 +76,8 @@ class EpssClient:
         """
         # Normalise + dedup.
         clean = sorted({c.upper() for c in cves if isinstance(c, str) and c})
-        result: Dict[str, float] = {}
-        uncached: List[str] = []
+        result: dict[str, float] = {}
+        uncached: list[str] = []
         for cve in clean:
             cached = self._cache.get(self._key(cve), ttl_seconds=self._ttl)
             if cached is None:
@@ -87,6 +90,8 @@ class EpssClient:
         if uncached and not self._offline:
             for chunk in _chunked(uncached, _BATCH_SIZE):
                 fetched = self._fetch_chunk(chunk)
+                if fetched is None:
+                    continue
                 # Cache every requested CVE — even ones without coverage,
                 # using a sentinel so we don't refetch a known no-data row.
                 for cve in chunk:
@@ -100,7 +105,7 @@ class EpssClient:
                         result[cve] = score
         return result
 
-    def score(self, cve: str) -> Optional[float]:
+    def score(self, cve: str) -> float | None:
         """Convenience: single-CVE lookup."""
         return self.scores([cve]).get(cve.upper())
 
@@ -108,7 +113,7 @@ class EpssClient:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_chunk(self, cves: List[str]) -> Dict[str, float]:
+    def _fetch_chunk(self, cves: list[str]) -> dict[str, float] | None:
         url = f"{EPSS_URL}?cve={','.join(cves)}"
         try:
             payload = self._http.get_json(url)
@@ -116,7 +121,7 @@ class EpssClient:
             logger.warning(
                 "core.cve.epss: chunk fetch failed (%s); leaving CVEs unresolved", e,
             )
-            return {}
+            return None
         return _parse_response(payload)
 
     @staticmethod
@@ -128,7 +133,7 @@ class EpssClient:
 _NO_SCORE_SENTINEL = -1.0
 
 
-def _coerce_score(value: object) -> Optional[float]:
+def _coerce_score(value: object) -> float | None:
     if isinstance(value, (int, float)):
         if float(value) == _NO_SCORE_SENTINEL:
             return None
@@ -136,13 +141,13 @@ def _coerce_score(value: object) -> Optional[float]:
     return None
 
 
-def _parse_response(payload: object) -> Dict[str, float]:
+def _parse_response(payload: object) -> dict[str, float]:
     if not isinstance(payload, dict):
         return {}
     data = payload.get("data")
     if not isinstance(data, list):
         return {}
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -158,9 +163,9 @@ def _parse_response(payload: object) -> Dict[str, float]:
     return out
 
 
-def _chunked(items: List[str], size: int):
+def _chunked(items: list[str], size: int):
     for i in range(0, len(items), size):
         yield items[i:i + size]
 
 
-__all__ = ["EpssClient", "EPSS_URL"]
+__all__ = ["EPSS_URL", "EpssClient"]

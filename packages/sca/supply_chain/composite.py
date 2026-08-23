@@ -56,7 +56,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import replace
-from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
+from collections.abc import Mapping
 
 from ..models import (
     Dependency,
@@ -137,7 +137,7 @@ _FAMILY: Mapping[SupplyChainKind, str] = {
 #
 # Sets are matched as SUBSETS (``pair <= families``) so the pair is
 # detected even when additional families also fire on the same dep.
-_HARD_PAIRS: FrozenSet[FrozenSet[str]] = frozenset({
+_HARD_PAIRS: frozenset[frozenset[str]] = frozenset({
     # Iron Worm shape: lifecycle hook executes a payload that ships
     # in the package's own tree.
     frozenset({"HOOK", "BINARY"}),
@@ -158,13 +158,13 @@ _HARD_PAIRS: FrozenSet[FrozenSet[str]] = frozenset({
 # rather than ``Literal.__args__``-derived because the literal's
 # order is the source of truth for displayed severity but the
 # RANKING is a separate semantic decision.
-_SEVERITY_ORDER: Tuple[Severity, ...] = (
+_SEVERITY_ORDER: tuple[Severity, ...] = (
     "info", "low", "medium", "high", "critical",
 )
 _RANK: Mapping[Severity, int] = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
 
 
-def _dep_key(dep: Dependency) -> Tuple[str, str, str]:
+def _dep_key(dep: Dependency) -> tuple[str, str, str]:
     """Per-version grouping key.  An attacker who spreads payload
     across multiple versions deliberately fragments the composite
     signal; that's their choice — we don't help them combine across
@@ -173,10 +173,10 @@ def _dep_key(dep: Dependency) -> Tuple[str, str, str]:
 
 
 def _families_per_dep(
-    findings: List[SupplyChainFinding],
-) -> Dict[Tuple[str, str, str], FrozenSet[str]]:
+    findings: list[SupplyChainFinding],
+) -> dict[tuple[str, str, str], frozenset[str]]:
     """Bucket findings by per-version dep key, project to family set."""
-    by_dep: Dict[Tuple[str, str, str], set] = defaultdict(set)
+    by_dep: dict[tuple[str, str, str], set] = defaultdict(set)
     for f in findings:
         family = _FAMILY.get(f.kind)
         if family is None:
@@ -193,7 +193,7 @@ def _families_per_dep(
     return {k: frozenset(v) for k, v in by_dep.items()}
 
 
-def _promotion_target(families: FrozenSet[str]) -> Optional[Severity]:
+def _promotion_target(families: frozenset[str]) -> Severity | None:
     """Return the severity FLOOR the composite signal earns, or None
     when no promotion applies.
 
@@ -223,7 +223,7 @@ def _promotion_target(families: FrozenSet[str]) -> Optional[Severity]:
 def _promoted(
     finding: SupplyChainFinding,
     new_floor: Severity,
-    families: FrozenSet[str],
+    families: frozenset[str],
 ) -> SupplyChainFinding:
     """Return a NEW finding with severity raised to ``new_floor``
     and a ``composite_score`` evidence stamp.
@@ -260,7 +260,7 @@ def _promoted(
     return replace(finding, severity=new_floor, evidence=evidence)
 
 
-def apply(findings: List[SupplyChainFinding]) -> List[SupplyChainFinding]:
+def apply(findings: list[SupplyChainFinding]) -> list[SupplyChainFinding]:
     """Apply composite scoring across ``findings``.
 
     Returns a NEW list.  Findings that participate in a multi-family
@@ -273,7 +273,7 @@ def apply(findings: List[SupplyChainFinding]) -> List[SupplyChainFinding]:
     Stable across reruns of the same input.
     """
     families = _families_per_dep(findings)
-    out: List[SupplyChainFinding] = []
+    out: list[SupplyChainFinding] = []
     for f in findings:
         key = _dep_key(f.dependency)
         fam_set = families.get(key, frozenset())

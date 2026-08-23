@@ -10,18 +10,29 @@ Same shape as the other registry clients.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import urllib.parse
 
-from core.json import JsonCache, MISSING
-from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.http import HttpClient
 
 logger = logging.getLogger(__name__)
 
 
 _CACHE_KEY_PREFIX = "rubygems-versions"
 _DEFAULT_TTL = 24 * 3600
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — a raw name containing ``/`` or ``..`` could otherwise
+    alias another package's cache file after JsonCache path
+    sanitisation. Old raw-name entries re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 
 class RubyGemsClient:
@@ -32,7 +43,7 @@ class RubyGemsClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -42,8 +53,8 @@ class RubyGemsClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+    def list_versions(self, name: str) -> list[str]:
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -66,12 +77,12 @@ class RubyGemsClient:
             self._cache.put(cache_key, versions, ttl_seconds=self._ttl)
         return versions
 
-    def get_metadata(self, name: str) -> Optional[dict]:
+    def get_metadata(self, name: str) -> dict | None:
         """Aggregate metadata via ``/api/v1/gems/<name>.json``.
 
         Used by ``_latest_stable_version`` in the transitive-drop
         detector (turns the gem name into a releases list)."""
-        cache_key = f"rubygems-meta:{name}"
+        cache_key = f"rubygems-meta:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -100,7 +111,7 @@ class RubyGemsClient:
 
     def get_version_metadata(
         self, name: str, version: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Fetch per-version metadata via
         ``/api/v2/rubygems/<name>/versions/<ver>.json``.
 
@@ -116,7 +127,8 @@ class RubyGemsClient:
         # every platform-pinned gem 404s. Caching on the canonical version
         # also dedups the java/x64/x86 variants onto one fetch.
         canonical = version.split("-", 1)[0]
-        cache_key = f"rubygems-vmeta:{name}:{canonical}"
+        cache_key = (f"rubygems-vmeta:{_key_component(name)}:"
+                     f"{_key_component(canonical)}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -146,7 +158,7 @@ class RubyGemsClient:
         return data
 
 
-def _extract_versions(data) -> List[str]:
+def _extract_versions(data) -> list[str]:
     """Pull stable, non-yanked versions from the RubyGems response.
 
     Shape: a JSON array of objects, each with ``number``, ``prerelease``,
@@ -154,7 +166,7 @@ def _extract_versions(data) -> List[str]:
     """
     if not isinstance(data, list):
         return []
-    out: List[str] = []
+    out: list[str] = []
     seen: set = set()
     for v in data:
         if not isinstance(v, dict):

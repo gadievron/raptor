@@ -26,6 +26,10 @@ import os
 import sys
 import time
 import traceback
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _section(title: str) -> None:
@@ -47,12 +51,14 @@ def _info(label: str, value=None) -> None:
     print(f"  [INFO] {label}{suffix}", flush=True)
 
 
-def _setup_dispatcher() -> object:
-    """Start the dispatcher with the parent's AWS creds; returns a
-    dispatcher whose credential store is shared across every client
-    the test allocates afterwards.  Constructed once because
-    ``CredentialStore.__init__`` pops ``AWS_BEARER_TOKEN_BEDROCK``
-    from env — a second store would find an empty env."""
+def _setup_dispatcher() -> "tuple[object, Path]":
+    """Start the dispatcher with the parent's AWS creds; returns
+    ``(dispatcher, audit_dir)`` — one dispatcher whose credential
+    store is shared across every client the test allocates afterwards
+    (``CredentialStore.__init__`` pops ``AWS_BEARER_TOKEN_BEDROCK``
+    from env — a second store would find an empty env), plus the
+    scratch dir holding its audit log, which the caller removes after
+    ``shutdown()`` (pre-fix every live run leaked it)."""
     os.environ["RAPTOR_DIR"] = os.path.dirname(
         os.path.dirname(
             os.path.dirname(
@@ -86,7 +92,7 @@ def _setup_dispatcher() -> object:
         run_id="bedrock-live-features",
         audit_path=audit_dir / "audit.jsonl",
         creds=store,
-    )
+    ), audit_dir
 
 
 def _make_client(dispatcher, api: str) -> tuple[object, str]:
@@ -664,7 +670,7 @@ def main() -> int:
         return 99
 
     try:
-        dispatcher = _setup_dispatcher()
+        dispatcher, audit_dir = _setup_dispatcher()
     except Exception as e:
         _fail("dispatcher setup", f"{type(e).__name__}: {e}")
         traceback.print_exc()
@@ -678,6 +684,8 @@ def main() -> int:
                 rc = api_rc
     finally:
         dispatcher.shutdown()
+        import shutil
+        shutil.rmtree(audit_dir, ignore_errors=True)
 
     _section("Summary")
     if rc == 0:

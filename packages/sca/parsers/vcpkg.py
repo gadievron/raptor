@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +51,15 @@ _PURL_TYPE = "vcpkg"
 # vcpkg port names are lowercase letters / digits / dashes per
 # the vcpkg port-naming guidelines. Anything else suggests a
 # malformed entry and we skip silently.
-_PORT_NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9\-]*$")
+_PORT_NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9\-]*\Z")
 
 
 @register(filenames=["vcpkg.json"])
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.vcpkg: read failed for %s: %s", path, e)
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason
+        # (oversize, unreadable, symlink escape, non-regular file).
         return []
 
     try:
@@ -70,7 +72,7 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(data, dict):
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     deps.extend(_extract_block(
         data.get("dependencies"), scope="main", path=path,
     ))
@@ -79,7 +81,7 @@ def parse(path: Path) -> List[Dependency]:
     # main-scope (over-report rather than under-report).
     features = data.get("features")
     if isinstance(features, dict):
-        for _, feat in features.items():
+        for feat in features.values():
             if isinstance(feat, dict):
                 deps.extend(_extract_block(
                     feat.get("dependencies"), scope="main", path=path,
@@ -89,10 +91,10 @@ def parse(path: Path) -> List[Dependency]:
 
 def _extract_block(
     block: Any, *, scope: str, path: Path,
-) -> List[Dependency]:
+) -> list[Dependency]:
     if not isinstance(block, list):
         return []
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for entry in block:
         dep = _build_dep(entry, scope=scope, path=path)
         if dep is not None:
@@ -102,7 +104,7 @@ def _extract_block(
 
 def _build_dep(
     entry: Any, *, scope: str, path: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if isinstance(entry, str):
         name = entry
         version = None
@@ -132,7 +134,7 @@ def _build_dep(
     )
 
 
-def _classify(entry: Dict[str, Any]) -> Tuple[Optional[str], PinStyle]:
+def _classify(entry: dict[str, Any]) -> tuple[str | None, PinStyle]:
     """Pull a (version, pin_style) tuple out of a vcpkg dict entry.
 
     Field-precedence (vcpkg's documented order):
@@ -160,7 +162,7 @@ def _classify(entry: Dict[str, Any]) -> Tuple[Optional[str], PinStyle]:
     return None, PinStyle.WILDCARD
 
 
-def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
+def _confidence(pin_style: PinStyle, version: str | None) -> Confidence:
     if pin_style == PinStyle.EXACT and version:
         return Confidence("high", reason="vcpkg.json structured field")
     if pin_style == PinStyle.RANGE and version:
@@ -171,7 +173,7 @@ def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
     return Confidence("medium", reason="vcpkg.json port name only")
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{name}"
     if version:
         return f"{base}@{version}"

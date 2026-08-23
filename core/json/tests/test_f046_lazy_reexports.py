@@ -96,11 +96,17 @@ def test_f046_dir_includes_all_public_names():
 
 
 def test_f046_all_unchanged():
-    """`__all__` must still list all 7 public names — no
-    documentation drift introduced by the lazy refactor."""
+    """`__all__` must list every public name — no documentation
+    drift introduced by the lazy refactor (or by later additions:
+    ``append_jsonl`` / ``load_jsonl`` joined with core.json.jsonl;
+    the bounded loaders joined with core.json.bounded)."""
     _force_fresh_core_json_import()
     import core.json
     assert set(core.json.__all__) == {
-        "CacheEnvelope", "JsonCache", "MISSING", "TTL_FOREVER",
-        "load_json", "save_json", "load_json_with_comments",
+        "CacheEnvelope", "JsonBudgetExceededError", "JsonCache",
+        "MISSING", "TTL_FOREVER",
+        "append_jsonl", "dumps_canonical", "dumps_display",
+        "load_json", "load_json_bounded",
+        "load_json_with_comments", "load_jsonl", "loads",
+        "loads_bounded", "save_json",
     }

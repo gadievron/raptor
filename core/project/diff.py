@@ -6,7 +6,7 @@ Matches findings by (file, function, line) — stable across runs.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.logging import get_logger
 from core.project.findings_utils import dedup_key as _dedup_key
@@ -15,7 +15,7 @@ from core.project.findings_utils import load_findings_from_dir as _load_findings
 logger = get_logger()
 
 
-def _get_status(finding: Dict[str, Any]) -> Optional[str]:
+def _get_status(finding: dict[str, Any]) -> str | None:
     """Extract the ruling status from a finding.
 
     Always returns a str or None, never a bool. Pre-fix the
@@ -54,7 +54,7 @@ def _get_status(finding: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _finding_label(finding: Dict[str, Any]) -> str:
+def _finding_label(finding: dict[str, Any]) -> str:
     """Human-readable label for a finding: file:function:line."""
     f = finding.get("file", "?")
     fn = finding.get("function", "?")
@@ -62,7 +62,7 @@ def _finding_label(finding: Dict[str, Any]) -> str:
     return f"{f}:{fn}:{line}"
 
 
-def _index_by_location(findings: List[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any]]:
+def _index_by_location(findings: list[dict[str, Any]]) -> dict[tuple, dict[str, Any]]:
     """Index findings by (file, function, line). Stable across runs."""
     indexed = {}
     for f in findings:
@@ -70,7 +70,7 @@ def _index_by_location(findings: List[Dict[str, Any]]) -> Dict[tuple, Dict[str, 
     return indexed
 
 
-def diff_runs(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
+def diff_runs(run_dir_a: Path, run_dir_b: Path) -> dict[str, Any]:
     """Diff findings between two run directories.
 
     Args:
@@ -93,8 +93,8 @@ def diff_runs(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
     index_a = _index_by_location(findings_a)
     index_b = _index_by_location(findings_b)
 
-    keys_a = set(index_a.keys())
-    keys_b = set(index_b.keys())
+    keys_a = set(index_a)
+    keys_b = set(index_b)
 
     new = [index_b[k] for k in sorted(keys_b - keys_a)]
     removed = [index_a[k] for k in sorted(keys_a - keys_b)]

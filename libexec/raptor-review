@@ -1,0 +1,1146 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Unified operator CLI for reviewing audit state across all layers.
+
+Assembles mechanical coverage, review journal, context-map roles, and
+operator annotations into a single view.  Degrades gracefully when any
+layer is absent.
+
+Usage:
+  raptor-review [show] <file> [function]   # unified per-function view
+  raptor-review findings                   # all findings across runs
+  raptor-review gaps                       # what needs review, and why
+  raptor-review coverage [file]            # mechanical tool coverage
+  raptor-review edges                      # edge obligations, verdicts, blind spots
+  raptor-review note <file> <fn> -m "..."  # add operator note
+  raptor-review edit <file> <fn>           # edit note in $EDITOR
+  raptor-review stale                      # source-drifted operator notes
+  raptor-review notes                      # list all operator notes
+  raptor-review history <file> <fn>        # all reviews over time
+  raptor-review stats                      # entry counts, costs, coverage %
+  raptor-review diff [run1 run2]           # verdict changes between two runs
+  raptor-review live                       # tail-follow a running audit's journal
+  raptor-review compact                    # compact project journal index
+
+Common options:
+  --out DIR       Run output directory (default: active project's latest)
+  --project DIR   Project directory (default: from .active symlink)
+  --target DIR    Source tree root (for stale detection)
+  --raw           Output raw JSON instead of formatted text
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import dumps_display, load_json, loads  # noqa: E402
+from core.security.prompt_output_sanitise import sanitise_string  # noqa: E402
+
+# Byte budgets for run artifacts this CLI renders: context maps /
+# gaps / obligations are audit-artifact class; run metadata and the
+# journal index are small records.
+_MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+_MAX_META_BYTES = 8 * 1024 * 1024
+
+
+def _line(value, max_chars: int = 200) -> str:
+    """Collapse an LLM/journal-derived value to one sanitised line.
+
+    Journal entries (verdict, model, strategies, hypothesis claims),
+    annotation bodies, and gap records carry LLM output or scanned-repo
+    identifiers. This CLI prints them straight to the operator's
+    terminal, so ANSI/BIDI/control bytes and autofetch markup must be
+    defanged first — same policy as the markdown report writers.
+    """
+    text = " ".join(str(value if value is not None else "").split()).strip()
+    return sanitise_string(text, max_chars=max_chars)
+
+
+def _prose(value, max_chars: int = 10_000) -> str:
+    """Sanitise a multi-line body (annotation prose) for terminal output."""
+    return sanitise_string(str(value if value is not None else ""), max_chars=max_chars)
+
+
+# ── Layer loaders ────────────────────────────────────────────────────
+
+def _resolve_project_dir(explicit: str | None = None) -> Path | None:
+    """Find the active project directory.
+
+    When *explicit* is given (from ``--project``), use it directly.
+    Otherwise derive it from the active project's registry JSON.
+    """
+    if explicit:
+        p = Path(explicit)
+        if p.is_dir():
+            return p
+        return None
+    # The active-project pointer lives at ~/.raptor/projects/.active and
+    # is a symlink to the project's <name>.json FILE; the project
+    # directory is that JSON's output_dir (the same derivation the run
+    # lifecycle's journal merge uses). Pre-fix this looked for a
+    # <repo-root>/.active path nothing creates, so without --project
+    # every project-level layer (coverage store, journal index)
+    # silently read as absent.
+    try:
+        from core.json import load_json
+        from core.startup import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if name:
+            data = load_json(PROJECTS_DIR / f"{name}.json")
+            if isinstance(data, dict) and data.get("output_dir"):
+                candidate = Path(data["output_dir"])
+                if candidate.is_dir():
+                    return candidate
+    except Exception:  # noqa: BLE001 — no active project is a normal state
+        pass
+    return None
+
+
+def _resolve_out_dir(args) -> Path | None:
+    """Resolve output directory: explicit --out, or latest in project."""
+    if getattr(args, "out", None):
+        return Path(args.out)
+    project = _resolve_project_dir(getattr(args, "project", None))
+    if not project:
+        return None
+    runs = sorted(
+        [d for d in project.iterdir() if d.is_dir() and (d / ".raptor-run.json").is_file()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    return runs[0] if runs else None
+
+
+def _load_context_map(out_dir: Path | None) -> dict | None:
+    if not out_dir:
+        return None
+    cm_path = out_dir / "context-map.json"
+    if not cm_path.is_file():
+        return None
+    return load_json(cm_path, max_bytes=_MAX_ARTIFACT_BYTES)
+
+
+def _load_journal_entries(out_dir: Path | None):
+    if not out_dir:
+        return []
+    try:
+        from core.audit.journal import load_entries
+        return load_entries(out_dir)
+    except Exception:  # noqa: BLE001 — layer loaders degrade gracefully when absent
+        return []
+
+
+def _load_journal_index(project_dir: Path | None):
+    if not project_dir:
+        return {}
+    try:
+        from core.audit.journal import load_index
+        return load_index(project_dir)
+    except Exception:  # noqa: BLE001 — layer loaders degrade gracefully when absent
+        return {}
+
+
+def _load_coverage_store(project_dir: Path | None):
+    if not project_dir:
+        return None
+    cov_path = project_dir / "coverage.json"
+    if not cov_path.is_file():
+        return None
+    try:
+        from core.coverage.store import CoverageStore
+        return CoverageStore(cov_path)
+    except Exception:  # noqa: BLE001 — layer loaders degrade gracefully when absent
+        return None
+
+
+def _load_annotation(ann_dir: Path | None, file: str, function: str):
+    if not ann_dir or not ann_dir.is_dir():
+        return None
+    try:
+        from core.annotations.storage import read_annotation
+        return read_annotation(ann_dir, file, function)
+    except Exception:  # noqa: BLE001 — layer loaders degrade gracefully when absent
+        return None
+
+
+def _load_suppression_records(
+    out_dir: Path | None, file: str, function: str,
+) -> list[dict]:
+    """Chokepoint records for this function from suppressions.jsonl.
+
+    Covers both dropped findings (binary-oracle, vendored triage) and
+    dropped=false survivor records (synthesis-policy refusals) — the
+    latter distinguish policy-capped suspicious from ordinary
+    suspicious. Tolerant reader: unknown keys ignored, bad lines
+    skipped.
+    """
+    if not out_dir:
+        return []
+    path = out_dir / "suppressions.jsonl"
+    if not path.is_file():
+        return []
+    records = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("file_path") == file and rec.get("function") == function:
+                records.append(rec)
+    except OSError:
+        return []
+    return records
+
+
+def _annotations_dir(out_dir: Path | None) -> Path | None:
+    if not out_dir:
+        return None
+    run_marker = out_dir / ".raptor-run.json"
+    if run_marker.is_file():
+        ann = out_dir.parent / "annotations"
+    else:
+        ann = out_dir / "annotations"
+    return ann if ann.is_dir() else None
+
+
+def _context_map_role(cm: dict | None, file: str, function: str) -> str | None:
+    """Extract the structural role of a function from context-map.json."""
+    if not cm:
+        return None
+    for section, role in [
+        ("entry_points", "entry_point"),
+        ("sink_details", "sink"),
+        ("boundary_details", "trust_boundary"),
+    ]:
+        for item in cm.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            item_file = item.get("file", "")
+            item_name = item.get("name", item.get("function", ""))
+            if item_file == file and item_name == function:
+                return role
+            if ((item_file.endswith(f"/{file}") or file.endswith(f"/{item_file}"))
+                    and item_name == function):
+                return role
+    return None
+
+
+# ── Subcommands ──────────────────────────────────────────────────────
+
+def cmd_show(args):
+    """Show unified view for a file or function."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    cm = _load_context_map(out_dir)
+    ann_dir = _annotations_dir(out_dir)
+
+    entries = _load_journal_entries(out_dir)
+    if not entries:
+        index = _load_journal_index(project_dir)
+    else:
+        index = {}
+
+    if args.function:
+        _show_function(
+            args.file, args.function, cm, entries, index, ann_dir, args,
+            out_dir=out_dir,
+        )
+    else:
+        _show_file(args.file, cm, entries, index, ann_dir, args)
+
+
+def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=None):
+    key = f"{file}:{function}"
+    role = _context_map_role(cm, file, function)
+    ann = _load_annotation(ann_dir, file, function)
+    suppressions = _load_suppression_records(out_dir, file, function)
+
+    journal_entry = None
+    for e in reversed(entries):
+        if e.key == key:
+            journal_entry = e
+            break
+    if not journal_entry and key in index:
+        journal_entry = index[key]
+
+    if getattr(args, "raw", False) and journal_entry:
+        print(dumps_display(journal_entry.to_dict(), indent=2))
+        return
+
+    header = f"─── {_line(file)} :: {_line(function)} "
+    print(header + "─" * max(0, 60 - len(header)))
+    print()
+
+    if role:
+        print(f"  Role:     {_line(role)}")
+
+    if journal_entry:
+        conf = f" ({_line(journal_entry.confidence, max_chars=40)})" if journal_entry.confidence else ""
+        model = _line(journal_entry.model or "unknown", max_chars=60)
+        ts_short = _line(journal_entry.ts[:10] if journal_entry.ts else "", max_chars=20)
+        print(f"  Verdict:  {_line(journal_entry.verdict, max_chars=40)}{conf} — {model}, {ts_short}")
+        if journal_entry.strategy_id or journal_entry.strategies:
+            strats = ", ".join(_line(s, max_chars=60) for s in journal_entry.strategies) if journal_entry.strategies else ""
+            sid = _line(journal_entry.strategy_id or "", max_chars=60)
+            print(f"  Strategy: {sid} [{strats}]" if sid else f"  Strategy: [{strats}]")
+    else:
+        print("  Verdict:  (no review recorded)")
+
+    if journal_entry and journal_entry.hypotheses:
+        print()
+        print("  Hypotheses:")
+        for h in journal_entry.hypotheses:
+            status = h.get("status", "?")
+            mark = {"confirmed": "+", "disproven": "x", "exploring": "?"}.get(status, "?")
+            print(f"    {mark} {_line(status, max_chars=40):<12} {_line(h.get('claim', ''))}")
+
+    if journal_entry and journal_entry.reading_list_items:
+        print()
+        print("  Unresolved questions:")
+        for q in journal_entry.reading_list_items:
+            print(f"    - {_line(q)}")
+
+    if suppressions:
+        print()
+        print("  Chokepoint records:")
+        for rec in suppressions:
+            verdict = _line(str(rec.get("verdict", "")), max_chars=40)
+            dropped = rec.get("dropped", True)
+            kind = "dropped" if dropped else "survived (policy-capped)"
+            print(f"    {verdict} [{kind}]")
+            reason = str(rec.get("reason", ""))
+            if reason:
+                print(f"      {_line(reason, max_chars=160)}")
+
+    if ann:
+        print()
+        print("  Operator note:")
+        body = getattr(ann, "body", "")
+        if body:
+            for line in _prose(body.strip()).splitlines():
+                print(f"    {line}")
+    print()
+
+
+def _show_file(file, cm, entries, index, ann_dir, args):
+    all_entries = {}
+    for e in entries:
+        if e.file == file:
+            existing = all_entries.get(e.function)
+            if not existing or e.ts > existing.ts:
+                all_entries[e.function] = e
+    for e in index.values():
+        if e.file == file and e.function not in all_entries:
+            all_entries[e.function] = e
+
+    count = len(all_entries)
+    header = f"─── {_line(file)} ({count} reviewed functions) "
+    print(header + "─" * max(0, 60 - len(header)))
+    print()
+
+    roles = {"entry_point": 0, "sink": 0, "trust_boundary": 0}
+    if cm:
+        for section, role in [("entry_points", "entry_point"), ("sink_details", "sink"), ("boundary_details", "trust_boundary")]:
+            for item in cm.get(section) or []:
+                if isinstance(item, dict):
+                    f = item.get("file", "")
+                    if f == file or f.endswith(f"/{file}") or file.endswith(f"/{f}"):
+                        roles[role] += 1
+        role_parts = [f"{v} {k.replace('_', ' ')}s" for k, v in roles.items() if v]
+        if role_parts:
+            print(f"  Roles:    {', '.join(role_parts)}")
+
+    findings = [e for e in all_entries.values() if e.verdict == "finding"]
+    if findings:
+        print(f"  Findings: {len(findings)}")
+    else:
+        print("  Findings: 0")
+
+    if all_entries:
+        print()
+        print("  Reviews:")
+        for fn in sorted(all_entries):
+            e = all_entries[fn]
+            conf = f" ({_line(e.confidence, max_chars=40)})" if e.confidence else ""
+            model = _line((e.model or "")[:12], max_chars=20)
+            print(f"    {_line(fn, max_chars=80):<30} {_line(e.verdict, max_chars=40)}{conf}  {model}")
+    print()
+
+
+def cmd_findings(args):
+    """List all findings across runs."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+
+    entries = _load_journal_entries(out_dir)
+    index = _load_journal_index(project_dir)
+
+    all_findings = {}
+    for e in entries:
+        if e.verdict in ("finding", "suspicious"):
+            existing = all_findings.get(e.key)
+            if not existing or e.ts > existing.ts:
+                all_findings[e.key] = e
+    for key, e in index.items():
+        if e.verdict in ("finding", "suspicious") and key not in all_findings:
+            all_findings[key] = e
+
+    if getattr(args, "raw", False):
+        print(dumps_display([e.to_dict() for e in all_findings.values()], indent=2))
+        return
+
+    if not all_findings:
+        print("  No findings.")
+        return
+
+    print(f"  {len(all_findings)} finding(s)")
+    print()
+    for key in sorted(all_findings):
+        e = all_findings[key]
+        cwe = _line(e.cwe or "", max_chars=20)
+        model = _line((e.model or "")[:12], max_chars=20)
+        ts_short = _line(e.ts[:10] if e.ts else "", max_chars=20)
+        print(f"  {_line(e.file)}:{_line(e.function, max_chars=80):<20} {cwe:<10} {_line(e.verdict, max_chars=40):<10} {model}  {ts_short}")
+
+
+def cmd_gaps(args):
+    """Show what needs review and why."""
+    out_dir = _resolve_out_dir(args)
+    if not out_dir:
+        print("  No output directory found. Run an audit first.", file=sys.stderr)
+        sys.exit(1)
+
+    gaps_path = out_dir / "gaps.json"
+    if not gaps_path.is_file():
+        print("  No gaps.json found in output directory.", file=sys.stderr)
+        sys.exit(1)
+
+    data = load_json(gaps_path, max_bytes=_MAX_ARTIFACT_BYTES)
+    if data is None:
+        print("  Failed to read gaps.json.", file=sys.stderr)
+        sys.exit(1)
+
+    gaps = data.get("gaps", [])
+    edge_lines = _edge_gap_lines(out_dir)
+    if not gaps and not edge_lines:
+        print("  No gaps — all functions reviewed.")
+        return
+
+    if getattr(args, "raw", False):
+        print(dumps_display(gaps, indent=2))
+        return
+
+    print(f"  {len(gaps)} function(s) need review")
+    print()
+    print(f"  {'Priority':<10} {'File':<30} {'Function':<25} {'Strategies'}")
+    print(f"  {'─' * 9:<10} {'─' * 29:<30} {'─' * 24:<25} {'─' * 20}")
+    for g in gaps[:50]:
+        strats = ", ".join(_line(s, max_chars=40) for s in g.get("strategies", [])[:3])
+        pri = _line(g.get('priority', 0), max_chars=20)
+        fn = _line(g.get('file', ''))
+        nm = _line(g.get('name', ''), max_chars=80)
+        print(f"  {pri:<10} {fn:<30} {nm:<25} {strats}")
+    for line in edge_lines:
+        print(line)
+
+
+def _edge_gap_lines(out_dir) -> list:
+    """Edge-obligation gap state for --edges runs (absent file → no
+    section). Tier-1 gaps rank ABOVE function gaps in urgency; they
+    render as their own block. Tier-2 shows the folded-pending count."""
+    raw = load_json(
+        out_dir / "edge-obligations.json", max_bytes=_MAX_ARTIFACT_BYTES,
+    )
+    if not isinstance(raw, dict):
+        return []
+    tier1 = raw.get("tier1") or []
+    tier2 = raw.get("tier2") or []
+    reviewed = set()
+    verdicted_folds = set()
+    try:
+        from core.audit.edge_review import edge_key  # noqa: PLC0415
+        from core.coverage.journal import load_entries
+        for e in load_entries(out_dir):
+            if getattr(e, "edge_callee", None) and e.verdict != "error":
+                reviewed.add(e.key)
+            for ev in getattr(e, "edge_verdicts", None) or []:
+                if isinstance(ev, dict) and ev.get("callee"):
+                    verdicted_folds.add(
+                        (e.file, e.function, str(ev["callee"])))
+    except Exception:  # noqa: BLE001 — layers degrade gracefully
+        return []
+    unreviewed = [r for r in tier1 if edge_key(r) not in reviewed]
+    pending2 = [
+        r for r in tier2
+        if (r.get("caller_file"), r.get("caller"),
+            str(r.get("callee"))) not in verdicted_folds
+    ]
+    if not unreviewed and not pending2:
+        return []
+    lines = ["", f"  Edge obligations ({len(unreviewed)} tier-1 "
+                 f"unreviewed, {len(pending2)} tier-2 pending)"]
+    for r in unreviewed[:15]:
+        loc = _line(
+            f"{r.get('caller_file')}:{r.get('caller')} -> "
+            f"{r.get('callee_file')}:{r.get('callee')}", max_chars=100)
+        why = _line(str(r.get("reason", "")), max_chars=40)
+        lines.append(f"    edge      {loc}  {why}")
+    if len(unreviewed) > 15:
+        lines.append(f"    (+{len(unreviewed) - 15} more tier-1 — see "
+                     "edge-obligations.json)")
+    if pending2:
+        lines.append(
+            f"    {len(pending2)} tier-2 edge contract(s) pending "
+            "(folded into caller reviews)")
+    return lines
+
+
+def cmd_history(args):
+    """Show all reviews of a function over time."""
+    out_dir = _resolve_out_dir(args)
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    key = f"{args.file}:{args.function}"
+
+    entries = [e for e in _load_journal_entries(out_dir) if e.key == key]
+
+    idx = _load_journal_index(project_dir)
+    if key in idx and not any(e.ts == idx[key].ts for e in entries):
+        entries.append(idx[key])
+
+    entries.sort(key=lambda e: e.ts)
+
+    if not entries:
+        print(f"  No reviews recorded for {key}")
+        return
+
+    if getattr(args, "raw", False):
+        print(dumps_display([e.to_dict() for e in entries], indent=2))
+        return
+
+    for e in entries:
+        ts_short = _line(e.ts[:16].replace("T", " ") if e.ts else "?", max_chars=20)
+        conf = f" ({_line(e.confidence, max_chars=40)})" if e.confidence else ""
+        model = _line((e.model or "?")[:12], max_chars=20)
+        strats = ", ".join(_line(s, max_chars=60) for s in e.strategies[:3]) if e.strategies else ""
+        print(f"  {ts_short}  {_line(e.verdict, max_chars=40)}{conf:<8} {model:<14} {strats}")
+
+
+def cmd_stats(args):
+    """Show entry counts, costs, coverage percentages."""
+    out_dir = _resolve_out_dir(args)
+    entries = _load_journal_entries(out_dir)
+
+    if not entries:
+        print("  No journal entries found.")
+        return
+
+    # Post-loop mechanical echo rows (one $0 row per pattern-scan
+    # finding, journalled for cross-layer visibility) are not LLM
+    # reviews — counted separately so verdict tallies aren't inflated.
+    from core.coverage.journal import is_mechanical_echo
+
+    echo_rows = sum(1 for e in entries if is_mechanical_echo(e))
+    verdicts: dict[str, int] = {}
+    total_cost = 0.0
+    total_duration = 0.0
+    models: set[str] = set()
+    for e in entries:
+        if is_mechanical_echo(e):
+            continue
+        verdicts[e.verdict] = verdicts.get(e.verdict, 0) + 1
+        total_cost += e.cost_usd or 0.0
+        total_duration += e.duration_s or 0.0
+        if e.model:
+            models.add(e.model)
+
+    print(f"  Entries:  {len(entries)}")
+    if echo_rows:
+        print(
+            f"  Mechanical echo rows: {echo_rows} "
+            "(post-loop pattern scans — excluded from verdicts)"
+        )
+    print(f"  Models:   {', '.join(_line(m, max_chars=60) for m in sorted(models)) or '(none)'}")
+    print(f"  Cost:     ${total_cost:.2f}")
+    print(f"  Duration: {total_duration:.0f}s ({total_duration / 60:.1f}m)")
+    print()
+    print("  Verdicts:")
+    for v in sorted(verdicts):
+        print(f"    {_line(v, max_chars=40):<15} {verdicts[v]}")
+
+
+def cmd_notes(args):
+    """List all operator annotations."""
+    out_dir = _resolve_out_dir(args)
+    ann_dir = _annotations_dir(out_dir)
+    if not ann_dir or not ann_dir.is_dir():
+        print("  No annotations directory found.")
+        return
+
+    try:
+        from core.annotations.storage import iter_all_annotations
+    except ImportError:
+        print("  Annotation storage not available.", file=sys.stderr)
+        return
+
+    count = 0
+    for ann in iter_all_annotations(ann_dir):
+        if ann.metadata.get("source") != "human":
+            continue
+        status = _line(ann.metadata.get("status", ""), max_chars=40)
+        body_preview = _line((ann.body or "")[:60], max_chars=80)
+        print(f"  {_line(ann.file)}:{_line(ann.function, max_chars=80):<25} {status:<12} {body_preview}")
+        count += 1
+
+    if count == 0:
+        print("  No operator notes found.")
+
+
+def cmd_note(args):
+    """Add an operator note (delegates to raptor-annotate)."""
+    import subprocess
+    libexec = Path(__file__).resolve().parent
+    cmd = [
+        sys.executable, str(libexec / "raptor-annotate"),
+        "add", args.file, args.function,
+    ]
+    if args.body:
+        cmd.extend(["-m", args.body])
+    if getattr(args, "status", None):
+        cmd.extend(["--status", args.status])
+    if getattr(args, "base", None):
+        cmd.extend(["--base", args.base])
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    # No --source: the delegate stamps the inherited fds' TTY context
+    # and derives the default from it, so an interactive /review note
+    # lands as human and an agent-driven one as agent.
+    sys.exit(subprocess.call(cmd, env=env))
+
+
+def cmd_edit(args):
+    """Edit an operator note (delegates to raptor-annotate)."""
+    import subprocess
+    libexec = Path(__file__).resolve().parent
+    cmd = [
+        sys.executable, str(libexec / "raptor-annotate"),
+        "edit", args.file, args.function,
+    ]
+    if getattr(args, "base", None):
+        cmd.extend(["--base", args.base])
+    env = os.environ.copy()
+    env["_RAPTOR_TRUSTED"] = "1"
+    sys.exit(subprocess.call(cmd, env=env))
+
+
+def cmd_stale(args):
+    """List stale reviews.
+
+    ``--source`` selects which store to check:
+      * ``annotation`` (default) — human operator notes (delegates
+        to ``raptor-annotate stale``).
+      * ``journal`` — LLM review entries in the project-level
+        journal index. Recomputes each entry's source hash and
+        lists entries where the current source differs from the
+        recorded hash (source drift since the review).
+      * ``both`` — run both.
+    """
+    source = getattr(args, "source", None) or "annotation"
+
+    if source in ("annotation", "both"):
+        import subprocess
+        libexec = Path(__file__).resolve().parent
+        cmd = [sys.executable, str(libexec / "raptor-annotate"), "stale"]
+        if getattr(args, "target", None):
+            cmd.extend(["--target", args.target])
+        env = os.environ.copy()
+        env["_RAPTOR_TRUSTED"] = "1"
+        rc = subprocess.call(cmd, env=env)
+        if source == "annotation":
+            sys.exit(rc)
+
+    if source in ("journal", "both"):
+        _stale_journal(args)
+
+
+def _stale_journal(args):
+    """List journal entries whose source hash no longer matches the
+    file on disk.
+
+    Amendment §6 (Phase 3.5): symmetric to ``/annotate stale``.
+    Operators previously had no way to find stale LLM reviews —
+    this closes that gap.
+    """
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    if not project_dir:
+        print("  No active project.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.audit.journal import load_index
+    from core.audit.record import _compute_hash
+
+    target = getattr(args, "target", None)
+    target_path = Path(target) if target else project_dir
+
+    try:
+        entries = load_index(project_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Corrupt journal index: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    stale = []
+    for entry in entries.values():
+        if not entry.source_hash:
+            continue
+        current = _compute_hash(
+            target_path, entry.file, entry.line_start,
+            entry.line_end,
+        )
+        if current and current != entry.source_hash:
+            stale.append((entry, current))
+
+    if not stale:
+        print(f"  {len(entries)} journal entries, 0 stale.")
+        return
+
+    print(f"  {len(entries)} journal entries, {len(stale)} stale:")
+    for entry, current in sorted(stale, key=lambda e: (e[0].file, e[0].function)):
+        print(
+            f"    {_line(entry.file)}:{_line(entry.function, max_chars=80)}  "
+            f"verdict={_line(entry.verdict, max_chars=40)}  "
+            f"was={entry.source_hash[:12]}...  "
+            f"now={current[:12]}..."
+        )
+
+
+def cmd_edges(args):
+    """Edge obligations: tier-1 review state, tier-2 pending, blind spots."""
+    out_dir = _resolve_out_dir(args)
+    if not out_dir:
+        print("No run directory found (pass --out or activate a project).")
+        return
+    ob_path = out_dir / "edge-obligations.json"
+    if not ob_path.is_file():
+        print("No edge-obligations.json in this run (run /audit --edges).")
+        return
+    ob = load_json(ob_path, max_bytes=_MAX_ARTIFACT_BYTES)
+    if ob is None:
+        print("edge-obligations.json unreadable.")
+        return
+    if getattr(args, "raw", False):
+        print(dumps_display(ob, indent=2))
+        return
+
+    reviewed = {}
+    edge_key = None
+    try:
+        from core.audit.edge_review import edge_key
+        from core.coverage.journal import load_entries, load_index
+        entries = list(load_entries(out_dir))
+        # Cross-run edge reuse journals verdicts in PRIOR runs — fold
+        # the project index too, per-run entries winning on conflict,
+        # or a reused run reads as entirely "unreviewed" here while
+        # the report says otherwise.
+        project_dir = _resolve_project_dir(getattr(args, "project", None))
+        if project_dir is not None:
+            index_entries = list(load_index(project_dir).values())
+        else:
+            index_entries = []
+        for e in index_entries + entries:
+            if getattr(e, "edge_callee", None) and e.verdict != "error":
+                reviewed[e.key] = e.verdict
+    except Exception:  # noqa: BLE001 — journal layer degrades gracefully
+        pass
+
+    tier1 = ob.get("tier1") or []
+    tier2 = ob.get("tier2") or []
+    blind = ob.get("blind_spots") or []
+    stats = ob.get("stats") or {}
+    print(f"─── Edge obligations ({_line(out_dir.name, 60)}) ───")
+    print(f"\n  Tier-1 (dedicated units): {len(tier1)}")
+    for rec in tier1:
+        try:
+            verdict = (reviewed.get(edge_key(rec), "unreviewed")
+                       if edge_key else "?")
+        except Exception:  # noqa: BLE001
+            verdict = "?"
+        loc = _line(f"{rec.get('caller_file')}:{rec.get('caller')} -> "
+                    f"{rec.get('callee')}", 90)
+        print(f"    {loc:90}  {_line(str(verdict), 12)}  "
+              f"[{_line(str(rec.get('reason', '')), 40)}]")
+    print(f"\n  Tier-2 (folded into caller reviews): {len(tier2)} — "
+          "cleared by each caller's function review")
+    print(f"\n  Blind spots: {len(blind)} call site(s) the static graph "
+          "cannot follow (first 10):")
+    for b in blind[:10]:
+        print(f"    {_line(str(b.get('file')), 40)}:"
+              f"{_line(str(b.get('caller') or '-'), 30)}  "
+              f"{_line(str(b.get('kind')), 20)}  "
+              f"{_line(str(b.get('name')), 40)}")
+    degraded = stats.get("degraded") or []
+    if degraded:
+        print(f"\n  Degraded: {', '.join(_line(d, 40) for d in degraded)}")
+    if stats.get("dispatch_resolved"):
+        print(f"  Dispatch sites resolved to tier-1: "
+              f"{stats['dispatch_resolved']}")
+
+
+def _resolve_diff_runs(args, project_dir):
+    """Resolve the two run dirs to diff: explicit names/paths, else the
+    two most recent runs in the project (older first)."""
+    named = list(getattr(args, "runs", None) or [])
+    resolved = []
+    for name in named[:2]:
+        p = Path(name)
+        if p.is_dir():
+            resolved.append(p)
+        elif project_dir and (project_dir / name).is_dir():
+            resolved.append(project_dir / name)
+        else:
+            print(f"Run not found: {name}", file=sys.stderr)
+            return None, None
+    if len(resolved) == 2:
+        return resolved[0], resolved[1]
+    if not project_dir:
+        return None, None
+    runs = sorted(
+        [d for d in project_dir.iterdir()
+         if d.is_dir() and (d / ".raptor-run.json").is_file()
+         and (d / "review-journal.jsonl").is_file()],
+        key=lambda d: d.stat().st_mtime,
+    )
+    if len(resolved) == 1:
+        others = [r for r in runs if r != resolved[0]]
+        return (others[-1], resolved[0]) if others else (None, None)
+    if len(runs) < 2:
+        return None, None
+    return runs[-2], runs[-1]
+
+
+def cmd_diff(args):
+    """Verdict changes between two runs' journals."""
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    run_a, run_b = _resolve_diff_runs(args, project_dir)
+    if run_a is None or run_b is None:
+        print("Need two runs with journals to diff (pass two run "
+              "dir names/paths, or have >=2 journalled runs in the "
+              "active project).")
+        return
+    try:
+        from core.audit.journal import latest_entries
+        a = latest_entries(run_a)
+        b = latest_entries(run_b)
+    except Exception:  # noqa: BLE001 — degrade like the other layer loaders
+        a, b = {}, {}
+    changed = []
+    new_reviews = []
+    for key, entry in sorted(b.items()):
+        prior = a.get(key)
+        if prior is None:
+            new_reviews.append(entry)
+        elif prior.verdict != entry.verdict:
+            changed.append((prior, entry))
+    if getattr(args, "raw", False):
+        print(dumps_display({
+            "run_a": run_a.name, "run_b": run_b.name,
+            "changed": [
+                {"file": e.file, "function": e.function,
+                 "from": p_.verdict, "to": e.verdict, "model": e.model}
+                for p_, e in changed
+            ],
+            "new": [
+                {"file": e.file, "function": e.function,
+                 "verdict": e.verdict, "model": e.model}
+                for e in new_reviews
+            ],
+        }, indent=2))
+        return
+    print(f"─── {_line(run_a.name, 60)} → "
+          f"{_line(run_b.name, 60)} ───")
+    print("\n  Changed verdicts:")
+    if not changed:
+        print("    (none)")
+    for prior, entry in changed:
+        loc = _line(f"{entry.file}:{entry.function}", 60)
+        print(f"    {loc:60}  {_line(prior.verdict, 12)} → "
+              f"{_line(entry.verdict, 12)}")
+    print("\n  New reviews:")
+    if not new_reviews:
+        print("    (none)")
+    for entry in new_reviews:
+        loc = _line(f"{entry.file}:{entry.function}", 60)
+        print(f"    {loc:60}  {_line(entry.verdict, 12)}  "
+              f"{_line(entry.model or '', 24)}")
+
+
+def cmd_live(args):
+    """Tail-follow a running audit's journal; exits when the run
+    reaches a terminal status."""
+    import time
+    out_dir = _resolve_out_dir(args)
+    if not out_dir:
+        print("No run directory found (pass --out or activate a project).")
+        return
+    journal = out_dir / "review-journal.jsonl"
+    meta = out_dir / ".raptor-run.json"
+
+    def _status() -> str:
+        data = load_json(meta, max_bytes=_MAX_META_BYTES)
+        if isinstance(data, dict):
+            return data.get("status", "unknown")
+        return "unknown"
+
+    print(f"{_line(out_dir.name, 80)} — {_line(_status(), 20)}")
+    pos = 0
+    try:
+        while True:
+            if journal.is_file():
+                with open(journal, encoding="utf-8") as fh:
+                    fh.seek(pos)
+                    chunk = fh.read()
+                # Only consume complete lines — a writer may be
+                # mid-append; the partial tail is re-read next poll.
+                if chunk and not chunk.endswith("\n"):
+                    chunk = chunk[:chunk.rfind("\n") + 1]
+                pos += len(chunk.encode("utf-8"))
+                for line in chunk.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = loads(line)
+                    except ValueError:
+                        continue
+                    loc = _line(
+                        f"{e.get('file', '')}:{e.get('function', '')}", 60)
+                    cost = e.get("cost_usd")
+                    cost_s = f"${cost:.2f}" if isinstance(
+                        cost, (int, float)) else ""
+                    print(f"  {_line(e.get('ts', ''), 27):27}  {loc:60}  "
+                          f"{_line(e.get('verdict', ''), 12):12}  {cost_s}")
+            status = _status()
+            if status != "running":
+                print(f"  run {_line(status, 20)}.")
+                return
+            time.sleep(2.0)
+    except KeyboardInterrupt:
+        return
+
+
+def cmd_coverage(args):
+    """Show mechanical tool coverage for a project run."""
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    store = _load_coverage_store(project_dir)
+    if store is None:
+        print("  No coverage data found.")
+        return
+
+    file_filter = getattr(args, "file", None)
+    all_files = store.files()
+    if file_filter:
+        all_files = [f for f in all_files if file_filter in f]
+        if not all_files:
+            print(f"  No coverage records matching '{file_filter}'.")
+            return
+
+    for path in all_files:
+        cov = store.file_coverage(path)
+        print(f"  {_line(path)}: {cov:.0f}%")
+
+    print(f"\n  {len(all_files)} file(s) with coverage data.")
+
+
+def cmd_compact(args):
+    """Compact the project journal index."""
+    project_dir = _resolve_project_dir(getattr(args, "project", None))
+    if not project_dir:
+        print("  No active project.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.audit.journal import INDEX_FILENAME
+    index_path = project_dir / INDEX_FILENAME
+    if not index_path.is_file():
+        print("  No journal index to compact.")
+        return
+
+    data = load_json(index_path, max_bytes=_MAX_ARTIFACT_BYTES)
+    if data is None:
+        print("  Corrupt index.", file=sys.stderr)
+        sys.exit(1)
+
+    count = len(data.get("entries", {}))
+    print(f"  Index has {count} entries.")
+
+
+# ── Argument parsing ─────────────────────────────────────────────────
+
+# Flags that consume a following value. The default-subcommand sniffer
+# must skip those values — pre-fix `raptor-review --project /x stats`
+# picked `/x` (a flag VALUE) as the first positional, decided it wasn't
+# a known subcommand, and prepended "show", so `stats` was parsed as
+# show's <file> argument.
+_VALUE_FLAGS = frozenset({
+    "--out", "--project", "--target", "--status", "--base",
+    "--source", "-m", "--body",
+})
+
+
+def _first_positional(argv_rest: list) -> str | None:
+    """First true positional, skipping values consumed by flags.
+
+    ``--flag value`` consumes the next token; ``--flag=value`` carries
+    its value inline and consumes nothing.
+    """
+    skip = False
+    for a in argv_rest:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("-") and a != "-":
+            if a in _VALUE_FLAGS:
+                skip = True
+            continue
+        return a
+    return None
+
+
+def main():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--out", default=None, help="Output directory")
+    common.add_argument("--project", default=None, help="Project directory")
+    common.add_argument("--raw", action="store_true", help="JSON output")
+
+    parser = argparse.ArgumentParser(
+        prog="raptor-review",
+        description="Unified review CLI — queries all layers.",
+        parents=[common],
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    p_show = sub.add_parser("show", parents=[common], help="Unified view for file/function")
+    p_show.add_argument("file")
+    p_show.add_argument("function", nargs="?", default=None)
+
+    sub.add_parser("findings", parents=[common], help="All findings across runs")
+    sub.add_parser("gaps", parents=[common], help="What needs review")
+
+    p_hist = sub.add_parser("history", parents=[common], help="Review history for a function")
+    p_hist.add_argument("file")
+    p_hist.add_argument("function")
+
+    sub.add_parser("stats", parents=[common], help="Entry counts, costs")
+    sub.add_parser("notes", parents=[common], help="List operator annotations")
+
+    p_note = sub.add_parser("note", parents=[common], help="Add operator note")
+    p_note.add_argument("file")
+    p_note.add_argument("function")
+    p_note.add_argument("-m", "--body", default=None)
+    p_note.add_argument("--status", default=None)
+    p_note.add_argument(
+        "--base", default=None,
+        help="annotation base dir (default: active project)",
+    )
+
+    p_edit = sub.add_parser("edit", parents=[common], help="Edit operator note")
+    p_edit.add_argument("file")
+    p_edit.add_argument("function")
+    p_edit.add_argument(
+        "--base", default=None,
+        help="annotation base dir (default: active project)",
+    )
+
+    p_stale = sub.add_parser(
+        "stale", parents=[common],
+        help="Find stale reviews (--source annotation|journal|both)",
+    )
+    p_stale.add_argument("--target", default=None)
+    p_stale.add_argument(
+        "--source", default="annotation",
+        choices=["annotation", "journal", "both"],
+        help="Which store to check for staleness (default: annotation)",
+    )
+
+    sub.add_parser("edges", parents=[common],
+                   help="Edge obligations, verdicts, blind spots")
+
+    p_diff = sub.add_parser(
+        "diff", parents=[common],
+        help="Verdict changes between two runs (default: two most recent)")
+    p_diff.add_argument("runs", nargs="*", default=[])
+
+    sub.add_parser(
+        "live", parents=[common],
+        help="Tail-follow a running audit's journal")
+
+    sub.add_parser("compact", parents=[common], help="Compact project journal index")
+
+    p_cov = sub.add_parser("coverage", parents=[common], help="Mechanical tool coverage")
+    p_cov.add_argument("file", nargs="?", default=None)
+
+    known_commands = {
+        "show", "findings", "gaps", "history", "stats", "notes",
+        "note", "edit", "stale", "compact", "coverage", "diff", "live",
+        "edges",
+    }
+    argv_rest = sys.argv[1:]
+    first_positional = _first_positional(argv_rest)
+
+    if first_positional and first_positional not in known_commands:
+        argv_rest = ["show"] + argv_rest
+    args = parser.parse_args(argv_rest)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    dispatch = {
+        "show": cmd_show,
+        "findings": cmd_findings,
+        "gaps": cmd_gaps,
+        "history": cmd_history,
+        "stats": cmd_stats,
+        "notes": cmd_notes,
+        "note": cmd_note,
+        "edit": cmd_edit,
+        "stale": cmd_stale,
+        "compact": cmd_compact,
+        "coverage": cmd_coverage,
+        "diff": cmd_diff,
+        "live": cmd_live,
+        "edges": cmd_edges,
+    }
+
+    handler = dispatch.get(args.command)
+    if handler:
+        handler(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

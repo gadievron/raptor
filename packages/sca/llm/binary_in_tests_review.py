@@ -13,11 +13,8 @@ LLM verdict does not suppress the mechanical ``binary_in_tests`` finding.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import List, Optional
 
 from core.llm.task_types import TaskType
-from ..models import SupplyChainFinding
 from . import (
     StageResult,
     TaintedString,
@@ -26,6 +23,11 @@ from . import (
 )
 from .prompts import BINARY_IN_TESTS_SYSTEM
 from .schemas import BinaryInTestsVerdict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models import SupplyChainFinding
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +36,9 @@ _MAX_CONTEXT_CHARS = 50_000
 
 def review_binary_in_tests(
     client,
-    findings: List[SupplyChainFinding],
+    findings: list[SupplyChainFinding],
     target: Path,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Enrich binary_in_tests findings with LLM plausibility assessment.
 
     Reads surrounding test files to provide context for the LLM's
@@ -50,7 +52,7 @@ def review_binary_in_tests(
         return findings
 
     for finding in bin_findings:
-        binary_path = finding.evidence.get("file_path", "")
+        binary_path = finding.evidence.get("path", "")
         file_size = finding.evidence.get("file_size", 0)
 
         context = _gather_test_context(target, binary_path)
@@ -72,7 +74,8 @@ def review_binary_in_tests(
             if finding.severity in ("info", "low"):
                 finding.severity = "medium"
         elif verdict.verdict == "malicious":
-            finding.severity = "high"
+            if finding.severity not in ("critical",):
+                finding.severity = "high"
 
     return findings
 
@@ -84,7 +87,7 @@ def _review_one(
     context: str,
     pkg_name: str,
     ecosystem: str,
-) -> Optional[BinaryInTestsVerdict]:
+) -> BinaryInTestsVerdict | None:
     """Run the LLM on a single binary-in-tests finding."""
     content_parts = [
         f"Binary file: {binary_path}",
@@ -148,7 +151,12 @@ def _gather_test_context(target: Path, binary_path: str) -> str:
         if binary_name not in text:
             continue
         header = f"--- {test_file.relative_to(target)} ---\n"
-        chunk = header + text[:10_000]
+        idx = text.find(binary_name)
+        if idx <= 10_000:
+            chunk = header + text[:10_000]
+        else:
+            start = max(0, idx - 5_000)
+            chunk = header + text[start:start + 10_000]
         if total + len(chunk) > _MAX_CONTEXT_CHARS:
             break
         chunks.append(chunk)

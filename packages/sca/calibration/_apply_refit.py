@@ -33,8 +33,10 @@ operators inspect the source manually.
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Dict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class RefitApplyError(RuntimeError):
@@ -51,7 +53,7 @@ _CONSTANT_LINE_RE = re.compile(
 
 
 def apply_refit_to_risk_py(
-    proposed_values: Dict[str, float],
+    proposed_values: dict[str, float],
     risk_py_path: Path,
 ) -> int:
     """Rewrite each constant in ``proposed_values`` to its new
@@ -66,13 +68,12 @@ def apply_refit_to_risk_py(
     if not proposed_values:
         return 0
     if not risk_py_path.is_file():
-        raise RefitApplyError(
-            f"risk.py not found at {risk_py_path}",
-        )
+        msg = f"risk.py not found at {risk_py_path}"
+        raise RefitApplyError(msg)
     text = risk_py_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
 
-    found: Dict[str, int] = {}
+    found: dict[str, int] = {}
     for i, line in enumerate(lines):
         m = _CONSTANT_LINE_RE.match(line)
         if m and m.group("name") in proposed_values:
@@ -80,10 +81,11 @@ def apply_refit_to_risk_py(
 
     missing = set(proposed_values) - set(found)
     if missing:
-        raise RefitApplyError(
+        msg = (
             f"constants not found in {risk_py_path}: "
             f"{sorted(missing)}"
         )
+        raise RefitApplyError(msg)
 
     modified = 0
     for name, line_idx in found.items():
@@ -91,7 +93,7 @@ def apply_refit_to_risk_py(
         m = _CONSTANT_LINE_RE.match(lines[line_idx])
         assert m is not None
         old_value = float(m.group("value"))
-        if old_value == new_value:
+        if old_value == round(new_value, 4):
             continue
         formatted = _format_value(new_value)
         new_line = (

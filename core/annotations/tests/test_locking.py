@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -35,6 +34,7 @@ def _writer_proc(base_str: str, file: str, prefix: str, count: int):
         ))
 
 
+@pytest.mark.filterwarnings("ignore:This process.*fork:DeprecationWarning")
 class TestConcurrentWrites:
     """Two processes hammer the same file. With locking, all writes
     survive. Without it, ~half would be lost to the read-modify-write
@@ -74,7 +74,7 @@ class TestConcurrentWrites:
         assert not missing, (
             f"{len(missing)} annotations lost to read-modify-write "
             f"race — locking didn't serialise. Missing: "
-            f"{sorted(list(missing))[:5]}..."
+            f"{sorted(missing)[:5]}..."
         )
 
 

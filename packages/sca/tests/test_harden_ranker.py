@@ -55,7 +55,8 @@ def test_severity_ordinal_known_keys() -> None:
     assert _SEVERITY_ORDINAL["critical"] == 4
     # Strict monotone.
     for a, b in zip(["none", "low", "medium", "high", "critical"],
-                    ["low", "medium", "high", "critical"]):
+                    ["low", "medium", "high", "critical"],
+                    strict=False):
         assert _SEVERITY_ORDINAL[a] < _SEVERITY_ORDINAL[b]
 
 

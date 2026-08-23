@@ -49,9 +49,9 @@ import io
 import logging
 import os
 import zipfile
-from typing import Callable, Dict, Optional, Union
+from collections.abc import Callable
 
-from .eocd import DEFAULT_MAX_ENTRIES, peek_total_entries
+from .eocd import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 from .safe_member import (
     DEFAULT_MAX_MEMBER_BYTES,
     DEFAULT_MAX_RATIO,
@@ -62,7 +62,10 @@ logger = logging.getLogger(__name__)
 
 
 class ZipEntryCountExceeded(Exception):
-    """Raised when a zip's declared entry count exceeds ``max_entry_count``.
+    """Raised when a zip's EOCD pre-flight flags a bomb shape — the
+    declared entry count exceeds ``max_entry_count``, or the declared
+    central-directory size fails the :func:`core.zip.eocd.
+    bomb_shaped_reason` cross-check against that count.
 
     Surfaces from :func:`extract_files_from_zip` when the caller opts
     into a hard failure on bomb-shaped archives (default behaviour is
@@ -85,17 +88,17 @@ class ZipTotalBytesExceeded(Exception):
 
 
 def extract_files_from_zip(
-    source: Union[bytes, str, os.PathLike, io.IOBase],
+    source: bytes | str | os.PathLike | io.IOBase,
     *,
-    selector: Callable[[zipfile.ZipInfo], Optional[str]],
+    selector: Callable[[zipfile.ZipInfo], str | None],
     max_member_bytes: int = DEFAULT_MAX_MEMBER_BYTES,
     max_ratio: int = DEFAULT_MAX_RATIO,
     max_entry_count: int = DEFAULT_MAX_ENTRIES,
     allow_absolute_paths: bool = False,
-    expected_count: Optional[int] = None,
+    expected_count: int | None = None,
     raise_on_entry_count: bool = False,
-    max_total_bytes: Optional[int] = None,
-) -> Dict[str, bytes]:
+    max_total_bytes: int | None = None,
+) -> dict[str, bytes]:
     """Walk ``source`` (a zip archive) and return selected members
     as a ``{key: bytes}`` dict.
 
@@ -136,23 +139,28 @@ def extract_files_from_zip(
     explicitly (project import, CodeQL DB unpack) pass ``True``
     to get :class:`ZipEntryCountExceeded`.
     """
-    found: Dict[str, bytes] = {}
+    found: dict[str, bytes] = {}
 
     # Pre-flight: EOCD scan rejects bomb-shaped archives BEFORE
     # ``ZipFile.__init__`` materialises the central directory into
-    # RSS. Only attempts the peek when ``source`` is a path or
-    # bytes; file-like streams can't be peeked without consuming
-    # them (the caller can buffer + re-pass if they want the gate).
+    # RSS. The declared entry count is cross-checked against the
+    # declared central-directory size (``bomb_shaped_reason``) — a
+    # forged small count in front of a huge real CD would otherwise
+    # bypass a count-only gate, since ``ZipFile`` parses the CD until
+    # the cd-size buffer is exhausted, ignoring the count. Only
+    # attempts the peek when ``source`` is a path or bytes; file-like
+    # streams can't be peeked without consuming them (the caller can
+    # buffer + re-pass if they want the gate).
     if isinstance(source, (bytes, bytearray, str, os.PathLike)):
-        declared = peek_total_entries(source)
-        if declared is not None and declared > max_entry_count:
-            msg = (
-                f"zip declares {declared} entries in EOCD — exceeds cap "
-                f"of {max_entry_count}; refusing as bomb-shape"
-            )
+        summary = peek_eocd(source)
+        reason = (
+            bomb_shaped_reason(summary, max_entries=max_entry_count)
+            if summary is not None else None
+        )
+        if reason is not None:
             if raise_on_entry_count:
-                raise ZipEntryCountExceeded(msg)
-            logger.debug("core.zip.extract: %s", msg)
+                raise ZipEntryCountExceeded(reason)
+            logger.debug("core.zip.extract: %s", reason)
             return found
 
     fileobj = _normalise_source(source)
@@ -225,9 +233,11 @@ def extract_files_from_zip(
             if max_total_bytes is not None:
                 total_bytes += len(data)
                 if total_bytes > max_total_bytes:
-                    raise ZipTotalBytesExceeded(
+                    msg_0 = (
                         f"zip extraction exceeds {max_total_bytes} bytes "
-                        f"(bomb-shape); refusing")
+                        f"(bomb-shape); refusing"
+                    )
+                    raise ZipTotalBytesExceeded(msg_0)
             found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break
@@ -237,8 +247,8 @@ def extract_files_from_zip(
 
 
 def _normalise_source(
-    source: Union[bytes, str, os.PathLike, io.IOBase],
-) -> Union[io.IOBase, str, os.PathLike]:
+    source: bytes | str | os.PathLike | io.IOBase,
+) -> io.IOBase | str | os.PathLike:
     """Coerce ``source`` into a form ``zipfile.ZipFile`` accepts.
 
     Bytes are wrapped in :class:`io.BytesIO` (zipfile needs

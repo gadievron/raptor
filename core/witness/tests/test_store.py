@@ -442,3 +442,87 @@ def test_concurrent_distinct_hash_writes_succeed(tmp_path):
     )
     assert len(blobs) == N * PER
     assert len(manifests) == N * PER
+
+
+# ----------------------------------------------------------------------
+# Read-side verification (hash-addressed content must match its address)
+# ----------------------------------------------------------------------
+
+
+def test_get_bytes_rejects_tampered_blob(tmp_path):
+    """A blob rewritten on disk no longer matches its hash address —
+    the store must refuse it, not serve it as evidence."""
+    store = WitnessStore(tmp_path)
+    data = b"original bytes"
+    w = _make_witness(data)
+    blob = store.put(w, data)
+    blob.write_bytes(b"tampered content")
+    with pytest.raises(WitnessStoreError, match="does not match its address"):
+        store.get_bytes(w.bytes_hash)
+
+
+def test_get_bytes_rejects_traversal_hash(tmp_path):
+    """The hash key is interpolated into on-disk paths — non-hex keys
+    (e.g. ``../``) must be rejected before any filesystem use."""
+    store = WitnessStore(tmp_path / "store")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"secret")
+    (tmp_path / "store" / "blobs").mkdir(parents=True)
+    with pytest.raises(WitnessStoreError, match="invalid bytes_hash"):
+        store.get_bytes("../../outside")
+    with pytest.raises(WitnessStoreError, match="invalid bytes_hash"):
+        store.get_witness("../../outside")
+    assert store.blob_path("../../outside") is None
+    assert not store.has("../../outside")
+
+
+def test_get_witness_rejects_address_mismatch(tmp_path):
+    """A manifest planted at <hashA>.json whose record claims a
+    different bytes_hash is inconsistent with its address."""
+    store = WitnessStore(tmp_path)
+    data = b"legit"
+    w = _make_witness(data)
+    store.put(w, data)
+    # Plant the legit record under a DIFFERENT hash address.
+    planted_hash = "b" * 64
+    planted = tmp_path / "manifests" / f"{planted_hash}.json"
+    planted.write_text(
+        (tmp_path / "manifests" / f"{w.bytes_hash}.json").read_text(),
+    )
+    with pytest.raises(WitnessStoreError, match="inconsistent with"):
+        store.get_witness(planted_hash)
+
+
+def test_list_witnesses_skips_address_mismatched_manifest(tmp_path):
+    store = WitnessStore(tmp_path)
+    data = b"legit"
+    w = _make_witness(data)
+    store.put(w, data)
+    planted = tmp_path / "manifests" / ("b" * 64 + ".json")
+    planted.write_text(
+        (tmp_path / "manifests" / f"{w.bytes_hash}.json").read_text(),
+    )
+    listed = list(store.list_witnesses())
+    assert len(listed) == 1
+    assert listed[0].bytes_hash == w.bytes_hash
+
+
+def test_list_witnesses_skips_non_hash_manifest_names(tmp_path):
+    store = WitnessStore(tmp_path)
+    data = b"legit"
+    store.put(_make_witness(data), data)
+    oddball = tmp_path / "manifests" / "not-a-hash.json"
+    oddball.write_text(
+        (tmp_path / "manifests" / f"{compute_bytes_hash(data)}.json")
+        .read_text(),
+    )
+    listed = list(store.list_witnesses())
+    assert len(listed) == 1
+
+
+def test_get_bytes_verified_roundtrip_still_works(tmp_path):
+    store = WitnessStore(tmp_path)
+    data = b"round trip bytes"
+    w = _make_witness(data)
+    store.put(w, data)
+    assert store.get_bytes(w.bytes_hash) == data

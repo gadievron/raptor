@@ -26,9 +26,12 @@ import json as _json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, TYPE_CHECKING
 
 from core.security.prompt_output_sanitise import sanitise_string
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +62,7 @@ _LEVEL_BY_SEVERITY = {
 }
 
 # Static rule names so consumers see human-readable labels in the UI.
-_RULE_NAMES: Dict[str, str] = {
+_RULE_NAMES: dict[str, str] = {
     "sca:vulnerable_dependency": "VulnerableDependency",
     "sca:hygiene:lockfile_missing": "LockfileMissing",
     "sca:hygiene:lockfile_drift": "LockfileDrift",
@@ -76,7 +79,7 @@ _RULE_NAMES: Dict[str, str] = {
 
 # Description text for each rule. Falls back to the vuln_type when a rule
 # isn't pre-registered (forward-compat with new kinds).
-_RULE_DESCRIPTIONS: Dict[str, str] = {
+_RULE_DESCRIPTIONS: dict[str, str] = {
     "sca:vulnerable_dependency":
         "A direct or transitive dependency matches a known CVE/GHSA "
         "advisory and should be upgraded.",
@@ -119,14 +122,18 @@ _RULE_DESCRIPTIONS: Dict[str, str] = {
 }
 
 
-def write_sarif(path: Path, *, target: Path, rows: Sequence[Dict[str, Any]],
+def write_sarif(path: Path, *, target: Path, rows: Sequence[dict[str, Any]],
                 generated_at: datetime | None = None) -> int:
     """Atomically write SARIF 2.1.0 to ``path``; returns ``len(rows)``."""
     doc = build_sarif(target=target, rows=rows, generated_at=generated_at)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _json.dump(doc, fh, indent=2)
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            _json.dump(doc, fh, indent=2)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(path)
     return len(rows)
 
@@ -134,16 +141,16 @@ def write_sarif(path: Path, *, target: Path, rows: Sequence[Dict[str, Any]],
 def build_sarif(
     *,
     target: Path,
-    rows: Sequence[Dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     generated_at: datetime | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return the SARIF document as a dict (in serialisation order)."""
     generated_at = generated_at or datetime.now(timezone.utc)
 
     # Collect every distinct rule id seen in the row set so we can
     # emit a matching rule definition. SARIF requires that every result
     # references a defined rule.
-    seen_rule_ids: List[str] = []
+    seen_rule_ids: list[str] = []
     seen: set = set()
     for r in rows:
         rid = r.get("vuln_type")
@@ -152,18 +159,21 @@ def build_sarif(
             seen_rule_ids.append(rid)
 
     rules = [_rule_definition(rid) for rid in seen_rule_ids]
+    rule_index = {rid: i for i, rid in enumerate(seen_rule_ids)}
 
-    results: List[Dict[str, Any]] = []
-    suppressions: List[Dict[str, Any]] = []
-    for idx, row in enumerate(rows):
-        result, suppression = _row_to_result(row, target, idx)
+    results: list[dict[str, Any]] = []
+    suppressions: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        result, suppression = _row_to_result(row, target, rule_index)
         if result is None:
             continue
         results.append(result)
         if suppression is not None:
             suppressions.append(suppression)
 
-    run: Dict[str, Any] = {
+    run: dict[str, Any] = {
         "tool": {
             "driver": {
                 "name": _TOOL_NAME,
@@ -197,7 +207,7 @@ def build_sarif(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _rule_definition(rule_id: str) -> Dict[str, Any]:
+def _rule_definition(rule_id: str) -> dict[str, Any]:
     name = _RULE_NAMES.get(rule_id, rule_id.replace(":", "_"))
     description = _RULE_DESCRIPTIONS.get(
         rule_id,
@@ -215,17 +225,27 @@ def _rule_definition(rule_id: str) -> Dict[str, Any]:
     }
 
 
+def _safe_start_line(val: Any) -> int:
+    try:
+        return max(int(val or 1), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def _row_to_result(
-    row: Dict[str, Any], target: Path, idx: int,
-) -> "tuple[Dict[str, Any] | None, Dict[str, Any] | None]":
+    row: dict[str, Any], target: Path,
+    rule_index: dict[str, int],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     rule_id = row.get("vuln_type")
     if not isinstance(rule_id, str):
         return None, None
-    severity = row.get("severity") or "info"
+    severity = str(row.get("severity") or "info")
     file_path = row.get("file") or ""
     rel = _relative_uri(file_path, target)
 
     sca = row.get("sca") or {}
+    if not isinstance(sca, dict):
+        sca = {}
     advisory = sca.get("advisory") or {}
     aliases = advisory.get("aliases") if isinstance(advisory, dict) else []
 
@@ -244,9 +264,9 @@ def _row_to_result(
         fingerprint_input.encode("utf-8")
     ).hexdigest()[:16]
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "ruleId": rule_id,
-        "ruleIndex": idx,            # placeholder; consumers tolerate any int
+        "ruleIndex": rule_index.get(rule_id, 0),
         # Lowercase normalisation — LLM verdicts and hand-edited
         # findings.json frequently capitalise ("Critical", "HIGH"); a
         # case-sensitive lookup would silently demote them to "note"
@@ -268,7 +288,7 @@ def _row_to_result(
         "locations": [{
             "physicalLocation": {
                 "artifactLocation": {"uri": rel},
-                "region": {"startLine": max(int(row.get("line") or 1), 1)},
+                "region": {"startLine": _safe_start_line(row.get("line"))},
             },
         }],
         "partialFingerprints": {
@@ -277,7 +297,7 @@ def _row_to_result(
         "properties": _result_properties(row, sca, advisory, aliases),
     }
 
-    suppression: Dict[str, Any] | None = None
+    suppression: dict[str, Any] | None = None
     if row.get("suppressed"):
         # Inline `suppressions` on the result is the SARIF 2.1.0 way.
         # `kind=external` indicates the suppression came from an
@@ -293,12 +313,12 @@ def _row_to_result(
 
 
 def _result_properties(
-    row: Dict[str, Any],
-    sca: Dict[str, Any],
-    advisory: Dict[str, Any] | Any,
-    aliases: List[str] | None,
-) -> Dict[str, Any]:
-    props: Dict[str, Any] = {
+    row: dict[str, Any],
+    sca: dict[str, Any],
+    advisory: dict[str, Any] | Any,
+    aliases: list[str] | None,
+) -> dict[str, Any]:
+    props: dict[str, Any] = {
         "tags": _tags_for(row.get("vuln_type") or ""),
         "ecosystem": sca.get("ecosystem"),
         "name": sca.get("name"),
@@ -328,11 +348,11 @@ def _relative_uri(file_path: str, target: Path) -> str:
         return ""
     try:
         return str(Path(file_path).resolve().relative_to(target.resolve()))
-    except ValueError:
+    except (ValueError, TypeError):
         return file_path
 
 
-def _tags_for(rule_id: str) -> List[str]:
+def _tags_for(rule_id: str) -> list[str]:
     tags = ["security", "raptor"]
     if rule_id == "sca:vulnerable_dependency":
         tags += ["vulnerability", "cve"]

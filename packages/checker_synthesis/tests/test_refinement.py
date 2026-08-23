@@ -10,8 +10,6 @@ Stub LLM + stub engine adapters keep tests deterministic.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
-
 
 from packages.checker_synthesis import (
     Match,
@@ -205,7 +203,7 @@ class TestFpContextPropagation:
         ])
 
         # Capture prompts the LLM sees.
-        captured_prompts: List[str] = []
+        captured_prompts: list[str] = []
 
         def llm(prompt, schema, system_prompt):
             captured_prompts.append(prompt)
@@ -229,12 +227,14 @@ class TestFpContextPropagation:
             max_iterations=3,
         )
         # Iter 2's synthesis prompt (index 2, 0-indexed) should
-        # include the FP feedback section.
-        assert "PRIOR FALSE POSITIVES" in captured_prompts[2]
+        # include the FP feedback — enveloped shape: the FP list
+        # travels in the untrusted prior-false-positives block of the
+        # user message.
+        assert "prior-false-positives" in captured_prompts[2]
         assert "src/sparse.py:10" in captured_prompts[2]
         # Iter 1's synthesis prompt should NOT have FP context (no
         # prior iterations).
-        assert "PRIOR FALSE POSITIVES" not in captured_prompts[0]
+        assert "prior-false-positives" not in captured_prompts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ class TestFpDedup:
             ([seed_m], [seed_m, repeated_fp]),
             ([seed_m], [seed_m]),
         ])
-        captured: List[str] = []
+        captured: list[str] = []
 
         def llm(prompt, schema, system_prompt):
             captured.append(prompt)

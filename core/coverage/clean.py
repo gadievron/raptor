@@ -24,14 +24,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any, TYPE_CHECKING
 
 from .importer import import_findings, import_run_dir, load_run_findings
 from .record import load_records
-from .store import CoverageStore
+
+if TYPE_CHECKING:
+    from .store import CoverageStore
+    from collections.abc import Iterable
 
 
-def _finding_key(f: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+def _finding_key(f: dict[str, Any]) -> tuple[Any, Any, Any]:
     """A cross-run identity for a finding: ``(file, location, issue)``.
 
     Location is the line (``("L", n)``) or, absent a line, the id (``("I",
@@ -43,15 +46,19 @@ def _finding_key(f: Dict[str, Any]) -> Tuple[Any, Any, Any]:
     key stable across runs (the same issue re-found at the same line matches
     even if its per-run id differs)."""
     file = f.get("file") or f.get("file_path") or f.get("path")
-    line = f.get("line") or f.get("line_start") or f.get("start_line")
+    line = next(
+        (v for k in ("line", "line_start", "start_line")
+         if (v := f.get(k)) is not None),
+        None,
+    )
     issue = (f.get("rule_id") or f.get("cwe_id") or f.get("vuln_type")
              or f.get("rule") or f.get("id") or f.get("finding_id"))
     loc = ("L", line) if line is not None else ("I", f.get("id") or f.get("finding_id"))
     return (file, loc, issue)
 
 
-def _files_examined(run_dir: Path) -> Set[str]:
-    out: Set[str] = set()
+def _files_examined(run_dir: Path) -> set[str]:
+    out: set[str] = set()
     for rec in load_records(run_dir):
         out.update(rec.get("files_examined", []) or [])
     return out
@@ -63,8 +70,8 @@ class CleanConsequence:
 
     run: str
     duplicate: bool                              # adds nothing the survivors lack
-    findings_lost: List[Tuple[Any, Any]] = field(default_factory=list)
-    coverage_files: List[str] = field(default_factory=list)
+    findings_lost: list[tuple[Any, Any]] = field(default_factory=list)
+    coverage_files: list[str] = field(default_factory=list)
 
     @property
     def lossy(self) -> bool:
@@ -80,8 +87,8 @@ def classify_removal(
     victim = Path(victim_run_dir)
     survivors = [Path(d) for d in surviving_run_dirs]
 
-    surv_files: Set[str] = set()
-    surv_finding_keys: Set[Tuple[Any, Any]] = set()
+    surv_files: set[str] = set()
+    surv_finding_keys: set[tuple[Any, Any]] = set()
     for d in survivors:
         surv_files |= _files_examined(d)
         for f in load_run_findings(d):
@@ -104,7 +111,7 @@ def classify_removal(
 
 def dedup_runs(
     run_dirs: Iterable[Path],
-) -> Tuple[List[Path], List[CleanConsequence]]:
+) -> tuple[list[Path], list[CleanConsequence]]:
     """Greedy lossless dedup: return the run dirs that can be deleted without
     losing examined extent or a unique finding, because each is fully subsumed
     by the runs that remain. Always keeps at least one run; keeps the newest
@@ -120,8 +127,8 @@ def dedup_runs(
     # Oldest-first so the newest run is the representative we keep. Run dir
     # names are timestamped, so name order is chronological.
     survivors = sorted((Path(d) for d in run_dirs), key=lambda p: p.name)
-    droppable: List[Path] = []
-    reasons: List[CleanConsequence] = []
+    droppable: list[Path] = []
+    reasons: list[CleanConsequence] = []
     i = 0
     while i < len(survivors):
         victim = survivors[i]
@@ -141,7 +148,7 @@ def dedup_runs(
 def apply_removal(
     store: CoverageStore,
     victim_run_dir: Path,
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
     consequence: CleanConsequence,
 ) -> None:
     """Snapshot the victim's coverage into the store and link its findings
@@ -162,7 +169,7 @@ def clean_run(
     store: CoverageStore,
     victim_run_dir: Path,
     surviving_run_dirs: Iterable[Path],
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
 ) -> CleanConsequence:
     """Classify + apply in one step (snapshot, retained flips, classification).
     Mutates the store (caller saves)."""
@@ -180,4 +187,7 @@ def format_consequence(c: CleanConsequence) -> str:
             f"  {c.run}: drops {len(c.findings_lost)} unique finding(s) — "
             f"those functions become re-review gaps (found-then-lost)"
         )
-    return f"  {c.run}: unique coverage preserved into the store; no findings lost"
+    return (
+        f"  {c.run}: unique coverage ({len(c.coverage_files)} examined "
+        f"file(s)) preserved into the store; no findings lost"
+    )

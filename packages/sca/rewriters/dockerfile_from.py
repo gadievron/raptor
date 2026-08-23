@@ -28,10 +28,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 
 from . import RewriteEdit, RewriteResult, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +50,13 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
-    if path.suffix == ".dockerfile":
-        return True
-    return False
+    return path.suffix == ".dockerfile"
 
 
 @register(predicate=_is_dockerfile, filenames=None)
 def rewrite_dockerfile_from(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply FROM-image tag-bump edits to a Dockerfile in place.
 
     The Dockerfile-ARG rewriter ALSO registers against Dockerfile
@@ -70,9 +72,9 @@ def rewrite_dockerfile_from(
     ``/``) route to the FROM path, everything else to ARG. Mixed
     batches get split + reassembled.
     """
-    arg_edits: List[RewriteEdit] = []
-    from_edits: List[RewriteEdit] = []
-    inline_install_edits: List[RewriteEdit] = []
+    arg_edits: list[RewriteEdit] = []
+    from_edits: list[RewriteEdit] = []
+    inline_install_edits: list[RewriteEdit] = []
     for edit in edits:
         kind = (edit.extra or {}).get("kind")
         if kind == "from_image":
@@ -81,16 +83,15 @@ def rewrite_dockerfile_from(
             arg_edits.append(edit)
         elif kind == "inline_install_pip":
             inline_install_edits.append(edit)
+        # Back-compat shape heuristic for edits without an
+        # ``extra["kind"]``: image refs always contain ``/``,
+        # ARG names never do.
+        elif "/" in edit.locator:
+            from_edits.append(edit)
         else:
-            # Back-compat shape heuristic for edits without an
-            # ``extra["kind"]``: image refs always contain ``/``,
-            # ARG names never do.
-            if "/" in edit.locator:
-                from_edits.append(edit)
-            else:
-                arg_edits.append(edit)
+            arg_edits.append(edit)
 
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     if from_edits:
         results.extend(_apply_from_edits(path, from_edits))
     if arg_edits:
@@ -109,8 +110,8 @@ def rewrite_dockerfile_from(
 
 
 def _apply_from_edits(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply image-tag edits, atomic-writing the result.
 
     Each edit's locator is ``"{registry}/{repository}"`` (e.g.
@@ -126,7 +127,7 @@ def _apply_from_edits(
                 for e2 in edits]
 
     new_text = text
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     for edit in edits:
         new_text, result = _apply_one_from(new_text, edit)
         results.append(result)
@@ -137,13 +138,14 @@ def _apply_from_edits(
         except OSError as e:
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 
 
 def _apply_one_from(
     text: str, edit: RewriteEdit,
-) -> "tuple[str, RewriteResult]":
+) -> tuple[str, RewriteResult]:
     """Apply one image-tag edit. Matches both canonical and
     short forms of the image ref."""
     locator = edit.locator
@@ -175,17 +177,19 @@ def _apply_one_from(
         rf"(\s|$|@|#)",              # boundary
         re.MULTILINE,
     )
-    match = pattern.search(text)
-    if match is None:
+    matches = list(pattern.finditer(text))
+    if not matches:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
         )
-    current_tag = match.group(2)
-    if current_tag == edit.new_value:
-        return text, RewriteResult(
-            edit=edit, applied=False, reason="no_change",
-        )
-    if current_tag != edit.old_value:
+    target_matches = [m for m in matches if m.group(2) == edit.old_value]
+    if not target_matches:
+        already_done = [m for m in matches if m.group(2) == edit.new_value]
+        if already_done:
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
+        current_tag = matches[0].group(2)
         return text, RewriteResult(
             edit=edit, applied=False,
             reason=(
@@ -193,38 +197,15 @@ def _apply_one_from(
                 f"plan expected {edit.old_value!r}"
             ),
         )
-    # Group 1 = prefix-up-to-colon, group 3 = boundary char.
-    new_text = pattern.sub(
-        rf"\g<1>{edit.new_value}\g<3>",
-        text, count=1,
-    )
+    new_text = text
+    for m in reversed(target_matches):
+        new_text = (
+            new_text[:m.start(2)]
+            + edit.new_value
+            + new_text[m.end(2):]
+        )
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename. Shared pattern with
-    ``dockerfile_arg``; could be factored to a shared
-    ``rewriters/_atomic.py`` when a third rewriter lands."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise

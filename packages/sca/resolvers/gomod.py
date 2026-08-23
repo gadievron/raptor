@@ -21,7 +21,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from . import ResolverResult, _check_tool, _run
 
@@ -79,10 +78,22 @@ class GoResolver:
                 src = project_dir / fname
                 if src.exists():
                     shutil.copy2(src, tmp_path / fname)
-            # ``go mod tidy`` walks .go files for imports too — copy
-            # them at the top level if present (rough but functional).
-            for go_file in project_dir.glob("*.go"):
-                shutil.copy2(go_file, tmp_path / go_file.name)
+            _SKIP_DIRS = {"vendor", "node_modules", ".git", "testdata"}
+            _MAX_FILES = 10_000
+            _copied = 0
+            for go_file in project_dir.rglob("*.go"):
+                if go_file.is_symlink():
+                    continue
+                parts = go_file.relative_to(project_dir).parts
+                if _SKIP_DIRS.intersection(parts):
+                    continue
+                _copied += 1
+                if _copied > _MAX_FILES:
+                    break
+                rel = go_file.relative_to(project_dir)
+                dest = tmp_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(go_file, dest)
 
             try:
                 proc = _run(
@@ -116,7 +127,7 @@ class GoResolver:
             )
 
 
-def _read_if_exists(p: Path) -> Optional[bytes]:
+def _read_if_exists(p: Path) -> bytes | None:
     try:
         return p.read_bytes()
     except OSError:

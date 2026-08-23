@@ -17,7 +17,7 @@ class GitHubClient:
 
     BASE_URL = "https://api.github.com"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._session: Any = None
 
     @property

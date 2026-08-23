@@ -56,16 +56,23 @@ def test_f071_l191_record_denial_append_failure_logs_warning(
     # Set the module-level active run dir so record_denial doesn't
     # no-op early.
     monkeypatch.setattr(summary_mod, "_active_run_dir", tmp_path)
-    # Force os.open inside record_denial to raise OSError.
+    # Force the evidence-file open inside record_denial to raise
+    # OSError (record_denial appends via a held evidence fd under
+    # <run_dir>/.audit/ since the evidence relocation).
+    from core.sandbox import evidence as evidence_mod
     real_open = os.open
-    target_path = str(tmp_path / ".sandbox-denials.jsonl")
+    target_path = str(
+        evidence_mod.evidence_write_path(
+            tmp_path, ".sandbox-denials.jsonl",
+        )
+    )
 
     def fake_open(path, flags, mode=0o666):
         if str(path) == target_path:
             raise OSError("EACCES")
         return real_open(path, flags, mode)
 
-    monkeypatch.setattr(summary_mod.os, "open", fake_open)
+    monkeypatch.setattr(evidence_mod.os, "open", fake_open)
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         summary_mod.record_denial(
             "test-cmd", 1, "network",
@@ -93,17 +100,19 @@ def test_f071_l349_summarize_read_failure_logs_warning(
     jsonl = tmp_path / ".sandbox-denials.jsonl"
     jsonl.write_text('{"type": "network", "host": "x"}\n', encoding="utf-8")
 
-    # Patch builtins.open inside summary_mod to raise OSError when
-    # reading the renamed tmp.
-    real_open = open
+    # Patch os.open (the F071 fd-based read path) to raise OSError
+    # when opening the renamed tmp. A generic OSError (not ELOOP) is
+    # the host-I/O branch — warn + return None, never tamper-flag.
+    import os as _os
+    real_os_open = _os.open
 
-    def fake_open(path, *args, **kwargs):
+    def fake_os_open(path, *args, **kwargs):
         spath = str(path)
         if ".sandbox-denials.jsonl.summarising" in spath:
             raise OSError("EIO read failed")
-        return real_open(path, *args, **kwargs)
+        return real_os_open(path, *args, **kwargs)
 
-    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(_os, "open", fake_os_open)
 
     with caplog.at_level(logging.DEBUG, logger="core.sandbox.summary"):
         result = summary_mod.summarize_and_write(tmp_path)

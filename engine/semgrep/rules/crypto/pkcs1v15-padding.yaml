@@ -9,8 +9,8 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
-      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding")
-      - pattern: Cipher.getInstance("RSA")
+      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding", ...)
+      - pattern: Cipher.getInstance("RSA", ...)
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]
@@ -24,25 +24,46 @@ rules:
     severity: HIGH
     pattern-either:
       - pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
-      - pattern: PKCS1_v1_5.new(...)
+      - patterns:
+        - pattern: PKCS1_v1_5.new(...)
+        - pattern-not-inside: |
+            from Crypto.Signature import PKCS1_v1_5
+            ...
+        - pattern-not-inside: |
+            import Crypto.Signature.PKCS1_v1_5
+            ...
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]
 
   - id: raptor.crypto.rsa.pkcs1v15.go
     message: >
-      PKCS#1 v1.5 RSA operations are vulnerable to oracle attacks. Use
-      rsa.EncryptOAEP / rsa.DecryptOAEP for encryption and rsa.SignPSS /
-      rsa.VerifyPSS for signatures.
+      PKCS#1 v1.5 RSA encryption is vulnerable to Bleichenbacher padding-oracle
+      attacks. Use rsa.EncryptOAEP / rsa.DecryptOAEP instead. (Signatures are a
+      different case — see raptor.crypto.rsa.pkcs1v15-sign.go.)
     languages: [go]
     severity: HIGH
     pattern-either:
       - pattern: rsa.DecryptPKCS1v15(...)
+      - pattern: rsa.DecryptPKCS1v15SessionKey(...)
       - pattern: rsa.EncryptPKCS1v15(...)
-      - pattern: rsa.SignPKCS1v15(...)
-      - pattern: rsa.VerifyPKCS1v15(...)
     metadata:
       cwe: ["CWE-780", "CWE-327"]
+      asvs: ["V11.3.1"]
+
+  # PKCS#1 v1.5 *signing* is not Bleichenbacher-vulnerable (that attack needs
+  # a decryption padding oracle); it is merely a legacy scheme. Prefer PSS for
+  # new signature generation. Verification is deliberately not flagged:
+  # verifying legacy v1.5 signatures is unavoidable for interoperability.
+  - id: raptor.crypto.rsa.pkcs1v15-sign.go
+    message: >
+      PKCS#1 v1.5 signature generation is a legacy scheme. Prefer rsa.SignPSS
+      for new signatures; keep v1.5 only where interoperability requires it.
+    languages: [go]
+    severity: LOW
+    pattern: rsa.SignPKCS1v15(...)
+    metadata:
+      cwe: ["CWE-327"]
       asvs: ["V11.3.1"]
 
   - id: raptor.crypto.rsa.pkcs1v15.node

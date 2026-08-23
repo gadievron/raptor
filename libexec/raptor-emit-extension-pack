@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Emit a CodeQL data-extension pack from learned taint vocabulary.
+
+Usage:
+  raptor-emit-extension-pack --specs <specs.json> --language {cpp,python} --out <dir>
+  raptor-emit-extension-pack --candidates <candidates.json> --language cpp --out <dir>
+
+Inputs:
+  --specs        JSON array of IRIS TaintSpec dicts (role, function,
+                 taint_classes, params_affected, return_tainted,
+                 confidence, evidence_tier) — the shape
+                 core.iris.specs.specs_from_json parses.
+  --candidates   JSON array of CandidateValidator dicts (see
+                 core.dataflow.sanitizer_evidence) — sanitizer records;
+                 emitted as cpp barrierModel rows.
+  --language     Target CodeQL language (verified layouts: cpp, python).
+  --out          Output directory; the pack lands under <out>/<scope-name>/.
+  --pack-name    Override the pack name (default raptor/learned-models-<lang>).
+  --min-confidence  Row gate (default 0.6).
+  --min-tier     Minimum evidence tier for spec rows (default xref_backed).
+
+Prints a JSON report: pack_dir, model_file, per-predicate row counts,
+and every rejected row with its reason. Exit 0 on a well-formed
+invocation even when rows were rejected (the report carries the
+rejections); exit 2 on usage errors (missing/unparseable input, no
+input rows at all, unsupported language).
+
+The emitted pack feeds `codeql database analyze --additional-packs`;
+see core/dataflow/codeql_augmented_run.py for the baseline-vs-augmented
+measurement harness.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import dumps_display  # noqa: E402
+
+from core.dataflow.extension_pack import (  # noqa: E402
+    rows_from_candidate_validators,
+    rows_from_taint_specs,
+    write_extension_pack,
+)
+from core.evidence import EvidenceTier  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Emit a CodeQL data-extension pack from learned vocabulary",
+    )
+    parser.add_argument("--specs", help="JSON file: array of TaintSpec dicts")
+    parser.add_argument(
+        "--candidates", help="JSON file: array of CandidateValidator dicts",
+    )
+    parser.add_argument("--language", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--pack-name", default=None)
+    parser.add_argument("--min-confidence", type=float, default=0.6)
+    parser.add_argument(
+        "--min-tier", default="xref_backed",
+        help="minimum evidence tier for spec rows (EvidenceTier value)",
+    )
+    args = parser.parse_args()
+
+    if not args.specs and not args.candidates:
+        parser.error("at least one of --specs / --candidates is required")
+
+    rows = []
+    rejected = []
+    if args.specs:
+        from core.iris.specs import specs_from_json
+        try:
+            specs = specs_from_json(Path(args.specs).read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"error: cannot read --specs: {e}", file=sys.stderr)
+            return 2
+        try:
+            tier = EvidenceTier(args.min_tier)
+        except ValueError:
+            print(
+                f"error: --min-tier {args.min_tier!r} not a valid "
+                f"EvidenceTier ({[t.value for t in EvidenceTier]})",
+                file=sys.stderr,
+            )
+            return 2
+        conv = rows_from_taint_specs(
+            specs, language=args.language,
+            min_confidence=args.min_confidence, min_tier=tier,
+        )
+        rows.extend(conv.rows)
+        rejected.extend(conv.rejected)
+    if args.candidates:
+        from core.dataflow.sanitizer_evidence import CandidateValidator
+        try:
+            raw = json.loads(Path(args.candidates).read_text(encoding="utf-8"))
+            candidates = [CandidateValidator.from_dict(c) for c in raw]
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"error: cannot read --candidates: {e}", file=sys.stderr)
+            return 2
+        conv = rows_from_candidate_validators(
+            candidates, language=args.language,
+            min_confidence=args.min_confidence,
+        )
+        rows.extend(conv.rows)
+        rejected.extend(conv.rejected)
+
+    if not rows and not rejected:
+        print("error: inputs contained no records", file=sys.stderr)
+        return 2
+
+    if not rows:
+        # Every record was rejected at conversion time. Don't write an
+        # empty pack (an augmented run against it looks like a clean
+        # zero-suppression measurement); report the rejections instead.
+        print(dumps_display({
+            "pack_dir": None,
+            "rows_written": 0,
+            "rejected": [{"row": r.row, "reason": r.reason} for r in rejected],
+        }, indent=2))
+        return 0
+
+    try:
+        result = write_extension_pack(
+            rows, language=args.language, out_dir=Path(args.out),
+            pack_name=args.pack_name,
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    report = result.to_dict()
+    report["rejected"] = (
+        [{"row": r.row, "reason": r.reason} for r in rejected]
+        + report["rejected"]
+    )
+    print(dumps_display(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

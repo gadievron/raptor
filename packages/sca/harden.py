@@ -52,20 +52,22 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
-from .versions import compare as version_compare
 from core.json import JsonCache
-from . import SCA_CACHE_ROOT
+
+from . import SCA_CACHE_ROOT, default_client
 from .discovery import find_manifests
-from . import default_client
 from .models import Dependency, PinStyle
 from .osv import OsvClient
 from .parsers import parse_manifest
+from .parsers._safe_read import scan_root_context
 from .registries.crates import CratesClient
 from .registries.debian import DebianClient
 from .registries.golang import GoClient
@@ -77,12 +79,13 @@ from .registries.packagist import PackagistClient
 from .registries.pypi import PyPIClient
 from .registries.rubygems import RubyGemsClient
 from .update import (
+    UpgradeChange,
     _crosses_major,
     _emit_git_patch,
     _materialise_changes,
     _PlanEntry,
-    UpgradeChange,
 )
+from .versions import compare as version_compare
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +130,11 @@ class HardenCandidate:
     name: str
     manifest: str
     pin_style: str                          # PinStyle.value, e.g. "range"
-    from_version: Optional[str]
-    to_version: Optional[str]
+    from_version: str | None
+    to_version: str | None
     crosses_major: bool
-    cve_cleared: List[str] = field(default_factory=list)
-    cve_remaining: List[str] = field(default_factory=list)
+    cve_cleared: list[str] = field(default_factory=list)
+    cve_remaining: list[str] = field(default_factory=list)
     candidates_considered: int = 0
     candidates_rejected_for_cve: int = 0
     status: str = "error"
@@ -144,7 +147,7 @@ class HardenCandidate:
     # consumers (pinning a library's deps to latest over-constrains them).
     selection: str = "highest_safe"
     # Reserved: the LLM impact analysis (Follow-up #7) populates this.
-    impact_analysis: Optional[Dict[str, Any]] = None
+    impact_analysis: dict[str, Any] | None = None
     # When the dep's version is owned by a *central* file (CPM
     # Directory.Packages.props or pre-CPM Directory.Build.targets/props),
     # ``manifest`` points at the csproj where the PackageReference is
@@ -152,7 +155,7 @@ class HardenCandidate:
     # Set from ``dep.source_extra['resolved_in']`` by the parser; consumed
     # by ``_apply`` when building the ``_PlanEntry`` so the rewrite is
     # routed to the right file. ``None`` for inline / non-central deps.
-    resolved_in: Optional[str] = None
+    resolved_in: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -163,19 +166,21 @@ def main(argv: Sequence[str]) -> int:
     args = _parse_args(argv)
     _configure_logging(args.verbose)
 
-    if args.trust_repo:
-        try:
-            from core.security.cc_trust import set_trust_override
-            set_trust_override(True)
-        except ImportError:
-            logger.debug("raptor-sca fix: cc_trust unavailable; "
-                          "--trust-repo had no effect")
+    # Repo-trust umbrella — same resolution as the scan path
+    # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+    # marker > off, banner when the marker decides). The resolved
+    # value drives the process-wide ``cc_trust`` / ``codeql_trust``
+    # overrides so adjacent subsystems in the same process agree
+    # with the operator's intent.
+    from ._scan_args import resolve_repo_trust
+    resolve_repo_trust(args)
 
     # --target-kind: translate into RAPTOR_TARGET_KIND so resolve_library_mode
     # (the in-process detector below) picks it up. 'auto' leaves the env
     # unset → per-target manifest detection.
     if getattr(args, "target_kind", "auto") != "auto":
         import os
+
         from core.config import RaptorConfig
         os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
 
@@ -198,13 +203,12 @@ def main(argv: Sequence[str]) -> int:
               file=sys.stderr)
         return 2
 
-    http = default_client()
+    http = default_client(offline=args.offline)
     cache = (None if args.no_cache else
              JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT))
     osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
                     offline=args.offline)
-    from core.cve import KevClient
-    from core.cve import EpssClient
+    from core.cve import EpssClient, KevClient
     kev = KevClient(http, cache or JsonCache(root=SCA_CACHE_ROOT), offline=args.offline)
     epss = EpssClient(http, cache or JsonCache(root=SCA_CACHE_ROOT), offline=args.offline)
     registries = {
@@ -240,6 +244,7 @@ def main(argv: Sequence[str]) -> int:
         logger.info("sca.harden: target classified %s — raising dependency "
                     "floors minimally to preserve ranges", target_kind)
 
+    excluded_surfaces: list[str] = []
     candidates = plan(
         target=target,
         registries=registries,
@@ -251,12 +256,14 @@ def main(argv: Sequence[str]) -> int:
         pin_only=args.pin_only,
         pin_debian=args.pin_debian,
         library_mode=library_mode,
+        exclude=args.exclude,
+        excluded_surfaces=excluded_surfaces,
     )
 
     # ``--ecosystems`` is a post-plan filter: candidates outside the
     # allowlist remain in candidates.json (so SBOM consumers see the
     # full picture) but never get applied or counted as actionable.
-    ecosystem_allowlist: Optional[set] = None
+    ecosystem_allowlist: set | None = None
     if args.ecosystems:
         ecosystem_allowlist = {
             e.strip() for e in args.ecosystems.split(",") if e.strip()
@@ -281,8 +288,11 @@ def main(argv: Sequence[str]) -> int:
             ecosystem_allowlist=ecosystem_allowlist,
         )
         _write_report(out_dir / "report.md", candidates, [],
-                      target_kind=target_kind, target_kind_reason=target_kind_reason)
-        _print_summary(candidates, [], out_dir, target_kind=target_kind)
+                      target_kind=target_kind, target_kind_reason=target_kind_reason,
+                      excluded_surfaces=excluded_surfaces)
+        _print_summary(candidates, [], out_dir, target_kind=target_kind,
+                       excluded_surfaces=excluded_surfaces,
+                       exclude_patterns=args.exclude, target=target)
         if actionable:
             print(f"raptor-sca fix --harden --check: {actionable} candidate(s) would be "
                   f"applied; rerun without --check to apply.")
@@ -297,7 +307,7 @@ def main(argv: Sequence[str]) -> int:
                      ecosystem_allowlist=ecosystem_allowlist)
     applied = [c for c in changes if c.skipped_reason is None]
     want_patch = args.git_patch or args.apply
-    patch_path: Optional[Path] = None
+    patch_path: Path | None = None
     if want_patch and applied:
         # Same anchor argument as in _apply: pin cwd to ``target`` so the
         # patch's manifest-rel-paths match the layout under proposed/.
@@ -308,17 +318,7 @@ def main(argv: Sequence[str]) -> int:
             res = _emit_git_patch(applied, out_dir.resolve())
         finally:
             os.chdir(prev)
-        if isinstance(res, tuple):
-            patch_path = res[0]
-        else:
-            patch_path = res
-
-    if args.apply:
-        from .patch_apply import apply_patch_to_target
-        rc = apply_patch_to_target(target, patch_path,
-                                    caller_label="raptor-sca fix --harden")
-        if rc != 0:
-            return rc
+        patch_path = res[0] if isinstance(res, tuple) else res
 
     if args.self_test:
         rc = _run_self_test(
@@ -329,13 +329,25 @@ def main(argv: Sequence[str]) -> int:
             ecosystem_allowlist=ecosystem_allowlist,
             allow_major_without_review=args.allow_major_without_review,
             allow_degraded=args.allow_degraded,
+            library_mode=library_mode,
+            exclude=args.exclude,
         )
         if rc != 0:
             return rc
 
+    if args.apply:
+        from .patch_apply import apply_patch_to_target
+        rc = apply_patch_to_target(target, patch_path,
+                                    caller_label="raptor-sca fix --harden")
+        if rc != 0:
+            return rc
+
     _write_report(out_dir / "report.md", candidates, changes,
-                  target_kind=target_kind, target_kind_reason=target_kind_reason)
-    _print_summary(candidates, changes, out_dir, target_kind=target_kind)
+                  target_kind=target_kind, target_kind_reason=target_kind_reason,
+                  excluded_surfaces=excluded_surfaces)
+    _print_summary(candidates, changes, out_dir, target_kind=target_kind,
+                   excluded_surfaces=excluded_surfaces,
+                   exclude_patterns=args.exclude, target=target)
     return 0
 
 
@@ -346,7 +358,7 @@ def main(argv: Sequence[str]) -> int:
 def plan(
     *,
     target: Path,
-    registries: Dict[str, Any],
+    registries: dict[str, Any],
     osv: OsvClient,
     kev=None,
     epss=None,
@@ -355,7 +367,9 @@ def plan(
     pin_only: bool = False,
     pin_debian: bool = False,
     library_mode: bool = False,
-) -> List[HardenCandidate]:
+    exclude: Sequence[str] | None = None,
+    excluded_surfaces: list[str] | None = None,
+) -> list[HardenCandidate]:
     """Walk the target and produce one HardenCandidate per dep.
 
     Args:
@@ -372,15 +386,53 @@ def plan(
       allow_major: when False, candidates whose latest-safe crosses a
         major boundary become ``review_required`` and are omitted from
         the patch.
+      pin_only: when True, deps that aren't already exact-pinned are
+        skipped (``skipped_loose_pin``) — never converts a loose
+        ``>=X``-style pin to ``==Y``; only already-exact pins are
+        considered for newer-exact promotions.
+      pin_debian: Debian/apt pinning is off by default; when True, opt
+        in to pinning apt deps to the newest version in the suite of
+        the governing base image. When False, Debian deps get
+        ``pinning_deferred``; deps with no resolvable suite are also
+        deferred rather than pinned to a guess.
       library_mode: when True (library/hybrid target), select the minimal
         safe version above the baseline rather than the newest — a minimal
         floor-raise that clears advisories while keeping the dependency
         range wide for downstream consumers.
+      exclude: operator ``--exclude`` globs (see ``_exclude`` module for
+        the matching semantics). Manifests matching any pattern are
+        dropped from the WRITE candidate set — no pins are proposed for
+        them. Policy lives with the caller: the tool itself applies no
+        default exclusion, so with no patterns the plan is fully
+        inclusive (test-tree manifests hold real dev dependencies in
+        ordinary repos).
+      excluded_surfaces: optional out-list; when an ``--exclude``
+        pattern drops a manifest, its path is appended here so the
+        caller can report the exclusion instead of silently truncating.
     """
-    manifests = find_manifests(target)
-    raw_deps: List[Dependency] = []
-    for m in manifests:
-        raw_deps.extend(parse_manifest(m))
+    # Enumerate INCLUSIVELY — the write path sees every manifest the
+    # walker can see, and the ONLY filter is the operator's --exclude
+    # globs, applied here at candidate selection (before any parsing
+    # or registry traffic for the excluded trees).
+    manifests = find_manifests(target, include_test_paths=True)
+    if exclude:
+        from ._exclude import matches_exclude
+        kept = []
+        for m in manifests:
+            if matches_exclude(m.path, exclude, root=target):
+                if excluded_surfaces is not None:
+                    excluded_surfaces.append(str(m.path))
+            else:
+                kept.append(m)
+        manifests = kept
+    raw_deps: list[Dependency] = []
+    # Scan-root context: the bounded readers refuse symlinked
+    # manifests UNLESS the resolved target stays inside the declared
+    # root (legitimate monorepo layouts) — same wrapping the pipeline
+    # applies around its parse loop.
+    with scan_root_context(target):
+        for m in manifests:
+            raw_deps.extend(parse_manifest(m))
 
     # Derive the project's (arch, libc) platform matrix once for the
     # whole run, from the target's committed build artifacts (Dockerfile
@@ -398,7 +450,7 @@ def plan(
                      "(%s); promotion compat-check degrades to skip", exc)
         platform_matrix = None
 
-    out: List[HardenCandidate] = []
+    out: list[HardenCandidate] = []
     for dep in raw_deps:
         if dep.commented_out:
             # Commented-out lines (``# pkg==X`` in requirements.txt or
@@ -455,7 +507,7 @@ def _supports_library_floor_raise(dep: Dependency) -> bool:
     return dep.declared_in.suffix.lower() in (".csproj", ".fsproj", ".vbproj")
 
 
-def _baseline_is_clean(dep: Dependency, baseline: Optional[str], *,
+def _baseline_is_clean(dep: Dependency, baseline: str | None, *,
                        osv: OsvClient, kev=None, epss=None) -> bool:
     """True if the dep's declared floor version itself carries no advisory —
     i.e. the range's minimum is already safe, so a library should leave the
@@ -477,7 +529,7 @@ def _baseline_is_clean(dep: Dependency, baseline: Optional[str], *,
 def _plan_one(
     dep: Dependency,
     *,
-    registries: Dict[str, Any],
+    registries: dict[str, Any],
     osv: OsvClient,
     kev=None,
     epss=None,
@@ -555,7 +607,7 @@ def _plan_one(
     # (Keyed on the ecosystem string — the only way to resolve a
     # ``DebianClient`` above is ``dep.ecosystem == "Debian"``, since the
     # registries dict is ecosystem-keyed.)
-    debian_suite: Optional[str] = None
+    debian_suite: str | None = None
     if dep.ecosystem == "Debian":
         if not pin_debian:
             cand.status = "pinning_deferred"
@@ -581,7 +633,7 @@ def _plan_one(
     # Fetch the candidate versions. For an opted-in Debian dep, restrict to
     # the governing base image's suite so the pin is installable there;
     # everything else lists all of the ecosystem's versions.
-    def _fetch() -> List[str]:
+    def _fetch() -> list[str]:
         if debian_suite is not None:
             return registry.versions_in_suite(dep.name, debian_suite)
         return registry.list_versions(dep.name)
@@ -629,7 +681,7 @@ def _plan_one(
             try:
                 if version_compare(dep.ecosystem, v, dep.version_ceiling) < 0:
                     bounded.append(v)
-            except Exception:                   # noqa: BLE001
+            except Exception:                   # noqa: BLE001, S112
                 continue
         filtered = bounded
     if not filtered:
@@ -676,7 +728,7 @@ def _plan_one(
             cand.selection = "library_minimal"
         else:
             target_version = clean[0].version
-        residual_advs: List[str] = []
+        residual_advs: list[str] = []
         target_status = "promoted"
     elif library_mode:
         # Library posture + no clean version in range: the only remaining
@@ -726,6 +778,24 @@ def _plan_one(
 
     cand.to_version = target_version
     cand.cve_remaining = list(residual_advs)
+
+    # Advisories the move actually CLEARS — what turns "promoted X→Y"
+    # into an auditable security claim. Assessed on the concrete
+    # current version (cache-backed OSV batch); a range spec string
+    # can't be assessed.
+    if dep.version and not any(c in dep.version for c in "<>=!~ ,*"):
+        try:
+            current = _rank_candidates_by_safety(
+                ecosystem=dep.ecosystem, name=dep.name,
+                candidates=[dep.version], osv=osv, kev=kev, epss=epss,
+            )
+        except Exception:                                # noqa: BLE001
+            current = []
+        if current:
+            cand.cve_cleared = [
+                a for a in current[0].advisory_ids
+                if a not in residual_advs
+            ]
 
     # Determine major crossing — applies to both promoted and
     # degraded_safety (a degraded promotion that crosses a major needs
@@ -821,16 +891,14 @@ def _has_rewriter(manifest: Path) -> bool:
     # Delegate to update's own predicate so the two dispatches stay
     # in lockstep when new file-shapes land.
     from .update import _is_inline_install_file
-    if _is_inline_install_file(manifest):
-        return True
-    return False
+    return bool(_is_inline_install_file(manifest))
 
 
 def _versions_above_installed(
-    versions: List[str],
-    installed: Optional[str],
+    versions: list[str],
+    installed: str | None,
     ecosystem: str,
-) -> List[str]:
+) -> list[str]:
     """Filter ``versions`` to those strictly greater than ``installed``.
 
     If ``installed`` is None (unpinned dep), return ``versions`` unchanged
@@ -853,7 +921,7 @@ def _versions_above_installed(
     for v in versions:
         try:
             cmp = version_compare(ecosystem, v, installed)
-        except Exception:                   # noqa: BLE001
+        except Exception:                   # noqa: BLE001, S112
             continue
         if cmp > 0:
             out.append(v)
@@ -862,10 +930,10 @@ def _versions_above_installed(
 
 def _bounded_downgrade(
     dep: Dependency,
-    versions: List[str],
+    versions: list[str],
     *,
     osv: Any, kev: Any, epss: Any,
-) -> Optional[str]:
+) -> str | None:
     """Highest CLEAN version in ``[floor, installed)``, or None.
 
     Called when no clean version exists at/above the installed pin: the
@@ -887,13 +955,13 @@ def _bounded_downgrade(
     if floor is None or installed is None:
         return None
     eco = dep.ecosystem
-    pool: List[str] = []
+    pool: list[str] = []
     for v in versions:
         try:
             if (version_compare(eco, v, floor) >= 0
                     and version_compare(eco, v, installed) < 0):
                 pool.append(v)
-        except Exception:                   # noqa: BLE001
+        except Exception:                   # noqa: BLE001, S112
             continue
     if not pool:
         return None
@@ -935,7 +1003,7 @@ class _RankedCandidate:
     """
 
     version: str
-    advisory_ids: List[str]
+    advisory_ids: list[str]
     max_severity: int        # ``_SEVERITY_ORDINAL`` value; 0 if no advs
     any_in_kev: bool         # at least one advisory is KEV-listed
     max_epss: float          # 0.0 if no EPSS data or no advs
@@ -952,15 +1020,13 @@ def _max_severity(advisories) -> int:
     return out
 
 
-def _cve_aliases(advisory) -> List[str]:
+def _cve_aliases(advisory) -> list[str]:
     """All CVE-shaped IDs for an advisory (its osv_id + aliases)."""
-    out: List[str] = []
+    out: list[str] = []
     osv_id = getattr(advisory, "osv_id", None)
     if isinstance(osv_id, str) and osv_id.upper().startswith("CVE-"):
         out.append(osv_id)
-    for a in getattr(advisory, "aliases", None) or []:
-        if isinstance(a, str) and a.upper().startswith("CVE-"):
-            out.append(a)
+    out.extend(a for a in getattr(advisory, "aliases", None) or [] if isinstance(a, str) and a.upper().startswith("CVE-"))
     return out
 
 
@@ -977,7 +1043,7 @@ def _advisory_in_kev(advisory, kev) -> bool:
     return False
 
 
-def _max_epss(advisories, scores: Dict[str, float]) -> float:
+def _max_epss(advisories, scores: dict[str, float]) -> float:
     """Highest EPSS score across an advisory list; 0.0 if none."""
     out = 0.0
     for a in advisories:
@@ -992,11 +1058,11 @@ def _rank_candidates_by_safety(
     *,
     ecosystem: str,
     name: str,
-    candidates: List[str],
+    candidates: list[str],
     osv: OsvClient,
     kev=None,
     epss=None,
-) -> List[_RankedCandidate]:
+) -> list[_RankedCandidate]:
     """Annotate each candidate with safety signals; preserve newest-first
     input order.
 
@@ -1006,9 +1072,7 @@ def _rank_candidates_by_safety(
         ``(any_in_kev, max_severity, max_epss, count, original_index)``.
     """
     from .models import Confidence
-    pseudo_deps = []
-    for v in candidates:
-        pseudo_deps.append(Dependency(
+    pseudo_deps = [Dependency(
             ecosystem=ecosystem, name=name, version=v,
             declared_in=Path("<harden>"),
             scope="main", is_lockfile=False,
@@ -1017,13 +1081,13 @@ def _rank_candidates_by_safety(
                 else f"pkg:{ecosystem}/{name}@{v}",
             parser_confidence=Confidence("high",
                                           reason="harden synthetic"),
-        ))
+        ) for v in candidates]
     results = osv.query_batch(pseudo_deps)
-    by_key: Dict[str, list] = {r.dep_key: r.advisories for r in results}
+    by_key: dict[str, list] = {r.dep_key: r.advisories for r in results}
 
     # Batch-resolve EPSS for every CVE alias across all candidates so we
     # do one call instead of one-per-version.
-    epss_scores: Dict[str, float] = {}
+    epss_scores: dict[str, float] = {}
     if epss is not None:
         all_cves: set = set()
         for advs in by_key.values():
@@ -1035,7 +1099,7 @@ def _rank_candidates_by_safety(
             except Exception:                   # noqa: BLE001
                 epss_scores = {}
 
-    out: List[_RankedCandidate] = []
+    out: list[_RankedCandidate] = []
     for d in pseudo_deps:
         advs = by_key.get(d.key(), [])
         out.append(_RankedCandidate(
@@ -1072,9 +1136,9 @@ def _evaluate_promotion_safety(
     *,
     dep: Dependency,
     target_version: str,
-    registries: Dict[str, Any],
+    registries: dict[str, Any],
     platform_matrix=None,
-) -> List[Any]:
+) -> list[Any]:
     """Run ``evaluate_bump_supply_chain`` for ``dep → target_version``.
 
     Returns the subset of findings that should demote the candidate
@@ -1148,18 +1212,20 @@ def _run_self_test(
     *,
     target: Path,
     out_dir: Path,
-    patch_path: Optional[Path],
-    registries: Dict[str, Any],
+    patch_path: Path | None,
+    registries: dict[str, Any],
     osv: OsvClient,
     kev,
     epss,
     offline: bool,
     allow_major: bool,
     pin_only: bool,
-    ecosystem_allowlist: Optional[set],
+    ecosystem_allowlist: set | None,
     allow_major_without_review: bool,
     allow_degraded: bool,
     pin_debian: bool = False,
+    library_mode: bool = False,
+    exclude: Sequence[str] | None = None,
 ) -> int:
     """Apply patch to a temp copy of ``target`` and re-run the planner.
 
@@ -1177,9 +1243,15 @@ def _run_self_test(
               file=sys.stderr)
         return 4
 
-    import tempfile
+    import contextlib
+
+    from core.run.scratch import scratch_dir
     from core.sandbox.context import run_untrusted
-    tmp_root = Path(tempfile.mkdtemp(prefix="raptor-sca-self-test-"))
+    # ``scratch_dir`` registers its prefix with the tmp reaper, so a
+    # dir orphaned by SIGTERM/OOM (which skips this function's
+    # ``finally``) is reclaimed by the next run's sweep.
+    _scratch = contextlib.ExitStack()
+    tmp_root = _scratch.enter_context(scratch_dir("raptor-sca-self-test-"))
     worktree = tmp_root / "wt"
     # The target's ``.git/config`` is attacker-controllable on an
     # untrusted clone — git evaluates ``core.fsmonitor`` /
@@ -1192,6 +1264,14 @@ def _run_self_test(
     # fake_home, Landlock writes limited to ``tmp_root`` and the
     # target's ``.git/`` dir) — same containment posture as the
     # resolver runners that execute ``./mvnw`` / ``./gradlew`` etc.
+    # profile="strict" on the substantive calls: a SELF-TEST that
+    # silently degrades its isolation reports confidence it didn't
+    # earn — better to abort (SandboxSetupError, caught by cli.py's
+    # top-level handler) than to pass under weaker containment than
+    # the posture this comment documents. The best-effort cleanup
+    # call in ``finally`` stays on the default profile: strict's
+    # abort is a BaseException, which would escape the cleanup's
+    # ``except Exception`` and mask the self-test verdict.
     target_git_dir = str(target / ".git")
     try:
         # ``git stash create`` materialises the working tree (including
@@ -1208,6 +1288,7 @@ def _run_self_test(
             cwd=str(target),
             capture_output=True, text=True, timeout=30,
             caller_label="sca-harden-self-test/git-stash",
+            profile="strict",
         )
         # ``git stash create`` exit codes: 0 = stash commit created
         # (SHA on stdout, tree had uncommitted changes); 1 = nothing to
@@ -1235,6 +1316,7 @@ def _run_self_test(
             cwd=str(target),
             capture_output=True, text=True, timeout=120,
             caller_label="sca-harden-self-test/git-worktree-add",
+            profile="strict",
         )
         if proc.returncode != 0:
             print(f"raptor-sca fix --harden --self-test: git worktree add failed: "
@@ -1256,6 +1338,7 @@ def _run_self_test(
             input=patch_text,
             capture_output=True, text=True, timeout=60,
             caller_label="sca-harden-self-test/git-apply",
+            profile="strict",
         )
         if proc.returncode != 0:
             print(f"raptor-sca fix --harden --self-test: patch application failed: "
@@ -1266,11 +1349,17 @@ def _run_self_test(
         # ``pin_debian``, so apt pins are re-validated as up_to_date rather
         # than silently deferred (which would make the self-test pass
         # vacuously without confirming the pin landed).
+        # ``exclude`` mirrors pass 1: if the operator's --exclude
+        # globs kept e.g. fixture manifests out of the patch, the
+        # re-plan must drop them too — otherwise their (deliberately
+        # old) pins would show up as "still actionable" and fail the
+        # self-test spuriously.
         post_candidates = plan(
             target=worktree,
             registries=registries, osv=osv, kev=kev, epss=epss,
             offline=offline, allow_major=allow_major, pin_only=pin_only,
-            pin_debian=pin_debian,
+            pin_debian=pin_debian, library_mode=library_mode,
+            exclude=exclude,
         )
         post_actionable = _count_actionable(
             post_candidates,
@@ -1288,20 +1377,25 @@ def _run_self_test(
         print(f"raptor-sca fix --harden --self-test: post-apply candidates → {post_path}")
 
         if post_actionable > 0:
-            print(f"raptor-sca fix --harden --self-test: REGRESSION — {post_actionable} "
+            print(f"raptor-sca fix --harden --self-test: Regression — {post_actionable} "
                   f"candidate(s) still actionable after apply. The chosen "
                   f"versions may have advisories the planner missed, or "
                   f"the rewriter didn't pin every dep. Inspect "
                   f"{post_path}.", file=sys.stderr)
             return 7
 
-        print("raptor-sca fix --harden --self-test: PASS — applying the patch closes "
+        print("raptor-sca fix --harden --self-test: Pass — applying the patch closes "
               "every actionable candidate.")
         return 0
     finally:
         # Tear down the worktree; ignore failures since we may be cleaning
         # up after a partial setup.
         if worktree.exists():
+            # Cleanup is best-effort; rmtree below removes the
+            # files regardless of whether git's bookkeeping
+            # got tidied. Spawn/timeout failures are the legitimate
+            # loss modes here; a bad argument is a wiring bug and
+            # must propagate.
             try:
                 run_untrusted(
                     ["git", "worktree", "remove", "--force",
@@ -1313,22 +1407,21 @@ def _run_self_test(
                     capture_output=True, text=True, timeout=60,
                     caller_label="sca-harden-self-test/git-worktree-remove",
                 )
-            except Exception:                       # noqa: BLE001
-                # Cleanup is best-effort; rmtree below removes the
-                # files regardless of whether git's bookkeeping
-                # got tidied.
-                pass
-        import shutil
-        shutil.rmtree(tmp_root, ignore_errors=True)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.debug(
+                    "harden self-test: git worktree remove failed for "
+                    "%s (leak candidate): %s", worktree, e,
+                )
+        _scratch.close()
 
 
 def _count_actionable(
-    candidates: List[HardenCandidate],
+    candidates: list[HardenCandidate],
     *,
     allow_major: bool,
     allow_major_without_review: bool,
     allow_degraded: bool,
-    ecosystem_allowlist: Optional[set] = None,
+    ecosystem_allowlist: set | None = None,
 ) -> int:
     """Number of candidates that *would* be applied at current flag levels.
 
@@ -1343,41 +1436,33 @@ def _count_actionable(
         if (ecosystem_allowlist is not None
                 and c.ecosystem not in ecosystem_allowlist):
             continue
-        if c.status == "promoted":
-            total += 1
-        elif c.status == "review_required" and allow_major_without_review:
-            total += 1
-        elif (c.status in ("degraded_safety", "downgraded_safety")
+        if c.status == "promoted" or (c.status == "review_required" and allow_major_without_review) or (c.status in ("degraded_safety", "downgraded_safety")
               and allow_degraded):
             total += 1
     return total
 
 
 def _apply(
-    candidates: List[HardenCandidate],
+    candidates: list[HardenCandidate],
     *,
     target: Path,
     out_dir: Path,
     allow_major_without_review: bool,
     allow_degraded: bool,
-    ecosystem_allowlist: Optional[set] = None,
-) -> List[UpgradeChange]:
+    ecosystem_allowlist: set | None = None,
+) -> list[UpgradeChange]:
     """Build _PlanEntry for every applicable candidate and run the same
     materialiser ``update`` uses. Returns the list of ``UpgradeChange``
     rows; ``skipped_reason`` is set on entries the rewriter couldn't
     apply.
     """
-    plans: Dict[Tuple[str, str, str], _PlanEntry] = {}
+    plans: dict[tuple[str, str, str], _PlanEntry] = {}
     for cand in candidates:
         if (ecosystem_allowlist is not None
                 and cand.ecosystem not in ecosystem_allowlist):
             continue
-        if cand.status == "promoted":
-            pass
-        elif (cand.status == "review_required" and
-              allow_major_without_review and cand.to_version):
-            pass
-        elif (cand.status in ("degraded_safety", "downgraded_safety") and
+        if cand.status == "promoted" or (cand.status == "review_required" and
+              allow_major_without_review and cand.to_version) or (cand.status in ("degraded_safety", "downgraded_safety") and
               allow_degraded and cand.to_version):
             pass
         else:
@@ -1472,15 +1557,22 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "exit 1 otherwise. Suitable for CI gates. Doesn't "
                         "emit a patch.")
     p.add_argument("--trust-repo", action="store_true",
-                   help="Set the process-wide ``cc_trust`` override. "
+                   help="Set the process-wide ``cc_trust`` / "
+                        "``codeql_trust`` overrides. "
                         "NO behaviour change in fix --harden itself — "
                         "harden's defenses (sandbox + egress proxy + "
                         "atomic write + supply-chain signal gate) are "
                         "not trust-gated. Provided for cross-subcommand "
-                        "consistency; the override IS consulted by "
+                        "consistency; the overrides ARE consulted by "
                         "adjacent subsystems (``/agentic`` LLM dispatch, "
                         "CodeQL build trust) when they run in the same "
-                        "process.")
+                        "process. The active project's ``config`` trust "
+                        "marker implies this flag.")
+    p.add_argument("--no-trust-repo", action="store_true",
+                   help="Force repo-untrusted for this run, overriding "
+                        "both ``--trust-repo`` and the active project's "
+                        "``config`` trust marker (explicit negative "
+                        "wins).")
     p.add_argument("--ecosystems",
                    help="comma-separated allowlist of ecosystems to "
                         "consider (e.g. ``PyPI,npm``). Candidates from "
@@ -1515,6 +1607,18 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "alternative for reproducible apt installs.")
     p.add_argument("--git-patch", action="store_true",
                    help="emit upgrade.patch alongside candidates.json")
+    p.add_argument("--exclude", action="append", metavar="GLOB",
+                   default=None,
+                   help="glob of paths to exclude from the WRITE set "
+                        "(no pins proposed for matching manifests); "
+                        "repeatable. Matched against the target-"
+                        "relative path; * spans /, and a leading **/ "
+                        "also matches at the target root. Typical use: "
+                        "protecting test-fixture manifests whose "
+                        "deliberately-old pins are test assertions "
+                        "(--exclude '**/tests/**' --exclude "
+                        "'**/fixtures/**'). Scanning is unaffected — "
+                        "findings in excluded trees stay reported.")
     p.add_argument("--offline", action="store_true",
                    help="don't call registries / OSV; cache only")
     p.add_argument("--no-cache", action="store_true",
@@ -1544,13 +1648,14 @@ def _default_out_dir(target: Path) -> Path:
 
 def _write_report(
     path: Path,
-    candidates: List[HardenCandidate],
-    changes: List[UpgradeChange],
+    candidates: list[HardenCandidate],
+    changes: list[UpgradeChange],
     *,
     target_kind: str = "unknown",
     target_kind_reason: str = "",
+    excluded_surfaces: list[str] | None = None,
 ) -> None:
-    by_status: Dict[str, List[HardenCandidate]] = {}
+    by_status: dict[str, list[HardenCandidate]] = {}
     for c in candidates:
         by_status.setdefault(c.status, []).append(c)
 
@@ -1578,37 +1683,44 @@ def _write_report(
     lines.append("")
     lines.append("| Status | Count |")
     lines.append("|---|---|")
-    for status in (
-        "promoted", "degraded_safety", "review_required", "up_to_date",
+    lines.extend(f"| {status} | {len(by_status[status])} |" for status in (
+        "promoted", "degraded_safety", "downgraded_safety",
+        "review_required", "up_to_date",
         "skipped_loose_pin", "unsupported_manifest",
         "library_floor_raise_unsupported",
+        "pinning_deferred",
         "no_versions", "registry_unsupported",
         "needs_network", "error",
-    ):
-        if status in by_status:
-            lines.append(f"| {status} | {len(by_status[status])} |")
+    ) if status in by_status)
     lines.append("")
+    if excluded_surfaces:
+        n = len(excluded_surfaces)
+        lines.append(
+            f"{n} surface(s) excluded from write by --exclude patterns."
+        )
+        lines.append("")
 
     if "promoted" in by_status:
         lines.append("## Promoted (applied)")
         lines.append("")
         for c in by_status["promoted"]:
+            cleared = (
+                f" — clears {', '.join(c.cve_cleared)}"
+                if c.cve_cleared else ""
+            )
             lines.append(
                 f"- **{c.ecosystem}:{c.name}** "
                 f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}`"
+                f"in `{c.manifest}`{cleared}"
             )
         lines.append("")
 
     if "review_required" in by_status:
         lines.append("## Review required (major bump — LLM impact analysis pending)")
         lines.append("")
-        for c in by_status["review_required"]:
-            lines.append(
-                f"- **{c.ecosystem}:{c.name}** "
+        lines.extend(f"- **{c.ecosystem}:{c.name}** "
                 f"`{c.from_version or '*'}` → `{c.to_version}` "
-                f"in `{c.manifest}` — {c.detail}"
-            )
+                f"in `{c.manifest}` — {c.detail}" for c in by_status["review_required"])
         lines.append("")
 
     if "library_floor_raise_unsupported" in by_status:
@@ -1648,19 +1760,55 @@ def _write_report(
             )
         lines.append("")
 
+    if "downgraded_safety" in by_status:
+        lines.append("## Downgraded safety (bounded downgrade to clean version)")
+        lines.append("")
+        lines.append("No fully-safe version exists at or above the current pin. "
+                     "Harden performed a bounded downgrade to the highest clean "
+                     "version within the recorded floor corridor. Apply with "
+                     "`--allow-degraded` if the version regression is acceptable.")
+        lines.append("")
+        lines.extend(f"- **{c.ecosystem}:{c.name}** "
+                f"`{c.from_version or '*'}` → `{c.to_version}` "
+                f"in `{c.manifest}` — {c.detail}" for c in by_status["downgraded_safety"])
+        lines.append("")
+
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _print_summary(
-    candidates: List[HardenCandidate],
-    changes: List[UpgradeChange],
+    candidates: list[HardenCandidate],
+    _changes: list[UpgradeChange],
     out_dir: Path,
     *,
     target_kind: str = "unknown",
+    excluded_surfaces: list[str] | None = None,
+    exclude_patterns: Sequence[str] | None = None,
+    target: Path | None = None,
 ) -> None:
-    by_status: Dict[str, int] = {}
+    by_status: dict[str, int] = {}
     for c in candidates:
         by_status[c.status] = by_status.get(c.status, 0) + 1
+    if excluded_surfaces:
+        print(f"raptor-sca fix: {len(excluded_surfaces)} surface(s) "
+              f"excluded from write by --exclude patterns")
+    if not exclude_patterns and target is not None:
+        # Informational guardrail (NOT a skip): fixture manifests in
+        # test trees often pin deliberately-old versions as test
+        # assertions. When no --exclude policy was given and the plan
+        # is about to write into such paths, say so once — the
+        # operator may want ``--exclude '**/tests/**'`` etc.
+        from ._test_paths import is_test_resident
+        flagged = {
+            c.manifest for c in candidates
+            if c.status == "promoted"
+            and is_test_resident(Path(c.manifest), target)
+        }
+        if flagged:
+            print(f"raptor-sca fix: note — {len(flagged)} write "
+                  f"target(s) under test/fixture paths (tests/, "
+                  f"testdata/, fixtures/, ...); if those pins are "
+                  f"test assertions, protect them with --exclude")
     if target_kind in ("library", "hybrid"):
         print(f"raptor-sca fix: target detected as a {target_kind} — raising "
               f"dependency floors to safe ranges (>=X), not exact pins (==X). "

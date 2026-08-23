@@ -23,7 +23,7 @@ where to fetch "what's the latest"."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class UpstreamSource:
 # corresponding ``_BUILTIN_ARG_MAP`` entries — every ARG with
 # a CVE ecosystem mapping ALSO needs an upstream source so the
 # bumper can propose a target version.
-_BUILTIN_UPSTREAM_MAP: Dict[str, UpstreamSource] = {
+_BUILTIN_UPSTREAM_MAP: dict[str, UpstreamSource] = {
     # PyPI tools — most cut proper GitHub releases.
     "SEMGREP_VERSION": UpstreamSource("github_release", "semgrep/semgrep"),
     "BANDIT_VERSION":  UpstreamSource("github_release", "PyCQA/bandit"),
@@ -104,7 +104,7 @@ _BUILTIN_UPSTREAM_MAP: Dict[str, UpstreamSource] = {
 }
 
 
-def lookup_upstream(arg_name: str) -> Optional[UpstreamSource]:
+def lookup_upstream(arg_name: str) -> UpstreamSource | None:
     """Return the upstream source for ``arg_name``, or ``None``
     if unknown. ``None`` means "the bumper can't propose a target
     for this ARG"; the operator can still get a verdict on a

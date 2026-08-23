@@ -2,128 +2,53 @@
 
 ## Purpose
 
-Organize knowledge and capabilities with progressive disclosure:
-- **Core (CLAUDE.md):** Always loaded - decision logic only
-- **Personas:** Available on-demand - expert methodologies
-- **Specialists:** Reserved for future - custom sub-agents
-- **Reference:** Reserved for future - deep dives and detailed guides
+Methodology and guidance files consumed by two paths:
+
+1. **Claude Code** — CLAUDE.md progressive-loading rules read guidance files
+   on demand; agent definitions reference persona files on spawn.
+2. **Python orchestration** — `core/llm/methodology.py` injects persona
+   content into LLM system prompts (Gemini, Ollama, etc.).
 
 ---
 
-## Current Structure
+## Structure
 
 ```
 tiers/
-├── analysis-guidance.md     # Loaded after scan completes
-├── exploit-guidance.md      # Loaded when developing exploits
-├── recovery.md              # Loaded on errors
-├── validation-recovery.md   # Loaded on validation errors
+├── analysis-guidance.md     # Post-scan exploit feasibility triage
+├── exploit-guidance.md      # Active exploit development constraints
+├── recovery.md              # General error recovery
+├── validation-recovery.md   # Validation stage error recovery
 │
-├── personas/                # Expert methodologies (AVAILABLE, not auto-loaded)
-│   ├── security_researcher.md   (~500t, load on request)
-│   ├── exploit_developer.md     (~400t, load on request)
-│   ├── crash_analyst.md         (~450t, load on request)
-│   ├── binary_exploitation_specialist.md
-│   ├── codeql_analyst.md
-│   ├── codeql_finding_analyst.md
-│   ├── fuzzing_strategist.md
-│   ├── offensive_security_researcher.md
-│   ├── patch_engineer.md
-│   ├── penetration_tester.md
-│   └── README.md
-│
-├── specialists/             # Sub-agents (RESERVED for future)
-│   └── README.md            # Currently: Defer to Python packages/
-│
-└── reference/               # RESERVED for future deep dives
-    └── (empty - add when needed)
+└── personas/                # Expert methodologies
+    ├── security_researcher.md
+    ├── exploit_developer.md
+    ├── crash_analyst.md
+    ├── binary_exploitation_specialist.md
+    ├── fuzzing_strategist.md
+    ├── patch_engineer.md
+    ├── penetration_tester.md
+    └── README.md
 ```
 
-**Note:** Claude Code skills live separately in `.claude/skills/` (not here).
+---
+
+## Loading
+
+**Guidance files** — auto-loaded by CLAUDE.md progressive loading rules:
+- `analysis-guidance.md` — after scan completes
+- `exploit-guidance.md` — when developing exploits
+- `recovery.md` — on general errors
+- `validation-recovery.md` — on validation stage errors
+
+**Personas** — loaded two ways:
+- Claude Code: on explicit request or via agent definitions
+- Python: `load_methodology("personas/<name>.md")` injects into system prompts
+
+Token cost is zero until loaded; 400–1000 tokens when active.
 
 ---
 
-## Usage Pattern
+## File Naming
 
-### Guidance Files (Auto-loaded)
-
-**Loaded by CLAUDE.md PROGRESSIVE LOADING rules:**
-- `analysis-guidance.md` - After scan completes (adversarial thinking)
-- `exploit-guidance.md` - When developing exploits (constraints, techniques)
-- `recovery.md` - On general errors
-- `validation-recovery.md` - On validation stage errors
-
-### Personas (Available Now)
-
-**Load explicitly when needed:**
-```
-"Use security researcher persona to analyze this"
-"Exploit developer: create PoC"
-"Crash analyst: is this exploitable?"
-```
-
-**Token cost:** 0 until invoked, 400-500 when loaded
-
-### Specialists (Future)
-
-**Reserved for custom domain specialists that don't exist in Python:**
-- API testing approaches
-- Mobile app security
-- Cloud infrastructure patterns
-
-**Currently:** All specialists implemented in Python (packages/)
-**Check availability:** System can detect Python vs custom specialists
-
-### Reference (Future)
-
-**Reserved for detailed guides:**
-- Complete attack methodologies
-- Tool orchestration examples
-- Failure recovery mappings
-
-**Add when users request deep background knowledge.**
-
----
-
-## Token Budget
-
-**Current usage:**
-- Core (CLAUDE.md): ~800 tokens (always loaded)
-- Guidance files: 0 tokens (loaded progressively when needed)
-- Personas: 0 tokens (load on explicit request only)
-- Specialists: 0 tokens (Python handles, or future custom)
-- Reference: 0 tokens (empty, reserved)
-
-**Typical session:** 800 tokens (core only)
-**After scan:** 800 + 500 = 1,300 tokens (analysis-guidance loaded)
-**With persona:** 800 + 500 = 1,300 tokens (when requested)
-
-**Capacity remaining:** ~2,200 tokens for future expansion
-
----
-
-## Design Philosophy
-
-**Start minimal:**
-- Only CLAUDE.md always loaded
-- Everything else on-demand
-
-**Expand when needed:**
-- Users ask for methodologies → Personas exist
-- Users ask for custom approaches → Add specialists
-- Users ask for deep explanations → Add reference files
-
-**Defer to Python:**
-- Python already handles execution
-- Don't duplicate what exists
-- Tiers provide decision-making, not execution
-
----
-
-## File Naming Conventions
-
-**Personas:** `[role].md` (security_researcher.md, exploit_developer.md)
-**Specialists:** `[domain].md` (api_tester.md, mobile_scanner.md)
-**Reference:** `[topic].md` (attack_methodologies.md, tool_guide.md)
-
-All lowercase with underscores.
+`[role].md` — lowercase with underscores (e.g. `security_researcher.md`).

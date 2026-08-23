@@ -63,7 +63,8 @@ import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,8 @@ class ResolverResult:
     ecosystem: str
     success: bool
     available: bool                  # was the toolchain present at all?
-    proposed_lockfile: Optional[bytes] = None
-    error: Optional[str] = None
+    proposed_lockfile: bytes | None = None
+    error: str | None = None
     raw_output: str = ""
 
 
@@ -112,7 +113,7 @@ class Resolver(Protocol):
         when ``yarn.lock`` is present, ``PoetryResolver`` when
         ``[tool.poetry]`` is in ``pyproject.toml``. When multiple
         candidates match, the registered order wins; when none match,
-        the first registered resolver for the ecosystem is the
+        the last registered resolver for the ecosystem is the
         fallback so single-tool ecosystems Just Work.
         """
         ...
@@ -124,12 +125,12 @@ class Resolver(Protocol):
 
 
 def dry_run_batch(
-    resolver: "Resolver",
+    resolver: Resolver,
     project_dirs: Sequence[Path],
     *,
-    common_root: Optional[Path] = None,
+    common_root: Path | None = None,
     timeout: int = 120,
-) -> "list[ResolverResult]":
+) -> list[ResolverResult]:
     """Resolve N project_dirs and return one ``ResolverResult`` per
     input dir, in input order.
 
@@ -174,7 +175,7 @@ def dry_run_batch(
 # (``<tool> --version``) independently — without caching, ``npm
 # --version`` (which is genuinely ~1s on most systems) gets invoked
 # 3-4× per scan and dominates short-scan wall-clock time.
-_CHECK_TOOL_CACHE: "dict[tuple, bool]" = {}
+_CHECK_TOOL_CACHE: dict[tuple, bool] = {}
 
 
 def _check_tool(cmd: list, *, timeout: int = 5) -> bool:
@@ -210,7 +211,7 @@ def _run(
     cwd: Path,
     timeout: int,
     proxy_hosts: Sequence[str],
-    env: Optional[dict] = None,
+    env: dict | None = None,
     block_network: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run a resolver subprocess sandboxed.
@@ -274,6 +275,7 @@ def _run(
             sandbox_kwargs["block_network"] = True
         else:
             sandbox_kwargs["use_egress_proxy"] = True
+            sandbox_kwargs["require_proxy_netns"] = True  # 00015: untrusted egress must use the netns tier
             sandbox_kwargs["proxy_hosts"] = list(proxy_hosts)
 
         return sandbox_run(cmd, **sandbox_kwargs)
@@ -283,18 +285,18 @@ def _run(
 # Registry
 # ---------------------------------------------------------------------------
 
-from . import bundler as _bundler     # noqa: E402,F401
-from . import cargo as _cargo         # noqa: E402,F401
-from . import composer as _composer   # noqa: E402,F401
-from . import gomod as _gomod         # noqa: E402,F401
-from . import gradle as _gradle       # noqa: E402,F401
-from . import maven as _maven         # noqa: E402,F401
-from . import npm as _npm             # noqa: E402,F401
-from . import nuget as _nuget         # noqa: E402,F401
-from . import pip as _pip             # noqa: E402,F401
-from . import pnpm as _pnpm           # noqa: E402,F401
-from . import poetry as _poetry       # noqa: E402,F401
-from . import yarn as _yarn           # noqa: E402,F401
+from . import bundler as _bundler     # noqa: E402
+from . import cargo as _cargo         # noqa: E402
+from . import composer as _composer   # noqa: E402
+from . import gomod as _gomod         # noqa: E402
+from . import gradle as _gradle       # noqa: E402
+from . import maven as _maven         # noqa: E402
+from . import npm as _npm             # noqa: E402
+from . import nuget as _nuget         # noqa: E402
+from . import pip as _pip             # noqa: E402
+from . import pnpm as _pnpm           # noqa: E402
+from . import poetry as _poetry       # noqa: E402
+from . import yarn as _yarn           # noqa: E402
 
 
 # Resolver registry. Order matters per ecosystem in two ways:
@@ -324,8 +326,8 @@ _RESOLVERS = (
 
 
 def get_resolver(
-    ecosystem: str, project_dir: Optional[Path] = None,
-) -> Optional[Resolver]:
+    ecosystem: str, project_dir: Path | None = None,
+) -> Resolver | None:
     """Return the best resolver for ``(ecosystem, project_dir)``.
 
     When ``project_dir`` is given, prefer a resolver whose

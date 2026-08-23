@@ -17,8 +17,20 @@ what's actually going to fire.
 from __future__ import annotations
 
 import logging
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+import core.llm.client as _client_mod
 from core.llm.client import LLMClient, _pinned_llm_config
+
+
+@pytest.fixture(autouse=True)
+def _reset_banner_flag():
+    """Reset once-per-process banner flag so tests are order-independent."""
+    _client_mod._MODEL_BANNER_SHOWN = False
+    yield
+    _client_mod._MODEL_BANNER_SHOWN = False
 
 
 class _RaptorLogCapture:
@@ -94,27 +106,57 @@ def test_pinned_llm_config_no_credentials_returns_bare_config():
     assert cfg.fallback_models == []
 
 
-def test_llmclient_pinned_banner_suppresses_default_primary(monkeypatch):
+def test_pinned_llm_config_provider_name_uses_provider_builder(monkeypatch):
+    """A pin that names a PROVIDER ("claudecode") uses that provider
+    builder's config verbatim — including its own model_name — instead
+    of falling through provider inference to a keyless anthropic config
+    that dies with an SDK auth error at call time."""
+    monkeypatch.setenv("RAPTOR_CC_MODEL", "claude-opus-4-7")
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    cfg = _pinned_llm_config("claudecode")
+    assert cfg.primary_model.provider == "claudecode"
+    assert cfg.primary_model.model_name == "claude-opus-4-7"
+    assert cfg.fallback_models == []
+
+
+def test_pinned_llm_config_provider_name_unavailable_raises(monkeypatch):
+    """Provider-name pin whose backend is absent fails loudly at
+    construction instead of synthesising a config for the wrong provider."""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    with pytest.raises(ValueError, match="claudecode"):
+        _pinned_llm_config("claudecode")
+
+
+@patch("core.llm.detection.detect_llm_availability")
+def test_llmclient_pinned_banner_suppresses_default_primary(mock_detect, monkeypatch):
     """With ``pinned_model``, banner reports the pin instead of the
     operator's auto-resolved primary, and skips the misleading "Primary
     model:" / "Fallback models:" lines."""
+    mock_detect.return_value = MagicMock(
+        external_llm=True, claude_code=False, llm_available=True,
+    )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-fake-key")
     with _RaptorLogCapture() as cap:
         LLMClient(pinned_model="claude-opus-4-8")
     msgs = cap.messages()
     assert any("Pinned model: claude-opus-4-8" in m for m in msgs), msgs
-    # The two lines that the fix is removing for pinned mode:
     assert not any(m.startswith("Primary model:") for m in msgs), msgs
     assert not any(m.startswith("Fallback models:") for m in msgs), msgs
 
 
-def test_llmclient_default_banner_unchanged(monkeypatch):
+@patch("core.llm.detection.detect_llm_availability")
+def test_llmclient_default_banner_unchanged(mock_detect, monkeypatch):
     """Without ``pinned_model``, banner behaviour is unchanged — the fix is
     additive (no regression for callers that don't opt in)."""
+    mock_detect.return_value = MagicMock(
+        external_llm=True, claude_code=False, llm_available=True,
+    )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-fake-key")
     with _RaptorLogCapture() as cap:
         LLMClient()
     msgs = cap.messages()
-    # At least one of these fires in default mode (the existing banner).
     assert (any(m.startswith("Primary model:") for m in msgs)
             or any("no primary model" in m for m in msgs)), msgs

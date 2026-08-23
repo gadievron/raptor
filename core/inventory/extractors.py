@@ -4,15 +4,22 @@ Extracts functions, globals, macros, and classes from source files.
 AST-based for Python, tree-sitter when available, regex fallback.
 
 Security metadata (decorators, annotations, visibility, types) is captured
-in FunctionMetadata. See docs/design-inventory-metadata.md for design rationale.
+in FunctionMetadata.
 """
 
 import ast
-import re
+import bisect
 import logging
+import re
+import threading
 import warnings
-from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any, ClassVar
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tree_sitter import Node
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +32,12 @@ KIND_CLASS = "class"
 KIND_TOP_LEVEL = "top_level"        # module-scope executable code (runs at import)
 KIND_INTERSTITIAL = "interstitial"  # residue not yet classified — trends to glue
                                     # (whitespace/braces/comments) as kinds fill in
+KIND_DECLARATION = "declaration"    # file-scope pure/extern declaration — no code
+                                    # runs; kept for coverage bookkeeping, not
+                                    # reviewable by default
+KIND_CONSTANT_MACRO = "constant_macro"  # object-like macro whose body is a single
+                                        # literal/identifier — inert data, not
+                                        # reviewable by default
 
 
 @dataclass
@@ -37,8 +50,8 @@ class CodeItem:
     name: str
     kind: str = KIND_FUNCTION
     line_start: int = 0
-    line_end: Optional[int] = None
-    checked_by: List[str] = field(default_factory=list)
+    line_end: int | None = None
+    checked_by: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialise for checklist.json."""
@@ -71,17 +84,16 @@ class FunctionMetadata:
     """Security-relevant metadata extracted from function definitions.
 
     Language-agnostic — same fields for all languages, language-specific values.
-    See docs/design-inventory-metadata.md for field semantics.
     """
-    class_name: Optional[str] = None
-    visibility: Optional[str] = None      # public/private/protected/static/exported/extern
-    attributes: List[str] = field(default_factory=list)  # decorators AND annotations
-    return_type: Optional[str] = None
-    parameters: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    class_name: str | None = None
+    visibility: str | None = None      # public/private/protected/static/exported/extern
+    attributes: list[str] = field(default_factory=list)  # decorators AND annotations
+    return_type: str | None = None
+    parameters: list[tuple[str, str | None]] = field(default_factory=list)
     # Annotations on the ENCLOSING class (Java only): a method carries its
     # class's stereotype annotations (@Service / @Component / …) so reachability
     # can treat public methods of a container-managed bean as framework entries.
-    class_attributes: List[str] = field(default_factory=list)
+    class_attributes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -91,8 +103,8 @@ class FunctionInfo(CodeItem):
     Inherits from CodeItem. Adds signature and metadata fields.
     kind is always KIND_FUNCTION.
     """
-    signature: Optional[str] = None
-    metadata: Optional[FunctionMetadata] = None
+    signature: str | None = None
+    metadata: FunctionMetadata | None = None
 
     def to_dict(self) -> dict:
         """Serialise for checklist.json."""
@@ -138,8 +150,11 @@ class PythonExtractor:
     annotations), return_type. Always available — uses stdlib ast.
     """
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
-        functions = []
+    def extract(self, filepath: str, content: str) -> list[CodeItem]:
+        # Mixed payload: FunctionInfo for defs/methods PLUS plain
+        # CodeItem ``top_level`` units from _top_level_items — the
+        # declared type is honest about both (FunctionInfo <: CodeItem).
+        functions: list[CodeItem] = []
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
@@ -147,38 +162,35 @@ class PythonExtractor:
             self._walk(tree, functions, class_name=None)
             functions.extend(self._top_level_items(tree))
         except SyntaxError as e:
-            logger.warning(f"Failed to parse {filepath}: {e}")
-            functions = self._regex_fallback(content)
+            logger.warning("Failed to parse %s: %s", filepath, e)
+            functions = list(self._regex_fallback(content))
 
         return functions
 
-    def _top_level_items(self, tree: ast.AST) -> List["CodeItem"]:
+    def _top_level_items(self, tree: ast.AST) -> list["CodeItem"]:
         """Module-scope executable statements that run at import — a bare
         expression statement containing a call (e.g. ``os.system(...)``,
         ``eval(...)``). Captured as ``top_level`` so it's a named, reviewable,
         reachability-eligible unit instead of anonymous interstitial.
         Assignments are globals; defs/classes/imports are their own kinds."""
-        out: List[CodeItem] = []
-        for node in getattr(tree, "body", []):
-            if isinstance(node, ast.Expr) and any(
-                isinstance(n, ast.Call) for n in ast.walk(node)
-            ):
-                out.append(CodeItem(
+        out: list[CodeItem] = [CodeItem(
                     name=f"top_level:{node.lineno}",
                     kind=KIND_TOP_LEVEL,
                     line_start=node.lineno,
                     line_end=getattr(node, "end_lineno", None) or node.lineno,
-                ))
+                ) for node in getattr(tree, "body", []) if isinstance(node, ast.Expr) and any(
+                isinstance(n, ast.Call) for n in ast.walk(node)
+            )]
         return out
 
     @staticmethod
-    def _class_base_names(node: "ast.ClassDef") -> List[str]:
+    def _class_base_names(node: "ast.ClassDef") -> list[str]:
         """Simple base-class names of a ``class`` (``class V(a.b.APIView,
         Mixin)`` → ``["APIView", "Mixin"]``). Keyword bases (``metaclass=``)
         are in ``node.keywords``, not ``node.bases``, so they're skipped.
         Mirrors the tree-sitter extractor so the stdlib fallback records the
         same ``class_attributes`` (framework-base detection needs it)."""
-        out: List[str] = []
+        out: list[str] = []
         for b in node.bases:
             if isinstance(b, ast.Name):
                 out.append(b.id)
@@ -186,8 +198,8 @@ class PythonExtractor:
                 out.append(b.attr)
         return out
 
-    def _walk(self, node: ast.AST, functions: List[FunctionInfo],
-              class_name: Optional[str],
+    def _walk(self, node: ast.AST, functions: list[CodeItem],
+              class_name: str | None,
               class_attributes: Sequence[str] = ()) -> None:
         """Walk AST collecting functions with metadata."""
         for child in ast.iter_child_nodes(node):
@@ -216,7 +228,7 @@ class PythonExtractor:
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
 
-    def _extract_function(self, node: ast.AST, class_name: Optional[str],
+    def _extract_function(self, node: ast.AST, class_name: str | None,
                           class_attributes: Sequence[str] = ()) -> FunctionInfo:
         """Extract a single function with full metadata."""
         args = node.args.args
@@ -243,9 +255,7 @@ class PythonExtractor:
         return_type = ast.unparse(node.returns) if node.returns else None
 
         # Decorators
-        attributes = []
-        for dec in node.decorator_list:
-            attributes.append(ast.unparse(dec))
+        attributes = [ast.unparse(dec) for dec in node.decorator_list]
 
         return FunctionInfo(
             name=node.name,
@@ -261,7 +271,7 @@ class PythonExtractor:
             ),
         )
 
-    def _regex_fallback(self, content: str) -> List[FunctionInfo]:
+    def _regex_fallback(self, content: str) -> list[FunctionInfo]:
         """Regex fallback for unparseable Python."""
         functions = []
         pattern = r'^(?:async\s+)?def\s+(\w+)\s*\('
@@ -282,7 +292,7 @@ class JavaScriptExtractor:
     parameters, decorators. Class method detection needs brace-depth tracking.
     """
 
-    PATTERNS = [
+    PATTERNS: ClassVar[list[str]] = [
         r'(?:async\s+)?function\s+(\w+)\s*\(',
         r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(',
         r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>',
@@ -298,21 +308,113 @@ class JavaScriptExtractor:
     # 100 MB minified bundle would otherwise sit in this loop).
     _MAX_JS_LINE = 16 * 1024
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+    _REGEX_PREFIX = frozenset('=(:,;!&|?[~^{>%*/')
+
+    @staticmethod
+    def _find_end(lines: list[str], start: int) -> int | None:
+        """Find the closing ``}`` for a function starting at *start* (0-based).
+
+        Tracks brace depth while skipping string literals (``"``, ``'``,
+        backtick), ``//`` line comments, ``/* */`` block comments, and
+        regex literals (``/pattern/``).  Returns a 1-based line number
+        or ``None`` when the end cannot be determined.
+        """
+        depth = 0
+        found_open = False
+        in_string: str | None = None
+        in_regex = False
+        in_block_comment = False
+        prev_significant = '='
+
+        for i in range(start, len(lines)):
+            line = lines[i]
+            j = 0
+            while j < len(line):
+                ch = line[j]
+
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+
+                if in_regex:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == '/':
+                        in_regex = False
+                    j += 1
+                    continue
+
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                        prev_significant = ch
+                    j += 1
+                    continue
+
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+
+                if ch in ('"', "'", '`'):
+                    in_string = ch
+                    j += 1
+                    continue
+
+                if (ch == '/' and j + 1 < len(line)
+                        and prev_significant in JavaScriptExtractor._REGEX_PREFIX):
+                    in_regex = True
+                    j += 1
+                    continue
+
+                if ch == '{':
+                    depth += 1
+                    found_open = True
+                elif ch == '}':
+                    depth -= 1
+
+                if found_open and depth <= 0:
+                    return i + 1
+
+                if not ch.isspace():
+                    prev_significant = ch
+
+                j += 1
+
+        return None
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
+        lines = content.split('\n')
 
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(lines, 1):
             if len(line) > self._MAX_JS_LINE:
+                continue
+            stripped = line.lstrip()
+            if stripped.startswith(('//', '/*')):
                 continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:
                     name = match.group(1)
                     if name not in seen and name not in ('if', 'for', 'while', 'switch', 'catch'):
-                        exported = line.lstrip().startswith('export ')
+                        exported = stripped.startswith('export ')
+                        end_line = self._find_end(lines, i - 1)
                         functions.append(FunctionInfo(
                             name=name, line_start=i,
+                            line_end=end_line,
                             metadata=FunctionMetadata(
                                 visibility="exported" if exported else None,
                             ),
@@ -422,10 +524,10 @@ class CExtractor:
 
     STORAGE_CLASSES = frozenset({'static', 'extern', 'inline'})
 
-    def _c_metadata(self, line: str, name: str) -> Optional[FunctionMetadata]:
+    def _c_metadata(self, line: str, name: str) -> FunctionMetadata | None:
         """Extract return type and storage class from the text before the function name."""
         try:
-            prefix = line.split(name)[0].strip() if name in line else ""
+            prefix = line.split(name, maxsplit=1)[0].strip() if name in line else ""
             words = prefix.split()
             storage = set()
             type_words = []
@@ -448,10 +550,10 @@ class CExtractor:
                 visibility = None
             return_type = " ".join(type_words) if type_words else None
             return FunctionMetadata(visibility=visibility, return_type=return_type)
-        except Exception:
+        except Exception:  # noqa: BLE001 — metadata is best-effort
             return None
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
         lines = content.split('\n')
@@ -461,7 +563,7 @@ class CExtractor:
             line = lines[i]
 
             stripped = line.strip()
-            if stripped.startswith('#') or stripped.startswith('//'):
+            if stripped.startswith(('#', '//')):
                 i += 1
                 continue
 
@@ -487,14 +589,27 @@ class CExtractor:
             if split_match:
                 name = split_match.group(1)
                 if name not in self.KEYWORDS and name not in seen:
-                    for j in range(i + 1, min(i + 3, len(lines))):
+                    # K&R declarations (e.g. `z_streamp strm;`) may
+                    # appear between the signature and the `{`.
+                    for j in range(i + 1, min(i + 40, len(lines))):
                         fwd = lines[j].strip()
                         if fwd == '{':
-                            functions.append(FunctionInfo(name=name, line_start=i + 1))
+                            functions.append(FunctionInfo(
+                                name=name, line_start=i + 1,
+                                metadata=self._c_metadata(line, name),
+                            ))
                             seen.add(name)
                             break
-                        if fwd and fwd != '{':
-                            break
+                        if fwd.startswith(('#', '//')):
+                            continue
+                        if not fwd:
+                            continue
+                        # K&R parameter declaration: `type name;` possibly
+                        # followed by a comment (`unsigned start; /* ... */`)
+                        fwd_no_comment = re.sub(r'/\*.*?\*/', '', fwd).strip()
+                        if ';' in fwd_no_comment:
+                            continue
+                        break
                 i += 1
                 continue
 
@@ -543,11 +658,12 @@ class CExtractor:
 
             i += 1
 
+        self._fill_line_ends(lines, functions)
         return functions
 
     def _multiline_opener_match(
         self, lines: list, i: int, seen: set,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Try matching a multi-line function-definition opener
         starting at ``lines[i]``. Returns the function name on a
         valid match (and the body opener `{` is found within a few
@@ -596,7 +712,7 @@ class CExtractor:
         # corrupt the depth count.
         depth = 0
         pieces: list = []
-        terminator: Optional[int] = None
+        terminator: int | None = None
         for j in range(i, min(i + 50, len(lines))):
             text = lines[j].rstrip()
             if len(text) > self._MAX_C_LINE:
@@ -651,6 +767,205 @@ class CExtractor:
                     return None
         return None
 
+    @staticmethod
+    def _find_end_brace(lines: list[str], start: int) -> int | None:
+        """Find the closing ``}`` for a C function starting at *start* (0-based).
+
+        Tracks brace depth while skipping string literals (``"``, ``'``),
+        ``//`` line comments, and ``/* */`` block comments.  Returns a
+        1-based line number or ``None`` when the end cannot be determined.
+        """
+        depth = 0
+        found_open = False
+        in_string: str | None = None
+        in_block_comment = False
+
+        for i in range(start, len(lines)):
+            line = lines[i]
+            j = 0
+            while j < len(line):
+                ch = line[j]
+
+                # Inside a block comment — look for closing `*/`.
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+
+                # Inside a string literal — look for the closing quote.
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                    j += 1
+                    continue
+
+                # Block comment opener.
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+
+                # Line comment — skip the rest of the line.
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+
+                # String opener.
+                if ch in ('"', "'"):
+                    in_string = ch
+                    j += 1
+                    continue
+
+                if ch == '{':
+                    depth += 1
+                    found_open = True
+                elif ch == '}':
+                    depth -= 1
+
+                if found_open and depth <= 0:
+                    return i + 1  # 1-based
+
+                j += 1
+
+        return None
+
+    @staticmethod
+    def _brace_events(lines: list[str]) -> list[tuple[int, int]]:
+        """One lexical pass over the whole file: ordered ``(line_idx,
+        delta)`` events for every ``{`` (+1) / ``}`` (−1) outside
+        strings, char literals and comments — the same skipping rules
+        as :meth:`_find_end_brace`, applied once instead of once per
+        function."""
+        events: list[tuple[int, int]] = []
+        in_string: str | None = None
+        in_block_comment = False
+        for i, line in enumerate(lines):
+            j = 0
+            while j < len(line):
+                ch = line[j]
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                    j += 1
+                    continue
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+                if ch in ('"', "'"):
+                    in_string = ch
+                    j += 1
+                    continue
+                if ch == '{':
+                    events.append((i, 1))
+                elif ch == '}':
+                    events.append((i, -1))
+                j += 1
+        return events
+
+    @classmethod
+    def _fill_line_ends(
+        cls, lines: list[str], functions: list[FunctionInfo],
+    ) -> None:
+        """Post-pass: fill ``line_end`` for every function that lacks it.
+
+        Linear, not per-function: calling :meth:`_find_end_brace` per
+        function scans to EOF whenever braces never re-balance, which
+        is O(N²) on a crafted file of never-closing openers (``int
+        fK(){`` on every line) — an effective hang at the 8 MiB
+        per-file cap, and this pass runs on EVERY C/C++ file as the
+        tree-sitter repair path. Instead, lex the file ONCE into brace
+        events, then answer each function from the event stream:
+
+        * ``base`` — brace depth just before the function's first
+          line (prefix depth of the last event on earlier lines);
+        * ``q`` — the first open-brace event at/after the start line
+          (``_find_end_brace`` ignores everything before its first
+          ``{``, closers included);
+        * the end is ``q`` itself when preceding closers already put
+          it at/below ``base`` (the reference scanner returns at a
+          ``{`` whose local depth is ≤ 0), else the first later event
+          where depth returns to ``base`` — precomputed as a
+          next-depth-below index with a monotonic stack.
+
+        Matches the per-function scanner on every input whose start
+        line begins outside a string/comment; when the start line is
+        INSIDE one (regex-extractor false positives only), the single
+        global lex is the more faithful of the two.
+        """
+        todo = [
+            f for f in functions
+            if f.line_end is None and f.line_start > 0
+        ]
+        if not todo:
+            return
+        events = cls._brace_events(lines)
+        m = len(events)
+        if m == 0:
+            return
+        ev_line = [e[0] for e in events]
+        depth_after: list[int] = []
+        d = 0
+        for _, delta in events:
+            d += delta
+            depth_after.append(d)
+        # next_open[i]: first event index >= i whose delta is +1.
+        next_open: list[int | None] = [None] * m
+        nxt: int | None = None
+        for i in range(m - 1, -1, -1):
+            if events[i][1] == 1:
+                nxt = i
+            next_open[i] = nxt
+        # next_below[i]: first j > i with depth_after[j] ==
+        # depth_after[i] - 1 (±1 steps make this the first crossing).
+        next_below: list[int | None] = [None] * m
+        stack: list[int] = []
+        for j in range(m):
+            while stack and depth_after[stack[-1]] - 1 == depth_after[j]:
+                next_below[stack.pop()] = j
+            stack.append(j)
+        for func in todo:
+            start0 = func.line_start - 1
+            p = bisect.bisect_left(ev_line, start0)
+            if p >= m:
+                continue
+            base = depth_after[p - 1] if p > 0 else 0
+            q = next_open[p]
+            if q is None:
+                continue
+            # Events between p and q are closers, so depth_after[q]
+            # <= base + 1: at most one next_below hop.
+            end_idx: int | None = q
+            while end_idx is not None and depth_after[end_idx] > base:
+                end_idx = next_below[end_idx]
+            if end_idx is not None:
+                func.line_end = events[end_idx][0] + 1  # 1-based
+
+
+_JAVA_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _count_braces_outside_strings(line: str) -> int:
+    cleaned = _JAVA_STRING_RE.sub("", line)
+    return cleaned.count("{") - cleaned.count("}")
+
 
 class JavaExtractor:
     """Extract methods from Java files using regex.
@@ -672,15 +987,48 @@ class JavaExtractor:
     PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
     _MAX_JAVA_LINE = 16 * 1024
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+    @staticmethod
+    def _split_params_respecting_generics(params_str: str) -> list[str]:
+        """Split parameter string on top-level commas only."""
+        parts: list[str] = []
+        depth = 0
+        current: list[str] = []
+        for ch in params_str:
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(ch)
+        if current:
+            parts.append("".join(current))
+        return parts
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         current_class = None
+        brace_depth = 0
+        class_depth = -1
 
         for i, line in enumerate(content.split('\n'), 1):
-            # Track class scope
-            class_match = re.search(r'class\s+(\w+)', line)
+            stripped = line.lstrip()
+
+            brace_depth += _count_braces_outside_strings(line)
+
+            class_match = re.search(r'\bclass\s+(\w+)', line)
             if class_match:
                 current_class = class_match.group(1)
+                class_depth = brace_depth
+
+            if current_class is not None and brace_depth < class_depth:
+                current_class = None
+                class_depth = -1
+
+            if stripped.startswith(("//", "/*")):
+                continue
 
             # Cap line length before regex match — see PATTERN comment
             # for the ReDoS rationale.
@@ -704,7 +1052,7 @@ class JavaExtractor:
                     # Parse parameters
                     parameters = []
                     if params_str:
-                        for p in params_str.split(','):
+                        for p in self._split_params_respecting_generics(params_str):
                             parts = p.strip().split()
                             if len(parts) >= 2:
                                 pname = parts[-1]
@@ -740,7 +1088,7 @@ class GoExtractor:
     # identifier — confusing greps and downstream cross-references.
     PATTERN = r'(?a)^func\s+(?:\((\w+)\s+(\*?\w+)\)\s+)?(\w+)\s*\('
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
 
         for i, line in enumerate(content.split('\n'), 1):
@@ -762,15 +1110,501 @@ class GoExtractor:
         return functions
 
 
+class LuaExtractor:
+    """Extract functions from Lua files using regex with ``end``-keyword
+    depth tracking for ``line_end`` computation.
+
+    Lua function patterns:
+      - ``function name(...)`` — global function
+      - ``local function name(...)`` — local function
+      - ``function Module.name(...)`` — module function (dot syntax)
+      - ``function Class:method(...)`` — method (colon syntax, stored as Class.method)
+      - ``M.name = function(...)`` / ``local name = function(...)`` — assigned anonymous
+    """
+
+    # Named function declarations (global, local, module dot, method colon).
+    _NAMED_PAT = re.compile(
+        r'^(?P<local>local\s+)?function\s+'
+        r'(?P<name>[\w.]+(?::[\w]+)?)\s*\((?P<params>[^)]*)\)',
+    )
+    # Assigned anonymous: ``M.name = function(...)`` or ``local name = function(...)``.
+    _ASSIGN_PAT = re.compile(
+        r'^(?P<local>local\s+)?(?P<name>[\w.]+)\s*=\s*function\s*\((?P<params>[^)]*)\)',
+    )
+
+    # Block-opening keywords that push the ``end`` depth.
+    # ``do`` is intentionally excluded: it appears as part of ``for ... do``
+    # / ``while ... do`` (already counted by ``for`` / ``while``).
+    # Standalone ``do ... end`` blocks are extremely rare and the minor
+    # depth error is acceptable vs double-counting every for/while loop.
+    _BLOCK_OPEN = re.compile(
+        r'\b(?:function|if|for|while)\b',
+    )
+    # ``repeat`` opens a block closed by ``until``, not ``end``.
+    _REPEAT = re.compile(r'\brepeat\b')
+    _UNTIL = re.compile(r'\buntil\b')
+    _END = re.compile(r'\bend\b')
+
+    @staticmethod
+    def _parse_lua_params(params_str: str) -> list[tuple[str, str | None]]:
+        """Parse Lua parameter names from a parenthesized param string."""
+        params = []
+        for p in params_str.split(","):
+            name = p.strip()
+            if name and name != "...":
+                params.append((name, None))
+            elif name == "...":
+                params.append(("...", None))
+        return params
+
+    @staticmethod
+    def _strip_strings_and_comments(line: str) -> str:
+        """Replace string contents and ``--`` line comments with spaces.
+
+        Without this, keywords inside strings (e.g. ``["function"] = name``)
+        confuse the block-depth tracker.
+        """
+        out = list(line)
+        in_str: str | None = None
+        i = 0
+        while i < len(out):
+            ch = out[i]
+            if in_str is not None:
+                if ch == '\\':
+                    out[i] = ' '
+                    if i + 1 < len(out):
+                        out[i + 1] = ' '
+                    i += 2
+                    continue
+                if ch == in_str:
+                    in_str = None
+                else:
+                    out[i] = ' '
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                in_str = ch
+                i += 1
+                continue
+            if ch == '-' and i + 1 < len(out) and out[i + 1] == '-':
+                for j in range(i, len(out)):
+                    out[j] = ' '
+                break
+            i += 1
+        return ''.join(out)
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
+        lines = content.split('\n')
+        functions: list[FunctionInfo] = []
+        seen: set = set()
+
+        for i, raw_line in enumerate(lines, 1):
+            line = raw_line.strip()
+            if line.startswith('--'):
+                continue
+            m = self._NAMED_PAT.match(line)
+            if m:
+                raw_name = m.group('name')
+                # Colon syntax ``Class:method`` → store as ``Class.method``.
+                name = raw_name.replace(':', '.')
+                is_local = bool(m.group('local'))
+                params = self._parse_lua_params(m.group('params'))
+                if name not in seen:
+                    param_strs = [n for n, _ in params]
+                    sig = f"{name}({', '.join(param_strs)})"
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=i,
+                        signature=sig,
+                        metadata=FunctionMetadata(
+                            visibility="private" if is_local else "public",
+                            parameters=params,
+                        ),
+                    ))
+                    seen.add(name)
+                continue
+            m = self._ASSIGN_PAT.match(line)
+            if m:
+                name = m.group('name')
+                is_local = bool(m.group('local'))
+                params = self._parse_lua_params(m.group('params'))
+                if name not in seen:
+                    param_strs = [n for n, _ in params]
+                    sig = f"{name}({', '.join(param_strs)})"
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=i,
+                        signature=sig,
+                        metadata=FunctionMetadata(
+                            visibility="private" if is_local else "public",
+                            parameters=params,
+                        ),
+                    ))
+                    seen.add(name)
+
+        # Post-pass: compute line_end via end-keyword depth tracking.
+        self._fill_line_ends(lines, functions)
+        return functions
+
+    def _fill_line_ends(
+        self, lines: list[str], functions: list[FunctionInfo],
+    ) -> None:
+        """Compute ``line_end`` for each function by tracking ``end``/``until``
+        depth from its ``line_start``."""
+        for func in functions:
+            if func.line_end is not None:
+                continue
+            func.line_end = self._find_end(lines, func.line_start - 1)
+
+    def _find_end(self, lines: list[str], start_idx: int) -> int | None:
+        """Find the matching ``end`` for a function starting at ``start_idx``
+        (0-based). Returns 1-based line number, or None."""
+        depth = 0
+        repeat_depth = 0
+        found_open = False
+
+        for i in range(start_idx, len(lines)):
+            stripped = self._strip_strings_and_comments(lines[i])
+
+            # Count block openers (function, if, for, while, do).
+            for _ in self._BLOCK_OPEN.finditer(stripped):
+                depth += 1
+                found_open = True
+
+            # ``repeat`` opens a block closed by ``until``.
+            for _ in self._REPEAT.finditer(stripped):
+                repeat_depth += 1
+
+            for _ in self._UNTIL.finditer(stripped):
+                repeat_depth = max(0, repeat_depth - 1)
+
+            # ``end`` closes one block (not repeat blocks).
+            for _ in self._END.finditer(stripped):
+                depth -= 1
+
+            if found_open and depth <= 0:
+                return i + 1  # 1-based
+
+        return None
+
+
+def _hash_brace_end(lines: list[str], start_idx: int,
+                    max_scan: int = 4000) -> int | None:
+    """Find the closing ``}`` for a brace-delimited body starting at
+    ``start_idx`` (0-based) in a ``#``-commented language (Perl, shell).
+
+    String-aware (``"``/``'``) and strips ``#`` line comments outside
+    strings so braces inside comments/strings don't corrupt the depth
+    count. Returns a 1-based line number, or None.
+    """
+    depth = 0
+    found_open = False
+    for i in range(start_idx, min(start_idx + max_scan, len(lines))):
+        line = lines[i]
+        in_str: str | None = None
+        j = 0
+        while j < len(line):
+            ch = line[j]
+            if in_str is not None:
+                if ch == '\\':
+                    j += 2
+                    continue
+                if ch == in_str:
+                    in_str = None
+                j += 1
+                continue
+            if ch in ('"', "'"):
+                in_str = ch
+                j += 1
+                continue
+            if ch == '#':
+                break  # line comment — ignore the rest
+            if ch == '{':
+                depth += 1
+                found_open = True
+            elif ch == '}':
+                depth -= 1
+            if found_open and depth <= 0:
+                return i + 1  # 1-based
+            j += 1
+    return None
+
+
+class PerlExtractor:
+    """Extract Perl subroutines using regex with brace tracking.
+
+    Matches ``sub name { ... }`` (attributes / prototypes tolerated
+    between name and brace). No tree-sitter grammar is wired for Perl;
+    a regex fallback returning names + spans is sufficient for the
+    checklist to carry Perl code as reviewable units.
+    """
+
+    _SUB_RE = re.compile(r'^\s*sub\s+([A-Za-z_]\w*)\b')
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
+        functions: list[FunctionInfo] = []
+        seen: set = set()
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            m = self._SUB_RE.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in seen:
+                continue
+            # Forward declarations (``sub name;``) carry no body.
+            rest = line[m.end():].lstrip()
+            if rest.startswith(';'):
+                continue
+            functions.append(FunctionInfo(
+                name=name,
+                line_start=i + 1,
+                line_end=_hash_brace_end(lines, i),
+                signature=f"sub {name}",
+            ))
+            seen.add(name)
+        return functions
+
+
+class ShellExtractor:
+    """Extract shell functions using regex with brace tracking.
+
+    Matches both POSIX ``name() {`` and bash ``function name {`` /
+    ``function name() {`` forms.
+    """
+
+    _POSIX_RE = re.compile(r'^\s*([A-Za-z_][\w.-]*)\s*\(\s*\)\s*\{?')
+    _BASH_RE = re.compile(r'^\s*function\s+([A-Za-z_][\w.-]*)\s*(?:\(\s*\))?\s*\{?')
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
+        functions: list[FunctionInfo] = []
+        seen: set = set()
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            m = self._BASH_RE.match(line) or self._POSIX_RE.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in seen:
+                continue
+            functions.append(FunctionInfo(
+                name=name,
+                line_start=i + 1,
+                line_end=_hash_brace_end(lines, i),
+                signature=f"{name}()",
+            ))
+            seen.add(name)
+        return functions
+
+
+class ObjCExtractor:
+    """Extract Objective-C methods (plus plain C functions) using regex.
+
+    Methods: ``- (ret)selector:(T)arg ...`` / ``+ (ret)selector`` — the
+    item name is the first selector token. Plain C functions in the
+    same file are recovered via :class:`CExtractor` (Objective-C is a C
+    superset). Brace tracking reuses the C end-brace walker (``//`` and
+    ``/* */`` comments).
+    """
+
+    _METHOD_RE = re.compile(r'^\s*[-+]\s*\([^)]*\)\s*([A-Za-z_]\w*)')
+
+    def extract(self, filepath: str, content: str) -> list[FunctionInfo]:
+        lines = content.split('\n')
+        functions: list[FunctionInfo] = []
+        seen: set = set()
+        for i, line in enumerate(lines):
+            m = self._METHOD_RE.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in seen:
+                continue
+            # Declarations inside @interface end with ';' before any '{'.
+            end = CExtractor._find_end_brace(lines, i)
+            semi = line.find(';')
+            if semi >= 0 and '{' not in line[:semi]:
+                continue
+            functions.append(FunctionInfo(
+                name=name,
+                line_start=i + 1,
+                line_end=end,
+                signature=line.strip()[:200],
+            ))
+            seen.add(name)
+        # Plain C functions in the same translation unit.
+        method_names = set(seen)
+        functions.extend(fn for fn in CExtractor().extract(filepath, content) if fn.name not in method_names)
+        # C extractor's post-pass already filled its own line_ends.
+        functions.sort(key=lambda f: f.line_start)
+        return functions
+
+
+class AsmExtractor:
+    """Extract assembly routines: column-0 labels as reviewable units.
+
+    A label's span runs to the line before the next label (or EOF).
+    Local labels (``.L*``, numeric) are skipped. Labels declared
+    ``.globl`` / ``.global`` / ``global`` (GAS / NASM) get exported
+    visibility so reachability treats them as entry candidates.
+    """
+
+    _LABEL_RE = re.compile(r'^([A-Za-z_][\w.$]*):')
+    _GLOBL_RE = re.compile(
+        r'(?m)^\s*(?:\.globa?l|global|\.type)\s+([A-Za-z_][\w.$]*)'
+    )
+
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
+        lines = content.split('\n')
+        exported = set(self._GLOBL_RE.findall(content))
+        labels: list[tuple] = []  # (name, 0-based line index)
+        for i, line in enumerate(lines):
+            m = self._LABEL_RE.match(line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name.startswith('.L'):
+                continue  # local label — control flow, not a routine
+            labels.append((name, i))
+        functions: list[FunctionInfo] = []
+        seen: set = set()
+        for idx, (name, i) in enumerate(labels):
+            if name in seen:
+                continue
+            end = labels[idx + 1][1] if idx + 1 < len(labels) else len(lines)
+            functions.append(FunctionInfo(
+                name=name,
+                line_start=i + 1,
+                line_end=max(i + 1, end),
+                metadata=FunctionMetadata(
+                    visibility="exported" if name in exported else None,
+                ),
+            ))
+            seen.add(name)
+        return functions
+
+
+class GitHubWorkflowExtractor:
+    """Extract reviewable units from GitHub workflow YAML.
+
+    Jobs (``jobs.<id>``) become items named ``job:<id>``; steps with a
+    ``run:`` script (the command-injection surface — ``${{ }}``
+    interpolation into shell) become nested items named
+    ``job:<id>.step-<n>``. Indentation-based scan, not a YAML parser —
+    workflows are regular enough, and this keeps the extractor
+    dependency-free with exact line spans.
+
+    Non-workflow YAML (no top-level ``jobs:`` block) yields nothing;
+    the inventory builder records those files as excluded instead.
+    """
+
+    _JOBS_RE = re.compile(r'^jobs:\s*(?:#.*)?$')
+    _KEY_RE = re.compile(r'^(\s+)([A-Za-z_][\w.-]*):')
+    _STEPS_RE = re.compile(r'^(\s+)steps:\s*(?:#.*)?$')
+    _STEP_ITEM_RE = re.compile(r'^(\s+)-\s')
+    _RUN_RE = re.compile(r'(?m)^\s+(?:-\s+)?run:')
+
+    def extract(self, _filepath: str, content: str) -> list[CodeItem]:
+        lines = content.split('\n')
+        jobs_start = None
+        for i, line in enumerate(lines):
+            if self._JOBS_RE.match(line):
+                jobs_start = i
+                break
+        if jobs_start is None:
+            return []
+
+        # First-level keys under jobs: are the job ids.
+        items: list[CodeItem] = []
+        job_indent = None
+        jobs: list[tuple] = []  # (job_id, 0-based start line)
+        end_of_jobs = len(lines)
+        for i in range(jobs_start + 1, len(lines)):
+            line = lines[i]
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            if not line[0].isspace():
+                end_of_jobs = i  # next top-level key — jobs block over
+                break
+            m = self._KEY_RE.match(line)
+            if not m:
+                continue
+            indent = len(m.group(1))
+            if job_indent is None:
+                job_indent = indent
+            if indent == job_indent:
+                jobs.append((m.group(2), i))
+
+        for idx, (job_id, start) in enumerate(jobs):
+            end = jobs[idx + 1][1] if idx + 1 < len(jobs) else end_of_jobs
+            # Trim trailing blank lines from the span.
+            while end - 1 > start and not lines[end - 1].strip():
+                end -= 1
+            items.append(CodeItem(
+                name=f"job:{job_id}",
+                kind=KIND_FUNCTION,
+                line_start=start + 1,
+                line_end=end,
+            ))
+            items.extend(self._extract_run_steps(lines, job_id, start, end))
+        return items
+
+    def _extract_run_steps(self, lines: list[str], job_id: str,
+                           start: int, end: int) -> list[CodeItem]:
+        """Steps carrying a ``run:`` script within lines[start:end]."""
+        steps: list[tuple] = []  # (0-based start line)
+        step_indent = None
+        in_steps = False
+        for i in range(start + 1, end):
+            line = lines[i]
+            if not line.strip():
+                continue
+            if self._STEPS_RE.match(line):
+                in_steps = True
+                step_indent = None
+                continue
+            if not in_steps:
+                continue
+            m = self._STEP_ITEM_RE.match(line)
+            if m:
+                indent = len(m.group(1))
+                if step_indent is None:
+                    step_indent = indent
+                if indent == step_indent:
+                    steps.append(i)
+
+        out: list[CodeItem] = []
+        for idx, s in enumerate(steps):
+            e = steps[idx + 1] if idx + 1 < len(steps) else end
+            while e - 1 > s and not lines[e - 1].strip():
+                e -= 1
+            block = '\n'.join(lines[s:e])
+            if not self._RUN_RE.search(block):
+                continue
+            out.append(CodeItem(
+                name=f"job:{job_id}.step-{idx + 1}",
+                kind=KIND_FUNCTION,
+                line_start=s + 1,
+                line_end=e,
+            ))
+        return out
+
+
 class GenericExtractor:
     """Generic fallback extractor using common patterns."""
 
-    PATTERNS = [
+    PATTERNS: ClassVar[list[str]] = [
         r'(?:function|def|func|fn|sub)\s+(\w+)\s*\(',
         r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\([^)]*\)\s*\{',
     ]
 
-    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+    def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
 
@@ -792,20 +1626,20 @@ class GenericExtractor:
 # ---------------------------------------------------------------------------
 
 try:
-    from tree_sitter import Language, Parser as TSParser
+    from tree_sitter import Language
+    from tree_sitter import Parser as TSParser
     _TS_AVAILABLE = True
 except ImportError:
     _TS_AVAILABLE = False
 
 
-# Per-language Parser cache. Pre-cache, ``TreeSitterExtractor(lang)``
-# constructed a fresh ``TSParser(ts_language)`` on every instance —
-# which is per-file in ``_extract_with_tree_sitter``. The grammar
-# is immutable across the program's lifetime so a single Parser
-# per language can be reused across every parse. Cache by the
-# language NAME (not Language object identity) because
-# ``_ts_language`` wraps a new Language per call.
-_TS_PARSER_BY_LANG: Dict[str, Any] = {}
+# Per-language Parser cache.  tree-sitter's Parser holds C-side
+# mutable state (internal parse stack) — NOT thread-safe for
+# concurrent ``.parse()`` calls.  The inventory builder fans out
+# via ThreadPoolExecutor, so a shared module-level dict would hand
+# the same Parser to multiple workers simultaneously.
+# ``threading.local`` gives every thread its own dict of parsers.
+_TS_PARSER_LOCAL = threading.local()
 
 
 def _ts_language(lang: str):
@@ -851,6 +1685,21 @@ def _ts_language(lang: str):
         elif lang == "php":
             import tree_sitter_php as ts
             return Language(ts.language_php())
+        elif lang == "lua":
+            import tree_sitter_lua as ts
+        elif lang == "scala":
+            # Without this branch .scala fell through to the regex
+            # extractor: no ``line_end`` on any function, and roughly a
+            # third fewer functions found. ``line_end`` is what the
+            # source-slicing consumers key on, so a JVM target like
+            # Kafka (Scala broker core, Java clients) silently got a
+            # partial inventory on its Scala half only. Same failure
+            # shape as the cpp and typescript branches above.
+            import tree_sitter_scala as ts
+        elif lang == "kotlin":
+            import tree_sitter_kotlin as ts
+        elif lang == "swift":
+            import tree_sitter_swift as ts
         else:
             return None
         return Language(ts.language())
@@ -859,20 +1708,21 @@ def _ts_language(lang: str):
 
 
 def _ts_parser_for(lang: str):
-    """Return a cached ``TSParser`` for ``lang``, or None if the
-    grammar isn't installed. Mirrors ``_get_ts_parser`` in
-    ``core/inventory/call_graph.py`` but keyed by language NAME so
-    repeated ``TreeSitterExtractor(lang)`` constructions across
-    many files share one Parser per grammar.
+    """Return a per-thread cached ``TSParser`` for ``lang``, or None
+    if the grammar isn't installed.
     """
-    cached = _TS_PARSER_BY_LANG.get(lang)
+    cache: dict[str, Any] = getattr(_TS_PARSER_LOCAL, "parsers", None)  # type: ignore[assignment]
+    if cache is None:
+        cache = {}
+        _TS_PARSER_LOCAL.parsers = cache
+    cached = cache.get(lang)
     if cached is not None:
         return cached
     ts_lang = _ts_language(lang)
     if ts_lang is None:
         return None
     parser = TSParser(ts_lang)
-    _TS_PARSER_BY_LANG[lang] = parser
+    cache[lang] = parser
     return parser
 
 
@@ -884,7 +1734,7 @@ class TreeSitterExtractor:
     """
 
     # Node types that represent functions/methods per language
-    _FUNC_TYPES = {
+    _FUNC_TYPES: ClassVar[dict[str, tuple]] = {
         "python": ("function_definition",),
         "java": ("method_declaration", "constructor_declaration"),
         "javascript": ("function_declaration", "method_definition", "arrow_function"),
@@ -905,9 +1755,28 @@ class TreeSitterExtractor:
         # methods). Trait method SIGNATURES (no body) are
         # ``function_signature_item`` — intentionally excluded (no code).
         "rust": ("function_item",),
+        "lua": ("function_declaration", "function_definition"),
+        # Scala: ``def`` with a body is ``function_definition`` — NOT
+        # Java's ``method_declaration``. Reusing the Java node names
+        # here extracts zero functions from a file that parses cleanly.
+        # An abstract trait/interface ``def`` with no body parses as
+        # ``function_declaration`` and is intentionally excluded (no
+        # code to review), matching the Rust rule above.
+        "scala": ("function_definition",),
+        # Kotlin: ``fun`` bodies + secondary constructors. Abstract /
+        # interface ``fun`` without a body still parses as
+        # function_declaration but carries no function_body — kept, since
+        # unlike Rust/Scala the node type doesn't distinguish and callers
+        # tolerate line_start==line_end signatures.
+        "kotlin": ("function_declaration", "secondary_constructor"),
+        # Swift: ``func`` + ``init``/``deinit``. Protocol requirement
+        # signatures are ``protocol_function_declaration`` — excluded
+        # (no body), matching the Rust/Scala signature rule.
+        "swift": ("function_declaration", "init_declaration",
+                  "deinit_declaration"),
     }
 
-    _CLASS_TYPES = {
+    _CLASS_TYPES: ClassVar[dict[str, tuple]] = {
         "python": ("class_definition",),
         "java": ("class_declaration", "interface_declaration",
                  "enum_declaration"),
@@ -925,41 +1794,55 @@ class TreeSitterExtractor:
         # no fns). ``impl Trait for Foo`` associates its methods with ``Foo``;
         # ``trait T`` with ``T`` (for default methods).
         "rust": ("impl_item", "trait_item"),
+        "lua": (),
+        # Scala hosts methods in all three; ``object`` is where the
+        # singleton/companion helpers live, which is a lot of a typical
+        # Scala service's logic.
+        "scala": ("class_definition", "object_definition", "trait_definition"),
+        # Kotlin: class_declaration covers class/interface/enum (the
+        # grammar reuses one node type); object_declaration is the
+        # singleton/companion host.
+        "kotlin": ("class_declaration", "object_declaration"),
+        # Swift: class_declaration covers class/struct/enum/extension
+        # (one node type, keyword child differs); protocols host
+        # default implementations via extensions but the declaration
+        # itself is tracked for hierarchy.
+        "swift": ("class_declaration", "protocol_declaration"),
     }
 
-    def __init__(self, language: str):
+    def __init__(self, language: str) -> None:
         self.language = language
         self.func_types = self._FUNC_TYPES.get(language, ())
         self.class_types = self._CLASS_TYPES.get(language, ())
         parser = _ts_parser_for(language)
         if parser is None:
-            raise RuntimeError(f"tree-sitter grammar not available for {language}")
+            msg = f"tree-sitter grammar not available for {language}"
+            raise RuntimeError(msg)
         self.parser = parser
 
-    def extract(self, filepath: str, content: str, _tree=None) -> List[FunctionInfo]:
+    def extract(self, filepath: str, content: str, _tree=None) -> list[FunctionInfo]:
         if _tree is None:
             try:
                 _tree = self.parser.parse(content.encode())
-            except Exception as e:
-                logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
+            except Exception as e:  # noqa: BLE001 — caller falls back to regex
+                logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
-        functions = []
+        self._source_lines = content.splitlines(True)
+        functions: list[FunctionInfo] = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
         return functions
 
-    def _class_annotations(self, node) -> List[str]:
+    def _class_annotations(self, node) -> list[str]:
         """Annotations / attributes declared on a class/interface.
 
         Java: the ``modifiers`` block holds ``marker_annotation`` / ``annotation``.
         C#: ``attribute_list`` children hold ``[Attr]`` attributes. Other
         languages put neither here, so this returns ``[]`` for them.
         """
-        out: List[str] = []
+        out: list[str] = []
         for child in node.children:
             if child.type == "modifiers":
-                for mod in child.children:
-                    if mod.type in ("marker_annotation", "annotation"):
-                        out.append(mod.text.decode().lstrip("@"))
+                out.extend(mod.text.decode().lstrip("@") for mod in child.children if mod.type in ("marker_annotation", "annotation"))
             elif child.type == "attribute_list":
                 # C#: attribute_list → attribute. PHP: attribute_list →
                 # attribute_group → attribute (deeper nesting).
@@ -977,9 +1860,7 @@ class TreeSitterExtractor:
                 # Ruby: ``class X < ApplicationController`` — base is a
                 # ``constant`` / ``scope_resolution``. Java: ``extends Foo`` —
                 # base is a ``type_identifier`` / ``generic_type``. Capture both.
-                for sc in child.children:
-                    if sc.type in ("constant", "scope_resolution"):
-                        out.append(sc.text.decode())          # Ruby
+                out.extend(sc.text.decode() for sc in child.children if sc.type in ("constant", "scope_resolution"))          # Ruby
                 out.extend(self._java_base_names(child))       # Java (no-op for Ruby)
             elif child.type in ("super_interfaces", "extends_interfaces"):
                 # Java: ``implements Bar`` / interface ``extends Baz`` — record
@@ -994,9 +1875,7 @@ class TreeSitterExtractor:
                 # ``APIView``) so framework base classes (Django/DRF/Flask
                 # class-based views) can mark the class's methods as entries.
                 # Skip keyword args (``metaclass=…``).
-                for b in child.children:
-                    if b.type in ("identifier", "attribute"):
-                        out.append(b.text.decode().split(".")[-1].strip())
+                out.extend(b.text.decode().split(".")[-1].strip() for b in child.children if b.type in ("identifier", "attribute"))
             elif child.type == "base_list":
                 # C#: ``: ControllerBase, IFoo<int>`` — record base/interface
                 # tail names so framework base classes (ControllerBase / Hub /
@@ -1013,14 +1892,14 @@ class TreeSitterExtractor:
         return out
 
     @staticmethod
-    def _java_base_names(node) -> List[str]:
+    def _java_base_names(node) -> list[str]:
         """Base type tail-names from a Java ``superclass`` / ``super_interfaces``
         / ``extends_interfaces`` node (``JpaRepository<Owner,Integer>`` →
         ``JpaRepository``; ``org.x.Validator`` → ``Validator``). Iterates the
         individual type nodes (a ``type_list`` separates them with ``,`` tokens)
         so a generic's inner comma isn't mistaken for a type separator."""
         _TYPE_NODES = ("type_identifier", "scoped_type_identifier", "generic_type")
-        out: List[str] = []
+        out: list[str] = []
 
         def add(tn) -> None:
             base = tn.text.decode().split("<")[0].strip().split(".")[-1].strip()
@@ -1037,11 +1916,11 @@ class TreeSitterExtractor:
         return out
 
     @staticmethod
-    def _csharp_attr_names(attribute_list_node) -> List[str]:
+    def _csharp_attr_names(attribute_list_node) -> list[str]:
         """Attribute names in one C# ``attribute_list`` (``[HttpGet, Route(\"x\")]``
         → ``["HttpGet", "Route"]``). The name is the ``attribute`` node's leading
         identifier / qualified_name; reachability tail-matches it."""
-        out: List[str] = []
+        out: list[str] = []
         for a in attribute_list_node.children:
             if a.type != "attribute":
                 continue
@@ -1051,22 +1930,22 @@ class TreeSitterExtractor:
                     break
         return out
 
-    def _csharp_attributes(self, node) -> List[str]:
+    def _csharp_attributes(self, node) -> list[str]:
         """C# attributes on a method/ctor — its ``attribute_list`` children."""
         if self.language != "csharp":
             return []
-        out: List[str] = []
+        out: list[str] = []
         for child in node.children:
             if child.type == "attribute_list":
                 out.extend(self._csharp_attr_names(child))
         return out
 
     @staticmethod
-    def _php_attr_names(attribute_list_node) -> List[str]:
+    def _php_attr_names(attribute_list_node) -> list[str]:
         """Attribute names in one PHP ``attribute_list`` — nests one level deeper
         than C#: ``attribute_list → attribute_group → attribute → name``
         (``#[Route('/x')]`` → ``["Route"]``)."""
-        out: List[str] = []
+        out: list[str] = []
         for grp in attribute_list_node.children:
             if grp.type != "attribute_group":
                 continue
@@ -1079,11 +1958,11 @@ class TreeSitterExtractor:
                         break
         return out
 
-    def _php_attributes(self, node) -> List[str]:
+    def _php_attributes(self, node) -> list[str]:
         """PHP attributes on a method — its ``attribute_list`` children."""
         if self.language != "php":
             return []
-        out: List[str] = []
+        out: list[str] = []
         for child in node.children:
             if child.type == "attribute_list":
                 out.extend(self._php_attr_names(child))
@@ -1096,7 +1975,7 @@ class TreeSitterExtractor:
         "accessibility_modifier", "comment", "override",
     })
 
-    def _ts_decorators(self, node) -> List[str]:
+    def _ts_decorators(self, node: "Node") -> list[str]:
         """Decorators on a JS/TS class or method. tree-sitter-typescript
         places ``@Foo(...)`` as a preceding SIBLING of the decorated node
         (inside class_body / export_statement), not a wrapper as Python does.
@@ -1108,7 +1987,7 @@ class TreeSitterExtractor:
         """
         if self.language not in ("javascript", "typescript", "tsx"):
             return []
-        out: List[str] = []
+        out: list[str] = []
         sib = node.prev_sibling
         while sib is not None:
             if sib.type == "decorator":
@@ -1119,7 +1998,7 @@ class TreeSitterExtractor:
         out.reverse()
         return out
 
-    def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str],
+    def _walk(self, node, functions: list[FunctionInfo], class_name: str | None,
               class_attributes: Sequence[str] = ()) -> None:
         for child in node.children:
             if child.type in self.class_types:
@@ -1179,6 +2058,8 @@ class TreeSitterExtractor:
                                 parameters=params,
                             ),
                         ))
+                    self._walk(arrow, functions, class_name=class_name,
+                               class_attributes=class_attributes)
                     continue
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
@@ -1200,26 +2081,123 @@ class TreeSitterExtractor:
                     fi = self._extract_function(child, class_name, attrs, class_attributes)
                     if fi:
                         functions.append(fi)
-                except Exception as e:
-                    logger.debug(f"tree-sitter: failed to extract function at line {child.start_point[0]+1}: {e}")
+                except Exception as e:  # noqa: BLE001 — skip one node, keep walking
+                    logger.debug("tree-sitter: failed to extract function at line %d: %s", child.start_point[0]+1, e)
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
             elif child.type == "decorated_definition":
                 # Python: walk into decorated definitions
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
+            elif (child.type == "function_declarator"
+                  and self.language in ("c", "cpp")
+                  and node.type in ("translation_unit", "ERROR")):
+                # C/C++ fragmented-parse recovery: macros (ZEXPORT,
+                # ZLIB_INTERNAL etc.) between return type and function
+                # name cause tree-sitter to emit the function_declarator
+                # as a top-level sibling instead of inside a
+                # function_definition. Recover the name.
+                self._recover_c_orphan_declarator(child, functions)
+            elif (child.type == "ERROR"
+                  and self.language in ("c", "cpp")
+                  and child.end_point[0] - child.start_point[0] > 2):
+                # C/C++ ERROR node recovery: look for function_declarator
+                # inside large ERROR nodes.
+                self._recover_c_error_node(child, functions)
             else:
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
 
-    def _extract_function(self, node, class_name: Optional[str],
-                          attrs: List[str],
-                          class_attributes: Sequence[str] = ()) -> Optional[FunctionInfo]:
+    def _recover_c_orphan_declarator(self, decl_node: "Node", functions: list[FunctionInfo]) -> None:
+        """Recover a C function from a top-level function_declarator.
+
+        When macros like ZEXPORT sit between the return type and the
+        function name, tree-sitter emits the function_declarator as a
+        sibling of the translation_unit root, not inside a
+        function_definition. Find the name and estimate the end line by
+        scanning forward for the matching compound_statement.
+
+        K&R style with macros (``int ZEXPORT inflate(strm, flush)``)
+        additionally fragments the body: the opening ``{`` becomes a
+        bare token instead of a compound_statement. In that case, fall
+        back to brace-depth counting via CExtractor._find_end_brace.
+        """
+        seen_names = {f.name for f in functions}
+        name = None
+        for sub in decl_node.children:
+            if sub.type == "identifier":
+                name = sub.text.decode()
+                break
+        if not name or name in seen_names or name in CExtractor.KEYWORDS:
+            return
+        end_line = decl_node.start_point[0] + 1
+        sib = decl_node.next_sibling
+        while sib is not None:
+            if sib.type == "compound_statement":
+                end_line = sib.end_point[0] + 1
+                break
+            if sib.type == "{":
+                brace_line = sib.start_point[0]
+                found = CExtractor._find_end_brace(
+                    self._source_lines, brace_line,
+                )
+                if found:
+                    end_line = found
+                break
+            if sib.type in ("function_definition", "function_declarator",
+                            "preproc_include", "preproc_define"):
+                break
+            sib = sib.next_sibling
+        functions.append(FunctionInfo(
+            name=name,
+            line_start=decl_node.start_point[0] + 1,
+            line_end=end_line,
+            metadata=FunctionMetadata(visibility=None),
+        ))
+
+    def _recover_c_error_node(self, error_node: "Node", functions: list[FunctionInfo]) -> None:
+        """Extract functions from C/C++ ERROR nodes caused by macro annotations."""
+        seen_names = {f.name for f in functions}
+        for child in error_node.children:
+            if child.type == "function_declarator":
+                name = None
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        name = sub.text.decode()
+                        break
+                if name and name not in seen_names and name not in CExtractor.KEYWORDS:
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=child.start_point[0] + 1,
+                        line_end=error_node.end_point[0] + 1,
+                        metadata=FunctionMetadata(visibility=None),
+                    ))
+                    seen_names.add(name)
+            elif child.type == "compound_statement":
+                continue
+            elif child.named_child_count > 0:
+                self._recover_c_error_node(child, functions)
+
+    def _extract_function(self, node: "Node", class_name: str | None,
+                          attrs: list[str],
+                          class_attributes: Sequence[str] = ()) -> FunctionInfo | None:
         name = self._get_name(node)
         if not name:
             return None
 
         visibility, class_name = self._extract_visibility(node, name, class_name, attrs)
+        # C++ out-of-line definitions (``Scanner::parseBody(...)`` in a
+        # .cpp, ``inline T Reader::getElement(...)`` in a header) sit at
+        # translation-unit level, so the enclosing-class walk never sets
+        # class_name and receiver-qualified pins / ``--functions`` specs
+        # (``Class.method``) could never match; with same-named overloads
+        # in one file the unambiguous-bare-name fallback refuses too, and
+        # the function was silently never scheduled for review. Recover
+        # the rightmost scope component from the declarator's
+        # qualified_identifier (``ns::detail::Reader::getElement``
+        # → ``Reader``).
+        if class_name is None and self.language in ("c", "cpp"):
+            class_name = self._cpp_scope_qualifier(node)
         parameters = self._extract_parameters(node)
         return_type = self._extract_return_type(node)
 
@@ -1243,7 +2221,62 @@ class TreeSitterExtractor:
             ),
         )
 
-    def _ts_member_visibility(self, node) -> Optional[str]:
+    # Declarator wrappers between a C/C++ function_definition node and
+    # its function_declarator (pointer/reference returns).
+    _CPP_DECL_WRAPPERS = ("pointer_declarator", "reference_declarator")
+
+    def _cpp_scope_qualifier(self, node) -> str | None:
+        """Rightmost scope component of an out-of-line C/C++ definition.
+
+        ``void Scanner::parseBody(...)`` parses with the name
+        wrapped in a ``qualified_identifier`` under the
+        ``function_declarator``; nested qualifications
+        (``ns::detail::Reader::f``) nest further
+        ``qualified_identifier`` nodes on the name side. The component
+        immediately left of the trailing name is the receiver/class
+        spelling that pins and labels use (a namespace-qualified free
+        function yields its namespace — the same rightmost-qualifier
+        rule). None when the definition is unqualified.
+        """
+        decl = node
+        for _ in range(3):  # function_definition → (pointer/ref)* → declarator
+            found = None
+            for child in decl.children:
+                if child.type == "function_declarator":
+                    found = child
+                    break
+                if child.type in self._CPP_DECL_WRAPPERS:
+                    found = child
+                    break
+            if found is None:
+                return None
+            decl = found
+            if decl.type == "function_declarator":
+                break
+        if decl.type != "function_declarator":
+            return None
+        qual = next(
+            (c for c in decl.children if c.type == "qualified_identifier"),
+            None,
+        )
+        if qual is None:
+            return None
+        scope = None
+        cur = qual
+        while cur is not None:
+            nested = None
+            for c in cur.children:
+                if c.type in ("namespace_identifier", "template_type"):
+                    text = c.text.decode()
+                    scope = text.split("<")[0].strip() or scope
+                elif c.type == "qualified_identifier":
+                    nested = c
+            if nested is None:
+                break
+            cur = nested
+        return scope or None
+
+    def _ts_member_visibility(self, node) -> str | None:
         """TS/JS class-member visibility from an ``accessibility_modifier``
         child (``private`` / ``protected`` / ``public``). TS members are
         PUBLIC by default, so absence ⇒ ``public`` — which is what the
@@ -1256,8 +2289,8 @@ class TreeSitterExtractor:
                 return child.text.decode().strip()
         return "public"
 
-    def _extract_visibility(self, node, name: str, class_name: Optional[str],
-                            attrs: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    def _extract_visibility(self, node, name: str, class_name: str | None,
+                            attrs: list[str]) -> tuple[str | None, str | None]:
         """Extract visibility and update class_name. Returns (visibility, class_name)."""
         visibility = None
 
@@ -1342,6 +2375,34 @@ class TreeSitterExtractor:
                         if parts:
                             class_name = parts[-1].lstrip("*")
 
+        # Lua: ``local function foo()`` has a ``local`` keyword child;
+        # ``function foo()`` (no local) is public/global.
+        if self.language == "lua":
+            has_local = any(
+                c.type == "local" for c in node.children
+            )
+            if has_local:
+                visibility = "private"
+            # For function_definition (anonymous assigned), check if
+            # the enclosing variable_declaration has a ``local`` child.
+            elif node.type == "function_definition":
+                p = node.parent
+                # Walk up: expression_list → assignment_statement →
+                # variable_declaration.
+                while p is not None and p.type in (
+                    "expression_list", "assignment_statement",
+                ):
+                    p = p.parent
+                if p is not None and p.type == "variable_declaration":
+                    if any(c.type == "local" for c in p.children):
+                        visibility = "private"
+                    else:
+                        visibility = "public"
+                else:
+                    visibility = "public"
+            else:
+                visibility = "public"
+
         # JS/TS: export statement wrapping
         parent = node.parent
         if parent and parent.type == "export_statement":
@@ -1349,7 +2410,22 @@ class TreeSitterExtractor:
 
         return visibility, class_name
 
-    def _get_name(self, node) -> Optional[str]:
+    def _get_name(self, node) -> str | None:
+        # Lua: function_declaration names can be identifier,
+        # dot_index_expression (M.foo), or method_index_expression (C:m).
+        if self.language == "lua" and node.type == "function_declaration":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode()
+                if child.type == "dot_index_expression":
+                    # ``function M.foo()`` → "M.foo"
+                    return child.text.decode()
+                if child.type == "method_index_expression":
+                    # ``function C:method()`` → "C.method" (colon → dot)
+                    return child.text.decode().replace(":", ".")
+        # Lua: function_definition (anonymous) — name from parent assignment.
+        if self.language == "lua" and node.type == "function_definition":
+            return self._lua_assigned_name(node)
         # Rust: an ``impl`` block associates its methods with the TARGET type
         # — ``impl Foo`` / ``impl Trait for Foo`` / ``impl<T> Box<T>``. The
         # target is the last type node before the body (after ``for`` in a
@@ -1403,6 +2479,24 @@ class TreeSitterExtractor:
         # ``type_identifier`` names a TS class/interface — but in a Java/TS
         # method it's the RETURN TYPE (``public String handle()``), which
         # precedes the method name, so only accept it on a class declaration.
+        # Swift: init/deinit carry no name identifier — synthesise.
+        if self.language == "swift" and node.type == "init_declaration":
+            return "init"
+        if self.language == "swift" and node.type == "deinit_declaration":
+            return "deinit"
+        # Swift: ``extension C`` wraps the target in user_type →
+        # type_identifier (one level down, unlike a direct class name).
+        if self.language == "swift" and node.type == "class_declaration":
+            ut = next((c for c in node.children if c.type == "user_type"), None)
+            if ut is not None:
+                ti = next((g for g in ut.children
+                           if g.type == "type_identifier"), None)
+                if ti is not None:
+                    return ti.text.decode()
+        # Kotlin: secondary constructors carry no name — use the
+        # conventional "constructor".
+        if self.language == "kotlin" and node.type == "secondary_constructor":
+            return "constructor"
         is_class_decl = node.type in (
             "class_declaration", "abstract_class_declaration",
             "interface_declaration",
@@ -1413,6 +2507,8 @@ class TreeSitterExtractor:
             # this the name didn't resolve and inline methods read
             # class_name=None (no CHA / framework / qualname association).
             "class_specifier", "struct_specifier",
+            # Swift: protocol name is a type_identifier child.
+            "protocol_declaration",
         )
         for child in node.children:
             if child.type in ("identifier", "name"):
@@ -1433,6 +2529,11 @@ class TreeSitterExtractor:
             # otherwise ES private methods were dropped entirely.
             if child.type in ("property_identifier",
                               "private_property_identifier"):
+                return child.text.decode()
+            # Swift: function/method names are simple_identifier (no
+            # other supported grammar emits that type, so it is safe in
+            # the generic loop).
+            if child.type == "simple_identifier":
                 return child.text.decode()
             if child.type == "type_identifier" and is_class_decl:
                 return child.text.decode()
@@ -1476,9 +2577,7 @@ class TreeSitterExtractor:
                 while cur is not None:
                     found_nested = False
                     for c in cur.children:
-                        if c.type in ("identifier", "field_identifier"):
-                            last_name = c.text.decode()
-                        elif c.type == "destructor_name":
+                        if c.type in ("identifier", "field_identifier") or c.type == "destructor_name":
                             last_name = c.text.decode()
                         elif c.type == "qualified_identifier":
                             cur = c
@@ -1503,13 +2602,39 @@ class TreeSitterExtractor:
                     return inner
         return None
 
+    def _lua_assigned_name(self, node) -> str | None:
+        """Resolve the name of a Lua ``function_definition`` (anonymous function)
+        from its enclosing assignment.
+
+        Shapes:
+          ``local parse = function(s) ... end``
+            → variable_declaration > assignment_statement > variable_list > identifier
+          ``M.handler = function(req) ... end``
+            → assignment_statement > variable_list > dot_index_expression
+        """
+        parent = node.parent
+        # function_definition sits inside expression_list inside assignment_statement
+        if parent is not None and parent.type == "expression_list":
+            parent = parent.parent
+        if parent is None or parent.type != "assignment_statement":
+            return None
+        for child in parent.children:
+            if child.type == "variable_list":
+                for v in child.children:
+                    if v.type == "identifier":
+                        return v.text.decode()
+                    if v.type == "dot_index_expression":
+                        return v.text.decode()
+                break
+        return None
+
     def _find_child(self, node, types: tuple):
         for child in node.children:
             if child.type in types:
                 return child
         return None
 
-    def _extract_parameters(self, node) -> List[Tuple[str, Optional[str]]]:
+    def _extract_parameters(self, node) -> list[tuple[str, str | None]]:
         params = []
         for child in node.children:
             if child.type in ("parameters", "formal_parameters", "parameter_list"):
@@ -1522,8 +2647,10 @@ class TreeSitterExtractor:
                 params.extend(self._extract_parameters(child))
         return params
 
-    def _parse_param(self, node) -> Tuple[Optional[str], Optional[str]]:
+    def _parse_param(self, node) -> tuple[str | None, str | None]:
         """Extract (name, type) from a parameter node."""
+        if node.type in ("identifier", "name"):
+            return node.text.decode(), None
         name = None
         ptype = None
         for child in node.children:
@@ -1569,7 +2696,7 @@ class TreeSitterExtractor:
             name = "_anon"
         return name, ptype
 
-    def _extract_return_type(self, node) -> Optional[str]:
+    def _extract_return_type(self, node) -> str | None:
         # C/C++: return type is a sibling before the function_declarator
         func_decl_pos = None
         for i, child in enumerate(node.children):
@@ -1579,9 +2706,10 @@ class TreeSitterExtractor:
 
         for i, child in enumerate(node.children):
             # Type node before the function declarator = return type
-            if func_decl_pos is not None and i < func_decl_pos:
-                if child.type in ("primitive_type", "type_identifier", "sized_type_specifier"):
-                    return child.text.decode()
+            if (func_decl_pos is not None and i < func_decl_pos
+                    and child.type in ("primitive_type", "type_identifier",
+                                       "sized_type_specifier")):
+                return child.text.decode()
             # Java/Python/Go: type after params
             if child.type in ("type", "return_type"):
                 return child.text.decode().lstrip(": ")
@@ -1594,10 +2722,18 @@ class TreeSitterExtractor:
         return None
 
 
-_cached_ts_languages: Optional[List[str]] = None
+# Languages ``_ts_language`` has a loader branch for. Probed to build the
+# startup banner's grammar list; keep in sync with that branch.
+_TS_PROBE_LANGUAGES = (
+    "python", "java", "javascript", "typescript", "tsx", "c", "cpp",
+    "go", "rust", "csharp", "ruby", "php", "lua", "scala", "kotlin",
+    "swift",
+)
+
+_cached_ts_languages: list[str] | None = None
 
 
-def _get_ts_languages() -> List[str]:
+def _get_ts_languages() -> list[str]:
     """Return list of languages with tree-sitter grammars installed. Cached."""
     global _cached_ts_languages
     if _cached_ts_languages is not None:
@@ -1605,10 +2741,12 @@ def _get_ts_languages() -> List[str]:
     if not _TS_AVAILABLE:
         _cached_ts_languages = []
         return []
-    available = []
-    for lang in ("python", "java", "javascript", "c", "go"):
-        if _ts_language(lang):
-            available.append(lang)
+    # Every language ``_ts_language`` can load. This list drifted behind
+    # the loader — cpp, typescript, rust, csharp, ruby and php all had
+    # working branches but were absent here, so the startup banner
+    # under-reported what the inventory could actually parse. Keep the
+    # two in sync when adding a grammar.
+    available = [lang for lang in _TS_PROBE_LANGUAGES if _ts_language(lang)]
     _cached_ts_languages = available
     return available
 
@@ -1630,13 +2768,24 @@ _REGEX_EXTRACTORS = {
     'cpp': CExtractor(),
     'java': JavaExtractor(),
     'go': GoExtractor(),
+    'lua': LuaExtractor(),
+    'perl': PerlExtractor(),
+    'shell': ShellExtractor(),
+    'objc': ObjCExtractor(),
+    'asm': AsmExtractor(),
+    'yaml': GitHubWorkflowExtractor(),
+    'inc': GenericExtractor(),
 }
 
 
-def extract_functions(filepath: str, language: str, content: str) -> List[FunctionInfo]:
+def extract_functions(filepath: str, language: str, content: str) -> list[CodeItem]:
     """Extract functions from a file using the best available extractor.
 
     Priority: tree-sitter (rich metadata) → Python AST → regex (basic).
+
+    The Python AST path also yields plain ``top_level`` :class:`CodeItem`
+    units alongside :class:`FunctionInfo` — the declared return type
+    reflects that mixed payload.
     """
     # Try tree-sitter first (rich metadata for all languages)
     if _TS_AVAILABLE:
@@ -1644,7 +2793,7 @@ def extract_functions(filepath: str, language: str, content: str) -> List[Functi
             extractor = TreeSitterExtractor(language)
             results = extractor.extract(filepath, content)
             if results:  # Empty = parse failed, fall through
-                return results
+                return list(results)
         except RuntimeError:
             pass  # Grammar not installed for this language
 
@@ -1654,12 +2803,12 @@ def extract_functions(filepath: str, language: str, content: str) -> List[Functi
 
     # Regex fallback (basic metadata)
     extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
-    return extractor.extract(filepath, content)
+    return list(extractor.extract(filepath, content))
 
 
 def compute_interstitial_items(
-    items: List[CodeItem], content: str,
-) -> List[CodeItem]:
+    items: list[CodeItem], content: str,
+) -> list[CodeItem]:
     """Synthesise ``interstitial`` items for line ranges NOT inside any
     extracted item — the safety net that makes "every meaningful line belongs
     to a CodeItem" true (coverage-layer Decision #2), so non-function code
@@ -1679,7 +2828,7 @@ def compute_interstitial_items(
         for ln in range(lo, min(total, hi) + 1):
             covered[ln] = True
 
-    out: List[CodeItem] = []
+    out: list[CodeItem] = []
     ln = 1
     while ln <= total:
         if covered[ln]:
@@ -1700,7 +2849,7 @@ def compute_interstitial_items(
 
 
 def extract_items(filepath: str, language: str, content: str,
-                  _tree_cache: dict = None) -> List[CodeItem]:
+                  _tree_cache: dict | None = None) -> list[CodeItem]:
     """Extract all code items (functions + globals + macros) from a file.
 
     Parses with tree-sitter once (if available) and extracts functions,
@@ -1708,10 +2857,15 @@ def extract_items(filepath: str, language: str, content: str,
     AST/regex for functions if tree-sitter is unavailable.
 
     Args:
+        filepath: Source file path, recorded on the extracted items
+            and used in failure log messages.
+        language: Language name selecting the tree-sitter grammar and
+            the AST/regex fallback extractor.
+        content: Full source text to parse.
         _tree_cache: If provided, the parsed tree is stored under
             _tree_cache["tree"] for reuse by count_sloc.
     """
-    items: List[CodeItem] = []
+    items: list[CodeItem] = []
 
     # Try tree-sitter: single parse for functions + globals
     ts_parsed = False
@@ -1721,8 +2875,8 @@ def extract_items(filepath: str, language: str, content: str,
             extractor = TreeSitterExtractor(language)
             tree = extractor.parser.parse(content.encode())
             ts_parsed = True
-        except (RuntimeError, Exception):
-            pass
+        except Exception:
+            logger.debug("tree-sitter parse failed, will use regex", exc_info=True)
 
     if tree is not None:
         # Cache tree for reuse by count_sloc
@@ -1735,21 +2889,21 @@ def extract_items(filepath: str, language: str, content: str,
             if functions:
                 items.extend(functions)
         except Exception:
-            pass  # Fall through to AST/regex fallback
+            logger.debug("tree-sitter function extraction failed for %s", filepath, exc_info=True)
 
         # Globals + module-scope executable code from the same parse tree
         try:
             items.extend(_extract_globals_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter globals extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_top_level_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter top-level extraction failed for %s", filepath, exc_info=True)
         try:
             items.extend(_extract_c_types_ts(tree.root_node, language))
         except Exception:
-            pass
+            logger.debug("tree-sitter c-types extraction failed for %s", filepath, exc_info=True)
 
     # Fallback: functions from AST/regex if tree-sitter didn't produce any
     if not ts_parsed or not any(i.kind == KIND_FUNCTION for i in items):
@@ -1764,8 +2918,40 @@ def extract_items(filepath: str, language: str, content: str,
             extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
             items.extend(extractor.extract(filepath, content))
 
-    # C/C++ macro extraction (regex — tree-sitter doesn't parse preprocessor)
-    if language in ("c", "cpp"):
+    # C/C++ repair pass: tree-sitter fragmentation from unknown macros
+    # (ZEXPORT, ZLIB_INTERNAL, etc.) can leave functions with broken
+    # line_end (== line_start) or miss functions entirely (swallowed by
+    # cascading parse errors). Use the regex extractor to fill gaps.
+    if ts_parsed and language in ("c", "cpp"):
+        ts_funcs = {i.name for i in items if i.kind == KIND_FUNCTION}
+        broken = {
+            i.name for i in items
+            if i.kind == KIND_FUNCTION
+            and i.line_end is not None
+            and i.line_end <= i.line_start
+        }
+        regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
+        regex_funcs = regex_ext.extract(filepath, content)
+        regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+        for i, item in enumerate(items):
+            if item.kind == KIND_FUNCTION and item.name in broken:
+                repair = regex_by_name.get(item.name)
+                if repair and repair.line_end and repair.line_end > repair.line_start:
+                    items[i] = FunctionInfo(
+                        name=item.name,
+                        line_start=item.line_start,
+                        line_end=repair.line_end,
+                        signature=item.signature or repair.signature,
+                        metadata=item.metadata or repair.metadata,
+                    )
+        for name, rfn in regex_by_name.items():
+            if name not in ts_funcs:
+                items.append(rfn)
+
+    # C/C++/ObjC macro extraction (regex — tree-sitter doesn't parse
+    # the preprocessor; Objective-C is a C superset with the same #define
+    # replication hazard)
+    if language in ("c", "cpp", "objc"):
         items.extend(_extract_macros_regex(content))
 
     return items
@@ -1784,7 +2970,7 @@ def _ts_contains_call(node, depth: int = 0) -> bool:
     return any(_ts_contains_call(c, depth + 1) for c in node.children)
 
 
-def _extract_top_level_ts(root_node, language: str) -> List[CodeItem]:
+def _extract_top_level_ts(root_node, language: str) -> list[CodeItem]:
     """Module-scope executable statements (run at import) as ``top_level`` items
     — a root-level ``expression_statement`` containing a call but not an
     assignment (assignments are globals). Captures the security-relevant case
@@ -1792,7 +2978,7 @@ def _extract_top_level_ts(root_node, language: str) -> List[CodeItem]:
     unit instead of anonymous interstitial. Script-like languages only."""
     if language not in _TOP_LEVEL_LANGS:
         return []
-    out: List[CodeItem] = []
+    out: list[CodeItem] = []
     for child in root_node.children:
         if child.type != "expression_statement":
             continue
@@ -1808,7 +2994,7 @@ def _extract_top_level_ts(root_node, language: str) -> List[CodeItem]:
     return out
 
 
-def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
+def _extract_globals_ts(root_node, language: str) -> list[CodeItem]:
     """Extract global variables/constants from a tree-sitter parse tree."""
     globals_found = []
 
@@ -1851,8 +3037,31 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
     else:
         scan_nodes = root_node.children
 
+    # C/C++ error recovery can hoist FUNCTION-BODY content to the root:
+    # an unparseable construct inside a body (e.g. a block-statement
+    # macro) fragments the tree, the function_definition wrapper is
+    # lost, and every local-variable declaration of the body surfaces
+    # as a root-level `declaration` node. Emitting those as globals
+    # turned each local of an affected function into a separate
+    # checklist item that consumed full review effort. Real file-scope
+    # C declarations start at column 0 in practice, hoisted locals keep
+    # their body indentation — so on a fragmented parse (root carries
+    # an error), skip indented root-level declarations. Pristine parses
+    # are unaffected.
+    c_fragmented = (
+        language in ("c", "cpp") and getattr(root_node, "has_error", False)
+    )
+
     for child in scan_nodes:
         if child.type not in target_types:
+            continue
+
+        if c_fragmented and child.start_point[1] > 0:
+            logger.debug(
+                "skipping indented root-level declaration at line %d: "
+                "fragmented parse, likely a hoisted function-body local",
+                child.start_point[0] + 1,
+            )
             continue
 
         # Only top-level declarations (not inside functions/classes).
@@ -1863,15 +3072,16 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
         # dropped. `_global_names` (plural) yields every name in
         # the declaration. Falls back to the single-name path for
         # languages where multi-spec isn't a thing.
+        kind = KIND_GLOBAL
+        if language in ("c", "cpp"):
+            kind = _c_declaration_kind(child, language)
         names = _global_names(child, language)
-        for name in names:
-            if name:
-                globals_found.append(CodeItem(
+        globals_found.extend(CodeItem(
                     name=name,
-                    kind=KIND_GLOBAL,
+                    kind=kind,
                     line_start=child.start_point[0] + 1,
                     line_end=child.end_point[0] + 1,
-                ))
+                ) for name in names if name)
 
     return globals_found
 
@@ -1879,7 +3089,7 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
 _RECORD_BODY_TYPES = ("field_declaration_list", "enumerator_list")
 
 
-def _specifier_tag_name(spec) -> Optional[str]:
+def _specifier_tag_name(spec) -> str | None:
     """Tag name of a struct/union/enum/class specifier that *defines* a type
     (has a body). Returns None for a forward declaration / use of an existing
     type (no body) or an anonymous specifier (no tag — a typedef names it
@@ -1892,7 +3102,7 @@ def _specifier_tag_name(spec) -> Optional[str]:
     return None
 
 
-def _typedef_name(node) -> Optional[str]:
+def _typedef_name(node: "Node") -> str | None:
     """The new type name introduced by a C/C++ ``type_definition`` (typedef).
     ``typedef struct {…} Foo;`` -> ``Foo``; ``typedef int (*cb)(int);`` -> ``cb``.
     """
@@ -1910,7 +3120,7 @@ def _typedef_name(node) -> Optional[str]:
     return None
 
 
-def _extract_c_types_ts(root_node, language: str) -> List[CodeItem]:
+def _extract_c_types_ts(root_node, language: str) -> list[CodeItem]:
     """File-scope C/C++ type definitions as ``class``-kind items: ``typedef``s
     and named struct/union/enum (and C++ class) *definitions*. Without these a
     header of type declarations collapses to anonymous interstitial. Forward
@@ -1923,7 +3133,7 @@ def _extract_c_types_ts(root_node, language: str) -> List[CodeItem]:
     specifiers = ("struct_specifier", "union_specifier", "enum_specifier")
     if language == "cpp":
         specifiers = specifiers + ("class_specifier",)
-    out: List[CodeItem] = []
+    out: list[CodeItem] = []
     for child in root_node.children:
         name = None
         if child.type == "type_definition":
@@ -1963,7 +3173,7 @@ def _global_names(node, language: str):
     """
     if language == "go":
         for child in node.children:
-            if child.type == "var_spec" or child.type == "const_spec":
+            if child.type in {"var_spec", "const_spec"}:
                 for sub in child.children:
                     if sub.type == "identifier":
                         yield sub.text.decode()
@@ -2031,6 +3241,68 @@ def _global_names(node, language: str):
         yield name
 
 
+# Named node types an initializer may contain and still be pure data.
+# Anything OUTSIDE this allowlist (call_expression, new_expression,
+# binary_expression, cast_expression, sizeof_expression, lambdas, ...)
+# keeps the item a reviewable global — unknown shapes stay reviewable.
+_C_INERT_INIT_TYPES = frozenset({
+    "initializer_list", "initializer_pair",
+    "field_designator", "subscript_designator",
+    "number_literal", "char_literal", "character",
+    "string_literal", "concatenated_string", "string_content",
+    "escape_sequence",
+    "true", "false", "null", "nullptr",
+    "identifier", "field_identifier",
+    "pointer_expression",   # &handler in function-pointer tables
+    "comment",
+})
+
+
+def _c_init_is_inert(node, depth: int = 0) -> bool:
+    """True when an initializer subtree is provably pure data — every
+    named node is on the ``_C_INERT_INIT_TYPES`` allowlist. Unnamed
+    tokens (punctuation, ``&``, braces) carry no semantics of their
+    own and are skipped."""
+    if depth > 32:
+        return False
+    if node.is_named and node.type not in _C_INERT_INIT_TYPES:
+        return False
+    return all(_c_init_is_inert(c, depth + 1) for c in node.children)
+
+
+def _c_declaration_kind(node, language: str) -> str:
+    """Classify a file-scope C/C++ ``declaration`` node.
+
+    ``KIND_DECLARATION`` for the provably-inert shapes: an ``extern``
+    declaration without an initializer, and (C only) a declaration with
+    no initializer or with a pure-data initializer (literals,
+    identifiers, initializer lists — e.g. a const function-pointer
+    table). These are not reviewable code; a reviewer has nothing to
+    review but the type and the name.
+
+    Everything else stays ``KIND_GLOBAL``. C++ is deliberately
+    conservative: ``Foo bar;`` / ``Foo bar = {...};`` can run a
+    constructor at start-up, so only extern-without-initializer is
+    reclassified there. When in doubt the item stays reviewable.
+    """
+    inits = [c for c in node.children if c.type == "init_declarator"]
+    is_extern = any(
+        c.type == "storage_class_specifier" and c.text == b"extern"
+        for c in node.children
+    )
+    if is_extern and not inits:
+        return KIND_DECLARATION
+    if language != "c":
+        return KIND_GLOBAL
+    if not inits:
+        return KIND_DECLARATION
+    for init in inits:
+        value = init.child_by_field_name("value")
+        if value is not None and not _c_init_is_inert(value):
+            return KIND_GLOBAL
+    return KIND_DECLARATION
+
+
 def _c_global_names(node):
     """Yield every declared name in a C/C++ ``declaration`` node.
 
@@ -2051,7 +3323,7 @@ def _c_global_names(node):
                 yield name
 
 
-def _c_declarator_name(node, depth: int = 0) -> Optional[str]:
+def _c_declarator_name(node, depth: int = 0) -> str | None:
     """Descend C/C++ declarator wrappers to the declared identifier. Returns the
     first identifier found, or None.
 
@@ -2084,7 +3356,7 @@ def _c_declarator_name(node, depth: int = 0) -> Optional[str]:
     return None
 
 
-def _global_name(node, language: str) -> Optional[str]:
+def _global_name(node, language: str) -> str | None:
     """Extract the name from a global declaration node."""
     if language == "python":
         # assignment: NAME = ...
@@ -2135,7 +3407,7 @@ def _global_name(node, language: str) -> Optional[str]:
 
     if language == "go":
         for child in node.children:
-            if child.type == "var_spec" or child.type == "const_spec":
+            if child.type in {"var_spec", "const_spec"}:
                 for sub in child.children:
                     if sub.type == "identifier":
                         return sub.text.decode()
@@ -2144,11 +3416,64 @@ def _global_name(node, language: str) -> Optional[str]:
     return None
 
 
-def _extract_macros_regex(content: str) -> List[CodeItem]:
+# Tokens an object-like macro body may consist of and still be inert
+# data: a string literal, a char literal, a number, or an identifier
+# with an optional constant subscript (`tv[0]`).
+_MACRO_INERT_TOKEN_RE = re.compile(
+    r'\s*('
+    r'"(?:\\.|[^"\\])*"'                                   # string literal
+    r"|'(?:\\.|[^'\\])+'"                                  # char literal
+    r'|[+-]?(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d+)?)[uUlLfF]*'  # number
+    r'|[A-Za-z_]\w*(?:\[\d+\])?'                           # ident / ident[0]
+    r')',
+    re.ASCII,
+)
+_MACRO_COMMENT_RE = re.compile(r'/\*.*?\*/|//.*$')
+
+
+def _object_macro_body_is_inert(body: str) -> bool:
+    """True when an object-like macro body is a single literal /
+    identifier (optionally parenthesised) or the string-paste idiom
+    (``SSHDIR "/ssh_config"``). Anything with operators, calls, or
+    statements — and the empty body (config flags / include guards
+    change compilation) — stays a reviewable ``macro``."""
+    body = _MACRO_COMMENT_RE.sub(" ", body).strip()
+    if body.startswith("(") and body.endswith(")"):
+        inner = body[1:-1].strip()
+        if "(" not in inner and ")" not in inner:
+            body = inner
+    if not body:
+        return False
+    tokens = []
+    pos = 0
+    while pos < len(body):
+        m = _MACRO_INERT_TOKEN_RE.match(body, pos)
+        if not m:
+            return False
+        tokens.append(m.group(1))
+        pos = m.end()
+    if len(tokens) == 1:
+        return True
+    # Multiple tokens: only the string-paste idiom is inert — every
+    # token an identifier or string literal, at least one string.
+    return (
+        any(t.startswith('"') for t in tokens)
+        and all(t.startswith('"') or t[0].isalpha() or t[0] == "_"
+                for t in tokens)
+    )
+
+
+def _extract_macros_regex(content: str) -> list[CodeItem]:
     """Extract C/C++ #define macros via regex.
 
     Captures all #define directives including include guards. Include guards
     are legitimate code items — they're part of the file's structure.
+
+    Object-like macros (no parameter list) whose single-line body is a
+    lone literal / identifier are classified ``constant_macro`` — inert
+    named constants that carry no reviewable logic. Function-like
+    macros always stay ``macro``: an unsafe function-like macro
+    replicates its bug at every expansion site.
     """
     macros = []
     # `re.ASCII` so `\w` matches only ASCII word chars. C identifiers
@@ -2158,15 +3483,33 @@ def _extract_macros_regex(content: str) -> List[CodeItem]:
     # `#define` would have its name captured here and surfaced into
     # the inventory under a homoglyph that matches a real ASCII
     # identifier — confusing greps + downstream cross-references.
-    _DEFINE_RE = re.compile(r'^\s*#\s*define\s+(\w+)', re.ASCII)
-    for i, line in enumerate(content.splitlines(), 1):
+    _DEFINE_RE = re.compile(r'^\s*#\s*define\s+(\w+)(.*)$', re.ASCII)
+    lines = content.splitlines()
+    for i, line in enumerate(lines, 1):
         m = _DEFINE_RE.match(line)
         if m:
+            # Multi-line macros continue while lines end with a
+            # backslash. With line_end pinned to the #define line the
+            # body lines were covered by NO item — they fell to
+            # interstitial and out of every reviewer's sight.
+            end = i
+            while end <= len(lines) and lines[end - 1].rstrip().endswith("\\"):
+                end += 1
+            rest = m.group(2)
+            # Function-like macros have `(` IMMEDIATELY after the name
+            # (a space before `(` makes the parens part of the body).
+            kind = KIND_MACRO
+            if (
+                end == i                      # single-line only
+                and not rest.startswith("(")  # object-like
+                and _object_macro_body_is_inert(rest)
+            ):
+                kind = KIND_CONSTANT_MACRO
             macros.append(CodeItem(
                 name=m.group(1),
-                kind=KIND_MACRO,
+                kind=kind,
                 line_start=i,
-                line_end=i,
+                line_end=end,
             ))
     return macros
 
@@ -2182,6 +3525,9 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
     falls back to regex-based comment detection.
 
     Args:
+        content: Source text whose lines are counted.
+        language: Language name used to pick the tree-sitter parser
+            and the comment syntax for the regex fallback.
         _tree: Optional pre-parsed tree-sitter tree (from extract_items).
     """
     lines = content.splitlines()
@@ -2201,7 +3547,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
                 comment_lines = _count_comment_lines_ts(tree.root_node)
                 return max(0, total - blank - comment_lines)
         except Exception:
-            pass
+            logger.debug("tree-sitter SLOC count failed, falling back to regex", exc_info=True)
 
     # Regex fallback
     comment_lines = _count_comment_lines_regex(content, language)
@@ -2210,39 +3556,52 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
 
 def _count_comment_lines_ts(node) -> int:
     """Count lines occupied by comment nodes in a tree-sitter tree."""
-    comment_lines = set()
+    comment_lines: set[int] = set()
     _collect_comment_lines(node, comment_lines)
     return len(comment_lines)
 
 
-def _collect_comment_lines(node, comment_lines: set, code_lines: set = None) -> None:
-    """Recursively collect line numbers that are comment-only.
+def _collect_comment_lines(node, comment_lines: set, code_lines: set | None = None) -> None:
+    """Collect line numbers that are comment-only.
 
     A line counts as comment-only if it contains a comment but no code.
     Lines like `int x = 1; // init` are code lines, not comment lines.
+
+    Iterative (explicit stack), not recursive: deeply nested ASTs —
+    e.g. openssl's ssl/s3_lib.c, whose giant static ciphersuite table
+    parses ~1000 levels deep — blow Python's recursion limit and got
+    the whole file silently dropped from the inventory.
     """
     if code_lines is None:
         code_lines = set()
         # First pass: collect all lines that have non-comment nodes
         _collect_code_lines(node, code_lines)
 
-    if node.type in ("comment", "line_comment", "block_comment"):
-        for line in range(node.start_point[0], node.end_point[0] + 1):
-            if line not in code_lines:
-                comment_lines.add(line)
-    for child in node.children:
-        _collect_comment_lines(child, comment_lines, code_lines)
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in ("comment", "line_comment", "block_comment", "multiline_comment"):
+            for line in range(n.start_point[0], n.end_point[0] + 1):
+                if line not in code_lines:
+                    comment_lines.add(line)
+        stack.extend(n.children)
 
 
 def _collect_code_lines(node, code_lines: set) -> None:
-    """Collect line numbers that have non-comment, non-whitespace nodes."""
-    if node.type not in ("comment", "line_comment", "block_comment") and not node.children:
-        # Leaf node that isn't a comment — it's code
-        if node.text and node.text.strip():
-            for line in range(node.start_point[0], node.end_point[0] + 1):
+    """Collect line numbers that have non-comment, non-whitespace nodes.
+
+    Iterative for the same deep-AST reason as _collect_comment_lines.
+    """
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if (n.type not in ("comment", "line_comment", "block_comment", "multiline_comment")
+                and not n.children
+                # Leaf node that isn't a comment — it's code
+                and n.text and n.text.strip()):
+            for line in range(n.start_point[0], n.end_point[0] + 1):
                 code_lines.add(line)
-    for child in node.children:
-        _collect_code_lines(child, code_lines)
+        stack.extend(n.children)
 
 
 def _count_comment_lines_regex(content: str, language: str) -> int:
@@ -2257,10 +3616,10 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
         stripped = line.strip()
         if not stripped:
             continue
-        if language == "python":
+        if language in ("python", "perl", "shell", "yaml", "ruby"):
             if stripped.startswith("#"):
                 count += 1
-        elif language in ("c", "cpp", "java", "javascript", "typescript", "tsx", "go"):
+        elif language in ("c", "cpp", "objc", "java", "javascript", "typescript", "tsx", "go"):
             # State-machine comment-walk per line so the in_block
             # state tracks every `/*` open and `*/` close on the
             # line, including the `*/ /* still open` shape where a
@@ -2288,8 +3647,6 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
                     i = j + 2
             # Count the line iff it starts inside a block, starts
             # with `//`, or starts with `/*`.
-            if (entered_in_block
-                or stripped.startswith("//")
-                or stripped.startswith("/*")):
+            if (entered_in_block or stripped.startswith(("//", "/*"))):
                 count += 1
     return count

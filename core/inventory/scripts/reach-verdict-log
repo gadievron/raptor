@@ -38,12 +38,12 @@ import os
 import sys
 from pathlib import Path
 
-# Resolve repo root + RAPTOR_DIR the way the sibling scripts do.
-RAPTOR = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(RAPTOR))
-os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
+# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
+# path ever added to sys.path (hard lookup; KeyError if the
+# script is run outside the launcher, by design).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.inventory.reach_verdict_log import (  # noqa: E402
+from core.analysis.reach_verdict_log import (  # noqa: E402
     SCHEMA_VERSION,
     _sidecar_path,
     reset,

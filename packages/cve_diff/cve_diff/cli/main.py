@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -38,10 +39,52 @@ from cve_diff.core.exceptions import (
 from cve_diff.infra import api_status
 from cve_diff.infra.github_client import warn_if_token_missing
 from cve_diff.llm.client import LLMCallFailed
-from cve_diff.pipeline import Pipeline, PipelineResult  # noqa: F401  (PipelineResult used in type hint)
+from cve_diff.pipeline import Pipeline, PipelineResult
 from cve_diff.report import markdown, osv_schema
 from cve_diff.report.flow import write_flow_files, write_outcome_patches
 from cve_diff.security.validators import validate_cve_id
+
+
+def _install_termination_handlers() -> list[tuple[int, object]]:
+    """Convert SIGTERM/SIGINT into exception unwinding.
+
+    The clone workdir can reach ~2GB. Its cleanup only runs when the
+    interpreter unwinds normally (the ``finally`` in ``run``), but
+    SIGTERM's default action terminates the process with no unwinding
+    — a CI timeout or supervisor kill mid-clone leaked the whole temp
+    tree. Raising from the handler routes both signals through the
+    existing ``finally`` so ``TemporaryDirectory.cleanup()`` fires.
+
+    Returns ``(signum, previous_handler)`` pairs for
+    :func:`_restore_termination_handlers`. Installation is skipped
+    (empty entry) off the main thread, where ``signal.signal`` raises
+    ``ValueError``.
+    """
+    def _sig_to_exc(signum: int, _frame: object) -> None:
+        if signum == signal.SIGINT:
+            # Preserve conventional Ctrl-C semantics (typer/click
+            # translate KeyboardInterrupt into their Abort path).
+            raise KeyboardInterrupt
+        raise SystemExit(128 + signum)
+
+    restore: list[tuple[int, object]] = []
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            restore.append((signum, signal.signal(signum, _sig_to_exc)))
+        except ValueError:
+            pass
+    return restore
+
+
+def _restore_termination_handlers(
+    restore: list[tuple[int, object]],
+) -> None:
+    """Undo :func:`_install_termination_handlers`."""
+    for signum, previous in restore:
+        try:
+            signal.signal(signum, previous)
+        except (ValueError, TypeError):
+            pass
 
 
 def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
@@ -83,7 +126,7 @@ def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
             return
     else:
         try:
-            body = flow_md_path.read_text()
+            body = flow_md_path.read_text(encoding="utf-8")
         except OSError:
             return
     typer.echo("")
@@ -97,7 +140,7 @@ def _echo_flow_md(output_dir: Path, cve_id: str, quiet: bool) -> None:
 def _flow_from_pipeline(
     output_dir: Path, cve_id: str, pipeline: Pipeline,
     *, ok: bool, error_class: str | None,
-    pipeline_result: "PipelineResult | None" = None,
+    pipeline_result: PipelineResult | None = None,
 ) -> None:
     """Read agent telemetry off the pipeline and emit per-CVE flow files.
 
@@ -133,7 +176,20 @@ def _flow_from_pipeline(
             slug = None
         if slug is None:
             slug = (bundle.repo_ref.repository_url or "").lower()
+        # Discover provenance: the AgentResult is the only structured
+        # record of WHY the agent picked this (slug, sha) — verdict
+        # rationale plus loop cost. On PASS this is an AgentOutput.
+        ar = pipeline_result.agent_result
         stage_signals = {
+            "discover": {
+                "rationale": getattr(ar, "rationale", "") or "",
+                "tokens": getattr(ar, "tokens", 0),
+                "cost_usd": getattr(ar, "cost_usd", 0.0),
+                "elapsed_s": getattr(ar, "elapsed_s", 0.0),
+                "verified_candidates": len(
+                    getattr(ar, "verified_candidates", ()) or ()
+                ),
+            },
             "acquire": {"layer": layer},
             "resolve": {
                 "before": (bundle.commit_before or "?")[:12],
@@ -232,7 +288,7 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
     failures here are not allowed to break the CLI's exit-code path."""
     try:
         text = markdown.render_failure(cve_id, error_class, error_text)
-        (output_dir / f"{cve_id}.md").write_text(text)
+        (output_dir / f"{cve_id}.md").write_text(text, encoding="utf-8")
         typer.echo(f"wrote {output_dir / f'{cve_id}.md'}")
     except Exception as exc:  # noqa: BLE001 — never block the CLI on report-write
         import logging as _logging
@@ -288,9 +344,14 @@ def run(
         ),
     ] = False,
     model_id: Annotated[
-        str,
-        typer.Option("--model", help="Model for root-cause analysis.", show_default=False),
-    ] = "claude-opus-4-7",
+        str | None,
+        typer.Option(
+            "--model",
+            help="Model for the discovery agent and root-cause analysis "
+                 "(default: RAPTOR's configured primary model).",
+            show_default=False,
+        ),
+    ] = None,
     disk_limit_pct: Annotated[
         float,
         typer.Option("--disk-limit", help="Max filesystem usage %.", show_default=False),
@@ -310,6 +371,11 @@ def run(
     """Discover, acquire, diff, and report the fix commit for a CVE."""
     warn_if_token_missing()
     cve_id = validate_cve_id(cve_id)
+    # Resolve the model at the entry point (operator pin > models.json
+    # > env autodetect > historical fallback) so the pipeline and
+    # analyzer stay config-free — see cve_diff.llm.auth.default_model_id.
+    from cve_diff.llm.auth import default_model_id
+    model_id = model_id or default_model_id()
     # Both the agent loop and the optional root-cause analyzer now go
     # direct to the Anthropic SDK (no LiteLLM proxy). The legacy
     # `require_alive()` proxy gate was removed 2026-05-01 along with
@@ -336,6 +402,11 @@ def run(
         work_dir.mkdir(parents=True, exist_ok=True)
         work = work_dir
 
+    # A SIGTERM (CI timeout, operator kill) must not leak the temp
+    # clone dir — convert it to unwinding so the finally below cleans
+    # up. Only needed when we own a TemporaryDirectory.
+    sig_restore = _install_termination_handlers() if tmp_ctx is not None else []
+
     if not quiet:
         api_status.print_to_stderr(api_status.render_startup_banner())
 
@@ -350,6 +421,14 @@ def run(
     # single-element list is the simplest closure-friendly mutable slot.
     pipeline_slot: list[Pipeline | None] = [None]
 
+    # Run-local LLM cost telemetry (llm-telemetry.jsonl next to the
+    # other artifacts) — same sink the libexec shim installs, so
+    # operator (bin/cve-diff) and agent (/cve-diff) runs record spend
+    # identically. Emits are no-ops without the sink.
+    from core.llm.telemetry import TELEMETRY_FILENAME, TelemetrySink, set_sink
+    telemetry_sink = TelemetrySink(output_dir / TELEMETRY_FILENAME)
+    set_sink(telemetry_sink)
+
     try:
         budget_multiplier = 1.0
         try:
@@ -360,6 +439,9 @@ def run(
                         max_file_bytes=max_file_bytes,
                         progress_callback=progress_cb,
                         agent_budget_multiplier=budget_multiplier,
+                        model_id=model_id,
+                        scorecard_enabled=True,
+                        sage_enabled=True,
                     )
                     result = pipeline_slot[0].run(cve_id, work)
                     break
@@ -434,7 +516,7 @@ def run(
                 "the record likely names a tag rather than the fix commit.",
                 err=True,
             )
-            _write_failure_md(output_dir, cve_id, "IdenticalCommits",
+            _write_failure_md(output_dir, cve_id, "IdenticalCommitsError",
                               f"IdenticalCommitsError: {exc}")
             if pipeline_slot[0] is not None:
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
@@ -469,12 +551,21 @@ def run(
                 typer.echo(f"root-cause analysis failed: {exc}", err=True)
                 raise typer.Exit(code=9) from exc
 
+        # Consensus-confirmed discovery → run-local verified outcome
+        # (surfaced by libexec/raptor-verified-outcomes). Best-effort.
+        from cve_diff.report.verified_outcomes import write_consensus_outcome
+        write_consensus_outcome(
+            output_dir, result.bundle,
+            cwe_id=getattr(rc, "cwe_id", None),
+        )
+
         osv_path = output_dir / f"{cve_id}.osv.json"
         md_path = output_dir / f"{cve_id}.md"
         osv_path.write_text(
-            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n"
+            json.dumps(osv_schema.render(result.bundle, root_cause=rc), indent=2) + "\n",
+            encoding="utf-8",
         )
-        md_path.write_text(markdown.render(result.bundle, root_cause=rc))
+        md_path.write_text(markdown.render(result.bundle, root_cause=rc), encoding="utf-8")
         if pipeline_slot[0] is not None:
             _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                 ok=True, error_class="PASS",
@@ -517,6 +608,10 @@ def run(
         if not quiet:
             api_status.print_to_stderr(api_status.render_rate_limit_summary())
     finally:
+        _restore_termination_handlers(sig_restore)
+        set_sink(None)
+        if telemetry_sink.total_records and not quiet:
+            typer.echo(telemetry_sink.summary_line(), err=True)
         if tmp_ctx is not None and not keep_workdir:
             tmp_ctx.cleanup()
 

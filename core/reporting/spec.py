@@ -1,7 +1,7 @@
 """Report specification — domain-agnostic report structure."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 @dataclass
@@ -19,13 +19,13 @@ class ReportSpec:
     markdown, console output, or other formats.
     """
     title: str = "Report"
-    metadata: Dict[str, str] = field(default_factory=dict)
-    summary: Dict[str, Any] = field(default_factory=dict)
-    table_columns: List[str] = field(default_factory=list)
-    table_rows: List[Tuple] = field(default_factory=list)
-    table_note: Optional[str] = None
-    warnings: List[str] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
+    summary: dict[str, Any] = field(default_factory=dict)
+    table_columns: list[str] = field(default_factory=list)
+    table_rows: list[tuple] = field(default_factory=list)
+    table_note: str | None = None
+    warnings: list[str] = field(default_factory=list)
     detail_title: str = "Details"
-    detail_sections: List[ReportSection] = field(default_factory=list)
-    sections: List[ReportSection] = field(default_factory=list)
-    output_files: List[str] = field(default_factory=list)
+    detail_sections: list[ReportSection] = field(default_factory=list)
+    sections: list[ReportSection] = field(default_factory=list)
+    output_files: list[str] = field(default_factory=list)

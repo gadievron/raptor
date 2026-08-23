@@ -18,7 +18,7 @@ coccinelle on the host. The wiring chain proven here is:
             → analyze(target)            (mocked to return a fixture)
         → _collect_axis(...)             (real adapter logic)
         → ToolEvidence(success=True, matches=...)
-    → _evaluate(hypothesis, evidence)    (LLM produces verdict)
+    → _evaluate_with_refinement(hypothesis, evidence)  (LLM produces verdict)
     → ValidationResult
 """
 

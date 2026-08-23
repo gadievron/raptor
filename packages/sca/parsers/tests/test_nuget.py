@@ -8,6 +8,7 @@ import pytest
 
 from packages.sca.models import PinStyle
 from packages.sca.parsers.nuget import (
+    _spec_corridor,
     parse_lockfile,
     parse_msbuild_project,
     parse_packages_config,
@@ -343,9 +344,8 @@ def test_csproj_invalid_xml_returns_empty(tmp_path: Path) -> None:
 def test_csproj_pathological_brackets_classified_unknown(
     tmp_path: Path, spec: str,
 ) -> None:
-    """Regression for the 2026-05-21 lint-sweep find: only ``[V]``
-    (both inclusive, single value) is a valid EXACT pin per the
-    NuGet version-range spec. The pathological one-value forms
+    """Only ``[V]`` (both inclusive, single value) is a valid
+    EXACT pin per the NuGet version-range spec. The pathological one-value forms
     ``(V)`` / ``[V)`` / ``(V]`` describe empty intervals and
     must NOT be classified as EXACT — otherwise the harden
     planner would treat a malformed manifest entry as a
@@ -385,6 +385,63 @@ def test_csproj_canonical_single_value_still_exact(
 
 
 # ---------------------------------------------------------------------------
+# _spec_corridor — version_floor / version_ceiling from range specs
+# ---------------------------------------------------------------------------
+
+def test_corridor_closed_range() -> None:
+    assert _spec_corridor("[1.0,2.0)") == ("1.0", "2.0")
+
+
+def test_corridor_open_lower() -> None:
+    assert _spec_corridor("(,2.0]") == (None, "2.0")
+
+
+def test_corridor_open_upper() -> None:
+    assert _spec_corridor("[1.5,)") == ("1.5", None)
+
+
+def test_corridor_plain_minimum_is_floor() -> None:
+    """Plain ``1.2.3`` is NuGet's implicit ``>=1.2.3``."""
+    assert _spec_corridor("1.2.3") == ("1.2.3", None)
+
+
+def test_corridor_exact_pin_has_no_corridor() -> None:
+    assert _spec_corridor("[1.2.3]") == (None, None)
+
+
+def test_corridor_garbage_and_empty() -> None:
+    assert _spec_corridor(None) == (None, None)
+    assert _spec_corridor("") == (None, None)
+    assert _spec_corridor("not a version!") == (None, None)
+    assert _spec_corridor("[" + " " * 500) == (None, None)  # length bound
+
+
+def test_msbuild_range_dep_carries_corridor(tmp_path: Path) -> None:
+    body = (
+        '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+        '<PackageReference Include="Foo" Version="[1.0,2.0)" />'
+        '<PackageReference Include="Bar" Version="[1.2.3]" />'
+        "</ItemGroup></Project>"
+    )
+    p = _write(tmp_path, body, "app.csproj")
+    deps = {d.name: d for d in parse_msbuild_project(p)}
+    assert deps["Foo"].version_floor == "1.0"
+    assert deps["Foo"].version_ceiling == "2.0"
+    assert deps["Bar"].version_floor is None
+    assert deps["Bar"].version_ceiling is None
+
+
+def test_classify_version_spec_shape_unchanged() -> None:
+    """Existing 2-tuple contract stays intact (tests + siblings
+    unpack it as ``pin, bare``)."""
+    from packages.sca.parsers.nuget import _classify_version_spec
+
+    assert _classify_version_spec("[1.2.3]") == (PinStyle.EXACT, "1.2.3")
+    pin, bare = _classify_version_spec("[1.0,2.0)")
+    assert pin is PinStyle.RANGE and bare == "1.0"
+
+
+# ---------------------------------------------------------------------------
 # packages.config — legacy
 # ---------------------------------------------------------------------------
 
@@ -399,6 +456,17 @@ def test_packages_config_basic(tmp_path: Path) -> None:
     p = _write(tmp_path, body, "packages.config")
     deps = parse_packages_config(p)
     assert {d.name for d in deps} == {"Newtonsoft.Json", "Serilog"}
+
+
+def test_packages_config_range_dep_carries_corridor(tmp_path: Path) -> None:
+    p = _write(
+        tmp_path,
+        '<packages><package id="Baz" version="[2.0,3.0)" /></packages>',
+        "packages.config",
+    )
+    (dep,) = parse_packages_config(p)
+    assert dep.version_floor == "2.0"
+    assert dep.version_ceiling == "3.0"
 
 
 # ---------------------------------------------------------------------------

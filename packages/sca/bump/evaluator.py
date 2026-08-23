@@ -38,7 +38,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle, SupplyChainFinding
 
@@ -61,9 +60,9 @@ def evaluate_bump_supply_chain(
     pypi_client=None,
     npm_client=None,
     platform_matrix=None,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     rapid_release_days: int = _RAPID_RELEASE_DAYS,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Return the bump-tier supply-chain findings for a proposed bump.
 
     Callers wire the per-ecosystem registry clients in (already
@@ -73,7 +72,7 @@ def evaluate_bump_supply_chain(
     to vuln-only verdict".
     """
     now = now or datetime.now(timezone.utc)
-    findings: List[SupplyChainFinding] = []
+    findings: list[SupplyChainFinding] = []
 
     target_publish = _target_publish_date(
         ecosystem=ecosystem, name=name, version=target_version,
@@ -154,7 +153,7 @@ def _platform_compat_findings(
     target_version: str,
     pypi_client,
     platform_matrix,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Compare current-vs-target wheel matrices against the
     project's platform matrix; emit findings for any change in
     compat verdict.
@@ -191,12 +190,13 @@ def _platform_compat_findings(
     target_verdicts = {
         v.pair: v for v in check_compat(platform_matrix, wm_target)
     }
-    current_verdicts = (
-        {v.pair: v for v in check_compat(platform_matrix, wm_current)}
-        if wm_current is not None else {}
-    )
+    if wm_current is None:
+        return []
+    current_verdicts = {
+        v.pair: v for v in check_compat(platform_matrix, wm_current)
+    }
 
-    findings: List[SupplyChainFinding] = []
+    findings: list[SupplyChainFinding] = []
     for pair, tv in target_verdicts.items():
         cv = current_verdicts.get(pair)
         # Regression: current was ok (or absent), target isn't.
@@ -309,7 +309,7 @@ def _target_publish_date(
     version: str,
     pypi_client,
     npm_client,
-) -> Optional[datetime]:
+) -> datetime | None:
     """Return the publish datetime for ``ecosystem:name@version``
     via the appropriate registry client, or ``None`` if the
     registry doesn't expose it or the lookup fails.
@@ -326,7 +326,7 @@ def _target_publish_date(
 
 def _pypi_version_publish(
     name: str, version: str, client,
-) -> Optional[datetime]:
+) -> datetime | None:
     """Earliest upload_time across the version's distribution files."""
     meta = client.get_metadata(name)
     if not isinstance(meta, dict):
@@ -335,7 +335,7 @@ def _pypi_version_publish(
     files = releases.get(version)
     if not files:
         return None
-    earliest: Optional[datetime] = None
+    earliest: datetime | None = None
     for entry in files:
         if not isinstance(entry, dict):
             continue
@@ -352,7 +352,7 @@ def _pypi_version_publish(
 
 def _npm_version_publish(
     name: str, version: str, client,
-) -> Optional[datetime]:
+) -> datetime | None:
     """``time[version]`` field of the npm packument."""
     meta = client.get_metadata(name)
     if not isinstance(meta, dict):
@@ -364,7 +364,7 @@ def _npm_version_publish(
     return _parse_iso(ts)
 
 
-def _parse_iso(ts: str) -> Optional[datetime]:
+def _parse_iso(ts: str) -> datetime | None:
     """ISO-8601 parser that tolerates trailing ``Z`` and missing
     fractional seconds (covers both PyPI and npm shapes)."""
     cleaned = ts.replace("Z", "+00:00")
@@ -385,7 +385,7 @@ def _maintainer_change(
     current_version: str,
     target_version: str,
     npm_client,
-) -> Optional[SupplyChainFinding]:
+) -> SupplyChainFinding | None:
     """Compare maintainer sets at current and target versions.
 
     Returns a single ``maintainer_change`` finding when the sets
@@ -465,7 +465,7 @@ def _install_hook_delta(
     current_version: str,
     target_version: str,
     npm_client,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Compare install-time scripts between current and target.
 
     Emits ``install_hook_suspicious`` findings for two distinct
@@ -509,7 +509,7 @@ def _install_hook_delta(
     cur_hooks = _install_hook_set(cur_scripts)
     tgt_hooks = _install_hook_set(tgt_scripts)
 
-    findings: List[SupplyChainFinding] = []
+    findings: list[SupplyChainFinding] = []
 
     added = sorted(tgt_hooks - cur_hooks)
     if added:
@@ -526,7 +526,7 @@ def _install_hook_delta(
     # reformatting; semantically-identical scripts that differ
     # only in surrounding whitespace shouldn't fire.
     overlap = sorted(cur_hooks & tgt_hooks)
-    body_changes: List[Tuple[str, str, str]] = []
+    body_changes: list[tuple[str, str, str]] = []
     for hook in overlap:
         cur_body = (cur_scripts.get(hook) or "").strip()
         tgt_body = (tgt_scripts.get(hook) or "").strip()
@@ -624,7 +624,7 @@ def _install_hook_body_change_finding(
     name: str,
     current_version: str,
     target_version: str,
-    body_changes: List[Tuple[str, str, str]],
+    body_changes: list[tuple[str, str, str]],
 ) -> SupplyChainFinding:
     """``install_hook_suspicious`` finding for a bump that
     mutates the BODY of an existing install-time script.

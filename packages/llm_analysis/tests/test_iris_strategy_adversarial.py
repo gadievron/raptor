@@ -9,12 +9,9 @@ happy-path picks).
 
 from __future__ import annotations
 
-
-
 from packages.llm_analysis.dataflow_validation import (
     _build_hypothesis,
 )
-
 
 # ---------------------------------------------------------------------------
 # Hostile finding fields
@@ -85,6 +82,7 @@ class TestHostileFindingFields:
     def test_hostile_metadata_huge_calls_list(self, tmp_path):
         """1000-entry calls list — picker scales, render_strategies
         caps total output."""
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         finding = {
             "file_path": "src/x.py", "start_line": 1,
             "rule_id": "x", "function": "f",

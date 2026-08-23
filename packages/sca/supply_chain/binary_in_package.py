@@ -1,4 +1,4 @@
-"""Detector for ``binary_in_tests`` — generalised to "any executable
+r"""Detector for ``binary_in_tests`` — generalised to "any executable
 binary in a source-language published package, outside the opt-in
 allowlist".
 
@@ -28,10 +28,11 @@ What this detector must defend against:
 
   * **Allowlist DOS via huge fixture trees** — attacker ships a
     million binaries in ``tests/fixtures/`` to slow the walk.
-    Defence: we honour the same ``EXCLUDED_DIR_NAMES`` discovery
-    uses + cap the walk via a stat budget.
+    Defence: we skip ``_BINARY_SKIP_DIRS`` (a deliberate subset of
+    discovery's ``EXCLUDED_DIR_NAMES`` — see its comment) + cap the
+    walk via a stat budget.
 
-  * **Magic-byte spoofing** — file starts with ``\\x7fELF`` but is
+  * **Magic-byte spoofing** — file starts with ``\x7fELF`` but is
     actually a text wrapper.  Defence: we don't claim "this WILL
     execute" — we claim "this LOOKS LIKE an executable that
     shouldn't be in a source distribution".  Operators decide.
@@ -45,6 +46,16 @@ What this detector must defend against:
     name-suffix allowlist via regex in
     ``data/binary_opt_in_locations.json``.
 
+  * **Manifest opt-out abuse** — attacker adds an innocuous allowlisted
+    field (``"os": ["linux"]``) to the scanned repo's own package.json
+    to switch the detector off.  Defence: manifest fields may ADD
+    scrutiny, never remove it.  The walk ALWAYS runs; a declaring
+    manifest merely annotates its hits (``manifest_declares_native``)
+    so reviewers see the package documented a native-binary surface.
+    (Pre-fix, a fully-declaring manifest set skipped the whole walk —
+    one attacker-controlled line suppressed every ``binary_in_package``
+    finding and the composite HOOK+BINARY promotion with it.)
+
   * **TOCTOU race** — file modified between stat and read.  Defence:
     one read of first 256 bytes; downstream review reads the file
     separately if needed.  This is a scan, not a runtime gate.
@@ -57,10 +68,11 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from collections.abc import Iterable, Sequence
 
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
+from ..parsers import _safe_read
 
 # Subset of EXCLUDED_DIR_NAMES that's safe to skip during binary
 # scanning.  We DELIBERATELY recurse into ``dist/``, ``build/``,
@@ -132,7 +144,7 @@ _MAX_WALKED_FILES: int = 50_000
 
 
 # Lazy-loaded allowlist data.
-_ALLOWLIST: Optional[dict] = None
+_ALLOWLIST: dict | None = None
 
 
 def _allowlist_path() -> Path:
@@ -176,12 +188,18 @@ class BinaryHit:
     # forensic pass fails (non-ELF, capability_fingerprint error,
     # etc.); the BinaryHit is still emitted regardless.
     forensic_evidence: dict = field(default_factory=dict)
+    # True when the manifest closest above the file declares a native
+    # opt-in field (npm ``binary``/``cpu``/``os``, Cargo ``links``).
+    # Annotation ONLY: the field is attacker-controlled in a scanned
+    # repo, so it never suppresses the hit — it just tells reviewers
+    # the package claims a documented native-binary surface.
+    manifest_declares_native: bool = False
 
 
-def _classify_magic(head: bytes) -> Optional[str]:
-    """Return ``"elf"``/``"pe"``/``"macho"``/``"wasm"`` or None.
+def _classify_magic(head: bytes) -> str | None:
+    r"""Return ``"elf"``/``"pe"``/``"macho"``/``"wasm"`` or None.
 
-    Disambiguates the ``\\xca\\xfe\\xba\\xbe`` collision: Mach-O fat
+    Disambiguates the ``\xca\xfe\xba\xbe`` collision: Mach-O fat
     binaries and Java ``.class`` files share the same first 4 bytes.
     Bytes 4-7 distinguish them:
 
@@ -244,8 +262,12 @@ def _manifest_declares_native(manifest: Manifest) -> bool:
     """True if the manifest declares it ships native binaries via a
     known opt-in field (npm ``binary``, Cargo ``links``, etc.).
 
-    Conservative: only checks fields enumerated in the allowlist
-    data file.  Unrecognised fields don't grant suppression.
+    Feeds the ``manifest_declares_native`` ANNOTATION on each hit —
+    never suppression.  The manifest lives in the scanned repo, so
+    every one of these fields is attacker-controlled; a declaration
+    can add reviewer context but must not remove findings.
+
+    Only fields enumerated in the allowlist data file are recognised.
     """
     allowlist = _load_allowlist()
     fields_per_ecosystem = allowlist.get("manifest_opt_in_fields", {})
@@ -254,9 +276,12 @@ def _manifest_declares_native(manifest: Manifest) -> bool:
         # Today we only know how to peek at npm package.json bodies.
         # Cargo's ``links`` is in TOML and not parsed here yet.
         return False
+    text = _safe_read.read_bounded(manifest.path, follow_symlinks=False)
+    if text is None:
+        return False
     try:
-        data = json.loads(manifest.path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return False
     if not isinstance(data, dict):
         return False
@@ -274,7 +299,7 @@ def _glob_to_regex(glob: str) -> str:
     ``**`` (path-traversal semantics conflict with its purer
     path-shape API), so we translate to regex ourselves.
     """
-    parts: List[str] = ["^"]
+    parts: list[str] = ["^"]
     i = 0
     n = len(glob)
     while i < n:
@@ -334,8 +359,10 @@ def _path_matches_allowlist(
 def _walk_for_binaries(
     root: Path,
 ) -> Iterable[Path]:
-    """Yield files under ``root`` skipping the same excluded dirs
-    discovery skips.  Bounded by ``_MAX_WALKED_FILES``."""
+    """Yield files under ``root`` skipping ``_BINARY_SKIP_DIRS`` — a
+    deliberate subset of discovery's excluded dirs that still recurses
+    into ``dist``/``build``/``target``/``vendor`` (common publication
+    paths).  Bounded by ``_MAX_WALKED_FILES``."""
     yielded = 0
     # ``Path.walk`` (3.12+) would be nicer but we keep compatibility.
     for dirpath, dirnames, filenames in __import__("os").walk(root):
@@ -354,7 +381,7 @@ def _walk_for_binaries(
             yield p
 
 
-def _classify_or_none(path: Path) -> Optional[tuple]:
+def _classify_or_none(path: Path) -> tuple | None:
     """Return ``(family, head_bytes)`` for files that look like
     executable payloads, otherwise None.  Reads only first 256 bytes.
 
@@ -368,7 +395,7 @@ def _classify_or_none(path: Path) -> Optional[tuple]:
     except OSError:
         return None
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             head = f.read(256)
     except OSError:
         return None
@@ -386,18 +413,23 @@ def scan_target(
     target: Path,
     manifests: Sequence[Manifest],
     deps: Sequence[Dependency] = (),
-) -> List[BinaryHit]:
+) -> list[BinaryHit]:
     """Walk ``target`` for files that look like executable binaries
     and aren't in the allowlist.  Emits one ``BinaryHit`` per such
     file.
 
     Soundness notes:
 
-      * Skips the same excluded dirs as discovery (so vendored deps
-        / VCS metadata don't dominate the noise).
+      * Skips ``_BINARY_SKIP_DIRS`` (VCS metadata, caches, installed
+        deps) — a subset of discovery's excluded dirs that deliberately
+        still recurses into ``dist``/``build``/``target``/``vendor``,
+        the common publication paths for planted binaries.
       * Suppresses via the data-file allowlist (legitimate
-        per-platform layouts) AND per-package opt-in (manifest
-        fields, per-platform package naming).
+        per-platform layouts) and per-platform package NAMING only.
+        Manifest opt-in fields (npm ``binary``/``cpu``/``os``, Cargo
+        ``links``) never suppress — they are attacker-controlled bytes
+        in the scanned repo, so they only annotate each hit via
+        ``manifest_declares_native``.  The walk always runs.
       * Walked-file budget capped to defend against pathological
         repos and tarball bombs that have somehow been extracted.
     """
@@ -408,14 +440,11 @@ def scan_target(
     # manifest "owns" each binary hit.  Most projects have one
     # top-level manifest; monorepos have several.
     manifests_list = list(manifests)
-    # Skip the walk entirely if every manifest declares native
-    # opt-in — caller's already saying "yes this ships binaries".
-    if manifests_list and all(
-        _manifest_declares_native(m) for m in manifests_list
-    ):
-        return []
     deps_list = list(deps)
-    out: List[BinaryHit] = []
+    # Per-manifest declaration answers, computed lazily so each
+    # manifest body is parsed at most once regardless of hit count.
+    declares_cache: dict = {}
+    out: list[BinaryHit] = []
     for path in _walk_for_binaries(target):
         result = _classify_or_none(path)
         if result is None:
@@ -434,12 +463,19 @@ def scan_target(
             continue
         if host is None:
             host = _placeholder_dep(target)
+        owner = _closest_manifest(path, manifests_list)
+        declared = False
+        if owner is not None:
+            if owner.path not in declares_cache:
+                declares_cache[owner.path] = _manifest_declares_native(owner)
+            declared = declares_cache[owner.path]
         out.append(BinaryHit(
             dependency=host,
             path=path,
             family=family,
             relpath=str(rel),
             forensic_evidence=_forensic_evidence(path, family),
+            manifest_declares_native=declared,
         ))
     return out
 
@@ -500,16 +536,38 @@ def _forensic_evidence(path: Path, family: str) -> dict:
     return evidence
 
 
+def _closest_manifest(
+    path: Path,
+    manifests: Sequence[Manifest],
+) -> Manifest | None:
+    """Return the manifest whose directory most closely dominates
+    ``path`` (same containment walk as :func:`_closest_dep`, without
+    requiring a declared dep).  None when no manifest dominates."""
+    best_depth = -1
+    best: Manifest | None = None
+    for m in manifests:
+        m_dir = m.path.parent.resolve()
+        try:
+            path.resolve().relative_to(m_dir)
+        except ValueError:
+            continue
+        depth = len(m_dir.parts)
+        if depth > best_depth:
+            best = m
+            best_depth = depth
+    return best
+
+
 def _closest_dep(
     path: Path,
     manifests: Sequence[Manifest],
     deps: Sequence[Dependency],
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Return the dep declared by the manifest closest to ``path``
     in the directory tree.  Returns None when no manifest dominates
     the file (caller falls back to a placeholder)."""
     best_depth = -1
-    best: Optional[Dependency] = None
+    best: Dependency | None = None
     for m in manifests:
         m_dir = m.path.parent.resolve()
         try:

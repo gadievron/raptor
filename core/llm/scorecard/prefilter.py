@@ -11,18 +11,34 @@ Provide the uniform glue every consumer needs around the scorecard:
     verdicts, record an event back to the scorecard so its trust
     math reflects the latest observation.
 
-The cheap-prompt construction itself is consumer-specific (codeql's
-"is this finding a confident FP?" looks nothing like SCA's "is this
-major-version bump safe?") — those prompts live in their respective
-packages. The scorecard side stays uniform.
+  * :func:`run_cheap_fp_check` — the cheap-tier call itself: the
+    CONSERVATIVE-profile envelope, the ``VERDICT_BINARY`` structured
+    call, and the verdict validation that every consumer had copied
+    verbatim. Fails soft (``None`` = no signal, run full analysis).
+
+  * :func:`fast_tier_model_name` — which model the ``VERDICT_BINARY``
+    task routes to, i.e. the model whose track record the scorecard
+    accumulates against. Pure config reading; previously duplicated
+    verbatim in four consumer packages because "core must not depend
+    on consumers" — this direction (consumers → core.llm) is correct.
+
+The cheap-prompt TEXT stays consumer-specific (codeql's "is this
+finding a confident FP?" looks nothing like SCA's "is this
+major-version bump safe?") — prompts and schemas live in their
+respective packages, passed in. The call mechanics and the scorecard
+side stay uniform here.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 from .scorecard import EventType, ModelScorecard, Policy
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,7 +62,7 @@ class PrefilterDecision:
 
 
 def prefilter_decision(
-    scorecard: Optional[ModelScorecard],
+    scorecard: ModelScorecard | None,
     *,
     decision_class: str,
     model: str,
@@ -91,7 +107,7 @@ def prefilter_decision(
 
 
 def record_prefilter_outcome(
-    scorecard: Optional[ModelScorecard],
+    scorecard: ModelScorecard | None,
     *,
     decision_class: str,
     model: str,
@@ -99,7 +115,7 @@ def record_prefilter_outcome(
     full_says_fp: bool,
     cheap_reasoning: str = "",
     full_reasoning: str = "",
-    model_version: Optional[str] = None,
+    model_version: str | None = None,
 ) -> None:
     """Record one observation of cheap-vs-full agreement.
 
@@ -141,8 +157,100 @@ def record_prefilter_outcome(
     )
 
 
+def fast_tier_model_name(config: Any) -> str:
+    """Return the model_name routed to for ``TaskType.VERDICT_BINARY``
+    — the model whose track record the scorecard accumulates against.
+
+    Falls back to the primary model when the operator hasn't
+    configured (or auto-config didn't seed) a fast-tier mapping — in
+    that case fast-tier and primary are the same model and scorecard
+    cells naturally key by the primary. ``""`` when neither exists.
+    """
+    from core.llm.task_types import TaskType
+    specialized = config.specialized_models.get(TaskType.VERDICT_BINARY)
+    if specialized is not None and specialized.enabled:
+        return specialized.model_name
+    if config.primary_model is not None:
+        return config.primary_model.model_name
+    return ""
+
+
+def run_cheap_fp_check(
+    client: Any,
+    *,
+    system: str,
+    schema: Mapping[str, Any],
+    untrusted_blocks: Sequence[Any] = (),
+    slots: Mapping[str, Any] | None = None,
+    allowed_verdicts: Sequence[str] = ("clear_fp", "needs_analysis"),
+    log: logging.Logger | None = None,
+) -> tuple[str, str] | None:
+    """Run the cheap-tier "is this a clear false positive?" call.
+
+    The consumer supplies WHAT to ask (``system`` prompt text,
+    ``schema``, envelope ``untrusted_blocks`` / ``slots`` — all
+    consumer-owned); this helper owns HOW: the CONSERVATIVE-profile
+    :func:`core.security.prompt_envelope.build_prompt` envelope, the
+    ``TaskType.VERDICT_BINARY`` structured call, response unwrapping,
+    and verdict validation against ``allowed_verdicts`` (SCA-style
+    consumers pass their own literals, e.g. ``("clear_safe",
+    "needs_analysis")``).
+
+    Returns ``(verdict, reasoning)`` on success. Fails SOFT: any call
+    failure or an out-of-set verdict returns ``None`` — "no signal",
+    the consumer runs its full analysis path exactly as if the cheap
+    tier didn't exist. Asymmetric by design: the cheap model is never
+    used to greenlight a true positive, only to identify confident
+    false positives.
+    """
+    from core.llm.coerce import structured_result
+    from core.llm.task_types import TaskType
+    from core.security.prompt_defense_profiles import CONSERVATIVE
+    from core.security.prompt_envelope import build_prompt
+
+    logger = log or _logger
+    bundle = build_prompt(
+        system=system,
+        profile=CONSERVATIVE,
+        untrusted_blocks=tuple(untrusted_blocks),
+        slots=dict(slots) if slots is not None else None,
+    )
+    system_prompt = next(
+        (m.content for m in bundle.messages if m.role == "system"), None,
+    )
+    prompt = next(
+        (m.content for m in bundle.messages if m.role == "user"), "",
+    )
+    try:
+        response = client.generate_structured(
+            prompt=prompt,
+            schema=dict(schema),
+            system_prompt=system_prompt,
+            task_type=TaskType.VERDICT_BINARY,
+        )
+    except Exception as e:  # noqa: BLE001 — any cheap-call failure = no signal
+        logger.debug("Cheap FP check failed (falling through to full): %s", e)
+        return None
+    result = structured_result(response, default={})
+    if not isinstance(result, Mapping):
+        result = {}
+    verdict = (result.get("verdict") or "").strip().lower()
+    reasoning = result.get("reasoning") or ""
+    if verdict not in allowed_verdicts:
+        # Defensive: an unexpected verdict string means we can't gate
+        # on it. Fall through to full analysis.
+        logger.debug(
+            "Cheap FP check returned unexpected verdict %r — falling through",
+            verdict,
+        )
+        return None
+    return verdict, reasoning
+
+
 __all__ = [
     "PrefilterDecision",
+    "fast_tier_model_name",
     "prefilter_decision",
     "record_prefilter_outcome",
+    "run_cheap_fp_check",
 ]

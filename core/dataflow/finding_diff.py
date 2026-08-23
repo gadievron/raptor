@@ -18,12 +18,15 @@ This module does NOT run CodeQL. PR2b-2 wires the subprocess.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Mapping, Set, Tuple
+from typing import Any, TYPE_CHECKING
 
 from core.dataflow.adapters.codeql import from_sarif_result
+from core.json import loads
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -37,9 +40,9 @@ class FindingDiff:
     data-extensions approach wins.
     """
 
-    suppressed_ids: Tuple[str, ...]
-    still_flagged_ids: Tuple[str, ...]
-    new_ids: Tuple[str, ...]
+    suppressed_ids: tuple[str, ...]
+    still_flagged_ids: tuple[str, ...]
+    new_ids: tuple[str, ...]
     baseline_count: int
     augmented_count: int
 
@@ -104,21 +107,31 @@ def diff_sarif_files(
         try:
             sz = path.stat().st_size
         except OSError as e:
-            raise RuntimeError(f"{label} SARIF stat failed: {e}") from e
+            msg = f"{label} SARIF stat failed: {e}"
+            raise RuntimeError(msg) from e
         if sz > _SARIF_MAX_BYTES:
-            raise RuntimeError(
+            msg = (
                 f"{label} SARIF {path} exceeds {_SARIF_MAX_BYTES}-byte cap "
                 f"(got {sz})"
             )
-    baseline = json.loads(baseline_path.read_text())
-    augmented = json.loads(augmented_path.read_text())
+            raise RuntimeError(msg)
+    try:
+        baseline = loads(baseline_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        msg = f"baseline SARIF read/parse failed: {e}"
+        raise RuntimeError(msg) from e
+    try:
+        augmented = loads(augmented_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        msg = f"augmented SARIF read/parse failed: {e}"
+        raise RuntimeError(msg) from e
     return diff_sarif_data(baseline, augmented)
 
 
-def _sarif_finding_ids(sarif: Mapping[str, Any]) -> Set[str]:
+def _sarif_finding_ids(sarif: Mapping[str, Any]) -> set[str]:
     """Return the set of stable ``finding_id``s for every dataflow
     result in the SARIF document."""
-    ids: Set[str] = set()
+    ids: set[str] = set()
     for run in sarif.get("runs", []) or []:
         for result in run.get("results", []) or []:
             try:

@@ -23,9 +23,7 @@ Run from the repo root:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -37,10 +35,16 @@ from pathlib import Path
 #   parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
-os.environ.setdefault("RAPTOR_DIR", str(REPO))
+# Hard-SET (never setdefault): children of this tree must import this
+# tree even when the launching shell exported RAPTOR_DIR for another
+# checkout (see core.config.pin_raptor_dir).
+from core.json import dumps_display
+from core.config import pin_raptor_dir_in_environ
 
-from packages.llm_analysis.intent_match import intent_match  # noqa: E402
+pin_raptor_dir_in_environ()
 
+from packages.llm_analysis.intent_match import intent_match
+from typing import NoReturn
 
 # ---------------------------------------------------------------------------
 # Fake LLM provider
@@ -48,7 +52,7 @@ from packages.llm_analysis.intent_match import intent_match  # noqa: E402
 
 
 class _FakeLLMResponse:
-    def __init__(self, content: str, cost_usd: float = 0.002):
+    def __init__(self, content: str, cost_usd: float = 0.002) -> None:
         self.content = content
         self.cost_usd = cost_usd
 
@@ -58,14 +62,15 @@ class FakeLLMProvider:
     one per ``.generate(...)`` call. The intent-match tiebreak
     invokes ``.generate(...)`` twice (describe + judge)."""
 
-    def __init__(self, responses):
+    def __init__(self, responses) -> None:
         self._responses = list(responses)
-        self.calls = []
+        self.calls: list[dict[str, int]] = []
 
     def generate(self, prompt, system_prompt=None, task_type=None, **kw):
         self.calls.append({"prompt_len": len(prompt)})
         if not self._responses:
-            raise RuntimeError("FakeLLMProvider exhausted")
+            msg = "FakeLLMProvider exhausted"
+            raise RuntimeError(msg)
         return self._responses.pop(0)
 
 
@@ -116,7 +121,7 @@ def _show(v) -> None:
     print(f"  confidence: {d['confidence']:.2f}")
     print(f"  used_llm:   {d['used_llm']}")
     print(f"  cost_usd:   ${d['cost_usd']:.4f}")
-    print(f"  signals:    {json.dumps(d['signals'], default=str)}")
+    print(f"  signals:    {dumps_display(d['signals'], indent=None)}")
     print(f"  reasoning:  {d['reasoning'][:200]}")
     if d.get("llm_error"):
         print(f"  llm_error:  {d['llm_error']}")
@@ -224,8 +229,9 @@ def scenario_6_llm_raises() -> None:
     _hr("Scenario 6: LLM raises → uncertain with llm_error")
 
     class _Bomb:
-        def generate(self, *a, **kw):
-            raise RuntimeError("simulated LLM API timeout")
+        def generate(self, *a, **kw) -> NoReturn:
+            msg = "simulated LLM API timeout"
+            raise RuntimeError(msg)
 
     v = intent_match(
         exploit_code=EXPLOIT_AMBIGUOUS,

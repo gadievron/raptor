@@ -24,9 +24,12 @@ modes — only speed differs.
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import Any, TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 try:
     # libyaml-backed loader — present when PyYAML was built

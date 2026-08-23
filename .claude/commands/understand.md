@@ -1,6 +1,6 @@
 ---
 description: Map attack surface, trace data flows, hunt vulnerability variants
-dispatch: libexec/raptor-understand [args]
+dispatch: skill
 ---
 
 # /understand - RAPTOR Code Understanding
@@ -9,14 +9,56 @@ You cannot find bugs if you don't have a deep, adversarial code understanding an
 
 It is a work in progress, remember that. 
 
+## Dispatch routing
+
+This command is mode-routed — there is no single CLI to call blindly:
+
+| Case | Route |
+|------|-------|
+| `<target>` is a compiled artefact (ELF/Mach-O/PE/JAR/APK/...) with `--map` | `libexec/raptor-understand --map --target <t> --out "$OUTPUT_DIR"` (mechanical, no LLM) |
+| `--model` passed with `--hunt` or `--trace` | `libexec/raptor-understand` (multi-model substrate) |
+| Everything else — source-tree `--map`, `--trace`, `--hunt`, `--teach`, `--study` | **In-session workflow below** (you are the LLM); `libexec/raptor-understand` rejects source-tree `--map` by design |
+
 ## Usage
 
 ```
 /understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>]
-                     [--out <dir>] [--model <name> ...]
+                     [--study <scope>] [--out <dir>] [--model <name> ...]
 ```
 
 If no mode flag is given, default to `--map`.
+
+### Compiled / black-box targets
+
+If `<target>` is a single ELF, Mach-O, PE, Java class/JAR, APK, .NET, Go or
+Rust artefact rather than a source tree, route `--map` through the binary
+substrate:
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR"
+```
+
+This writes the same `context-map.json` bridge artefact, plus
+`binary-manifest.json`, `binary-evidence.json`, `binary-checklist.json`,
+`binary-decompilations.json`, `binary-validation-handoff.json`,
+`binary-analysis-report.md` and `graph/binary-graph.sqlite`.
+
+The binary path is evidence-first by design:
+- import tables and xrefs are surfaced as candidates, not silently promoted to vulnerabilities
+- runtime evidence is only ingested from an explicit `/frida` run via `--runtime-dir`
+- fuzz witnesses are only ingested from an explicit `/fuzz` run via `--fuzz-dir`
+- SMT is only run against explicit conditions supplied in `--constraint-file`
+- no trust boundary or unchecked flow is invented when the binary evidence cannot prove it
+- Mach-O slices, app bundle metadata and Objective-C / Swift selectors are structure, not attacker-control claims
+
+For deeper evidence after the static map:
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR" \
+    --runtime-dir <frida-run-dir> --fuzz-dir <fuzz-run-dir> \
+    --constraint-file <conditions.json> --compare <older-binary> \
+    --slice-arch <arm64|x86_64> --max-decompile 50
+```
 
 ### Multi-model mode (opt-in)
 
@@ -38,12 +80,30 @@ rather than doing the analysis here. Without `--model`, or for `--map`
 
 ## Execution
 
+**Mechanical binary map path (when `<resolved_target>` is a single compiled artefact):**
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR"
+```
+
+This path does not use an LLM. It writes a `map-result.json` summary beside
+the binary evidence artefacts and keeps source-tree `/understand --map`
+unchanged.
+
 **Multi-model path (when `--model` is present with `--hunt` or `--trace`):**
 
 ```bash
 libexec/raptor-understand --hunt "<pattern>" --target <resolved_target> \
     --out "$OUTPUT_DIR" --model <name> [--model <name> ...]
 ```
+
+Optional: add `--rank` to reorder the merged hunt items
+most-promising-first (listwise LLM ranking) before
+`hunt-result.json` is written. Ordering only — never filters an
+item; head-capped (first 200 items) and budget-capped; not
+available with `--hunt-tool slopsquat`. On claude-code-only
+installs the ranking runs through the session transport — expect
+extra minutes on large lists.
 
 For `--trace`, point at a JSON file containing the trace list:
 ```bash
@@ -108,23 +168,16 @@ libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-
 libexec/raptor-render-diagrams "$OUTPUT_DIR"
 ```
 
-**Step 4.5: Synthesise per-function annotations** (for `--map` or `--trace`):
-```bash
-libexec/raptor-understand-annotate "$OUTPUT_DIR"
-```
-Reads `context-map.json` + any `flow-trace-*.json`, attaches per-function
-annotations under `$OUTPUT_DIR/annotations/` for entry points, sinks,
-trust boundaries, unchecked flows, and trace steps. Best-effort — exits
-0 with "nothing to synthesise" when no inputs are present.
+**Step 5: Complete the run.** Skip this step entirely if you skipped Step 1 because `--out` was already resolved by another command's lifecycle (e.g. the `/audit` mapping phase) — that command owns the run and finalises it itself; completing it here stamps the owner's run `completed` while its real work hasn't started. `--command understand` makes the stub refuse mechanically in that case.
 
-**Step 5: Complete the run.** Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the analysis, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag entirely; the run still completes, the model is just left unrecorded.
+Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the analysis, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag entirely; the run still completes, the model is just left unrecorded.
 ```bash
-libexec/raptor-run-lifecycle complete "$OUTPUT_DIR" --model <your-model-id>
+libexec/raptor-run-lifecycle complete "$OUTPUT_DIR" --command understand --model <your-model-id>
 ```
 
-**On failure** (at any point):
+**On failure** (at any point — same ownership rule: skip if you skipped Step 1):
 ```bash
-libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
+libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description" --command understand
 ```
 
 ## Modes
@@ -135,8 +188,11 @@ libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
 | `--trace <entry>` | Trace one data flow source → sink with full call chain |
 | `--hunt <pattern>` | Find all variants of a pattern across the codebase |
 | `--teach <subject>` | Explain a framework, library, or code pattern in depth |
+| `--study <scope>` | Extract semantic concepts (ownership, lifetime, contracts) → `domain-model.json` |
 
 Modes combine and run in order: map → trace → hunt → teach. This matches the natural attack progression, so build context first, then trace a specific flow, then hunt for variants. Running `--map --trace EP-001` first maps, then traces the specified entry point.
+
+`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation. Study is multi-language: C/C++ resolve through the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, and Rust identifiers resolve in-process (unresolvable identifiers are returned as unresolved with a reason, never guessed).
 
 ## Examples
 
@@ -150,6 +206,9 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 # Find all variants of a finding from validation
 /understand ./src --hunt FIND-001
 
+# Learn semantic concepts (ownership, lifetime, contracts)
+/understand ./src --study crypto/
+
 # Understand an unfamiliar pattern before tracing
 /understand ./src --teach SQLAlchemy
 
@@ -157,7 +216,7 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 /understand ./src --map --trace EP-001
 
 # Hunt for variants, write output for validator to consume
-/understand ./src --hunt "cursor.execute with f-string" --out .out/my-validation/
+/understand ./src --hunt "cursor.execute with f-string" --out out/my-validation/
 ```
 
 ## Integration with Validation Pipeline
@@ -187,6 +246,7 @@ Load before executing:
 - `.claude/skills/code-understanding/trace.md` — for `--trace`
 - `.claude/skills/code-understanding/hunt.md` — for `--hunt`
 - `.claude/skills/code-understanding/teach.md` — for `--teach`
+- `.claude/skills/code-understanding/study.md` — for `--study`
 
 ## Output
 
@@ -198,6 +258,19 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | `flow-trace-<id>.json` | `--trace` | Step-by-step data flow with attacker control assessment |
 | `variants.json` | `--hunt` | All pattern matches, taint status, root-cause groups |
 | `diagrams.md` | `--map`, `--trace` | Mermaid diagrams (auto-generated) |
+| `domain-model.json` | `--study` | Concepts, invariants, contracts |
 | *(none)* | `--teach` | Inline explanation — no file written |
+
+Binary `--map` also writes:
+
+| File | Contents |
+|------|----------|
+| `binary-manifest.json` | Content hash, format, architecture, import capabilities, runtime markers |
+| `binary-evidence.json` | Every mechanical observation with tier, tool and reproducibility |
+| `binary-checklist.json` | Address-stable function, class, callback and evidence handoff inventory |
+| `binary-decompilations.json` | Persisted pseudocode for the reviewed high-value functions |
+| `binary-validation-handoff.json` | What evidence exists and what is still missing before a finding can be promoted |
+| `binary-analysis-report.md` | One-screen operator summary and explicit non-claims |
+| `graph/binary-graph.sqlite` | Queryable binary graph memory |
 
 ---

@@ -16,10 +16,12 @@ Two layers:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from core.sandbox import observe_profile as observe_profile_mod
 from core.sandbox.observe_profile import (
     OBSERVE_FILENAME,
     ConnectTarget,
@@ -85,6 +87,24 @@ def _connect_record(ip: str, port: int,
     }
 
 
+def _macos_connect_record(dest: str, pid: int = 1234) -> dict:
+    """Build a network-outbound record shaped like the macOS log
+    streamer's parse_log_entry output (canned darwin record — kext
+    destinations carry NO family suffix)."""
+    return {
+        "ts": "2026-05-08T00:00:00Z",
+        "cmd": f"<sandbox audit: network-outbound {dest}>",
+        "returncode": 0,
+        "type": "network",
+        "verdict": "deny",
+        "observe": True,
+        "syscall": "network-outbound",
+        "path": dest,
+        "target_pid": pid,
+        "process_name": "curl",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Parser — happy paths
 # ---------------------------------------------------------------------------
@@ -100,6 +120,106 @@ class TestParseEmpty:
         (tmp_path / OBSERVE_FILENAME).write_text("")
         profile = parse_observe_log(tmp_path)
         assert profile == ObserveProfile()
+
+
+class TestCurrentRunNonceRefusal:
+    """When audit degrades, the observe
+    CLI parses with expected_nonce=None. A current-run parse must
+    then refuse the target-writable legacy run-root location and
+    demote the profile to nonce_trusted=False; parses with a nonce
+    keep current behaviour."""
+
+    def _audit_log(self, tmp_path, records):
+        d = tmp_path / ".audit"
+        d.mkdir(mode=0o700, exist_ok=True)
+        _write_jsonl(d / OBSERVE_FILENAME, records)
+
+    def test_nonceless_current_run_refuses_legacy_location(
+            self, tmp_path, caplog):
+        # Forged log planted at the target-writable run root only.
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [
+            _open_record("/forged/by/target"),
+        ])
+        with caplog.at_level(logging.WARNING,
+                             logger="core.sandbox.observe_profile"):
+            profile = parse_observe_log(tmp_path, current_run=True)
+        assert profile.paths_read == [], (
+            "a target-writable run-root log must not be parsed on a "
+            "nonce-less current-run parse")
+        assert profile.nonce_trusted is False
+        assert any("legacy" in r.message.lower() for r in caplog.records)
+
+    def test_nonceless_current_run_parses_audit_location_untrusted(
+            self, tmp_path):
+        self._audit_log(tmp_path, [_open_record("/etc/passwd")])
+        profile = parse_observe_log(tmp_path, current_run=True)
+        # Canonical location parses, but without a nonce the records
+        # cannot be authenticated → demoted.
+        assert profile.paths_read == ["/etc/passwd"]
+        assert profile.nonce_trusted is False
+
+    def test_current_run_with_nonce_keeps_legacy_fallback(self, tmp_path):
+        rec = _open_record("/etc/passwd")
+        rec["nonce"] = "n-123"
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [rec])
+        profile = parse_observe_log(tmp_path, current_run=True,
+                                    expected_nonce="n-123")
+        assert profile.paths_read == ["/etc/passwd"]
+        assert profile.nonce_trusted is True
+
+    def test_offline_nonceless_parse_keeps_legacy_fallback(self, tmp_path):
+        # Back-compat: offline readers of older runs' artifacts
+        # (current_run=False, the default) are unchanged.
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [
+            _open_record("/etc/passwd"),
+        ])
+        profile = parse_observe_log(tmp_path)
+        assert profile.paths_read == ["/etc/passwd"]
+        assert profile.nonce_trusted is True
+
+
+class TestBoundedReads:
+    """The evidence pathname is child-mutable
+    on Landlock-only hosts. _iter_records must never block on a
+    planted FIFO nor balloon on an oversized planted file."""
+
+    def test_planted_fifo_returns_empty_promptly(self, tmp_path):
+        """Pre-fix a mkfifo at the observe path hung the parent's
+        blocking open until a hostile writer appeared. The
+        nonblocking open + S_ISREG check refuses it immediately —
+        this test completing at all (with no writer on the FIFO) is
+        the regression proof."""
+        import os
+        os.mkfifo(tmp_path / OBSERVE_FILENAME)
+        profile = parse_observe_log(tmp_path)
+        assert profile == ObserveProfile()
+
+    def test_oversized_file_refused(self, tmp_path, monkeypatch, caplog):
+        # Shrink the cap so the fixture stays small.
+        monkeypatch.setattr(observe_profile_mod,
+                            "_MAX_OBSERVE_BYTES", 1024)
+        rec = _open_record("/etc/passwd")
+        line = json.dumps(rec) + "\n"
+        with (tmp_path / OBSERVE_FILENAME).open("w") as f:
+            for _ in range(1 + 1024 // len(line)):
+                f.write(line)
+        with caplog.at_level(logging.WARNING,
+                             logger="core.sandbox.observe_profile"):
+            profile = parse_observe_log(tmp_path)
+        assert profile.paths_read == []
+        assert any("oversized" in r.message.lower()
+                   or "cap" in r.message.lower()
+                   for r in caplog.records)
+
+    def test_oversized_single_line_skipped_others_parse(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(observe_profile_mod,
+                            "_MAX_RECORD_BYTES", 512)
+        good = _open_record("/etc/passwd")
+        huge = _open_record("/" + "A" * 2048)
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [huge, good])
+        profile = parse_observe_log(tmp_path)
+        assert profile.paths_read == ["/etc/passwd"]
 
 
 class TestParsePaths:
@@ -191,6 +311,169 @@ class TestParseConnect:
         _write_jsonl(tmp_path / OBSERVE_FILENAME, [rec])
         profile = parse_observe_log(tmp_path)
         assert profile.connect_targets == []
+
+    def test_linux_connect_never_uses_macos_grammar(self, tmp_path):
+        # A Linux `connect` record whose path lacks the "(family)"
+        # suffix is a sockaddr-decode anomaly, not a macOS record —
+        # it must NOT fall through to the looser bare host:port
+        # grammar reserved for network-outbound records.
+        rec = _connect_record("1.2.3.4", 443)
+        rec["path"] = "1.2.3.4:443"
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [rec])
+        profile = parse_observe_log(tmp_path)
+        assert profile.connect_targets == []
+
+
+class TestParseMacOSConnect:
+    """macOS network-outbound records carry the kext's raw
+    destination in the path field — bare ``host:port`` with no
+    family suffix, or a unix-socket path. The parser must surface
+    the host:port shapes as ConnectTargets so darwin-sourced streams
+    feed external_reach and egress-allowlist derivation exactly like
+    Linux ones. Canned records; runs hermetically on Linux."""
+
+    def _parse(self, tmp_path, *dests):
+        _write_jsonl(tmp_path / OBSERVE_FILENAME,
+                     [_macos_connect_record(d) for d in dests])
+        return parse_observe_log(tmp_path)
+
+    def test_ipv4_dest_parsed(self, tmp_path):
+        profile = self._parse(tmp_path, "140.82.112.3:443")
+        assert profile.connect_targets == [
+            ConnectTarget(ip="140.82.112.3", port=443, family="AF_INET"),
+        ]
+
+    def test_hostname_dest_parsed(self, tmp_path):
+        profile = self._parse(tmp_path, "example.com:8443")
+        assert profile.connect_targets == [
+            ConnectTarget(ip="example.com", port=8443, family="AF_INET"),
+        ]
+
+    def test_wildcard_dest_parsed(self, tmp_path):
+        # SBPL-style wildcard destination ("*:443") — keep it verbatim
+        # so diagnostics stay honest about what the kext reported.
+        profile = self._parse(tmp_path, "*:443")
+        assert profile.connect_targets == [
+            ConnectTarget(ip="*", port=443, family="AF_INET"),
+        ]
+
+    def test_bracketed_ipv6_dest_parsed(self, tmp_path):
+        profile = self._parse(tmp_path, "[2606:50c0:8000::153]:443")
+        assert profile.connect_targets == [
+            ConnectTarget(ip="2606:50c0:8000::153", port=443,
+                          family="AF_INET6"),
+        ]
+
+    def test_bare_ipv6_dest_parsed_at_last_colon(self, tmp_path):
+        profile = self._parse(tmp_path, "::1:443")
+        assert profile.connect_targets == [
+            ConnectTarget(ip="::1", port=443, family="AF_INET6"),
+        ]
+
+    def test_unix_socket_dest_yields_no_target(self, tmp_path):
+        # Unix-domain sockets are local IPC, not egress.
+        profile = self._parse(tmp_path, "/private/var/run/mDNSResponder")
+        assert profile.connect_targets == []
+
+    def test_dedup_with_linux_records(self, tmp_path):
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, [
+            _connect_record("1.2.3.4", 443),
+            _macos_connect_record("1.2.3.4:443"),  # same triple
+            _macos_connect_record("5.6.7.8:80"),
+        ])
+        profile = parse_observe_log(tmp_path)
+        assert profile.connect_targets == [
+            ConnectTarget(ip="1.2.3.4", port=443, family="AF_INET"),
+            ConnectTarget(ip="5.6.7.8", port=80, family="AF_INET"),
+        ]
+
+    def test_macos_targets_flow_to_external_reach(self, tmp_path):
+        # Fix contract: the operator-facing derivation path consumes
+        # macOS-parsed targets identically to Linux ones — same
+        # ConnectTarget triples, same external_reach formatting.
+        from core.sandbox.observe_context_merge import (
+            merge_observation_into_context_map,
+        )
+        profile = self._parse(tmp_path, "140.82.112.3:443")
+        merged = merge_observation_into_context_map({}, profile)
+        obs = merged["runtime_observation"]
+        assert obs["connect_targets"] == [
+            {"ip": "140.82.112.3", "port": 443, "family": "AF_INET"},
+        ]
+        assert obs["correlations"]["external_reach"] == [
+            "140.82.112.3:443 (AF_INET)",
+        ]
+
+
+class TestDarwinConnectGapWarning:
+    """A darwin-sourced stream whose network-outbound records all
+    fail to parse must warn (throttled) instead of silently handing
+    downstream consumers an empty connect_targets list."""
+
+    GAP_TEXT = "yielded zero connect targets"
+
+    @pytest.fixture(autouse=True)
+    def _reset_throttle(self, monkeypatch):
+        # Open the throttle window so each test observes the warning
+        # decision itself, not a leftover stamp from a prior test.
+        monkeypatch.setattr(observe_profile_mod,
+                            "_connect_gap_last_warn", float("-inf"))
+
+    def _parse_with_caplog(self, tmp_path, caplog, records):
+        _write_jsonl(tmp_path / OBSERVE_FILENAME, records)
+        with caplog.at_level(logging.WARNING,
+                             logger="core.sandbox.observe_profile"):
+            return parse_observe_log(tmp_path)
+
+    def test_zero_parse_warning_fires(self, tmp_path, caplog):
+        # A destination shape the parser doesn't understand (no
+        # trailing :port) — e.g. a future kext format change.
+        profile = self._parse_with_caplog(
+            tmp_path, caplog,
+            [_macos_connect_record("unrecognised-destination-shape")],
+        )
+        assert profile.connect_targets == []
+        assert self.GAP_TEXT in caplog.text
+        assert "network-outbound" in caplog.text
+
+    def test_warning_throttled_on_repeat_parse(self, tmp_path, caplog):
+        records = [_macos_connect_record("unrecognised-destination-shape")]
+        self._parse_with_caplog(tmp_path, caplog, records)
+        assert caplog.text.count(self.GAP_TEXT) == 1
+        # Immediate re-parse of the same broken log: throttle holds.
+        self._parse_with_caplog(tmp_path, caplog, records)
+        assert caplog.text.count(self.GAP_TEXT) == 1
+
+    def test_no_warning_when_macos_target_parsed(self, tmp_path, caplog):
+        profile = self._parse_with_caplog(
+            tmp_path, caplog,
+            [_macos_connect_record("1.2.3.4:443"),
+             _macos_connect_record("unrecognised-destination-shape")],
+        )
+        assert len(profile.connect_targets) == 1
+        assert self.GAP_TEXT not in caplog.text
+
+    def test_no_warning_for_unix_socket_only_stream(self, tmp_path,
+                                                    caplog):
+        # Local IPC destinations correctly yield no targets — that's
+        # not a parse gap and must stay quiet.
+        self._parse_with_caplog(
+            tmp_path, caplog,
+            [_macos_connect_record("/private/var/run/mDNSResponder")],
+        )
+        assert self.GAP_TEXT not in caplog.text
+
+    def test_no_warning_for_linux_stream(self, tmp_path, caplog):
+        # Linux-sourced streams (connect records) never trip the
+        # darwin diagnostic, even when a path fails to parse.
+        bad = _connect_record("1.2.3.4", 443)
+        bad["path"] = "garbage"
+        profile = self._parse_with_caplog(
+            tmp_path, caplog,
+            [bad, _connect_record("5.6.7.8", 80)],
+        )
+        assert len(profile.connect_targets) == 1
+        assert self.GAP_TEXT not in caplog.text
 
 
 class TestMacOSKextActionClassification:
@@ -428,7 +711,7 @@ class TestTracerRoutesToObserveFilename:
     land in .sandbox-denials.jsonl with `"audit": True`."""
 
     def test_observe_mode_routes_to_observe_filename(self, tmp_path):
-        from core.sandbox.tracer import _write_record, _OBSERVE_FILENAME
+        from core.sandbox.tracer import _OBSERVE_FILENAME, _write_record
         ok = _write_record(
             tmp_path, "openat", 257, [0, 0, 0, 0, 0, 0], 1234,
             path="/etc/passwd",
@@ -436,11 +719,12 @@ class TestTracerRoutesToObserveFilename:
             mode_field="observe",
         )
         assert ok is True
-        observe_file = tmp_path / _OBSERVE_FILENAME
+        from core.sandbox.evidence import AUDIT_SUBDIR
+        observe_file = tmp_path / AUDIT_SUBDIR / _OBSERVE_FILENAME
         assert observe_file.exists()
         # Denials file should NOT exist — observe-mode never writes
         # there.
-        denials_file = tmp_path / ".sandbox-denials.jsonl"
+        denials_file = tmp_path / AUDIT_SUBDIR / ".sandbox-denials.jsonl"
         assert not denials_file.exists()
         rec = json.loads(observe_file.read_text().strip())
         assert rec["observe"] is True
@@ -449,15 +733,16 @@ class TestTracerRoutesToObserveFilename:
         assert rec["path"] == "/etc/passwd"
 
     def test_default_routes_to_denials_filename(self, tmp_path):
-        from core.sandbox.tracer import _write_record, _DENIALS_FILENAME
+        from core.sandbox.tracer import _DENIALS_FILENAME, _write_record
         ok = _write_record(
             tmp_path, "openat", 257, [0, 0, 0, 0, 0, 0], 1234,
             path="/etc/passwd",
         )
         assert ok is True
-        denials_file = tmp_path / _DENIALS_FILENAME
+        from core.sandbox.evidence import AUDIT_SUBDIR
+        denials_file = tmp_path / AUDIT_SUBDIR / _DENIALS_FILENAME
         assert denials_file.exists()
-        observe_file = tmp_path / ".sandbox-observe.jsonl"
+        observe_file = tmp_path / AUDIT_SUBDIR / ".sandbox-observe.jsonl"
         assert not observe_file.exists()
         rec = json.loads(denials_file.read_text().strip())
         assert rec["audit"] is True
@@ -469,10 +754,10 @@ class TestTracerRoutesToObserveFilename:
         signs (e.g., observe_mode=True returning the denials
         filename) is caught immediately."""
         from core.sandbox.tracer import (
-            _resolve_output_filename,
-            _resolve_record_mode_field,
             _DENIALS_FILENAME,
             _OBSERVE_FILENAME,
+            _resolve_output_filename,
+            _resolve_record_mode_field,
         )
         assert _resolve_output_filename(True) == _OBSERVE_FILENAME
         assert _resolve_output_filename(False) == _DENIALS_FILENAME
@@ -504,6 +789,7 @@ class TestPublicObserveKwarg:
         # observe_mode=True. Cheap probe: monkeypatch the spy on
         # the _spawn entry point and trigger a no-op run().
         from unittest.mock import patch
+
         from core.sandbox import context as ctx_mod
 
         seen_kwargs = {}
@@ -528,11 +814,10 @@ class TestPublicObserveKwarg:
              patch("core.sandbox._spawn.mount_ns_available",
                    return_value=True), \
              patch("core.sandbox.context.check_mount_available",
-                   return_value=True):
-            with ctx_mod.sandbox(target=str(tmp_path),
-                                 output=str(tmp_path),
-                                 observe=True) as run:
-                run(["true"])
+                   return_value=True), ctx_mod.sandbox(target=str(tmp_path),
+                             output=str(tmp_path),
+                             observe=True) as run:
+            run(["true"])
         assert spy.called
         assert seen_kwargs.get("audit_mode") is True, (
             "observe=True must force audit_mode upstream"
@@ -550,6 +835,7 @@ class TestPublicObserveKwarg:
     )
     def test_observe_off_by_default(self, tmp_path):
         from unittest.mock import patch
+
         from core.sandbox import context as ctx_mod
 
         seen_kwargs = {}
@@ -565,10 +851,9 @@ class TestPublicObserveKwarg:
              patch("core.sandbox._spawn.mount_ns_available",
                    return_value=True), \
              patch("core.sandbox.context.check_mount_available",
-                   return_value=True):
-            with ctx_mod.sandbox(target=str(tmp_path),
-                                 output=str(tmp_path)) as run:
-                run(["true"])
+                   return_value=True), ctx_mod.sandbox(target=str(tmp_path),
+                             output=str(tmp_path)) as run:
+            run(["true"])
         # observe_mode kwarg should default to False so non-observe
         # callers don't accidentally engage the trace-set extension.
         assert seen_kwargs.get("observe_mode") in (False, None), (

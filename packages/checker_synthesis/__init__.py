@@ -1,4 +1,5 @@
-"""KNighter-style checker synthesis (SOSP 2025).
+"""KNighter-style checker synthesis (Yang et al., SOSP 2025,
+arXiv:2503.09002; see docs/references.md).
 
 Turn a single confirmed bug into a Semgrep or Coccinelle rule, run
 it across the codebase, surface variant matches. The thing that
@@ -32,7 +33,9 @@ Initial consumers:
 
 from __future__ import annotations
 
+from .cwe_families import cwe_family, cwe_siblings
 from .languages import detect_engine, supported_engines
+from .library import RuleLibrary
 from .models import (
     CheckerSynthesisResult,
     Match,
@@ -51,8 +54,11 @@ __all__ = [
     "LLMCallable",
     "Match",
     "MatchTriage",
+    "RuleLibrary",
     "SeedBug",
     "SynthesisedRule",
+    "cwe_family",
+    "cwe_siblings",
     "detect_engine",
     "supported_engines",
     "synthesise_and_run",

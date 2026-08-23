@@ -342,18 +342,23 @@ def test_bench_command_breakdown_block_when_mixed_outcomes(
 ) -> None:
     """Mixed PASS / refusal / pipeline-issue prints all three buckets."""
     sample = tmp_path / "sample.json"
-    _write_sample(sample, ["CVE-A", "CVE-B", "CVE-C"])
+    _write_sample(
+        sample, ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"],
+    )
     out = tmp_path / "out"
 
     canned = {
-        "CVE-A": _CveResult(cve_id="CVE-A", ok=True, elapsed_s=1,
-                            shape="source", error_class="PASS"),
-        "CVE-B": _CveResult(cve_id="CVE-B", ok=False, elapsed_s=1,
-                            error="UnsupportedSource: closed",
-                            error_class="UnsupportedSource"),
-        "CVE-C": _CveResult(cve_id="CVE-C", ok=False, elapsed_s=1,
-                            error="DiscoveryError budget_cost_usd",
-                            error_class="budget_cost_usd"),
+        "CVE-2024-0001": _CveResult(cve_id="CVE-2024-0001", ok=True,
+                                    elapsed_s=1, shape="source",
+                                    error_class="PASS"),
+        "CVE-2024-0002": _CveResult(cve_id="CVE-2024-0002", ok=False,
+                                    elapsed_s=1,
+                                    error="UnsupportedSource: closed",
+                                    error_class="UnsupportedSource"),
+        "CVE-2024-0003": _CveResult(cve_id="CVE-2024-0003", ok=False,
+                                    elapsed_s=1,
+                                    error="DiscoveryError budget_cost_usd",
+                                    error_class="budget_cost_usd"),
     }
     monkeypatch.setattr(_bench_mod, "_run_one",
                         lambda cid, *_a, **_kw: canned[cid])
@@ -406,3 +411,89 @@ def test_render_html_emits_valid_table_for_empty_and_populated() -> None:
     html_pop = _render_html(populated)
     assert "CVE-1" in html_pop
     assert "CVE-2" in html_pop
+
+
+def test_render_html_escapes_tracker_influenced_fields() -> None:
+    """r.error carries exception text embedding the submitted
+    repository_url (hostile OSV data passes on an http(s) prefix
+    alone) — every dynamic field must land in summary.html escaped
+    """
+    from cve_diff.cli.bench import _render_html
+
+    payload = '"><script src=//evil.example></script>'
+    s = _BenchSummary(sample=f"x{payload}.json", total=2, passed=1)
+    s.results = [
+        _CveResult(cve_id=f"CVE-1{payload}", ok=False, elapsed_s=1,
+                   error=f"clone failed: {payload}", error_class="Other"),
+        _CveResult(cve_id="CVE-2", ok=True, elapsed_s=1,
+                   shape=f"source{payload}", error_class="PASS",
+                   extraction_agree=f"agree{payload}"),
+    ]
+    out = _render_html(s)
+    # The raw tag must never survive; the payload appears only in its
+    # escaped, inert form so the operator still sees what happened.
+    assert "<script" not in out
+    assert "&lt;script" in out
+
+
+def test_valid_cve_id_accepts_and_normalises() -> None:
+    from cve_diff.cli.bench import _valid_cve_id
+
+    assert _valid_cve_id("CVE-2024-31337") == "CVE-2024-31337"
+    assert _valid_cve_id("cve-2024-31337") == "CVE-2024-31337"
+    assert _valid_cve_id(" CVE-2024-1234567 ") == "CVE-2024-1234567"
+
+
+def test_valid_cve_id_rejects_filename_hostile_shapes() -> None:
+    """cve_id flows into output filenames and a tempdir prefix — path
+    separators, traversal segments, and free-text must all refuse."""
+    from cve_diff.cli.bench import _valid_cve_id
+
+    for bad in (
+        "../evil",
+        "CVE-2024-1234/../../etc",
+        "CVE-2024-123",          # too-short sequence number
+        "CVE-24-12345",          # two-digit year
+        "CVE-2024-1234x",
+        "no CVE here",
+        "",
+    ):
+        assert _valid_cve_id(bad) is None, bad
+
+
+def test_render_html_battery_variant_payloads_neutralised() -> None:
+    """Evasion variants observed against the pre-fix renderer, pinned
+    one-by-one:
+    cveid-script, error-script (img autofetch), shape-attr,
+    extraction-attr (iframe), error-ansi (terminal injection when the
+    operator cats the file), sample-title-escape."""
+    from cve_diff.cli.bench import _render_html
+
+    s = _BenchSummary(
+        sample='x</title><script>alert(1)</script>.json',
+        total=3, passed=1,
+    )
+    s.results = [
+        # cveid-script
+        _CveResult(cve_id="<script>alert('ZEVIL')</script>", ok=False,
+                   elapsed_s=1, error="e", error_class="Other"),
+        # error-script (img autofetch) + error-ansi
+        _CveResult(cve_id="CVE-2024-0001", ok=False, elapsed_s=1,
+                   error="x <img src=//evil.example/ZEVIL> \x1b[2J y",
+                   error_class="Other"),
+        # shape-attr + extraction-attr (iframe)
+        _CveResult(cve_id="CVE-2024-0002", ok=True, elapsed_s=1,
+                   shape='"><script>ZEVILs</script>',
+                   extraction_agree=(
+                       '"><iframe src=//evil.example/ZEVIL>'
+                   ),
+                   error_class="PASS"),
+    ]
+    out = _render_html(s)
+    assert "<script" not in out
+    assert "<img" not in out
+    assert "<iframe" not in out
+    assert "\x1b" not in out            # raw ANSI never written
+    assert "</title><script" not in out
+    # Evidence stays visible in inert form.
+    assert "&lt;script" in out and "&lt;iframe" in out

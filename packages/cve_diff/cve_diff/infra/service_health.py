@@ -92,6 +92,30 @@ def probe_anthropic() -> HealthResult:
     and no Anthropic auth, the agent loop's resolver picks Gemini
     cleanly; this health probe is informational, not gating.
     """
+    # When the operator's configured primary model routes to another
+    # provider entirely (models.json / env autodetect — see
+    # cve_diff.llm.auth.default_model_id), Anthropic is NOT on this
+    # run's critical path: report the probe as informational-ok rather
+    # than failing the health check for a credential the run won't use.
+    default_m = ""
+    try:
+        from core.security.llm_family import provider_of
+
+        from cve_diff.llm.auth import default_model_id
+        default_m = default_model_id()
+        default_provider = provider_of(default_m) or "anthropic"
+    except Exception:  # noqa: BLE001 — resolution trouble → historical behaviour
+        default_provider = "anthropic"
+    if default_provider not in ("anthropic", "claudecode"):
+        return HealthResult(
+            "Anthropic API", True, 0,
+            detail=(
+                f"skipped — default model {default_m} routes to "
+                f"{default_provider}; that provider is exercised at "
+                f"first pipeline call"
+            ),
+        )
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
     if not api_key and not via_dispatcher:
@@ -150,7 +174,7 @@ def probe_anthropic() -> HealthResult:
 def probe_nvd() -> HealthResult:
     api_key = os.environ.get("NVD_API_KEY", "").strip()
     headers = {"apiKey": api_key} if api_key else {}
-    latency, body, status, err = _timed_get(
+    latency, _body, status, err = _timed_get(
         "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2016-5195",
         headers=headers,
     )
@@ -163,7 +187,7 @@ def probe_nvd() -> HealthResult:
 
 
 def probe_osv() -> HealthResult:
-    latency, body, status, err = _timed_get(
+    latency, _body, status, err = _timed_get(
         "https://api.osv.dev/v1/vulns/CVE-2016-5195"
     )
     if err:
@@ -226,7 +250,7 @@ def probe_github() -> HealthResult:
 
 
 def probe_debian() -> HealthResult:
-    latency, body, status, err = _timed_get(
+    latency, _body, status, err = _timed_get(
         "https://security-tracker.debian.org/tracker/CVE-2016-5195",
     )
     if err:
@@ -237,7 +261,7 @@ def probe_debian() -> HealthResult:
 
 
 def probe_ubuntu() -> HealthResult:
-    latency, body, status, err = _timed_get(
+    latency, _body, status, err = _timed_get(
         "https://ubuntu.com/security/cves.json?q=CVE-2016-5195",
     )
     if err:
@@ -248,7 +272,7 @@ def probe_ubuntu() -> HealthResult:
 
 
 def probe_redhat() -> HealthResult:
-    latency, body, status, err = _timed_get(
+    latency, _body, status, err = _timed_get(
         "https://access.redhat.com/hydra/rest/securitydata/cve/CVE-2016-5195.json",
     )
     if err:
@@ -298,8 +322,7 @@ def run_all() -> list[HealthResult]:
 def render_table(results: list[HealthResult]) -> str:
     """Format results as a fixed-width table for terminal display."""
     lines = ["", "Service health probes:", ""]
-    for r in results:
-        lines.append(r.as_row())
+    lines.extend(r.as_row() for r in results)
     lines.append("")
     failing_critical = [r.name for r in results if not r.ok and r.name in CRITICAL_NAMES]
     if failing_critical:

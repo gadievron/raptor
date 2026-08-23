@@ -15,8 +15,7 @@ adds:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from packages.nvd import extract_patch_refs
 from packages.nvd.client import (
@@ -26,6 +25,9 @@ from packages.nvd.client import (
 )
 
 from cve_diff.core.models import CommitSha, DiscoveryResult, PatchTuple
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 

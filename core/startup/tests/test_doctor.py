@@ -9,7 +9,7 @@ classification + exit code.
 
 from __future__ import annotations
 
-
+import typing
 
 from core.startup import doctor
 from core.startup.doctor import _render, main
@@ -25,6 +25,7 @@ def _gather_stub(
     env_warnings=(),
     lang_line=None,
     project_line=None,
+    advisories=(),
 ):
     """Build a _gather()-shaped tuple for tests."""
     return (
@@ -32,6 +33,7 @@ def _gather_stub(
         list(llm_lines), list(llm_warnings),
         list(env_parts), list(env_warnings),
         lang_line, project_line,
+        list(advisories),
     )
 
 
@@ -67,14 +69,14 @@ class TestRenderClassification:
         assert "rr not found" in text
 
     def test_llm_warnings_are_warnings(self):
-        text, n_fail, n_warn = _render(
+        _text, _n_fail, n_warn = _render(
             *_gather_stub(llm_warnings=["No API keys configured"]),
             verbose=False,
         )
         assert n_warn == 1
 
     def test_env_warnings_are_warnings(self):
-        text, n_fail, n_warn = _render(
+        _text, _n_fail, n_warn = _render(
             *_gather_stub(env_warnings=["RAPTOR_DIR not set"]),
             verbose=False,
         )
@@ -97,7 +99,7 @@ class TestRenderClassification:
         assert "PASSED:" not in text
 
     def test_pass_lines_shown_with_verbose(self):
-        text, n_fail, n_warn = _render(
+        text, _n_fail, _n_warn = _render(
             *_gather_stub(
                 tool_results=[("semgrep", True)],
                 env_parts=["out/ ✓"],
@@ -112,6 +114,31 @@ class TestRenderClassification:
         text, _, _ = _render(*_gather_stub(), verbose=False)
         assert "Summary:" in text
         assert "0 failure(s)" in text
+
+    def test_lang_cross_line_not_listed_as_pass(self):
+        """A ✗ tree-sitter line must not appear under PASSED — the
+        degradation warning check_lang emits covers the signal."""
+        text, n_fail, n_warn = _render(
+            *_gather_stub(
+                lang_line="  lang: tree-sitter ✗",
+                env_warnings=[
+                    ("no tree-sitter grammars installed — inventory "
+                     "degrades to regex extraction"),
+                ],
+            ),
+            verbose=True,
+        )
+        assert n_fail == 0
+        assert n_warn == 1
+        passed_section = text.split("PASSED:")[1] if "PASSED:" in text else ""
+        assert "tree-sitter ✗" not in passed_section
+
+    def test_lang_check_line_still_listed_as_pass(self):
+        text, _, _ = _render(
+            *_gather_stub(lang_line="  lang: tree-sitter ✓ (python, c)"),
+            verbose=True,
+        )
+        assert "tree-sitter ✓ (python, c)" in text
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +246,114 @@ class TestUsage:
         # Short flag triggers verbose rendering.
         out = capsys.readouterr().out
         assert "PASSED:" in out
+
+
+# ---------------------------------------------------------------------------
+# Module-dep import verification (doctor-only depth)
+# ---------------------------------------------------------------------------
+
+
+class TestModuleDepVerification:
+    """The banner's find_spec probe deliberately never imports; doctor
+    spends a subprocess to catch the present-but-broken-wheel state
+    (Python upgraded under the venv, half-completed install)."""
+
+    _DEPS: typing.ClassVar[dict] = {
+        "z3": {
+            "module": "z3", "pip": "z3-solver",
+            "severity": "degrades", "affects": "/audit (SMT)",
+        },
+        "semgrep": {"binary": "semgrep", "affects": "/scan"},
+    }
+
+    def _run(self, monkeypatch, *, spec_found=True, returncode=0,
+             run_side_effect=None):
+        from unittest import mock
+
+        from core.config import RaptorConfig
+
+        proc = mock.Mock(returncode=returncode, stdout="", stderr="boom")
+        run_mock = mock.Mock(
+            return_value=proc, side_effect=run_side_effect,
+        )
+        with mock.patch.object(RaptorConfig, "TOOL_DEPS", self._DEPS), \
+             mock.patch(
+                 "importlib.util.find_spec",
+                 return_value=object() if spec_found else None,
+             ), mock.patch("subprocess.run", run_mock):
+            warnings = doctor._module_dep_warnings()
+        return warnings, run_mock
+
+    def test_broken_module_warns_with_reinstall_hint(self, monkeypatch):
+        warnings, _ = self._run(monkeypatch, returncode=1)
+        assert len(warnings) == 1
+        assert "z3 is installed but failed to import" in warnings[0]
+        assert "z3-solver" in warnings[0]
+
+    def test_healthy_module_stays_quiet(self, monkeypatch):
+        warnings, _ = self._run(monkeypatch, returncode=0)
+        assert warnings == []
+
+    def test_absent_module_skipped_without_subprocess(self, monkeypatch):
+        # Absent is check_tools' territory — no duplicate warning,
+        # and no subprocess spent.
+        warnings, run_mock = self._run(monkeypatch, spec_found=False)
+        assert warnings == []
+        run_mock.assert_not_called()
+
+    def test_binary_deps_never_probed(self, monkeypatch):
+        # Only module deps are import-verified; one subprocess for z3,
+        # none for semgrep.
+        _, run_mock = self._run(monkeypatch, returncode=0)
+        assert run_mock.call_count == 1
+
+    def test_probe_failure_never_raises(self, monkeypatch):
+        warnings, _ = self._run(
+            monkeypatch, run_side_effect=OSError("spawn failed"),
+        )
+        assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Module-dep probe isolation
+# ---------------------------------------------------------------------------
+
+
+class TestModuleProbeIsolation:
+    """``python -c`` puts the invocation cwd at ``sys.path[0]`` — a
+    planted module in whatever directory doctor runs from must never
+    execute in the probe subprocess."""
+
+    def test_planted_module_in_cwd_not_executed(
+        self, monkeypatch, tmp_path,
+    ):
+        from unittest import mock
+
+        from core.config import RaptorConfig
+
+        attack = tmp_path / "attack"
+        attack.mkdir()
+        canary = tmp_path / "canary"
+        (attack / "raptor_probe_target_mod.py").write_text(
+            "import pathlib\n"
+            f"pathlib.Path({str(canary)!r}).touch()\n",
+        )
+        deps = {
+            "probe-target": {
+                "module": "raptor_probe_target_mod",
+                "pip": "probe-target", "affects": "/nothing",
+            },
+        }
+        monkeypatch.chdir(attack)
+        with mock.patch.object(RaptorConfig, "TOOL_DEPS", deps), \
+             mock.patch(
+                 "importlib.util.find_spec", return_value=object(),
+             ):
+            doctor._module_dep_warnings()
+        assert not canary.exists(), (
+            "module-dep probe imported a module planted in the "
+            "invocation cwd"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -344,9 +479,9 @@ class TestOutputShape:
             doctor, "_gather",
             lambda: _gather_stub(
                 env_warnings=[
-                    "RAPTOR_DIR not set in this process; "
-                    "expected /home/op/raptor based on checkout "
-                    "location.",
+                    ("RAPTOR_DIR not set in this process; "
+                     "expected /home/op/raptor based on checkout "
+                     "location."),
                 ],
             ),
         )
@@ -457,3 +592,140 @@ class TestNonprintableEscaping:
         assert "!" in out
         # Em-dash (a printable Unicode codepoint) must survive.
         assert "—" in out
+
+
+# ---------------------------------------------------------------------------
+# Imported-annotation advisory sweep
+# ---------------------------------------------------------------------------
+
+
+def _write_note(base, source_file, function, metadata):
+    from core.annotations.models import Annotation
+    from core.annotations.storage import write_annotation
+
+    write_annotation(base, Annotation(
+        file=source_file, function=function,
+        body="reviewed", metadata=metadata,
+    ))
+
+
+_HUMAN_GRADE_META = {
+    "status": "clean", "source": "human",
+    "tty": "stdin", "provenance": "interactive-tty",
+}
+
+
+def _make_project(tmp_path, name, *, target="/src/app"):
+    """Fabricate a registered project with an output dir under tmp_path."""
+    from core.project.project import ProjectManager
+
+    mgr = ProjectManager(projects_dir=tmp_path / "registry")
+    out_dir = tmp_path / "out" / name
+    mgr.create(name, target, output_dir=str(out_dir), resolve_target=False)
+    return out_dir
+
+
+class TestImportedAnnotationAdvisories:
+    def test_no_projects_is_skipped(self, tmp_path):
+        assert doctor._imported_annotation_advisories(
+            projects_dir=tmp_path / "registry",
+        ) == []
+
+    def test_human_grade_notes_get_generic_advisory(self, tmp_path):
+        out_dir = _make_project(tmp_path, "proj1")
+        _write_note(out_dir / "annotations", "src/a.py", "f",
+                    _HUMAN_GRADE_META)
+        lines = doctor._imported_annotation_advisories(
+            projects_dir=tmp_path / "registry",
+        )
+        assert len(lines) == 1
+        assert "'proj1'" in lines[0]
+        assert "cannot be machine-attributed" in lines[0]
+        assert "/annotate ls" in lines[0]
+
+    def test_imported_target_breadcrumb_gets_targeted_advisory(
+        self, tmp_path,
+    ):
+        """The one pre-marker registry breadcrumb: import registers
+        target='(imported)' when the archive metadata omitted a target.
+        Such projects get a targeted line, not the generic one."""
+        out_dir = _make_project(tmp_path, "oldimport", target="(imported)")
+        run = out_dir / "scan_20260101-000000"
+        run.mkdir(parents=True)
+        _write_note(run / "annotations", "src/b.py", "g",
+                    _HUMAN_GRADE_META)
+        lines = doctor._imported_annotation_advisories(
+            projects_dir=tmp_path / "registry",
+        )
+        assert len(lines) == 1
+        assert "'oldimport'" in lines[0]
+        assert "(imported)" in lines[0]
+        assert "1 human-grade annotation(s)" in lines[0]
+
+    def test_marker_covered_trees_are_skipped(self, tmp_path):
+        """Runs (and whole projects) carrying the persisted import
+        marker were demoted at import time — never advised on."""
+        import json
+
+        out_marked_run = _make_project(tmp_path, "postfix-run")
+        run = out_marked_run / "scan_20260101-000000"
+        run.mkdir(parents=True)
+        (run / ".raptor-imported.json").write_text(
+            json.dumps({"imported": True}))
+        _write_note(run / "annotations", "src/c.py", "h",
+                    _HUMAN_GRADE_META)
+
+        out_marked_root = _make_project(tmp_path, "postfix-root")
+        (out_marked_root / ".raptor-imported.json").write_text(
+            json.dumps({"imported": True}))
+        _write_note(out_marked_root / "annotations", "src/d.py", "i",
+                    _HUMAN_GRADE_META)
+
+        assert doctor._imported_annotation_advisories(
+            projects_dir=tmp_path / "registry",
+        ) == []
+
+    def test_hint_tier_notes_not_flagged(self, tmp_path):
+        """Demoted (provenance=imported) and non-tty notes are hint
+        tier — no operator authority, nothing to advise about."""
+        out_dir = _make_project(tmp_path, "hints")
+        _write_note(out_dir / "annotations", "src/e.py", "j", {
+            "status": "clean", "source": "human",
+            "provenance": "imported",
+        })
+        _write_note(out_dir / "annotations", "src/e.py", "k", {
+            "status": "clean", "source": "human",
+            "tty": "none", "provenance": "non-tty",
+        })
+        _write_note(out_dir / "annotations", "src/e.py", "l", {
+            "status": "clean", "source": "agent",
+            "tty": "stdin", "provenance": "interactive-tty",
+        })
+        assert doctor._imported_annotation_advisories(
+            projects_dir=tmp_path / "registry",
+        ) == []
+
+    def test_advisories_render_without_affecting_counts(self, capsys):
+        text, n_fail, n_warn = _render(
+            *_gather_stub(
+                tool_results=[("semgrep", True)],
+                advisories=["human-grade annotations found in 'p'"],
+            ),
+            verbose=False,
+        )
+        assert n_fail == 0
+        assert n_warn == 0
+        assert "ADVISORIES:" in text
+        assert "i human-grade annotations found in 'p'" in text
+
+    def test_advisories_do_not_fail_strict(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            doctor, "_gather",
+            lambda: _gather_stub(
+                tool_results=[("semgrep", True)],
+                advisories=["human-grade annotations found in 'p'"],
+            ),
+        )
+        rc = main(["--strict"])
+        assert rc == 0
+        assert "ADVISORIES:" in capsys.readouterr().out

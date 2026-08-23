@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
 
 from core.ast.model import FunctionView, Return, SCHEMA_VERSION
 from core.inventory.call_graph import (
@@ -54,6 +53,10 @@ from core.inventory.call_graph import (
 )
 from core.inventory.extractors import extract_functions
 from core.inventory.languages import detect_language
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +79,7 @@ _CALL_GRAPH_DISPATCH: dict[str, Callable] = {
     "python": extract_call_graph_python,
     "javascript": extract_call_graph_javascript,
     "typescript": extract_call_graph_javascript,
+    "tsx": extract_call_graph_javascript,
     "java": extract_call_graph_java,
     "go": extract_call_graph_go,
     "c": extract_call_graph_c,
@@ -96,9 +100,9 @@ def view(
     path: Path,
     function: str,
     *,
-    at_line: Optional[int] = None,
-    language: Optional[str] = None,
-) -> Optional[FunctionView]:
+    at_line: int | None = None,
+    language: str | None = None,
+) -> FunctionView | None:
     """Return a :class:`FunctionView` for ``function`` in ``path``.
 
     Returns ``None`` when:
@@ -178,8 +182,8 @@ def _filter_calls(
     content: str,
     language: str,
     line_start: int,
-    line_end: Optional[int],
-) -> Tuple:
+    line_end: int | None,
+) -> tuple:
     """Return calls inside the function's line range. Empty tuple
     when the language has no call-graph walker or the file is
     unparseable for it."""
@@ -208,8 +212,8 @@ def _walk_returns(
     content: str,
     language: str,
     line_start: int,
-    line_end: Optional[int],
-) -> Tuple[Return, ...]:
+    line_end: int | None,
+) -> tuple[Return, ...]:
     """Return all explicit ``return`` statements inside the function.
 
     Implicit returns (end-of-function fall-through in C/Go, etc.) are
@@ -234,14 +238,19 @@ def _walk_returns_python(
     content: str,
     line_start: int,
     line_end: int,
-) -> Tuple[Return, ...]:
+) -> tuple[Return, ...]:
     """Use stdlib ``ast`` for Python — no third-party grammar needed."""
     import ast as _stdlib_ast  # absolute import: shadowed by core.ast namespace
     try:
         tree = _stdlib_ast.parse(content)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # Beyond SyntaxError, ast.parse signals its depth/input limits
+        # differently across interpreter versions on attacker-shaped
+        # source: RecursionError or MemoryError for deeply-nested
+        # expressions, ValueError for null bytes (pre-3.12). All mean
+        # "unparseable file" here, not a caller bug.
         return ()
-    out: List[Return] = []
+    out: list[Return] = []
     for node in _stdlib_ast.walk(tree):
         if not isinstance(node, _stdlib_ast.Return):
             continue
@@ -266,7 +275,7 @@ def _walk_returns_ts(
     grammar_module,
     line_start: int,
     line_end: int,
-) -> Tuple[Return, ...]:
+) -> tuple[Return, ...]:
     """Generic tree-sitter ``return_statement`` walk.
 
     The grammar's emitted node type is conventionally
@@ -286,16 +295,23 @@ def _walk_returns_ts(
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception:                                       # noqa: BLE001
         return ()
-    out: List[Return] = []
+    out: list[Return] = []
     return_types = ("return_statement",)
 
-    def visit(node) -> None:
+    # Iterative pre-order walk with an explicit stack: the parse tree
+    # is attacker-shaped (target-repo source), so traversal depth must
+    # not be bound by Python's recursion limit — a recursive visit
+    # overflows on deeply-nested files (e.g. thousands of nested
+    # parens) and crashes the whole view.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
         # Cheap line-range prune: skip subtrees entirely outside
         # [line_start, line_end].
         n_start = node.start_point[0] + 1
         n_end = node.end_point[0] + 1
         if n_start > line_end or n_end < line_start:
-            return
+            continue
         if node.type in return_types:
             line = n_start
             if line_start <= line <= line_end:
@@ -307,10 +323,9 @@ def _walk_returns_ts(
                 out.append(Return(line=line, value_text=value_text))
             # Returns don't nest meaningfully; still descend so nested
             # functions / lambdas inside return expressions are seen.
-        for c in node.children:
-            visit(c)
-
-    visit(tree.root_node)
+        # Reversed so pop() yields children in source order,
+        # preserving the recursive walk's pre-order output.
+        stack.extend(reversed(node.children))
     return tuple(out)
 
 
@@ -325,7 +340,7 @@ def _ts_grammar_module(language: str):
         if language == "cpp":
             import tree_sitter_cpp as m
             return m
-        if language in ("javascript", "typescript"):
+        if language in ("javascript", "typescript", "tsx"):
             import tree_sitter_javascript as m
             return m
         if language == "java":
@@ -362,7 +377,7 @@ def _has_inline_asm(
     content: str,
     language: str,
     line_start: int,
-    line_end: Optional[int],
+    line_end: int | None,
 ) -> bool:
     """True iff a GNU-extension inline-asm construct appears in the
     function body. Non-C/C++ always False."""

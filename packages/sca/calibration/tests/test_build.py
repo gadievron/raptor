@@ -450,7 +450,7 @@ def test_build_metasploit_extracts_cve_to_module_mapping(tmp_path: Path) -> None
     ]
     # Modules with no CVE refs don't emit a signal.
     assert all(
-        cve.startswith("CVE-") for cve in sigs.keys()
+        cve.startswith("CVE-") for cve in sigs
     )
 
 

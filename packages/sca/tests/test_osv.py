@@ -8,12 +8,12 @@ verify caching prevented re-fetches.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
-from core.json import JsonCache
 from core.http import HttpError
+from core.json import JsonCache
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.osv import (
     OSV_VULN_URL_TEMPLATE,
@@ -22,7 +22,6 @@ from packages.sca.osv import (
     parse_osv_record,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fake HTTP client
 # ---------------------------------------------------------------------------
@@ -30,8 +29,8 @@ from packages.sca.osv import (
 class FakeHttp:
     def __init__(
         self,
-        batch_results: List[List[str]] | None = None,
-        vuln_records: Dict[str, Dict[str, Any]] | None = None,
+        batch_results: list[list[str]] | None = None,
+        vuln_records: dict[str, dict[str, Any]] | None = None,
         post_error: Exception | None = None,
         get_error: Exception | None = None,
     ) -> None:
@@ -39,8 +38,8 @@ class FakeHttp:
         self.vuln_records = vuln_records or {}
         self.post_error = post_error
         self.get_error = get_error
-        self.posts: List[tuple[str, dict]] = []
-        self.gets: List[str] = []
+        self.posts: list[tuple[str, dict]] = []
+        self.gets: list[str] = []
 
     def post_json(self, url: str, body: dict, timeout: int = 30) -> dict:
         self.posts.append((url, body))
@@ -142,6 +141,83 @@ def test_parse_osv_record_unknown_severity_type_skipped() -> None:
     assert a.severity is None
 
 
+_V4_ONLY_VECTOR = (
+    "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/"
+    "VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+)
+
+
+def _v4_only_record(db_severity: str | None = "CRITICAL") -> dict:
+    record = dict(_LOG4J_RECORD)
+    record["severity"] = [{"type": "CVSS_V4", "score": _V4_ONLY_VECTOR}]
+    if db_severity is not None:
+        record["database_specific"] = {"severity": db_severity}
+    else:
+        record.pop("database_specific", None)
+    return record
+
+
+def test_v4_only_advisory_uses_database_severity_label(monkeypatch) -> None:
+    """Without the optional ``cvss`` package the v4 vector can't be
+    scored — the GHSA database_specific.severity label carries the
+    severity instead of degrading to medium."""
+    import packages.sca.osv as osv_mod
+    monkeypatch.setattr(osv_mod, "_cvss_v4_base_score", lambda v: None)
+    a = parse_osv_record(_v4_only_record("CRITICAL"))
+    assert a.severity is None            # no fabricated numeric score
+    assert a.severity_fallback == "critical"
+    a2 = parse_osv_record(_v4_only_record("MODERATE"))
+    assert a2.severity_fallback == "medium"
+
+
+def test_v4_only_advisory_without_label_degrades(monkeypatch) -> None:
+    import packages.sca.osv as osv_mod
+    monkeypatch.setattr(osv_mod, "_cvss_v4_base_score", lambda v: None)
+    a = parse_osv_record(_v4_only_record(db_severity=None))
+    assert a.severity is None
+    assert a.severity_fallback is None   # findings layer degrades to medium
+
+
+def test_v4_vector_scored_numerically_when_scorer_available(
+    monkeypatch,
+) -> None:
+    """When a v4 base score is computable it competes in the normal
+    highest-score selection and buckets like a v3 score."""
+    import packages.sca.osv as osv_mod
+    monkeypatch.setattr(osv_mod, "_cvss_v4_base_score", lambda v: 9.3)
+    a = parse_osv_record(_v4_only_record("CRITICAL"))
+    assert a.severity is not None
+    assert a.severity.score == 9.3
+    assert a.severity.severity == "critical"
+    assert a.severity.vector == _V4_ONLY_VECTOR
+    assert a.severity_fallback is None
+
+
+def test_v4_base_score_via_cvss_package() -> None:
+    """Exercise the real optional-dependency path when it's installed."""
+    pytest.importorskip("cvss")
+    from packages.sca.osv import _cvss_v4_base_score
+    score = _cvss_v4_base_score(_V4_ONLY_VECTOR)
+    assert score is not None and 9.0 <= score <= 10.0
+    assert _cvss_v4_base_score("not a vector") is None
+
+
+def test_v3_entry_still_wins_alongside_unscoreable_v4(monkeypatch) -> None:
+    """A record carrying both CVSS_V3 and CVSS_V4 keeps its computed v3
+    severity; the label fallback only engages when nothing scored."""
+    import packages.sca.osv as osv_mod
+    monkeypatch.setattr(osv_mod, "_cvss_v4_base_score", lambda v: None)
+    record = dict(_LOG4J_RECORD)
+    record["severity"] = list(record["severity"]) + [
+        {"type": "CVSS_V4", "score": _V4_ONLY_VECTOR},
+    ]
+    record["database_specific"] = {"severity": "LOW"}
+    a = parse_osv_record(record)
+    assert a.severity is not None
+    assert a.severity.severity == "critical"
+    assert a.severity_fallback is None
+
+
 def test_parse_osv_record_invalid_dates_become_none() -> None:
     record = dict(_LOG4J_RECORD)
     record["modified"] = "not-a-date"
@@ -241,6 +317,105 @@ def test_querybatch_http_error_yields_empty(tmp_path: Path) -> None:
     assert results[0].advisories == []
 
 
+def test_querybatch_http_error_not_cached_and_marks_degraded(
+    tmp_path: Path,
+) -> None:
+    """A transient batch failure must NOT be cached as an authoritative
+    empty answer — the next run (same cache) retries and gets the real
+    advisories. The client records the degradation for scan-level
+    reporting."""
+    deps = [_dep("lodash")]
+    cache = JsonCache(root=tmp_path)
+
+    failing = FakeHttp(post_error=HttpError("boom", status=503))
+    client = OsvClient(failing, cache)
+    results = client.query_batch(deps)
+    assert results[0].advisories == []
+    assert client.degraded is True
+    assert client.failed_lookups == 1
+    assert client.failed_dep_keys == ["npm:lodash@1.0.0"]
+
+    # Same cache, working transport: the lookup must go to the network
+    # (nothing negative-cached) and return the advisory.
+    working = FakeHttp(
+        batch_results=[["GHSA-jfh8-c2jp-5v3q"]],
+        vuln_records={"GHSA-jfh8-c2jp-5v3q": _LOG4J_RECORD},
+    )
+    client2 = OsvClient(working, cache)
+    results2 = client2.query_batch(deps)
+    assert len(working.posts) == 1
+    assert results2[0].advisories[0].osv_id == "GHSA-jfh8-c2jp-5v3q"
+    assert client2.degraded is False
+    assert client2.failed_lookups == 0
+
+
+def test_malformed_querybatch_shape_not_cached(tmp_path: Path) -> None:
+    """A malformed batch response is a failed lookup, not an empty one."""
+    deps = [_dep("lodash")]
+    cache = JsonCache(root=tmp_path)
+
+    class WrongShapeHttp(FakeHttp):
+        def post_json(self, url: str, body: dict, timeout: int = 30) -> dict:
+            self.posts.append((url, body))
+            return {"results": "not a list"}
+
+    client = OsvClient(WrongShapeHttp(), cache)
+    client.query_batch(deps)
+    assert client.degraded is True
+
+    working = FakeHttp(batch_results=[[]])
+    client2 = OsvClient(working, cache)
+    client2.query_batch(deps)
+    # Cache held nothing for the dep — the retry hit the network.
+    assert len(working.posts) == 1
+
+
+def test_osssfuzz_fallback_failure_marks_degraded_not_cached(
+    tmp_path: Path,
+) -> None:
+    """A transient OSS-Fuzz fallback failure is recorded and left
+    uncached, mirroring the primary-batch policy."""
+    dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
+
+    class FallbackFailsHttp(FakeHttp):
+        def post_json(self, url, body, timeout=30):
+            self.posts.append((url, body))
+            eco = body["queries"][0]["package"]["ecosystem"]
+            if eco == "OSS-Fuzz":
+                raise HttpError("boom", status=502)
+            return {"results": [{"vulns": []}]}
+
+    cache = JsonCache(root=tmp_path)
+    client = OsvClient(FallbackFailsHttp(), cache)
+    results = client.query_batch([dep])
+    assert results[0].advisories == []
+    assert client.degraded is True
+    assert client.failed_lookups == 1
+
+    # Retry with a healthy fallback: only the OSS-Fuzz query re-fires
+    # (the primary empty WAS authoritative and cached).
+    record = {
+        "id": "OSV-2024-001", "aliases": [], "summary": "x",
+        "details": "", "affected": [], "references": [],
+    }
+
+    class FallbackWorksHttp(FakeHttp):
+        def post_json(self, url, body, timeout=30):
+            self.posts.append((url, body))
+            return {"results": [{"vulns": [{"id": "OSV-2024-001"}]}]}
+
+        def get_json(self, url, timeout=30):
+            return record
+
+    http2 = FallbackWorksHttp()
+    client2 = OsvClient(http2, cache)
+    results2 = client2.query_batch([dep])
+    assert len(http2.posts) == 1
+    assert http2.posts[0][1]["queries"][0]["package"]["ecosystem"] == "OSS-Fuzz"
+    assert results2[0].advisories[0].osv_id == "OSV-2024-001"
+    assert client2.degraded is False
+
+
 def test_vuln_hydration_error_drops_only_that_id(tmp_path: Path) -> None:
     deps = [_dep("lodash"), _dep("other")]
     http = FakeHttp(
@@ -321,7 +496,7 @@ def test_osssfuzz_fallback_fires_when_primary_empty(
     vcpkg ecosystem (empty), one for OSS-Fuzz (hits)."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
     osssfuzz_record = {
         "id": "OSV-2024-001",
         "aliases": [],
@@ -368,7 +543,7 @@ def test_osssfuzz_fallback_skipped_when_primary_has_hits(
     deterministic."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
 
     class TrackingHttp(FakeHttp):
         def post_json(self, url, body, timeout=30):
@@ -393,7 +568,7 @@ def test_osssfuzz_fallback_not_fired_for_non_cpp_ecosystem(
     — PyPI deps don't have C/C++ analogues."""
     dep = _dep("nonexistent", "1.0", ecosystem="PyPI")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
 
     class TrackingHttp(FakeHttp):
         def post_json(self, url, body, timeout=30):
@@ -414,7 +589,7 @@ def test_osssfuzz_fallback_caches_result(tmp_path: Path) -> None:
     BOTH primary AND OSS-Fuzz — no network calls."""
     dep = _dep("openssl", "3.0.0", ecosystem="vcpkg")
 
-    posts: List[dict] = []
+    posts: list[dict] = []
     record = {
         "id": "OSV-2024-001", "aliases": [], "summary": "x",
         "details": "", "affected": [], "references": [],
@@ -615,3 +790,58 @@ def test_query_batch_translates_cargo_to_crates_io(tmp_path: Path) -> None:
         f"Cargo must be translated to crates.io before reaching "
         f"OSV; got {posted_ecosystems}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache-key injectivity
+# ---------------------------------------------------------------------------
+
+def test_query_key_injective_for_slash_vs_underscore() -> None:
+    """``@babel/traverse`` and a literal ``@babel_traverse`` must map
+    to different cache keys — the old ``"/" → "_"`` flattening
+    collided them, letting one package's advisory list serve (or
+    poison) the other's."""
+    scoped = OsvClient._query_key(_dep("@babel/traverse"))
+    literal = OsvClient._query_key(_dep("@babel_traverse"))
+    assert scoped != literal
+
+
+def test_query_key_components_are_single_path_segments() -> None:
+    """Every encoded component is one path segment — names carrying
+    ``/`` or ``..`` can't traverse into another key's cache file."""
+    key = OsvClient._query_key(_dep("@babel/traverse", version="7.23.2"))
+    parts = key.split("/")
+    assert parts[0] == "queries"
+    assert len(parts) == 4, f"unexpected key shape: {key}"
+    assert ".." not in parts
+
+
+def test_osssfuzz_query_key_injective() -> None:
+    d = _dep("x", version="1.0.0", ecosystem="vcpkg")
+    a = OsvClient._osssfuzz_query_key(d, "lib/name")
+    b = OsvClient._osssfuzz_query_key(d, "lib_name")
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# CWE extraction (P40 — audit-side advisory priors)
+# ---------------------------------------------------------------------------
+
+def test_parse_osv_record_extracts_cwe_ids() -> None:
+    record = dict(_LOG4J_RECORD)
+    record["database_specific"] = {
+        "cwe_ids": ["CWE-502", "cwe-400", "CWE-502", "not-a-cwe", 7],
+    }
+    a = parse_osv_record(record)
+    assert a.cwe_ids == ["CWE-502", "CWE-400"]
+
+
+def test_parse_osv_record_no_database_specific() -> None:
+    a = parse_osv_record(_LOG4J_RECORD)
+    assert a.cwe_ids == []
+
+
+def test_parse_osv_record_malformed_cwe_field() -> None:
+    record = dict(_LOG4J_RECORD)
+    record["database_specific"] = {"cwe_ids": "CWE-79"}
+    assert parse_osv_record(record).cwe_ids == []

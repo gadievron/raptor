@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""raptor-cvefix-envs — env-verify cvefix corpus entries.
+
+Builds the PRE-FIX environment for each cvefix corpus entry through
+cve-env and records an entry-level ``env-verification.json`` sidecar:
+the corpus boundary provably builds, deploys, and serves (verify DAG —
+version assertion + functional smoke). This upgrades entry confidence
+WITHOUT touching span-level manifest ``review`` fields, which stay
+human (see core/recall/cvefix_manifest.py).
+
+A ``CvefixSpec`` already carries a fix pointer (public repo + full fix
+commit — the provenance hard gate), so each entry stages a pre-fill
+artifact via the bridge's own writer and drives ``cve-env build
+--prefill-from``. Successful builds auto-record replay specs, so a
+re-run of the corpus replays at ~$0. Runs use the ledger-free facade
+path — corpus builds never feed the operator scorecard or
+verified-outcomes — and stamp ``profile: deployed-infrastructure``
+(corpus INFRASTRUCTURE, not a cold-profile capability measurement).
+
+Results append crash-safe to ``results.jsonl`` (resume = re-invoke:
+already-recorded entries are skipped); the run stops HARD when
+cumulative spend crosses ``--budget-usd`` and prints how to continue.
+
+Usage:
+  packages/cve_env/scripts/raptor-cvefix-envs --specs <file-or-dir> \\
+      --out <dir> [--budget-usd 50] [--max-cost-usd 1.80] \\
+      [--wall-seconds 1800] [--overlay-dir DIR] [--model NAME]
+
+Exit codes: 0 pass completed (report written; misses are recorded, not
+fatal); 1 nothing ran; 2 usage / spec error; 3 budget ceiling hit
+(resume with a new --budget-usd tranche).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] cve_env/   (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+RAPTOR_DIR = Path(__file__).resolve().parents[3]
+import os  # noqa: E402
+
+sys.path.insert(0, str(RAPTOR_DIR))
+import core.startup.process_init  # noqa: E402,F401
+
+LEDGER = "results.jsonl"
+SIDECAR = "env-verification.json"
+
+#: Give-up reasons that mean "this entry cannot be dynamically
+#: exercised on this host" — information, never a label downgrade.
+_TYPED_MISS_FIELD = "give_up_reason"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Env-verify cvefix corpus entries via cve-env",
+    )
+    p.add_argument("--specs", required=True, type=Path,
+                   help="one cvefix spec JSON, or a directory of them")
+    p.add_argument("--out", required=True, type=Path,
+                   help="run directory (ledger, per-entry dirs, report)")
+    p.add_argument("--budget-usd", type=float, default=50.0,
+                   help="HARD ceiling on cumulative agent spend for "
+                        "this corpus pass (default 50; replays are $0)")
+    p.add_argument("--max-cost-usd", type=float, default=1.80,
+                   help="per-entry agent budget cap (default 1.80)")
+    p.add_argument("--wall-seconds", type=float, default=1800.0,
+                   help="per-entry wall cap; a killed entry records "
+                        "a driver_timeout row (default 1800)")
+    p.add_argument("--overlay-dir", type=Path, default=None,
+                   help="also write <CVE>.env-verification.json "
+                        "sidecars here (the local label overlay — "
+                        "keep it out of public checkouts)")
+    p.add_argument("--model", default=None,
+                   help="CVE_ENV_MODEL for the builds (default: "
+                        "inherit the environment)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the plan, run nothing")
+    return p.parse_args(argv)
+
+
+def load_specs(path: Path) -> list[dict[str, Any]]:
+    """Load + validate specs via the manifest module's own gate."""
+    from core.recall.cvefix_manifest import CvefixSpec
+
+    files = ([path] if path.is_file()
+             else sorted(path.glob("*.json")) if path.is_dir() else [])
+    if not files:
+        raise SystemExit(f"error: no spec JSON at {path}")
+    specs = []
+    for f in files:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+        spec = CvefixSpec.from_dict(raw)  # provenance hard gate
+        specs.append({"spec": spec, "path": f})
+    return specs
+
+
+def resolve_parent(spec) -> str:
+    """``commit_before`` = the fix commit's first parent.
+
+    Local clone first (offline, exact); GitHub commits API as the
+    fallback (same resolution the S5.1 A/B staging used). Raises
+    ValueError when neither resolves — the entry records stage_failed.
+    """
+    clone = Path(spec.local_clone)
+    if (clone / ".git").exists() or (clone / "HEAD").exists():
+        proc = subprocess.run(
+            ["git", "-C", str(clone), "rev-parse",
+             f"{spec.fix_commit}^"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        sha = (proc.stdout or "").strip()
+        if proc.returncode == 0 and len(sha) == 40:
+            return sha
+    if spec.repo_url.startswith("https://github.com/"):
+        import urllib.request
+        slug = spec.repo_url.removesuffix(".git").split("github.com/")[1]
+        url = (f"https://api.github.com/repos/{slug}/commits/"
+               f"{spec.fix_commit}")
+        with urllib.request.urlopen(url, timeout=20) as r:
+            data = json.load(r)
+        parents = data.get("parents") or []
+        if parents and parents[0].get("sha"):
+            return parents[0]["sha"]
+    raise ValueError(
+        f"{spec.cve_id}: cannot resolve {spec.fix_commit}^ from the "
+        f"local clone or the GitHub API")
+
+
+def stage_entry(spec, commit_before: str, entry_dir: Path) -> Path:
+    """Write the pre-fill artifact via the bridge's own writer."""
+    from core.orchestration.cvediff_bridge import (
+        FixPointer,
+        write_fix_pointer_artifact,
+    )
+
+    pointer = FixPointer(
+        cve_id=spec.cve_id,
+        repository_url=spec.repo_url,
+        fix_commit=spec.fix_commit,
+        commit_before=commit_before,
+        diff_shape="source",
+        source_run="cvefix-spec",
+    )
+    return write_fix_pointer_artifact(pointer, entry_dir)
+
+
+def _build_cmd(cve: str, entry_dir: Path,
+               args: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable, "-m", "cve_env", "build", cve,
+        "--prefill-from", str(entry_dir),
+        "--audit-root", str(entry_dir),
+        "--max-cost-usd", str(args.max_cost_usd),
+        "--silent",
+        "--auto-cleanup-containers",
+    ]
+
+
+def _run_env(model: str | None) -> dict[str, str]:
+    env = dict(os.environ)
+    if model:
+        env["CVE_ENV_MODEL"] = model
+    pkg = str(RAPTOR_DIR / "packages" / "cve_env")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(RAPTOR_DIR), pkg] +
+        ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+    )
+    return env
+
+
+def _cleanup_after_kill(cve: str) -> None:
+    """Best-effort container cleanup for a wall-killed entry."""
+    try:
+        listing = subprocess.run(
+            ["docker", "ps", "-aq", "--filter",
+             f"label=cve-env.cve-id={cve}"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        ids = [i for i in (listing.stdout or "").split() if i]
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids],
+                           capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def run_entry(spec, entry_dir: Path, args: argparse.Namespace,
+              *, runner=None) -> dict[str, Any]:
+    """Stage + build one entry → one ledger row (never raises).
+
+    ``runner`` resolves at CALL time (default ``subprocess.run``) so
+    tests that patch the module's subprocess seam are honoured."""
+    runner = runner or subprocess.run
+    cve = spec.cve_id
+    row: dict[str, Any] = {
+        "cve_id": cve,
+        "started_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"),
+        "entry_dir": str(entry_dir),
+        "profile": "deployed-infrastructure",
+    }
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        commit_before = resolve_parent(spec)
+        stage_entry(spec, commit_before, entry_dir)
+        row["boundary_commit"] = commit_before
+    except Exception as exc:  # noqa: BLE001 — a bad entry is a row, not a crash
+        row.update(status="stage_failed", detail=str(exc)[:300],
+                   cost_usd=0.0)
+        return row
+
+    t0 = time.monotonic()
+    try:
+        runner(
+            _build_cmd(cve, entry_dir, args),
+            env=_run_env(args.model),
+            capture_output=True, text=True,
+            timeout=args.wall_seconds, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup_after_kill(cve)
+        row.update(status="driver_timeout", cost_usd=0.0,
+                   duration_s=round(time.monotonic() - t0, 1))
+        return row
+    except OSError as exc:
+        row.update(status="driver_error", detail=f"spawn failed: {exc}",
+                   cost_usd=0.0)
+        return row
+
+    outcome_path = entry_dir / f"{cve}.outcome.json"
+    try:
+        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        row.update(status="no_outcome", cost_usd=0.0,
+                   duration_s=round(time.monotonic() - t0, 1))
+        return row
+
+    row.update(
+        status=str(outcome.get("status") or "unknown"),
+        verify_passed=bool(outcome.get("verify_passed")),
+        method=outcome.get("method"),
+        cost_usd=float(outcome.get("total_cost_usd") or 0.0),
+        give_up_reason=outcome.get(_TYPED_MISS_FIELD),
+        stop_reason=outcome.get("stop_reason"),
+        replayable=(entry_dir / "environment-spec.json").is_file(),
+        duration_s=round(time.monotonic() - t0, 1),
+    )
+    return row
+
+
+def write_sidecar(row: dict[str, Any], entry_dir: Path,
+                  overlay_dir: Path | None) -> None:
+    """Entry-level provenance. ``verification`` is present ONLY on an
+    env-verified entry; misses keep their typed reason as information.
+    Span-level manifest ``review`` fields are never touched."""
+    sidecar = {
+        "cve_id": row["cve_id"],
+        "boundary_commit": row.get("boundary_commit"),
+        "status": row.get("status"),
+        "verify_passed": row.get("verify_passed", False),
+        "method": row.get("method"),
+        "replayable": row.get("replayable", False),
+        "profile": "deployed-infrastructure",
+        "cost_usd": row.get("cost_usd", 0.0),
+        "give_up_reason": row.get("give_up_reason"),
+        "run_ref": str(entry_dir),
+        "ts": row.get("started_at"),
+    }
+    if row.get("status") == "success" and row.get("verify_passed"):
+        # enum: env-verified | repro-verified (reserved for /exploit)
+        sidecar["verification"] = "env-verified"
+    (entry_dir / SIDECAR).write_text(
+        json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+    if overlay_dir is not None:
+        overlay_dir.mkdir(parents=True, exist_ok=True)
+        (overlay_dir / f"{row['cve_id']}.{SIDECAR}").write_text(
+            json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_ledger(out_dir: Path) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    path = out_dir / LEDGER
+    if not path.is_file():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            rows[row["cve_id"]] = row
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return rows
+
+
+def render_report(rows: list[dict[str, Any]], out_dir: Path) -> str:
+    verified = [r for r in rows if r.get("verify_passed")
+                and r.get("status") == "success"]
+    missed = [r for r in rows if r not in verified]
+    spend = sum(float(r.get("cost_usd") or 0.0) for r in rows)
+    lines = [
+        "# cvefix env-verification pass",
+        "",
+        f"- entries recorded: {len(rows)}",
+        f"- env-verified: {len(verified)} "
+        f"({sum(1 for r in verified if r.get('replayable'))} replayable)",
+        f"- missed: {len(missed)}",
+        f"- spend: ${spend:.2f} (profile: deployed-infrastructure)",
+        "",
+        "| CVE | status | verified | method | replayable | cost |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in sorted(rows, key=lambda r: r["cve_id"]):
+        lines.append(
+            f"| {r['cve_id']} | {r.get('status')} "
+            f"| {r.get('verify_passed', False)} | {r.get('method') or ''} "
+            f"| {r.get('replayable', False)} "
+            f"| ${float(r.get('cost_usd') or 0):.2f} |")
+    text = "\n".join(lines) + "\n"
+    (out_dir / "report.md").write_text(text, encoding="utf-8")
+    return text
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        entries = load_specs(args.specs)
+    except Exception as exc:  # noqa: BLE001 — CLI boundary
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    args.out.mkdir(parents=True, exist_ok=True)
+    ledger = _load_ledger(args.out)
+
+    todo = [e for e in entries if e["spec"].cve_id not in ledger]
+    print(f"cvefix-envs: {len(entries)} spec(s), "
+          f"{len(ledger)} already in the ledger, {len(todo)} to run; "
+          f"budget ${args.budget_usd:.2f}")
+    if args.dry_run:
+        for e in todo:
+            print(f"  {e['spec'].cve_id}  ({e['path'].name})")
+        return 0
+    if not todo and not ledger:
+        return 1
+
+    spent = sum(float(r.get("cost_usd") or 0.0) for r in ledger.values())
+    ceiling_hit = False
+    for e in todo:
+        if spent >= args.budget_usd:
+            ceiling_hit = True
+            print(f"BUDGET CEILING: ${spent:.2f} spent >= "
+                  f"${args.budget_usd:.2f} — stopping before "
+                  f"{e['spec'].cve_id}. Re-invoke with a new "
+                  f"--budget-usd tranche to continue.",
+                  file=sys.stderr)
+            break
+        cve = e["spec"].cve_id
+        print(f"[{cve}] ...", flush=True)
+        row = run_entry(e["spec"], args.out / cve, args)
+        write_sidecar(row, args.out / cve, args.overlay_dir)
+        with (args.out / LEDGER).open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+        ledger[cve] = row
+        spent += float(row.get("cost_usd") or 0.0)
+        print(f"  -> {row.get('status')} "
+              f"(verified={row.get('verify_passed', False)}, "
+              f"${float(row.get('cost_usd') or 0):.2f}, "
+              f"total ${spent:.2f})", flush=True)
+
+    render_report(list(ledger.values()), args.out)
+    print(f"report: {args.out / 'report.md'}")
+    return 3 if ceiling_hit else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

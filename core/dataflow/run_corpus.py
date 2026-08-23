@@ -17,7 +17,6 @@ import csv
 import importlib
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 
 from core.dataflow.finding import Finding
 from core.dataflow.label import (
@@ -26,12 +25,16 @@ from core.dataflow.label import (
     VERDICT_TRUE_POSITIVE,
 )
 from core.dataflow.validator import TrivialValidator, Validator, ValidatorVerdict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 _DEFAULT_CORPUS_DIR = Path(__file__).resolve().parent / "corpus" / "findings"
 
 
-CSV_HEADER: List[str] = [
+CSV_HEADER: list[str] = [
     "finding_id",
     "producer",
     "rule_id",
@@ -43,14 +46,14 @@ CSV_HEADER: List[str] = [
 ]
 
 
-def iter_corpus(corpus_dir: Path) -> Iterable[Tuple[Finding, GroundTruth]]:
+def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
     """Yield ``(finding, label)`` for every paired entry in the corpus dir."""
     for fp in sorted(corpus_dir.glob("*.json")):
         if fp.name.endswith(".label.json"):
             continue
-        finding = Finding.from_json(fp.read_text())
+        finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         label_path = fp.with_suffix(".label.json")
-        label = GroundTruth.from_json(label_path.read_text())
+        label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         yield finding, label
 
 
@@ -75,7 +78,7 @@ def run(corpus_dir: Path, validator: Validator, output: Path) -> int:
     Returns the number of findings processed.
     """
     rows = 0
-    with output.open("w", newline="") as f:
+    with output.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
         for finding, label in iter_corpus(corpus_dir):
@@ -102,26 +105,26 @@ def load_validator(spec: str) -> Validator:
     """Load a validator from a ``module.path:ClassName`` import spec."""
     module_path, _, class_name = spec.partition(":")
     if not module_path or not class_name:
-        raise ValueError(
-            f"validator spec must be `module.path:ClassName`, got {spec!r}"
-        )
-    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+        msg = f"validator spec must be `module.path:ClassName`, got {spec!r}"
+        raise ValueError(msg)
     # ``module_path`` is from the operator's ``--validator`` CLI
     # flag. The operator invoking RAPTOR can already execute any
     # Python; importing the validator they explicitly named adds
     # no privilege. Not a public API, not attacker-controllable.
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
     instance = cls()
     if not isinstance(instance, Validator):
-        raise TypeError(
+        msg = (
             f"{spec!r} loaded but does not implement Validator protocol "
             f"(missing .validate(finding))"
         )
+        raise TypeError(msg)
     return instance
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--corpus-dir",

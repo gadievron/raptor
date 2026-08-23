@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
-from packages.sca import whatif
 from core.json import JsonCache
+from packages.sca import whatif
 from packages.sca.osv import OSV_QUERY_BATCH_URL, OSV_VULN_URL_TEMPLATE
-
 
 _VULN_OLD = {
     "id": "GHSA-old",
@@ -50,11 +49,11 @@ class StubHttp:
 
     def __init__(
         self,
-        version_to_vulns: Dict[str, List[str]],
-        records: Dict[str, Dict[str, Any]],
+        version_to_vulns: dict[str, list[str]],
+        records: dict[str, dict[str, Any]],
     ) -> None:
-        self.posts: List[Tuple[str, dict]] = []
-        self.gets: List[str] = []
+        self.posts: list[tuple[str, dict]] = []
+        self.gets: list[str] = []
         self._v_to_vulns = version_to_vulns
         self._records = records
 
@@ -265,7 +264,8 @@ def test_writes_report_to_out(tmp_path: Path, capsys) -> None:
 
 def test_explain_appends_llm_section_when_available(tmp_path: Path, capsys) -> None:
     """When --explain is set and LLM is available, the report gains an impact section."""
-    from unittest.mock import patch as _patch, MagicMock
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as _patch
 
     http = StubHttp(version_to_vulns={"1.0": [], "2.0": []}, records={})
     cache = JsonCache(root=tmp_path / "cache")
@@ -296,12 +296,88 @@ def test_explain_degrades_when_no_llm(tmp_path: Path, capsys) -> None:
     http = StubHttp(version_to_vulns={"1.0": [], "2.0": []}, records={})
     cache = JsonCache(root=tmp_path / "cache")
 
-    with _patch("packages.sca.llm.get_llm_client", return_value=None):
-        with _patch("packages.sca.llm.upgrade_impact_review.assess_upgrade_impact") as mock_assess:
-            whatif.main(
-                ["npm", "x", "1.0", "2.0", "--explain", "--target", str(tmp_path)],
-                http=http, cache=cache,
-            )
+    with _patch("packages.sca.llm.get_llm_client", return_value=None), \
+            _patch("packages.sca.llm.upgrade_impact_review"
+                   ".assess_upgrade_impact") as mock_assess:
+        whatif.main(
+            ["npm", "x", "1.0", "2.0", "--explain", "--target", str(tmp_path)],
+            http=http, cache=cache,
+        )
     captured = capsys.readouterr()
     assert "No LLM available" in captured.out
     mock_assess.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# OSV-field sanitisation in _advisory_line
+# ---------------------------------------------------------------------------
+
+def test_advisory_line_sanitises_osv_fields() -> None:
+    """OSV id / aliases / summary reach stdout via _advisory_line —
+    ANSI escapes and autofetch markup must be defanged."""
+    from pathlib import Path
+
+    from packages.sca.models import (
+        Advisory,
+        Confidence,
+        Dependency,
+        PinStyle,
+        Reachability,
+        VulnFinding,
+    )
+    from packages.sca.whatif import _advisory_line
+
+    adv = Advisory(
+        osv_id="GHSA-y\x1b[31mred",
+        aliases=["CVE-2099-0002\x1b[0m"],
+        summary="see ![leak](https://evil.example/x.png)\x07",
+        details="",
+        affected=[],
+        severity=None,
+        fixed_versions=[],
+        references=[],
+    )
+    dep = Dependency(
+        ecosystem="npm", name="x", version="1.0",
+        declared_in=Path("/r/package.json"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:npm/x@1.0",
+        parser_confidence=Confidence("high", reason="t"),
+    )
+    f = VulnFinding(
+        finding_id="sca:vuln:npm:x@1.0:GHSA-y",
+        dependency=dep,
+        advisories=[adv],
+        in_kev=False,
+        epss=None,
+        fixed_version=None,
+        reachability=Reachability(
+            verdict="not_evaluated",
+            confidence=Confidence("low", reason="t"),
+        ),
+        version_match_confidence=Confidence("high", reason="t"),
+        cvss_score=None,
+        cvss_vector=None,
+        severity="high",
+        exposure_factor=0.0,
+        transitive_depth=0,
+    )
+    line = _advisory_line(f)
+    assert "\x1b" not in line
+    assert "\x07" not in line
+    assert "\\x1b" in line
+    assert "![leak](https://evil.example/x.png)" not in line
+
+
+def test_explain_requires_target(tmp_path: Path, capsys) -> None:
+    """--explain without --target must be a parse error (the help text
+    documents the coupling), never a silent cwd-relative grep."""
+    with pytest.raises(SystemExit) as exc:
+        whatif.main(
+            ["npm", "x", "1.0", "2.0", "--explain"],
+            http=StubHttp(version_to_vulns={}, records={}),
+            cache=JsonCache(root=tmp_path),
+        )
+    assert exc.value.code == 2  # argparse usage-error exit
+    err = capsys.readouterr().err
+    assert "--target is required with --explain" in err

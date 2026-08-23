@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Named helper for the coverage read hook (raptor-hook-read).
+
+Replaces the hook's inline ``python3 -c "..."`` JSON extractors and
+its ``python3 - <<PY`` manifest-append heredoc. The behaviour is
+identical; only the process shape changes: an on-disk, attributable
+script executed by path instead of interpreter invocations carrying
+embedded source. The hook fires on EVERY tracked file read, so inline
+code here was the highest-frequency "python -c blob" an endpoint-
+security agent saw from RAPTOR (docs/troubleshooting.md, "Running
+under endpoint security / EDR").
+
+Standalone on purpose: no RAPTOR imports (the hook runs outside any
+RAPTOR process, straight from Claude Code), stdlib only.
+
+Subcommands (all failures are silent — print nothing / append nothing
+and exit 0; an async hook must never turn a malformed payload into a
+visible error):
+
+  get <file|-> <dotted.key>
+      Parse JSON from *file* (``-`` = stdin) and print the string
+      value at *dotted.key* (missing / non-string prints nothing).
+
+  append <manifest> <line>
+      Append one line with O_NOFOLLOW|O_APPEND, mode 0600 — the
+      symlink-refusing append documented in the Python twin
+      (core/coverage/track_read.py). Path and line arrive as argv
+      DATA, never interpolated into code.
+"""
+
+import json
+import os
+import sys
+
+
+def _get(src: str, key: str) -> None:
+    try:
+        if src == "-":
+            data = json.load(sys.stdin)
+        else:
+            with open(src, encoding="utf-8") as fh:
+                data = json.load(fh)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return
+    cur = data
+    for part in key.split("."):
+        if not isinstance(cur, dict):
+            return
+        cur = cur.get(part)
+    if isinstance(cur, str) and cur:
+        print(cur)
+
+
+def _append(manifest: str, line: str) -> None:
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_APPEND
+             | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fd = os.open(manifest, flags, 0o600)
+    except OSError:
+        return  # symlink (ELOOP) or unwritable — refuse silently
+    try:
+        os.write(fd, (line + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[0] == "get":
+        _get(argv[1], argv[2])
+    elif len(argv) == 3 and argv[0] == "append":
+        _append(argv[1], argv[2])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

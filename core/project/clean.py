@@ -3,7 +3,7 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
 def _run_dir_size(d: Path) -> int:
@@ -26,7 +26,36 @@ def _run_dir_size(d: Path) -> int:
     return size
 
 
-def plan_clean(project, keep=1) -> Dict[str, Any]:
+def split_live_runs(dirs) -> tuple[list, list]:
+    """Partition run dirs into ``(rest, live)``.
+
+    A run is *live* when its metadata says ``status=running`` AND the
+    recorded ``tool_pid`` is still alive — deleting or merging it would
+    yank the directory out from under an in-flight process. Runs in
+    ``running`` state whose worker is dead are NOT live (they are stale
+    abandons; the sweep machinery marks them failed, and clean may
+    reclaim them like any other terminal run).
+    """
+    from core.json import load_json
+    from core.run.metadata import RUN_METADATA_FILE, _tool_pid_alive
+
+    live: list = []
+    rest: list = []
+    for d in dirs:
+        try:
+            meta = load_json(Path(d) / RUN_METADATA_FILE)
+        except Exception:  # noqa: BLE001 — unreadable metadata is not live
+            meta = None
+        if (isinstance(meta, dict)
+                and meta.get("status") == "running"
+                and _tool_pid_alive(meta.get("tool_pid"))):
+            live.append(d)
+        else:
+            rest.append(d)
+    return rest, live
+
+
+def plan_clean(project, keep: int=1) -> dict[str, Any]:
     """Plan which runs to delete. Returns stats with directory paths.
 
     ``keep=0`` is valid: delete as aggressively as possible, bounded by the
@@ -37,14 +66,21 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
     Does not modify the filesystem.
     """
     if keep < 0:
-        raise ValueError(f"keep must be >= 0, got {keep}")
+        msg = f"keep must be >= 0, got {keep}"
+        raise ValueError(msg)
     groups = project.get_run_dirs_by_type()
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "delete_dirs": [], "deleted": [], "kept": [], "freed_bytes": 0,
-        "by_type": {},
+        "by_type": {}, "skipped_live": [],
     }
 
     for cmd_type, dirs in groups.items():
+        # Never plan a live run (status=running with a live worker)
+        # for deletion — it counts as kept, outside the keep quota.
+        dirs, live = split_live_runs(dirs)
+        for d in live:
+            stats["skipped_live"].append(d.name)
+            stats["kept"].append(d.name)
         to_keep = dirs[:keep]
         to_delete = dirs[keep:]
         # Clean-safety invariant (project.md): never delete the last run of a
@@ -74,7 +110,7 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
     return stats
 
 
-def plan_dedup(project) -> Dict[str, Any]:
+def plan_dedup(project) -> dict[str, Any]:
     """Lossless dedup plan: per command type, drop runs fully subsumed (same
     files examined, no unique findings) by a surviving run, keeping the newest
     representative. Same shape as :func:`plan_clean` so the clean machinery
@@ -87,11 +123,18 @@ def plan_dedup(project) -> Dict[str, Any]:
     from core.coverage.clean import dedup_runs
 
     groups = project.get_run_dirs_by_type()
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "delete_dirs": [], "deleted": [], "kept": [], "freed_bytes": 0,
-        "by_type": {},
+        "by_type": {}, "skipped_live": [],
     }
     for cmd_type, dirs in groups.items():
+        # Never dedup away a live run (status=running with a live
+        # worker) — and never let a half-written live run subsume a
+        # completed sibling either.
+        dirs, live = split_live_runs(dirs)
+        for d in live:
+            stats["skipped_live"].append(d.name)
+            stats["kept"].append(d.name)
         droppable, _ = dedup_runs(dirs)
         drop_set = set(droppable)
         type_freed = 0
@@ -113,36 +156,44 @@ def plan_dedup(project) -> Dict[str, Any]:
     return stats
 
 
-def execute_clean(plan: Dict[str, Any]) -> None:
+def execute_clean(plan: dict[str, Any],
+                  output_path: Path | None = None) -> None:
     """Execute a clean plan by deleting the planned directories.
 
     Per-dir containment check before delete: refuse to rmtree any
     path that resolves outside the project's expected output area.
-    Pre-fix `execute_clean` trusted whatever paths the planner
-    produced — but `delete_dirs` can be operator-supplied (a future
+    `delete_dirs` can be operator-supplied (a future
     `--delete-dirs path1,path2,...` flag) or planner-corrupted (a
     bug elsewhere produces a path with `..` that escapes the
     project root). `shutil.rmtree` would happily walk anywhere
     its argument resolved to.
 
-    Worst case the unguarded rmtree could hit operator data outside
-    `~/.raptor/projects/<name>/`. The containment check refuses any
-    delete that, after `resolve()`, is not under the plan's expected
-    parent (the plan dir is the union of all `delete_dirs`'
-    common parent — operator can override with explicit env var
-    if their layout has a non-standard root).
+    ``output_path`` is the containment root — the project's output
+    directory, passed by the caller that planned against it. Pre-fix
+    the root was derived from the delete paths themselves (the
+    closest common ancestor of ``delete_dirs``' parents), which is a
+    tautology: a plan whose every path pointed at the same wrong tree
+    contained itself perfectly. The self-derived ancestor is kept
+    only as a fallback for legacy callers that don't pass a root.
     """
     delete_dirs = plan["delete_dirs"]
     if not delete_dirs:
         return
-    # The expected containment root is the closest common ancestor
-    # of all paths in `delete_dirs`. A delete that resolves outside
-    # that ancestor is almost certainly a bug.
-    try:
-        roots = [Path(d).resolve().parent for d in delete_dirs]
-        common = Path(os.path.commonpath([str(r) for r in roots]))
-    except (OSError, ValueError):
-        common = None
+    common = None
+    if output_path is not None:
+        try:
+            common = Path(output_path).resolve()
+        except OSError:
+            common = None
+    if common is None:
+        # Legacy fallback: closest common ancestor of the plan's own
+        # paths. Weaker (self-referential) but still catches a single
+        # corrupted entry escaping its siblings.
+        try:
+            roots = [Path(d).resolve().parent for d in delete_dirs]
+            common = Path(os.path.commonpath([str(r) for r in roots]))
+        except (OSError, ValueError):
+            common = None
     for d in delete_dirs:
         if not d.exists():
             continue
@@ -154,15 +205,19 @@ def execute_clean(plan: Dict[str, Any]) -> None:
             try:
                 real.relative_to(common)
             except ValueError:
-                # Resolved path escapes the common parent. Refuse.
-                raise RuntimeError(
+                # Resolved path escapes the containment root. Refuse.
+                msg = (
                     f"execute_clean refusing to rmtree {d!r}: resolved "
                     f"path {real!r} escapes containment root {common!r}"
                 )
-        shutil.rmtree(d)
+                raise RuntimeError(msg) from None
+        try:
+            shutil.rmtree(d)
+        except FileNotFoundError:
+            pass
 
 
-def clean_project(project, keep=1, dry_run=False) -> Dict[str, Any]:
+def clean_project(project, keep: int=1, dry_run: bool=False) -> dict[str, Any]:
     """Clean old runs from a project. Returns stats dict.
 
     Keeps latest `keep` runs per command type.
@@ -170,5 +225,5 @@ def clean_project(project, keep=1, dry_run=False) -> Dict[str, Any]:
     """
     stats = plan_clean(project, keep=keep)
     if not dry_run:
-        execute_clean(stats)
+        execute_clean(stats, output_path=project.output_path)
     return stats

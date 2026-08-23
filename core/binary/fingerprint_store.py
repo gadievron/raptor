@@ -52,11 +52,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from collections.abc import Iterator
 
+from core.atomic_fs import write_text_atomically
 from core.binary.fingerprint import (
     FINGERPRINT_SCHEMA_VERSION,
     CapabilityFingerprint,
@@ -81,7 +80,7 @@ def _ref_filename(ref: str) -> str:
 
 def save_fingerprint(
     store_dir: Path, ref: str, fingerprint: CapabilityFingerprint,
-) -> Optional[Path]:
+) -> Path | None:
     """Atomically write ``fingerprint`` to ``store_dir`` keyed
     by ``ref``. Replaces any previous entry for the same ref.
 
@@ -108,38 +107,27 @@ def save_fingerprint(
         "fingerprint": fingerprint.to_dict(),
     }
     final_path = store_dir / _ref_filename(ref)
-    # Atomic write: tmp file in the same dir (so rename is on
-    # the same filesystem and stays atomic), then os.replace.
+    # Atomic write: fingerprint is the drift-detector's on-disk baseline.
+    # A torn write would corrupt JSON, get skipped as unreadable, and
+    # silently disable drift signal for that ref until the next scan.
     try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=".tmp-", suffix=".json", dir=store_dir,
+        write_text_atomically(
+            final_path,
+            json.dumps(payload, sort_keys=True, indent=2),
+            tmp_prefix=".fingerprint-",
         )
-    except OSError as e:
-        logger.warning(
-            "core.binary.fingerprint_store: tempfile failed for %s: %s",
-            store_dir, e,
-        )
-        return None
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, sort_keys=True, indent=2)
-        os.replace(tmp_name, final_path)
     except OSError as e:
         logger.warning(
             "core.binary.fingerprint_store: write failed for %s: %s",
             final_path, e,
         )
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
         return None
     return final_path
 
 
 def load_fingerprint(
     store_dir: Path, ref: str,
-) -> Optional[CapabilityFingerprint]:
+) -> CapabilityFingerprint | None:
     """Load the most recently stored fingerprint for ``ref``.
 
     Returns ``None`` when:
@@ -156,9 +144,9 @@ def load_fingerprint(
     if not file_path.is_file():
         return None
     try:
-        with open(file_path, "r") as f:
+        with Path(file_path).open(encoding="utf-8") as f:
             payload = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.debug(
             "core.binary.fingerprint_store: load failed for %s: %s",
             file_path, e,
@@ -204,7 +192,7 @@ def load_fingerprint(
 
 def iter_refs(
     store_dir: Path,
-) -> Iterator[Tuple[str, CapabilityFingerprint]]:
+) -> Iterator[tuple[str, CapabilityFingerprint]]:
     """Yield ``(ref, fingerprint)`` for every entry in the store.
 
     Useful for store-wide audits / CI gates / drift-detection
@@ -222,9 +210,9 @@ def iter_refs(
             # final-named entry is what's load-bearing.
             continue
         try:
-            with open(entry, "r") as f:
+            with Path(entry).open(encoding="utf-8") as f:
                 payload = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
         if not isinstance(payload, dict):
             continue

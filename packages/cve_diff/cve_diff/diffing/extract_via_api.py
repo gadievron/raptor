@@ -73,40 +73,45 @@ def extract_via_api(
     """
     sha = (ref.fix_commit or "").strip().lower()
     if sha in _INVALID_LITERALS or not _SHA_RE.fullmatch(sha):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: extract_via_api refused — fix_commit "
             f"{ref.fix_commit!r} is not a SHA (Bug #12 defense)"
         )
+        raise AnalysisError(msg)
 
     slug = _slug_of(ref.repository_url)
     if slug is None:
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: extract_via_api supports github.com URLs only "
             f"(got {ref.repository_url!r})"
         )
+        raise AnalysisError(msg)
 
     payload = github_client.get_commit(slug, sha)
     if payload is None:
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: GitHub commit API returned no data for {slug}@{sha[:12]} "
             f"(404 / rate-limit / network failure)"
         )
+        raise AnalysisError(msg)
 
     parents = payload.get("parents") or []
     parent_sha_raw = parents[0].get("sha") if parents and isinstance(parents[0], dict) else None
     if not isinstance(parent_sha_raw, str):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: commit {slug}@{sha[:12]} has no parent — "
             f"can't compute fix^..fix via API (root commit)"
         )
+        raise AnalysisError(msg)
     parent_sha = parent_sha_raw.lower()
 
     files_raw = payload.get("files") or []
     if not isinstance(files_raw, list):
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: API response 'files' is not a list "
             f"(got {type(files_raw).__name__})"
         )
+        raise AnalysisError(msg)
 
     # Build unified diff text by concatenating per-file patches.
     # Each file in the API response has a `patch` field with hunks.
@@ -143,9 +148,8 @@ def extract_via_api(
     diff_text = "\n".join(diff_chunks)
 
     if not file_names and not diff_text:
-        raise AnalysisError(
-            f"{cve_id}: API returned commit {slug}@{sha[:12]} with no file changes"
-        )
+        msg = f"{cve_id}: API returned commit {slug}@{sha[:12]} with no file changes"
+        raise AnalysisError(msg)
 
     shape = shape_dynamic.classify(
         file_names,

@@ -33,7 +33,6 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 
 # Match preprocessor directives. Group 1 is the directive name; group 2
@@ -54,7 +53,7 @@ class ConditionalBlock:
 
 
 @lru_cache(maxsize=512)
-def _index_file(path_str: str) -> Tuple[ConditionalBlock, ...]:
+def _index_file(path_str: str) -> tuple[ConditionalBlock, ...]:
     """Parse a file once and cache the list of conditional blocks.
 
     Returns an empty tuple when the file can't be read or contains
@@ -63,12 +62,12 @@ def _index_file(path_str: str) -> Tuple[ConditionalBlock, ...]:
     """
     path = Path(path_str)
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ()
 
-    blocks: List[ConditionalBlock] = []
-    open_stack: List[Tuple[int, str, str]] = []  # (line, directive, condition)
+    blocks: list[ConditionalBlock] = []
+    open_stack: list[tuple[int, str, str]] = []  # (line, directive, condition)
     for n, line in enumerate(text.split("\n"), start=1):
         m = _DIRECTIVE_RE.match(line)
         if not m:
@@ -78,15 +77,14 @@ def _index_file(path_str: str) -> Tuple[ConditionalBlock, ...]:
 
         if directive in ("if", "ifdef", "ifndef"):
             open_stack.append((n, directive, rest))
-        elif directive == "endif":
-            if open_stack:
-                start_line, dir_open, cond = open_stack.pop()
-                blocks.append(ConditionalBlock(
-                    start_line=start_line,
-                    end_line=n,
-                    condition=cond,
-                    directive=dir_open,
-                ))
+        elif directive == "endif" and open_stack:
+            start_line, dir_open, cond = open_stack.pop()
+            blocks.append(ConditionalBlock(
+                start_line=start_line,
+                end_line=n,
+                condition=cond,
+                directive=dir_open,
+            ))
         # `elif` and `else` are continuations of the current block —
         # we don't change the stack. v1 limitation documented in the
         # module docstring.
@@ -96,7 +94,7 @@ def _index_file(path_str: str) -> Tuple[ConditionalBlock, ...]:
     return tuple(blocks)
 
 
-def enclosing_condition(file_path: str, line: int) -> Optional[str]:
+def enclosing_condition(file_path: str, line: int) -> str | None:
     """Return the condition text of the innermost ``#if*`` block that
     contains ``line`` in ``file_path``, or ``None`` if the line is not
     inside any conditional.
@@ -109,7 +107,7 @@ def enclosing_condition(file_path: str, line: int) -> Optional[str]:
     blocks = _index_file(file_path)
     # Find blocks containing the line; pick the one with the largest
     # start_line (innermost — opens last, before the matched line).
-    enclosing: Optional[ConditionalBlock] = None
+    enclosing: ConditionalBlock | None = None
     for block in blocks:
         if block.start_line <= line <= block.end_line:
             if enclosing is None or block.start_line > enclosing.start_line:

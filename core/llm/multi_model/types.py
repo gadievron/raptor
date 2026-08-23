@@ -34,8 +34,9 @@ Contracts in plain English:
 
 from dataclasses import dataclass, field
 from typing import (
-    Any, Callable, Dict, Hashable, List, Optional, Protocol, runtime_checkable,
+    Any, Protocol, runtime_checkable,
 )
+from collections.abc import Callable, Hashable
 
 
 @runtime_checkable
@@ -72,11 +73,11 @@ class MultiModelResult:
         The run still completes with the survivors; consumers may choose
         to fail loudly if too many failed.
     """
-    items: List[Dict[str, Any]] = field(default_factory=list)
-    correlation: Optional[Dict[str, Any]] = None
-    aggregation: Optional[Dict[str, Any]] = None
-    per_model_raw: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
-    failed_models: List[str] = field(default_factory=list)
+    items: list[dict[str, Any]] = field(default_factory=list)
+    correlation: dict[str, Any] | None = None
+    aggregation: dict[str, Any] | None = None
+    per_model_raw: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    failed_models: list[str] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -88,7 +89,7 @@ class ItemAdapter(Protocol):
     compute agreement. Implementations MUST handle N=1 gracefully.
     """
 
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         """Stable, non-empty string ID. Consistent across models.
 
         Implementations must return a non-empty string. Items without a
@@ -98,8 +99,8 @@ class ItemAdapter(Protocol):
         ...
 
     def merge(
-        self, per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
+        self, per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
         """Fold per-model result lists into a single merged item list.
 
         Substrate filters out error entries before calling. Implementation
@@ -109,9 +110,9 @@ class ItemAdapter(Protocol):
 
     def correlate(
         self,
-        merged_items: List[Dict[str, Any]],
-        per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        merged_items: list[dict[str, Any]],
+        per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
         """Compute agreement matrix / confidence signals over merged items.
 
         Returns a shape-specific summary:
@@ -133,7 +134,7 @@ class VerdictAdapter(ItemAdapter, Protocol):
     via select_primary, attaches multi_model_analyses.
     """
 
-    def normalize_verdict(self, item: Dict[str, Any]) -> str:
+    def normalize_verdict(self, item: dict[str, Any]) -> str:
         """Return one of: 'positive', 'negative', 'inconclusive', 'unknown'.
 
         'unknown' items are kept in merge but excluded from agreement
@@ -142,8 +143,8 @@ class VerdictAdapter(ItemAdapter, Protocol):
         ...
 
     def select_primary(
-        self, model_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        self, model_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Pick one result as primary when N models all returned for one id.
 
         Policy is consumer-defined. /agentic uses prefer-positive to avoid
@@ -160,7 +161,7 @@ class SetAdapter(ItemAdapter, Protocol):
     tasks. Merge unions by item_key, annotates with found_by_models.
     """
 
-    def item_key(self, item: Dict[str, Any]) -> Hashable:
+    def item_key(self, item: dict[str, Any]) -> Hashable:
         """Hashable dedup key. Items with equal keys are the same item.
 
         Implementations should normalize before key generation (e.g.,
@@ -192,8 +193,8 @@ class Reviewer(Protocol):
     cutoff_ratio: float
 
     def review(
-        self, merged_items: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        self, merged_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Return new dicts with reviewer annotations; substrate replaces.
 
         For ConditionalReviewer, the substrate filters via should_review()
@@ -215,7 +216,7 @@ class ConditionalReviewer(Reviewer, Protocol):
     result looks suspicious — low quality or nonce leaked).
     """
 
-    def should_review(self, item: Dict[str, Any]) -> bool:
+    def should_review(self, item: dict[str, Any]) -> bool:
         """Return True if this reviewer should process the item."""
         ...
 
@@ -251,9 +252,9 @@ class Aggregator(Protocol):
 
     def aggregate(
         self,
-        merged_items: List[Dict[str, Any]],
-        correlation: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        merged_items: list[dict[str, Any]],
+        correlation: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Produce the synthesis dict.
 
         Return value is stored on MultiModelResult.aggregation:
@@ -266,4 +267,4 @@ class Aggregator(Protocol):
 
 # Type alias for the consumer-supplied per-model task callable.
 # Substrate calls this once per model in parallel.
-TaskFn = Callable[[ModelHandle], List[Dict[str, Any]]]
+TaskFn = Callable[[ModelHandle], list[dict[str, Any]]]

@@ -1,13 +1,36 @@
 rules:
+  # Known gaps (not cheaply expressible as literal-keysize patterns, left for a
+  # dedicated pass):
+  #   * EC: weak curves are named (secp160r1, prime192v1, ...) not sized —
+  #     needs a curve-name allowlist/blocklist rule per library.
+  #   * DH/DHE: parameter strength usually comes from loaded parameter files
+  #     or library defaults rather than an inline integer.
+
   - id: raptor.crypto.rsa.small-key.java
     message: RSA key size too small. Use >= 2048 bits. Verify by regenerating keys and updating tests.
     languages: [java, kotlin]
     severity: HIGH
     patterns:
       - pattern: |
-          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA");
+          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA", ...);
+          ...
+          $KPG.initialize($N, ...);
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.dsa.small-key.java
+    message: DSA key size too small. Use >= 2048 bits (or prefer EdDSA/ECDSA). Verify by regenerating keys.
+    languages: [java, kotlin]
+    severity: HIGH
+    patterns:
       - pattern: |
-          $KPG.initialize($N, ...)
+          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("DSA", ...);
+          ...
+          $KPG.initialize($N, ...);
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048
@@ -20,7 +43,28 @@ rules:
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern: rsa.generate_private_key(public_exponent=$E, key_size=$N, ...)
+      - pattern-either:
+          # cryptography.hazmat
+          - pattern: rsa.generate_private_key(public_exponent=$E, key_size=$N, ...)
+          # pycryptodome / pycrypto
+          - pattern: Crypto.PublicKey.RSA.generate($N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.dsa.small-key.python
+    message: DSA key size too small. Use >= 2048 bits (or prefer EdDSA/ECDSA). Verify with known-answer tests.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          # cryptography.hazmat
+          - pattern: dsa.generate_private_key(key_size=$N, ...)
+          # pycryptodome / pycrypto
+          - pattern: Crypto.PublicKey.DSA.generate($N, ...)
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048

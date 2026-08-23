@@ -28,15 +28,16 @@ Discovery sources (in walk order):
    the release driver; the Dockerfile's own ``--platform=`` may
    declare narrower targets that don't reflect production.
 
-4. **GHA ``docker/build-push-action`` step inputs** — the dominant
+4. **GitHub Actions** — ``.github/workflows/*.yml`` ``runs-on:``
+   values. Standard runner labels map to known platforms. Matrix
+   strategies (``strategy.matrix.platform``) multiply the set.
+
+5. **GHA ``docker/build-push-action`` step inputs** — the dominant
    modern multi-arch release pipeline. ``with: platforms:
    linux/amd64,linux/arm64`` declares the OUTPUT image's arches
    independent of ``runs-on:`` (which is the runner arch — usually
-   x86_64 + QEMU emulation for arm64).
-
-5. **GitHub Actions** — ``.github/workflows/*.yml`` ``runs-on:``
-   values. Standard runner labels map to known platforms. Matrix
-   strategies (``strategy.matrix.platform``) multiply the set.
+   x86_64 + QEMU emulation for arm64). Scanned per workflow file
+   right after that file's ``runs-on`` values.
 
 If no signal is found, the matrix defaults to
 ``{(x86_64, glibc 2.17)}`` (the manylinux2014 baseline — what
@@ -58,7 +59,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Set, Tuple
+from collections.abc import Iterable
 
 from packages.sca.platform_matrix.glibc_db import (
     LibcVersion,
@@ -81,7 +82,7 @@ class PlatformPair:
     """
 
     arch: str                  # "x86_64" | "aarch64" | "armv7l" | "i686" | …
-    libc: Optional[LibcVersion]
+    libc: LibcVersion | None
     # Source-trace for diagnostics ("Dockerfile FROM python:3.13-bookworm",
     # "GHA runs-on: ubuntu-22.04", etc.). Not used by the compat
     # checker; surfaces in operator-facing reports so a flagged
@@ -91,7 +92,7 @@ class PlatformPair:
     # project on a macos-13 runner has macos_version=(13, 0); a wheel
     # tagged ``macosx_14_0_arm64`` is too new and gets refused. ``None``
     # for non-macOS pairs.
-    macos_version: Optional[Tuple[int, int]] = None
+    macos_version: tuple[int, int] | None = None
 
     def as_str(self) -> str:
         if self.macos_version is not None:
@@ -104,7 +105,7 @@ class PlatformPair:
 class ProjectPlatformMatrix:
     """The set of (arch, libc) pairs the project supports."""
 
-    pairs: Set[PlatformPair] = field(default_factory=set)
+    pairs: set[PlatformPair] = field(default_factory=set)
 
     def add(self, pair: PlatformPair) -> None:
         self.pairs.add(pair)
@@ -154,7 +155,7 @@ _FROM_RE = re.compile(
 )
 
 
-def _from_image_to_distro(image_ref: str) -> Optional[str]:
+def _from_image_to_distro(image_ref: str) -> str | None:
     """Strip digest + reduce to a distro-lookup key.
 
     Examples:
@@ -183,18 +184,20 @@ def _walk_dockerfile(
         logger.debug("platform_matrix: failed to read %s: %s", path, e)
         return
 
+    known_stages: set = set()
     for match in _FROM_RE.finditer(text):
         platform_flag = match.group(1)  # may be None
         image_ref = match.group(2)
-        # Skip multi-stage FROM-AS references (``FROM build AS rt``
-        # where ``build`` is a prior stage name, not an image).
-        if ":" not in image_ref and "/" not in image_ref:
-            # No tag + no registry — looks like a stage name. The
-            # ``FROM stage AS new_stage`` pattern is the case.
+        as_m = re.search(r'\bAS\s+(\S+)', match.group(0), re.IGNORECASE)
+        if as_m:
+            known_stages.add(as_m.group(1))
+        if image_ref in known_stages:
             continue
-        # Strip variant suffixes like ``-slim``, ``-alpine`` keep
-        # the distro lookup focused: ``python:3.13-slim-bookworm``
-        # is bookworm-based.
+        # Reduce the ref to a ``name:tag`` lookup key (digest +
+        # registry/namespace stripped). Variant suffixes like
+        # ``-slim`` are NOT stripped here — ``lookup_distro_libc``
+        # tolerates them and still resolves
+        # ``python:3.13-slim-bookworm`` as bookworm-based.
         distro_key = _from_image_to_distro(image_ref)
         libc = lookup_distro_libc(distro_key or image_ref)
         if libc is None:
@@ -253,6 +256,14 @@ def _walk_devcontainer(
     if isinstance(image, str):
         distro_key = _from_image_to_distro(image)
         libc = lookup_distro_libc(distro_key or image)
+        if libc is None:
+            logger.debug(
+                "platform_matrix: unknown libc for image %r (from %s)",
+                image, path,
+            )
+            # Still register the platform pair — libc=None means
+            # "we couldn't determine the libc, don't gate on it".
+            # Mirrors the Dockerfile walker.
         for arch in ("x86_64", "aarch64"):
             matrix.add(PlatformPair(
                 arch=arch, libc=libc,
@@ -452,10 +463,10 @@ def _walk_gha_workflows(
 
     runs_on_re = re.compile(r"^\s*runs-on:\s*([^\n#]+)", re.MULTILINE)
     matrix_os_re = re.compile(
-        r"^\s*os:\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
+        r"^\s*(?:os|platform):\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
     )
 
-    for wf in workflows_dir.glob("*.yml"):
+    for wf in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
         try:
             text = wf.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -496,7 +507,7 @@ def _walk_gha_workflows(
 # grammar-incomplete workflow (in-flight edit, typo) doesn't take
 # down discovery.
 _BUILD_PUSH_USES_RE = re.compile(
-    r"^\s*-\s*uses:\s*docker/build-push-action@[^\s\n]+",
+    r"^\s*-?\s*uses:\s*docker/build-push-action@[^\s\n]+",
     re.MULTILINE,
 )
 _NEXT_STEP_BOUNDARY_RE = re.compile(
@@ -536,6 +547,8 @@ def _extract_gha_build_push_platforms(
         if platforms_match is None:
             continue
         value = platforms_match.group(1).strip().strip("'\"")
+        if value in ("|", ">", "|+", ">+", "|-", ">-"):
+            continue
         # ``platforms: linux/amd64,linux/arm64`` — comma-separated.
         # Also handle YAML list inline shape: ``[linux/amd64, ...]``.
         value = value.strip("[]")
@@ -568,7 +581,7 @@ _MACOS_RUNNER_LATEST = (14, 0)
 _MACOS_RUNNER_RE = re.compile(r"^macos-(\d+)(?:\.(\d+))?$")
 
 
-def _parse_macos_runner_version(runner_ref: str) -> Optional[Tuple[int, int]]:
+def _parse_macos_runner_version(runner_ref: str) -> tuple[int, int] | None:
     """Map a GHA macOS runner label to its (major, minor) macOS
     version. Returns ``None`` for unrecognised labels — let the
     wheel-compat check fall back to "no version constraint" rather
@@ -602,9 +615,8 @@ def _add_runner(
         ))
         return
     if runner_ref.startswith("macos-"):
-        # Modern macOS runners are aarch64 (Apple Silicon).
-        arch = "aarch64"
         macos_version = _parse_macos_runner_version(runner_ref)
+        arch = "aarch64" if macos_version is None or macos_version[0] >= 14 else "x86_64"
         matrix.add(PlatformPair(
             arch=arch, libc=None,
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",
@@ -626,8 +638,6 @@ def _add_runner(
 # Top-level discovery
 # ---------------------------------------------------------------------------
 
-_DOCKERFILE_NAMES_RE = re.compile(r"^(Dockerfile|.*\.dockerfile)$|^Containerfile$")
-
 
 def _is_dockerfile(path: Path) -> bool:
     name = path.name
@@ -635,9 +645,7 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile."):
         return True
-    if name.endswith(".dockerfile"):
-        return True
-    return False
+    return bool(name.endswith(".dockerfile"))
 
 
 def _iter_dockerfiles(target: Path) -> Iterable[Path]:

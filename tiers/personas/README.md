@@ -1,116 +1,34 @@
 # RAPTOR Expert Personas
 
-## Purpose
+Expert methodologies extracted from RAPTOR's Python analysis code.
 
-Expert methodologies extracted from RAPTOR's Python code, made available for explicit invocation.
+## Pipeline Mapping
 
-**These personas already exist in Python code** - this makes them accessible to Claude Code users for manual guidance and review.
+Each persona serves a distinct moment in the security analysis pipeline:
 
----
+| Persona | Pipeline moment | Python call site |
+|---------|----------------|------------------|
+| `security_researcher` | Finding triage + dataflow validation | `autonomous_analyzer.py`, `dataflow_validator.py` |
+| `exploit_developer` | PoC generation (CodeQL) | `autonomous_analyzer.py` |
+| `crash_analyst` | Crash root-cause triage | `crash_agent.py` |
+| `binary_exploitation_specialist` | Crash PoC generation | `crash_agent.py` |
+| `patch_engineer` | Remediation guidance | (Claude Code only) |
+| `penetration_tester` | Web payload generation | (Claude Code only) |
+| `fuzzing_strategist` | Fuzzing strategy decisions | (Claude Code only) |
 
-## Available Personas
+## Consumption paths
 
-| Persona | Named Expert | Source File | Tool/Context | Token Cost |
-|---------|--------------|-------------|--------------|------------|
-| **Exploit Developer** | Mark Dowd | agent.py | Exploit generation | ~650t |
-| **Crash Analyst** | Charlie Miller / Halvar Flake | crash_agent.py | Binary crash analysis | ~700t |
-| **Security Researcher** | Research methodology | agent.py | Vulnerability validation | ~620t |
-| **Patch Engineer** | Senior security engineer | agent.py | Secure patch creation | ~400t |
-| **Penetration Tester** | Senior pentester | web/fuzzer.py | Web payload generation | ~350t |
-| **Fuzzing Strategist** | Expert strategist | autonomous/dialogue.py | Fuzzing decisions | ~300t |
-| **Binary Exploitation Specialist** | Binary expert | crash_agent.py | Crash exploit generation | ~400t |
-| **CodeQL Dataflow Analyst** | Dataflow expert | codeql/dataflow_validator.py | Dataflow validation | ~400t |
-| **CodeQL Finding Analyst** | Mark Dowd methodology | codeql/autonomous_analyzer.py | CodeQL findings | ~350t |
+1. **Python** — `core/llm/methodology.py` loads the file, strips
+   frontmatter/header comments, and appends the body to the system
+   prompt for Gemini/Ollama/etc.
 
----
+2. **Claude Code** — agent definitions reference persona files
+   (e.g. crash-analyzer-agent reads `crash_analyst.md`); operators
+   can also request personas explicitly.
 
-## Usage
+## Adding a persona
 
-### Explicit Invocation Only
-
-Personas are **NOT auto-loaded**. Load when you need expert methodology:
-
-```
-"Use exploit developer persona to create PoC for finding #42"
-"Use crash analyst persona to analyze this crash"
-"Use security researcher persona to validate if this is a false positive"
-"Use patch engineer persona to create secure fix for this vulnerability"
-```
-
-### What Happens
-
-1. Claude loads persona file (tiers/personas/[name].md)
-2. Applies persona methodology framework
-3. Analyzes using expert criteria
-4. Returns structured verdict/code
-
-### Token Cost
-
-- **Not loaded:** 0 tokens (default)
-- **When invoked:** 400-500 tokens per persona
-- **Session impact:** Only when explicitly requested
-
----
-
-## Integration with Python
-
-**Python already uses these personas internally:**
-- `packages/llm_analysis/agent.py`: Security Researcher + Exploit Developer
-- `packages/llm_analysis/crash_agent.py`: Crash Analyst
-
-**These files make Python's internal methodologies explicit and user-accessible.**
-
-No Python code changes needed - personas are reference documentation only.
-
----
-
-## When to Use
-
-**Security Researcher:**
-- Validate if finding is real or false positive
-- Analyze sanitizer effectiveness
-- Assess exploitability with 4-step framework
-
-**Exploit Developer:**
-- Generate working exploit code (not templates)
-- Fix broken/placeholder exploits
-- Create actual patches (not recommendations)
-
-**Crash Analyst:**
-- Analyze AFL++ crashes
-- Assess binary exploitability
-- Understand crash types and primitives
-
----
-
-## Quick Reference
-
-**Security Researcher Framework:**
-1. Source Control (attacker-controlled?)
-2. Sanitizer Analysis (effective or bypassable?)
-3. Reachability (can attacker trigger?)
-4. Impact Assessment (what's the damage?)
-
-**Exploit Developer Principles:**
-- Working code ONLY (no TODOs)
-- Complete and compilable
-- Safe for authorized testing
-- Well documented
-
-**Crash Analyst Framework:**
-1. Signal interpretation
-2. Register analysis
-3. Exploit primitives
-4. Mitigations check
-5. Feasibility classification
-
----
-
-## Future Expansion
-
-**Reserved space for additional personas:**
-- `code_auditor.md` (systematic code review)
-- `penetration_tester.md` (attack simulation)
-- `defensive_analyst.md` (blue team perspective)
-
-**Add when needed, not preemptively.**
+Create `tiers/personas/<role>.md` with `# ` header comment lines
+(stripped by the loader) followed by the methodology body. Wire it
+into the relevant Python call site with
+`load_methodology("personas/<role>.md")`.

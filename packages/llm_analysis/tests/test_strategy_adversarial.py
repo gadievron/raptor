@@ -9,7 +9,6 @@ unbounded growth in prompt size.
 
 from __future__ import annotations
 
-
 from packages.llm_analysis.prompts.analysis import (
     build_analysis_prompt_bundle,
     build_analysis_prompt_bundle_from_finding,
@@ -185,9 +184,10 @@ class TestSignalAdversarial:
         # as long as no exception escapes.
         assert "ASSUME-EXPLOIT" in sys
 
-    def test_huge_function_calls_list(self):
+    def test_huge_function_calls_list(self, tmp_path):
         """1000 callees, mostly noise. Picker should still fire on
         the real signals + cap render budget."""
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         calls = ["noise_" + str(i) for i in range(1000)] + [
             "mutex_lock", "spin_lock",
         ]
@@ -196,6 +196,7 @@ class TestSignalAdversarial:
             file_path="src/foo.py", start_line=1, end_line=5,
             message="m",
             function_calls_made=calls,
+            repo_path=str(tmp_path),
         )
         sys = _system(bundle)
         assert "## Strategy: concurrency" in sys

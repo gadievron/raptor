@@ -31,7 +31,14 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
+
+
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (ValueError, TypeError, OverflowError):
+        return default
 
 
 class WitnessSource(str, Enum):
@@ -131,10 +138,10 @@ class Witness:
 
     # Optional / pipeline-specific
     bytes_len: int = 0
-    target_binary_hash: Optional[str] = None
-    target_source_hash: Optional[str] = None
+    target_binary_hash: str | None = None
+    target_source_hash: str | None = None
     outcome_detail: dict[str, Any] = field(default_factory=dict)
-    produced_by: Optional[str] = None
+    produced_by: str | None = None
     timestamp: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc),
     )
@@ -144,17 +151,17 @@ class Witness:
         # so a downstream consumer relying on the hash for lookup
         # doesn't fail with a confusing "not found" later.
         if len(self.bytes_hash) != 64:
-            raise ValueError(
+            msg = (
                 f"bytes_hash must be a 64-char SHA-256 hex digest, "
                 f"got {len(self.bytes_hash)} chars: {self.bytes_hash[:16]!r}..."
             )
+            raise ValueError(msg)
         # Verify the hash is actually hex.
         try:
             int(self.bytes_hash, 16)
         except ValueError as exc:
-            raise ValueError(
-                f"bytes_hash must be hex, got {self.bytes_hash[:16]!r}..."
-            ) from exc
+            msg = f"bytes_hash must be hex, got {self.bytes_hash[:16]!r}..."
+            raise ValueError(msg) from exc
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe serialisation. Datetime → ISO string, enums
@@ -177,7 +184,7 @@ class Witness:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Witness":
+    def from_dict(cls, data: dict[str, Any]) -> Witness:
         """Inverse of :meth:`to_dict`. Tolerant of extra keys —
         unknown fields are dropped silently so a future schema
         version writing extra metadata doesn't break old loaders."""
@@ -191,7 +198,7 @@ class Witness:
 
         return cls(
             bytes_hash=data["bytes_hash"],
-            bytes_len=int(data.get("bytes_len", 0)),
+            bytes_len=_safe_int(data.get("bytes_len", 0)),
             source=WitnessSource(data["source"]),
             observed_outcome=WitnessOutcome(data["observed_outcome"]),
             target_binary_hash=data.get("target_binary_hash"),

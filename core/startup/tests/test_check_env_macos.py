@@ -35,7 +35,11 @@ def test_check_env_macos_seatbelt_available(reset_seatbelt_cache):
                      return_value=True):
         parts, warnings = startup_init.check_env(set())
 
-    sandbox_parts = [p for p in parts if "sandbox" in p]
+    # Match the sandbox STATUS part only ("sandbox ✓ (…)" / "sandbox ✗").
+    # A bare substring test also caught unrelated parts that merely
+    # contain "sandbox" in a path (e.g. RAPTOR_CONFIG=/…/foo-sandbox/…),
+    # making the assertion depend on the checkout's directory name.
+    sandbox_parts = [p for p in parts if p.startswith("sandbox ")]
     assert sandbox_parts == ["sandbox ✓ (seatbelt)"]
     sandbox_warnings = [w for w in warnings if "sandbox" in w.lower()]
     assert sandbox_warnings == []
@@ -50,7 +54,11 @@ def test_check_env_macos_seatbelt_unavailable(reset_seatbelt_cache):
                      return_value=False):
         parts, warnings = startup_init.check_env(set())
 
-    sandbox_parts = [p for p in parts if "sandbox" in p]
+    # Match the sandbox STATUS part only ("sandbox ✓ (…)" / "sandbox ✗").
+    # A bare substring test also caught unrelated parts that merely
+    # contain "sandbox" in a path (e.g. RAPTOR_CONFIG=/…/foo-sandbox/…),
+    # making the assertion depend on the checkout's directory name.
+    sandbox_parts = [p for p in parts if p.startswith("sandbox ")]
     assert sandbox_parts == ["sandbox ✗"]
     sandbox_warnings = [w for w in warnings if "sandbox" in w.lower()]
     assert any("sandbox-exec" in w for w in sandbox_warnings), (

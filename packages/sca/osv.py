@@ -18,7 +18,8 @@ Two-pass lookup (unchanged behaviour, internals delegated):
 
 Caching:
 
-- Per-query (``queries/<eco>-<name>-<ver>``) ID-list cache lives here
+- Per-query (``queries/<eco>/<name>/<ver>``, each segment
+  percent-encoded) ID-list cache lives here
   (Dependency-keyed, separate ``query_ttl``).
 - Per-vuln (``osv/vulns/<id>``) record cache lives in the shared
   client (uses our cache + ``vuln_ttl``).
@@ -33,7 +34,12 @@ Failure modes:
 
 - Network down: each HTTP error is logged once and converted to an empty
   result for the affected slice; a partial answer is more useful than a
-  hard failure for the security gate.
+  hard failure for the security gate. Failed slots are NOT cached (a
+  transient failure must not masquerade as an authoritative "no
+  advisories" answer for the next 24h) and are counted on
+  ``OsvClient.failed_lookups`` so callers can surface scan-level
+  degradation (the pipeline emits an operator warning plus a
+  ``sca:scan_health:osv_lookup_degraded`` row in findings.json).
 - Single corrupt OSV record: skip with ``debug``-level log; the rest of
   the batch is unaffected.
 
@@ -45,19 +51,25 @@ Advisory list.
 from __future__ import annotations
 
 import logging
+import re
+import urllib.parse
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
-from packages.cvss.calculator import compute_score_safe  # type: ignore[import-not-found]
+from core.http import HttpClient
+from core.json import JsonCache
+from packages.cvss.calculator import (
+    compute_score_safe,  # type: ignore[import-not-found]
+)
 from packages.osv import OsvClient as _SharedOsvClient
-from packages.osv import OsvRecord, parse_record as _shared_parse_record
+from packages.osv import OsvRecord
+from packages.osv import parse_record as _shared_parse_record
 from packages.osv.client import OSV_BASE_URL
 
-from core.json import JsonCache
-from core.http import HttpClient
 from .models import (
-    AffectedRange,
     Advisory,
+    AffectedRange,
     CVSSScore,
     Dependency,
 )
@@ -78,8 +90,18 @@ _BATCH_CHUNK_SIZE = 500
 _DEFAULT_QUERY_TTL = 24 * 3600
 _DEFAULT_VULN_TTL = 24 * 3600
 
-# OSV severity types we care about, in preference order.
-_CVSS_TYPES = ("CVSS_V3", "CVSS_V31")
+# OSV severity types scored by the in-repo v3.x calculator; the winner
+# among matching entries is picked by highest numeric score, not by
+# position in this tuple. OSV tags both 3.0 and 3.1 vectors with the
+# ``CVSS_V3`` type — the old ``CVSS_V31`` entry here was a no-op (that
+# type never appears on the wire).
+_CVSS_TYPES = ("CVSS_V3",)
+
+# CVSS v4 vectors are scored via the optional ``cvss`` PyPI package
+# (see ``_cvss_v4_base_score``); when it's absent, v4-only advisories
+# fall back to the GHSA-provided severity label and finally to the
+# findings layer's blanket ``medium``.
+_CVSS_V4_TYPE = "CVSS_V4"
 
 # OSV ecosystem identifiers diverge from RAPTOR's internal names in
 # one place: Rust. OSV uses ``crates.io`` (the registry domain) and
@@ -94,16 +116,25 @@ def _to_osv_ecosystem(ecosystem: str) -> str:
     return _OSV_ECOSYSTEM_OVERRIDES.get(ecosystem, ecosystem)
 
 
+def _encode_key_component(value: str) -> str:
+    """Percent-encode one cache-key path segment (``safe=""`` so even
+    ``/`` is encoded). Injective, unlike character flattening."""
+    return urllib.parse.quote(value, safe="")
+
+
 @dataclass(frozen=True)
 class OsvResult:
     """A single dep's match result.
 
     ``advisories`` is the post-processed list — empty when no advisories
-    apply or when offline mode + cache miss combined to drop the lookup.
+    apply, when offline mode + cache miss combined to drop the lookup,
+    or when the remote lookup failed transiently (the client's
+    ``failed_lookups`` counter distinguishes the last case at scan
+    level).
     """
 
     dep_key: str          # ``Dependency.key()`` — "ecosystem:name@version"
-    advisories: List[Advisory]
+    advisories: list[Advisory]
 
 
 class OsvClient:
@@ -141,22 +172,42 @@ class OsvClient:
         # Optional ``OsvOfflineDB`` — when supplied AND ``offline=True``,
         # cache misses route to the offline DB instead of failing silently.
         self._offline_db = offline_db
+        # Degradation telemetry. ``failed_lookups`` counts query slots
+        # (primary + OSS-Fuzz fallback) whose remote lookup failed
+        # transiently — those slots return no advisories AND are left
+        # uncached so a later run retries. ``failed_dep_keys`` keeps a
+        # capped sample for operator-facing evidence. Cumulative across
+        # ``query_batch`` calls on this client instance.
+        self.failed_lookups: int = 0
+        self.failed_dep_keys: list[str] = []
 
-    def query_batch(self, deps: Sequence[Dependency]) -> List[OsvResult]:
+    @property
+    def degraded(self) -> bool:
+        """True when at least one lookup failed transiently this run."""
+        return self.failed_lookups > 0
+
+    _FAILED_KEY_SAMPLE_CAP = 20
+
+    def _record_failed_lookup(self, dep_key: str) -> None:
+        self.failed_lookups += 1
+        if len(self.failed_dep_keys) < self._FAILED_KEY_SAMPLE_CAP:
+            self.failed_dep_keys.append(dep_key)
+
+    def query_batch(self, deps: Sequence[Dependency]) -> list[OsvResult]:
         """Look up advisories for every dep that has a known version.
 
         Deps with ``version=None`` (unpinned manifest entries) are
         skipped — OSV's match semantics need a concrete version.
         """
-        unique_keys: Dict[str, Dependency] = {}
+        unique_keys: dict[str, Dependency] = {}
         for d in deps:
             if d.version is None:
                 continue
             unique_keys.setdefault(d.key(), d)
 
         # Pass 1: per-query ID lookup (cache + remote via shared client).
-        dep_to_ids: Dict[str, List[str]] = {}
-        uncached: List[Dependency] = []
+        dep_to_ids: dict[str, list[str]] = {}
+        uncached: list[Dependency] = []
         for key, dep in unique_keys.items():
             cached = self._cache.get(
                 self._query_key(dep), ttl_seconds=self._query_ttl,
@@ -193,7 +244,7 @@ class OsvClient:
                              if d.ecosystem not in _OSV_QUERYABLE]
             # Build all chunk-payloads up front so the parallel
             # dispatch below has a flat list to map over.
-            chunk_payloads: List[Tuple[List["Dependency"], List[Dict]]] = []
+            chunk_payloads: list[tuple[list[Dependency], list[dict]]] = []
             for chunk in _chunked(queryable, _BATCH_CHUNK_SIZE):
                 queries = [
                     {
@@ -219,13 +270,13 @@ class OsvClient:
             # storm and fails subsequent calls fast.
             #
             # ``self._inner.query_batch`` failures are absorbed
-            # already by the inner client (returns ``[[]]`` per
-            # query on HTTP error), so we don't need a try/except
-            # in the worker — propagated exceptions are programmer
-            # errors, not transient.
+            # already by the inner client (returns ``None`` per
+            # query slot on HTTP error), so we don't need a
+            # try/except in the worker — propagated exceptions are
+            # programmer errors, not transient.
             def _query_one_chunk(
-                payload: Tuple[List["Dependency"], List[Dict]],
-            ) -> Tuple[List["Dependency"], List[List[str]]]:
+                payload: tuple[list[Dependency], list[dict]],
+            ) -> tuple[list[Dependency], list[list[str] | None]]:
                 chunk, queries = payload
                 results = self._inner.query_batch(queries)
                 return chunk, results
@@ -248,7 +299,16 @@ class OsvClient:
                 ]
 
             for chunk, results in chunk_results:
-                for dep, ids in zip(chunk, results):
+                for dep, ids in zip(chunk, results, strict=True):
+                    if ids is None:
+                        # Transient lookup failure (network / malformed
+                        # batch response). Leave the slot UNCACHED so
+                        # the next run retries, and record the
+                        # degradation instead of caching an
+                        # authoritative-looking empty answer for the
+                        # full query TTL.
+                        self._record_failed_lookup(dep.key())
+                        continue
                     self._cache.put(
                         self._query_key(dep), ids,
                         ttl_seconds=self._query_ttl,
@@ -287,7 +347,7 @@ class OsvClient:
         # hit from the per-query JSON cache. This bypasses the dep_to_ids
         # → vuln_records hydration path because the offline DB returns
         # full ``Advisory`` objects in one shot.
-        offline_db_advisories: Dict[str, List[Advisory]] = {}
+        offline_db_advisories: dict[str, list[Advisory]] = {}
         if self._offline and self._offline_db is not None and uncached:
             for dep in uncached:
                 try:
@@ -304,7 +364,7 @@ class OsvClient:
 
         # Pass 2: hydrate unique vuln IDs via shared client.
         all_ids = sorted({i for ids in dep_to_ids.values() for i in ids})
-        vuln_records: Dict[str, Advisory] = {}
+        vuln_records: dict[str, Advisory] = {}
         for vid in all_ids:
             record = self._inner.get_vuln(vid)
             if record is None:
@@ -317,7 +377,7 @@ class OsvClient:
                 )
 
         # Project back to per-dep results, preserving input order.
-        out: List[OsvResult] = []
+        out: list[OsvResult] = []
         seen_keys: set[str] = set()
         for d in deps:
             if d.version is None or d.key() in seen_keys:
@@ -342,10 +402,14 @@ class OsvClient:
 
     @staticmethod
     def _query_key(dep: Dependency) -> str:
-        # Path-segment safe; cache.JsonCache sanitises further.
-        eco = dep.ecosystem.replace("/", "_")
-        name = dep.name.replace("/", "_")
-        ver = (dep.version or "*").replace("/", "_")
+        # Percent-encode each component: injective (unlike the old
+        # ``"/" → "_"`` flattening, where ``@babel/traverse`` collided
+        # with a literal ``@babel_traverse``) and filesystem-safe as a
+        # single path segment. Encoding change invalidates entries
+        # written under the old keys — acceptable; they just re-fetch.
+        eco = _encode_key_component(dep.ecosystem)
+        name = _encode_key_component(dep.name)
+        ver = _encode_key_component(dep.version or "*")
         return f"queries/{eco}/{name}/{ver}"
 
     @staticmethod
@@ -355,16 +419,18 @@ class OsvClient:
         Distinct from ``_query_key`` so primary + fallback have
         independent TTL handling. Same candidate name across
         different deps shares the same cache entry — OSS-Fuzz
-        ecosystem + name + version is the canonical key.
+        ecosystem + name + version is the canonical key. Components
+        are percent-encoded for the same injectivity reason as
+        ``_query_key`` (old-key entries re-fetch once).
         """
-        name = candidate.replace("/", "_")
-        ver = (dep.version or "*").replace("/", "_")
+        name = _encode_key_component(candidate)
+        ver = _encode_key_component(dep.version or "*")
         return f"queries/OSS-Fuzz/{name}/{ver}"
 
     def _osssfuzz_fallback(
         self,
-        unique_keys: Dict[str, Dependency],
-        dep_to_ids: Dict[str, List[str]],
+        unique_keys: dict[str, Dependency],
+        dep_to_ids: dict[str, list[str]],
     ) -> None:
         """Mutate ``dep_to_ids`` in place with OSS-Fuzz query results
         for C/C++ deps that came back empty from the primary query.
@@ -389,18 +455,17 @@ class OsvClient:
 
         # Build candidate work: only deps with empty primary results
         # AND a non-empty OSS-Fuzz candidate list.
-        work: List[Tuple[Dependency, str]] = []
+        work: list[tuple[Dependency, str]] = []
         for key, dep in unique_keys.items():
             if dep_to_ids.get(key):
                 continue
-            for candidate in _oss_fuzz_candidates(dep):
-                work.append((dep, candidate))
+            work.extend((dep, candidate) for candidate in _oss_fuzz_candidates(dep))
 
         if not work:
             return
 
         # Cache pass.
-        uncached: List[Tuple[Dependency, str]] = []
+        uncached: list[tuple[Dependency, str]] = []
         for dep, candidate in work:
             cached = self._cache.get(
                 self._osssfuzz_query_key(dep, candidate),
@@ -426,7 +491,12 @@ class OsvClient:
                 for dep, candidate in chunk
             ]
             results = self._inner.query_batch(queries)
-            for (dep, candidate), ids in zip(chunk, results):
+            for (dep, candidate), ids in zip(chunk, results, strict=True):
+                if ids is None:
+                    # Transient failure — same policy as the primary
+                    # batch: no cache entry, record the degradation.
+                    self._record_failed_lookup(dep.key())
+                    continue
                 self._cache.put(
                     self._osssfuzz_query_key(dep, candidate), ids,
                     ttl_seconds=self._query_ttl,
@@ -439,7 +509,7 @@ class OsvClient:
 # OSV record → Advisory translation
 # ---------------------------------------------------------------------------
 
-def _oss_fuzz_candidates(dep: Dependency) -> List[str]:
+def _oss_fuzz_candidates(dep: Dependency) -> list[str]:
     """Return OSS-Fuzz package-name candidates for a C/C++ dep.
 
     OSS-Fuzz package names typically match the upstream library
@@ -481,7 +551,7 @@ def _oss_fuzz_candidates(dep: Dependency) -> List[str]:
     return []
 
 
-def parse_osv_record(record: Dict[str, Any]) -> Advisory:
+def parse_osv_record(record: dict[str, Any]) -> Advisory:
     """Translate an OSV vulnerability record into our ``Advisory``.
 
     Wire-format parsing is delegated to :func:`packages.osv.parse_record`;
@@ -497,13 +567,34 @@ def parse_osv_record(record: Dict[str, Any]) -> Advisory:
 def _record_to_advisory(rec: OsvRecord) -> Advisory:
     affected = _affected_from_record(rec)
     fixed_versions = _collect_fixed_versions(affected)
-    severity = _highest_cvss_v3(rec)
+    severity = _highest_cvss(rec)
     refs = [r.url for r in rec.references]
+
+    # CVSS_V4-only advisories (GHSA started publishing these in 2024)
+    # used to degrade straight to the findings layer's blanket
+    # ``medium``. When no CVSS entry could be scored numerically but a
+    # v4 vector IS present, fall back to the record's own
+    # ``database_specific.severity`` label so a CRITICAL v4-only
+    # advisory gates as critical. The label rides on
+    # ``Advisory.severity_fallback`` (no fabricated numeric score);
+    # when even that is absent, log which advisory degraded.
+    severity_fallback: str | None = None
+    if severity is None and any(
+        e.type == _CVSS_V4_TYPE for e in rec.severity
+    ):
+        severity_fallback = _severity_label_from_raw(rec)
+        if severity_fallback is None:
+            logger.info(
+                "sca.osv: advisory %s carries only CVSS_V4 severity and "
+                "no database_specific.severity label — findings will "
+                "degrade it to medium (install the 'cvss' package to "
+                "score v4 vectors numerically)", rec.id,
+            )
 
     # Stash anything else under ecosystem_specific for downstream access
     # (Go function-level reachability uses ``ecosystem_specific.imports``).
     # First non-None block wins, matching prior behaviour.
-    ecosystem_specific: Optional[Dict[str, Any]] = None
+    ecosystem_specific: dict[str, Any] | None = None
     for blk in rec.affected:
         if blk.ecosystem_specific is not None:
             ecosystem_specific = blk.ecosystem_specific
@@ -517,7 +608,7 @@ def _record_to_advisory(rec: OsvRecord) -> Advisory:
     # exploitation ground-truth (treating them as exploited would
     # inflate the signal set with non-security records). First
     # non-empty value across affected blocks wins.
-    informational: Optional[str] = None
+    informational: str | None = None
     for blk in rec.affected:
         ds = blk.database_specific
         if isinstance(ds, dict):
@@ -539,30 +630,55 @@ def _record_to_advisory(rec: OsvRecord) -> Advisory:
         modified=rec.modified,
         ecosystem_specific=ecosystem_specific,
         informational=informational,
+        cwe_ids=_cwe_ids_from_record(rec),
+        severity_fallback=severity_fallback,
     )
 
 
-def _affected_from_record(rec: OsvRecord) -> List[AffectedRange]:
-    out: List[AffectedRange] = []
+_CWE_ID_RE = re.compile(r"^CWE-\d{1,5}$")
+
+
+def _cwe_ids_from_record(rec: OsvRecord) -> list[str]:
+    """Extract normalised CWE ids from ``database_specific.cwe_ids``.
+
+    GHSA records carry them at the top level of the raw JSON; values
+    are validated against the ``CWE-NNN`` shape (the field comes from
+    an external feed — never trust free-form strings).
+    """
+    ds = rec.raw.get("database_specific")
+    if not isinstance(ds, dict):
+        return []
+    raw_ids = ds.get("cwe_ids")
+    if not isinstance(raw_ids, list):
+        return []
+    out: list[str] = []
+    for item in raw_ids:
+        if not isinstance(item, str):
+            continue
+        cwe = item.strip().upper()
+        if _CWE_ID_RE.match(cwe) and cwe not in out:
+            out.append(cwe)
+    return out[:8]
+
+
+def _affected_from_record(rec: OsvRecord) -> list[AffectedRange]:
+    out: list[AffectedRange] = []
     for blk in rec.affected:
-        for r in blk.ranges:
-            out.append(AffectedRange(
+        out.extend(AffectedRange(
                 type=r.type,        # type: ignore[arg-type]
                 events=[dict(ev) for ev in r.events],
                 repo=r.repo,
-            ))
+            ) for r in blk.ranges)
     return out
 
 
-def _collect_fixed_versions(affected: List[AffectedRange]) -> List[str]:
-    fixed: List[str] = []
+def _collect_fixed_versions(affected: list[AffectedRange]) -> list[str]:
+    fixed: list[str] = []
     for r in affected:
-        for ev in r.events:
-            if "fixed" in ev:
-                fixed.append(ev["fixed"])
+        fixed.extend(ev["fixed"] for ev in r.events if "fixed" in ev)
     # De-duplicate while preserving order.
     seen: set[str] = set()
-    deduped: List[str] = []
+    deduped: list[str] = []
     for v in fixed:
         if v not in seen:
             seen.add(v)
@@ -570,18 +686,29 @@ def _collect_fixed_versions(affected: List[AffectedRange]) -> List[str]:
     return deduped
 
 
-def _highest_cvss_v3(rec: OsvRecord) -> Optional[CVSSScore]:
-    """Pick the highest CVSS v3.x entry; compute numeric score from vector.
+def _highest_cvss(rec: OsvRecord) -> CVSSScore | None:
+    """Pick the highest-scoring CVSS entry; compute numeric score from
+    the vector.
 
-    ``packages.cvss.calculator`` accepts vectors with optional temporal
-    or environmental extensions (e.g. Log4Shell's ``…/A:H/E:H``); we
-    pass them through verbatim and the base-only score is returned.
+    v3.x vectors go through ``packages.cvss.calculator`` (accepts
+    optional temporal / environmental extensions — e.g. Log4Shell's
+    ``…/A:H/E:H`` — and returns the base-only score). v4.0 vectors go
+    through the optional ``cvss`` PyPI package when it's installed;
+    without it they score as ``None`` here and the caller falls back to
+    the record's database-provided severity label (see
+    ``_severity_label_from_raw``).
     """
-    best: Optional[Tuple[float, str, str]] = None
+    best: tuple[float, str, str] | None = None
     for entry in rec.severity:
-        if entry.type not in _CVSS_TYPES:
+        if entry.type in _CVSS_TYPES:
+            score, severity_label = compute_score_safe(entry.score)
+        elif entry.type == _CVSS_V4_TYPE:
+            score = _cvss_v4_base_score(entry.score)
+            severity_label = (
+                _bucket_score(score) if score is not None else None
+            )
+        else:
             continue
-        score, severity_label = compute_score_safe(entry.score)
         if score is None or severity_label is None:
             continue
         if best is None or score > best[0]:
@@ -593,6 +720,49 @@ def _highest_cvss_v3(rec: OsvRecord) -> Optional[CVSSScore]:
     if severity_label not in valid_levels:
         severity_label = _bucket_score(score)
     return CVSSScore(score=score, vector=vector, severity=severity_label)  # type: ignore[arg-type]
+
+
+def _cvss_v4_base_score(vector: str) -> float | None:
+    """Score a CVSS v4.0 vector via the optional ``cvss`` PyPI package.
+
+    v4.0 scoring is a MacroVector table lookup with distance
+    interpolation — far too much machinery to reimplement here, so we
+    delegate to the reference implementation when it's installed and
+    degrade gracefully when it isn't (returns ``None``; the caller then
+    tries the database-provided severity label).
+    """
+    try:
+        from cvss import CVSS4  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        return float(CVSS4(vector).base_score)
+    except Exception as exc:                       # noqa: BLE001
+        logger.debug("sca.osv: unparseable CVSS_V4 vector %r: %s",
+                     vector, exc)
+        return None
+
+
+# GHSA (and OSV mirrors of it) put a coarse severity label on the raw
+# record's top-level ``database_specific.severity``.
+_DB_SEVERITY_LABELS = {
+    "CRITICAL": "critical",
+    "HIGH": "high",
+    "MODERATE": "medium",
+    "MEDIUM": "medium",
+    "LOW": "low",
+}
+
+
+def _severity_label_from_raw(rec: OsvRecord) -> str | None:
+    """Map ``database_specific.severity`` to our severity enum."""
+    ds = rec.raw.get("database_specific")
+    if not isinstance(ds, dict):
+        return None
+    label = ds.get("severity")
+    if not isinstance(label, str):
+        return None
+    return _DB_SEVERITY_LABELS.get(label.strip().upper())
 
 
 def _bucket_score(score: float) -> str:

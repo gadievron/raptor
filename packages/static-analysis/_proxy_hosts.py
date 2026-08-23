@@ -33,12 +33,12 @@ what this module returns.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
+
+from core.config.hosts_override import load_hosts_override
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ _OVERRIDE_CONFIG_PATH = (
 # Static default — the public Semgrep endpoints scanner.py historically
 # hardcoded. Kept as a tuple so this module is a layered wrapper, not a
 # policy change at the bottom of the chain.
-_DEFAULT_SEMGREP_HOSTS: Tuple[str, ...] = (
+_DEFAULT_SEMGREP_HOSTS: tuple[str, ...] = (
     "semgrep.dev",
     "registry.semgrep.dev",
     "semgrep.app",
@@ -65,7 +65,7 @@ _DEFAULT_SEMGREP_HOSTS: Tuple[str, ...] = (
 # gets distinct cache entries. ``SEMGREP_RULES`` and
 # ``SEMGREP_RULES_CACHE`` shift the rule-fetch surface and
 # legitimately discriminate the binary's reach.
-_SEMGREP_ENV_KEYS: Tuple[str, ...] = (
+_SEMGREP_ENV_KEYS: tuple[str, ...] = (
     "SEMGREP_APP_TOKEN",
     "SEMGREP_RULES",
     "SEMGREP_RULES_CACHE",
@@ -75,38 +75,19 @@ _SEMGREP_ENV_KEYS: Tuple[str, ...] = (
 # Per-process memoisation. Calibration is sha-keyed on disk; without
 # this in-memory layer, every scanner-spawn in a /scan would stat the
 # cache file independently.
-_CALIBRATED_CACHE: "dict[str, Optional[object]]" = {}
+_CALIBRATED_CACHE: dict[str, object | None] = {}
 
 
-def _load_override() -> Optional[list[str]]:
+def _load_override() -> list[str] | None:
     """Return the operator override list, or None when no override
     is configured. Tolerant: malformed JSON, non-UTF-8 bytes, or an
     unexpected schema all degrade to None — production failure mode
     is loud at the proxy (scanner subprocess fails with "host not
     in allowlist"), not silent at startup."""
-    if not _OVERRIDE_CONFIG_PATH.exists():
-        return None
-    try:
-        data = json.loads(
-            _OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"),
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    hosts = data.get("hosts")
-    if not isinstance(hosts, list):
-        return None
-    seen: set = set()
-    result: list = []
-    for h in hosts:
-        if isinstance(h, str) and h and h not in seen:
-            seen.add(h)
-            result.append(h)
-    return result or None
+    return load_hosts_override(_OVERRIDE_CONFIG_PATH)
 
 
-def _resolve_semgrep_bin() -> Optional[str]:
+def _resolve_semgrep_bin() -> str | None:
     """Resolve ``semgrep`` to its absolute path via PATH. None when
     not installed — calibration is impossible in that case so we
     fall through to defaults."""
@@ -157,7 +138,7 @@ def _calibrated_profile():
     return profile
 
 
-def _calibrated_proxy_hosts() -> Optional[list[str]]:
+def _calibrated_proxy_hosts() -> list[str] | None:
     """Calibrated layer — None when no profile exists OR the profile
     carries an empty ``proxy_hosts`` list (the common case for
     ``--version`` probes — they don't network)."""

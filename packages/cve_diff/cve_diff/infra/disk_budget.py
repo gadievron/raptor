@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 DEFAULT_LIMIT_PCT = 80.0
 
@@ -44,7 +47,8 @@ def check(path: str | Path = "/", limit_pct: float = DEFAULT_LIMIT_PCT) -> DiskS
 def assert_ok(path: str | Path = "/", limit_pct: float = DEFAULT_LIMIT_PCT) -> None:
     status = check(path=path, limit_pct=limit_pct)
     if not status.ok:
-        raise DiskBudgetExceeded(
+        msg = (
             f"disk usage on {status.path} is {status.used_pct:.1f}% "
             f"(limit {status.limit_pct:.0f}%); aborting before further work."
         )
+        raise DiskBudgetExceeded(msg)

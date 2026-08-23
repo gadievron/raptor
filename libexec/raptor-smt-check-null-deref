@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Stage E SMT verb: CWE-476 null-pointer dereference.
 
 Usage:
@@ -28,7 +30,8 @@ import sys
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -37,11 +40,14 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import dumps_display  # noqa: E402
 
-from packages.exploit_feasibility.smt_verbs import check_null_deref
+from packages.exploit_feasibility.smt_verbs import check_null_deref  # noqa: E402
 
 
 def main() -> int:
@@ -67,7 +73,7 @@ def main() -> int:
         print(f"raptor-smt-check-null-deref: {e}", file=sys.stderr)
         return 2
 
-    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write(dumps_display(result))
     sys.stdout.write("\n")
     return 0
 

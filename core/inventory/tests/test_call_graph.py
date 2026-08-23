@@ -8,15 +8,14 @@ verdicts silently, so the data layer needs explicit coverage.
 from __future__ import annotations
 
 from core.inventory.call_graph import (
-    FileCallGraph,
     INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_GETATTR,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_WILDCARD_IMPORT,
+    FileCallGraph,
     extract_call_graph_python,
 )
-
 
 # ---------------------------------------------------------------------------
 # Imports
@@ -296,3 +295,59 @@ def test_pep695_type_param_bound_call_captured():
     assert ("get_base",) in chains, (
         f"PEP 695 type-bound call missed; saw chains={chains}"
     )
+
+
+class TestLoadCallGraphs:
+    """Project-level loader consumed by the audit orchestrator
+    (IRIS bypass analysis, structural detectors)."""
+
+    def _tree(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "a.py").write_text(
+            "def f():\n    g()\n\ndef g():\n    pass\n", encoding="utf-8")
+        (tmp_path / "main.py").write_text(
+            "from pkg.a import f\nf()\n", encoding="utf-8")
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "node_modules" / "dep.py").write_text(
+            "def hidden():\n    pass\n", encoding="utf-8")
+        (tmp_path / "README.md").write_text("docs", encoding="utf-8")
+        return tmp_path
+
+    def test_walk_mode_extracts_supported_files(self, tmp_path):
+        from core.inventory.call_graph import load_call_graphs
+
+        graphs = load_call_graphs(self._tree(tmp_path))
+        assert set(graphs) == {"pkg/a.py", "main.py"}
+        assert any(c.chain == ["g"] for c in graphs["pkg/a.py"].calls)
+
+    def test_checklist_mode_keys_by_checklist_path(self, tmp_path):
+        from core.inventory.call_graph import load_call_graphs
+
+        self._tree(tmp_path)
+        checklist = {"files": [{"path": "pkg/a.py"},
+                               {"path": "missing.py"}]}
+        graphs = load_call_graphs(tmp_path, checklist)
+        assert set(graphs) == {"pkg/a.py"}
+
+    def test_compositional_analyzer_accepts_result(self, tmp_path):
+        """The orchestrator feeds the result straight into
+        CompositionalAnalyzer — the two shapes must stay compatible."""
+        from core.inventory.call_graph import load_call_graphs
+        from core.iris import CompositionalAnalyzer
+
+        graphs = load_call_graphs(self._tree(tmp_path))
+        analyzer = CompositionalAnalyzer(graphs)
+        assert analyzer.all_funcs
+
+    def test_max_files_cap(self, tmp_path):
+        from core.inventory.call_graph import load_call_graphs
+
+        graphs = load_call_graphs(self._tree(tmp_path), max_files=1)
+        assert len(graphs) == 1
+
+    def test_oversized_file_skipped(self, tmp_path):
+        from core.inventory.call_graph import load_call_graphs
+
+        self._tree(tmp_path)
+        graphs = load_call_graphs(tmp_path, max_bytes=10)
+        assert graphs == {}

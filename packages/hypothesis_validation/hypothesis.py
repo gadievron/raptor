@@ -9,7 +9,18 @@ when unset. No breaking changes to existing callers.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+
+
+def _coerce_line(value) -> int:
+    """Best-effort int coercion for LLM-supplied line numbers.
+
+    LLM JSON routinely carries null, "", or non-numeric strings where an
+    int belongs — from_dict must degrade to 0 rather than raise.
+    """
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 @dataclass
@@ -37,14 +48,14 @@ class Location:
         }
 
     @classmethod
-    def from_dict(cls, d: Optional[dict]) -> "Location":
+    def from_dict(cls, d: dict | None) -> "Location":
         if not d or not isinstance(d, dict):
             return cls()
         return cls(
             kind=(d.get("kind") or ""),
             file=(d.get("file") or ""),
             function=(d.get("function") or ""),
-            line=int(d.get("line") or 0),
+            line=_coerce_line(d.get("line")),
         )
 
 
@@ -73,13 +84,13 @@ class FlowStep:
         }
 
     @classmethod
-    def from_dict(cls, d: Optional[dict]) -> "FlowStep":
+    def from_dict(cls, d: dict | None) -> "FlowStep":
         if not d or not isinstance(d, dict):
             return cls()
         return cls(
             file=(d.get("file") or ""),
             function=(d.get("function") or ""),
-            line=int(d.get("line") or 0),
+            line=_coerce_line(d.get("line")),
             description=(d.get("description") or ""),
         )
 
@@ -122,13 +133,13 @@ class Hypothesis:
     target: Path
     target_function: str = ""
     cwe: str = ""
-    suggested_tools: List[str] = field(default_factory=list)
+    suggested_tools: list[str] = field(default_factory=list)
     context: str = ""
-    source: Optional[Location] = None
-    sink: Optional[Location] = None
-    flow_steps: List[FlowStep] = field(default_factory=list)
-    sanitizers: List[str] = field(default_factory=list)
-    smt_constraints: List[str] = field(default_factory=list)
+    source: Location | None = None
+    sink: Location | None = None
+    flow_steps: list[FlowStep] = field(default_factory=list)
+    sanitizers: list[str] = field(default_factory=list)
+    smt_constraints: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {
@@ -155,7 +166,7 @@ class Hypothesis:
         return d
 
     @classmethod
-    def from_dict(cls, d: Optional[dict]) -> "Hypothesis":
+    def from_dict(cls, d: dict | None) -> "Hypothesis":
         if not d or not isinstance(d, dict):
             return cls(claim="", target=Path("."))
         # Use `or fallback` rather than `.get(key, fallback)` so JSON

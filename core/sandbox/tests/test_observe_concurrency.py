@@ -29,7 +29,6 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
     reason="Linux ptrace + seccomp tracer — observe is Linux-only here",
@@ -38,8 +37,8 @@ pytestmark = pytest.mark.skipif(
 
 def _prereqs_met() -> tuple[bool, str]:
     from core.sandbox.probes import check_net_available
-    from core.sandbox.seccomp import check_seccomp_available
     from core.sandbox.ptrace_probe import check_ptrace_available
+    from core.sandbox.seccomp import check_seccomp_available
     if not check_net_available():
         return False, "user namespaces unavailable"
     if not check_seccomp_available():
@@ -65,10 +64,14 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
         if not ok:
             self.skipTest(reason)
 
+    @pytest.mark.slow
     def test_two_runs_same_dir_distinct_nonces(self):
+        from concurrent.futures import ThreadPoolExecutor
+
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (
-            OBSERVE_FILENAME, parse_observe_log,
+            OBSERVE_FILENAME,
+            parse_observe_log,
         )
 
         # Each run uses its own target/output (Landlock + tracer
@@ -83,25 +86,32 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
             scratch_b = Path(d) / "b"
             scratch_b.mkdir()
 
-            # Run A: reads /etc/hostname (a path that "true" doesn't
-            # touch — gives us a distinguishable signal).
-            r_a = sandbox_run(
-                ["/bin/sh", "-c",
-                 "cat /etc/hostname > /dev/null"],
-                target=str(scratch_a), output=str(shared),
-                observe=True, capture_output=True, text=True, timeout=10,
-            )
+            def _run_a():
+                return sandbox_run(
+                    ["/bin/sh", "-c",
+                     "cat /etc/hostname > /dev/null"],
+                    target=str(scratch_a), output=str(shared),
+                    observe=True, capture_output=True, text=True, timeout=20,
+                )
+
+            def _run_b():
+                return sandbox_run(
+                    ["/bin/sh", "-c",
+                     "cat /etc/os-release > /dev/null"],
+                    target=str(scratch_b), output=str(shared),
+                    observe=True, capture_output=True, text=True, timeout=20,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_a = pool.submit(_run_a)
+                fut_b = pool.submit(_run_b)
+                r_a = fut_a.result(timeout=30)
+                r_b = fut_b.result(timeout=30)
+
             nonce_a = r_a.sandbox_info.get("observe_nonce")
             if nonce_a is None:
                 self.skipTest("audit didn't engage on run A")
 
-            # Run B: reads /etc/os-release.
-            r_b = sandbox_run(
-                ["/bin/sh", "-c",
-                 "cat /etc/os-release > /dev/null"],
-                target=str(scratch_b), output=str(shared),
-                observe=True, capture_output=True, text=True, timeout=10,
-            )
             nonce_b = r_b.sandbox_info.get("observe_nonce")
             if nonce_b is None:
                 self.skipTest("audit didn't engage on run B")
@@ -112,7 +122,8 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
             )
 
             # The shared JSONL has BOTH runs' records.
-            jsonl = shared / OBSERVE_FILENAME
+            from core.sandbox.evidence import resolve_read_path
+            jsonl = resolve_read_path(shared, OBSERVE_FILENAME)
             self.assertTrue(jsonl.exists())
 
             # Parse with nonce A → A's reads, not B's.
@@ -190,7 +201,8 @@ class TestObserveJsonlAtomicity(unittest.TestCase):
             if nonce is None:
                 self.skipTest("audit didn't engage")
 
-            jsonl = run_dir / OBSERVE_FILENAME
+            from core.sandbox.evidence import resolve_read_path
+            jsonl = resolve_read_path(run_dir, OBSERVE_FILENAME)
             self.assertTrue(jsonl.exists())
 
             # Parse every line directly (not via parse_observe_log,

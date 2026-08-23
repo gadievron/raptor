@@ -19,9 +19,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from core.config import RaptorConfig
+from packages.fuzzing.env_hygiene import scrub_identity_env
+from core.run.workdir import exec_workdir
 from packages.binary_analysis.radare2_understand import probe_capability as _probe_radare2_capability
 
 logger = logging.getLogger(__name__)
@@ -37,27 +38,27 @@ class CapabilityReport:
     is_linux: bool
 
     # Tools
-    afl_fuzz: Optional[str] = None
-    afl_cc: Optional[str] = None        # afl-clang-fast or afl-gcc
-    afl_cxx: Optional[str] = None
-    afl_showmap: Optional[str] = None
-    afl_cmin: Optional[str] = None
-    afl_tmin: Optional[str] = None
-    afl_cov: Optional[str] = None
+    afl_fuzz: str | None = None
+    afl_cc: str | None = None        # afl-clang-fast or afl-gcc
+    afl_cxx: str | None = None
+    afl_showmap: str | None = None
+    afl_cmin: str | None = None
+    afl_tmin: str | None = None
+    afl_cov: str | None = None
 
-    clang: Optional[str] = None
-    clang_xx: Optional[str] = None
-    gcc: Optional[str] = None
+    clang: str | None = None
+    clang_xx: str | None = None
+    gcc: str | None = None
 
-    lcov: Optional[str] = None
-    gcov: Optional[str] = None
-    llvm_cov: Optional[str] = None
+    lcov: str | None = None
+    gcov: str | None = None
+    llvm_cov: str | None = None
 
-    gdb: Optional[str] = None
-    rr: Optional[str] = None
+    gdb: str | None = None
+    rr: str | None = None
 
     # Binary analysis
-    radare2: Optional[str] = None
+    radare2: str | None = None
     has_r2pipe: bool = False
     has_r2ghidra: bool = False
 
@@ -69,15 +70,15 @@ class CapabilityReport:
     has_thread_sanitizer: bool = False
 
     # Platform-specific issues
-    afl_shmem_ok: Optional[bool] = None    # macOS: True/False/None=untested
+    afl_shmem_ok: bool | None = None    # macOS: True/False/None=untested
     macos_afl_warning: str = ""
 
     # Versions (best effort)
     afl_version: str = ""
     clang_version: str = ""
 
-    issues: List[str] = field(default_factory=list)
-    recommendations: List[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
+    recommendations: list[str] = field(default_factory=list)
 
     def has_afl(self) -> bool:
         return self.afl_fuzz is not None and self.afl_shmem_ok is not False
@@ -88,7 +89,7 @@ class CapabilityReport:
     def has_any_fuzzer(self) -> bool:
         return self.has_afl() or self.has_clang_fuzzer()
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         d = dict(self.__dict__)
         d["has_afl"] = self.has_afl()
         d["has_clang_fuzzer"] = self.has_clang_fuzzer()
@@ -130,13 +131,11 @@ class CapabilityReport:
         if self.issues:
             lines.append("")
             lines.append("Issues:")
-            for issue in self.issues:
-                lines.append(f"  - {issue}")
+            lines.extend(f"  - {issue}" for issue in self.issues)
         if self.recommendations:
             lines.append("")
             lines.append("Recommendations:")
-            for rec in self.recommendations:
-                lines.append(f"  - {rec}")
+            lines.extend(f"  - {rec}" for rec in self.recommendations)
         return "\n".join(lines)
 
 
@@ -188,7 +187,11 @@ def probe() -> CapabilityReport:
     if is_macos:
         for hb in _homebrew_llvm_paths:
             if hb.endswith("clang") and Path(hb).exists():
-                # Only override if Apple clang doesn't have libFuzzer
+                # Only override when no clang was found or the PATH
+                # clang is Apple's /usr/bin/clang (which doesn't ship
+                # libFuzzer). Path match, not a capability probe — the
+                # actual libFuzzer probe runs further down against
+                # whichever clang wins here.
                 if not report.clang or "/usr/bin/clang" in (report.clang or ""):
                     report.clang = hb
                     break
@@ -258,7 +261,7 @@ def probe() -> CapabilityReport:
             )
 
     # MemorySanitizer is Linux/x86_64 only in practice
-    if report.has_memory_sanitizer and (is_macos or arch not in ("x86_64", "amd64")):
+    if report.has_memory_sanitizer and (not is_linux or arch not in ("x86_64", "amd64")):
         report.has_memory_sanitizer = False
         report.issues.append(
             "MemorySanitizer is supported only on Linux x86_64 in practice; "
@@ -293,11 +296,11 @@ def probe() -> CapabilityReport:
             "On Linux: 'sudo apt install rr' (Intel CPUs only)."
         )
 
-    logger.info(f"Capability probe: {report.summary().splitlines()[0]}")
+    logger.info("Capability probe: %s", report.summary().splitlines()[0])
     return report
 
 
-def _probe_version(binary: str, args: List[str]) -> str:
+def _probe_version(binary: str, args: list[str]) -> str:
     """Best-effort version extraction. Returns first non-empty version-looking line."""
     try:
         result = subprocess.run(
@@ -305,6 +308,7 @@ def _probe_version(binary: str, args: List[str]) -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            env=scrub_identity_env(RaptorConfig.get_safe_env()),
         )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         for line in output.splitlines():
@@ -344,11 +348,15 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
 
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".c", delete=False
+            mode="w", prefix="raptor-fuzz-probe-", suffix=".c",
+            delete=False, dir=exec_workdir(),
         ) as src:
             src.write(test_src)
             src_path = src.name
-        with tempfile.NamedTemporaryFile(suffix=".out", delete=False) as out:
+        with tempfile.NamedTemporaryFile(
+            prefix="raptor-fuzz-probe-", suffix=".out",
+            delete=False, dir=exec_workdir(),
+        ) as out:
             out_path = out.name
 
         result = subprocess.run(
@@ -356,6 +364,7 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
             capture_output=True,
             text=True,
             timeout=30,
+            env=scrub_identity_env(RaptorConfig.get_safe_env()),
         )
         return result.returncode == 0
     except Exception:
@@ -381,13 +390,15 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
     if not Path(cat).exists():
         return True
     try:
-        with tempfile.TemporaryDirectory(prefix="raptor-afl-probe-") as tmp:
+        with tempfile.TemporaryDirectory(
+                prefix="raptor-afl-probe-", dir=exec_workdir(),
+        ) as tmp:
             tmp_path = Path(tmp)
             seeds = tmp_path / "in"
             out = tmp_path / "out"
             seeds.mkdir()
             (seeds / "seed").write_bytes(b"seed\n")
-            env = RaptorConfig.get_safe_env()
+            env = scrub_identity_env(RaptorConfig.get_safe_env())
             env.setdefault("AFL_SKIP_CPUFREQ", "1")
             env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
             result = subprocess.run(
@@ -407,16 +418,7 @@ def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
             )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         lowered = output.lower()
-        if (
-            "shmget" in lowered
-            or "shmat" in lowered
-            or "shared memory" in lowered
-            or "afl-system-config" in lowered
-            or "cannot allocate memory" in lowered
-            or "operation not permitted" in lowered
-        ):
-            return False
-        return True
+        return not ("shmget" in lowered or "shmat" in lowered or "shared memory" in lowered or "afl-system-config" in lowered or "cannot allocate memory" in lowered or "operation not permitted" in lowered)
     except Exception:
         return True   # If we cannot tell, assume OK and let AFL fail loudly later
 
@@ -425,8 +427,8 @@ def select_fuzzer(
     report: CapabilityReport,
     target_kind: str = "binary",
     *,
-    prefer: Optional[str] = None,
-) -> Optional[str]:
+    prefer: str | None = None,
+) -> str | None:
     """Pick the right fuzzer for a target.
 
     target_kind:

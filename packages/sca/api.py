@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .pipeline import RunOptions, RunResult, run_sca
 
@@ -23,8 +23,8 @@ def analyse(
     *,
     offline: bool = False,
     no_cache: bool = False,
-    sarif_dirs: Optional[List[Path]] = None,
-) -> Dict[str, Any]:
+    sarif_dirs: list[Path] | None = None,
+) -> dict[str, Any]:
     """Run the full SCA pipeline and return a summary dict.
 
     Parameters
@@ -54,8 +54,8 @@ def analyse(
             output_dir=Path(output_dir),
             options=options,
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("sca.api.analyse failed: %s", exc, exc_info=True)
+    except Exception as exc:
+        logger.exception("sca.api.analyse failed: %s", exc)
         return {"status": "error", "error": str(exc)}
 
     if sarif_dirs:
@@ -71,7 +71,7 @@ def analyse(
     return _summarise(result)
 
 
-def _summarise(result: RunResult) -> Dict[str, Any]:
+def _summarise(result: RunResult) -> dict[str, Any]:
     return {
         "status": "ok",
         "findings_path": str(result.findings_path),

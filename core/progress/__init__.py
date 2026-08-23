@@ -5,18 +5,20 @@ For operations that take >15 seconds.
 
 import locale
 import sys
+import threading
 import time
 from datetime import datetime
-from typing import Optional
+from types import TracebackType
+from typing import Literal
 
 
-# Module-level "last stage that ran" — readable by out-of-band
+# Thread-local "last stage that ran" — readable by out-of-band
 # exception handlers via :func:`last_stage_name`. See the
 # ``HackerProgressBar`` docstring for the design rationale.
-_LAST_STAGE_NAME: Optional[str] = None
+_stage_local = threading.local()
 
 
-def last_stage_name() -> Optional[str]:
+def last_stage_name() -> str | None:
     """The most-recent stage name that any active or recent
     ``HackerProgressBar`` started, or ``None`` if no bar has
     started a stage in this process.
@@ -30,17 +32,17 @@ def last_stage_name() -> Optional[str]:
     still show context for failures that occurred between stages
     (e.g. while writing an artefact between two ``stage()`` calls).
     """
-    return _LAST_STAGE_NAME
+    return getattr(_stage_local, "name", None)
 
 
 def _stderr_supports_unicode() -> bool:
-    """Probe whether stderr can encode the unicode block characters
+    r"""Probe whether stderr can encode the unicode block characters
     used by the spinner / status decorations.
 
     Returns False under POSIX/C locale, on legacy 7-bit terminals,
     and on platforms where stderr lacks an `encoding` attribute.
     Pre-fix every write to stderr risked
-    `UnicodeEncodeError: 'ascii' codec can't encode character '\\u2588'`
+    `UnicodeEncodeError: 'ascii' codec can't encode character '\u2588'`
     when the operator's locale was `C` (common in containers and
     minimal CI runners), aborting the entire `with HackerProgress`
     block partway through. Detect once at import.
@@ -77,8 +79,8 @@ class HackerProgress:
     _CHECK = '✓' if _UNICODE_OK else '[OK]'
     _CROSS = '✗' if _UNICODE_OK else '[FAIL]'
 
-    def __init__(self, total: Optional[int] = None, operation: str = "Processing",
-                 disabled: bool = False):
+    def __init__(self, total: int | None = None, operation: str = "Processing",
+                 disabled: bool = False) -> None:
         self.total = total
         self.operation = operation
         self.disabled = disabled
@@ -129,7 +131,7 @@ class HackerProgress:
             remaining = 0
         return self._format_time(remaining)
 
-    def update(self, current: Optional[int] = None, message: str = ""):
+    def update(self, current: int | None = None, message: str = "") -> None:
         """Update progress display."""
         if self.disabled:
             return
@@ -181,7 +183,7 @@ class HackerProgress:
         sys.stderr.write(f"\r\033[K{status}")
         sys.stderr.flush()
 
-    def finish(self, message: str = "Complete"):
+    def finish(self, message: str = "Complete") -> None:
         """Finish progress and move to new line.
 
         Emits a final state line BEFORE the checkmark so the
@@ -216,7 +218,7 @@ class HackerProgress:
             sys.stderr.flush()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> Literal[False]:
         """Context manager exit."""
         if self.disabled:
             return False
@@ -269,8 +271,8 @@ class HackerProgressBar:
 
     Side-channel last-stage tracking
     -------------------------------
-    On every ``stage()`` call the bar updates a module-level
-    ``_LAST_STAGE_NAME`` so out-of-band exception handlers can
+    On every ``stage()`` call the bar updates the thread-local
+    ``_stage_local.name`` so out-of-band exception handlers can
     surface "which phase was running when this died" without
     threading the bar through every call site. The CLI's outer
     ``except`` reads it via :func:`last_stage_name` to print
@@ -289,10 +291,10 @@ class HackerProgressBar:
     _DONE_GLYPH = "✓" if _UNICODE_OK else "[OK]"
     _FLASH_GLYPH = "↳" if _UNICODE_OK else "->"
 
-    def __init__(self, *, target: Optional[str] = None,
-                 disabled: Optional[bool] = None,
+    def __init__(self, *, target: str | None = None,
+                 disabled: bool | None = None,
                  stream=None,
-                 bar_width: int = 12):
+                 bar_width: int = 12) -> None:
         self._stream = stream if stream is not None else sys.stderr
         # Three modes:
         #   "redraw"  — TTY: rewriting stage lines + flashes + ANSI
@@ -317,8 +319,8 @@ class HackerProgressBar:
         self._target = str(target) if target is not None else None
         self._bar_width = bar_width
         # Per-stage state
-        self._stage: Optional[str] = None
-        self._stage_total: Optional[int] = None
+        self._stage: str | None = None
+        self._stage_total: int | None = None
         self._stage_done: int = 0
         self._stage_start: float = 0.0
         self._stage_detail: str = ""
@@ -342,7 +344,7 @@ class HackerProgressBar:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> Literal[False]:
         # Finalise any in-flight stage so the operator sees its
         # detail rather than the bar.
         if self._stage is not None:
@@ -350,7 +352,7 @@ class HackerProgressBar:
                                   if exc_type else self._stage_detail)
         return False
 
-    def stage(self, name: str, total: Optional[int] = None) -> None:
+    def stage(self, name: str, total: int | None = None) -> None:
         """Begin a new stage. Finalises any prior in-flight stage."""
         if self._stage is not None:
             self._finalise_stage(detail=self._stage_detail)
@@ -360,13 +362,12 @@ class HackerProgressBar:
         self._stage_start = time.time()
         self._stage_detail = ""
         self._last_redraw = 0.0
-        # Update module-level side-channel for out-of-band exception
+        # Update thread-local side-channel for out-of-band exception
         # handlers (see ``last_stage_name``).
-        global _LAST_STAGE_NAME
-        _LAST_STAGE_NAME = name
+        _stage_local.name = name
         self._render()
 
-    def tick(self, done: Optional[int] = None,
+    def tick(self, done: int | None = None,
              detail: str = "") -> None:
         """Advance progress within the current stage. Throttled."""
         if self._stage is None:
@@ -452,7 +453,7 @@ class HackerProgressBar:
         self._line_active = True
 
     def _format_line(self, *, final: bool,
-                     detail: Optional[str] = None) -> str:
+                     detail: str | None = None) -> str:
         name = self._stage or ""
         if final:
             text = detail or "..."

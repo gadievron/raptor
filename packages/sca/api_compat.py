@@ -49,7 +49,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class UpgradeCompatReport:
     name: str
     from_version: str
     to_version: str
-    risks: List[UpgradeCompatRisk] = field(default_factory=list)
+    risks: list[UpgradeCompatRisk] = field(default_factory=list)
 
     @property
     def overall_severity(self) -> str:
@@ -105,7 +105,7 @@ def check_pypi_api_compat(
     containing only the semver-bump signal (which is computable
     from version strings alone — no metadata needed).
     """
-    risks: List[UpgradeCompatRisk] = []
+    risks: list[UpgradeCompatRisk] = []
 
     # Always-on: semver heuristic. Pure version-string analysis;
     # no network needed.
@@ -134,12 +134,12 @@ def check_pypi_api_compat(
 # ---------------------------------------------------------------------------
 
 
-_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
 
 
 def _semver_bump_risk(
     from_v: str, to_v: str,
-) -> Optional[UpgradeCompatRisk]:
+) -> UpgradeCompatRisk | None:
     """Detect major-version bumps. Operators using
     ``sca update --apply --allow-major`` get a "this is a
     semver-major break per upstream's own contract" signal."""
@@ -194,7 +194,7 @@ def _semver_bump_risk(
 def _pypi_dep_set_risks(
     name: str, from_v: str, to_v: str,
     *, http: Any, cache: Any,
-) -> List[UpgradeCompatRisk]:
+) -> list[UpgradeCompatRisk]:
     """Compare ``requires_dist`` between two PyPI versions.
 
     Three signals:
@@ -207,7 +207,7 @@ def _pypi_dep_set_risks(
         ``requests>=2.20`` and Y requires ``requests>=2.31``;
         operators on older requests get pulled forward.
     """
-    out: List[UpgradeCompatRisk] = []
+    out: list[UpgradeCompatRisk] = []
     from_deps = _fetch_pypi_requires_dist(name, from_v, http=http, cache=cache)
     to_deps = _fetch_pypi_requires_dist(name, to_v, http=http, cache=cache)
     if from_deps is None or to_deps is None:
@@ -243,7 +243,7 @@ def _pypi_dep_set_risks(
 def _fetch_pypi_requires_dist(
     name: str, version: str,
     *, http: Any, cache: Any,
-) -> Optional[List[str]]:
+) -> list[str] | None:
     """Fetch a specific version's ``requires_dist`` from PyPI's
     JSON API. Cached per-(name, version) for the run.
 
@@ -257,15 +257,19 @@ def _fetch_pypi_requires_dist(
     # requires_dist gets cached TTL_FOREVER. Operators wanting to
     # force a refetch (debugging a corrupt cache) run
     # ``raptor-sca clean-cache``.
+    from urllib.parse import quote as _q
+
     from core.json.cache import TTL_FOREVER
-    cache_key = f"pypi-requires-dist:{name.lower()}:{version}"
+    cache_key = (f"pypi-requires-dist:{_q(name.lower(), safe='')}:"
+                 f"{_q(version, safe='')}")
     if cache is not None:
         cached = cache.get(cache_key, ttl_seconds=TTL_FOREVER)
         if cached is not None:
             return list(cached) if cached else []
     try:
-        url = f"https://pypi.org/pypi/{name}/{version}/json"
-        data = http.get_json(url)
+        url = (f"https://pypi.org/pypi/{_q(name, safe='')}/"
+               f"{_q(version, safe='')}/json")
+        data = http.get_json(url, timeout=5, total_timeout=10, retries=1)
     except Exception:                                   # noqa: BLE001
         return None
     if not isinstance(data, dict):
@@ -273,7 +277,7 @@ def _fetch_pypi_requires_dist(
     info = data.get("info") or {}
     reqs = info.get("requires_dist") or []
     if not isinstance(reqs, list):
-        return []
+        return None
     out = [r for r in reqs if isinstance(r, str)]
     if cache is not None:
         cache.put(cache_key, out, ttl_seconds=TTL_FOREVER)

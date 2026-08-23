@@ -24,4 +24,4 @@ KEV? what's its EPSS score?), not for advisory aggregation.
 from core.cve.epss import EPSS_URL, EpssClient
 from core.cve.kev import KEV_URL, KevClient
 
-__all__ = ["EpssClient", "EPSS_URL", "KevClient", "KEV_URL"]
+__all__ = ["EPSS_URL", "KEV_URL", "EpssClient", "KevClient"]

@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.supply_chain.registry_metadata import (
     RegistryMetaFinding,
-    _Meta,
     _escalate_severity,
     _low_bus_factor_check,
     _maintainer_account_change_check,
     _maintainer_change_check,
+    _Meta,
     scan_deps,
 )
 
@@ -31,25 +31,25 @@ def _dep(eco="PyPI", name="django", version="4.0.0",
 
 
 class _PyPIStub:
-    def __init__(self, raw: Dict[str, Any]) -> None:
+    def __init__(self, raw: dict[str, Any]) -> None:
         self.raw = raw
 
-    def get_metadata(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_metadata(self, name: str) -> dict[str, Any] | None:
         return self.raw
 
 
 class _NpmStub:
-    def __init__(self, raw: Dict[str, Any]) -> None:
+    def __init__(self, raw: dict[str, Any]) -> None:
         self.raw = raw
 
-    def get_metadata(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_metadata(self, name: str) -> dict[str, Any] | None:
         return self.raw
 
 
 class _FailingStub:
     """Simulates a registry client that raises on get_metadata."""
 
-    def get_metadata(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_metadata(self, name: str) -> dict[str, Any] | None:
         raise ConnectionError("network failure")
 
 
@@ -739,10 +739,13 @@ def test_meta_cache_avoids_reparse_for_same_dep():
     """Multiple supply-chain detectors fetch metadata for the same
     dep. The post-parse ``_Meta`` cache should serve later calls
     from memory instead of re-walking the raw JSON."""
-    from packages.sca.supply_chain.registry_metadata import (
-        _fetch, _from_pypi as _orig_from_pypi,
-    )
     from packages.sca.supply_chain import registry_metadata as rm
+    from packages.sca.supply_chain.registry_metadata import (
+        _fetch,
+    )
+    from packages.sca.supply_chain.registry_metadata import (
+        _from_pypi as _orig_from_pypi,
+    )
 
     class _CountingPyPI:
         def __init__(self):
@@ -1070,3 +1073,87 @@ def test_payload_size_spike_dep_version_missing_from_registry() -> None:
         pypi_client=None, npm_client=npm, now=_NOW,
     )
     assert not any(f.kind == "payload_size_spike" for f in out)
+
+
+# ---------------------------------------------------------------------------
+# Robustness — malformed registry documents must not kill the batch
+# ---------------------------------------------------------------------------
+
+def test_naive_timestamp_document_scans_normally() -> None:
+    """A registry document with offset-less (naive) timestamps must
+    yield a normal scan result. Pre-fix, ``_parse_iso`` returned a
+    naive datetime and the aware-vs-naive comparison against ``now``
+    raised TypeError, killing the whole SCA run."""
+    naive_iso = (_NOW - timedelta(days=5)).replace(
+        tzinfo=None).isoformat()          # no offset, no Z
+    assert "+" not in naive_iso and not naive_iso.endswith("Z")
+    pypi = _PyPIStub({
+        "info": {"author": "test"},
+        "releases": {
+            "1.0": [{"upload_time_iso_8601": naive_iso}],
+        },
+    })
+    out = scan_deps(
+        [_dep(name="naive-ts-pkg")],
+        pypi_client=pypi, npm_client=None, now=_NOW,
+    )
+    kinds = [f.kind for f in out]
+    assert "recent_publish" in kinds      # 5 days old, normalised to UTC
+    rp = next(f for f in out if f.kind == "recent_publish")
+    assert rp.evidence["age_days"] == 5
+
+
+class _PerNamePyPIStub:
+    """Returns a per-package canned document; lets one package's
+    document be malformed while the rest are healthy."""
+
+    def __init__(self, mapping: dict[str, Any]) -> None:
+        self.mapping = mapping
+
+    def get_metadata(self, name: str) -> Any | None:
+        return self.mapping.get(name)
+
+
+def test_one_exploding_document_does_not_abort_batch(caplog) -> None:
+    """A document whose scan raises is logged + skipped; every other
+    dep's findings survive. Exercises the thread-pool path (> 4 deps)
+    where an unhandled exception in a worker previously propagated out
+    of ``pool.map`` and aborted the whole batch."""
+    import logging as _logging
+
+    good_doc = {
+        "info": {"author": "test"},
+        "releases": {"1.0": [{"upload_time_iso_8601": _iso(5)}]},
+    }
+    names = [f"pkg-{i}" for i in range(6)]
+    mapping: dict[str, Any] = {n: dict(good_doc) for n in names}
+    # A truthy non-dict document blows up inside ``_from_pypi``
+    # (attribute access on a str) — the shape a hostile or corrupt
+    # registry response can take.
+    mapping["pkg-3"] = "not-a-dict"
+
+    stub = _PerNamePyPIStub(mapping)
+    deps = [_dep(name=n) for n in names]
+    with caplog.at_level(_logging.WARNING,
+                          logger="packages.sca.supply_chain.registry_metadata"):
+        out = scan_deps(deps, pypi_client=stub, npm_client=None, now=_NOW)
+
+    # The five healthy packages all produced their recent_publish rows.
+    fired = {f.dependency.name for f in out if f.kind == "recent_publish"}
+    assert fired == {n for n in names if n != "pkg-3"}
+    # The failure was logged with the package name for triage.
+    assert any("pkg-3" in rec.message for rec in caplog.records)
+
+
+def test_exploding_document_sequential_path_also_isolated() -> None:
+    """Same isolation on the <= 4-dep sequential path."""
+    good_doc = {
+        "info": {"author": "test"},
+        "releases": {"1.0": [{"upload_time_iso_8601": _iso(5)}]},
+    }
+    stub = _PerNamePyPIStub({"ok-pkg": good_doc, "bad-pkg": 12345})
+    out = scan_deps(
+        [_dep(name="ok-pkg"), _dep(name="bad-pkg")],
+        pypi_client=stub, npm_client=None, now=_NOW,
+    )
+    assert {f.dependency.name for f in out} == {"ok-pkg"}

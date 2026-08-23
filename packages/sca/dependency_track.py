@@ -54,7 +54,8 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any
+from collections.abc import Sequence
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -81,8 +82,8 @@ def push_bom(
     project_version: str,
     auto_create: bool = True,
     timeout: int = _DEFAULT_TIMEOUT,
-    http: Optional[Any] = None,
-) -> Dict[str, Any]:
+    http: Any | None = None,
+) -> dict[str, Any]:
     """Push a CycloneDX BOM file to a Dependency-Track instance.
 
     ``url`` is the DT base URL (e.g. ``https://dt.example.com``) —
@@ -113,7 +114,14 @@ def push_bom(
         return bom_bytes              # pre-flight error
 
     if http is None:
-        http = _build_egress_client(url)
+        try:
+            http = _build_egress_client(url)
+        except ValueError as e:
+            return {
+                "status": "error",
+                "token": None,
+                "error": f"invalid DT URL: {e}",
+            }
 
     body = {
         "projectName": project_name,
@@ -216,9 +224,8 @@ def _build_egress_client(url: str) -> Any:
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError(
-            f"DT URL must be http(s) with a hostname; got {url!r}"
-        )
+        msg = f"DT URL must be http(s) with a hostname; got {url!r}"
+        raise ValueError(msg)
     from core.http.egress_backend import EgressClient
     from packages.sca import SCA_USER_AGENT
     return EgressClient(
@@ -231,7 +238,10 @@ def _redact_url(url: str) -> str:
     Operators sometimes pass auth via query (legacy DT setups);
     avoid leaking it into logs."""
     parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.hostname}{parsed.path}".rstrip("/")
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return f"{parsed.scheme}://{host}{parsed.path}".rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +249,7 @@ def _redact_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="raptor-sca dt-push",
         description=(

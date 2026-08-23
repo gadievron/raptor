@@ -24,14 +24,16 @@ flow through, misses return ``None``/empty.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.http import HttpClient, HttpError
-from core.json import JsonCache
 
 from .parser import parse_record
-from .types import OsvRecord
+
+if TYPE_CHECKING:
+    from core.json import JsonCache
+    from .types import OsvRecord
+    from collections.abc import Sequence
 
 log = logging.getLogger(__name__)
 
@@ -69,19 +71,32 @@ class OsvClient:
     def query_batch(
         self,
         queries: Sequence[dict[str, Any]],
-    ) -> list[list[str]]:
-        """Bulk lookup. Returns one ID list per query slot.
+    ) -> list[list[str] | None]:
+        """Bulk lookup. Returns one slot per query.
 
         Each query is the OSV query body shape, e.g.::
 
             {"package": {"name": "lodash", "ecosystem": "npm"}, "version": "4.17.20"}
 
-        On any network error or malformed response, every slot is
-        returned empty — partial answers are more useful than hard
-        failure for security gates that aggregate across many deps.
+        Slot semantics distinguish "OSV knows of no advisories" from
+        "the lookup did not happen":
+
+          - ``list[str]`` — the query succeeded; the list (possibly
+            empty) is OSV's authoritative answer for that slot.
+          - ``None`` — the lookup failed (network error, malformed
+            response shape, offline). Callers MUST NOT cache or treat
+            ``None`` slots as "no advisories"; caching a transient
+            failure as an authoritative empty answer silently blinds
+            every scan until the cache entry expires.
+
+        Partial answers are still more useful than hard failure for
+        security gates that aggregate across many deps, so errors are
+        absorbed per-batch rather than raised.
         """
-        if self._offline or not queries:
-            return [[] for _ in queries]
+        if not queries:
+            return []
+        if self._offline:
+            return [None for _ in queries]
         body = {"queries": list(queries)}
         try:
             data = self._http.post_json(
@@ -89,7 +104,7 @@ class OsvClient:
             )
         except HttpError as exc:
             log.warning("osv: querybatch failed: %s", exc)
-            return [[] for _ in queries]
+            return [None for _ in queries]
 
         results = data.get("results") if isinstance(data, dict) else None
         if not isinstance(results, list) or len(results) != len(queries):
@@ -99,17 +114,14 @@ class OsvClient:
                 len(results) if isinstance(results, list) else -1,
                 len(queries),
             )
-            return [[] for _ in queries]
+            return [None for _ in queries]
 
-        out: list[list[str]] = []
+        out: list[list[str] | None] = []
         for slot in results:
             if not isinstance(slot, dict):
                 out.append([])
                 continue
-            ids: list[str] = []
-            for v in (slot.get("vulns") or []):
-                if isinstance(v, dict) and isinstance(v.get("id"), str):
-                    ids.append(v["id"])
+            ids: list[str] = [v["id"] for v in slot.get("vulns") or [] if isinstance(v, dict) and isinstance(v.get("id"), str)]
             out.append(ids)
         return out
 

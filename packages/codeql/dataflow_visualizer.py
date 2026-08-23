@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 CodeQL Dataflow Visualizer
 
@@ -11,9 +10,8 @@ Creates visual representations of CodeQL dataflow paths in multiple formats:
 
 import json
 import sys
-from pathlib import Path
-from typing import Dict, List
 from html import escape
+from pathlib import Path
 
 # Add parent directory to path for imports
 # packages/codeql/dataflow_visualizer.py -> repo root
@@ -36,7 +34,7 @@ class DataflowVisualizer:
     - DOT: Graphviz format for custom rendering
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path) -> None:
         """
         Initialize visualizer.
 
@@ -52,7 +50,7 @@ class DataflowVisualizer:
         dataflow: DataflowPath,
         finding_id: str,
         repo_path: Path
-    ) -> Dict[str, Path]:
+    ) -> dict[str, Path]:
         """
         Generate all visualization formats for a dataflow path.
 
@@ -69,27 +67,27 @@ class DataflowVisualizer:
         # Generate each format
         try:
             outputs['html'] = self.generate_html(dataflow, finding_id, repo_path)
-            self.logger.info(f"Generated HTML visualization: {outputs['html']}")
-        except Exception as e:
-            self.logger.warning(f"Failed to generate HTML: {e}")
+            self.logger.info("Generated HTML visualization: %s", outputs['html'])
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to generate HTML: %s", e)
 
         try:
             outputs['mermaid'] = self.generate_mermaid(dataflow, finding_id)
-            self.logger.info(f"Generated Mermaid diagram: {outputs['mermaid']}")
-        except Exception as e:
-            self.logger.warning(f"Failed to generate Mermaid: {e}")
+            self.logger.info("Generated Mermaid diagram: %s", outputs['mermaid'])
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to generate Mermaid: %s", e)
 
         try:
             outputs['ascii'] = self.generate_ascii(dataflow, finding_id)
-            self.logger.info(f"Generated ASCII visualization: {outputs['ascii']}")
-        except Exception as e:
-            self.logger.warning(f"Failed to generate ASCII: {e}")
+            self.logger.info("Generated ASCII visualization: %s", outputs['ascii'])
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to generate ASCII: %s", e)
 
         try:
             outputs['dot'] = self.generate_dot(dataflow, finding_id)
-            self.logger.info(f"Generated DOT file: {outputs['dot']}")
-        except Exception as e:
-            self.logger.warning(f"Failed to generate DOT: {e}")
+            self.logger.info("Generated DOT file: %s", outputs['dot'])
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Failed to generate DOT: %s", e)
 
         return outputs
 
@@ -167,7 +165,7 @@ class DataflowVisualizer:
                     continue
                 
                 if file_path.exists():
-                    with open(file_path) as f:
+                    with Path(file_path).open(encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
 
                     start = max(0, node['line'] - 6)
@@ -178,12 +176,14 @@ class DataflowVisualizer:
                         marker = ">>>" if i == node['line'] - 1 else "   "
                         context.append(f"{marker} {i + 1:4d} | {lines[i].rstrip()}")
 
-                    # HTML-escape to prevent injection using code_context
-                    node['code_context'] = escape('\n'.join(context))
+                    # D3's .text() handles escaping on the client side;
+                    # pre-escaping here causes double encoding of angle
+                    # brackets and ampersands in source snippets.
+                    node['code_context'] = '\n'.join(context)
                 else:
-                    node['code_context'] = escape(f"File not found: {node['file']}")
-            except Exception as e:
-                node['code_context'] = escape(f"Error reading file: {e}")
+                    node['code_context'] = f"File not found: {node['file']}"
+            except Exception as e:  # noqa: BLE001
+                node['code_context'] = f"Error reading file: {e}"
 
         # Generate HTML
         html_content = self._create_html_template(
@@ -195,7 +195,7 @@ class DataflowVisualizer:
             sanitizers=dataflow.sanitizers
         )
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
         return output_file
@@ -205,9 +205,9 @@ class DataflowVisualizer:
         finding_id: str,
         rule_id: str,
         message: str,
-        nodes: List[Dict],
-        edges: List[Dict],
-        sanitizers: List[str]
+        nodes: list[dict],
+        edges: list[dict],
+        sanitizers: list[str]
     ) -> str:
         """Create HTML template with embedded visualization."""
 
@@ -620,7 +620,7 @@ class DataflowVisualizer:
         lines.append("")
 
         # Add source node
-        lines.append(f'    A0["🔴 SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
+        lines.append(f'    A0["⚠️ SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
         lines.append('    style A0 fill:#f48771,stroke:#fff,stroke-width:2px,color:#000')
         lines.append("")
 
@@ -669,10 +669,9 @@ class DataflowVisualizer:
         if dataflow.sanitizers:
             lines.append("")
             lines.append("**Detected Sanitizers:**")
-            for san in dataflow.sanitizers:
-                lines.append(f"- {san}")
+            lines.extend(f"- {san}" for san in dataflow.sanitizers)
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         return output_file
@@ -691,9 +690,8 @@ class DataflowVisualizer:
         text = text.replace(')', '&#41;')
         text = text.replace('<', '&lt;')
         text = text.replace('>', '&gt;')
-        text = text.replace('#', '&#35;')
+        return text.replace('#', '&#35;')
 
-        return text
 
     def generate_ascii(self, dataflow: DataflowPath, finding_id: str) -> Path:
         """
@@ -719,8 +717,7 @@ class DataflowVisualizer:
 
         if dataflow.sanitizers:
             lines.append("Detected Sanitizers:")
-            for san in dataflow.sanitizers:
-                lines.append(f"  • {san}")
+            lines.extend(f"  • {san}" for san in dataflow.sanitizers)
             lines.append("")
 
         lines.append("=" * 80)
@@ -730,7 +727,7 @@ class DataflowVisualizer:
 
         # Source
         lines.append("┌─────────────────────────────────────────────────────────────────────────────┐")
-        lines.append("│ 🔴 SOURCE (User-Controlled Input)                                          │")
+        lines.append("│ ⚠️ SOURCE (User-Controlled Input)                                          │")
         lines.append("└─────────────────────────────────────────────────────────────────────────────┘")
         lines.append(f"  Location: {dataflow.source.file_path}:{dataflow.source.line}:{dataflow.source.column}")
         lines.append(f"  Label: {dataflow.source.label}")
@@ -777,7 +774,7 @@ class DataflowVisualizer:
         lines.append("=" * 80)
         lines.append("")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         # Also print to logger for terminal viewing
@@ -785,7 +782,7 @@ class DataflowVisualizer:
         for line in lines[:30]:  # Print first 30 lines to log
             self.logger.info(line)
         if len(lines) > 30:
-            self.logger.info(f"... ({len(lines) - 30} more lines in {output_file})")
+            self.logger.info("... (%s more lines in %s)", len(lines) - 30, output_file)
 
         return output_file
 
@@ -831,17 +828,16 @@ class DataflowVisualizer:
         lines.append("")
 
         # Edges
-        for i in range(sink_id):
-            lines.append(f'    node{i} -> node{i + 1};')
+        lines.extend(f'    node{i} -> node{i + 1};' for i in range(sink_id))
 
         lines.append("}")
 
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
         # Add instructions
         instructions_file = self.output_dir / f"{finding_id}_dataflow_instructions.txt"
-        with open(instructions_file, 'w') as f:
+        with open(instructions_file, 'w', encoding="utf-8") as f:
             f.write("To render the DOT file:\n\n")
             f.write("# Install Graphviz (if not already installed):\n")
             f.write("# macOS: brew install graphviz\n")
@@ -856,15 +852,26 @@ class DataflowVisualizer:
         return output_file
 
     def _escape_dot(self, text: str) -> str:
-        """Escape text for DOT syntax."""
+        r"""Escape text for DOT syntax.
+
+        Backslashes are escaped first: escaping quotes before backslashes
+        would let text ending in a backslash produce ``\\"`` (an escaped
+        backslash followed by a bare quote), which re-terminates the DOT
+        string early.
+        """
         if len(text) > 50:
             text = text[:47] + "..."
-        return text.replace('"', '\\"').replace('\n', '\\n')
+        return (
+            text.replace('\\', '\\\\')
+            .replace('"', '\\"')
+            .replace('\n', '\\n')
+        )
 
 
-def main():
+def main() -> None:
     """CLI entry point for testing."""
     import argparse
+
     from packages.codeql.dataflow_validator import DataflowValidator
 
     parser = argparse.ArgumentParser(description="Visualize CodeQL dataflow paths")

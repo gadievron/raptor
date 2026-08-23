@@ -9,17 +9,19 @@ one-liner (see plan's Port/Rewrite/Discard table).
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 from core.git import get_safe_git_env
 from core.git.clone import safe_git_command
-
+from core.url_patterns import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
-from core.url_patterns import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 DEFAULT_TIMEOUT_S = 300
 
@@ -67,7 +69,13 @@ def extract_diff(
     completed = subprocess.run(
         safe_git_command(
             "-C", str(repo_path),
-            "diff", "--no-color", "--binary",
+            # --no-ext-diff: _SAFE_GIT_OVERRIDES pins ``diff.external=``
+            # (empty) to neutralise a hostile repo's external-diff
+            # driver, but git treats the empty value as a command to
+            # run and dies ("cannot run : No such file or directory").
+            # Per the overrides' own doc, diff invocations against
+            # target repos must disable external drivers explicitly.
+            "diff", "--no-ext-diff", "--no-color", "--binary",
             f"{commit_before}..{commit_after}",
         ),
         capture_output=True,
@@ -76,10 +84,11 @@ def extract_diff(
         env=get_safe_git_env(),
     )
     if completed.returncode != 0:
-        raise RuntimeError(
+        msg = (
             f"git diff {commit_before}..{commit_after} failed: "
             f"{completed.stderr.decode('utf-8', errors='replace').strip()}"
         )
+        raise RuntimeError(msg)
     diff_text = completed.stdout.decode("utf-8", errors="replace")
 
     file_names = _list_files(repo_path, commit_before, commit_after, timeout_s)
@@ -89,11 +98,12 @@ def extract_diff(
     # empty. Fail fast with AnalysisError so the pipeline's error
     # path surfaces this cleanly (CLI exit 9).
     if not file_names and len(diff_text) == 0:
-        raise AnalysisError(
+        msg = (
             f"{cve_id}: empty diff ({commit_before[:7]}..{commit_after[:7]}) — "
             "before/after resolve to identical trees; the agent's pick may be "
             "a tag rather than a fix commit"
         )
+        raise AnalysisError(msg)
     shape = shape_dynamic.classify(
         file_names,
         slug=_slug_of(ref.repository_url),
@@ -191,15 +201,13 @@ def _build_file_changes(
     `git diff` call.
     """
     hunk_counts = _count_hunks_per_file(diff_text)
-    out: list[FileChange] = []
-    for path in paths:
-        out.append(FileChange(
+    out: list[FileChange] = [FileChange(
             path=path,
             is_test=is_test_path(path),
             hunks_count=hunk_counts.get(path, 0),
             before_source=_show_blob(repo, before, path, timeout_s, cap_bytes),
             after_source=_show_blob(repo, after, path, timeout_s, cap_bytes),
-        ))
+        ) for path in paths]
     return tuple(out)
 
 
@@ -213,7 +221,8 @@ def _list_files(
     completed = subprocess.run(
         safe_git_command(
             "-C", str(repo_path),
-            "diff", "--name-only", f"{before}..{after}",
+            # --no-ext-diff for the same reason as extract_diff above.
+            "diff", "--no-ext-diff", "--name-only", f"{before}..{after}",
         ),
         capture_output=True,
         timeout=timeout_s,

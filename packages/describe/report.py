@@ -1,7 +1,7 @@
 """Top-level ``/describe`` report — composes target shape +
-tool readiness + catalog defaults preview + cost estimate
-into a single operator-facing description (``DescribeReport``)
-plus renderers (text + JSON).
+tool readiness + catalog defaults preview into a single
+operator-facing description (``DescribeReport``) plus
+renderers (text + JSON).
 
 **Scope contract — read-only describe, no execution.**
 
@@ -24,7 +24,6 @@ What /describe DOES surface:
 * Target-specific tool gaps — CodeQL build deps, coccinelle
   language applicability, binary-oracle artefact presence.
   Per-target. Host-level checks live in /doctor.
-* Cost estimate — from #21 estimator.
 
 When the operator is ready to act, they run ``raptor.py
 agentic`` / ``codeql`` / ``scan`` etc. — those commands have
@@ -41,11 +40,11 @@ build (separate arc).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from core.json import dumps_display
 from packages.describe.recommendations import recommend_next
 from packages.describe.target_shape import TargetShape, infer_target_shape
 from packages.describe.tool_readiness import ToolCheck, check_tool_readiness
@@ -59,9 +58,9 @@ class TargetTypeDefaults:
 
     Empty fields are dropped from the renderer (target with
     no specific catalog defaults shows nothing here)."""
-    semgrep_packs: List[str]
-    high_priority_dirs: List[str]
-    pipeline_names: List[str]   # catalog-label names, not runnable commands
+    semgrep_packs: list[str]
+    high_priority_dirs: list[str]
+    pipeline_names: list[str]   # catalog-label names, not runnable commands
 
 
 @dataclass(frozen=True)
@@ -71,18 +70,18 @@ class DescribeReport:
     operator-typed commands — see module docstring for the
     scope rationale."""
     target_shape: TargetShape
-    tool_checks: List[ToolCheck]
-    target_type_defaults: Optional[TargetTypeDefaults]
-    estimate_summary: Optional[str]  # one-line "$X-Y, N-M min" or None
+    tool_checks: list[ToolCheck]
+    target_type_defaults: TargetTypeDefaults | None
+    estimate_summary: str | None  # one-line "$X-Y, N-M min" or None
     # Original archive basename when the operator pointed at a
     # tarball/zip (extracted on the fly into a temp dir before
     # inference). None when the target was a plain directory.
-    archive_label: Optional[str] = None
+    archive_label: str | None = None
 
 
 def build_describe_report(
     target_path: Path,
-    archive_label: Optional[str] = None,
+    archive_label: str | None = None,
 ) -> DescribeReport:
     """Compose the substrates: target shape (#17 catalog +
     language/build detectors), tool readiness, catalog
@@ -95,7 +94,7 @@ def build_describe_report(
     shape = infer_target_shape(target_path)
     checks = check_tool_readiness(shape)
     preview = _target_type_defaults(shape)
-    estimate = _estimate_summary(target_path)
+    estimate = _scorecard_estimate(target_path)
     return DescribeReport(
         target_shape=shape,
         tool_checks=checks,
@@ -105,6 +104,29 @@ def build_describe_report(
     )
 
 
+def _scorecard_estimate(target_path: Path) -> str | None:
+    """Return a one-line scorecard-derived estimate, or None."""
+    try:
+        from core.run.target_types import load as _load_catalog
+        from core.run.estimator import estimate_from_scorecard, format_estimate
+        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+
+        entry = _load_catalog(target_path)
+        n = entry.typical_findings_count if entry else 0
+        if n <= 0:
+            return None
+        model = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+        if not model:
+            return None
+        est = estimate_from_scorecard(model, n)
+        if est is None:
+            return None
+        text = format_estimate(est)
+        return text or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Target-type defaults preview — read-only data, no commands
 # ---------------------------------------------------------------------------
@@ -112,7 +134,7 @@ def build_describe_report(
 
 def _target_type_defaults(
     shape: TargetShape,
-) -> Optional[TargetTypeDefaults]:
+) -> TargetTypeDefaults | None:
     """Read the matched target-type entry and surface what it'll
     apply at analysis time. None when no matched entry OR when
     all preview fields are empty (no useful defaults to show —
@@ -144,26 +166,6 @@ def _target_type_defaults(
     )
 
 
-def _estimate_summary(target_path: Path) -> Optional[str]:
-    """One-line cost+time estimate from the existing #21
-    estimator. None when no catalog match / estimator data."""
-    try:
-        from core.run.estimator import estimate_run, format_estimate
-        est = estimate_run(target_path)
-        if est is None:
-            return None
-        full = format_estimate(est)
-        if not full:
-            return None
-        # Strip the estimator's "Expected: " prefix and "(target
-        # type: ...)" suffix — the /describe renderer wraps the
-        # value in "Cost estimate: ..." and the target type is
-        # already named in the header.
-        full = full.removeprefix("Expected: ")
-        return full.split(" (target type:", 1)[0]
-    except Exception:  # noqa: BLE001
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Renderers — text (operator-facing) + JSON (machine-readable)
@@ -182,7 +184,7 @@ def format_text(report: DescribeReport) -> str:
     """Operator-facing block. Single source of truth for what a
     human sees when they run ``raptor describe``."""
     s = report.target_shape
-    lines: List[str] = ["Target analysis:"]
+    lines: list[str] = ["Target analysis:"]
 
     # Pre-flight: when /describe extracted an archive on the
     # fly, surface that fact first so the operator knows the
@@ -360,8 +362,7 @@ def format_text(report: DescribeReport) -> str:
         lines.append("")
         lines.append("Recommended next (based on signals):")
         cmd_w = max(len(r.command) for r in recs)
-        for r in recs:
-            lines.append(f"  {r.command:<{cmd_w}}  — {r.reason}")
+        lines.extend(f"  {r.command:<{cmd_w}}  — {r.reason}" for r in recs)
 
     # Tool applicability — target-level signals only. Host-level
     # checks (binary presence, LLM keys, env) live in /doctor.
@@ -399,8 +400,7 @@ def format_text(report: DescribeReport) -> str:
     lines.append("For host-level setup, run `raptor doctor`.")
     lines.append(
         f"To start analysis, run `raptor.py agentic --repo "
-        f"{s.target_path}` (prints same estimate at start; "
-        f"runs sandboxed)."
+        f"{s.target_path}` (runs sandboxed)."
     )
 
     return "\n".join(lines)
@@ -411,7 +411,7 @@ def format_json(report: DescribeReport) -> str:
     downstream tools. Field names match the dataclass shape so
     consumers can mirror the schema."""
     s = report.target_shape
-    doc: Dict[str, Any] = {
+    doc: dict[str, Any] = {
         "target_path": str(s.target_path),
         "languages": s.languages,
         "language_breakdown": s.language_breakdown,
@@ -475,7 +475,7 @@ def format_json(report: DescribeReport) -> str:
             for r in recommend_next(s)
         ],
     }
-    return json.dumps(doc, indent=2)
+    return dumps_display(doc, indent=2)
 
 
 def _short_int(n: int) -> str:
@@ -483,14 +483,14 @@ def _short_int(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
-        return f"{n // 1_000}k"
+        return f"{round(n / 1_000)}k"
     return str(n)
 
 
 __all__ = [
-    "TargetTypeDefaults",
     "DescribeReport",
+    "TargetTypeDefaults",
     "build_describe_report",
-    "format_text",
     "format_json",
+    "format_text",
 ]

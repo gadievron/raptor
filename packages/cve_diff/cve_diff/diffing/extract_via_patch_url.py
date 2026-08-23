@@ -54,7 +54,7 @@ _MAX_BYTES = 5_000_000  # 5MB cap on patch body
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> "EgressClient":
+def _client() -> EgressClient:
     """Allowlisted egress client (curated forge hosts only).
 
     Pre-2026-05-04 this returned a bare UrllibClient with no host
@@ -125,8 +125,7 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     from urllib.parse import urlsplit
     if is_kernel_org_url(url):
         base = url.rstrip("/")
-        if base.endswith(".git"):
-            base = base[:-4]
+        base = base.removesuffix(".git")
         return f"{base}/commit/?id={sha}&format=patch"
     try:
         parts = urlsplit(url)
@@ -139,14 +138,12 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     # but require it to be a true path component):
     if "/cgit/" in path:
         base = url.rstrip("/")
-        if base.endswith(".git"):
-            base = base[:-4]
+        base = base.removesuffix(".git")
         return f"{base}/commit/?id={sha}&format=patch"
     if host in ("git.savannah.gnu.org", "savannah.gnu.org",
                 "git.savannah.nongnu.org", "savannah.nongnu.org"):
         base = url.rstrip("/")
-        if base.endswith(".git"):
-            base = base[:-4]
+        base = base.removesuffix(".git")
         return f"{base}/commit/?id={sha}&format=patch"
 
     return None
@@ -260,7 +257,7 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
 
     slug = extract_github_slug(ref.repository_url or "")
 
-    def _no_languages_fetch(_slug: str):
+    def _no_languages_fetch(_slug: str) -> None:
         # Best-effort: the patch URL path may be running against a forge
         # that doesn't expose a languages endpoint. shape_dynamic falls
         # back to its offline classifier.

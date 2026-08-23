@@ -20,6 +20,7 @@ Files inspected:
 Blocking fields in ``codeql-pack.yml`` / ``qlpack.yml``:
     extractor:                     ANY value (codeql may exec this)
     dependencies.<name>            non-canonical (not ``codeql/...``)
+    defaultSuiteFile               path-traversing value (escapes pack)
     buildCommand                   subprocess invocation
     setup / preCompileScript /
     postCompileScript              subprocess invocation
@@ -29,6 +30,7 @@ Blocking fields in ``codeql-config.yml``:
     packs.<lang>[]                 non-canonical pack reference
     queries[].uses                 external repo / URL reference
     manualBuildSteps / setup       subprocess invocation
+    pack-cache                     ANY value (in-repo pack source)
     structural: symlink, oversized, malformed → block
 
 Trust override: same module-flag pattern as cc_trust. ``--trust-repo``
@@ -40,18 +42,19 @@ system; trust must come from explicit operator intent).
 
 from __future__ import annotations
 
-import os
-import stat
+import logging
 import unicodedata
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
+
+from core.security.capped_read import read_capped
 
 try:
     import yaml
 except ImportError:  # pragma: no cover — yaml is a hard dep elsewhere
     yaml = None
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +88,7 @@ class Finding:
 class FileScan:
     """Findings for one inspected file."""
     path: Path
-    findings: List[Finding] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
 
     def has_blocking(self) -> bool:
         return any(f.blocking for f in self.findings)
@@ -111,7 +114,12 @@ _MAX_PACK_FILES = 200
 # U+2028/U+2029 line-separators slip past Cc/Cf categories but
 # render as newlines in terminals — strip them so output can't be
 # split by an attacker-supplied label.
-_EXTRA_STRIP = frozenset({" ", " "})
+# Escaped spellings (matching cc_trust._EXTRA_STRIP): the literal
+# characters are invisible in an editor, so a reviewer cannot tell
+# the set from a pair of ordinary quoted blanks — and an accidental
+# "cleanup" to real spaces would silently disable the defence while
+# corrupting every space in sanitised output.
+_EXTRA_STRIP = frozenset({"\u2028", "\u2029"})
 
 # CodeQL's canonical (Microsoft-authored) pack namespace. Anything
 # outside this namespace is third-party and may carry custom
@@ -137,6 +145,23 @@ def _truncate(s: str, limit: int = 80) -> str:
     return safe[:limit] + "..." if len(safe) > limit else safe
 
 
+def _mask(s: str, keep: int = 8) -> str:
+    """Render a command-bearing config value without echoing it.
+
+    Scan output lands on stdout and from there in retained CI logs;
+    extractor / build-hook command lines can embed credentials in
+    their arguments. Keep a short identifying prefix, redact the
+    tail, show the length. Mirrors cc_trust._mask.
+    """
+    safe = _safe(s)
+    if not safe:
+        return "(empty)"
+    # A prefix of a value no longer than ``keep`` IS the value —
+    # fully redact rather than echo it whole.
+    prefix = safe[:keep] if 0 < keep < len(safe) else ""
+    return f"{prefix}*** ({len(safe)} chars)"
+
+
 def _path_present(p: Path) -> bool:
     try:
         return p.is_symlink() or p.exists()
@@ -144,48 +169,10 @@ def _path_present(p: Path) -> bool:
         return False
 
 
-def _read_capped(path: Path) -> Optional[bytes]:
-    """Read up to ``_MAX_CONFIG_BYTES+1`` bytes. Returns None on
-    oversized, non-regular, or unreadable.
-
-    O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open
-    TOCTOU holes. O_NOFOLLOW closes the symlink-redirect hole — the
-    caller's recursive pack walk records symlinks as findings without
-    reading them, but a TOCTOU race could swap a regular file for a
-    symlink between the symlink check and the open here. With
-    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
-    None). Broad except for any I/O surprise — fail-closed is the
-    safe stance.
-
-    Mirrors core/security/cc_trust.py:177-214 (commit eb18aa6 — the
-    same hardening for the parallel CC-side trust scanner).
-    """
-    try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY
-            | getattr(os, "O_NONBLOCK", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
-        )
-    except Exception:
-        return None
-    data: Optional[bytes] = None
-    try:
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return None
-            with os.fdopen(fd, "rb", closefd=False) as f:
-                data = f.read(_MAX_CONFIG_BYTES + 1)
-        except Exception:
-            return None
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-    if data is None or len(data) > _MAX_CONFIG_BYTES:
-        return None
-    return data
+def _read_capped(path: Path) -> bytes | None:
+    """Read up to ``_MAX_CONFIG_BYTES``; delegates the hardened
+    open/read to :func:`core.security.capped_read.read_capped`."""
+    return read_capped(path, _MAX_CONFIG_BYTES)
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +213,7 @@ def _scan_pack_file(path: Path) -> FileScan:
     # source root.
     if doc.get("extractor"):
         fs.findings.append(
-            Finding("extractor", _truncate(str(doc["extractor"]), 120), True)
+            Finding("extractor", _mask(str(doc["extractor"])), True)
         )
 
     # dependencies: only the canonical ``codeql/`` namespace is allowed
@@ -275,7 +262,7 @@ def _scan_pack_file(path: Path) -> FileScan:
                 "preCompileScript", "postCompileScript"):
         if doc.get(key):
             fs.findings.append(
-                Finding(key, _truncate(str(doc[key]), 120), True)
+                Finding(key, _mask(str(doc[key])), True)
             )
 
     return fs
@@ -312,11 +299,13 @@ def _scan_codeql_config(path: Path) -> FileScan:
     # Canonical = ``codeql/<name>``; anything else is third-party.
     packs = doc.get("packs")
     if packs:
-        flat: List[str] = []
+        flat: list[str] = []
         if isinstance(packs, dict):
             for refs in packs.values():
                 if isinstance(refs, list):
                     flat.extend(str(r) for r in refs if isinstance(r, str))
+                elif isinstance(refs, str):
+                    flat.append(refs)
         elif isinstance(packs, list):
             flat = [str(r) for r in packs if isinstance(r, str)]
         for ref in flat:
@@ -332,10 +321,7 @@ def _scan_codeql_config(path: Path) -> FileScan:
     if queries:
         entries = queries if isinstance(queries, list) else [queries]
         for e in entries:
-            if isinstance(e, dict):
-                uses = str(e.get("uses", ""))
-            else:
-                uses = str(e)
+            uses = str(e.get("uses", "")) if isinstance(e, dict) else str(e)
             # External: any path containing ``/`` that isn't a relative
             # local reference (``./`` or ``../``).
             if "/" in uses and not uses.startswith(("./", "../")):
@@ -347,7 +333,7 @@ def _scan_codeql_config(path: Path) -> FileScan:
     for key in ("manualBuildSteps", "setup"):
         if doc.get(key):
             fs.findings.append(
-                Finding(key, _truncate(str(doc[key]), 120), True)
+                Finding(key, _mask(str(doc[key])), True)
             )
 
     # pack-cache: redirects codeql's pack download cache to a custom
@@ -365,16 +351,23 @@ def _scan_codeql_config(path: Path) -> FileScan:
 
 
 # ---------------------------------------------------------------------------
-# Top-level scan + cache
+# Top-level scan
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=64)
-def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
-    """Pure scan: returns (scans, any_blocking). Cached because
-    filesystem state for a given resolved path doesn't change within a
-    session. Side-effect-free so cache hits don't suppress operator-
-    visible warnings (rendered in the caller)."""
+def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
+    """Pure scan: returns (scans, any_blocking). Deliberately NOT
+    cached. The pack-file set comes from a recursive walk, so no cheap
+    fingerprint can prove freshness (a qlpack.yml written deep in the
+    tree between two checks would not change any fixed-location stat,
+    and a top-level-mtime heuristic misses nested additions entirely) —
+    a per-process cache therefore reintroduces the TOCTOU the trust
+    gate exists to close: the same process runs untrusted target code
+    that can write pack files after the first check. Re-scanning is
+    affordable: the check fires once per ``codeql database create``
+    (packages/codeql/database_manager.py), and two rglob passes are
+    noise next to a DB build measured in minutes. The pack-file-cap
+    warning fires on every call, which is at most once per DB create."""
     target = Path(resolved_path)
     # Skip RAPTOR's own repo — RAPTOR ships codeql packs under
     # packages/llm_analysis/codeql_packs/ that would always flag
@@ -385,12 +378,16 @@ def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
 
     # Walk for pack files. Skip dotted dirs (e.g. ``.git``,
     # ``.claude/worktrees``) except ``.github`` which holds
-    # codeql-config.yml legitimately.
-    pack_files: List[Path] = []
+    # codeql-config.yml legitimately. The cap is applied PER PATTERN so
+    # a flood of one filename cannot starve enumeration of the other.
+    pack_files: list[Path] = []
+    capped = False
     try:
         for name in ("codeql-pack.yml", "qlpack.yml"):
+            found_for_name = 0
             for p in target.rglob(name):
-                if len(pack_files) >= _MAX_PACK_FILES:
+                if found_for_name >= _MAX_PACK_FILES:
+                    capped = True
                     break
                 rel_parts = p.relative_to(target).parts
                 if any(
@@ -399,19 +396,26 @@ def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
                 ):
                     continue
                 pack_files.append(p)
-            if len(pack_files) >= _MAX_PACK_FILES:
-                break
+                found_for_name += 1
     except OSError:
         pass
+
+    if capped:
+        _logger.warning(
+            "CodeQL trust: pack-file scan capped at %d files per "
+            "pattern in %s — additional pack files were NOT inspected; "
+            "treating the incomplete scan as blocking.",
+            _MAX_PACK_FILES, target,
+        )
 
     config_path = target / ".github" / "codeql" / "codeql-config.yml"
     if _path_present(config_path):
         pack_files.append(config_path)
 
-    if not pack_files:
+    if not pack_files and not capped:
         return ((), False)
 
-    scans: List[FileScan] = []
+    scans: list[FileScan] = []
     for path in pack_files:
         if path.is_symlink():
             fs = FileScan(path=path)
@@ -429,13 +433,32 @@ def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
         if scanned.findings:
             scans.append(scanned)
 
+    if capped:
+        # Fail closed: a verdict computed from a knowably-incomplete
+        # enumeration is not a verdict. Reaching the cap becomes a
+        # blocking finding — same shape as a malformed pack file — so
+        # the operator sees exactly why the gate refused and can
+        # override deliberately (--trust-repo / the project's `config`
+        # trust marker) after looking at the concrete findings above.
+        # This is an operational gate outcome, not a code verdict:
+        # nothing here is persisted to journals or cross-run stores,
+        # so a later trusted re-run starts clean.
+        capped_scan = FileScan(path=target)
+        capped_scan.findings.append(Finding(
+            "scan_capped",
+            f"more than {_MAX_PACK_FILES} pack files per pattern; "
+            "enumeration incomplete — uninspected pack files remain",
+            True,
+        ))
+        scans.append(capped_scan)
+
     any_blocking = any(s.has_blocking() for s in scans)
     return (tuple(scans), any_blocking)
 
 
 def check_repo_codeql_trust(
     repo_path: str,
-    trust_override: Optional[bool] = None,
+    trust_override: bool | None = None,
 ) -> bool:
     """Check target repo for unsafe CodeQL pack config. Returns True if
     DB creation should be refused.
@@ -455,7 +478,7 @@ def check_repo_codeql_trust(
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    scans, any_blocking = _scan_cached(resolved)
+    scans, any_blocking = _scan_repo(resolved)
     if scans:
         target = Path(resolved)
         _render_scan_report(target, scans, any_blocking, trust_override)
@@ -464,12 +487,12 @@ def check_repo_codeql_trust(
 
 def _render_scan_report(
     target: Path,
-    scans: Tuple[FileScan, ...],
+    scans: tuple[FileScan, ...],
     any_blocking: bool,
     trust_override: bool,
 ) -> None:
-    """Pure rendering — separated from ``_scan_cached`` so the cache
-    doesn't suppress operator warnings on re-invocation."""
+    """Pure rendering — separated from ``_scan_repo`` so the scan stays
+    side-effect free."""
     safe_target = _safe(str(target))
     if any_blocking:
         if trust_override:
@@ -494,8 +517,8 @@ def _render_scan_report(
 
 
 __all__ = [
-    "Finding",
     "FileScan",
+    "Finding",
     "check_repo_codeql_trust",
     "set_trust_override",
 ]

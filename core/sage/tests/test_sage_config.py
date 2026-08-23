@@ -9,6 +9,7 @@ from unittest.mock import patch
 class TestSageConfig(unittest.TestCase):
     """Test SageConfig defaults and environment variable overrides."""
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_default_values(self):
         """Config should have sane defaults."""
         from core.sage.config import SageConfig
@@ -17,7 +18,7 @@ class TestSageConfig(unittest.TestCase):
         self.assertFalse(config.enabled)
         self.assertEqual(config.url, "http://localhost:8090")
         self.assertIsNone(config.identity_path)
-        self.assertEqual(config.timeout, 15.0)
+        self.assertEqual(config.timeout, 30.0)
 
     @patch.dict(os.environ, {"SAGE_ENABLED": "true"})
     def test_enabled_from_env(self):

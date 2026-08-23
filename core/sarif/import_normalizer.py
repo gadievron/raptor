@@ -10,10 +10,11 @@ producing findings in the same internal dict shape that
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import unquote
 
 from core.logging import get_logger
+from core.sarif.parser import _coerce_line
 
 logger = get_logger()
 
@@ -22,32 +23,32 @@ logger = get_logger()
 # CWE inference from rule_id / message text
 # ---------------------------------------------------------------------------
 
-_CWE_MESSAGE_PATTERNS: List[tuple] = [
-    (re.compile(r"sql.?inject", re.I), "CWE-89"),
-    (re.compile(r"command.?inject|os.?command|shell.?inject", re.I), "CWE-78"),
-    (re.compile(r"cross.?site.?script|xss", re.I), "CWE-79"),
-    (re.compile(r"path.?travers|directory.?travers", re.I), "CWE-22"),
-    (re.compile(r"buffer.?over(?:flow|run)|stack.?overflow", re.I), "CWE-120"),
-    (re.compile(r"heap.?over(?:flow|run)", re.I), "CWE-122"),
-    (re.compile(r"format.?string", re.I), "CWE-134"),
-    (re.compile(r"integer.?over(?:flow|wrap)", re.I), "CWE-190"),
-    (re.compile(r"double.?free", re.I), "CWE-415"),
-    (re.compile(r"use.?after.?free|uaf", re.I), "CWE-416"),
-    (re.compile(r"null.?(?:pointer|deref|dereference)", re.I), "CWE-476"),
-    (re.compile(r"out.?of.?bounds.?write", re.I), "CWE-787"),
-    (re.compile(r"out.?of.?bounds.?read", re.I), "CWE-125"),
-    (re.compile(r"uninitiali[sz]ed", re.I), "CWE-908"),
-    (re.compile(r"deseriali[sz]ation", re.I), "CWE-502"),
-    (re.compile(r"(?:server.?side|ssrf).?request.?forg", re.I), "CWE-918"),
-    (re.compile(r"race.?condition|toctou|time.?of.?check", re.I), "CWE-367"),
-    (re.compile(r"type.?confusion", re.I), "CWE-843"),
-    (re.compile(r"hardcoded.?(?:secret|password|credential|key)", re.I), "CWE-798"),
+_CWE_MESSAGE_PATTERNS: list[tuple] = [
+    (re.compile(r"sql.?inject", re.IGNORECASE), "CWE-89"),
+    (re.compile(r"command.?inject|os.?command|shell.?inject", re.IGNORECASE), "CWE-78"),
+    (re.compile(r"cross.?site.?script|xss", re.IGNORECASE), "CWE-79"),
+    (re.compile(r"path.?travers|directory.?travers", re.IGNORECASE), "CWE-22"),
+    (re.compile(r"buffer.?over(?:flow|run)|stack.?overflow", re.IGNORECASE), "CWE-120"),
+    (re.compile(r"heap.?over(?:flow|run)", re.IGNORECASE), "CWE-122"),
+    (re.compile(r"format.?string", re.IGNORECASE), "CWE-134"),
+    (re.compile(r"integer.?over(?:flow|wrap)", re.IGNORECASE), "CWE-190"),
+    (re.compile(r"double.?free", re.IGNORECASE), "CWE-415"),
+    (re.compile(r"use.?after.?free|uaf", re.IGNORECASE), "CWE-416"),
+    (re.compile(r"null.?(?:pointer|deref|dereference)", re.IGNORECASE), "CWE-476"),
+    (re.compile(r"out.?of.?bounds.?write", re.IGNORECASE), "CWE-787"),
+    (re.compile(r"out.?of.?bounds.?read", re.IGNORECASE), "CWE-125"),
+    (re.compile(r"uninitiali[sz]ed", re.IGNORECASE), "CWE-908"),
+    (re.compile(r"deseriali[sz]ation", re.IGNORECASE), "CWE-502"),
+    (re.compile(r"(?:server.?side|ssrf).?request.?forg", re.IGNORECASE), "CWE-918"),
+    (re.compile(r"race.?condition|toctou|time.?of.?check", re.IGNORECASE), "CWE-367"),
+    (re.compile(r"type.?confusion", re.IGNORECASE), "CWE-843"),
+    (re.compile(r"hardcoded.?(?:secret|password|credential|key)", re.IGNORECASE), "CWE-798"),
 ]
 
-_CWE_RE = re.compile(r"CWE-(\d+)", re.I)
+_CWE_RE = re.compile(r"CWE-(\d+)", re.IGNORECASE)
 
 
-def _infer_cwe(rule_id: str, message: str) -> Optional[str]:
+def _infer_cwe(rule_id: str, message: str) -> str | None:
     """Infer CWE from rule_id keywords or finding message text.
 
     Returns ``"CWE-NNN"`` or None.  Tries the vuln-type reverse map
@@ -67,7 +68,8 @@ def _infer_cwe(rule_id: str, message: str) -> Optional[str]:
 
     m = _CWE_RE.search(combined)
     if m:
-        return f"CWE-{m.group(1)}"
+        from core.cve.cwe import format_cwe
+        return format_cwe(m.group(1))
 
     for pattern, cwe in _CWE_MESSAGE_PATTERNS:
         if pattern.search(combined):
@@ -111,7 +113,7 @@ _DEPENDENCY_MANIFEST_NAMES = frozenset({
 })
 
 
-def _is_sca_finding(finding: Dict[str, Any]) -> bool:
+def _is_sca_finding(finding: dict[str, Any]) -> bool:
     tool = (finding.get("tool") or "").lower().strip()
     if any(kw in tool for kw in _SCA_TOOL_KEYWORDS):
         return True
@@ -128,13 +130,13 @@ _SKIP_DIRS = frozenset({
 })
 
 
-def _build_file_index(source_root: Path) -> Dict[str, List[Path]]:
+def _build_file_index(source_root: Path) -> dict[str, list[Path]]:
     """Map basename → list of relative paths under *source_root*.
 
     Skips well-known non-source directories to keep the index small
     and the walk fast on large repos.
     """
-    index: Dict[str, List[Path]] = {}
+    index: dict[str, list[Path]] = {}
 
     def _walk(directory: Path) -> None:
         try:
@@ -171,9 +173,9 @@ def _is_under_root(source_root: Path, candidate: str) -> bool:
 def _resolve_uri(
     uri: str,
     source_root: Path,
-    file_index: Dict[str, List[Path]],
-    depth_cache: List[Optional[int]],
-) -> Optional[str]:
+    file_index: dict[str, list[Path]],
+    depth_cache: list[int | None],
+) -> str | None:
     """Resolve a SARIF URI to a relative path under *source_root*.
 
     Tries progressively shorter prefixes until a match is found.
@@ -224,12 +226,16 @@ _SNIPPET_CONTEXT_LINES = 3
 
 def _synthesize_snippet(
     source_root: Path, rel_path: str,
-    start_line: int, end_line: Optional[int],
+    start_line: int, end_line: int | None,
 ) -> str:
-    """Read source lines around the finding location."""
+    """Read the finding's source lines plus trailing context.
+
+    The snippet starts at ``start_line`` (no leading context) and
+    extends ``_SNIPPET_CONTEXT_LINES`` lines past the finding's end.
+    """
     try:
         full = source_root / rel_path
-        lines = full.read_text(errors="replace").splitlines()
+        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         s = max(0, start_line - 1)
         e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
         return "\n".join(lines[s:e])
@@ -261,8 +267,8 @@ class ImportStats:
 
 @dataclass
 class ImportResult:
-    findings: List[Dict[str, Any]] = field(default_factory=list)
-    warnings: List[ImportWarning] = field(default_factory=list)
+    findings: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[ImportWarning] = field(default_factory=list)
     stats: ImportStats = field(default_factory=ImportStats)
 
 
@@ -271,7 +277,7 @@ class ImportResult:
 # ---------------------------------------------------------------------------
 
 def normalize_imported_findings(
-    findings: List[Dict[str, Any]],
+    findings: list[dict[str, Any]],
     source_root: Path,
     original_tool: str = "external",
 ) -> ImportResult:
@@ -289,18 +295,29 @@ def normalize_imported_findings(
     source_root = source_root.resolve()
 
     file_index = _build_file_index(source_root)
-    depth_cache: List[Optional[int]] = [None]
+    depth_cache: list[int | None] = [None]
 
     for idx, finding in enumerate(findings):
         uri = finding.get("file") or ""
-        start_line = finding.get("startLine")
-        if not uri or not start_line:
+        if not isinstance(uri, str):
+            uri = ""
+        # Untrusted numeric fields: findings may arrive from external
+        # SARIF where startLine is a JSON string or Infinity/NaN —
+        # values that pass a truthiness gate but raise TypeError in
+        # the snippet arithmetic below. Coerce to int-or-None and
+        # require a positive line so only usable locations proceed.
+        start_line = _coerce_line(finding.get("startLine"))
+        if start_line is not None and start_line < 1:
+            start_line = None
+        if not uri or start_line is None:
             result.warnings.append(ImportWarning(
                 idx, "file/startLine",
-                f"Skipped: missing file or startLine (rule_id={finding.get('rule_id')})",
+                f"Skipped: missing or invalid file/startLine "
+                f"(rule_id={finding.get('rule_id')})",
             ))
             result.stats.findings_skipped += 1
             continue
+        finding["startLine"] = start_line
 
         # --- URI rebasing ---
         resolved = _resolve_uri(uri, source_root, file_index, depth_cache)
@@ -319,8 +336,12 @@ def normalize_imported_findings(
         finding["file"] = resolved
 
         # --- endLine default ---
-        if not finding.get("endLine"):
-            finding["endLine"] = start_line
+        # Same coercion as startLine; a missing, non-integer, or
+        # before-start endLine falls back to startLine.
+        end_line = _coerce_line(finding.get("endLine"))
+        if not end_line or end_line < start_line:
+            end_line = start_line
+        finding["endLine"] = end_line
 
         # --- snippet synthesis ---
         if not finding.get("snippet"):
@@ -367,7 +388,7 @@ def normalize_imported_findings(
     return result
 
 
-def format_import_summary(result: ImportResult, sarif_files: List[str]) -> str:
+def format_import_summary(result: ImportResult, sarif_files: list[str]) -> str:
     """Format a human-readable import summary for the operator."""
     s = result.stats
     lines = [
@@ -381,6 +402,11 @@ def format_import_summary(result: ImportResult, sarif_files: List[str]) -> str:
             lines.append(f"  → {s.findings_skipped} findings skipped ({examples})")
         else:
             lines.append(f"  → {s.findings_skipped} findings skipped")
+        if s.uri_unresolved:
+            lines.append(
+                f"  → {s.uri_unresolved} skipped because their URIs "
+                f"could not be mapped to the source tree"
+            )
     if s.cwe_inferred:
         lines.append(f"  → {s.cwe_inferred} CWEs inferred from rule_id/message")
     if s.snippet_synthesized:
@@ -402,7 +428,7 @@ def format_import_summary(result: ImportResult, sarif_files: List[str]) -> str:
     return "\n".join(lines)
 
 
-def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+def findings_to_sarif(findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Convert normalized finding dicts back to a valid SARIF 2.1.0 structure.
 
     Groups findings by tool name and produces one run per tool.
@@ -410,8 +436,8 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     synthesized snippets) so downstream consumers that re-parse from disk
     see the same data the in-memory pipeline does.
     """
-    runs_by_tool: Dict[str, list] = {}
-    rules_by_tool: Dict[str, Dict[str, dict]] = {}
+    runs_by_tool: dict[str, list] = {}
+    rules_by_tool: dict[str, dict[str, dict]] = {}
 
     for f in findings:
         tool = f.get("tool") or "external"
@@ -420,7 +446,7 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         rule_id = f.get("rule_id") or "unknown"
 
-        region: Dict[str, Any] = {}
+        region: dict[str, Any] = {}
         if f.get("startLine"):
             region["startLine"] = f["startLine"]
         if f.get("endLine"):
@@ -428,7 +454,7 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
         if f.get("snippet"):
             region["snippet"] = {"text": f["snippet"]}
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "ruleId": rule_id,
             "level": f.get("level") or "warning",
             "message": {"text": f.get("message") or ""},
@@ -443,20 +469,25 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
         if f.get("has_dataflow") and f.get("dataflow_path"):
             result["codeFlows"] = f["dataflow_path"]
 
+        # Same guard as enriched_writer._build_result: a legacy
+        # finding whose finding_id is the bare rule_id (the pre-fix
+        # collided form) must not be stamped out as a tool
+        # fingerprint — every same-rule finding would share a
+        # matchBasedId/v1 on re-parse.
         fid = f.get("finding_id")
-        if fid:
+        if fid and fid != rule_id:
             result["fingerprints"] = {"matchBasedId/v1": fid}
 
         runs_by_tool[tool].append(result)
 
         if rule_id not in rules_by_tool[tool]:
-            rule_entry: Dict[str, Any] = {"id": rule_id}
+            rule_entry: dict[str, Any] = {"id": rule_id}
             cwe = f.get("cwe_id")
             if cwe:
                 rule_entry["properties"] = {"cwe": [cwe]}
             rules_by_tool[tool][rule_id] = rule_entry
 
-    sarif: Dict[str, Any] = {
+    sarif: dict[str, Any] = {
         "version": "2.1.0",
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "runs": [],
@@ -477,14 +508,14 @@ def findings_to_sarif(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def import_provenance_block(
     result: ImportResult,
-    sarif_files: List[str],
-    tools: List[str],
+    sarif_files: list[str],
+    tools: list[str],
     source_type: str = "directory",
-    archive_sha256: Optional[str] = None,
-) -> Dict[str, Any]:
+    archive_sha256: str | None = None,
+) -> dict[str, Any]:
     """Build the provenance block for the run manifest."""
     s = result.stats
-    block: Dict[str, Any] = {
+    block: dict[str, Any] = {
         "sarif_files": sarif_files,
         "tools": tools,
         "total_imported": s.total_imported,
@@ -493,6 +524,7 @@ def import_provenance_block(
             "snippet_synthesized": s.snippet_synthesized,
             "uri_rebased": s.uri_rebased,
             "findings_skipped": s.findings_skipped,
+            "uri_unresolved": s.uri_unresolved,
         },
         "source": source_type,
     }

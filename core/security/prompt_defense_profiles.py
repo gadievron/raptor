@@ -112,6 +112,7 @@ _BY_PREFIX: tuple[tuple[str, ModelDefenseProfile], ...] = (
     ("openai/", OPENAI_GPT),
     ("o1-", OPENAI_GPT),
     ("o3-", OPENAI_GPT),
+    ("o4-", OPENAI_GPT),
     ("gemini-", GOOGLE_GEMINI),
     ("gemini/", GOOGLE_GEMINI),
     ("google/", GOOGLE_GEMINI),
@@ -128,10 +129,18 @@ def get_profile_for(model_id: str) -> ModelDefenseProfile:
     and `anthropic/claude-sonnet-4-6` both resolve to ANTHROPIC_CLAUDE.
     Unknown identifiers return CONSERVATIVE. Identifiers may include a
     provider prefix (`openai/gpt-5`) or be bare (`gpt-5`); both forms
-    are handled.
+    are handled. Bedrock regional/provider prefixes and aggregator
+    prefixes are stripped before matching.
     """
+    from core.security.llm_family import bare_model_id
+
     needle = model_id.lower()
     for prefix, profile in _BY_PREFIX:
         if needle.startswith(prefix):
             return profile
+    stripped = bare_model_id(model_id).lower()
+    if stripped != needle:
+        for prefix, profile in _BY_PREFIX:
+            if stripped.startswith(prefix):
+                return profile
     return CONSERVATIVE

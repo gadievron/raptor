@@ -57,7 +57,7 @@
      "reason": "git internal — typically excluded from publish but harmless if shipped"}
   ],
   "manifest_opt_in_fields": {
-    "_comment": "Manifest fields that, when present, declare the package opts in to shipping platform-specific binaries. A package with one of these explicit declarations is treated as having a documented native-binary surface; we don't flag binaries it ships under expected paths.",
+    "_comment": "Manifest fields that, when present, declare the package opts in to shipping platform-specific binaries. Annotation only: these fields live in the scanned repo's own manifest (attacker-controlled), so a declaration never suppresses findings — the binary walk always runs, and hits under a declaring manifest carry manifest_declares_native so reviewers see the package claims a documented native-binary surface.",
     "npm": ["binary", "cpu", "os"],
     "Cargo": ["links"]
   },

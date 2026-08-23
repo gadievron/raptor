@@ -49,10 +49,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
 
 try:
     import tomllib                  # Python 3.11+
@@ -67,15 +67,13 @@ _PURL_TYPE = "pypi"
 
 
 @register(filenames=["uv.lock"])
-def parse(path: Path) -> List[Dependency]:
-    try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except OSError as e:
-        logger.warning(
-            "sca.parsers.uv_lock: read failed for %s: %s", path, e,
-        )
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
+    try:
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         logger.warning(
             "sca.parsers.uv_lock: TOML parse failed for %s: %s",
@@ -89,7 +87,7 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(packages, list):
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for pkg in packages:
         dep = _build_dep(pkg, declared_in=path)
         if dep is not None:
@@ -99,7 +97,7 @@ def parse(path: Path) -> List[Dependency]:
 
 def _build_dep(
     pkg: Any, *, declared_in: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(pkg, dict):
         return None
     name = pkg.get("name")
@@ -118,7 +116,7 @@ def _build_dep(
     # Skip the project's own row (``virtual``) and local
     # editables / directories — these aren't registry-published
     # deps.
-    if any(k in source for k in ("virtual", "editable", "directory")):
+    if any(k in source for k in ("virtual", "editable", "directory", "url", "path")):
         return None
 
     # Git sources keep the version (some commit SHA or tag) but

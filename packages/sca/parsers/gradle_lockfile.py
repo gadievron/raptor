@@ -19,18 +19,20 @@ also appear in the manifest.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import List, Optional, Set
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 ECOSYSTEM = "Maven"
 
 # Configurations that count as production runtime / compile.
-_MAIN_CONFIGS: Set[str] = {
+_MAIN_CONFIGS: set[str] = {
     "compileClasspath",
     "runtimeClasspath",
     "default",
@@ -48,7 +50,7 @@ _MAIN_CONFIGS: Set[str] = {
 
 # Test configurations — record as test only when no main config also
 # claims the dep.
-_TEST_CONFIGS: Set[str] = {
+_TEST_CONFIGS: set[str] = {
     "testCompileClasspath",
     "testRuntimeClasspath",
     "testImplementation",
@@ -60,7 +62,7 @@ _TEST_CONFIGS: Set[str] = {
 }
 
 # Build-time only (annotation processors, plugin classpath, etc.).
-_BUILD_CONFIGS: Set[str] = {
+_BUILD_CONFIGS: set[str] = {
     "annotationProcessor",
     "kapt",
     "ksp",
@@ -69,14 +71,13 @@ _BUILD_CONFIGS: Set[str] = {
 }
 
 
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.gradle_lockfile: read failed for %s: %s", path, e)
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -94,7 +95,7 @@ def parse(path: Path) -> List[Dependency]:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _parse_line(line: str, path: Path) -> Optional[Dependency]:
+def _parse_line(line: str, path: Path) -> Dependency | None:
     if "=" not in line:
         return None
     coord, configs_text = line.split("=", 1)
@@ -123,14 +124,20 @@ def _parse_line(line: str, path: Path) -> Optional[Dependency]:
     )
 
 
-def _scope_from_configs(configs: Set[str]) -> str:
+def _scope_from_configs(configs: set[str]) -> str:
     if configs & _MAIN_CONFIGS:
         return "main"
     if configs & _TEST_CONFIGS:
         return "test"
     if configs & _BUILD_CONFIGS:
         return "build"
-    return "main"   # safest default: assume runtime-relevant
+    lc = {c.lower() for c in configs}
+    if any("test" in c for c in lc):
+        return "test"
+    if any(kw in c for c in lc
+           for kw in ("annotationprocessor", "kapt", "ksp")):
+        return "build"
+    return "main"
 
 
 register(filenames=["gradle.lockfile"])(parse)

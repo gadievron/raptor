@@ -50,7 +50,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 
@@ -85,9 +84,9 @@ class BranchProtectionFinding:
 
 
 def scan_target(
-    target: Path, manifests: List[Manifest],
+    target: Path, manifests: list[Manifest],
     *, client=None,
-) -> List[BranchProtectionFinding]:
+) -> list[BranchProtectionFinding]:
     """Query GitHub's branch-protection API for the target repo's
     default branch. ``client`` is a ``GitHubActionsClient`` (or stub
     for tests). When None, the detector no-ops (offline / no token
@@ -144,7 +143,7 @@ def scan_target(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _detect_github_remote(target: Path) -> Optional[str]:
+def _detect_github_remote(target: Path) -> str | None:
     """Return ``owner/repo`` for the target's ``origin`` remote, or
     None when the remote isn't a GitHub one (or no .git config)."""
     config = target / ".git" / "config"
@@ -180,7 +179,7 @@ def _detect_github_remote(target: Path) -> Optional[str]:
     return None
 
 
-def _parse_github_url(url: str) -> Optional[str]:
+def _parse_github_url(url: str) -> str | None:
     """``https://github.com/Foo/bar.git`` → ``Foo/bar``;
     ``git@github.com:Foo/bar.git`` → ``Foo/bar``. None for non-
     GitHub remotes (GitLab, Bitbucket, self-hosted Gitea / Forgejo,
@@ -192,18 +191,17 @@ def _parse_github_url(url: str) -> Optional[str]:
     return None
 
 
-def _detect_default_branch(client, owner_repo: str) -> Optional[str]:
+def _detect_default_branch(client, owner_repo: str) -> str | None:
     """Ask GitHub for the repo's default branch via
-    ``GET /repos/{owner}/{repo}``. Falls back to ``main`` when the
-    API call fails — the operator-most-common name. Truly weird
-    defaults (``trunk``, ``develop``) are surfaced by the API call;
-    we don't try to be clever."""
+    ``GET /repos/{owner}/{repo}``. Returns None when the API call
+    fails — the caller no-ops, consistent with the module's
+    'better silent than wrong' contract."""
     info = client.get_repo_info(owner_repo)
     if isinstance(info, dict):
         branch = info.get("default_branch")
         if isinstance(branch, str) and branch:
             return branch
-    return "main"
+    return None
 
 
 def _placeholder_host(target: Path, owner_repo: str) -> Dependency:

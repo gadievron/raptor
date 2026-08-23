@@ -7,9 +7,12 @@ per-call via ``new_solver(timeout_ms=...)``.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, TYPE_CHECKING
 
 from .availability import z3
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 DEFAULT_TIMEOUT_MS = 5000
 
@@ -95,8 +98,9 @@ def scoped(solver: Any) -> Iterator[Any]:
     """
     try:
         solver.push()
-    except Exception as e:  # noqa: BLE001 — Z3Exception unavailable cross-version
-        raise RuntimeError(f"scoped: solver.push() failed: {e}") from e
+    except Exception as e:
+        msg = f"scoped: solver.push() failed: {e}"
+        raise RuntimeError(msg) from e
     try:
         yield solver
     finally:

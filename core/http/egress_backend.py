@@ -57,7 +57,7 @@ Lets RAPTOR work behind corporate proxies transparently.
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from collections.abc import Iterable
 
 import urllib3
 

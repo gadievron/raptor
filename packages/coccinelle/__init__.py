@@ -14,12 +14,12 @@ from .findings import to_findings
 from .coverage import to_coverage_record
 
 __all__ = [
-    "run_rule",
-    "run_rules",
-    "is_available",
-    "version",
     "SpatchMatch",
     "SpatchResult",
-    "to_findings",
+    "is_available",
+    "run_rule",
+    "run_rules",
     "to_coverage_record",
+    "to_findings",
+    "version",
 ]

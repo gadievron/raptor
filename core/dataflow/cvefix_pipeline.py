@@ -4,7 +4,7 @@ Wires the shipped CodeQL runner (:mod:`core.dataflow.codeql_augmented_run`)
 to the generator (:mod:`core.dataflow.cvefix_corpus_generator`). Runs the
 *same* (stock) queries on the pre- and post-fix CodeQL databases — the
 diff in what's flagged is what the generator labels (post-fix-still-flagged
-→ FP candidate, pre-fix → TP). See ``~/design/trust-witness.md``.
+→ FP candidate, pre-fix → TP).
 
 This is corpus *generation*, distinct from the sound-tier *measurement*
 (baseline vs custom-``.ql`` isBarrier on the same post-fix DB) which uses the
@@ -19,15 +19,23 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
 
 from core.dataflow.codeql_augmented_run import DEFAULT_CODEQL_BIN, RunnerFn, analyze
 from core.dataflow.cvefix_corpus_generator import generate_from_sarif, write_corpus
-from core.dataflow.finding import Finding
-from core.dataflow.label import GroundTruth
+from core.json import load_json
+from typing import TYPE_CHECKING
+
+# CodeQL SARIF over corpus code — the SARIF budget class shared with
+# core.sarif.parser.load_sarif.
+_MAX_SARIF_BYTES = 100 * 1024 * 1024
+
+if TYPE_CHECKING:
+    from core.dataflow.label import GroundTruth
+    from core.dataflow.finding import Finding
+    from collections.abc import Iterable, Sequence
+
 
 
 def generate_corpus_for_pair(
@@ -39,11 +47,11 @@ def generate_corpus_for_pair(
     cwe: str,
     labeled_at: str,
     out_dir: Path,
-    fix_touched_files: Optional[Iterable[str]] = None,
+    fix_touched_files: Iterable[str] | None = None,
     codeql_bin: str = DEFAULT_CODEQL_BIN,
-    runner: Optional[RunnerFn] = None,
+    runner: RunnerFn | None = None,
     write: bool = True,
-) -> List[Tuple[Finding, GroundTruth]]:
+) -> list[tuple[Finding, GroundTruth]]:
     """Run ``queries`` on the pre- and post-fix CodeQL DBs and emit labeled
     corpus entries for one CVE.
 
@@ -60,8 +68,26 @@ def generate_corpus_for_pair(
         after_db, queries, sarif_dir / "after.sarif",
         codeql_bin=codeql_bin, runner=runner,
     )
-    before_sarif = json.loads(Path(a_before.sarif_path).read_text())
-    after_sarif = json.loads(Path(a_after.sarif_path).read_text())
+    try:
+        before_sarif = load_json(
+            a_before.sarif_path, strict=True, max_bytes=_MAX_SARIF_BYTES,
+        )
+    except (OSError, ValueError) as e:
+        msg = f"before-SARIF read/parse failed: {e}"
+        raise RuntimeError(msg) from e
+    if before_sarif is None:
+        msg = "before-SARIF read/parse failed: missing file"
+        raise RuntimeError(msg)
+    try:
+        after_sarif = load_json(
+            a_after.sarif_path, strict=True, max_bytes=_MAX_SARIF_BYTES,
+        )
+    except (OSError, ValueError) as e:
+        msg = f"after-SARIF read/parse failed: {e}"
+        raise RuntimeError(msg) from e
+    if after_sarif is None:
+        msg = "after-SARIF read/parse failed: missing file"
+        raise RuntimeError(msg)
 
     pairs = generate_from_sarif(
         before_sarif, after_sarif,
@@ -73,7 +99,7 @@ def generate_corpus_for_pair(
     return pairs
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("before_db", type=Path, help="CodeQL DB of the pre-fix source")
     p.add_argument("after_db", type=Path, help="CodeQL DB of the post-fix source")

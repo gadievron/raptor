@@ -18,8 +18,10 @@ empty result so /describe doesn't crash on unusual targets.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 # Cap on manifests we parse. /describe should be sub-second on
@@ -33,7 +35,7 @@ _MAX_MANIFESTS_TO_PARSE = 50
 class DependencyCounts:
     """Per-ecosystem direct-dep count + a truncation flag when
     we hit the parser cap."""
-    by_ecosystem: Dict[str, int] = field(default_factory=dict)
+    by_ecosystem: dict[str, int] = field(default_factory=dict)
     truncated: bool = False
 
 
@@ -77,7 +79,7 @@ def detect_dependency_counts(target_path: Path) -> DependencyCounts:
     if truncated:
         direct = direct[:_MAX_MANIFESTS_TO_PARSE]
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     try:
         for manifest in direct:
             try:

@@ -7,21 +7,92 @@ Semgrep JSON output, CodeQL SARIF, and findings.json.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.json import load_json, save_json
 
 COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 READS_MANIFEST = ".reads-manifest"
 
+# Ceiling on how much of the reads manifest a single reader ingests.
+# Legitimate /agentic runs produce manifests under 5 MB even on large
+# monorepos; 64 MB is a generous ceiling. In adversarial cases (the
+# PostToolUse hook fires on every Read, an LLM in a tight loop reads
+# thousands of small files) the manifest can reach hundreds of MB —
+# better a partial coverage record than an OOM.
+_MANIFEST_CAP = 64 * 1024 * 1024
+
+
+def _read_manifest_lines(manifest_path: Path) -> set[str]:
+    r"""Read reads-manifest paths under a shared flock with a size cap.
+
+    Single reader for the hook-written ``.reads-manifest`` so every
+    consumer (``build_from_manifest``, ``build_from_findings``) gets
+    the same reader-writer coordination and memory ceiling.
+
+    Hold a shared flock during the read so an in-flight writer (the
+    PostToolUse hook in plugins/coverage/) can't interleave a partial
+    line into our buffered iteration — the hook side serialises
+    appends via flock LOCK_EX on the same path; taking LOCK_SH here
+    completes the coordination. fcntl.flock is non-fatal: on platforms
+    without flock (Windows; raptor doesn't really support them but the
+    import is best-effort) we fall back to an unlocked read.
+
+    Use ``rstrip("\r\n")`` not ``strip()`` — the latter also trims
+    leading/trailing spaces, but POSIX permits filenames that
+    legitimately START or END with a space. ``track_read`` already
+    rejects NUL/CR/LF in the path itself, so a manifest line carrying
+    a filename with a trailing space made it in legitimately. Only
+    newline-style line terminators need removing.
+
+    Best-effort: returns an empty set when the manifest is missing or
+    unreadable.
+    """
+    files: set[str] = set()
+    if not manifest_path.exists():
+        return files
+    try:
+        try:
+            import fcntl as _fcntl
+        except ImportError:
+            _fcntl = None
+        with Path(manifest_path).open(encoding="utf-8", errors="replace") as f:
+            if _fcntl is not None:
+                try:
+                    _fcntl.flock(f, _fcntl.LOCK_SH)
+                except OSError:
+                    pass
+            bytes_read = 0
+            for line in f:
+                bytes_read += len(line)
+                if bytes_read > _MANIFEST_CAP:
+                    # Cap hit — log and stop. The remaining entries
+                    # don't make it into the coverage record.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "coverage manifest %s exceeded %d-byte cap; "
+                        "truncating coverage record (read %d files)",
+                        manifest_path, _MANIFEST_CAP, len(files),
+                    )
+                    break
+                line = line.rstrip("\r\n")
+                if line:
+                    files.add(line)
+            # The flock releases when the file is closed.
+    except OSError:
+        pass
+    return files
+
 
 def build_from_manifest(run_dir: Path, tool: str,
-                        rules_applied: List[str] = None,
-                        extra_files: List[str] = None) -> Optional[Dict[str, Any]]:
+                        rules_applied: list[str] | None = None,
+                        extra_files: list[str] | None = None) -> dict[str, Any] | None:
     """Build a coverage record from the reads manifest.
 
     The manifest is populated by the PostToolUse hook on Read.
-    Deduplicates and normalises paths relative to the target.
+    Deduplicates the raw manifest lines; path normalisation against the
+    target happens downstream when the record is imported
+    (:mod:`core.coverage.importer`).
 
     Args:
         run_dir: Run output directory containing .reads-manifest.
@@ -35,24 +106,10 @@ def build_from_manifest(run_dir: Path, tool: str,
     run_dir = Path(run_dir)
     manifest = run_dir / READS_MANIFEST
 
-    files = set()
-
-    # Read manifest. Use `rstrip("\r\n")` not `strip()` — the latter
-    # also trims leading/trailing spaces, but POSIX permits filenames
-    # that legitimately START or END with a space. `track_read`
-    # already rejects NUL/CR/LF in the path itself (batch 207), so
-    # a manifest line carrying a filename with a trailing space
-    # made it in legitimately and was then silently mangled by
-    # `strip()` here. Only newline-style line terminators need
-    # removing.
-    if manifest.exists():
-        try:
-            for line in manifest.read_text().splitlines():
-                line = line.rstrip("\r\n")
-                if line:
-                    files.add(line)
-        except OSError:
-            pass
+    # Locked, capped, streaming read — the manifest is appended to by
+    # the PostToolUse hook (LOCK_EX side), so this reader needs the
+    # same LOCK_SH coordination as ``build_from_findings``.
+    files = _read_manifest_lines(manifest)
 
     # Add extra files from tool-specific sources
     if extra_files:
@@ -72,12 +129,41 @@ def build_from_manifest(run_dir: Path, tool: str,
     return record
 
 
-def build_from_semgrep(run_dir: Path, semgrep_json_path: Path,
-                       rules_applied: List[str] = None) -> Optional[Dict[str, Any]]:
+def cleanup_manifest(run_dir: Path) -> bool:
+    """Remove the consumed ``.reads-manifest`` from *run_dir*.
+
+    Callers that fold the manifest into a coverage record (e.g. the
+    validation helper's ``build_from_findings`` + ``write_record``
+    sequence) delete it afterwards so the run-completion hook's
+    manifest→``coverage-read.json`` conversion doesn't re-count the
+    same reads.  Best-effort: returns True when a manifest was
+    removed, False when none existed or removal failed.
+    """
+    manifest = Path(run_dir) / READS_MANIFEST
+    try:
+        manifest.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
+                       rules_applied: list[str] | None = None,
+                       extra_error_json_paths: list[Path] | None = None,
+                       ) -> dict[str, Any] | None:
     """Build a coverage record from Semgrep JSON output.
 
     Reads paths.scanned from Semgrep's JSON output for authoritative
     file list, and errors for files_failed.
+
+    ``extra_error_json_paths``: the OTHER packs' JSON outputs.
+    ``paths.scanned`` is cumulative across packs (same tree walk), so
+    one file suffices for the examined list — but ``errors`` are
+    per-pack: a file dropped by rule timeouts under one pack's rules
+    is reported only in that pack's JSON. Merging every pack's errors
+    keeps files_failed from silently under-reporting coverage loss.
     """
     data = load_json(semgrep_json_path)
     if not data or not isinstance(data, dict):
@@ -88,7 +174,13 @@ def build_from_semgrep(run_dir: Path, semgrep_json_path: Path,
     if not scanned:
         return None
 
-    errors = data.get("errors", [])
+    errors = list(data.get("errors", []))
+    for extra in (extra_error_json_paths or []):
+        if Path(extra) == Path(semgrep_json_path):
+            continue
+        extra_data = load_json(extra)
+        if isinstance(extra_data, dict):
+            errors.extend(extra_data.get("errors", []))
     version = data.get("version", "")
 
     record = {
@@ -100,18 +192,25 @@ def build_from_semgrep(run_dir: Path, semgrep_json_path: Path,
         record["version"] = version
     if rules_applied:
         record["rules_applied"] = rules_applied
-    if errors:
-        record["files_failed"] = [
-            {"path": e.get("path", ""), "reason": e.get("message", "error")}
-            for e in errors if e.get("path")
-        ]
+    seen: set = set()
+    failed = []
+    for e in errors:
+        if not e.get("path"):
+            continue
+        key = (e.get("path"), e.get("message", "error"))
+        if key in seen:
+            continue
+        seen.add(key)
+        failed.append({"path": e["path"], "reason": e.get("message", "error")})
+    if failed:
+        record["files_failed"] = failed
 
     return record
 
 
-def build_from_cocci(spatch_results: List[Any],
-                     spatch_version: Optional[str] = None,
-                     ) -> Optional[Dict[str, Any]]:
+def build_from_cocci(spatch_results: list[Any],
+                     spatch_version: str | None = None,
+                     ) -> dict[str, Any] | None:
     """Build a coverage record from a list of ``SpatchResult``.
 
     Source of truth is the runner's structured output, NOT the
@@ -139,8 +238,8 @@ def build_from_cocci(spatch_results: List[Any],
         return None
 
     files: set = set()
-    rules_applied: List[str] = []
-    failures: List[Dict[str, str]] = []
+    rules_applied: list[str] = []
+    failures: list[dict[str, str]] = []
 
     for r in spatch_results:
         # Defensive attribute access — these are SpatchResult fields
@@ -155,17 +254,16 @@ def build_from_cocci(spatch_results: List[Any],
         # spatch errors → failures with the rule name as ``path``
         # (no per-file binding from spatch errors; the rule itself
         # is what failed).
-        for err in getattr(r, "errors", []) or []:
-            failures.append({
+        failures.extend({
                 "path": rule_name,
                 "reason": str(err)[:500],
-            })
+            } for err in getattr(r, "errors", []) or [])
 
     if not files and not rules_applied:
         # Skipped run with no signal at all — don't write a record.
         return None
 
-    record: Dict[str, Any] = {
+    record: dict[str, Any] = {
         "tool": "coccinelle",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": sorted(files),
@@ -174,13 +272,17 @@ def build_from_cocci(spatch_results: List[Any],
         record["version"] = spatch_version
     if rules_applied:
         record["rules_applied"] = sorted(set(rules_applied))
+    # Match the sibling builders (semgrep, codeql): drop failures with
+    # an empty path — a SpatchResult with errors but no rule name
+    # would otherwise emit a phantom empty-path files_failed entry.
+    failures = [f for f in failures if f["path"]]
     if failures:
         record["files_failed"] = failures
 
     return record
 
 
-def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
+def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
     """Build a coverage record from CodeQL SARIF output.
 
     Extracts: files from artifacts, packs from tool.extensions,
@@ -192,7 +294,7 @@ def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
 
     files = []
     packs = []
-    rules = []
+    rules: list[str] = []
     failures = []
     version = ""
 
@@ -206,7 +308,7 @@ def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
         # Tool info
         tool = run.get("tool", {})
         driver = tool.get("driver", {})
-        version = version or driver.get("version", "")
+        version = version or driver.get("version") or driver.get("semanticVersion") or ""
         rules.extend(r.get("id", "") for r in driver.get("rules", []))
 
         # Packs
@@ -240,14 +342,15 @@ def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
         record["packs"] = packs
     if rules:
         record["rules_applied"] = sorted(set(rules))
+    failures = [f for f in failures if f["path"]]
     if failures:
-        record["files_failed"] = [f for f in failures if f["path"]]
+        record["files_failed"] = failures
 
     return record
 
 
-def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
-                        tool: str = "llm") -> Optional[Dict[str, Any]]:
+def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = None,
+                        tool: str = "llm") -> dict[str, Any] | None:
     """Build a coverage record from findings.json + optional reads manifest.
 
     Combines two signals:
@@ -270,72 +373,11 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
             functions.append({"file": file_path, "function": func})
             finding_files.add(file_path)
 
-    # Files examined (from reads manifest).
-    #
-    # Pre-fix `read_text().splitlines()` materialised the entire
-    # manifest into memory in two passes — once as a single
-    # string, then split into a list of lines. For a long-running
-    # /agentic session that read tens of thousands of files, the
-    # manifest can grow to multi-MB; in adversarial cases (a
-    # PostToolUse hook fires on every Read, an LLM in a tight
-    # loop reads thousands of small files), the manifest can
-    # reach hundreds of MB. The double-buffering then took
-    # 2x peak RSS just for the read.
-    #
-    # Cap the read at 64 MB. Legitimate /agentic runs produce
-    # manifests under 5 MB even on large monorepos; 64 MB is a
-    # generous ceiling. Stream line-by-line so the manifest
-    # isn't fully buffered. On read failure (OSError), the cap
-    # is irrelevant — we just skip.
-    _MANIFEST_CAP = 64 * 1024 * 1024
+    # Files examined (from reads manifest) — locked, capped,
+    # streaming read shared with ``build_from_manifest``.
     read_files = set()
-    if reads_manifest_path and reads_manifest_path.exists():
-        try:
-            # Hold a shared flock during the read so an in-flight
-            # writer (the PostToolUse hook in plugins/coverage/) can't
-            # interleave a partial line into our buffered iteration.
-            # Pre-fix the reader iterated line-by-line without any
-            # lock — a writer's append occurring between the kernel
-            # buffer-fill and our newline-split would surface as a
-            # torn final line in the iteration. The hook side already
-            # serialises appends via flock LOCK_EX on the same path;
-            # taking LOCK_SH here completes the reader-writer
-            # coordination. fcntl.flock is non-fatal: on platforms
-            # without flock (Windows; raptor doesn't really support
-            # them but the import is best-effort) we fall back to
-            # unlocked read.
-            try:
-                import fcntl as _fcntl
-            except ImportError:
-                _fcntl = None
-            with open(reads_manifest_path, "r", encoding="utf-8",
-                      errors="replace") as f:
-                if _fcntl is not None:
-                    try:
-                        _fcntl.flock(f, _fcntl.LOCK_SH)
-                    except OSError:
-                        pass
-                bytes_read = 0
-                for line in f:
-                    bytes_read += len(line)
-                    if bytes_read > _MANIFEST_CAP:
-                        # Cap hit — log and stop. The remaining
-                        # entries don't make it into the
-                        # coverage record. Better partial than
-                        # OOM.
-                        import logging
-                        logging.getLogger(__name__).warning(
-                            "coverage manifest %s exceeded %d-byte cap; "
-                            "truncating coverage record (read %d files)",
-                            reads_manifest_path, _MANIFEST_CAP, len(read_files),
-                        )
-                        break
-                    line = line.rstrip("\r\n")
-                    if line:
-                        read_files.add(line)
-                # The flock releases when the file is closed.
-        except OSError:
-            pass
+    if reads_manifest_path:
+        read_files = _read_manifest_lines(reads_manifest_path)
 
     all_files = sorted(read_files | finding_files)
 
@@ -358,7 +400,7 @@ def build_from_annotations(
     annotations_dir: Path,
     *,
     tool_name: str = "annotations",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Build a coverage record from a tree of annotation .md files.
 
     Every annotated function counts as "examined" for coverage purposes:
@@ -395,10 +437,10 @@ def build_from_annotations(
     from core.annotations import iter_all_annotations
 
     files = set()
-    functions: List[Dict[str, str]] = []
+    functions: list[dict[str, str]] = []
     seen = set()
-    statuses: Dict[str, int] = {}
-    sources: Dict[str, int] = {}
+    statuses: dict[str, int] = {}
+    sources: dict[str, int] = {}
     for ann in iter_all_annotations(annotations_dir):
         if ann.file:
             files.add(ann.file)
@@ -406,7 +448,7 @@ def build_from_annotations(
         if key in seen:
             continue
         seen.add(key)
-        entry: Dict[str, str] = {"file": ann.file, "function": ann.function}
+        entry: dict[str, str] = {"file": ann.file, "function": ann.function}
         # Include verdict + source-line hash inline when the
         # annotation metadata carries them. /audit's status enum
         # (clean / suspicious / finding / error) flows straight
@@ -435,8 +477,64 @@ def build_from_annotations(
     }
 
 
-def write_record(run_dir: Path, record: Dict[str, Any],
-                 tool_name: str = None) -> Path:
+def build_from_journal(run_dir: Path,
+                       tool_name: str = "journal") -> dict[str, Any] | None:
+    """Build a coverage record from review-journal.jsonl.
+
+    Replaces ``build_from_annotations`` for runs that emit journal
+    entries instead of annotation .md files (post-migration /agentic).
+
+    Args:
+        run_dir: Run output directory containing review-journal.jsonl.
+        tool_name: ``tool`` field for the resulting record.
+
+    Returns:
+        Coverage record dict, or None if no journal entries exist.
+    """
+    from core.coverage.journal import load_entries
+
+    entries = load_entries(run_dir)
+    if not entries:
+        return None
+
+    functions: list[dict[str, str]] = []
+    seen = set()
+    statuses: dict[str, int] = {}
+
+    for entry in entries:
+        key = (entry.file, entry.function)
+        if key in seen:
+            continue
+        seen.add(key)
+        func_entry: dict[str, str] = {
+            "file": entry.file,
+            "function": entry.function,
+        }
+        if entry.verdict:
+            func_entry["status"] = entry.verdict
+            statuses[entry.verdict] = statuses.get(entry.verdict, 0) + 1
+        if entry.source_hash:
+            func_entry["hash"] = entry.source_hash
+        functions.append(func_entry)
+
+    if not functions:
+        return None
+    # Deliberately NO files_examined: the record's tool label is
+    # review-grade (llm/analysed — see core/coverage/registry.py), and
+    # the importer marks files_examined WHOLE-FILE under the record's
+    # tool. A journal entry reviews one function, not its whole file;
+    # emitting the file list here inflated every containing file to
+    # reviewed. functions_analysed carries the exact spans.
+    return {
+        "tool": tool_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "functions_analysed": functions,
+        "journal_statuses": statuses,
+    }
+
+
+def write_record(run_dir: Path, record: dict[str, Any],
+                 tool_name: str | None = None) -> Path:
     """Write a coverage record to the run directory.
 
     Args:
@@ -445,16 +543,13 @@ def write_record(run_dir: Path, record: Dict[str, Any],
         tool_name: If provided, writes coverage-<tool_name>.json.
                    Otherwise writes the legacy coverage-record.json.
     """
-    if tool_name:
-        filename = f"coverage-{tool_name}.json"
-    else:
-        filename = COVERAGE_RECORD_FILE
+    filename = f"coverage-{tool_name}.json" if tool_name else COVERAGE_RECORD_FILE
     path = Path(run_dir) / filename
     save_json(path, record)
     return path
 
 
-def load_records(run_dir: Path) -> List[Dict[str, Any]]:
+def load_records(run_dir: Path) -> list[dict[str, Any]]:
     """Load all coverage records from a run directory.
 
     The per-tool glob `coverage-*.json` overlaps the legacy
@@ -500,13 +595,6 @@ def load_records(run_dir: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def load_record(run_dir: Path) -> Optional[Dict[str, Any]]:
+def load_record(run_dir: Path) -> dict[str, Any] | None:
     """Load a coverage record from a run directory. Legacy single-file API."""
     return load_json(Path(run_dir) / COVERAGE_RECORD_FILE)
-
-
-def cleanup_manifest(run_dir: Path) -> None:
-    """Remove the reads manifest after converting to a coverage record."""
-    manifest = Path(run_dir) / READS_MANIFEST
-    if manifest.exists():
-        manifest.unlink(missing_ok=True)

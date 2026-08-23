@@ -28,21 +28,25 @@ same family of limitation as Java/Go instance dispatch.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import extract_qualified_symbols as _extract_qualified
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 def build_cargo_symbol_map(
-    osv_results: Optional[Iterable[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: Iterable[Any] | None,
+) -> dict[str, list[str]]:
     """Extract per-dep qualified-name targets from Cargo OSV results."""
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
@@ -50,7 +54,7 @@ def build_cargo_symbol_map(
         if not dep_key or not dep_key.startswith("Cargo:"):
             continue
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
-        qualified: List[str] = []
+        qualified: list[str] = []
         for adv in r.advisories:
             qualified.extend(_extract_qualified(adv, dep_name))
         if qualified:
@@ -58,37 +62,13 @@ def build_cargo_symbol_map(
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
-    out: List[str] = []
-    es = getattr(advisory, "ecosystem_specific", None) or {}
-    ds = getattr(advisory, "database_specific", None) or {}
-    for source in (es, ds):
-        if not isinstance(source, dict):
-            continue
-        for imp in source.get("imports") or []:
-            if not isinstance(imp, dict):
-                continue
-            path = imp.get("path") or dep_name
-            symbols = imp.get("symbols") or []
-            for s in symbols:
-                if isinstance(s, str) and s and isinstance(path, str):
-                    out.append(f"{path}.{s}")
-        for key in ("affected_symbols", "affected_functions"):
-            v = source.get(key)
-            if isinstance(v, list) and dep_name:
-                for s in v:
-                    if isinstance(s, str):
-                        out.append(f"{dep_name}.{s}")
-    return out
-
-
 def refine_cargo_verdicts(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
     *,
     target: Path,
-    cargo_symbol_map: Dict[str, List[str]],
-    inventory: Optional[Dict[str, Any]] = None,
+    cargo_symbol_map: dict[str, list[str]],
+    inventory: dict[str, Any] | None = None,
 ) -> None:
     candidates = [
         d for d in deps
@@ -114,25 +94,25 @@ def refine_cargo_verdicts(
             )
             return
 
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     for d in candidates:
         qualified_names = cargo_symbol_map[d.key()]
-        results = []
+        paired = []
         for qn in qualified_names:
             if "." not in qn:
                 continue
             try:
-                results.append(function_called(inventory, qn))
+                paired.append((qn, function_called(inventory, qn)))
             except ValueError:
                 continue
-        if not results:
+        if not paired:
             continue
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence: List[str] = []
-            called: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence: list[str] = []
+            called: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called.append(qn)
                     evidence.extend(
@@ -156,7 +136,7 @@ def refine_cargo_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"crate imported but the {len(qualified_names)} "
+                        f"crate imported but the {len(paired)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test Rust source"
                     ),

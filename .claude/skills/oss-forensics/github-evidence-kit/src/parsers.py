@@ -45,9 +45,9 @@ from .schema.events import (
 class _RowContext:
     """Extracted common data from a GH Archive row."""
 
-    __slots__ = ("row", "payload", "when", "who", "repository", "verification")
+    __slots__ = ("payload", "repository", "row", "verification", "when", "who")
 
-    def __init__(self, row: dict[str, Any], table: str | None = None):
+    def __init__(self, row: dict[str, Any], table: str | None = None) -> None:
         self.row = row
         # `.get("payload")` not `["payload"]`. Pre-fix
         # `row["payload"]` raised KeyError on rows that didn't
@@ -89,11 +89,12 @@ class _RowContext:
 
         # Raise error if we still couldn't extract valid repo name
         if not repo_name:
-            raise ValueError(
+            msg = (
                 f"Cannot extract repository name from GH Archive row. "
                 f"Row ID: {row.get('id', 'unknown')}, Event Type: {row.get('type', 'unknown')}. "
                 f"Available keys: {list(row.keys())}"
             )
+            raise ValueError(msg)
 
         self.repository = make_repo_from_full_name(repo_name)
 
@@ -344,11 +345,14 @@ def parse_member_event(row: dict[str, Any], table: str | None = None) -> MemberE
     action = ctx.payload.get("action", "added")
 
     # MemberEvent actions in GitHub are: added, removed, edited
-    action_map = {"added": "added", "removed": "removed"}
+    action_map = {"added": "added", "removed": "removed", "edited": "edited"}
     normalized_action = action_map.get(action, "added")
 
     return MemberEvent(
-        evidence_id=generate_evidence_id("member", ctx.repository.full_name, member.get("login", ""), action),
+        # Keyed on the NORMALIZED action so the id and the record's
+        # action field can never disagree (an unknown raw action used
+        # to produce an id citing it while the record said "added").
+        evidence_id=generate_evidence_id("member", ctx.repository.full_name, member.get("login", ""), normalized_action),
         when=ctx.when,
         who=ctx.who,
         what=f"Collaborator {member.get('login', 'unknown')} {normalized_action}",
@@ -464,5 +468,6 @@ def parse_gharchive_event(row: dict[str, Any], table: str | None = None) -> Any:
     parser = _PARSERS.get(event_type)
     if parser is None:
         supported = ", ".join(_PARSERS.keys())
-        raise ValueError(f"Unsupported GH Archive event type: {event_type}. Supported: {supported}")
+        msg = f"Unsupported GH Archive event type: {event_type}. Supported: {supported}"
+        raise ValueError(msg)
     return parser(row, table)

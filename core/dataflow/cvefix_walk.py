@@ -27,10 +27,24 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
 
 from core.config import RaptorConfig
-from core.dataflow.cvefix_loader import CveFixPair, INJECTION_CWES, load_pairs
+from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, load_pairs
+from core.git.clone import (
+    get_safe_git_env,
+    safe_git_command,
+    safe_git_readonly_command,
+)
+
+# CodeQL resource tunables live in ``packages.codeql`` — the central
+# home for all CodeQL-related utilities.  We re-export the type at the
+# old name so other modules (and tests that import it via cvefix_walk)
+# keep working without churn.
+from packages.codeql.tunables import CodeQLTunables
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 DEFAULT_CODEQL_BIN = "codeql"
 
@@ -179,7 +193,7 @@ def _codeql_lang(repo_language: str) -> str:
     return _LANG_MAP.get(repo_language, "javascript")
 
 
-def query_for(repo_language: str, cwe: str) -> Optional[str]:
+def query_for(repo_language: str, cwe: str) -> str | None:
     pack, table = _QUERIES[_codeql_lang(repo_language)]
     sub = table.get(cwe)
     return None if sub is None else f"codeql/{pack}:{sub}"
@@ -188,7 +202,11 @@ def query_for(repo_language: str, cwe: str) -> Optional[str]:
 @dataclass(frozen=True)
 class WalkResult:
     fix_hash: str
-    status: str               # ok | fetch_fail | build_fail | analyze_fail | no_query
+    # ok | fetch_fail | build_fail | analyze_fail | no_query, plus two
+    # statuses persisted into the same walk_results.status column by
+    # other writers: "error" (walk()'s process_pair crash handler) and
+    # "ok_built" (promote_misses' autobuild-recovered rows).
+    status: str
     before_count: int = -1
     after_count: int = -1
 
@@ -196,19 +214,51 @@ class WalkResult:
     def is_yield(self) -> bool:
         return self.status == "ok" and self.before_count > 0
 
-    @property
-    def is_fp_candidate(self) -> bool:
-        return self.status == "ok" and self.after_count > 0
-
 
 # --- subprocess steps (module-level so tests can stub them) ---
 
 def _run(cmd, timeout) -> bool:
     # get_safe_env() strips env vars tools may shell-evaluate (untrusted-repo
-    # hygiene per CLAUDE.md); buildless extraction + git read-only ops only.
+    # hygiene per CLAUDE.md); buildless CodeQL extraction only — git
+    # invocations go through _run_git below.  preserve_proxy: buildless
+    # extraction may still resolve query packs over the network on
+    # mandatory-egress-proxy hosts.
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           check=False, env=RaptorConfig.get_safe_env())
+                           check=False,
+                           env=RaptorConfig.get_safe_env(preserve_proxy=True))
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _run_git(args, timeout, *, network: bool = False) -> bool:
+    """Run one hardened git command against a cloned (internet-sourced,
+    therefore untrusted) repo.
+
+    argv comes from ``core.git``'s shared helpers — never a bare
+    ``["git", ...]`` list: a hostile repo can ship ``.git/config``
+    entries (fsmonitor, hooksPath, filters, gpg, pagers) that execute
+    attacker code on ordinary git ops; the per-invocation ``-c``
+    overrides neutralise them (env vars alone cannot).
+
+      * ``network=False`` (init / remote add / checkout): the STRICT
+        read-only variant — ``protocol.allow=never``, no transport can
+        ever engage.
+      * ``network=True`` (the targeted ``fetch``): the network-capable
+        ``safe_git_command`` — the fetch genuinely needs the https
+        transport, so it keeps the per-protocol pins instead.
+
+    Env is the shared sanitised git env; the fetch keeps the
+    operator's proxy vars (git honours proxy env, and on mandatory-
+    egress-proxy hosts the remote has no route without them; local
+    invocations never dial out, so they get the fully-stripped env).
+    """
+    cmd = safe_git_command(*args) if network else safe_git_readonly_command(*args)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           check=False,
+                           env=get_safe_git_env(preserve_proxy=network))
         return r.returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -243,15 +293,17 @@ def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str,
     try:
         from core.sandbox import check_landlock_available, run_untrusted_networked
     except ImportError as exc:
-        raise RuntimeError(
-            "core.sandbox unavailable — refusing to autobuild an untrusted repo") from exc
+        msg = "core.sandbox unavailable — refusing to autobuild an untrusted repo"
+        raise RuntimeError(msg) from exc
     if not check_landlock_available():
-        raise RuntimeError(
-            "Landlock unavailable — refusing to autobuild an untrusted repo unsandboxed")
+        msg = "Landlock unavailable — refusing to autobuild an untrusted repo unsandboxed"
+        raise RuntimeError(msg)
     if lang not in _AUTOBUILD_PROFILES:
-        raise RuntimeError(
+        msg = (
             f"no autobuild profile for lang={lang!r}; known: "
-            f"{sorted(_AUTOBUILD_PROFILES)}")
+            f"{sorted(_AUTOBUILD_PROFILES)}"
+        )
+        raise RuntimeError(msg)
     proxy_hosts, env_extender = _AUTOBUILD_PROFILES[lang]
     env = RaptorConfig.get_safe_env(preserve_proxy=True)
     env.update(env_extender(work_root))
@@ -270,27 +322,23 @@ def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str,
 def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
-    if not _run(["git", "init", "-q", str(dest)], 30):
+    if not _run_git(["init", "-q", str(dest)], 30):
         return False
-    if not _run(["git", "-C", str(dest), "remote", "add", "origin", repo_url], 30):
+    if not _run_git(["-C", str(dest), "remote", "add", "origin", repo_url], 30):
         return False
-    # --depth 2 brings the fix + its single parent.
-    return _run(["git", "-C", str(dest), "fetch", "-q", "--depth", "2", "origin", fix_hash], timeout)
+    # --depth 2 brings the fix + its single parent.  network=True: the
+    # fetch is the one step that legitimately needs a transport.
+    return _run_git(["-C", str(dest), "fetch", "-q", "--depth", "2", "origin", fix_hash],
+                    timeout, network=True)
 
-
-# CodeQL resource tunables live in ``packages.codeql`` — the central
-# home for all CodeQL-related utilities.  We re-export the type at the
-# old name so other modules in this file (and tests that import it via
-# cvefix_walk) keep working without churn.
-from packages.codeql.tunables import CodeQLTunables  # noqa: E402
 
 _DEFAULT_TUNABLES = CodeQLTunables()
 
 
 def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, timeout: int,
-              build_mode: Optional[str] = None,
+              build_mode: str | None = None,
               tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> bool:
-    if not _run(["git", "-C", str(src), "checkout", "-q", commit], 60):
+    if not _run_git(["-C", str(src), "checkout", "-q", commit], 60):
         return False
     cmd = [codeql_bin, "database", "create", str(db), f"--language={lang}",
            f"--source-root={src}", "--overwrite"]
@@ -306,7 +354,7 @@ def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, time
 
 
 def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
-                 tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> Optional[int]:
+                 tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> int | None:
     cmd = [codeql_bin, "database", "analyze", str(db), query,
            "--format=sarif-latest", f"--output={out}"]
     # ``database analyze`` doesn't accept ``--max-disk-cache``; suppress it
@@ -316,8 +364,8 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
         return None
     try:
         import json
-        data = json.loads(out.read_text())
-        return sum(len(r.get("results", [])) for r in data.get("runs", []))
+        data = json.loads(out.read_text(encoding="utf-8"))
+        return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
     except (OSError, ValueError):
         return None
 
@@ -365,7 +413,7 @@ def _clean_go_caches(work_dir: Path) -> None:
 def process_pair(
     pair: CveFixPair, *, work_dir: Path, codeql_bin: str = DEFAULT_CODEQL_BIN,
     fetch_timeout: int = 150, build_timeout: int = 240, analyze_timeout: int = 180,
-    build_mode: Optional[str] = None,
+    build_mode: str | None = None,
     tunables: CodeQLTunables = _DEFAULT_TUNABLES,
 ) -> WalkResult:
     """Fetch, build before/after DBs, run the CWE query; clean up; return counts.
@@ -450,7 +498,7 @@ def walk(
     languages=("Python", "JavaScript", "TypeScript"),
     work_dir: Path = Path("/data/corpus/clones/walk"),
     codeql_bin: str = DEFAULT_CODEQL_BIN,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     fetch_timeout: int = 150,
     build_timeout: int = 240,
     analyze_timeout: int = 180,
@@ -465,41 +513,52 @@ def walk(
     controls ``--threads`` / ``--ram`` / ``--max-disk-cache``."""
     pairs = load_pairs(db_path, cwes=cwes, languages=languages)
     con = sqlite3.connect(str(results_db))
-    con.execute(_SCHEMA)
-    # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
-    # yields identical (DB, query, result), so process it once. (The PK already
-    # dedups at storage, but without this we'd waste a full rebuild on each.)
-    done = _processed(con)
-    todo, seen = [], set()
-    for p in pairs:
-        key = (p.fix_hash, p.cwe)
-        if key in done or key in seen:
-            continue
-        seen.add(key)
-        todo.append(p)
-    log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for pair in todo:
-        if limit is not None and n >= limit:
-            break
-        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                           fetch_timeout=fetch_timeout,
-                           build_timeout=build_timeout,
-                           analyze_timeout=analyze_timeout,
-                           tunables=tunables)
-        _record(con, pair, res)
-        n += 1
-        tag = "YIELD" if res.is_yield else res.status
-        log(f"  [{n}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
-            f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
-            f"before={res.before_count} after={res.after_count}")
-    summary = dict(con.execute(
-        "SELECT 'total', count(*) FROM walk_results UNION ALL "
-        "SELECT 'yield', count(*) FROM walk_results WHERE status='ok' AND before_count>0 UNION ALL "
-        "SELECT 'fp_candidate', count(*) FROM walk_results WHERE status='ok' AND after_count>0"
-    ).fetchall())
-    con.close()
+    try:
+        con.execute(_SCHEMA)
+        # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
+        # yields identical (DB, query, result), so process it once. (The PK already
+        # dedups at storage, but without this we'd waste a full rebuild on each.)
+        done = _processed(con)
+        todo, seen = [], set()
+        for p in pairs:
+            key = (p.fix_hash, p.cwe)
+            if key in done or key in seen:
+                continue
+            seen.add(key)
+            todo.append(p)
+        log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        for n, pair in enumerate(todo):
+            if limit is not None and n >= limit:
+                break
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   fetch_timeout=fetch_timeout,
+                                   build_timeout=build_timeout,
+                                   analyze_timeout=analyze_timeout,
+                                   tunables=tunables)
+            except Exception as exc:  # noqa: BLE001
+                log(f"  [{n + 1}/{len(todo)}] {pair.cve_id} {pair.cwe}: "
+                    f"process_pair crashed: {exc}")
+                res = WalkResult(pair.fix_hash, "error")
+            _record(con, pair, res)
+            tag = "YIELD" if res.is_yield else res.status
+            log(f"  [{n + 1}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
+                f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
+                f"before={res.before_count} after={res.after_count}")
+        # status IN ('ok','ok_built'): re-running walk() over a db that
+        # promote_misses already upgraded must keep counting the
+        # promoted yielders — they are 'ok' rows whose autobuild retry
+        # recovered a result, not a different outcome class.
+        summary = dict(con.execute(
+            "SELECT 'total', count(*) FROM walk_results UNION ALL "
+            "SELECT 'yield', count(*) FROM walk_results "
+            "WHERE status IN ('ok','ok_built') AND before_count>0 UNION ALL "
+            "SELECT 'fp_candidate', count(*) FROM walk_results "
+            "WHERE status IN ('ok','ok_built') AND after_count>0"
+        ).fetchall())
+    finally:
+        con.close()
     return summary
 
 
@@ -509,7 +568,7 @@ def promote_misses(
     codeql_bin: str = DEFAULT_CODEQL_BIN,
     promote_languages: Sequence[str] = ("Java",),
     build_timeout: int = 600,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     log=print,
 ) -> dict:
     """Build-promote buildless misses (the second half of the Java plan).
@@ -523,37 +582,44 @@ def promote_misses(
     the expensive autobuilds are bounded to the buildless false-negative set.
     """
     con = sqlite3.connect(str(results_db))
-    con.execute(_SCHEMA)
-    ph = ",".join("?" * len(promote_languages))
-    rows = con.execute(
-        f"SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash "
-        f"FROM walk_results WHERE status='ok' AND before_count=0 "
-        f"AND repo_language IN ({ph}) ORDER BY cve_id", tuple(promote_languages)
-    ).fetchall()
-    log(f"promote: {len(rows)} buildless-miss rows in {tuple(promote_languages)}")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    promoted = n = 0
-    for fix_hash, cve_id, cwe, lang, repo_url, parent_hash in rows:
-        if limit is not None and n >= limit:
-            break
-        n += 1
-        pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
-                           build_timeout=build_timeout, build_mode="autobuild")
-        if res.status == "ok" and res.before_count > 0:
-            con.execute(
-                "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
-                "WHERE fix_hash=? AND cwe=?",
-                ("ok_built", res.before_count, res.after_count, time.time(), fix_hash, cwe))
-            con.commit()
-            promoted += 1
-            log(f"  [{n}/{len(rows)}] PROMOTED {cve_id} {cwe} "
-                f"{repo_url.split('github.com/')[-1]}: before={res.before_count} "
-                f"after={res.after_count}")
-        else:
-            log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
-                f"{res.status} before={res.before_count}")
-    con.close()
+    try:
+        con.execute(_SCHEMA)
+        ph = ",".join("?" * len(promote_languages))
+        rows = con.execute(
+            f"SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash "
+            f"FROM walk_results WHERE status='ok' AND before_count=0 "
+            f"AND repo_language IN ({ph}) ORDER BY cve_id", tuple(promote_languages)
+        ).fetchall()
+        log(f"promote: {len(rows)} buildless-miss rows in {tuple(promote_languages)}")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        promoted = n = 0
+        for fix_hash, cve_id, cwe, lang, repo_url, parent_hash in rows:
+            if limit is not None and n >= limit:
+                break
+            n += 1
+            pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
+            try:
+                res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                                   build_timeout=build_timeout, build_mode="autobuild")
+            except Exception as exc:  # noqa: BLE001
+                log(f"  [{n}/{len(rows)}] {cve_id} {cwe}: "
+                    f"process_pair crashed: {exc}")
+                continue
+            if res.status == "ok" and res.before_count > 0:
+                con.execute(
+                    "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
+                    "WHERE fix_hash=? AND cwe=?",
+                    ("ok_built", res.before_count, res.after_count, time.time(), fix_hash, cwe))
+                con.commit()
+                promoted += 1
+                log(f"  [{n}/{len(rows)}] PROMOTED {cve_id} {cwe} "
+                    f"{repo_url.split('github.com/')[-1]}: before={res.before_count} "
+                    f"after={res.after_count}")
+            else:
+                log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
+                    f"{res.status} before={res.before_count}")
+    finally:
+        con.close()
     return {"candidates": len(rows), "promoted": promoted}
 
 
@@ -601,7 +667,10 @@ def main(argv=None) -> None:
     ap.add_argument("--analyze-timeout", type=int, default=180,
                     help="codeql database analyze timeout, seconds (default 180)")
     a = ap.parse_args(argv)
-    log = lambda m: print(m, flush=True)  # noqa: E731
+
+    def log(m) -> None:
+        print(m, flush=True)
+
     # Resolve operator overrides against tuning.json-backed defaults.
     tunables = CodeQLTunables.from_tuning(
         overrides={"threads": a.threads, "ram_mb": a.ram,

@@ -11,11 +11,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import heapq
+import logging
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 # Range of schema versions ``from_dict`` will accept. Anything
@@ -53,7 +60,7 @@ _EVIDENCE_RAW_KEY_ALLOWLIST = frozenset({
 
 
 def _clip_str(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
-    """Coerce ``value`` to str, strip control chars, cap length.
+    r"""Coerce ``value`` to str, strip control chars, cap length.
 
     Used at every adversarial-input boundary entering the
     threat model. Strips the C1 control-char range
@@ -64,7 +71,7 @@ def _clip_str(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
     otherwise a hostile 10 MB input made the escape pass do
     proportional work even though we'd discard most of it
     immediately. ``escape_nonprintable`` can expand chars up to
-    ~4x (each control byte → ``\\x..`` text); the pre-clip
+    ~4x (each control byte → ``\x..`` text); the pre-clip
     accepts that the tail of the cap may be truncated
     mid-escape sequence on hostile inputs, which is safer than
     an O(N) regex pass over an attacker-controlled blob.
@@ -124,11 +131,10 @@ def _clip_str_list(values: Any) -> list[str]:
     hostile JSON inputs claiming ``"focus_areas": [str * 1_000_000]``
     or single entries 100 MB long."""
     raw = _coerce_str_list(values)
-    capped = [_clip_str(v) for v in raw[:_MAX_LIST_ENTRIES]]
-    return capped
+    return [_clip_str(v) for v in raw[:_MAX_LIST_ENTRIES]]
 
 
-def _resolve_inside(path: Path, project_out: Path) -> Optional[Path]:
+def _resolve_inside(path: Path, project_out: Path) -> Path | None:
     """Return ``path.resolve()`` only if it lives inside
     ``project_out.resolve()``. Defends against attacker-tampered
     ``project.threat_model_path`` pointing at ``/etc/shadow`` or
@@ -223,7 +229,7 @@ class ThreatModel:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ThreatModel":
+    def from_dict(cls, data: dict[str, Any]) -> ThreatModel:
         def _list(key: str) -> list[str]:
             # Caps each entry's byte length AND the total entry
             # count. Defends against hostile JSON inputs of
@@ -243,18 +249,20 @@ class ThreatModel:
             try:
                 version = int(raw_version)
             except (TypeError, ValueError):
-                raise ValueError(
+                msg = (
                     f"threat-model version must be an integer, got "
                     f"{type(raw_version).__name__}"
                 )
+                raise ValueError(msg) from None
             if not (
                 SCHEMA_VERSION_MIN <= version <= SCHEMA_VERSION_MAX
             ):
-                raise ValueError(
+                msg = (
                     f"threat-model schema version {version} outside "
                     f"supported range "
                     f"[{SCHEMA_VERSION_MIN}, {SCHEMA_VERSION_MAX}]"
                 )
+                raise ValueError(msg)
 
         now = datetime.now(timezone.utc).isoformat()
         return cls(
@@ -423,7 +431,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     model = blank_for_project(project)
     model.source = "context-map"
     model.entry_points = _summaries_from_entries(
-        context_map.get("entry_points") or context_map.get("sources") or [],
+        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
         default_label="entry",
     )
     model.trust_boundaries = _summaries_from_entries(
@@ -431,7 +439,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
         default_label="boundary",
     )
     sinks = _summaries_from_entries(
-        context_map.get("sink_details") or context_map.get("sinks") or [],
+        context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or [],
         default_label="sink",
     )
     model.domain_packs = _derive_domain_packs(context_map)
@@ -513,15 +521,12 @@ def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> 
 
 def derive_focus_areas(entry_points: Iterable[str], sinks: Iterable[str]) -> list[str]:
     """Return stable focus areas from mapped entries/sinks."""
-    out: list[str] = []
-    for value in list(entry_points)[:8]:
-        out.append(f"Entry point: {value}")
-    for value in list(sinks)[:8]:
-        out.append(f"Sensitive sink: {value}")
+    out: list[str] = [f"Entry point: {value}" for value in list(entry_points)[:8]]
+    out.extend(f"Sensitive sink: {value}" for value in list(sinks)[:8])
     return _dedup(out)
 
 
-def load_model(path: Path) -> Optional[ThreatModel]:
+def load_model(path: Path) -> ThreatModel | None:
     data = load_json(path)
     if not isinstance(data, dict):
         return None
@@ -533,7 +538,7 @@ def save_model(
     json_path: Path,
     markdown_path: Path,
     *,
-    expected_mtime: Optional[float] = None,
+    expected_mtime: float | None = None,
 ) -> None:
     """Persist the model to disk. When ``expected_mtime`` is
     provided, refuses to write if the on-disk file's mtime has
@@ -552,12 +557,13 @@ def save_model(
         except OSError:
             actual_mtime = None
         if actual_mtime != expected_mtime:
-            raise RuntimeError(
+            msg = (
                 f"threat model at {json_path} was modified by another "
                 f"writer (expected mtime {expected_mtime}, found "
                 f"{actual_mtime}); refusing to overwrite. Reload and "
                 f"retry."
             )
+            raise RuntimeError(msg)
     model.updated_at = datetime.now(timezone.utc).isoformat()
     json_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(json_path, model.to_dict())
@@ -568,8 +574,8 @@ def save_report(
     model: ThreatModel,
     report_path: Path,
     *,
-    lint: Optional[list[dict[str, Any]]] = None,
-    drift: Optional[dict[str, Any]] = None,
+    lint: list[dict[str, Any]] | None = None,
+    drift: dict[str, Any] | None = None,
 ) -> None:
     """Write the richer operator report for a model."""
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -623,8 +629,8 @@ def render_markdown(model: ThreatModel) -> str:
 def render_report(
     model: ThreatModel,
     *,
-    lint: Optional[list[dict[str, Any]]] = None,
-    drift: Optional[dict[str, Any]] = None,
+    lint: list[dict[str, Any]] | None = None,
+    drift: dict[str, Any] | None = None,
 ) -> str:
     """Render a higher-signal threat-model report for assessment output."""
     lint = lint if lint is not None else lint_model(model)
@@ -634,7 +640,7 @@ def render_report(
         except (TypeError, ValueError):
             return 0
 
-    top_threats = sorted(model.threats, key=_safe_risk, reverse=True)[:10]
+    top_threats = heapq.nlargest(10, model.threats, key=_safe_risk)
     lines = []
     logo = _read_raptor_logo()
     if logo:
@@ -661,40 +667,31 @@ def render_report(
         "",
     ])
     if top_threats:
-        for threat in top_threats:
-            lines.append(
-                "- {id} [{status}] risk={risk} severity={severity}: {title}".format(
+        lines.extend("- {id} [{status}] risk={risk} severity={severity}: {title}".format(
                     id=_safe_for_render(threat.get("id", "?")),
                     status=_safe_for_render(threat.get("status", "needs_evidence")),
                     risk=_safe_for_render(threat.get("risk_score", 0)),
                     severity=_safe_for_render(threat.get("severity", "unknown")),
                     title=_safe_for_render(threat.get("title", "Untitled threat")),
-                )
-            )
+                ) for threat in top_threats)
     else:
         lines.append("- No threats recorded yet.")
     lines.extend(["", "## Evidence Loop", ""])
     if model.evidence:
-        for ev in model.evidence[:20]:
-            lines.append(
-                "- {id} [{oracle}/{status}] {summary}".format(
+        lines.extend("- {id} [{oracle}/{status}] {summary}".format(
                     id=_safe_for_render(ev.get("id", "?")),
                     oracle=_safe_for_render(ev.get("oracle", "?")),
                     status=_safe_for_render(ev.get("status", "?")),
                     summary=_safe_for_render(ev.get("summary", "no summary")),
-                )
-            )
+                ) for ev in model.evidence[:20])
     else:
         lines.append("- No oracle evidence linked yet.")
     lines.extend(["", "## Quality Gates", ""])
     if lint:
-        for issue in lint:
-            lines.append(
-                "- {severity}: {message}".format(
+        lines.extend("- {severity}: {message}".format(
                     severity=_safe_for_render(str(issue.get("severity", "info")).title()),
                     message=_safe_for_render(issue.get("message", "")),
-                )
-            )
+                ) for issue in lint)
     else:
         lines.append("- No quality issues found.")
     if drift:
@@ -703,8 +700,7 @@ def render_report(
                     "missing_trust_boundaries", "new_unchecked_flows"):
             values = drift.get(key) or []
             lines.append(f"- {key}: {len(values)}")
-            for value in values[:8]:
-                lines.append(f"  - {_safe_for_render(value)}")
+            lines.extend(f"  - {_safe_for_render(value)}" for value in values[:8])
     lines.extend(["", "## Mermaid", "", "```mermaid", "flowchart LR"])
     for flow in model.data_flows[:25]:
         src = _mermaid_id(str(flow.get("source") or flow.get("id") or "source"))
@@ -746,16 +742,12 @@ def prompt_context(model: ThreatModel, *, max_items: int = 8) -> str:
                 return 0
 
         by_risk = sorted(model.threats, key=_risk_key, reverse=True)
-        rendered = []
-        for threat in by_risk[:max_items]:
-            rendered.append(
-                "{id} {status} risk={risk}: {title}".format(
+        rendered = ["{id} {status} risk={risk}: {title}".format(
                     id=threat.get("id", "?"),
                     status=threat.get("status", "needs_evidence"),
                     risk=threat.get("risk_score", 0),
                     title=threat.get("title", "Untitled threat"),
-                )
-            )
+                ) for threat in by_risk[:max_items]]
         lines.append(f"- Threat ledger: {escape_nonprintable('; '.join(rendered))}")
     if model.controls:
         rendered = [
@@ -887,7 +879,7 @@ def lint_model(model: ThreatModel) -> list[dict[str, Any]]:
 def diff_context_map(model: ThreatModel, context_map: dict[str, Any]) -> dict[str, Any]:
     """Compare a model with a fresh ``context-map.json``."""
     fresh_entries = set(_summaries_from_entries(
-        context_map.get("entry_points") or context_map.get("sources") or [],
+        context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
         default_label="entry",
     ))
     fresh_boundaries = set(_summaries_from_entries(
@@ -991,7 +983,7 @@ def link_verified_outcomes(model: ThreatModel, outcomes: Iterable[Any]) -> Threa
     return model
 
 
-def load_for_target(target: Path) -> Optional[ThreatModel]:
+def load_for_target(target: Path) -> ThreatModel | None:
     """Find the project-owned threat model for ``target`` if one exists."""
     try:
         from core.project.project import ProjectManager
@@ -1009,10 +1001,11 @@ def load_for_target(target: Path) -> Optional[ThreatModel]:
             return None
         return load_model(json_path)
     except Exception:
+        logger.warning("failed to load project threat model for %s", target, exc_info=True)
         return None
 
 
-def _project_threat_model_json_path(project: Any) -> Optional[Path]:
+def _project_threat_model_json_path(project: Any) -> Path | None:
     """Resolve the threat-model JSON path for ``project`` with
     containment defence.
 
@@ -1026,9 +1019,10 @@ def _project_threat_model_json_path(project: Any) -> Optional[Path]:
     ``project.output_dir``. Anything outside is refused (returns
     None; caller treats as "no threat model").
     """
-    output_dir = Path(getattr(project, "output_dir", "") or "")
-    if not str(output_dir):
+    output_dir_str = getattr(project, "output_dir", "") or ""
+    if not output_dir_str:
         return None
+    output_dir = Path(output_dir_str)
     configured = getattr(project, "threat_model_path", "")
     if configured:
         candidate = Path(configured)
@@ -1161,7 +1155,7 @@ def _vuln_classes_for_packs(packs: list[str]) -> list[str]:
 
 def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, Any]]:
     entries = context_map.get("entry_points") or []
-    sinks = context_map.get("sink_details") or context_map.get("sinks") or []
+    sinks = context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or []
     entries_by_id = _records_by_id(entries)
     sinks_by_id = _records_by_id(sinks)
     out: list[dict[str, Any]] = []
@@ -1198,7 +1192,7 @@ def _threats_from_context_map(
         category = _category_from_sink(str(flow.get("sink") or ""))
         threats.append({
             "id": f"T-{i + 1:03d}",
-            "title": f"Unchecked flow from {flow.get('source')} to {flow.get('sink')}",
+            "title": f"Unchecked flow from {flow.get('source') or '?'} to {flow.get('sink') or '?'}",
             "category": category,
             "stride": _stride_for_category(category),
             "status": "needs_evidence",
@@ -1290,14 +1284,16 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
         location = entry.get("file") or entry.get("path") or entry.get("location")
         line = entry.get("line")
         trust = entry.get("trust") or entry.get("trust_level")
-        summary = _clip_str(name)
+        parts = [_clip_str(name)]
         if location:
-            summary += f" ({_clip_str(location)})"
-            if line and ":" not in str(location):
-                summary += f":{line}"
+            loc_str = _clip_str(location)
+            if line is not None and ":" not in str(location):
+                parts.append(f" ({loc_str}:{line})")
+            else:
+                parts.append(f" ({loc_str})")
         if trust:
-            summary += f" - {_clip_str(trust)}"
-        out.append(summary)
+            parts.append(f" - {_clip_str(trust)}")
+        out.append("".join(parts))
     return _dedup(out)
 
 
@@ -1336,7 +1332,7 @@ def _summaries_from_unchecked_flows(
             loc = _clip_str(sink.get("file") or "?")
             line = sink.get("line")
             sink_type = _clip_str(sink.get("type") or "sink")
-            sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line else ''}"
+            sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line is not None else ''}"
         issue = _clip_str(flow.get("missing_boundary") or flow.get("notes") or "unchecked flow")
         severity = flow.get("severity")
         label = f"{entry_label} -> {sink_label}: {issue}"
@@ -1449,7 +1445,7 @@ def _location(record: dict[str, Any]) -> str:
     if not file:
         return ""
     line = record.get("line")
-    return f"{file}:{line}" if line and ":" not in str(file) else str(file)
+    return f"{file}:{line}" if line is not None and ":" not in str(file) else str(file)
 
 
 def _normalise_severity(value: Any) -> str:
@@ -1555,14 +1551,7 @@ def _outcome_matches_threat(data: dict[str, Any], threat: dict[str, Any]) -> boo
         return True
     cwe_num = _extract_cwe_number(data.get("cwe_id"))
     category = str(threat.get("category") or "").lower()
-    if cwe_num and (
-        (cwe_num == "78" and category == "command_execution")
-        or (cwe_num == "89" and category == "sql_injection")
-        or (cwe_num == "1336" and "template" in category)
-        or (cwe_num == "22" and category == "path_traversal")
-    ):
-        return True
-    return False
+    return bool(cwe_num and (cwe_num == "78" and category == "command_execution" or cwe_num == "89" and category == "sql_injection" or cwe_num == "1336" and "template" in category or cwe_num == "22" and category == "path_traversal"))
 
 
 def _mermaid_id(value: str) -> str:
@@ -1578,8 +1567,8 @@ def _mermaid_label(value: Any) -> str:
     # backticks before we apply the Mermaid quote-escape, so the
     # final label can't smuggle a node-terminator + new
     # statement.
-    text = _safe_for_render(value)
-    return text.replace("\\", "\\\\").replace('"', '\\"')[:90]
+    text = _safe_for_render(value)[:90]
+    return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _read_raptor_logo() -> str:

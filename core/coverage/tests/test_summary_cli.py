@@ -79,3 +79,105 @@ def test_import_gcov_persists_and_shows_runtime(tmp_path):
     assert rep.returncode == 0, rep.stderr
     assert "runtime" in rep.stdout
     assert "runtime      0 (0.0%)" not in rep.stdout
+
+
+def test_help_flag_prints_usage(tmp_path):
+    # Pre-fix --help was silently ignored and the summary ran instead.
+    res = _run("--help")
+    assert res.returncode == 0
+    assert "Usage:" in res.stdout
+    assert "--mark" in res.stdout
+
+
+def test_run_listing_shows_target_path(tmp_path):
+    # The acquisition stamp's "source" is the acquisition KIND
+    # ("directory"), not a target; the listing must show the real path.
+    d = tmp_path / "scan-1"
+    d.mkdir()
+    (d / ".raptor-run.json").write_text(json.dumps({
+        "command": "scan", "status": "completed",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "target_path": "/repos/myproj",
+        "manifest": {"target": {"source": "directory"}},
+    }))
+    (d / "coverage-semgrep.json").write_text(json.dumps(
+        {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+    res = _run(str(d))
+    assert "target: /repos/myproj" in res.stdout
+    assert "target: directory" not in res.stdout
+
+
+def _project_fixture(tmp_path):
+    """Project dir + run dir + target source so mark journaling engages."""
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "a.c").write_text(
+        "int f1(void) {\n  return 1;\n}\n" + "\n" * 10)
+    proj = tmp_path / "proj"
+    run = proj / "audit-1"
+    run.mkdir(parents=True)
+    (run / ".raptor-run.json").write_text("{}")
+    (proj / "checklist.json").write_text(json.dumps({
+        "target_path": str(target),
+        "files": [{"path": "a.c", "lines": 13, "items": [
+            {"name": "f1", "line_start": 1, "line_end": 3},
+        ]}],
+    }))
+    return proj, run
+
+
+def test_mark_journals_to_project_index(tmp_path):
+    proj, run = _project_fixture(tmp_path)
+    res = _run(str(run), "--mark", "a.c:f1")
+    assert "journaled to project index" in res.stdout, res.stderr
+    index = json.loads((proj / "review-journal-index.json").read_text())
+    rows = list(index["entries"].values())
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["file"], row["function"]) == ("a.c", "f1")
+    assert row["producer"] == "mark"
+    assert row["model"] == "operator"
+    assert row["verdict"] == "clean"
+    assert row["source_hash"]        # target resolvable → hash-aware
+
+
+def test_unmark_neutralises_journaled_mark(tmp_path):
+    proj, run = _project_fixture(tmp_path)
+    _run(str(run), "--mark", "a.c:f1")
+    _run(str(run), "--unmark", "a.c:f1")
+    index = json.loads((proj / "review-journal-index.json").read_text())
+    rows = list(index["entries"].values())
+    assert len(rows) == 1              # same key — latest-wins replaced it
+    assert rows[0]["verdict"] == "error"
+
+
+def test_mark_without_project_context_stays_record_only(tmp_path):
+    d = tmp_path / "standalone-run"
+    d.mkdir()
+    (d / ".raptor-run.json").write_text("{}")
+    res = _run(str(d), "--mark", "a.c:f1")
+    assert "journaled" not in res.stdout
+    assert not (tmp_path / "review-journal-index.json").exists()
+    rec = json.loads((d / "coverage-llm.json").read_text())
+    assert rec["functions_analysed"] == [{"file": "a.c", "function": "f1"}]
+
+
+def test_journaled_mark_suppresses_audit_gap(tmp_path):
+    # The full loop: --mark → journal index → compute_gaps fold.
+    proj, run = _project_fixture(tmp_path)
+    _run(str(run), "--mark", "a.c:f1")
+
+    from core.audit.gaps import compute_gaps
+    checklist = json.loads((proj / "checklist.json").read_text())
+    fresh_run = proj / "audit-2"
+    fresh_run.mkdir()
+    gaps = compute_gaps(
+        checklist, [], out_dir=fresh_run, project_dir=proj,
+    )
+    assert "f1" not in {g["name"] for g in gaps}
+    # And the withdrawal restores the gap.
+    _run(str(run), "--unmark", "a.c:f1")
+    gaps = compute_gaps(
+        checklist, [], out_dir=fresh_run, project_dir=proj,
+    )
+    assert "f1" in {g["name"] for g in gaps}

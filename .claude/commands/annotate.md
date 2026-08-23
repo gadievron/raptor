@@ -10,9 +10,12 @@ Annotations capture audit-style notes on individual functions: a manual
 "reviewed clean", a hypothesis-then-validate finding, a CWE label, or any
 free-form prose.
 
-Operator-driven adds default to ``metadata.source=human``, so subsequent
-LLM passes (`/agentic`, `/understand` post-processor) that pass
-``overwrite=respect-manual`` will not silently clobber operator notes.
+Every add/edit stamps the invocation context into the metadata
+(`tty=<which std fds were TTYs>`, `provenance=interactive-tty|non-tty`).
+The `source` default is context-sensitive: `human` when the invocation is
+interactive (any of stdin/stdout/stderr is a TTY), `agent` when none is.
+Scripted callers that pass `overwrite=respect-manual` will not silently
+clobber `source=human` notes.
 
 ## Usage
 
@@ -34,20 +37,21 @@ LLM passes (`/agentic`, `/understand` post-processor) that pass
 | `show <file> <function>` | Render one annotation |
 | `edit <file> <function>` | Open the source file's annotation .md in `$EDITOR` |
 | `rm <file> <function>` | Remove an annotation; cleans up empty .md files |
-| `stale` | List annotations whose stored source-line hash no longer matches |
+| `stale` | List annotations whose stored source-line hash no longer matches, or whose source file no longer exists |
 
 ## Add options
 
 | Option | Purpose |
 |---|---|
-| `--status VALUE` | `clean` / `suspicious` / `finding` / `error` |
+| `--status VALUE` | `clean` / `suspicious` / `finding` / `dormant` / `error`, plus the role markers `sink` / `entry_point` (consumed by IRIS spec promotion) |
 | `--cwe CWE-XX` | CWE identifier |
 | `-m, --body TEXT` | Annotation prose |
 | `--body-file PATH` | Read body from file (`-` for stdin) |
 | `--lines N-M` | Source line range; computes `metadata.hash` for staleness |
 | `--target REPO_ROOT` | Where to find source for hash (default: cwd) |
 | `--meta KEY=VALUE` | Extra metadata (repeatable) |
-| `--source VALUE` | Defaults to `human`; set `llm` only for scripted adds |
+| `--checklist PATH` | Inventory `checklist.json` for auto-discovering function bounds when `--lines` is omitted |
+| `--source VALUE` | `human` / `llm` / `agent`. Default: `human` when interactive (any std fd a TTY), else `agent` |
 | `--overwrite MODE` | `all` (default) or `respect-manual` |
 
 ## ls options
@@ -112,10 +116,11 @@ Run via the Bash tool:
 libexec/raptor-annotate <subcommand> [args]
 ```
 
-For `add` calls invoked through this slash command, the operator's intent
-is implicit — keep the default `--source human`. Do **not** pass
-`--source llm` from `/annotate` unless the operator explicitly asks for
-scripted, non-human-attributable behaviour.
+`add` calls executed by the assistant run without a TTY and therefore
+default to `source=agent` — leave that default alone. Do **not** pass
+`--source human` from `/annotate`: the non-tty stamp would contradict it
+and readers demote such notes to hint tier anyway. Human-grade
+annotations come from the operator running the CLI interactively.
 
 ## Output
 
@@ -135,9 +140,11 @@ works" without arguments.
 
 ## Conventions
 
-- **`metadata.source=human`** marks a manual entry. LLM-driven callers
-  (e.g. `/agentic`'s annotation emitter) pass `overwrite=respect-manual`
-  so they will skip rather than overwrite a human-source record.
+- **`metadata.source=human`** marks a manual entry; it earns elevated
+  weight in readers only together with an `interactive-tty` provenance
+  stamp (or on legacy pre-stamp notes). Scripted callers pass
+  `overwrite=respect-manual` so they skip rather than overwrite a
+  human-source record.
 - **`metadata.hash`**: a short sha256 prefix of the function's source
   lines, captured at add time when `--lines N-M --target REPO_ROOT` is
   provided. Used by `/annotate stale` to detect annotations whose source

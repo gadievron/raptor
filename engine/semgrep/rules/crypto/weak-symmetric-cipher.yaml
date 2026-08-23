@@ -4,10 +4,14 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
-      - pattern: Cipher.getInstance("DES/...", ...)
-      - pattern: Cipher.getInstance("DESede/...", ...)
+      - patterns:
+          - pattern: Cipher.getInstance($ALGO, ...)
+          - metavariable-regex:
+              metavariable: $ALGO
+              regex: ^"(DES|DESede)(/[^"]*)?"$
       - pattern: Cipher.getInstance("RC4", ...)
       - pattern: Cipher.getInstance("ARCFOUR", ...)
+      - pattern: Cipher.getInstance("Blowfish", ...)
     metadata:
       cwe: ["CWE-326","CWE-327"]
       asvs: ["V3.11"]
@@ -18,6 +22,7 @@ rules:
     severity: HIGH
     pattern-either:
       - pattern: des.NewCipher(...)
+      - pattern: des.NewTripleDESCipher(...)
       - pattern: rc4.NewCipher(...)
     metadata:
       cwe: ["CWE-326","CWE-327"]
@@ -28,8 +33,33 @@ rules:
     languages: [python]
     severity: HIGH
     pattern-either:
+      # pycryptodome
       - pattern: Crypto.Cipher.DES.new(...)
+      - pattern: Crypto.Cipher.DES3.new(...)
       - pattern: Crypto.Cipher.ARC4.new(...)
+      - pattern: Crypto.Cipher.ARC2.new(...)
+      - pattern: Crypto.Cipher.Blowfish.new(...)
+      # cryptography.hazmat
+      - pattern: algorithms.TripleDES(...)
+      - pattern: algorithms.ARC4(...)
+      - pattern: algorithms.Blowfish(...)
+    metadata:
+      cwe: ["CWE-326","CWE-327"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.weak.symmetric.js
+    message: Weak symmetric cipher detected. Use AES-GCM (aes-256-gcm) or ChaCha20-Poly1305. Verify deprecation plan.
+    languages: [javascript, typescript]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipheriv($ALGO, ...)
+          - pattern: crypto.createDecipheriv($ALGO, ...)
+      - metavariable-regex:
+          metavariable: $ALGO
+          # rc4 in any variant, single/triple DES in any variant, and any
+          # algorithm running in ECB mode (case-insensitive).
+          regex: (?i)^["'](rc4.*|des.*|.*-ecb)["']$
     metadata:
       cwe: ["CWE-326","CWE-327"]
       asvs: ["V3.11"]

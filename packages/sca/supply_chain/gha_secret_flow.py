@@ -93,9 +93,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set
 
 from .._yaml_fast import safe_load
 from ..models import Confidence, Dependency, Manifest, PinStyle
@@ -118,10 +118,10 @@ _MAX_HEREDOC_BODY_BYTES = 100_000   # per-heredoc close-search window
 
 
 # Trusted-consumer allowlist (lazy-loaded).
-_TRUSTED: Optional[Set[str]] = None
+_TRUSTED: set[str] | None = None
 
 
-def _trusted_consumers() -> Set[str]:
+def _trusted_consumers() -> set[str]:
     global _TRUSTED
     if _TRUSTED is not None:
         return _TRUSTED
@@ -173,7 +173,7 @@ _ENV_SHELL_RE = re.compile(
 )
 # Mask-line shape that legitimately consumes a secret in a run block.
 _MASK_RE = re.compile(
-    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*'
+    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)'
 )
 # ``${{ steps.<id>.outputs.<name> }}`` — a downstream reference to
 # a previous step's output.  Used in both ``with:`` inputs and
@@ -193,12 +193,6 @@ _KEY_VALUE_RE = re.compile(
 )
 
 
-def _redirect_target_pattern(target: str) -> str:
-    """Regex source for matching ``$TARGET`` / ``${TARGET}`` /
-    ``"$TARGET"`` / ``"${TARGET}"`` etc."""
-    return rf'"?\$\{{?{target}\}}?"?'
-
-
 def _multi_redirect_target_pattern(targets: Sequence[str]) -> str:
     """Regex source matching ``$NAME`` or ``${!NAME}`` (bash
     variable-indirection) for ANY name in ``targets``.
@@ -215,9 +209,16 @@ def _multi_redirect_target_pattern(targets: Sequence[str]) -> str:
 
 
 _MAX_ALIAS_CHAIN_DEPTH = 6
+# Cap on the alias set tracked per body. Legitimate run bodies alias
+# the redirect target a handful of times at most; the cap bounds both
+# the combined alternation pattern below and the downstream
+# ``_multi_redirect_target_pattern`` alternation, so a body stuffed
+# with thousands of ``Vn=$GITHUB_ENV`` assignments can't inflate
+# pattern size or scan cost.
+_MAX_ALIAS_SET_SIZE = 64
 
 
-def _aliased_targets(body: str, target: str) -> List[str]:
+def _aliased_targets(body: str, target: str) -> list[str]:
     """Find local shell-var names that hold ``$TARGET`` (transitively)
     or that hold the LITERAL string ``TARGET`` (which bash variable
     indirection ``${!VAR}`` would dereference back to the target).
@@ -250,23 +251,40 @@ def _aliased_targets(body: str, target: str) -> List[str]:
     # Use a negative lookahead after the alias name so ``$A1`` doesn't
     # match ``$A10``/``$A11`` (would otherwise cause both an alias-set
     # explosion AND incorrect VAR-name captures).
+    #
+    # One combined alternation pattern per iteration (all current
+    # aliases OR'd together) rather than one full-body scan per alias:
+    # keeps the invariant "O(depth) full-body scans regardless of
+    # alias count" — a 500 KB body with thousands of alias
+    # assignments would otherwise trigger thousands of full-body
+    # scans on iteration 2.
     aliases = {target}
     for _ in range(_MAX_ALIAS_CHAIN_DEPTH):
+        if len(aliases) >= _MAX_ALIAS_SET_SIZE:
+            break
+        alt = "|".join(re.escape(a) for a in sorted(aliases))
+        alias_re = re.compile(
+            r'(?:^|[\s;&|({])'
+            r'(?:export\s+|declare\s+(?:-[\w]+\s+)*|local\s+)?'
+            r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
+            rf'"?\$\{{?(?:{alt})'
+            r'(?![A-Za-z0-9_])'
+            r'\}?"?'
+        )
         new = set()
-        for alias in list(aliases):
-            alias_re = re.compile(
-                r'(?:^|[\s;&|({])'
-                r'(?:export\s+|declare\s+(?:-[\w]+\s+)*|local\s+)?'
-                r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'
-                rf'"?\$\{{?{re.escape(alias)}'
-                r'(?![A-Za-z0-9_])'
-                r'\}?"?'
-            )
-            for m in alias_re.finditer(body):
-                new.add(m.group(1))
+        for m in alias_re.finditer(body):
+            new.add(m.group(1))
         if not (new - aliases):
             break
         aliases |= new
+        if len(aliases) > _MAX_ALIAS_SET_SIZE:
+            # Deterministic truncation (sorted) — keeps the target
+            # itself; which surplus aliases drop is arbitrary but
+            # stable across runs.
+            aliases = {target} | set(
+                sorted(aliases - {target})[:_MAX_ALIAS_SET_SIZE - 1]
+            )
+            break
     # Indirection target — ``T=TARGET`` literal (no leading ``$``).
     # ``${!T}`` then dereferences to the value of TARGET.  Same
     # word-boundary lookahead so ``T=GITHUB_ENVIRONMENT`` doesn't
@@ -281,6 +299,8 @@ def _aliased_targets(body: str, target: str) -> List[str]:
     )
     for m in indir_re.finditer(body):
         aliases.add(m.group(1))
+        if len(aliases) > _MAX_ALIAS_SET_SIZE:
+            break
     return list(aliases - {target})
 
 
@@ -293,7 +313,7 @@ _EVAL_RE = re.compile(
 )
 
 
-def _eval_arg_strings(body: str) -> List[str]:
+def _eval_arg_strings(body: str) -> list[str]:
     """Extract the QUOTED ARGUMENT of every ``eval``/``bash -c`` /
     ``sh -c`` invocation in ``body``.
 
@@ -306,7 +326,7 @@ def _eval_arg_strings(body: str) -> List[str]:
     backslash escapes; misses ``eval $VAR`` and ``eval cmd``
     (unquoted), which are less common in attack writeups.
     """
-    out: List[str] = []
+    out: list[str] = []
     for m in _EVAL_RE.finditer(body):
         arg = m.group(1) or m.group(2) or ""
         # Decode the most common escape sequences without invoking
@@ -348,13 +368,13 @@ def _find_balanced(masked: str, open_ch: str, close_ch: str,
 
 def _balanced_blocks(masked: str, body: str,
                      open_ch: str, close_ch: str,
-                     redirect_pat: str) -> List[str]:
+                     redirect_pat: str) -> list[str]:
     """Find every balanced ``open_ch ... close_ch`` region whose
     closer is followed (skipping whitespace) by a match of
     ``redirect_pat``.  Returns the INTERIOR content sliced from
     the ORIGINAL body."""
     redirect_after_re = re.compile(rf"^\s*{redirect_pat}")
-    blocks: List[str] = []
+    blocks: list[str] = []
     i = 0
     n = len(masked)
     while i < n:
@@ -385,7 +405,7 @@ def _mask_gha_exprs(body: str) -> str:
     caller can re-slice the ORIGINAL body once a boundary is
     found in the masked one.
     """
-    out: List[str] = []
+    out: list[str] = []
     i = 0
     n = len(body)
     while i < n:
@@ -407,8 +427,8 @@ def _mask_gha_exprs(body: str) -> str:
 
 def _extract_redirect_blocks(
     body: str, target: str, _depth: int = 0,
-) -> List[str]:
-    """Return text blocks whose content flows into ``$TARGET``
+) -> list[str]:
+    r"""Return text blocks whose content flows into ``$TARGET``
     (``GITHUB_ENV`` or ``GITHUB_OUTPUT``) via any of the bash redirect
     shapes commonly used in workflow `run:` blocks.
 
@@ -416,7 +436,7 @@ def _extract_redirect_blocks(
       * per-line — ``echo "X=Y" >> $TARGET``
       * group — ``{ echo X=Y; echo Z=W; } >> $TARGET`` (nested OK)
       * subshell — ``( ... ) >> $TARGET`` (nested OK)
-      * heredoc — ``cat <<EOF >> $TARGET\\n X=Y\\n EOF`` (with
+      * heredoc — ``cat <<EOF >> $TARGET\n X=Y\n EOF`` (with
         ``<<-`` and quoted-delim variants)
       * tee — ``echo X=Y | tee -a $TARGET`` (the piped command is
         the block)
@@ -464,13 +484,16 @@ def _extract_redirect_blocks(
     # redirect-shape matchers treat ``$ALIAS`` and ``$TARGET``
     # interchangeably within this body's scope.
     aliases = _aliased_targets(body, target)
-    target_alts = [target, *aliases]
+    # Same cap as ``_aliased_targets`` — belt-and-braces so the
+    # ``_multi_redirect_target_pattern`` alternation stays bounded
+    # even if the alias source ever changes.
+    target_alts = [target, *aliases][:_MAX_ALIAS_SET_SIZE]
     target_pat = _multi_redirect_target_pattern(target_alts)
     redirect_pat = rf'>>?\s*{target_pat}'
     tee_pat = rf'\|\s*tee\s+(?:-a\s+)?{target_pat}'
     redirect_re = re.compile(redirect_pat)
     tee_re = re.compile(tee_pat)
-    blocks: List[str] = []
+    blocks: list[str] = []
 
     # Heredoc — hand-rolled linear scan.  The regex finditer version
     # had an O(n²) worst case when many ``<<DELIM`` openers had no
@@ -535,8 +558,7 @@ def _extract_redirect_blocks(
             body.rfind("\n", 0, m.start()),
             body.rfind(";", 0, m.start()),
         )
-        if start < 0:
-            start = 0
+        start = max(start, 0)
         blocks.append(body[start:m.start()])
 
     # Per-line — catches simple ``<cmd> >> $TARGET`` lines.  Skip
@@ -578,11 +600,11 @@ def _extract_redirect_blocks(
 
 def _extract_redirected_writes(
     body: str, target: str,
-) -> List[tuple]:
+) -> list[tuple]:
     """Extract ``[(key, value)]`` pairs written to a target
     (``GITHUB_ENV`` / ``GITHUB_OUTPUT``) across all supported
     redirect shapes."""
-    pairs: List[tuple] = []
+    pairs: list[tuple] = []
     for block in _extract_redirect_blocks(body, target):
         for m in _KEY_VALUE_RE.finditer(block):
             key = m.group(1)
@@ -595,7 +617,7 @@ def _extract_redirected_writes(
     return pairs
 
 
-def _value_is_tainted(value: str, job_ctx: "_JobContext") -> Optional[str]:
+def _value_is_tainted(value: str, job_ctx: _JobContext) -> str | None:
     """Return the source secret name if ``value`` references any
     currently-tainted thing in this job: a literal
     ``${{ secrets.X }}``, a previously-bound ``$NAME``, or a
@@ -608,6 +630,10 @@ def _value_is_tainted(value: str, job_ctx: "_JobContext") -> Optional[str]:
     if m:
         return m.group(1)
     for env_m in _ENV_SHELL_RE.finditer(value):
+        var = env_m.group(1)
+        if var in job_ctx.secret_bound_env:
+            return job_ctx.secret_bound_env[var]
+    for env_m in _ENV_TEMPLATE_RE.finditer(value):
         var = env_m.group(1)
         if var in job_ctx.secret_bound_env:
             return job_ctx.secret_bound_env[var]
@@ -643,9 +669,9 @@ class SecretFlowHit:
 class _JobContext:
     """Per-job tracking state.  Reset at job boundary — env bindings
     do NOT cross jobs."""
-    secret_bound_env: Dict[str, str] = field(default_factory=dict)
+    secret_bound_env: dict[str, str] = field(default_factory=dict)
     # name -> source-secret-name for evidence
-    secret_bound_outputs: Dict[str, Dict[str, str]] = field(
+    secret_bound_outputs: dict[str, dict[str, str]] = field(
         default_factory=dict,
     )
     # step_id -> {output_name -> source-secret-name}.  Populated when
@@ -676,7 +702,7 @@ _ENV_DUMP_RE = re.compile(
     """,
     re.VERBOSE,
 )
-_VAR_DUMP_RE_FACTORY = lambda var: re.compile(  # noqa: E731
+_VAR_DUMP_RE_FACTORY = lambda var: re.compile(
     rf"""
     \b(?:echo|printf)\s+
     [^\n|]*?
@@ -691,7 +717,7 @@ _VAR_DUMP_RE_FACTORY = lambda var: re.compile(  # noqa: E731
 
 
 def _body_writes_env_to_disk(
-    body: str, secret_bound_env: Dict[str, str],
+    body: str, secret_bound_env: dict[str, str],
 ) -> bool:
     """True iff ``body`` contains an ``env`` / ``printenv`` / ``set``
     dump to a non-GHA-target file, OR an ``echo $VAR > file`` where
@@ -704,10 +730,7 @@ def _body_writes_env_to_disk(
     """
     if _ENV_DUMP_RE.search(body):
         return True
-    for var in secret_bound_env:
-        if _VAR_DUMP_RE_FACTORY(var).search(body):
-            return True
-    return False
+    return any(_VAR_DUMP_RE_FACTORY(var).search(body) for var in secret_bound_env)
 
 
 def _strip_bash_full_line_comments(body: str) -> str:
@@ -742,9 +765,9 @@ def _is_truthy_run_body_egress(body: str) -> bool:
     if re.search(r">>?\s*\$?GITHUB_(OUTPUT|ENV)|>>?\s*/tmp/", body):
         return True
     # IFS / base64 / curl-pipe-shell
-    if re.search(r"curl.+\|\s*(?:bash|sh)|base64\s+(?:-d|--decode)", body):
-        return True
-    return False
+    return bool(
+        re.search(r"curl.+\|\s*(?:bash|sh)|base64\s+(?:-d|--decode)", body)
+    )
 
 
 def _scan_one_step(
@@ -754,12 +777,12 @@ def _scan_one_step(
     job_ctx: _JobContext,
     workflow_path: Path,
     dep: Dependency,
-) -> List[SecretFlowHit]:
+) -> list[SecretFlowHit]:
     """Scan a single workflow step for secret-flow edges.  Mutates
     ``job_ctx`` to record env bindings derived from secrets."""
     if not isinstance(step, dict):
         return []
-    hits: List[SecretFlowHit] = []
+    hits: list[SecretFlowHit] = []
 
     # 1) Update env bindings — anything assigned from a secret-flavoured
     #    expression becomes secret-tainted within this job.
@@ -826,8 +849,8 @@ def _scan_one_step(
     uses = step.get("uses")
     if isinstance(uses, str):
         action_name = _action_name(uses)
-        is_local = action_name.startswith("./") or action_name.startswith("../")
-        is_reusable_workflow = action_name.endswith(".yml") or action_name.endswith(".yaml")
+        is_local = action_name.startswith(("./", "../"))
+        is_reusable_workflow = action_name.endswith((".yml", ".yaml"))
         # Trust any first-party ``actions/<name>`` action (GitHub's
         # official org).  The ``actions/`` GitHub org is the
         # canonical source of first-party workflow primitives; any
@@ -840,7 +863,7 @@ def _scan_one_step(
         )
         # Find secret-tainted inputs flowing into this action
         with_inputs = step.get("with") or {}
-        tainted_inputs: List[str] = []
+        tainted_inputs: list[str] = []
         if isinstance(with_inputs, dict):
             for in_name, in_val in with_inputs.items():
                 if not isinstance(in_val, str):
@@ -995,18 +1018,16 @@ def _scan_one_step(
         # sinks can require evidence stronger than "env binding
         # alone" before promoting to high severity.  Set once per
         # job; resets only at job boundary.
-        if not job_ctx.env_written_to_disk:
-            if _body_writes_env_to_disk(
-                run_body, job_ctx.secret_bound_env,
-            ):
-                job_ctx.env_written_to_disk = True
+        if not job_ctx.env_written_to_disk and _body_writes_env_to_disk(
+            run_body, job_ctx.secret_bound_env,
+        ):
+            job_ctx.env_written_to_disk = True
         # Mask-line is the canonical legitimate use of a secret in
         # a run body.  Even when present we still want to update
         # taint bindings from any GITHUB_ENV/OUTPUT writes in the
         # SAME body (a body that masks ONE secret can still leak
         # another via redirect) — but skip emitting a ``run_block``
         # finding so the mask line itself isn't a FP.
-        is_masked = bool(_MASK_RE.search(run_body))
         # Strip bash full-line comments before scanning for
         # ``$VAR`` references — a comment explaining what the body
         # does or why the secret-handling pattern is safe must not
@@ -1017,9 +1038,12 @@ def _scan_one_step(
         # avoid; the FP-shape we close here is the common "docstring-
         # like full-line comment block at top of run body".
         scan_body = _strip_bash_full_line_comments(run_body)
+        masked_secrets = {
+            m.group(1) for m in _MASK_RE.finditer(scan_body)
+        }
         # Check whether the body references a secret literal,
         # a secret-tainted env var, or a tainted prior-step output.
-        secret_refs_in_body: List[str] = []
+        secret_refs_in_body: list[str] = []
         for m in _SECRETS_LITERAL_RE.finditer(scan_body):
             name_match = re.search(
                 r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", m.group(0),
@@ -1032,13 +1056,22 @@ def _scan_one_step(
                 secret_refs_in_body.append(
                     job_ctx.secret_bound_env[var],
                 )
+        for m in _ENV_TEMPLATE_RE.finditer(scan_body):
+            var = m.group(1)
+            if var in job_ctx.secret_bound_env:
+                secret_refs_in_body.append(
+                    job_ctx.secret_bound_env[var],
+                )
         for sm in _STEPS_OUTPUT_RE.finditer(scan_body):
             step_id = sm.group(1)
             out_name = sm.group(2)
             bound = job_ctx.secret_bound_outputs.get(step_id, {})
             if out_name in bound:
                 secret_refs_in_body.append(bound[out_name])
-        if secret_refs_in_body and not is_masked:
+        unmasked_refs = [
+            s for s in secret_refs_in_body if s not in masked_secrets
+        ]
+        if unmasked_refs:
             severity = (
                 "high"
                 if _is_truthy_run_body_egress(scan_body)
@@ -1048,10 +1081,10 @@ def _scan_one_step(
                 dependency=dep, workflow_path=workflow_path,
                 job_id=job_id, step_index=step_index,
                 sink_kind="run_block",
-                secret_names=tuple(sorted(set(secret_refs_in_body))),
+                secret_names=tuple(sorted(set(unmasked_refs))),
                 detail=(
                     f"``run:`` block references secret(s) "
-                    f"{sorted(set(secret_refs_in_body))!r} outside "
+                    f"{sorted(set(unmasked_refs))!r} outside "
                     f"the standard echo-with-mask form"
                 ),
                 severity=severity,
@@ -1062,14 +1095,14 @@ def _scan_one_step(
         # propagated taint at their sinks.  No finding here — the
         # laundering step itself isn't the sink.
         for key, value in _extract_redirected_writes(
-            run_body, "GITHUB_ENV",
+            scan_body, "GITHUB_ENV",
         ):
             source = _value_is_tainted(value, job_ctx)
             if source is not None:
                 job_ctx.secret_bound_env[key] = source
         if step_id_str:
             for key, value in _extract_redirected_writes(
-                run_body, "GITHUB_OUTPUT",
+                scan_body, "GITHUB_OUTPUT",
             ):
                 source = _value_is_tainted(value, job_ctx)
                 if source is not None:
@@ -1082,7 +1115,7 @@ def _scan_one_step(
 
 def _scan_workflow(
     workflow_path: Path, dep: Dependency,
-) -> List[SecretFlowHit]:
+) -> list[SecretFlowHit]:
     """Parse one workflow YAML and scan every job's every step."""
     try:
         # Read-cap defends against a pathologically large workflow
@@ -1103,7 +1136,7 @@ def _scan_workflow(
         return []
     try:
         data = safe_load(text)
-    except Exception as exc:                          # pragma: no cover
+    except Exception as exc:      # pragma: no cover  # noqa: BLE001
         # PyYAML raises a wide tree of exceptions on malformed input
         # — we don't care which one; just skip the workflow.
         logger.debug(
@@ -1117,7 +1150,7 @@ def _scan_workflow(
     jobs = data.get("jobs")
     if not isinstance(jobs, dict):
         return []
-    hits: List[SecretFlowHit] = []
+    hits: list[SecretFlowHit] = []
     for job_id, job in jobs.items():
         if not isinstance(job, dict):
             continue
@@ -1147,27 +1180,29 @@ def scan_target(
     target: Path,
     manifests: Sequence[Manifest] = (),
     deps: Sequence[Dependency] = (),
-) -> List[SecretFlowHit]:
+) -> list[SecretFlowHit]:
     """Walk ``target/.github/workflows/`` for ``*.yml`` and ``*.yaml``
     files and scan each for secret-flow shapes."""
     target = target.resolve()
     workflow_dir = target / ".github" / "workflows"
     if not workflow_dir.is_dir():
         return []
-    dep = _placeholder_dep(target)
-    out: List[SecretFlowHit] = []
+    out: list[SecretFlowHit] = []
     for entry in sorted(workflow_dir.iterdir()):
         if entry.is_file() and entry.suffix in (".yml", ".yaml"):
-            out.extend(_scan_workflow(entry, dep))
+            out.extend(_scan_workflow(entry, _placeholder_dep(target, entry.name)))
     return out
 
 
-def _placeholder_dep(target: Path) -> Dependency:
+def _placeholder_dep(target: Path, workflow: str) -> Dependency:
     """Workflow-flow hits don't have a natural dependency-row owner;
-    they target the project itself."""
+    they target the project itself. Name the workflow file so the
+    finding's operator-facing title/name identify WHICH workflow —
+    the literal "<workflow>" placeholder used to leak all the way
+    into report titles."""
     return Dependency(
         ecosystem="GitHub Actions",
-        name="<workflow>",
+        name=workflow,
         version=None,
         declared_in=target,
         scope="main",

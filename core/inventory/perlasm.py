@@ -1,0 +1,601 @@
+"""Perlasm generator detection and sandboxed generated-asm inventory.
+
+OpenSSL-family repos build shipped runtime assembly from Perl
+generators (``crypto/*/asm/*.pl`` driven through a ``*-xlate.pl``
+translator). The asm lives in heredoc strings, invisible to every
+source extractor — the inventory could not even enumerate those
+kernels. This module closes that hole with the bounded option:
+*run the generators, analyse what they emit* — never the Perl itself.
+
+Pipeline (all best-effort, every miss recorded loudly):
+
+1. **Detect** — structural content signature, not path matching: a
+   ``$xlate = "...-xlate.pl"`` driver reference plus ``$flavour`` /
+   ``$output`` argv handling. ``*-xlate.pl`` translators themselves
+   are excluded.
+2. **Derive flavour** — from build metadata when present (a generated
+   ``configdata.pm``'s ``perlasm_scheme``), else a per-driver-family
+   default: ``arm-xlate.pl`` → ``linux64`` (the AArch64 flavour of the
+   observed findings), ``x86_64-xlate.pl`` → ``elf``. Families with no
+   derivable flavour (ppc, ...) are recorded as coverage gaps, never
+   executed blind.
+3. **Execute sandboxed** — the ``.pl`` is repo content: list-argv
+   ``perl`` under :func:`core.sandbox.run_untrusted` with
+   ``profile="strict"`` (fail-closed: namespace + Landlock + network
+   deny or no execution at all), reads confined to the target tree,
+   writes confined to the cache dir. Emitted assembly is untrusted
+   data to every consumer.
+4. **Cache** — keyed on generator content hash + resolved xlate driver
+   hash + flavour (the build-id/source-hash cache precedent); repeat
+   inventory runs skip execution entirely.
+5. **Inventory** — the emitted ``.S`` goes through the existing
+   ``AsmExtractor`` so the kernels become enumerable, reviewable units:
+   synthetic file records under ``.perlasm-generated/`` with
+   ``language == "asm-generated"`` and full provenance (generator,
+   flavour, hashes, cached path).
+6. **Gap flagging** — generators detected but not analysed (no perl,
+   sandbox refusal, no flavour, execution failure, cap) append to
+   ``inventory['limitations']`` and warn — a detected generator is
+   never silently missed.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+import re
+import shutil
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from core.run.scratch import scratch_dir
+
+logger = logging.getLogger(__name__)
+
+# Virtual path prefix for generated-file records in the checklist.
+# Distinct top-level namespace so synthetic records can never collide
+# with real target paths.
+GENERATED_PREFIX = ".perlasm-generated"
+
+# Bounded work: read caps mirror the builder's bounded reads; the
+# generator cap matches the design's ~50 x ~1s envelope.
+_MAX_PL_BYTES = 2 * 1024 * 1024
+_MAX_ASM_BYTES = 8 * 1024 * 1024
+MAX_GENERATORS = 50
+_GEN_TIMEOUT_S = 30
+
+# Structural perlasm preamble signature (content, not path): an xlate
+# driver reference + flavour argv + output argv.
+_XLATE_REF_RE = re.compile(r"\$xlate\s*=[^\n]{0,120}?([\w-]+-xlate)\.pl")
+_FLAVOUR_RE = re.compile(r"\$flavour\s*=[^\n]{0,160}(?:shift|ARGV)")
+_OUTPUT_RE = re.compile(r"\$output\s*=[^\n]{0,160}(?:pop|shift|ARGV)")
+
+# Flavour defaults per xlate driver family, used when the target
+# carries no build metadata. linux64 == AArch64 GAS — the flavour of
+# the two observed findings; elf == linux x86_64. Families absent
+# here (ppc-xlate, ...) become coverage gaps, not blind runs.
+DRIVER_DEFAULT_FLAVOURS = {
+    "arm-xlate": "linux64",
+    "x86_64-xlate": "elf",
+}
+
+# configdata.pm (present only in configured build trees) records the
+# scheme the real build would pass.
+_PERLASM_SCHEME_RE = re.compile(r'"perlasm_scheme"\s*=>\s*"(\w+)"')
+
+_SKIP_DIR_NAMES = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "__pycache__",
+})
+
+
+@dataclass
+class PerlasmGenerator:
+    """One detected perlasm generator (structural match)."""
+
+    path: Path            # absolute
+    rel_path: str         # relative to target root
+    driver: str           # xlate family, e.g. "arm-xlate"
+    sha256: str
+
+
+@dataclass
+class PerlasmResult:
+    """Outcome of the detection + generation pass."""
+
+    generators: list[PerlasmGenerator] = field(default_factory=list)
+    file_records: list[dict] = field(default_factory=list)
+    gaps: list[str] = field(default_factory=list)
+    flavours: dict[str, str] = field(default_factory=dict)  # rel_path -> flavour
+
+
+def detect_perlasm_generators(target: Path) -> list[PerlasmGenerator]:
+    """Walk *target* for ``.pl`` files matching the perlasm preamble.
+
+    Structural detection only — no path hardcoding. Symlinks are
+    skipped (same discipline as the inventory walk); ``*-xlate.pl``
+    translators are the drivers, not generators.
+    """
+    found: list[PerlasmGenerator] = []
+    for root, dirs, files in os.walk(target):
+        dirs[:] = sorted(
+            d for d in dirs
+            if not d.startswith(".") and d not in _SKIP_DIR_NAMES
+            and not Path(root, d).is_symlink()
+        )
+        for name in sorted(files):
+            if not name.endswith(".pl") or name.endswith("-xlate.pl"):
+                continue
+            fpath = Path(root, name)
+            if fpath.is_symlink():
+                continue
+            try:
+                fd = os.open(fpath, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, "rb") as fh:
+                    raw = fh.read(_MAX_PL_BYTES)
+            except OSError:
+                continue
+            content = raw.decode("utf-8", "replace")
+            m = _XLATE_REF_RE.search(content)
+            if not m or not _FLAVOUR_RE.search(content) \
+                    or not _OUTPUT_RE.search(content):
+                continue
+            found.append(PerlasmGenerator(
+                path=fpath,
+                rel_path=str(fpath.relative_to(target)),
+                driver=m.group(1),
+                sha256=hashlib.sha256(raw).hexdigest(),
+            ))
+    return found
+
+
+def derive_flavour(gen: PerlasmGenerator, target: Path,
+                   ) -> tuple[str | None, str]:
+    """Return ``(flavour, source)`` for *gen*.
+
+    Resolution order: build metadata (``configdata.pm``'s
+    ``perlasm_scheme`` — present only in configured trees), then the
+    per-driver-family default. ``(None, reason)`` when neither
+    applies.
+    """
+    configdata = target / "configdata.pm"
+    if configdata.is_file():
+        try:
+            m = _PERLASM_SCHEME_RE.search(
+                configdata.read_text(errors="replace")[:4 * 1024 * 1024]
+            )
+            if m:
+                return m.group(1), "build-metadata (configdata.pm)"
+        except OSError:
+            pass
+    flavour = DRIVER_DEFAULT_FLAVOURS.get(gen.driver)
+    if flavour:
+        return flavour, f"driver-family default for {gen.driver}"
+    return None, f"no derivable flavour for driver family {gen.driver!r}"
+
+
+def default_cache_dir() -> Path:
+    """Generated-asm cache root (build-id-cache resolution precedent):
+    ``RAPTOR_PERLASM_CACHE_DIR`` env, else ``<repo>/.cache/perlasm``.
+    """
+    env = os.environ.get("RAPTOR_PERLASM_CACHE_DIR")
+    if env:
+        return Path(env)
+    from core.config import RaptorConfig
+    return Path(RaptorConfig.REPO_ROOT) / ".cache" / "perlasm"
+
+
+def _resolve_driver_sha(gen: PerlasmGenerator) -> str:
+    """Hash the xlate driver the generator will load, when locatable.
+
+    The emitted asm is a function of generator + driver + flavour, so
+    the driver content belongs in the cache key. Mirrors the
+    generator's own lookup: alongside it, then ``../../perlasm/``.
+    """
+    for cand in (
+        gen.path.parent / f"{gen.driver}.pl",
+        gen.path.parent / ".." / ".." / "perlasm" / f"{gen.driver}.pl",
+    ):
+        try:
+            if cand.is_file() and not cand.is_symlink():
+                return hashlib.sha256(cand.read_bytes()).hexdigest()
+        except OSError:
+            continue
+    return "driver-unresolved"
+
+
+def _cache_key(gen: PerlasmGenerator, flavour: str) -> str:
+    driver_sha = _resolve_driver_sha(gen)
+    return hashlib.sha256(
+        f"{gen.sha256}\0{driver_sha}\0{flavour}".encode()
+    ).hexdigest()[:24]
+
+
+def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
+                 cache_dir: Path) -> tuple[Path | None, str | None]:
+    """Run *gen* sandboxed for *flavour*; return ``(cached .S, None)``
+    or ``(None, gap reason)``.
+
+    Cache hit skips execution. Execution is fail-closed: strict
+    sandbox profile (namespace + Landlock + network deny) or nothing.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / f"{_cache_key(gen, flavour)}.S"
+    if cached.is_file():
+        return cached, None
+
+    from core.sandbox.context import run_untrusted
+    from core.sandbox.errors import SandboxSetupError
+
+    # Write scope: a PRIVATE per-invocation directory, never the shared
+    # cache root. The cache is global across targets and runs, and keys
+    # are pure content hashes an attacker can compute from public
+    # upstream content — a repo's generator given write scope over the
+    # whole cache dir could plant `<key(stock-generator, flavour)>.S`
+    # entries that a LATER scan of a genuine tree would consume as its
+    # own generated kernels without ever executing (cross-target cache
+    # poisoning, with the trusted target's provenance fields on the
+    # poisoned record). The generator writes only its own output file;
+    # the move into the keyed cache slot is done HERE, by trusted code,
+    # after the run is validated.
+    with scratch_dir("gen-", dir=cache_dir) as tmp_dir:
+        tmp_path = tmp_dir / "out.S"
+        try:
+            proc = run_untrusted(
+                ["perl", str(gen.path), flavour, str(tmp_path)],
+                target=str(target),
+                output=str(tmp_dir),
+                profile="strict",
+                caller_label="perlasm_generate",
+                capture_output=True,
+                text=True,
+                timeout=_GEN_TIMEOUT_S,
+            )
+        except SandboxSetupError as exc:
+            return None, (
+                f"{gen.rel_path}: sandbox refused (strict isolation "
+                f"unavailable: {exc}) — generator NOT executed"
+            )
+        except (OSError, ValueError) as exc:
+            return None, f"{gen.rel_path}: perl invocation failed: {exc}"
+        except Exception as exc:  # timeout etc.
+            return None, f"{gen.rel_path}: generation failed: {exc}"
+        if proc.returncode != 0:
+            tail = (proc.stderr or "").strip()[-200:]
+            return None, (
+                f"{gen.rel_path}: generator exited {proc.returncode} "
+                f"for flavour {flavour!r}: {tail}"
+            )
+        # The generator is UNTRUSTED code and out.S is ITS artifact:
+        # a symlink-following is_file()/stat() probe followed by
+        # os.replace() would move a generator-planted symlink into
+        # the shared cache AS a symlink (rename never follows), and
+        # every later consumer opening the cache entry normally
+        # would read — or attribute asm to — an arbitrary host path.
+        # Open the output O_NOFOLLOW, require fstat to report a
+        # non-empty regular file, and copy the bytes through that fd
+        # into a FRESH regular file in the cache dir; an
+        # attacker-created inode is never renamed into the cache.
+        import stat as _stat
+        # O_NONBLOCK: a generator-planted FIFO at out.S would block
+        # the open forever; with it the open succeeds instantly and
+        # the S_ISREG gate refuses the inode.
+        _flags = (os.O_RDONLY | os.O_NOFOLLOW
+                  | getattr(os, "O_NONBLOCK", 0))
+        try:
+            fd = os.open(str(tmp_path), _flags)
+        except OSError:
+            return None, (
+                f"{gen.rel_path}: generator produced no output for "
+                f"flavour {flavour!r}"
+            )
+        try:
+            st = os.fstat(fd)
+            if not _stat.S_ISREG(st.st_mode) or st.st_size == 0:
+                return None, (
+                    f"{gen.rel_path}: generator output for flavour "
+                    f"{flavour!r} is not a non-empty regular file — "
+                    "refusing to cache it"
+                )
+            out_fd, out_name = tempfile.mkstemp(
+                prefix=".perlasm-tmp-", dir=str(cache_dir))
+            try:
+                while True:
+                    chunk = os.read(fd, 1 << 20)
+                    if not chunk:
+                        break
+                    view = memoryview(chunk)
+                    written = 0
+                    while written < len(view):
+                        n = os.write(out_fd, view[written:])
+                        if n <= 0:
+                            raise OSError("short write to cache entry")
+                        written += n
+                os.close(out_fd)
+                out_fd = -1
+                os.replace(out_name, cached)
+            except OSError as exc:
+                if out_fd != -1:
+                    os.close(out_fd)
+                try:
+                    os.unlink(out_name)
+                except OSError:
+                    pass
+                return None, (
+                    f"{gen.rel_path}: caching generated asm failed: {exc}"
+                )
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return cached, None
+
+
+def _sloc(text: str) -> int:
+    return sum(
+        1 for line in text.split("\n")
+        if line.strip() and not line.strip().startswith(("//", "#", "/*", "*"))
+    )
+
+
+def _build_file_record(gen: PerlasmGenerator, flavour: str,
+                       flavour_source: str, cached: Path) -> dict | None:
+    """AsmExtractor pass over the emitted asm -> synthetic file record."""
+    from core.inventory.extractors import AsmExtractor
+
+    try:
+        with Path(cached).open("rb") as fh:
+            raw = fh.read(_MAX_ASM_BYTES)
+    except OSError as exc:
+        logger.warning("perlasm: cannot read cached asm %s: %s", cached, exc)
+        return None
+    text = raw.decode("utf-8", "replace")
+    virtual_path = f"{GENERATED_PREFIX}/{gen.rel_path}.{flavour}.S"
+    items = AsmExtractor().extract(virtual_path, text)
+    return {
+        "path": virtual_path,
+        "language": "asm-generated",
+        "lines": text.count("\n") + 1,
+        "sloc": _sloc(text),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "items": [fi.to_dict() for fi in items],
+        "perlasm": {
+            "generator": gen.rel_path,
+            "generator_sha256": gen.sha256,
+            "driver": gen.driver,
+            "flavour": flavour,
+            "flavour_source": flavour_source,
+            "generated_path": str(cached),
+        },
+    }
+
+
+# Simple scalar assignment in the generator preamble
+# (``$prefix="aes_v8";`` / ``my $foo = 'bar';``). Only literal
+# word-ish values interpolate — anything computed stays unresolved
+# and the label definition using it is skipped (best-effort).
+_PL_SCALAR_ASSIGN_RE = re.compile(
+    r'(?m)^\s*(?:my\s+)?\$(\w+)\s*=\s*(["\'])([\w.$-]*)\2\s*;'
+)
+# Column-0 asm label DEFINITION inside a heredoc, possibly spelled
+# with perl interpolation (``${prefix}_encrypt_kernel:``).
+# Local (.L*) and numeric labels are not routines (AsmExtractor rule).
+_PL_LABEL_DEF_RE = re.compile(r"^([A-Za-z_$][\w.${}]*):[ \t]*$")
+_PL_VAR_RE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def pl_kernel_items(pl_text: str, kernel_names: set[str]) -> list:
+    """Map generated asm kernels back to their on-disk generator spans.
+
+    The generated ``.S`` kernels are inventoried under the virtual
+    ``.perlasm-generated/`` record, but the SOURCE of each kernel is a
+    heredoc block in the ``.pl`` generator — the location an operator
+    pin or corpus label spells (with the literal on-disk name, e.g.
+    ``${prefix}_encrypt_kernel``). Without a matching item on
+    the ``.pl`` file itself such a pin can never match a gap and the
+    kernel's source span is never a reviewable unit.
+
+    For every column-0 label definition in *pl_text* whose
+    perl-interpolated rendering (simple scalar assignments only)
+    matches a generated kernel name, emit a ``FunctionInfo`` named
+    with the literal on-disk spelling, spanning from the definition
+    line to the kernel's ``.size`` directive (fallback: the next
+    kernel definition / EOF).
+    """
+    from core.inventory.extractors import FunctionInfo, FunctionMetadata
+
+    if not kernel_names:
+        return []
+    assigns = {
+        m.group(1): m.group(3)
+        for m in _PL_SCALAR_ASSIGN_RE.finditer(pl_text)
+    }
+    lines = pl_text.split("\n")
+    defs: list[tuple[int, str, str]] = []
+    for i, line in enumerate(lines, 1):
+        m = _PL_LABEL_DEF_RE.match(line)
+        if not m:
+            continue
+        literal = m.group(1)
+        unresolved = [False]
+
+        def _sub(mm, _unresolved=unresolved):
+            var = mm.group(1) or mm.group(2)
+            if var in assigns:
+                return assigns[var]
+            _unresolved[0] = True
+            return mm.group(0)
+
+        rendered = _PL_VAR_RE.sub(_sub, literal)
+        if unresolved[0]:
+            continue
+        defs.append((i, literal, rendered))
+
+    items = []
+    seen: set[str] = set()
+    for idx, (ln, literal, rendered) in enumerate(defs):
+        if rendered not in kernel_names or literal in seen:
+            continue
+        seen.add(literal)
+        end = None
+        for j in range(ln, len(lines)):
+            stripped = lines[j].strip()
+            if stripped.startswith(".size") and literal in stripped:
+                end = j + 1
+                break
+        if end is None:
+            end = defs[idx + 1][0] - 1 if idx + 1 < len(defs) else len(lines)
+        items.append(FunctionInfo(
+            name=literal,
+            line_start=ln,
+            line_end=end,
+            signature=f"{literal}()",
+            metadata=FunctionMetadata(
+                attributes=[f"perlasm_kernel:{rendered}"],
+            ),
+        ))
+    return items
+
+
+def run_perlasm_pass(target: Path, *, cache_dir: Path | None = None,
+                     max_generators: int = MAX_GENERATORS) -> PerlasmResult:
+    """Full detect -> derive -> generate -> extract pass over *target*."""
+    result = PerlasmResult()
+    result.generators = detect_perlasm_generators(target)
+    if not result.generators:
+        return result
+
+    if shutil.which("perl") is None:
+        result.gaps.append(
+            f"perl not installed — {len(result.generators)} perlasm "
+            f"generator(s) detected but NOT analysed (generated runtime "
+            f"assembly is unreviewed)"
+        )
+        return result
+
+    todo = result.generators[:max_generators]
+    overflow = result.generators[max_generators:]
+    if overflow:
+        result.gaps.append(
+            f"generator cap ({max_generators}) reached — "
+            f"{len(overflow)} generator(s) NOT analysed: "
+            + ", ".join(g.rel_path for g in overflow[:5])
+            + (" ..." if len(overflow) > 5 else "")
+        )
+
+    cache = cache_dir or default_cache_dir()
+    for gen in todo:
+        flavour, flavour_source = derive_flavour(gen, target)
+        if flavour is None:
+            result.gaps.append(
+                f"{gen.rel_path}: {flavour_source} — generator NOT "
+                f"analysed"
+            )
+            continue
+        cached, gap = generate_asm(gen, flavour, target, cache)
+        if cached is None:
+            result.gaps.append(gap or f"{gen.rel_path}: generation failed")
+            continue
+        record = _build_file_record(gen, flavour, flavour_source, cached)
+        if record is None:
+            result.gaps.append(
+                f"{gen.rel_path}: emitted asm unreadable — NOT inventoried"
+            )
+            continue
+        result.file_records.append(record)
+        result.flavours[gen.rel_path] = flavour
+    return result
+
+
+def enrich_inventory_with_perlasm(inventory: dict, target_path: str | Path,
+                                  *, cache_dir: Path | None = None) -> None:
+    """Builder seam: append generated-asm records + gap notes in place.
+
+    Best-effort by contract with the caller (the builder wraps this in
+    try/except like the binary-oracle enrichment); mutates
+    ``inventory['files']``, the totals, ``inventory['perlasm']`` and
+    ``inventory['limitations']``. ``RAPTOR_NO_PERLASM=1`` disables.
+    """
+    if os.environ.get("RAPTOR_NO_PERLASM"):
+        return
+    from core.config import RaptorConfig
+    if not getattr(RaptorConfig, "PERLASM_INVENTORY", True):
+        return
+
+    result = run_perlasm_pass(Path(target_path), cache_dir=cache_dir)
+    if not result.generators:
+        return
+
+    files = inventory.setdefault("files", [])
+    existing = {f.get("path") for f in files}
+    added_items = added_functions = added_sloc = 0
+    for record in result.file_records:
+        if record["path"] in existing:
+            continue
+        files.append(record)
+        added_items += len(record["items"])
+        added_functions += len(record["items"])
+        added_sloc += record["sloc"]
+
+    # Source-span kernels: the generator's OWN file record gains one
+    # item per generated kernel, named with the literal on-disk
+    # spelling, so pins/labels on the ``.pl`` source resolve to a
+    # reviewable unit (see pl_kernel_items).
+    by_path = {f.get("path"): f for f in files}
+    for record in result.file_records:
+        gen_rel = (record.get("perlasm") or {}).get("generator")
+        pl_record = by_path.get(gen_rel)
+        if pl_record is None:
+            continue
+        kernel_names = {
+            it.get("name", "") for it in record.get("items", [])
+        }
+        try:
+            pl_text = (Path(target_path) / gen_rel).read_text(
+                errors="replace",
+            )
+        except OSError:
+            continue
+        have = {it.get("name") for it in pl_record.get("items", [])}
+        new_items = [
+            fi.to_dict() for fi in pl_kernel_items(pl_text, kernel_names)
+            if fi.name not in have
+        ]
+        if new_items:
+            pl_record.setdefault("items", []).extend(new_items)
+            added_items += len(new_items)
+            added_functions += len(new_items)
+            logger.info(
+                "perlasm: %d source-span kernel item(s) added to %s",
+                len(new_items), gen_rel,
+            )
+    if result.file_records:
+        inventory["total_files"] = inventory.get("total_files", 0) + len(
+            result.file_records
+        )
+        inventory["total_items"] = inventory.get("total_items", 0) + added_items
+        inventory["total_functions"] = (
+            inventory.get("total_functions", 0) + added_functions
+        )
+        inventory["total_sloc"] = inventory.get("total_sloc", 0) + added_sloc
+
+    inventory["perlasm"] = {
+        "generators_detected": len(result.generators),
+        "analysed": len(result.file_records),
+        "flavours": result.flavours,
+        "gaps": result.gaps,
+    }
+    if result.gaps:
+        limitations = inventory.setdefault("limitations", [])
+        for gap in result.gaps:
+            note = f"perlasm coverage gap: {gap}"
+            limitations.append(note)
+            logger.warning("%s", note)
+    logger.info(
+        "perlasm: %d generator(s) detected, %d analysed (%d kernels "
+        "inventoried), %d gap(s)",
+        len(result.generators), len(result.file_records),
+        added_functions, len(result.gaps),
+    )

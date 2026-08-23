@@ -9,12 +9,17 @@ Output is action-oriented: every section answers "what should I look at next?"
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from core.json import load_json
 from core.run import load_run_metadata
 
-from .findings_utils import dedup_key, load_findings_from_dir
+from .findings_utils import (
+    dedup_key,
+    finding_file,
+    load_findings_from_dir,
+    safe_run_mtime,
+)
 
 # --- Status normalization ---
 
@@ -48,20 +53,20 @@ def normalize_verdict(status: str) -> str:
     return "unknown"
 
 
-def get_finding_status(finding: Dict) -> str:
+def get_finding_status(finding: dict) -> str:
     if "is_true_positive" in finding or "is_exploitable" in finding:
         if finding.get("is_true_positive") is False:
             return "false_positive"
-        if finding.get("is_exploitable"):
+        if finding.get("is_exploitable") is True:
             return "exploitable"
-        if finding.get("is_true_positive"):
+        if finding.get("is_true_positive") is True:
             return "confirmed"
     return finding.get("final_status") or finding.get("status") or ""
 
 
 # --- Main entry point ---
 
-def correlate_project(project) -> Dict[str, Any]:
+def correlate_project(project) -> dict[str, Any]:
     """Correlate findings and coverage across all runs in a project.
 
     Returns an action-oriented result: disagreements first, then new/resolved
@@ -116,7 +121,7 @@ def correlate_project(project) -> Dict[str, Any]:
     }
 
 
-def _empty_result() -> Dict[str, Any]:
+def _empty_result() -> dict[str, Any]:
     return {
         "actions": [],
         "disagreements": [],
@@ -149,17 +154,17 @@ def _get_run_model(run_dir: Path) -> str:
     """Extract the analysis model name for a run."""
     orch = load_json(run_dir / "orchestrated_report.json")
     if orch and isinstance(orch, dict):
-        o = orch.get("orchestration", {})
-        models = o.get("analysis_models", [])
+        o = orch.get("orchestration") or {}
+        models = o.get("analysis_models") or []
         if models:
             return ", ".join(models)
         m = o.get("analysis_model")
         if m:
             return m
     meta = load_run_metadata(run_dir)
-    if meta:
-        extra = meta.get("extra", {})
-        models = extra.get("analysis_models", [])
+    if isinstance(meta, dict):
+        extra = meta.get("extra") or {}
+        models = extra.get("analysis_models") or []
         if models:
             return ", ".join(models)
         m = extra.get("analysis_model")
@@ -168,18 +173,18 @@ def _get_run_model(run_dir: Path) -> str:
     return ""
 
 
-def _get_run_types(run_dirs: List[Path]) -> Dict[str, str]:
+def _get_run_types(run_dirs: list[Path]) -> dict[str, str]:
     """Map run dir name -> command type (scan, agentic, validate, etc.)."""
     result = {}
     for d in run_dirs:
         meta = load_run_metadata(d)
-        result[d.name] = (meta or {}).get("command", "unknown")
+        result[d.name] = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
     return result
 
 
 def _load_all_findings(
-    run_dirs: List[Path],
-) -> Dict[str, List[Dict[str, Any]]]:
+    run_dirs: list[Path],
+) -> dict[str, list[dict[str, Any]]]:
     """Load findings from each run dir, keyed by run dir name.
 
     Prefers orchestrated_report.json results (which have analysed_by and
@@ -202,12 +207,12 @@ def _load_all_findings(
 # --- Disagreement detection ---
 
 def _find_disagreements(
-    findings_by_run: Dict[str, List[Dict]],
-    run_models: Dict[str, str],
-) -> List[Dict[str, Any]]:
+    findings_by_run: dict[str, list[dict]],
+    run_models: dict[str, str],
+) -> list[dict[str, Any]]:
     """Find findings where runs disagree on verdict (positive vs negative)."""
-    key_to_verdicts: Dict[tuple, List[Dict]] = defaultdict(list)
-    key_to_finding: Dict[tuple, Dict] = {}
+    key_to_verdicts: dict[tuple, list[dict]] = defaultdict(list)
+    key_to_finding: dict[tuple, dict] = {}
 
     for run_name, findings in findings_by_run.items():
         for f in findings:
@@ -226,7 +231,8 @@ def _find_disagreements(
                 "verdict": verdict,
                 "model": model,
                 "score": f.get("exploitability_score")
-                         or f.get("cvss_score_estimate"),
+                         if f.get("exploitability_score") is not None
+                         else f.get("cvss_score_estimate"),
             })
 
     disagreements = []
@@ -240,11 +246,11 @@ def _find_disagreements(
             continue
 
         f = key_to_finding[k]
-        scores = [v["score"] for v in verdicts if v["score"]]
+        scores = [v["score"] for v in verdicts if v["score"] is not None]
         disagreements.append({
-            "file": f.get("file", ""),
+            "file": finding_file(f),
             "function": f.get("function", ""),
-            "line": f.get("line", 0),
+            "line": f.get("line") or 0,
             "vuln_type": f.get("vuln_type", ""),
             "verdicts": verdicts,
             "disagreement_type": dtype,
@@ -261,21 +267,21 @@ def _find_disagreements(
 # --- New / resolved detection ---
 
 def _find_new_and_resolved(
-    findings_by_run: Dict[str, List[Dict]],
-    run_dirs: List[Path],
-    run_types: Dict[str, str],
-) -> Dict[str, List[Dict]]:
+    findings_by_run: dict[str, list[dict]],
+    run_dirs: list[Path],
+    run_types: dict[str, str],
+) -> dict[str, list[dict]]:
     """Detect findings that appeared or disappeared across runs.
 
     Only compares runs of the same command type — a finding in scan-001
     but absent from validate-001 is expected, not "resolved."
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = [d.name for d in sorted(run_dirs, key=safe_run_mtime)]
 
-    key_to_runs_by_type: Dict[tuple, Dict[str, List[str]]] = defaultdict(
+    key_to_runs_by_type: dict[tuple, dict[str, list[str]]] = defaultdict(
         lambda: defaultdict(list),
     )
-    key_to_finding: Dict[tuple, Dict] = {}
+    key_to_finding: dict[tuple, dict] = {}
 
     for run_name, findings in findings_by_run.items():
         cmd_type = run_types.get(run_name, "unknown")
@@ -303,9 +309,9 @@ def _find_new_and_resolved(
             if first_run != earliest:
                 status = get_finding_status(f)
                 new_findings.append({
-                    "file": f.get("file", ""),
+                    "file": finding_file(f),
                     "function": f.get("function", ""),
-                    "line": f.get("line", 0),
+                    "line": f.get("line") or 0,
                     "vuln_type": f.get("vuln_type", ""),
                     "status": status,
                     "verdict": normalize_verdict(status),
@@ -323,9 +329,9 @@ def _find_new_and_resolved(
                     and run_order.index(r) > run_order.index(last_run)
                 ]
                 potentially_resolved.append({
-                    "file": f.get("file", ""),
+                    "file": finding_file(f),
                     "function": f.get("function", ""),
-                    "line": f.get("line", 0),
+                    "line": f.get("line") or 0,
                     "vuln_type": f.get("vuln_type", ""),
                     "last_seen_run": last_run,
                     "absent_from": absent,
@@ -341,18 +347,23 @@ def _find_new_and_resolved(
 # --- Tool gap analysis ---
 
 def _build_tool_gaps(
-    run_dirs: List[Path],
-    findings_by_run: Dict[str, List[Dict]],
-    run_types: Dict[str, str],
-) -> Dict[str, Any]:
+    _run_dirs: list[Path],
+    findings_by_run: dict[str, list[dict]],
+    run_types: dict[str, str],
+) -> dict[str, Any]:
     """Identify coverage gaps between scan tools and LLM analysis."""
-    scan_files: Dict[str, set] = defaultdict(set)
-    llm_files: Dict[str, set] = defaultdict(set)
+    scan_files: dict[str, set] = defaultdict(set)
+    llm_files: dict[str, set] = defaultdict(set)
 
     for run_name, findings in findings_by_run.items():
         cmd = run_types.get(run_name, "unknown")
         for f in findings:
-            fp = f.get("file", "")
+            # finding_file handles both scan-shaped (`file`) and
+            # orchestrated (`file_path`) findings — pre-fix agentic
+            # findings were silently skipped here, so LLM coverage
+            # never registered and every scanned file looked
+            # "never LLM-validated".
+            fp = finding_file(f)
             if not fp:
                 continue
             k = dedup_key(f)
@@ -391,8 +402,7 @@ def _build_tool_gaps(
             f"{'s' if len(validated_not_scanned) != 1 else ''}"
             f" with LLM findings but no static analysis"
         )
-    for cmd in missing:
-        suggested.append(f"raptor {cmd}  # no {cmd} runs found")
+    suggested.extend(f"raptor {cmd}  # no {cmd} runs found" for cmd in missing)
 
     return {
         "scanned_not_validated": scanned_not_validated,
@@ -405,13 +415,13 @@ def _build_tool_gaps(
 # --- Action list ---
 
 def _build_action_list(
-    disagreements: List[Dict],
-    new_resolved: Dict[str, List[Dict]],
-    tool_gaps: Dict[str, Any],
-    persistent: List[Dict],
-) -> List[Dict[str, Any]]:
+    disagreements: list[dict],
+    new_resolved: dict[str, list[dict]],
+    tool_gaps: dict[str, Any],
+    _persistent: list[dict],
+) -> list[dict[str, Any]]:
     """Synthesize all analyses into a single prioritised action list."""
-    actions: List[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
 
     for d in disagreements:
         pos = [v for v in d["verdicts"] if v["verdict"] == "positive"]
@@ -437,8 +447,7 @@ def _build_action_list(
             "detail": d,
         })
 
-    for nf in new_resolved.get("new_findings", []):
-        actions.append({
+    actions.extend({
             "priority": 2 if nf["verdict"] == "positive" else 6,
             "category": "new_finding",
             "summary": (
@@ -446,10 +455,9 @@ def _build_action_list(
                 f"new in {nf['first_seen_run']}"
             ),
             "detail": nf,
-        })
+        } for nf in new_resolved.get("new_findings", []))
 
-    for gap in tool_gaps.get("scanned_not_validated", []):
-        actions.append({
+    actions.extend({
             "priority": 3,
             "category": "tool_gap",
             "summary": (
@@ -458,10 +466,9 @@ def _build_action_list(
                 f" never LLM-validated"
             ),
             "detail": gap,
-        })
+        } for gap in tool_gaps.get("scanned_not_validated", []))
 
-    for r in new_resolved.get("potentially_resolved", []):
-        actions.append({
+    actions.extend({
             "priority": 5,
             "category": "resolved",
             "summary": (
@@ -469,16 +476,15 @@ def _build_action_list(
                 f"absent from latest {r['command_type']} run"
             ),
             "detail": r,
-        })
+        } for r in new_resolved.get("potentially_resolved", []))
 
-    for cmd in tool_gaps.get("missing_command_types", []):
-        actions.append({
+    actions.extend({
             "priority": 7,
             "category": "tool_gap",
             "summary": f"No {cmd} runs found",
             "command": f"raptor {cmd}",
             "detail": {"missing": cmd},
-        })
+        } for cmd in tool_gaps.get("missing_command_types", []))
 
     actions.sort(key=lambda a: a["priority"])
     return actions
@@ -487,13 +493,13 @@ def _build_action_list(
 # --- Existing analyses (persistent, trends, coverage) ---
 
 def _find_persistent(
-    findings_by_run: Dict[str, List[Dict]],
-    run_models: Dict[str, str],
-) -> List[Dict[str, Any]]:
+    findings_by_run: dict[str, list[dict]],
+    run_models: dict[str, str],
+) -> list[dict[str, Any]]:
     """Find findings that appear across 2+ runs."""
-    key_to_runs: Dict[tuple, List[str]] = defaultdict(list)
-    key_to_finding: Dict[tuple, Dict] = {}
-    key_to_models: Dict[tuple, set] = defaultdict(set)
+    key_to_runs: dict[tuple, list[str]] = defaultdict(list)
+    key_to_finding: dict[tuple, dict] = {}
+    key_to_models: dict[tuple, set] = defaultdict(set)
 
     for run_name, findings in findings_by_run.items():
         for f in findings:
@@ -510,9 +516,9 @@ def _find_persistent(
             continue
         f = key_to_finding[k]
         persistent.append({
-            "file": f.get("file", ""),
+            "file": finding_file(f),
             "function": f.get("function", ""),
-            "line": f.get("line", 0),
+            "line": f.get("line") or 0,
             "vuln_type": f.get("vuln_type", ""),
             "status": f.get("final_status") or f.get("status", ""),
             "runs_seen": len(runs),
@@ -524,25 +530,26 @@ def _find_persistent(
 
 
 def _build_trends(
-    findings_by_run: Dict[str, List[Dict]],
-    run_dirs: List[Path],
-    run_models: Dict[str, str],
-) -> Dict[str, List[Dict[str, Any]]]:
+    findings_by_run: dict[str, list[dict]],
+    run_dirs: list[Path],
+    run_models: dict[str, str],
+) -> dict[str, list[dict[str, Any]]]:
     """Track how each finding's status changed across runs.
 
     Returns {finding_label: [{run, status, score, model}]} ordered by run time.
     """
-    run_order = [d.name for d in run_dirs]
+    run_order = [d.name for d in sorted(run_dirs, key=safe_run_mtime)]
 
-    key_to_history: Dict[tuple, List[Dict]] = defaultdict(list)
+    key_to_history: dict[tuple, list[dict]] = defaultdict(list)
     for run_name, findings in findings_by_run.items():
         for f in findings:
             k = dedup_key(f)
             model = f.get("analysed_by") or run_models.get(run_name, "")
+            es = f.get("exploitability_score")
             key_to_history[k].append({
                 "run": run_name,
                 "status": f.get("final_status") or f.get("status", ""),
-                "score": f.get("exploitability_score") or f.get("cvss_score_estimate"),
+                "score": es if es is not None else f.get("cvss_score_estimate"),
                 "model": model,
             })
 
@@ -557,16 +564,16 @@ def _build_trends(
     return trends
 
 
-def _build_tool_coverage(run_dirs: List[Path]) -> Dict[str, List[str]]:
+def _build_tool_coverage(run_dirs: list[Path]) -> dict[str, list[str]]:
     """Build tool -> files-covered mapping from run metadata."""
-    tool_files: Dict[str, set] = defaultdict(set)
+    tool_files: dict[str, set] = defaultdict(set)
 
     for d in run_dirs:
         meta = load_run_metadata(d)
-        tool = (meta or {}).get("command", "unknown")
+        tool = (meta if isinstance(meta, dict) else {}).get("command", "unknown")
         findings = load_findings_from_dir(d)
         for f in findings:
-            fp = f.get("file", "")
+            fp = finding_file(f)
             if fp:
                 tool_files[tool].add(fp)
 

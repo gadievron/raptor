@@ -20,9 +20,12 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Dict, FrozenSet, Iterable, List, Set, Tuple
 
 from ..discovery import EXCLUDED_DIR_NAMES
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +42,13 @@ _CACHE_LOCK = threading.Lock()
 # the returned list. Memory: ~50 bytes per row × ~50k rows on
 # Grafana ≈ 2.5 MB — trivial. Bounded so a test sweep over many
 # distinct targets in one process can't grow unbounded.
-_CACHE: Dict[Tuple[str, int], Tuple[Tuple[Path, str], ...]] = {}
+_CACHE: dict[tuple[str, int], tuple[tuple[Path, str], ...]] = {}
 _CACHE_MAX_TARGETS = 4
 
 
 def walk_source_files(
     target: Path, *, max_depth: int = DEFAULT_MAX_DEPTH,
-) -> Tuple[Tuple[Path, str], ...]:
+) -> tuple[tuple[Path, str], ...]:
     """Return every file under ``target`` that survives the canonical
     SCA dir-exclusion list, as ``(path, suffix_lower)`` tuples.
 
@@ -59,7 +62,7 @@ def walk_source_files(
         if cached is not None:
             return cached
     base_depth = len(target.parts)
-    out: List[Tuple[Path, str]] = []
+    out: list[tuple[Path, str]] = []
     try:
         walker = os.walk(str(target), followlinks=False)
     except OSError as e:
@@ -92,10 +95,10 @@ def walk_source_files(
 
 def iter_source_files(
     target: Path,
-    extensions: Set[str],
+    extensions: set[str],
     *,
     max_depth: int = DEFAULT_MAX_DEPTH,
-    extra_excluded_dir_names: FrozenSet[str] = frozenset(),
+    extra_excluded_dir_names: frozenset[str] = frozenset(),
 ) -> Iterable[Path]:
     """Yield files under ``target`` whose suffix is in ``extensions``.
 
@@ -143,6 +146,6 @@ def _reset_cache_for_tests() -> None:
 
 __all__ = [
     "DEFAULT_MAX_DEPTH",
-    "walk_source_files",
     "iter_source_files",
+    "walk_source_files",
 ]

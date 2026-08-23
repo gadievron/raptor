@@ -68,7 +68,6 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -122,14 +121,14 @@ class IntreeTarget:
         return self.kind == "binary"
 
 
-def _split_compound(body: str) -> List[str]:
+def _split_compound(body: str) -> list[str]:
     """Break ``body`` into sub-commands at shell separators.  Returns
     a list (possibly singleton) of stripped sub-command strings."""
     pieces = _COMPOUND_RE.split(body)
     return [p.strip() for p in pieces if p.strip()]
 
 
-def _strip_path_prefix(tok: str) -> Optional[str]:
+def _strip_path_prefix(tok: str) -> str | None:
     """Drop ``./``, ``$PWD/``, etc. — return the path-relative form,
     or None if the token is clearly not a path (absolute, contains
     ``..``, looks like a flag)."""
@@ -150,7 +149,7 @@ def _strip_path_prefix(tok: str) -> Optional[str]:
 
 def _safe_resolve_intree(
     rel: str, manifest_dir: Path,
-) -> Optional[Path]:
+) -> Path | None:
     """Resolve ``rel`` against ``manifest_dir``, defending against
     traversal and symlink escapes.  Returns the resolved path or
     None when not resolvable to a regular file inside the tree."""
@@ -184,7 +183,7 @@ def _classify_first_bytes(path: Path) -> str:
     """Return ``binary``, ``script``, ``source``, or ``unknown`` based
     on the first 256 bytes of ``path``."""
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             head = f.read(256)
     except OSError:
         return "unknown"
@@ -209,7 +208,7 @@ def _classify_first_bytes(path: Path) -> str:
 
 def resolve_intree_targets(
     body: str, manifest_dir: Path,
-) -> List[IntreeTarget]:
+) -> list[IntreeTarget]:
     """Find every shell token in ``body`` that resolves to a file
     inside ``manifest_dir``, classify each by magic bytes.
 
@@ -221,10 +220,10 @@ def resolve_intree_targets(
     traversal, symlinks; see module docstring.
     """
     seen: set = set()
-    out: List[IntreeTarget] = []
+    out: list[IntreeTarget] = []
     for sub in _split_compound(body):
         try:
-            tokens = shlex.split(sub, posix=True, comments=True)
+            tokens = shlex.split(sub, posix=True, comments=False)
         except ValueError:
             # Unterminated quote — uninterpretable.  Skip rather
             # than misclassify.

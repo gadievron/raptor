@@ -122,17 +122,62 @@ def test_vendored_dep_binary_suppressed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-package opt-in — manifest declarations
+# Manifest declarations — annotate, never suppress
 # ---------------------------------------------------------------------------
 
-def test_manifest_with_binary_field_suppresses_walk(tmp_path: Path) -> None:
-    """``package.json:binary`` declares native binary opt-in.  We
-    skip the walk entirely for fully-opt-in projects."""
+def test_manifest_binary_field_annotates_never_suppresses(
+    tmp_path: Path,
+) -> None:
+    """``package.json:binary`` declares native binary opt-in.  The
+    walk still runs (the field is attacker-controlled); the hit is
+    merely annotated."""
     m = _manifest(tmp_path, extra={"binary": {"module_name": "foo"}})
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "setup").write_bytes(b"\x7fELF" + b"\x00")
     hits = scan_target(tmp_path, [m], [_dep(m)])
-    assert hits == []
+    assert len(hits) == 1
+    assert hits[0].manifest_declares_native is True
+
+
+def test_os_field_cannot_switch_detector_off(tmp_path: Path) -> None:
+    """The suppression PoC shape: one innocuous ``"os": ["linux"]`` line
+    in the scanned repo's package.json must NOT suppress the planted
+    ELF — the hit is emitted, annotated as manifest-declared."""
+    m = _manifest(tmp_path, extra={"os": ["linux"]})
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "setup").write_bytes(b"\x7fELF" + b"\x00" * 16)
+    hits = scan_target(tmp_path, [m], [_dep(m)])
+    assert len(hits) == 1
+    assert hits[0].relpath == "tools/setup"
+    assert hits[0].manifest_declares_native is True
+
+
+def test_undeclaring_manifest_hit_not_annotated(tmp_path: Path) -> None:
+    """No opt-in field in the manifest: the hit fires with
+    ``manifest_declares_native`` False."""
+    m = _manifest(tmp_path)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "setup").write_bytes(b"\x7fELF" + b"\x00")
+    hits = scan_target(tmp_path, [m], [_dep(m)])
+    assert len(hits) == 1
+    assert hits[0].manifest_declares_native is False
+
+
+def test_annotation_uses_closest_manifest(tmp_path: Path) -> None:
+    """Monorepo: the annotation comes from the manifest closest above
+    the binary, not from any other manifest in the tree."""
+    root = _manifest(tmp_path, name="root", extra={"os": ["linux"]})
+    subdir = tmp_path / "packages" / "leaf"
+    subdir.mkdir(parents=True)
+    leaf_path = subdir / "package.json"
+    leaf_path.write_text(json.dumps({"name": "leaf"}), encoding="utf-8")
+    leaf = Manifest(path=leaf_path, ecosystem="npm", is_lockfile=False)
+    (subdir / "payload").write_bytes(b"\x7fELF" + b"\x00")
+    hits = scan_target(tmp_path, [root, leaf], [_dep(root, name="root")])
+    assert len(hits) == 1
+    # Closest manifest (leaf) declares nothing, so no annotation even
+    # though the root manifest declares.
+    assert hits[0].manifest_declares_native is False
 
 
 # ---------------------------------------------------------------------------

@@ -4,9 +4,17 @@ description: Extract IOCs from vendor security reports as forensic evidence
 tools: Read, Write, WebFetch
 model: inherit
 skills: github-evidence-kit
+hooks:
+  PreToolUse:
+    - matcher: WebFetch
+      hooks:
+        - type: command
+          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/webfetch-domain-allowlist.py --https-any"
 ---
 
 You extract Indicators of Compromise (IOCs) from vendor security reports.
+
+**Network constraint:** WebFetch is mechanically restricted to https:// URLs (PreToolUse hook; plain-http fetches are denied). Vendor reports live on arbitrary domains, so no host allowlist is enforced — fetch only the operator-supplied vendor report URL and links inside that report needed for IOC extraction. Nothing else.
 
 ## Skill Access
 

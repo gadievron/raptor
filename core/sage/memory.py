@@ -6,9 +6,10 @@ for consensus-validated persistence while keeping JSON as local cache.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.logging import get_logger
+from core.security.redaction import redact_secrets
 
 from .client import SageClient
 from .config import SageConfig
@@ -20,6 +21,37 @@ logger = get_logger()
 from packages.autonomous.memory import FuzzingMemory, FuzzingKnowledge  # noqa: E402
 
 
+def _domain_tag_for_knowledge(k: FuzzingKnowledge) -> str:
+    """Route fuzzing knowledge to the SAGE domain that matches its semantics.
+
+    ``exploit_technique`` and ``binary_characteristic`` generalize across
+    binaries and campaigns (methodology). ``strategy`` and ``crash_pattern``
+    stay under fuzzing/campaign-specific recall.
+    """
+    if k.knowledge_type in ("exploit_technique", "binary_characteristic"):
+        return "raptor-methodology"
+    return "raptor-fuzzing"
+
+
+def _merge_query_hits(
+    hit_lists: list[list[dict[str, Any]]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Merge SAGE query rows from multiple domains, de-duped by content."""
+    seen: set = set()
+    out: list[dict[str, Any]] = []
+    for lst in hit_lists:
+        for r in lst:
+            c = (r.get("content") or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            out.append(r)
+            if len(out) >= top_k:
+                return out
+    return out
+
+
 def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:
     """Convert a FuzzingKnowledge entry to natural language for SAGE embedding."""
     parts = [
@@ -28,7 +60,7 @@ def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:
 
     if isinstance(k.value, dict):
         for vk, vv in k.value.items():
-            if vv is not None and vv != "" and vv != 0:
+            if vv is not None and vv not in {"", 0}:
                 parts.append(f"{vk}: {vv}.")
     else:
         parts.append(f"Value: {k.value}.")
@@ -44,7 +76,7 @@ def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:
     return " ".join(parts)
 
 
-def _campaign_to_natural_language(campaign: Dict) -> str:
+def _campaign_to_natural_language(campaign: dict) -> str:
     """Convert a campaign dict to natural language."""
     name = campaign.get("binary_name", "unknown")
     date = campaign.get("date", "unknown")
@@ -71,79 +103,93 @@ class SageFuzzingMemory(FuzzingMemory):
         similar = memory.recall_similar("heap overflow strategies")
     """
 
+    _AVAILABILITY_TTL_S = 300.0
+
     def __init__(
         self,
-        memory_file: Optional[Path] = None,
-        sage_config: Optional[SageConfig] = None,
-    ):
+        memory_file: Path | None = None,
+        sage_config: SageConfig | None = None,
+    ) -> None:
         super().__init__(memory_file=memory_file)
 
         self._sage_config = sage_config or SageConfig.from_env()
         self._sage_client = SageClient(self._sage_config)
         self._sage_available = self._sage_client.is_available()
+        self._sage_available_checked_at = __import__("time").monotonic()
 
         if self._sage_available:
             logger.info("SAGE memory enabled — fuzzing knowledge will be persisted to SAGE")
         else:
             logger.info("SAGE unavailable — using JSON fallback only")
 
-    def save(self):
+    def _is_sage_available(self) -> bool:
+        """Return cached SAGE availability, re-probing after TTL on negative."""
+        import time
+        if self._sage_available:
+            return True
+        now = time.monotonic()
+        if (now - self._sage_available_checked_at) > self._AVAILABILITY_TTL_S:
+            self._sage_available = self._sage_client.is_available()
+            self._sage_available_checked_at = now
+        return self._sage_available
+
+    def save(self) -> None:
         """Save to JSON (always) and SAGE (when available)."""
         super().save()
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         stored = 0
         for key, k in self.knowledge.items():
             try:
                 if self._sage_client.propose(
-                    content=_knowledge_to_natural_language(k),
+                    content=redact_secrets(_knowledge_to_natural_language(k)),
                     memory_type="observation",
-                    domain_tag="raptor-fuzzing",
+                    domain_tag=_domain_tag_for_knowledge(k),
                     confidence=k.confidence,
                 ):
                     stored += 1
                 _throttle()
             except Exception as e:
-                logger.debug(f"SAGE sync failed for {key}: {e}")
+                logger.debug("SAGE sync failed for %s: %s", key, e)
 
         if stored > 0:
-            logger.debug(f"Synced {stored}/{len(self.knowledge)} knowledge entries to SAGE")
+            logger.debug("Synced %d/%d knowledge entries to SAGE", stored, len(self.knowledge))
 
-    def remember(self, knowledge: FuzzingKnowledge):
+    def remember(self, knowledge: FuzzingKnowledge) -> None:
         """Store knowledge locally and in SAGE."""
         super().remember(knowledge)
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         try:
             self._sage_client.propose(
-                content=_knowledge_to_natural_language(knowledge),
+                content=redact_secrets(_knowledge_to_natural_language(knowledge)),
                 memory_type="observation",
-                domain_tag="raptor-fuzzing",
+                domain_tag=_domain_tag_for_knowledge(knowledge),
                 confidence=knowledge.confidence,
             )
         except Exception as e:
-            logger.debug(f"SAGE remember failed: {e}")
+            logger.debug("SAGE remember failed: %s", e)
 
-    def record_campaign(self, campaign_data: Dict):
+    def record_campaign(self, campaign_data: dict) -> None:
         """Record campaign locally and in SAGE."""
         super().record_campaign(campaign_data)
 
-        if not self._sage_available:
+        if not self._is_sage_available():
             return
 
         try:
             self._sage_client.propose(
-                content=_campaign_to_natural_language(campaign_data),
+                content=redact_secrets(_campaign_to_natural_language(campaign_data)),
                 memory_type="observation",
                 domain_tag="raptor-campaigns",
                 confidence=0.85,
             )
         except Exception as e:
-            logger.debug(f"SAGE campaign store failed: {e}")
+            logger.debug("SAGE campaign store failed: %s", e)
 
     # ------------------------------------------------------------------
     # Semantic recall from SAGE
@@ -154,25 +200,46 @@ class SageFuzzingMemory(FuzzingMemory):
         query_text: str,
         domain: str = "raptor-fuzzing",
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
-        """Recall semantically similar fuzzing knowledge from SAGE."""
-        if not self._sage_available:
+    ) -> list[dict[str, Any]]:
+        """Recall semantically similar fuzzing knowledge from SAGE.
+
+        When ``domain`` is not ``raptor-methodology``, also queries the
+        methodology domain and merges (de-duplicated), so exploit-adjacent
+        recall still picks up generalised lessons.
+        """
+        if not self._is_sage_available():
             return []
 
-        return self._sage_client.query(
+        if domain == "raptor-methodology":
+            return self._sage_client.query(
+                text=query_text,
+                domain_tag=domain,
+                top_k=top_k,
+            )
+
+        primary = self._sage_client.query(
             text=query_text,
             domain_tag=domain,
             top_k=top_k,
         )
+        methodology = self._sage_client.query(
+            text=(
+                "Security fuzzing and exploitation methodology related to: "
+                f"{query_text}"
+            ),
+            domain_tag="raptor-methodology",
+            top_k=max(2, min(3, top_k)),
+        )
+        return _merge_query_hits([primary, methodology], top_k)
 
     def recall_exploit_patterns(
         self,
         crash_type: str,
-        binary_characteristics: Optional[Dict] = None,
+        binary_characteristics: dict | None = None,
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Recall exploit technique patterns relevant to a crash type."""
-        if not self._sage_available:
+        if not self._is_sage_available():
             return []
 
         mitigations = ""
@@ -181,15 +248,22 @@ class SageFuzzingMemory(FuzzingMemory):
             if active:
                 mitigations = f" with mitigations: {', '.join(active)}"
 
-        return self._sage_client.query(
-            text=f"exploit techniques for {crash_type}{mitigations}",
+        text = f"exploit techniques for {crash_type}{mitigations}"
+        methodology = self._sage_client.query(
+            text=text,
+            domain_tag="raptor-methodology",
+            top_k=top_k,
+        )
+        fuzzing = self._sage_client.query(
+            text=text,
             domain_tag="raptor-fuzzing",
             top_k=top_k,
         )
+        return _merge_query_hits([methodology, fuzzing], top_k)
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """Get memory statistics including SAGE status."""
         stats = super().get_statistics()
-        stats["sage_enabled"] = self._sage_available
-        stats["sage_url"] = self._sage_config.url if self._sage_available else None
+        stats["sage_enabled"] = self._is_sage_available()
+        stats["sage_url"] = self._sage_config.url if self._is_sage_available() else None
         return stats

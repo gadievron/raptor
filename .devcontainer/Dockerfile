@@ -4,7 +4,7 @@
 # This container provides all dependencies for the RAPTOR security research framework.
 # Based on comprehensive audit of all agents, commands, skills, and packages.
 
-FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+FROM mcr.microsoft.com/devcontainers/python:3-3.14-bookworm
 
 # The base image's `node` devcontainer-feature install path added a stale
 # yarn apt source (NO_PUBKEY 62D54FD4003F6525, breaks apt-get update) AND
@@ -69,7 +69,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep==1.161.0
+RUN pip install --no-cache-dir semgrep==1.172.0
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -102,7 +102,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Downloaded from GitHub releases
 # ============================================================================
 
-ARG CODEQL_VERSION=2.15.5
+ARG CODEQL_VERSION=2.26.3
 RUN mkdir -p /opt/codeql \
     && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
     && unzip /tmp/codeql.zip -d /opt \
@@ -141,13 +141,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
     && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs=24.15.0-1nodesource1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@2.1.119
+    && npm install -g @anthropic-ai/claude-code@2.1.163
 
 # ============================================================================
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
-RUN npm install -g yarn@1.22.22 pnpm@11.3.0
+RUN npm install -g yarn@1.22.22 pnpm@11.8.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

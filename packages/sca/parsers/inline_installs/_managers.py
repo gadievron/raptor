@@ -10,7 +10,8 @@ keeps everything per-PM (pip / apt / yum / apk / npm / cargo /
 gem / brew / go install).
 
 Adding a new package manager: write a ``_parse_<pm>_args``
-generator yielding ``(name, version, pin_style)`` tuples and
+generator yielding ``(name, version, pin_style)`` tuples (plus
+optional ``(floor, ceiling)`` corridor bounds — see pip) and
 append a ``_PkgManager(...)`` row to ``_MANAGERS`` below. Pattern
 order in the table doesn't matter (the scanner picks the
 latest-starting match).
@@ -20,31 +21,44 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Iterator, List, Optional, Tuple
 
 from ...models import PinStyle
 from ..requirements import _spec_bounds
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 
 # ---------------------------------------------------------------------------
 # Package-manager descriptor table
 # ---------------------------------------------------------------------------
 
+# One parsed package row: ``(name, version, pin_style)``. Managers that
+# record a safe corridor (pip) additionally append ``(floor, ceiling)``.
+# The consumer (``__init__._scan_shell_lines``) unpacks defensively so
+# both shapes flow through at runtime.
+_ParsedRow = tuple[str, str | None, PinStyle]
+_ParsedRowWithBounds = tuple[str, str | None, PinStyle,
+                             str | None, str | None]
+
+
 @dataclass(frozen=True)
 class _PkgManager:
     """One row per supported package manager."""
 
-    pattern: "re.Pattern[str]"      # matches the install command in a line
+    pattern: re.Pattern[str]      # matches the install command in a line
     ecosystem: str                  # the SCA ecosystem string
     purl_type: str                  # the purl `type` segment
-    purl_namespace: Optional[str]   # the purl `namespace` segment (or None)
-    parse_args: Callable[[str], Iterator[Tuple[str, Optional[str], PinStyle]]]
+    purl_namespace: str | None   # the purl `namespace` segment (or None)
+    parse_args: Callable[
+        [str], Iterator[_ParsedRow | _ParsedRowWithBounds]]
 
 
 _NAME_RE = r"[A-Za-z0-9][A-Za-z0-9._+\-]*"
 
 
-def _tokenise(s: str) -> List[str]:
+def _tokenise(s: str) -> list[str]:
     """Split on whitespace, dropping empties. Doesn't honour shell quoting
     perfectly — quotes are stripped afterwards by the per-manager parser.
     """
@@ -70,9 +84,9 @@ _PIP_FLAGS_WITH_VALUE = {
 
 def _parse_pip_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
-    """Yield (name, version, pin_style) tuples from a ``pip install ...`` arg
-    string.
+) -> Iterator[_ParsedRowWithBounds]:
+    """Yield (name, version, pin_style, floor, ceiling) tuples from a
+    ``pip install ...`` arg string.
 
     Handles the common pinning shapes: ``foo==1.2.3``, ``foo>=1.2.3``,
     ``foo~=1.2.3``, ``foo`` (unpinned), and PEP 508 multi-specifier
@@ -113,8 +127,7 @@ def _parse_pip_args(
 
 def _classify_pip_token(
     tok: str,
-) -> Optional[Tuple[str, Optional[str], PinStyle,
-                    Optional[str], Optional[str]]]:
+) -> _ParsedRowWithBounds | None:
     """Map one ``pkg[<spec>...]`` token to
     ``(name, version, pin_style, floor, ceiling)``.
 
@@ -167,8 +180,7 @@ def _classify_pip_token(
 
 def _legacy_single_spec(
     name: str, rest: str,
-) -> Optional[Tuple[str, Optional[str], PinStyle,
-                    Optional[str], Optional[str]]]:
+) -> _ParsedRowWithBounds | None:
     """Pre-``packaging`` fallback for single-specifier shapes only.
 
     Multi-spec rests get rejected (yield None) rather than mangled.
@@ -198,7 +210,7 @@ _APT_FLAGS_WITH_VALUE = {
 
 def _parse_apt_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``apt install nginx=1.18.0-6.1 curl`` — single ``=`` is the pin."""
     skip_next = False
     for tok in _tokenise(args):
@@ -231,7 +243,7 @@ _YUM_FLAGS_WITH_VALUE = {
 
 def _parse_yum_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``yum install nginx-1.18.0-2.el8`` — version follows a dash; we
     split on the first dash followed by a digit. Plain ``nginx`` is
     unpinned."""
@@ -264,7 +276,7 @@ _APK_FLAGS_WITH_VALUE = {
 
 def _parse_apk_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``apk add nginx=1.18.0-r0`` — same shape as apt."""
     skip_next = False
     for tok in _tokenise(args):
@@ -299,7 +311,7 @@ _NPM_SCOPED_RE = re.compile(
 _NPM_PLAIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._\-]*)$")
 
 
-def _split_npm_token(tok: str) -> Optional[Tuple[str, Optional[str]]]:
+def _split_npm_token(tok: str) -> tuple[str, str | None] | None:
     """Split an npm install token into ``(name, version)``.
 
     Handles four shapes:
@@ -339,8 +351,8 @@ def _split_npm_token(tok: str) -> Optional[Tuple[str, Optional[str]]]:
 
 def _emit_npm_pkg(
     name: str,
-    version: Optional[str],
-) -> Tuple[str, Optional[str], PinStyle]:
+    version: str | None,
+) -> _ParsedRow:
     """Map an npm name+version into a Dependency-shaped tuple."""
     if version is None:
         return name, None, PinStyle.WILDCARD
@@ -348,12 +360,16 @@ def _emit_npm_pkg(
         return name, version[1:], PinStyle.CARET
     if version.startswith("~"):
         return name, version[1:], PinStyle.TILDE
+    if version.startswith((">=", "<=", ">", "<")) or "*" in version or ".x" in version:
+        return name, version, PinStyle.RANGE
+    if not version[:1].isdigit():
+        return name, version, PinStyle.WILDCARD
     return name, version, PinStyle.EXACT
 
 
 def _parse_npm_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``npm install lodash@4.17.21 @angular/core@12.3.1``.
 
     Also covers ``npm i`` / ``yarn add`` / ``pnpm add`` since those land
@@ -378,7 +394,7 @@ def _parse_npm_args(
 
 def _parse_npx_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``npx <pkg>[@version] <cmd-args...>`` — only the first positional is
     a package; subsequent positionals are arguments to the executed command.
 
@@ -388,7 +404,7 @@ def _parse_npx_args(
     Same parser is reused for ``bunx``, ``pnpm dlx``, ``yarn dlx``.
     """
     tokens = _tokenise(args)
-    packages: List[str] = []
+    packages: list[str] = []
     via_flag = False
     saw_positional = False
     i = 0
@@ -428,17 +444,17 @@ def _parse_versioned_flag_args(
     args: str,
     *,
     version_flags: set,
-    name_re: "re.Pattern[str]",
+    name_re: re.Pattern[str],
     flags_with_value: set,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """Generic parser for ``<cmd> install <name> [--version X]`` shape.
 
     Used for cargo (``--version``) and gem (``-v`` / ``--version``).
     Multiple positionals share the same ``--version`` if present.
     """
     tokens = _tokenise(args)
-    version: Optional[str] = None
-    names: List[str] = []
+    version: str | None = None
+    names: list[str] = []
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -497,7 +513,7 @@ def _parse_gem_args(args: str):
 
 def _parse_brew_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``brew install python@3.12 nginx``."""
     for tok in _tokenise(args):
         if tok.startswith("-"):
@@ -526,7 +542,7 @@ _GO_NAME_RE = re.compile(
 
 def _parse_go_install_args(
     args: str,
-) -> Iterator[Tuple[str, Optional[str], PinStyle]]:
+) -> Iterator[_ParsedRow]:
     """``go install github.com/foo/bar@v1.2.3``."""
     for tok in _tokenise(args):
         if tok.startswith("-"):
@@ -547,7 +563,7 @@ def _parse_go_install_args(
 # Registry table
 # ---------------------------------------------------------------------------
 
-_MANAGERS: List[_PkgManager] = [
+_MANAGERS: list[_PkgManager] = [
     _PkgManager(
         pattern=re.compile(
             r"\b(?:python3?\s+-m\s+)?pip3?\s+install\b", re.IGNORECASE),

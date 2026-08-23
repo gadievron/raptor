@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.sca.discovery import EXCLUDED_DIR_NAMES, find_manifests
+from packages.sca.discovery import (
+    EXCLUDED_DIR_NAMES,
+    _should_skip_dir,
+    find_manifests,
+)
 
 
 def test_top_level_packages_dir_not_excluded(tmp_path: Path) -> None:
@@ -125,3 +129,36 @@ def test_root_manifest_with_word_test_in_dir_name_kept(
     (sub / "package.json").write_text('{"name": "x"}', encoding="utf-8")
     manifests = find_manifests(tmp_path)
     assert any("test-utils-pkg" in str(m.path) for m in manifests)
+
+
+# ---------------------------------------------------------------------------
+# ``_should_skip_dir`` — exclusion is a plain set-membership check (dotted
+# names get no special-casing) plus the ephemeral-venv prefix rule.
+# ---------------------------------------------------------------------------
+
+def test_excluded_plain_name_skipped() -> None:
+    assert _should_skip_dir("node_modules", EXCLUDED_DIR_NAMES) is True
+
+
+def test_excluded_dotted_name_skipped() -> None:
+    """Dotted AND excluded names skip identically to plain ones."""
+    assert _should_skip_dir(".git", EXCLUDED_DIR_NAMES) is True
+    assert _should_skip_dir(".venv", EXCLUDED_DIR_NAMES) is True
+
+
+def test_dotted_but_not_excluded_kept() -> None:
+    assert _should_skip_dir(".myconfig", EXCLUDED_DIR_NAMES) is False
+
+
+def test_plain_non_excluded_kept() -> None:
+    assert _should_skip_dir("src", EXCLUDED_DIR_NAMES) is False
+
+
+def test_ephemeral_venv_prefix_skipped() -> None:
+    """PEP 668 ephemeral venv dirs are skipped regardless of the
+    exclude set (suffix varies per run)."""
+    assert _should_skip_dir(".raptor-sca-venv-12345", set()) is True
+
+
+def test_extra_excludes_honoured() -> None:
+    assert _should_skip_dir("custom", EXCLUDED_DIR_NAMES | {"custom"}) is True

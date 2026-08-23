@@ -8,6 +8,14 @@ user-invocable: false
 
 Tracks what each tool examined during analysis. Answers: "what code has been checked, by whom, and what's missing?"
 
+## Architecture
+
+Three layers:
+
+1. **Collection** — the coverage plugin hook (`plugins/coverage/`) appends file paths to `.reads-manifest` on every Read tool call. Per-tool records (`coverage-<tool>.json`) are written by scanners and the run lifecycle.
+2. **Store** — `CoverageStore` (`core/coverage/store.py`) persists a unified `coverage.json` keyed by (file, line-interval, tool). Survives across runs. Updated at run completion via importers.
+3. **Reporting** — `render_coverage()` and `coverage_view()` join store state with per-run execution detail.
+
 ## Coverage Records
 
 Each tool writes a `coverage-<tool>.json` in the run output directory:
@@ -16,9 +24,62 @@ Each tool writes a `coverage-<tool>.json` in the run output directory:
 |------|-----------|----------|
 | `coverage-semgrep.json` | Scanner (`/scan`) | files examined, policy groups, errors |
 | `coverage-codeql.json` | Scanner (`/scan`, `/codeql`) | files examined, packs, rules, extraction failures |
-| `coverage-llm.json` | Lifecycle complete (`/validate`, `/understand`) | files examined (from reads manifest), items analysed — functions, globals, structs (from findings + mark) |
+| `coverage-read.json` | Lifecycle end (any status) | files the LLM read (from `.reads-manifest`) |
+| `coverage-llm.json` | `/validate` stage 1; operator/agent `--mark` | items analysed (from findings + marks) |
+| `coverage-journal.json` | `/agentic` | functions reviewed (from review-journal entries) |
+| `coverage-fuzz.json` | `/fuzz` (gcov-instrumented targets) | per-function runtime reach (never counts as review) |
 
-Records are written automatically — no manual action needed.
+Records are written automatically — no manual action needed. The summary
+ends with a `Read tracking:` health line (did the LLM-read capture leg
+ever engage?) and, in project mode, a `Progress:` trend line from
+`coverage-progress.jsonl` (one row appended per completed run).
+
+## Coverage Store
+
+`CoverageStore` (`core/coverage/store.py`) is the persistent coverage sink. Key APIs:
+
+```python
+from core.coverage.store import CoverageStore
+
+store = CoverageStore(project_dir / "coverage.json")   # loads if present
+
+# Mark lines as examined by a tool
+store.mark("src/auth.c", 10, 50, "audit")
+
+# Query who examined a line or a function's span
+tools = store.who_checked("src/auth.c", 25)
+tools = store.who_checked_function("src/auth.c", 10, 50)
+```
+
+Line-range tracking uses inclusive `[lo, hi]` intervals, kept sorted and coalesced per tool.
+
+### Tool Registry
+
+Tool labels are classified by category and depth (`core/coverage/registry.py`):
+
+| Category | Depth | Tools |
+|----------|-------|-------|
+| static | scanned | semgrep, coccinelle, codeql |
+| llm | scanned | read, understand |
+| llm | analysed | claude, llm, audit, validate, agentic, journal, mark, annotations |
+| runtime | runtime-tested | gcov, lcov, llvm-cov, afl, fuzz, bincov, drcov, frida, sancov, coverage.py, pytest |
+
+The registry source is authoritative for the full label set.
+
+A file the LLM merely read (`read`) is `scanned`, not `analysed` — it does not count as "reviewed". Review requires depth >= `analysed`.
+
+### Store Importers
+
+At run completion, `_snapshot_run_coverage` in `core/run/metadata.py` imports data into the store:
+
+```python
+from core.coverage.importer import (
+    import_run_dir,        # import all coverage-*.json records
+    import_run_findings,   # import findings as function-level coverage
+    import_journal,        # import review journal entries
+    import_annotations,    # import human-authored annotations
+)
+```
 
 ## CLI
 
@@ -50,20 +111,28 @@ From file (many functions — preferred for `/understand` and `/validate`):
 libexec/raptor-coverage-summary <run_dir> --mark-file "$OUTPUT_DIR/reviewed-items.json"
 ```
 
-The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias.
+The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias. An optional `status` (`clean` / `suspicious` / `finding` / `dormant`) sets the journaled verdict; default `clean`.
 ```json
 [
     {"file": "src/auth.c", "item": "check_pw"},
-    {"file": "src/auth.c", "item": "credentials"},
+    {"file": "src/auth.c", "item": "credentials", "status": "suspicious"},
     {"file": "src/db.c", "item": "query"}
 ]
 ```
 
 Write this file using the Write tool, then pass it to `--mark-file`.
 
+**Durability:** in a project context (run dir under a project with a checklist), every mark is ALSO journaled into the project's `review-journal-index.json` as a review assertion (`producer=mark`, `model=operator`) with a source hash. Journaled marks survive run deletion, suppress `/audit` gaps cross-run through the hash-verified fold, and resurface automatically when the function's source drifts. On a standalone run dir the mark stays record-only (same-run suppression only).
+
 **Remove from reviewed** (undo incorrect mark):
 ```bash
 libexec/raptor-coverage-summary <run_dir> --unmark src/auth.c:check_pw
+```
+Unmark also withdraws any journaled mark (an error-verdict entry replaces it in the index), so the function returns to the gap list.
+
+**Import external runtime coverage:**
+```bash
+libexec/raptor-coverage-summary <run_dir> --import coverage.info --format lcov --tool gcov
 ```
 
 **Via project command** (summary and detail only):
@@ -84,6 +153,7 @@ from core.coverage.store_summary import (
     render_coverage,        # unified report string (state + execution detail)
     render_run_coverage,    # single-run convenience wrapper
     coverage_view,          # the store-backed view dict (for --fail-under etc.)
+    store_coverage_threshold_met,  # threshold check
 )
 
 # Single run (resolves checklist/coverage.json/annotations under the dir):
@@ -95,9 +165,11 @@ print(report)
 
 # Programmatic view (e.g. to apply a threshold):
 view = coverage_view(run_dirs, checklist, store_path, annotations_base)
+if not store_coverage_threshold_met(view, fail_under=80.0):
+    print("Coverage below threshold")
 ```
 
-### View dict structure (store-backed coverage state)
+### View dict structure
 
 ```python
 {
@@ -115,8 +187,7 @@ view = coverage_view(run_dirs, checklist, store_path, annotations_base)
 }
 ```
 
-Per-run tool **execution** detail (files examined, rules/packs, files failed,
-Semgrep policy-group validation) is separate, read from the records:
+### Execution detail (per-run tool diagnostics)
 
 ```python
 from core.coverage.summary import execution_detail, format_execution_detail
@@ -176,7 +247,9 @@ Only `tool` and `files_examined` are required. All other fields are optional.
 
 **CodeQL:** Files from SARIF `artifacts` array. Query packs from `tool.extensions`. Rules from `tool.driver.rules`. Extraction failures from `invocations.toolExecutionNotifications`.
 
-**LLM:** Files from the reads manifest (`.reads-manifest`, populated by coverage plugin hook on every Read tool call). Functions from `findings.json` — any function with a finding or ruling counts as analysed.
+**LLM (read):** Files from the reads manifest (`.reads-manifest`, populated by coverage plugin hook on every Read tool call). Depth: scanned only.
+
+**LLM (analysed):** Functions from `findings.json` — any function with a finding or ruling counts as analysed. Also from the review journal (`review-journal.jsonl`), which is the primary source for function-level coverage in `/audit`.
 
 ## Inventory (denominator)
 
@@ -191,12 +264,13 @@ The checklist is built by `/validate` Stage 0 or `/understand` MAP-0.
 
 Semgrep policy groups are compared against `RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK` to identify which vulnerability classes weren't scanned. Missing groups appear in the "Action needed" section.
 
-## Future (Phase 3+)
+## Gap Computation in /audit
 
-The current system computes coverage on-the-fly from records. Phase 3 adds:
-- `CoverageStore` class with persistent `coverage.json`
-- `store.mark()` / `store.gaps()` / `store.who_checked()` query API
-- Line-range tracking (intervals, bitmap fallback for dense data)
-- Tool registry with categories (static/llm/runtime)
+`core/audit/gaps.py:compute_gaps` determines which functions still need review. Coverage sources, in priority order:
 
-See `/home/raptor/design/coverage-layer.md` for the full design.
+1. **Review journal** — `review-journal.jsonl` (per-run) and `review-journal-index.json` (project-level). This is the primary mid-run and cross-run source.
+2. **Coverage records** — per-tool `coverage-*.json` in the run dir: review-grade `functions_analysed` entries (an operator `--mark`, `coverage-llm.json`, `coverage-journal.json`) suppress gaps; scanned-depth labels (`read`, `understand`), whole-file `files_examined`, and runtime records (`coverage-fuzz.json` is reachability evidence, not review) never do. Legacy `coverage-record.json` still loads for pre-per-tool-split runs.
+
+A function is a gap when it has no entry in either source. The durable
+`coverage.json` store is a query-time projection (summaries, `--gaps`),
+not a `compute_gaps` input.

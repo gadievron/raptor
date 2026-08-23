@@ -31,7 +31,6 @@ from packages.sca.versions import in_range
 from packages.sca.versions.semver import compare as cmp
 from packages.sca.versions.semver import parse
 
-
 # ---------------------------------------------------------------------------
 # Basic ordering.
 # ---------------------------------------------------------------------------
@@ -236,3 +235,39 @@ def test_in_range_semver_smoke() -> None:
     assert in_range("npm", "2.0.0", events) is False
     # Pre-release of 2.0 still < 2.0 per spec, so still in range.
     assert in_range("npm", "2.0.0-rc.1", events) is True
+
+
+def test_in_range_multiple_intervals_in_one_events_list() -> None:
+    """Two introduced/fixed pairs in one range object — both intervals
+    must match."""
+    events = [
+        {"introduced": "1.0.0"}, {"fixed": "1.5.0"},
+        {"introduced": "2.0.0"}, {"fixed": "2.5.0"},
+    ]
+    assert in_range("npm", "1.2.0", events) is True
+    assert in_range("npm", "1.7.0", events) is False
+    assert in_range("npm", "2.2.0", events) is True
+    assert in_range("npm", "3.0.0", events) is False
+
+
+def test_in_range_consecutive_introduced_keeps_first_interval() -> None:
+    """A second ``introduced`` while one interval is open used to
+    overwrite the first, silently dropping its vulnerable range. The
+    first now closes as open-ended (conservative, mirroring a dangling
+    introduced)."""
+    events = [
+        {"introduced": "1.0.0"},
+        {"introduced": "2.0.0"}, {"fixed": "2.5.0"},
+    ]
+    # In the first (now open-ended) interval — was False pre-fix.
+    assert in_range("npm", "1.2.0", events) is True
+    # In the second interval.
+    assert in_range("npm", "2.2.0", events) is True
+    # Below every introduced bound.
+    assert in_range("npm", "0.9.0", events) is False
+
+
+def test_in_range_dangling_introduced_open_ended() -> None:
+    events = [{"introduced": "1.0.0"}]
+    assert in_range("npm", "99.0.0", events) is True
+    assert in_range("npm", "0.1.0", events) is False

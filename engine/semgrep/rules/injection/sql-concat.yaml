@@ -1,11 +1,44 @@
 rules:
+  # Concatenation shapes are language-split: the PHP `.` operator and
+  # the Python `%` format don't parse under the other grammars, and a
+  # single multi-language rule dies whole when one branch fails.
+  # Known residual (documented, not detected here): f-strings /
+  # template literals — those are the taint rules' job below.
+  # Pre-fix this rule matched only the exact shape `query = "SELECT "
+  # + $X` (variable literally named `query`, literal exactly
+  # "SELECT ") — effectively dead on real code (U12-F102).
   - id: raptor.injection.sql.concatenation
-    message: SQL query formed by string concatenation; consider parameterised queries or prepared statements.
-    languages: [java, python, javascript, php]
+    message: SQL query formed by string concatenation; use parameterised queries or prepared statements.
+    languages: [java, javascript, python]
     severity: HIGH
     pattern-either:
-      - pattern: executeQuery("SELECT " + $X + " FROM " + $Y)
-      - pattern: query = "SELECT " + ...
+      - pattern: $Q = "=~/(?i)^(select|insert|update|delete|create|drop|alter)[^a-z0-9_]/" + ...
+      - patterns:
+          - pattern: $OBJ.$METHOD("=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" + ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(executeQuery|executeUpdate|execute|executemany|query|rawQuery)$
+    metadata:
+      cwe: ["CWE-89"]
+      asvs: ["V5.1"]
+
+  - id: raptor.injection.sql.concatenation.format
+    message: SQL query formed by %-formatting; use parameterised queries or placeholders.
+    languages: [python]
+    severity: HIGH
+    pattern: $Q = "=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" % ...
+    metadata:
+      cwe: ["CWE-89"]
+      asvs: ["V5.1"]
+
+  - id: raptor.injection.sql.concatenation.php
+    message: SQL query formed by string concatenation; use parameterised queries or prepared statements.
+    languages: [php]
+    severity: HIGH
+    # Deep match on the innermost `"SQL..." . $X` node so left-assoc
+    # chains fire; a constant SQL string with no concatenation has no
+    # `.` node and stays silent.
+    pattern: $Q = <... "=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" . $X ...>;
     metadata:
       cwe: ["CWE-89"]
       asvs: ["V5.1"]
@@ -27,9 +60,13 @@ rules:
       - pattern-either:
           - pattern: $DB.execute($QUERY)
           - pattern: $DB.executemany($QUERY)
+    # NOTE: sqlalchemy.text() and psycopg2.sql.SQL() are NOT
+    # sanitizers — both wrap the string verbatim, so tainted data
+    # concatenated into their argument still reaches the database
+    # as executable SQL. Genuinely parameterised calls
+    # (db.execute(query, params)) are already non-findings: the
+    # one-argument sink patterns above do not match them.
     pattern-sanitizers:
-      - pattern: psycopg2.sql.SQL(...)
-      - pattern: sqlalchemy.text(...)
+      - pattern: int(...)
     metadata:
       cwe: ["CWE-89"]
-      

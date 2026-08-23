@@ -1,4 +1,4 @@
-"""Zip member safety predicate.
+r"""Zip member safety predicate.
 
 Zip lacks a stdlib equivalent of :func:`tarfile.data_filter` (PEP 706
 covers tar only), so this module hand-rolls the same hardening rules
@@ -14,8 +14,8 @@ The hardening rules:
   * **Absolute paths** — leading ``/`` rejected; a zip extracting to
     ``/usr/local`` shouldn't write to ``/etc``.
   * **Backslash separator** — Windows-shaped paths inside zips
-    legitimately use ``\\``; we reject so the on-disk resolver
-    can't be fooled by ``..\\..\\etc\\passwd`` on a POSIX host.
+    legitimately use ``\``; we reject so the on-disk resolver
+    can't be fooled by ``..\..\etc\passwd`` on a POSIX host.
   * **Symlinks** — zip stores Unix mode in
     ``external_attr >> 16``. We refuse any member whose mode
     matches ``S_IFLNK``. Symlink-aware unpacking is a footgun;
@@ -145,9 +145,8 @@ def safe_member_reason(
     # don't have to special-case the directory shape.
 
     # Absolute-path check.
-    if not allow_absolute_paths:
-        if name.startswith("/"):
-            return UnsafeMemberReason.ABSOLUTE_PATH
+    if not allow_absolute_paths and name.startswith("/"):
+        return UnsafeMemberReason.ABSOLUTE_PATH
 
     # Backslash check. Zip spec uses forward slash; any backslash
     # is either a malformed producer or an intentional Windows

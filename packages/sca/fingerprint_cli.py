@@ -16,35 +16,34 @@ The input can be either a local file path (any binary) OR an
 OCI image ref (``docker.io/library/alpine:3.18``) — for image
 refs the main binary is fetched via the same extractor the
 scan + bump pipelines use.
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
 
 from . import SCA_CACHE_ROOT
+from typing import TYPE_CHECKING
+
+from core.json import dumps_display
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     args = _parse_args(list(argv) if argv is not None else None)
     target = args.target
 
     # Resolve: local path or image ref?
     local_path = Path(target)
-    if local_path.is_file():
-        fp_input = ("path", local_path)
-    else:
-        fp_input = ("image_ref", target)
+    fp_input = ("path", local_path) if local_path.is_file() else ("image_ref", target)
 
     cache_root = Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT
     store_dir = cache_root / "fingerprints"
@@ -61,7 +60,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _cmd_print(fp_input, args) -> int:
+def _cmd_print(fp_input, args: argparse.Namespace) -> int:
     """Default: compute the fingerprint, print as JSON."""
     fp = _fingerprint(fp_input, args)
     if fp is None:
@@ -74,7 +73,7 @@ def _cmd_print(fp_input, args) -> int:
     return _emit_json(fp.to_dict(), args.out)
 
 
-def _cmd_save(fp_input, args, *, store_dir: Path) -> int:
+def _cmd_save(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
     """Save as baseline. The ``--ref`` flag specifies the store
     key (defaults to the input identifier — image ref or path)."""
     from core.binary import save_fingerprint
@@ -100,7 +99,7 @@ def _cmd_save(fp_input, args, *, store_dir: Path) -> int:
     return 0
 
 
-def _cmd_check(fp_input, args, *, store_dir: Path) -> int:
+def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
     """Compare current fingerprint against stored baseline. Prints
     the drift summary and exits:
       * 0 — no baseline OR no drift
@@ -172,7 +171,7 @@ def _fingerprint(fp_input, args):
     return _fingerprint_image_ref(value, args)
 
 
-def _fingerprint_image_ref(ref: str, args):
+def _fingerprint_image_ref(ref: str, _args):
     """Pull the image, extract the main binary, fingerprint it.
     Reuses the bumper's OCI extractor."""
     from core.binary import capability_fingerprint
@@ -188,7 +187,13 @@ def _fingerprint_image_ref(ref: str, args):
             "fingerprint_cli: OCI client construction failed: %s", e,
         )
         return None
-    binary = fetch_image_binary(ref, client=client)
+    try:
+        binary = fetch_image_binary(ref, client=client)
+    except Exception as e:                               # noqa: BLE001
+        logger.warning(
+            "fingerprint_cli: image binary fetch failed: %s", e,
+        )
+        return None
     if binary is None:
         return None
     try:
@@ -200,17 +205,17 @@ def _fingerprint_image_ref(ref: str, args):
             pass
 
 
-def _emit_json(payload, out_path: Optional[str]) -> int:
+def _emit_json(payload, out_path: str | None) -> int:
     """Print to stdout or write to ``out_path``. Returns 0 on
     success, 3 on I/O failure (matches the CLI's infra-failure
     exit code so CI gates can differentiate write errors from
     drift / no-drift)."""
-    text = json.dumps(payload, sort_keys=True, indent=2)
+    text = dumps_display(payload, sort_keys=True)
     if not out_path:
         print(text)
         return 0
     try:
-        Path(out_path).write_text(text + "\n")
+        Path(out_path).write_text(text + "\n", encoding="utf-8")
     except OSError as e:
         print(
             f"raptor-sca fingerprint: --out write failed "
@@ -226,7 +231,7 @@ def _emit_json(payload, out_path: Optional[str]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="raptor-sca fingerprint",
         description=(

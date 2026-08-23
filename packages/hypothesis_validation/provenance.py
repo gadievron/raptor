@@ -1,4 +1,4 @@
-"""Provenance edges — every piece of evidence carries its hypothesis hash.
+r"""Provenance edges — every piece of evidence carries its hypothesis hash.
 
 Two pieces:
 
@@ -13,7 +13,7 @@ paths (`target`, and the `file` attribute of nested locations / flow
 steps).
 
 Why normalise whitespace: the LLM frequently re-emits the same claim
-with different wrapping ("foo\\n  bar" vs "foo bar") between iteration
+with different wrapping ("foo\n  bar" vs "foo bar") between iteration
 rounds. Without normalisation, two semantically identical hypotheses
 hash differently and the runner cannot deduplicate or detect "this is
 the same hypothesis as last round".
@@ -22,7 +22,7 @@ Why normalise paths: the LLM (and the runner) regularly emit `./foo.c`,
 `src/./foo.c`, and `src/../src/foo.c` interchangeably. `posixpath.normpath`
 collapses these without filesystem access. We use `posixpath` rather
 than `os.path` because the latter is platform-dependent — on Windows
-it rewrites `/` to `\\`, so a hypothesis hashed on a Linux dev machine
+it rewrites `/` to `\`, so a hypothesis hashed on a Linux dev machine
 and the same hypothesis hashed on a Windows CI runner would produce
 different hashes, defeating the cross-machine stability that's the
 whole point of this hash. Note that absolute and relative forms of the
@@ -36,7 +36,8 @@ import hashlib
 import json
 import posixpath
 import re
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .hypothesis import Hypothesis
 
@@ -59,12 +60,12 @@ _PATH_KEYS = frozenset({"target", "file"})
 
 
 def _normalise_string(s: str, *, is_path: bool = False) -> str:
-    """Collapse runs of whitespace into one space; strip ends.
+    r"""Collapse runs of whitespace into one space; strip ends.
 
     When `is_path` is set, additionally apply `posixpath.normpath` to
     fold redundant separators and `.`/`..` segments. We use `posixpath`
     explicitly so the result is platform-independent: `os.path.normpath`
-    rewrites `/` to `\\` on Windows, which would make hashes diverge
+    rewrites `/` to `\` on Windows, which would make hashes diverge
     across machines. The empty string is preserved as-is —
     `normpath("")` returns `"."`, which would change the hash for an
     unset path field.
@@ -126,15 +127,14 @@ def ensure_same_provenance(items: Iterable[Any]) -> HypothesisHash:
         if ref:
             seen.add(ref)
     if len(seen) > 1:
-        raise ProvenanceMismatch(
-            f"evidence list spans multiple hypotheses: {sorted(seen)}"
-        )
+        msg = f"evidence list spans multiple hypotheses: {sorted(seen)}"
+        raise ProvenanceMismatch(msg)
     return next(iter(seen), "")
 
 
 __all__ = [
     "HypothesisHash",
     "ProvenanceMismatch",
-    "hash_hypothesis",
     "ensure_same_provenance",
+    "hash_hypothesis",
 ]

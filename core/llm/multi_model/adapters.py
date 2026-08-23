@@ -11,7 +11,8 @@ directly because Protocol + abc.ABC interaction is messy.
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Any, Dict, Hashable, List, Tuple
+from typing import Any
+from collections.abc import Hashable
 
 
 def _coerce_numeric(value: Any, default: float = 0.0) -> float:
@@ -65,20 +66,20 @@ class BaseVerdictAdapter(ABC):
     # ----- consumer-required -----
 
     @abstractmethod
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         """Stable, non-empty id consistent across models."""
         ...
 
     @abstractmethod
-    def normalize_verdict(self, item: Dict[str, Any]) -> str:
+    def normalize_verdict(self, item: dict[str, Any]) -> str:
         """Return one of: 'positive', 'negative', 'inconclusive', 'unknown'."""
         ...
 
     # ----- consumer-overridable -----
 
     def select_primary(
-        self, model_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        self, model_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Default policy: prefer-positive, then quality, then exploitability.
 
         Subclasses may override for domain-specific tiebreaking. Tie-breaks
@@ -90,9 +91,10 @@ class BaseVerdictAdapter(ABC):
         type elsewhere shouldn't crash the sort with a confusing error.
         """
         if not model_results:
-            raise ValueError("select_primary called with empty list")
+            msg = "select_primary called with empty list"
+            raise ValueError(msg)
 
-        def sort_key(r: Dict[str, Any]) -> Tuple:
+        def sort_key(r: dict[str, Any]) -> tuple:
             verdict = self.normalize_verdict(r)
             # prefer positive (True), then inconclusive (False), then negative
             verdict_rank = 0 if verdict == "positive" else (
@@ -106,8 +108,8 @@ class BaseVerdictAdapter(ABC):
         return dict(sorted(model_results, key=sort_key)[0])
 
     def extract_analysis_record(
-        self, result: Dict[str, Any], model_name: str,
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], model_name: str,
+    ) -> dict[str, Any]:
         """Pick the per-model record stored under multi_model_analyses.
 
         Reasoning is truncated to REASONING_TRUNCATE chars to keep the
@@ -125,8 +127,8 @@ class BaseVerdictAdapter(ABC):
     # ----- substrate-facing -----
 
     def merge(
-        self, per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
+        self, per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
         """Fold per-model results into one item per id.
 
         Each merged item is a dict-copy of the primary chosen by
@@ -136,8 +138,8 @@ class BaseVerdictAdapter(ABC):
         checking for multi-model context should use `if "multi_model_analyses"
         in item:` rather than `if item.get(...)`.
         """
-        by_id: Dict[str, List[Tuple[str, Dict[str, Any]]]] = defaultdict(list)
-        first_seen_order: List[str] = []
+        by_id: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        first_seen_order: list[str] = []
         for model_name, results in per_model_results.items():
             for r in results:
                 rid = self.item_id(r)
@@ -145,7 +147,7 @@ class BaseVerdictAdapter(ABC):
                     first_seen_order.append(rid)
                 by_id[rid].append((model_name, r))
 
-        merged: List[Dict[str, Any]] = []
+        merged: list[dict[str, Any]] = []
         for rid in first_seen_order:
             entries = by_id[rid]
             results_only = [r for _, r in entries]
@@ -165,9 +167,9 @@ class BaseVerdictAdapter(ABC):
 
     def correlate(
         self,
-        merged_items: List[Dict[str, Any]],
-        per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        merged_items: list[dict[str, Any]],
+        per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
         """Compute agreement matrix and confidence signals.
 
         Returns:
@@ -178,14 +180,14 @@ class BaseVerdictAdapter(ABC):
         """
         models = sorted(per_model_results.keys())
         # Build matrix: id → {model → verdict}
-        matrix: Dict[str, Dict[str, str]] = {}
+        matrix: dict[str, dict[str, str]] = {}
         for model_name, results in per_model_results.items():
             for r in results:
                 rid = self.item_id(r)
                 matrix.setdefault(rid, {})[model_name] = self.normalize_verdict(r)
 
-        confidence: Dict[str, str] = {}
-        unique_insights: List[Dict[str, Any]] = []
+        confidence: dict[str, str] = {}
+        unique_insights: list[dict[str, Any]] = []
 
         for item in merged_items:
             rid = self.item_id(item)
@@ -213,14 +215,12 @@ class BaseVerdictAdapter(ABC):
                 neg_models = {a["model"] for a in analyses
                               if a.get("verdict") == "negative"}
                 minority = pos_models if len(pos_models) < len(neg_models) else neg_models
-                for analysis in analyses:
-                    if analysis.get("model") in minority and analysis.get("reasoning"):
-                        unique_insights.append({
+                unique_insights.extend({
                             "item_id": rid,
                             "model": analysis["model"],
                             "verdict": analysis.get("verdict"),
                             "reasoning": analysis["reasoning"],
-                        })
+                        } for analysis in analyses if analysis.get("model") in minority and analysis.get("reasoning"))
             elif uniq == {"positive"}:
                 confidence[rid] = "high"
             elif uniq == {"negative"}:
@@ -282,12 +282,12 @@ class BaseSetAdapter(ABC):
     # ----- consumer-required -----
 
     @abstractmethod
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         """Stable, non-empty id."""
         ...
 
     @abstractmethod
-    def item_key(self, item: Dict[str, Any]) -> Hashable:
+    def item_key(self, item: dict[str, Any]) -> Hashable:
         """Hashable dedup key. Items with equal keys are the same item.
 
         Implementations should normalize before key generation (e.g.,
@@ -298,8 +298,8 @@ class BaseSetAdapter(ABC):
     # ----- consumer-overridable -----
 
     def extract_set_record(
-        self, item: Dict[str, Any], model_name: str,
-    ) -> Dict[str, Any]:
+        self, item: dict[str, Any], model_name: str,
+    ) -> dict[str, Any]:
         """Per-model record stored under multi_model_finds.
 
         Default keeps the whole item with a model annotation. Override if
@@ -310,8 +310,8 @@ class BaseSetAdapter(ABC):
     # ----- substrate-facing -----
 
     def merge(
-        self, per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
+        self, per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
         """Union by item_key. Each merged item gets:
            - found_by_models: sorted list of distinct model names
            - multi_model_finds: per-model records (only when 2+ DISTINCT
@@ -320,9 +320,9 @@ class BaseSetAdapter(ABC):
              it (alphabetically-first model name wins on ties because the
              substrate sorts per_model_results upstream)
         """
-        by_key: Dict[Hashable, Dict[str, Any]] = {}
-        first_seen_order: List[Hashable] = []
-        finds_by_key: Dict[Hashable, List[Dict[str, Any]]] = defaultdict(list)
+        by_key: dict[Hashable, dict[str, Any]] = {}
+        first_seen_order: list[Hashable] = []
+        finds_by_key: dict[Hashable, list[dict[str, Any]]] = defaultdict(list)
 
         for model_name, results in per_model_results.items():
             for item in results:
@@ -335,7 +335,7 @@ class BaseSetAdapter(ABC):
                     by_key[k]["found_by_models"].append(model_name)
                 finds_by_key[k].append(self.extract_set_record(item, model_name))
 
-        merged: List[Dict[str, Any]] = []
+        merged: list[dict[str, Any]] = []
         for k in first_seen_order:
             item = by_key[k]
             item["found_by_models"] = sorted(set(item["found_by_models"]))
@@ -350,9 +350,9 @@ class BaseSetAdapter(ABC):
 
     def correlate(
         self,
-        merged_items: List[Dict[str, Any]],
-        per_model_results: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        merged_items: list[dict[str, Any]],
+        per_model_results: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
         """Compute recall signals: how many models found each item.
 
         Returns:
@@ -363,14 +363,14 @@ class BaseSetAdapter(ABC):
         n_models = len(per_model_results)
         models = sorted(per_model_results.keys())
 
-        recall: Dict[str, str] = {}
-        presence: Dict[str, List[str]] = {}
+        recall: dict[str, str] = {}
+        presence: dict[str, list[str]] = {}
 
         for item in merged_items:
             rid = self.item_id(item)
             # Dedupe: a single model returning the same item twice
             # shouldn't show up as two separate "finders" in the matrix.
-            unique_models = sorted(set(item.get("found_by_models", [])))
+            unique_models = sorted(set(item.get("found_by_models") or []))
             presence[rid] = unique_models
             n_found = len(unique_models)
 

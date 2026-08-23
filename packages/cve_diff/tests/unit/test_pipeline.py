@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
 from cve_diff.acquisition.layers import (
     CascadingRepoAcquirer,
     ShallowCloneLayer,
@@ -179,7 +178,7 @@ class _QueuedAgent:
 
 def test_retry_runs_when_budget_surrender_has_candidates(tmp_path):
     """budget_cost surrender + verified candidates → retry runs."""
-    origin, introduced, fixed = _make_origin(tmp_path)
+    origin, _introduced, fixed = _make_origin(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
     surrender = AgentSurrender(
@@ -248,7 +247,7 @@ def test_retry_runs_on_budget_s_with_candidates(tmp_path):
     """budget_s exhaustion (wall-clock) + candidates → meta-retry kicks in.
     Same recovery shape as budget_cost_usd; the agent's first run
     finished its exploration but ran out of clock before submit_result."""
-    origin, introduced, fixed = _make_origin(tmp_path)
+    origin, _introduced, fixed = _make_origin(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
     surrender = AgentSurrender(
@@ -278,7 +277,7 @@ def test_retry_runs_on_budget_s_with_candidates(tmp_path):
 
 def test_retry_runs_on_llm_error_with_candidates(tmp_path):
     """llm_error after in-loop retries exhaust + candidates → meta-retry kicks in."""
-    origin, introduced, fixed = _make_origin(tmp_path)
+    origin, _introduced, fixed = _make_origin(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
     surrender = AgentSurrender(
@@ -438,7 +437,6 @@ def test_pipeline_clone_path_skips_api_fallback(tmp_path, monkeypatch):
 
     def fake_get_commit(slug, sha):
         api_called["n"] += 1
-        return None
 
     from cve_diff.diffing import extract_via_api as eva_mod
     monkeypatch.setattr(eva_mod.github_client, "get_commit", fake_get_commit)
@@ -497,7 +495,7 @@ def test_post_submit_retry_on_acquisition_error_recovers(tmp_path):
     """Acquirer raises AcquisitionError on the first (slug, sha); after
     the agent re-runs and picks the second candidate, acquire succeeds.
     Pipeline returns a PipelineResult and flags the retry attempt."""
-    origin, introduced, fixed = _make_origin(tmp_path)
+    origin, _introduced, fixed = _make_origin(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
 
@@ -526,7 +524,7 @@ def test_post_submit_retry_on_acquisition_error_recovers(tmp_path):
 def test_post_submit_retry_on_analysis_error_recovers(tmp_path):
     """Diff shape returns notes_only first (rejected by AnalysisError);
     second attempt returns source. Retry path produces the PASS."""
-    origin, introduced, fixed = _make_origin(tmp_path)
+    origin, _introduced, fixed = _make_origin(tmp_path)
     work = tmp_path / "work"
     work.mkdir()
 
@@ -541,7 +539,7 @@ def test_post_submit_retry_on_analysis_error_recovers(tmp_path):
             return "notes_only_diff"  # reject first
         return None  # accept retry
 
-    import unittest.mock as mock
+    from unittest import mock
     with mock.patch.object(pipeline_mod, "check_diff_shape", side_effect=flaky_check):
         agent = _SequencedAgent([
             _output(f"file://{origin}", fixed),
@@ -625,3 +623,124 @@ def test_post_submit_retry_telemetry_starts_false(tmp_path):
     )
     pipeline.run("CVE-X", work)
     assert getattr(pipeline, "_last_post_submit_retry_attempted", False) is False
+
+
+# ---------------------------------------------------------------------------
+# Typed-exception contract on post-submit-retry exhaustion
+#
+# Module docstring contract: failure modes surface as one of the five
+# typed exceptions (DiscoveryError / AcquisitionError /
+# IdenticalCommitsError / UnsupportedSource / AnalysisError) the CLI
+# maps to failure.md + exit codes. Raw ValueError / RuntimeError /
+# HttpError caught by the retry loop must not escape as themselves
+# when the retry cap is exhausted.
+
+class _RaisingAcquirer:
+    """Acquirer stub that raises a canned exception on every acquire."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.reports: list = []
+
+    def acquire(self, ref, dest) -> None:
+        raise self._exc
+
+
+def _raw_error_cases():
+    from core.http import HttpError
+    return [
+        ValueError("rev-parse failed on stale SHA"),
+        RuntimeError("transient mid-fetch git error"),
+        HttpError("502 from forge proxy", status=502),
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw_exc", _raw_error_cases(), ids=lambda e: type(e).__name__,
+)
+def test_post_submit_exhaustion_wraps_raw_errors_in_typed_exception(
+    tmp_path, raw_exc,
+):
+    """When both attempts die on a raw ValueError / RuntimeError /
+    HttpError, the pipeline surfaces AcquisitionError (typed contract)
+    with the original exception chained for diagnosis."""
+    work = tmp_path / "work"
+    work.mkdir()
+    agent = _SequencedAgent([
+        _output("https://github.com/o/r", "deadbeef" * 5),
+        _output("https://github.com/o/r", "deadbeef" * 5),
+    ])
+    pipeline = Pipeline(
+        agent=agent,
+        acquirer_factory=lambda: _RaisingAcquirer(raw_exc),
+        disk_limit_pct=99.9,
+        enable_consensus=False,
+        api_extract_fallback=False,
+    )
+    with pytest.raises(AcquisitionError) as ei:
+        pipeline.run("CVE-X", work)
+    assert ei.value.__cause__ is raw_exc
+    assert type(raw_exc).__name__ in str(ei.value)
+    # The retry still fired before the wrap (2 total attempts).
+    assert agent.calls == 2
+
+
+def test_post_submit_exhaustion_keeps_typed_exceptions_unwrapped(tmp_path):
+    """AcquisitionError raised on the final attempt propagates as-is —
+    no double wrapping."""
+    work = tmp_path / "work"
+    work.mkdir()
+    original = AcquisitionError("clone cascade failed")
+    agent = _SequencedAgent([
+        _output("https://github.com/o/r", "deadbeef" * 5),
+        _output("https://github.com/o/r", "deadbeef" * 5),
+    ])
+    pipeline = Pipeline(
+        agent=agent,
+        acquirer_factory=lambda: _RaisingAcquirer(original),
+        disk_limit_pct=99.9,
+        enable_consensus=False,
+        api_extract_fallback=False,
+    )
+    with pytest.raises(AcquisitionError) as ei:
+        pipeline.run("CVE-X", work)
+    assert ei.value is original
+
+
+def test_pipeline_threads_model_id_into_agent_config(tmp_path):
+    """Pipeline.model_id must reach every AgentConfig the pipeline
+    builds (primary run here; the focused-retry shape shares
+    _model_kw). The entry points resolve the operator's configured
+    primary and pass it through this field."""
+    captured = {}
+
+    @dataclass
+    class _CapturingAgent:
+        def run(self, config, ctx):
+            captured["model_id"] = config.model_id
+            return AgentSurrender(reason="unsupported_source", detail="stub")
+
+    pipeline = Pipeline(
+        agent=_CapturingAgent(), disk_limit_pct=99.9,
+        model_id="test-model-x",
+    )
+    with pytest.raises(UnsupportedSource):
+        pipeline.run("CVE-2099-0001", tmp_path)
+    assert captured["model_id"] == "test-model-x"
+
+
+def test_pipeline_without_model_id_keeps_agent_config_default(tmp_path):
+    from cve_diff.agent.loop import AgentConfig
+
+    captured = {}
+
+    @dataclass
+    class _CapturingAgent:
+        def run(self, config, ctx):
+            captured["model_id"] = config.model_id
+            return AgentSurrender(reason="unsupported_source", detail="stub")
+
+    pipeline = Pipeline(agent=_CapturingAgent(), disk_limit_pct=99.9)
+    with pytest.raises(UnsupportedSource):
+        pipeline.run("CVE-2099-0002", tmp_path)
+    assert captured["model_id"] == AgentConfig.__dataclass_fields__["model_id"].default

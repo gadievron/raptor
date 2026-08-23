@@ -35,7 +35,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +72,12 @@ class DockerfileSyntaxError(ValueError):
 class Instruction:
     directive: str
     args: str
-    stage_name: Optional[str]
+    stage_name: str | None
     line: int
     raw: str
 
 
-def parse_dockerfile(text: str) -> List[Instruction]:
+def parse_dockerfile(text: str) -> list[Instruction]:
     """Parse the Dockerfile source into an ordered list of
     instructions.
 
@@ -86,8 +85,8 @@ def parse_dockerfile(text: str) -> List[Instruction]:
     iterating multiple times (consumers walking ``FROM`` lines vs
     ``RUN`` lines independently).
     """
-    out: List[Instruction] = []
-    current_stage: Optional[str] = None
+    out: list[Instruction] = []
+    current_stage: str | None = None
     raw_lines = text.splitlines()
     i = 0
     while i < len(raw_lines):

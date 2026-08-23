@@ -18,11 +18,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-from cve_diff.core.models import DiffBundle
+from core.security.prompt_defense_profiles import CONSERVATIVE
+from core.security.prompt_envelope import UntrustedBlock, build_prompt
+
 from cve_diff.llm.client import ResilientLLMClient
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cve_diff.core.models import DiffBundle
 
 DEFAULT_MODEL = "claude-opus-4-7"
 DIFF_PROMPT_LIMIT = 32_000  # Bytes of diff passed to the model.
+
+_SYSTEM_PROMPT = (
+    "You are a precise, concise security engineer. Always respond "
+    "with a single valid JSON object matching the requested schema. "
+    "No prose before or after the JSON."
+)
 
 # The single LLM prompt template uses ``${var}`` substitutions only —
 # no loops, no conditionals, no inheritance — so ``string.Template``
@@ -69,20 +81,20 @@ class RootCause:
 
 @dataclass
 class RootCauseAnalyzer:
-    client: ResilientLLMClient = field(default_factory=ResilientLLMClient)
+    client: ResilientLLMClient = field(
+        default_factory=lambda: ResilientLLMClient(
+            call_class="cve-diff:root-cause",
+        ),
+    )
     model_id: str = DEFAULT_MODEL
     diff_limit: int = DIFF_PROMPT_LIMIT
 
     def analyze(self, bundle: DiffBundle) -> RootCause:
-        prompt = self._render_prompt(bundle)
+        system, prompt = self._render_prompt(bundle)
         response = self.client.complete(
             model_id=self.model_id,
             prompt=prompt,
-            system=(
-                "You are a precise, concise security engineer. Always respond "
-                "with a single valid JSON object matching the requested schema. "
-                "No prose before or after the JSON."
-            ),
+            system=system,
             max_tokens=1500,
         )
         data = _parse_json_payload(response.text)
@@ -112,19 +124,50 @@ class RootCauseAnalyzer:
                 _safe_data = escape_nonprintable(repr(data))
             except Exception:  # noqa: BLE001 — defensive; fall back to bare repr
                 _safe_data = repr(data)
-            raise AnalysisError(
-                f"response missing required field: {exc}. got={_safe_data}"
-            ) from exc
+            msg = f"response missing required field: {exc}. got={_safe_data}"
+            raise AnalysisError(msg) from exc
 
-    def _render_prompt(self, bundle: DiffBundle) -> str:
+    def _render_prompt(self, bundle: DiffBundle) -> tuple[str, str]:
+        """Render ``(system, user)`` for the root-cause call.
+
+        The diff body is attacker-authored content (the patched repo's
+        own bytes) — it is routed through ``build_prompt`` /
+        ``UntrustedBlock`` so it lands inside a nonce'd untrusted
+        envelope (tag-forgery neutralisation, autofetch strip,
+        control-char escape) rather than being Template-substituted
+        into the trusted prompt as raw text. CONSERVATIVE keeps the
+        floor defences without base64/datamarking, so the model still
+        reads the diff verbatim. The system message carries the
+        envelope priming produced by ``build_prompt``.
+        """
         tmpl = _load_template("root_cause.txt")
         diff_text = bundle.diff_text
         if len(diff_text) > self.diff_limit:
             diff_text = diff_text[: self.diff_limit] + "\n[...truncated...]"
+        pb = build_prompt(
+            system=_SYSTEM_PROMPT,
+            profile=CONSERVATIVE,
+            untrusted_blocks=(
+                UntrustedBlock(
+                    content=diff_text,
+                    kind="patch-diff",
+                    origin=(
+                        f"{bundle.repo_ref.repository_url}"
+                        f"@{bundle.commit_after}"
+                    ),
+                ),
+            ),
+        )
+        system = "\n\n".join(
+            m.content for m in pb.messages if m.role == "system"
+        )
+        diff_block = "\n\n".join(
+            m.content for m in pb.messages if m.role == "user"
+        )
         # ``substitute`` (not ``safe_substitute``) so a missing key
         # raises immediately rather than silently leaving ``$placeholder``
         # in the rendered prompt.
-        return tmpl.substitute(
+        user = tmpl.substitute(
             cve_id=bundle.cve_id,
             repository_url=bundle.repo_ref.repository_url,
             commit_after=bundle.commit_after,
@@ -132,8 +175,9 @@ class RootCauseAnalyzer:
             files_changed=bundle.files_changed,
             diff_bytes=bundle.bytes_size,
             diff_limit=self.diff_limit,
-            diff_text=diff_text,
+            diff_block=diff_block,
         )
+        return system, user
 
 
 # `\{.*?\}` lazy + DOTALL on hostile input: a response containing
@@ -163,7 +207,8 @@ def _parse_json_payload(text: str) -> dict:
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AnalysisError(f"model returned non-JSON payload: {exc}") from exc
+            msg = f"model returned non-JSON payload: {exc}"
+            raise AnalysisError(msg) from exc
 
     # No fenced block — scan forward through `{` positions and use
     # `JSONDecoder.raw_decode` to consume only the JSON prefix at
@@ -190,10 +235,11 @@ def _parse_json_payload(text: str) -> dict:
             last_exc = exc
             _start = idx + 1
             _attempts += 1
-    raise AnalysisError(
+    msg = (
         f"model returned non-JSON payload "
         f"(scanned {_attempts} brace positions): {last_exc}"
-    ) from last_exc
+    )
+    raise AnalysisError(msg) from last_exc
 
 
 _CWE_RE = re.compile(r"CWE[-_\s]?(\d+)", re.IGNORECASE)
@@ -202,5 +248,6 @@ _CWE_RE = re.compile(r"CWE[-_\s]?(\d+)", re.IGNORECASE)
 def _normalize_cwe(value: str) -> str:
     m = _CWE_RE.search(str(value))
     if not m:
-        raise AnalysisError(f"not a CWE id: {value!r}")
+        msg = f"not a CWE id: {value!r}"
+        raise AnalysisError(msg)
     return f"CWE-{m.group(1)}"

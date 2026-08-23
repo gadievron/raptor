@@ -28,11 +28,15 @@ def reset_state():
     state._cli_sandbox_audit_verbose = False
     state._cli_sandbox_disabled = False
     state._cli_sandbox_profile = None
+    state._cli_sandbox_readable_paths = None
+    state._cli_sandbox_tool_paths = None
     yield
     state._cli_sandbox_audit = False
     state._cli_sandbox_audit_verbose = False
     state._cli_sandbox_disabled = False
     state._cli_sandbox_profile = None
+    state._cli_sandbox_readable_paths = None
+    state._cli_sandbox_tool_paths = None
 
 
 class TestArgparseShape:
@@ -233,7 +237,8 @@ class TestProfileSet:
     def test_canonical_profiles(self):
         from core.sandbox.profiles import PROFILES
         assert set(PROFILES) == {
-            "full", "strict", "debug", "network-only", "none",
+            "full", "strict", "target_run", "debug", "frida",
+            "network-only", "none",
         }
 
     def test_no_audit_mode_field_in_profile_dicts(self):
@@ -268,9 +273,14 @@ class TestSandboxAuditKwarg:
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
             ):
-                # Audit engaged via per-call kwarg → proxy acquired.
-                assert proxy_inst._audit_count == 1
-            assert proxy_inst._audit_count == 0
+                # Audit engaged via per-call kwarg → THIS context's
+                # lane carries the bit; the global count is untouched.
+                lanes = (list(proxy_inst._unix_lanes.values())
+                         + list(proxy_inst._tcp_lanes.values()))
+                assert [ln.audit_log_only for ln in lanes] == [True]
+                assert proxy_inst._audit_count == 0
+            assert not proxy_inst._unix_lanes
+            assert not proxy_inst._tcp_lanes
         finally:
             proxy_mod._reset_for_tests()
 
@@ -285,3 +295,74 @@ class TestSandboxAuditKwarg:
         assert (state._cli_sandbox_audit or True) is True
         # Both unset → not engaged.
         assert (state._cli_sandbox_audit or False) is False
+
+
+class TestAllowlistExtensionFlags:
+    """--sandbox-readable-path / --sandbox-tool-path: the self-service
+    recovery levers for read denials. Validated at parse time, stored
+    in module state, merged into every sandbox() by context.py."""
+
+    def test_readable_path_propagates(self, parser, tmp_path):
+        f = tmp_path / "cfg.txt"
+        f.write_text("x")
+        args = parser.parse_args(
+            ["--sandbox-readable-path", str(f),
+             "--sandbox-readable-path", str(tmp_path)])
+        cli_mod.apply_cli_args(args, parser)
+        assert state._cli_sandbox_readable_paths == [
+            str(f.resolve()), str(tmp_path.resolve())]
+
+    def test_tool_path_propagates(self, parser, tmp_path):
+        args = parser.parse_args(["--sandbox-tool-path", str(tmp_path)])
+        cli_mod.apply_cli_args(args, parser)
+        assert state._cli_sandbox_tool_paths == [str(tmp_path.resolve())]
+
+    def test_missing_readable_path_rejected(self, parser, tmp_path):
+        args = parser.parse_args(
+            ["--sandbox-readable-path", str(tmp_path / "typo")])
+        with pytest.raises(ValueError, match="does not exist"):
+            cli_mod.apply_cli_args(args, None)
+        assert state._cli_sandbox_readable_paths is None
+
+    def test_tool_path_must_be_directory(self, parser, tmp_path):
+        f = tmp_path / "afile"
+        f.write_text("x")
+        args = parser.parse_args(["--sandbox-tool-path", str(f)])
+        with pytest.raises(ValueError, match="not a directory"):
+            cli_mod.apply_cli_args(args, None)
+        assert state._cli_sandbox_tool_paths is None
+
+    def test_incoherent_with_no_sandbox(self, parser, tmp_path):
+        args = parser.parse_args(
+            ["--no-sandbox", "--sandbox-readable-path", str(tmp_path)])
+        with pytest.raises(ValueError, match="incoherent"):
+            cli_mod.apply_cli_args(args, None)
+
+    def test_incoherent_with_profile_none(self, parser, tmp_path):
+        args = parser.parse_args(
+            ["--sandbox", "none", "--sandbox-tool-path", str(tmp_path)])
+        with pytest.raises(ValueError, match="incoherent"):
+            cli_mod.apply_cli_args(args, None)
+
+    def test_context_merges_cli_readable_paths(self, tmp_path):
+        """sandbox() must union the CLI extension into the caller's
+        readable_paths kwarg (dedup included)."""
+        from unittest import mock
+
+        from core.sandbox import context
+
+        captured = {}
+        state._cli_sandbox_readable_paths = [str(tmp_path), "/usr"]
+
+        real = context._make_preexec_fn
+
+        def spy(limits, **kw):
+            captured["readable"] = kw.get("readable_paths")
+            return real(limits, **kw)
+
+        with mock.patch.object(context, "_make_preexec_fn", side_effect=spy), \
+             context.sandbox(target="/tmp", output="/tmp",
+                             restrict_reads=True):
+            pass
+        assert captured["readable"] is not None
+        assert str(tmp_path) in captured["readable"]

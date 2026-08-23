@@ -22,10 +22,6 @@ You are helping the user scan a web application for security vulnerabilities.
    python3 raptor.py web --url <url>
    ```
 
-   For a live target, RAPTOR writes a scope receipt and defaults to `active`
-   actions only. Use `--validator nuclei` for an opt-in second opinion, or
-   `--ffuf-wordlist <path>` to feed external content discovery into the crawl.
-
 3. **Analyze results**: After the scan:
    - Summarize vulnerabilities found (XSS, SQLi, CSRF, etc.)
    - Show severity ratings
@@ -44,18 +40,65 @@ Basic web scan:
 python3 raptor.py web --url https://example.com
 ```
 
-Authenticated scanning is supported with `--auth-mode form`, `bearer`,
-`cookie`, or `basic`. MFA/SSO apps are best handled with a manually exported
-cookie or bearer token rather than pretending RAPTOR can magic its way through
-an MFA flow.
+(The crawler itself has no auth flags, but the ffuf content-discovery
+channel accepts repeatable `--ffuf-header 'Header-Name: value'` and
+`--ffuf-cookie 'session=...'` for authenticated discovery. See also
+`--ffuf-wordlist`.)
+
+## ffuf content discovery (opt-in)
+
+ffuf runs sandboxed (egress pinned to the target host) whenever
+`--ffuf-wordlist` is set. Common recipes — `python3 raptor.py web --help`
+for the full flag list:
+
+```bash
+# Deep directory discovery: recursion + extensions
+python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
+  --ffuf-recursion --ffuf-extensions '.php,.bak'
+
+# POST parameter discovery (fixed URL, FUZZ in the body)
+python3 raptor.py web --url https://target --ffuf-wordlist params.txt \
+  --ffuf-path 'api/login' --ffuf-method POST --ffuf-data 'FUZZ=1' \
+  --ffuf-header 'Content-Type: application/x-www-form-urlencoded'
+
+# Virtual-host discovery (fixed URL, FUZZ in the Host header)
+python3 raptor.py web --url https://target --ffuf-wordlist subdomains.txt \
+  --ffuf-vhost
+
+# Multi-wordlist: parameter name x value (clusterbomb)
+python3 raptor.py web --url https://target \
+  --ffuf-wordlist params.txt --ffuf-wordlist 'values.txt:W2' \
+  --ffuf-path 'search?FUZZ=W2'
+
+# API fuzzing from a raw request (e.g. generated from an OpenAPI spec)
+python3 raptor.py web --url https://target --ffuf-wordlist payloads.txt \
+  --ffuf-request request.txt
+
+# Blind-timing probe: sleep-payload wordlist + response-time matcher
+python3 raptor.py web --url https://target --ffuf-wordlist sleep-payloads.txt \
+  --ffuf-path 'search?q=FUZZ' --ffuf-match-time '>3000' --ffuf-rate 5
+# (verify every timing hit with the replay oracle before believing it)
+
+# Secret hunting in response bodies
+python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
+  --ffuf-match-regex 'AKIA[0-9A-Z]{16}'
+```
+
+Operational notes:
+
+- Recursion and clusterbomb apply a default `-rate 50` unless
+  `--ffuf-rate` is set; recursion also caps each sub-job with
+  `-maxtime-job`.
+- Every run is capped by ffuf's own `-maxtime` (`--ffuf-max-runtime`,
+  default 300s) so partial results are always flushed; `timed_out` in
+  the report marks a run the backstop had to kill.
+- `--ffuf-stop-on-403` stops early when >95% of responses are 403 —
+  the usual WAF signal.
 
 ## Important Notes
 
 - Only scan applications you own or have permission to test
 - Web scanning looks for OWASP Top 10 vulnerabilities
 - Results are saved to `out/web_scan_<timestamp>/`
-- `scope-receipt.json` and `web-execution-policy.json` show what RAPTOR was allowed to touch
-- `web-evidence-ledger.json` shows the baseline/attack/diff chain behind each finding
-- External validator no-match results are not refutations
 
 Be ethical and responsible with security testing!

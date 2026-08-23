@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """RAPTOR Recon Agent (safe, read-only)
+
+Deprecated: no slash-command dispatch routes here — the target
+description role is served by ``/describe`` (``packages/describe``),
+which covers language mix, build system, catalog match, and tool
+readiness. This agent remains for direct manual invocation
+(``python3 packages/recon/agent.py --repo <path-or-url>``).
+
 - Accepts repo path or git URL
 - Clones shallowly if URL (no credentials, no network if disabled)
 - Produces out/recon.json with simple inventory: file counts, languages by extension
@@ -8,9 +15,7 @@
 import argparse
 import json
 import os
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -24,9 +29,10 @@ from pathlib import Path
 # unset — surfacing the configuration problem at startup
 # rather than at first import-of-core.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
-from core.json import save_json
 from core.git import clone_repository
 from core.hash import sha256_tree
+from core.json import save_json
+from core.run.scratch import scratch_dir
 
 
 def get_out_dir() -> Path:
@@ -41,8 +47,8 @@ _INVENTORY_FILE_CAP = 200_000
 
 
 def inventory(path: Path):
-    counts = {}
-    langs = {}
+    counts: dict[str, int] = {}
+    langs: dict[str, int] = {}
     total_files = 0
     truncated = False
     # `os.walk(followlinks=False)` instead of `path.rglob("*")`:
@@ -56,7 +62,7 @@ def inventory(path: Path):
     # Hard cap at _INVENTORY_FILE_CAP enforces termination
     # even on loop-free pathological trees.
     import os
-    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+    for dirpath, _dirnames, filenames in os.walk(path, followlinks=False):
         for name in filenames:
             total_files += 1
             if total_files > _INVENTORY_FILE_CAP:
@@ -89,15 +95,15 @@ def inventory(path: Path):
         result['truncated_at'] = _INVENTORY_FILE_CAP
     return result
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description='RAPTOR Recon Agent - safe inventory')
     ap.add_argument('--repo', required=True, help='Path or git URL')
     ap.add_argument('--keep', action='store_true', help='Keep temp repo if cloned')
     args = ap.parse_args()
 
-    tmp = Path(tempfile.mkdtemp(prefix='raptor_recon_'))
-    repo_path = None
-    try:
+    # keep=--keep: operator takes ownership of the clone dir.
+    with scratch_dir('raptor_recon_', keep=args.keep) as tmp:
+        repo_path = None
         if args.repo.startswith('http://') or args.repo.startswith('https://') or args.repo.startswith('git@'):
             repo_path = tmp / 'repo'
             clone_repository(args.repo, repo_path, depth=1)
@@ -118,7 +124,8 @@ def main():
                 # `except OSError`, and keeps the standalone-
                 # script case working (uncaught exceptions
                 # produce the same operator-visible behaviour).
-                raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
+                msg = f"Repository path does not exist: {repo_path}"
+                raise FileNotFoundError(msg)
 
         out_dir = get_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -138,12 +145,6 @@ def main():
         save_json(out_dir / 'recon.json', {'manifest': manifest, 'inventory': inv})
 
         print(json.dumps({'status':'ok','manifest':manifest,'inventory':inv}, indent=2))
-    finally:
-        if not args.keep:
-            try:
-                shutil.rmtree(tmp)
-            except Exception:
-                pass
 
 if __name__ == '__main__':
     main()

@@ -293,6 +293,29 @@ def test_apt_separator_ends_args_no_false_pin_in_next_command() -> None:
     assert "&& echo installing curl done\n" in new   # echo's 'curl' untouched
 
 
+def test_apt_same_line_chained_command_not_rewritten() -> None:
+    """A package name reused as a COMMAND after ``&&`` on the same
+    physical line must not be pinned — only the install command's own
+    argument segment is rewritable."""
+    text = ("RUN apt-get install -y curl && "
+            "curl -fsSL https://example.invalid/setup.sh | bash\n")
+    plan = _plan("Debian", "curl", "8.20.0-2")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == ("RUN apt-get install -y curl=8.20.0-2 && "
+                   "curl -fsSL https://example.invalid/setup.sh | bash\n")
+
+
+def test_apt_same_line_trailing_comment_repeat_not_rewritten() -> None:
+    """Only the first (real) occurrence in the segment is pinned; a
+    repeat of the name in a trailing comment stays verbatim."""
+    text = "RUN apt-get install -y curl  # keep curl fresh\n"
+    plan = _plan("Debian", "curl", "8.20.0-2")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN apt-get install -y curl=8.20.0-2  # keep curl fresh\n"
+
+
 # ---------------------------------------------------------------------------
 # Cargo: ``cargo install <pkg> --version <X>`` (multi-token version)
 # ---------------------------------------------------------------------------
@@ -320,6 +343,29 @@ def test_cargo_short_vers_flag() -> None:
     new, hit, _ = _rewrite_inline_install(text, plan)
     assert hit is True
     assert "--vers 14.2.0" in new
+
+
+def test_two_cargo_installs_version_bound_to_named_package() -> None:
+    """The ``--version`` flag lookup must stay inside the named
+    package's own command segment — bumping the second crate must not
+    rewrite the first crate's ``--version`` value."""
+    text = ("RUN cargo install ripgrep --version 14.1.0 && "
+            "cargo install cargo-audit\n")
+    plan = _plan("Cargo", "cargo-audit", "0.21.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == ("RUN cargo install ripgrep --version 14.1.0 && "
+                   "cargo install cargo-audit --version 0.21.0\n")
+
+
+def test_two_cargo_installs_first_package_bumped_in_place() -> None:
+    text = ("RUN cargo install ripgrep --version 14.1.0 && "
+            "cargo install cargo-audit --version 0.20.0\n")
+    plan = _plan("Cargo", "ripgrep", "14.2.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == ("RUN cargo install ripgrep --version 14.2.0 && "
+                   "cargo install cargo-audit --version 0.20.0\n")
 
 
 # ---------------------------------------------------------------------------

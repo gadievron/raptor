@@ -35,8 +35,8 @@ def eval_bv(expr: Any, width: int) -> int:
     Always unsigned bit pattern — callers that want the signed
     interpretation should apply their own two's-complement reinterpretation.
 
-    Raises ``AssertionError`` when the probe-equality check is
-    `unknown` (timeout, undecidable). Pre-fix this used a bare
+    Raises ``RuntimeError`` when the probe-equality check does not
+    come back `sat` (unsat, timeout, undecidable). Pre-fix this used a bare
     ``assert s.check() == z3.sat`` — `python -O` strips assert
     statements entirely, so under `-O` the check became a no-op
     and the next line's `s.model()` raised an opaque
@@ -50,11 +50,12 @@ def eval_bv(expr: Any, width: int) -> int:
     s.add(probe == expr)
     result = s.check()
     if result != z3.sat:
-        raise RuntimeError(
+        msg = (
             f"eval_bv: probe equality returned {result!r}; "
             f"reason: {s.reason_unknown() if result == z3.unknown else 'unsat'}"
         )
+        raise RuntimeError(msg)
     return s.model()[probe].as_long()
 
 
-__all__ = ["eval_predicate", "eval_bv"]
+__all__ = ["eval_bv", "eval_predicate"]

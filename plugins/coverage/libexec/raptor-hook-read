@@ -87,13 +87,23 @@ if command -v jq >/dev/null 2>&1; then
     HAVE_JQ=1
 fi
 
+# Named python helper for the no-jq JSON fallbacks and the O_NOFOLLOW
+# manifest append. Pre-fix these were inline `python3 -c "..."` blobs
+# and a `python3 - <<PY` heredoc — behaviourally fine, but an
+# interpreter invocation carrying embedded source is exactly the
+# process shape endpoint-security heuristics flag, and this hook
+# fires on EVERY tracked file read. A named on-disk script is
+# attributable; arguments stay argv DATA exactly as before.
+HELPER="$(dirname "${BASH_SOURCE[0]}")/raptor-hook-json"
+[ -f "$HELPER" ] || exit 0
+
 # Read project output dir and target
 if [ "$HAVE_JQ" = "1" ]; then
     PROJECT_DIR=$(jq -r '.output_dir // empty' "$PROJECT_FILE" 2>/dev/null)
     PROJECT_TARGET=$(jq -r '.target // empty' "$PROJECT_FILE" 2>/dev/null)
 else
-    PROJECT_DIR=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('output_dir',''))" "$PROJECT_FILE" 2>/dev/null)
-    PROJECT_TARGET=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('target',''))" "$PROJECT_FILE" 2>/dev/null)
+    PROJECT_DIR=$(python3 "$HELPER" get "$PROJECT_FILE" output_dir 2>/dev/null)
+    PROJECT_TARGET=$(python3 "$HELPER" get "$PROJECT_FILE" target 2>/dev/null)
 fi
 [ -z "$PROJECT_DIR" ] && exit 0
 [ ! -d "$PROJECT_DIR" ] && exit 0
@@ -126,19 +136,19 @@ for d in "$PROJECT_DIR"/*/; do
     if [ "$HAVE_JQ" = "1" ]; then
         STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null)
     else
-        # Pass the path via argv (sys.argv[1]), NOT via shell-
-        # interpolation into the Python source string. Pre-fix
-        # `python3 -c "...open('${d}.raptor-run.json')..."` baked
-        # the bash variable into the Python literal — a path with
-        # a single quote, newline, or backslash broke the Python
-        # syntax (SyntaxError → silent failure under
+        # Pass the path via argv, NOT via shell-interpolation
+        # into Python source. Pre-fix (twice over) this was
+        # `python3 -c "...open('${d}.raptor-run.json')..."` with
+        # the bash variable baked into the Python literal — a
+        # path with a single quote, newline, or backslash broke
+        # the Python syntax (SyntaxError → silent failure under
         # `2>/dev/null`). Worse: an attacker-controlled `${d}`
         # (paths under a target repo could conceivably be named
         # to inject) could close the string and append arbitrary
         # Python code to the `-c` source, executing under the
-        # hook's uid (the parent Claude Code process).
-        # `sys.argv[1]` passes the value as DATA, not code.
-        STATUS=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status',''))" "${d}.raptor-run.json" 2>/dev/null)
+        # hook's uid (the parent Claude Code process). The named
+        # helper keeps the value as argv DATA, not code.
+        STATUS=$(python3 "$HELPER" get "${d}.raptor-run.json" status 2>/dev/null)
     fi
     [ "$STATUS" = "running" ] || continue
     # Get mtime in epoch seconds; try GNU stat first, fall back to BSD.
@@ -155,7 +165,7 @@ done
 if [ "$HAVE_JQ" = "1" ]; then
     FILE_PATH=$(jq -r '.tool_input.file_path // empty' 2>/dev/null)
 else
-    FILE_PATH=$(python3 -c "import json,sys;print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
+    FILE_PATH=$(python3 "$HELPER" get - tool_input.file_path 2>/dev/null)
 fi
 [ -z "$FILE_PATH" ] && exit 0
 
@@ -212,31 +222,24 @@ if [ -n "$PROJECT_TARGET" ]; then
     esac
 fi
 
-# Append to manifest under flock so concurrent hook fires don't
-# interleave their writes mid-line.
+# Append to manifest with an O_NOFOLLOW guard.
 #
-# The hook is registered as PostToolUse on Read, which Claude
-# Code can fire concurrently from multiple worker threads
-# (parallel agentic tool dispatch, batch_tool_use). Pre-fix bare
-# `>>` was atomic per-write up to PIPE_BUF (4096 bytes on Linux)
-# — a single short path is fine, but two appends from two threads
-# on the same file at the same instant could interleave their
-# data in the kernel pipe buffer for buffered IO chains, leaving
-# manifest entries like `/path/A/path/B\n\n` (the second's
-# leading content stuck onto the first's trailing newline).
-# Downstream coverage parsing then saw a nonexistent path
-# `/path/A/path/B` and lost both real reads.
-#
-# `flock -x` on the manifest path serialises the appends. The
-# fd-3 redirect keeps the lock fd open across the inner echo
-# while flock holds the lock; closing fd 3 on exit releases
-# the lock implicitly when the script ends. 5s timeout because
-# the hook runs async and shouldn't block tool dispatch — if
-# 5s isn't enough to acquire the lock there's something seriously
-# wrong with the hook concurrency.
+# Bash `>>` follows ANY symlink at the manifest path. The run dir
+# is writable by sandboxed target-derived children (it is the
+# sandbox's output= path), so a symlink planted at
+# <run_dir>/.reads-manifest turned this unsandboxed hook into an
+# append-to-arbitrary-user-file primitive (content = source
+# paths). The Python twin (core/coverage/track_read.py) documents
+# and defends this exact attack with O_NOFOLLOW; a race-free
+# equivalent is not expressible with shell redirection (an
+# `[ -L ]` pre-check leaves the classic TOCTOU window), so the
+# append delegates to the named python helper mirroring the twin's
+# semantics: O_NOFOLLOW + O_APPEND, path and line passed as argv
+# DATA, never interpolated into python source. A single O_APPEND
+# write of one short line is atomic on POSIX regular files, giving
+# the same no-interleave guarantee the previous flock provided for
+# concurrent hook fires. python3 is already a hard fallback
+# dependency of this script's JSON parsing above.
 manifest="${RUN_DIR}.reads-manifest"
-exec 3>>"$manifest"
-if flock -w 5 -x 3; then
-    echo "$FILE_PATH" >&3
-fi
-exec 3>&-
+command -v python3 >/dev/null 2>&1 || exit 0
+python3 "$HELPER" append "$manifest" "$FILE_PATH" 2>/dev/null || exit 0

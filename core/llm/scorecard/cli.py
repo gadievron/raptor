@@ -21,7 +21,9 @@ import datetime as _dt
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from core.json import dumps_display
 
 from .scorecard import (
     ALL_EVENT_TYPES,
@@ -67,7 +69,7 @@ def _policy_for_stats(
     return Policy.FALL_THROUGH
 
 
-def _format_policy(policy: str, n: int, sample_size_floor: int = 10) -> str:
+def _format_policy(policy: str, _n: int, sample_size_floor: int = 10) -> str:
     """Operator-friendly policy label."""
     if policy == Policy.SHORT_CIRCUIT:
         return "short-circuit"
@@ -99,7 +101,7 @@ def _drift_marker(baseline: str, current: str) -> str:
 def _wilson_ub_pct(
     stats: DecisionClassStats,
     event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
-) -> Optional[float]:
+) -> float | None:
     """Wilson 95% upper bound on the chosen event slot's
     incorrect-rate as a percentage. None when n=0 (no observations).
 
@@ -144,7 +146,7 @@ def _event_correct_count(stats: DecisionClassStats, event_type: str) -> int:
     return stats.events[event_type].correct
 
 
-def _humanise_age(iso_ts: str, *, now: Optional[_dt.datetime] = None) -> str:
+def _humanise_age(iso_ts: str, *, now: _dt.datetime | None = None) -> str:
     """Render an ISO timestamp as a human-friendly relative age
     (``2h ago``, ``3d ago``). Empty string for missing/invalid ts."""
     if not iso_ts:
@@ -177,9 +179,8 @@ def _parse_since(s: str) -> _dt.timedelta:
     """Parse strings like ``7d``, ``24h``, ``30m``, ``90d``."""
     m = re.fullmatch(r"(\d+)([smhd])", s)
     if not m:
-        raise argparse.ArgumentTypeError(
-            f"--since expects N[smhd] (e.g. 7d, 12h), got {s!r}"
-        )
+        msg = f"--since expects N[smhd] (e.g. 7d, 12h), got {s!r}"
+        raise argparse.ArgumentTypeError(msg)
     n, unit = int(m.group(1)), m.group(2)
     return {
         "s": _dt.timedelta(seconds=n),
@@ -190,13 +191,13 @@ def _parse_since(s: str) -> _dt.timedelta:
 
 
 def _filter_stats(
-    stats: List[DecisionClassStats], *,
-    consumer: Optional[str] = None,
-    since: Optional[_dt.timedelta] = None,
+    stats: list[DecisionClassStats], *,
+    consumer: str | None = None,
+    since: _dt.timedelta | None = None,
     only_untrusted: bool = False,
     only_learning: bool = False,
     sample_size_floor: int = 10,
-) -> List[DecisionClassStats]:
+) -> list[DecisionClassStats]:
     """Apply CLI filter flags. Filters compose (AND)."""
     out = list(stats)
     if consumer is not None:
@@ -231,9 +232,9 @@ def _filter_stats(
 
 
 def _sort_stats(
-    stats: List[DecisionClassStats], *, sort_key: str,
+    stats: list[DecisionClassStats], *, sort_key: str,
     event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
-) -> List[DecisionClassStats]:
+) -> list[DecisionClassStats]:
     """Apply CLI sort. Default is decision_class then model."""
     if sort_key == "savings":
         return sorted(
@@ -261,7 +262,7 @@ def _sort_stats(
 # ---------------------------------------------------------------------------
 
 
-def _stats_to_json(s: DecisionClassStats) -> Dict[str, Any]:
+def _stats_to_json(s: DecisionClassStats) -> dict[str, Any]:
     """JSON-shape dict for a single cell — used by every command's --json
     output. Keeps the shape stable so scripts / dashboards / CI gates can
     depend on it (vs scraping the markdown table)."""
@@ -289,10 +290,10 @@ def _stats_to_json(s: DecisionClassStats) -> Dict[str, Any]:
 
 
 def _render_table(
-    stats: List[DecisionClassStats],
+    stats: list[DecisionClassStats],
     event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
     *,
-    drift_map: Optional[Dict[Any, str]] = None,
+    drift_map: dict[Any, str] | None = None,
 ) -> str:
     """Markdown table of cell summary lines. Columns are chosen for
     "what is this model good at?" research questions.
@@ -341,16 +342,15 @@ def _render_table(
         for i in range(len(headers))
     ]
     lines = []
-    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)))
     lines.append("-+-".join("-" * w for w in widths))
-    for r in rows:
-        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths)))
+    lines.extend(" | ".join(str(c).ljust(w) for c, w in zip(r, widths, strict=True)) for r in rows)
     return "\n".join(lines)
 
 
 def _render_compare(
-    a_stats: List[DecisionClassStats],
-    b_stats: List[DecisionClassStats],
+    a_stats: list[DecisionClassStats],
+    b_stats: list[DecisionClassStats],
     *, model_a: str, model_b: str,
 ) -> str:
     """Side-by-side view of two models on decision_classes they
@@ -398,10 +398,9 @@ def _render_compare(
         for i in range(len(headers))
     ]
     lines = []
-    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    lines.append(" | ".join(h.ljust(w) for h, w in zip(headers, widths, strict=True)))
     lines.append("-+-".join("-" * w for w in widths))
-    for r in rows:
-        lines.append(" | ".join(str(c).ljust(w) for c, w in zip(r, widths)))
+    lines.extend(" | ".join(str(c).ljust(w) for c, w in zip(r, widths, strict=True)) for r in rows)
     return "\n".join(lines)
 
 
@@ -455,7 +454,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     # Drift map: when freshness is on, compute the unweighted baseline policy
     # per (dc, model) so the render can flag cells whose verdict changed under
     # freshness — the silent-regression / silent-recovery signal.
-    drift_map: Optional[Dict[Any, str]] = None
+    drift_map: dict[Any, str] | None = None
     if hl:
         baseline = sc.get_stats()
         drift_map = {
@@ -480,7 +479,6 @@ def cmd_list(args: argparse.Namespace) -> int:
     event_type = getattr(args, "event_type", EventType.CHEAP_SHORT_CIRCUIT)
     stats = _sort_stats(stats, sort_key=sort_key, event_type=event_type)
     if getattr(args, "json", False):
-        import json as _json
         cells = []
         for s in stats:
             d = _stats_to_json(s)
@@ -489,11 +487,11 @@ def cmd_list(args: argparse.Namespace) -> int:
                 if baseline and baseline != d["policy"]:
                     d["freshness_drift"] = {"baseline_policy": baseline}
             cells.append(d)
-        out: Dict[str, Any] = {"cells": cells}
+        out: dict[str, Any] = {"cells": cells}
         if hl:
             out["freshness_half_life_days"] = hl
             out["freshness_impact"] = sc.measure_freshness_impact(hl)
-        print(_json.dumps(out, indent=2, default=str))
+        print(dumps_display(out))
         return 0
     print(_render_table(stats, event_type=event_type, drift_map=drift_map))
     if hl:
@@ -522,10 +520,10 @@ def cmd_summary(args: argparse.Namespace) -> int:
     models = set()
     short_circuit = learning = fall_through = 0
     total_cost = 0.0
-    cost_per_model: Dict[str, float] = {}
-    calls_per_model: Dict[str, int] = {}
-    usage_cell_by_model: Dict[str, DecisionClassStats] = {}
-    sc_models_by_dc: Dict[str, str] = {}   # for cheapest-trusted picking
+    cost_per_model: dict[str, float] = {}
+    calls_per_model: dict[str, int] = {}
+    usage_cell_by_model: dict[str, DecisionClassStats] = {}
+    sc_models_by_dc: dict[str, str] = {}   # for cheapest-trusted picking
 
     for s in stats:
         models.add(s.model)
@@ -544,8 +542,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
         calls_per_model[s.model] = calls_per_model.get(s.model, 0) + s.calls
 
     # Cheapest short-circuit (lowest $/call from each cell's _usage row).
-    cheapest: Optional[tuple] = None
-    sc_aliases = {m for (_, m) in sc_models_by_dc.keys()}
+    cheapest: tuple | None = None
+    sc_aliases = {m for (_, m) in sc_models_by_dc}
     for m in sc_aliases:
         u = usage_cell_by_model.get(m)
         if u and u.calls > 0:
@@ -569,7 +567,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
     most_used = max(calls_per_model.items(), key=lambda x: x[1], default=(None, 0))
 
     if getattr(args, "json", False):
-        import json as _json
         out = {
             "cells_total": len(stats),
             "models_total": len(models),
@@ -589,7 +586,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
             ),
             "recent_cells_7d": recent,
         }
-        print(_json.dumps(out, indent=2, default=str))
+        print(dumps_display(out))
         return 0
 
     print(f"scorecard summary ({args.path}):")
@@ -655,7 +652,6 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     hl = getattr(args, "freshness_half_life_days", None)
 
     if getattr(args, "json", False):
-        import json as _json
         def _r(row):
             m, ub, cpc, _pol, n = row
             return {"model": m, "max_miss_pct": ub, "cost_per_call": cpc, "n": n}
@@ -672,7 +668,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         }
         if not sc_rows and fall_through:
             out["least_bad"] = {"model": fall_through[0][0]}
-        print(_json.dumps(out, indent=2, default=str))
+        print(dumps_display(out))
         return 0
 
     # Freshness banner — when an operator passes --freshness, surface that the
@@ -681,10 +677,10 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     suffix = f" (freshness half-life {hl:g}d)" if hl else ""
     print(f"recommendation for {target_dc}{suffix}:")
 
-    def _fmt_ub(x):
+    def _fmt_ub(x) -> str:
         return f"{x:.1f}% max_miss" if x is not None else "max_miss=n/a"
 
-    def _fmt_cpc(x):
+    def _fmt_cpc(x) -> str:
         return f"${x:.4f}/call" if x is not None else "no cost data"
 
     if sc_rows:
@@ -704,11 +700,132 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chain_closure(args: argparse.Namespace) -> int:
+    """Rank models by chain-closure success rate for a given
+    exploit_chain_closure decision_class.
+
+    Distinct from ``recommend``: that command optimises the
+    cheap-vs-expensive short-circuit trust question (CHEAP_SHORT_CIRCUIT
+    events), which isn't the right question for /exploit fires. Here we
+    look at EXPLOIT_CHAIN_CLOSURE events directly — how often did the
+    model actually weaponise the bug — and rank highest success rate
+    first, with cost per fire as a tiebreak.
+
+    Usage:
+      scorecard chain-closure                 # aggregate across CWEs
+      scorecard chain-closure --cwe cwe-121   # per-CWE ranking
+    """
+    sc = ModelScorecard(args.path)
+    stats = sc.get_stats(
+        freshness_half_life_days=getattr(
+            args, "freshness_half_life_days", None,
+        ),
+    )
+    # Target decision_class: aggregate or per-CWE.
+    target_dc = "exploit_chain_closure"
+    if getattr(args, "cwe", None):
+        target_dc = f"exploit_chain_closure:{args.cwe.lower()}"
+
+    candidates = []
+    usage_by_model = {}
+    for s in stats:
+        if s.decision_class == "_usage":
+            usage_by_model[s.model] = s
+        elif s.decision_class == target_dc:
+            candidates.append(s)
+
+    if not candidates:
+        msg = (
+            f"no chain-closure data for {target_dc!r} — nothing to rank. "
+            f"Fire /exploit with --scorecard <path> to populate."
+        )
+        if getattr(args, "json", False):
+            print(dumps_display({
+                "decision_class": target_dc,
+                "candidates": [],
+                "message": msg,
+            }))
+        else:
+            print(msg, file=sys.stderr)
+        return 0
+
+    # For each candidate: n = successes + failures on this cell;
+    # success_rate = success / n; cost_per_fire from _usage.
+    rows = []
+    for c in candidates:
+        ev = c.events[EventType.EXPLOIT_CHAIN_CLOSURE]
+        n = ev.correct + ev.incorrect
+        rate = (ev.correct / n) if n else None
+        u = usage_by_model.get(c.model)
+        cpc = (u.cost_usd / u.calls) if u and u.calls else None
+        rows.append({
+            "model": c.model,
+            "n": n,
+            "successes": ev.correct,
+            "success_rate": rate,
+            "cost_per_call": cpc,
+        })
+    # Sort: highest success_rate first; ties broken by cheaper
+    # cost_per_call, then by larger n (more evidence).
+    #
+    # F5 fix: pre-fix used ``-(r["success_rate"] or -1.0)`` which
+    # collapsed rate=0.0 to -(-1.0)=1.0 — identical to rate=None
+    # (also 1.0) — so a 0/10 all-failures model with a low cost
+    # could sort ABOVE a rate=None cell (n=0, cost=inf), and the
+    # top row would then be handed to the "recommendation" field.
+    # Post-fix: rate=None sorts to the tail explicitly via a
+    # sentinel; rate=0.0 keeps its ordinal (worst rate wins the
+    # top of "least bad" tail).
+    def _sort_key(r):
+        rate = r["success_rate"]
+        rate_key = -rate if rate is not None else float("inf")
+        cost_key = (
+            r["cost_per_call"] if r["cost_per_call"] is not None
+            else float("inf")
+        )
+        return (rate_key, cost_key, -r["n"])
+
+    rows.sort(key=_sort_key)
+
+    # A recommendation is only meaningful when the top row has real
+    # positive success rate. Recommending a rate=0.0 model would be
+    # misleading — no wins observed. Return None in that case
+    # rather than pointing operators at a proven-failing model.
+    def _recommendation() -> str | None:
+        if not rows:
+            return None
+        top = rows[0]
+        if top["n"] and (top["success_rate"] or 0.0) > 0.0:
+            return top["model"]
+        return None
+
+    if getattr(args, "json", False):
+        print(dumps_display({
+            "decision_class": target_dc,
+            "candidates": rows,
+            "recommendation": _recommendation(),
+        }))
+        return 0
+
+    print(f"chain-closure ranking for {target_dc}:")
+    print(
+        f"  {'model':<28} {'n':>4} {'succ':>4} "
+        f"{'rate':>7} {'cost/fire':>10}",
+    )
+    for r in rows:
+        rate_s = f"{r['success_rate']*100:5.1f}%" if r['success_rate'] is not None else "  n/a"
+        cpc_s = f"${r['cost_per_call']:.3f}" if r['cost_per_call'] is not None else "  n/a"
+        print(
+            f"  {r['model']:<28} {r['n']:>4} {r['successes']:>4} "
+            f"{rate_s:>7} {cpc_s:>10}",
+        )
+    return 0
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     sc = ModelScorecard(args.path)
     all_stats = sc.get_stats()
     if getattr(args, "json", False):
-        import json as _json
         by_dc_a = {s.decision_class: s for s in all_stats if s.model == args.model_a}
         by_dc_b = {s.decision_class: s for s in all_stats if s.model == args.model_b}
         out = {
@@ -722,7 +839,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 for dc in sorted(set(by_dc_a) & set(by_dc_b))
             ],
         }
-        print(_json.dumps(out, indent=2, default=str))
+        print(dumps_display(out))
         return 0
     print(_render_compare(
         all_stats, all_stats,
@@ -808,27 +925,55 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
     Operator-driven back-propagation: run after a /validate completes
     to update the scorecard with downstream-validation truth signal.
     """
-    import json as _json
+    from core.json import load_json
+
     from .tool_evidence import record_tool_evidence_outcomes
 
+    def _read_report(path: Path):
+        data = load_json(path, strict=True, max_bytes=64 * 1024 * 1024)
+        if data is None:
+            # strict load_json returns None for a missing file.
+            msg = f"{path}: file not found"
+            raise OSError(msg)
+        return data
+
     try:
-        analysis = _json.loads(Path(args.analysis).read_text(encoding="utf-8"))
+        analysis = _read_report(Path(args.analysis))
     except (OSError, ValueError) as e:
-        print(f"error: cannot read analysis report {args.analysis!r}: {e}",
+        print(f"✗ Cannot read analysis report {args.analysis!r}: {e}",
               file=sys.stderr)
         return 2
     try:
-        validation = _json.loads(Path(args.validation).read_text(encoding="utf-8"))
+        validation = _read_report(Path(args.validation))
     except (OSError, ValueError) as e:
-        print(f"error: cannot read validation report {args.validation!r}: {e}",
+        print(f"✗ Cannot read validation report {args.validation!r}: {e}",
               file=sys.stderr)
+        return 2
+
+    if not isinstance(analysis, dict):
+        print(
+            f"✗ Analysis report is not a JSON object: "
+            f"{type(analysis).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(validation, dict):
+        print(
+            f"✗ Validation report is not a JSON object: "
+            f"{type(validation).__name__}",
+            file=sys.stderr,
+        )
         return 2
 
     # Build {finding_id: validation_verdict} from the validation report.
     # Tolerate multiple possible shapes — both a flat ``findings`` list
     # and a nested ``results`` array.
     val_by_id: dict = {}
-    val_findings = validation.get("findings") or validation.get("results") or []
+    val_findings = (
+        validation.get("findings")
+        or validation.get("results")
+        or []
+    )
     for vf in val_findings:
         fid = vf.get("finding_id")
         if not fid:
@@ -886,6 +1031,29 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
         "if invoking from automation.",
         file=sys.stderr,
     )
+    return 0
+
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """Re-bless an unverified sidecar with this install's integrity
+    token (see ``core.llm.scorecard.integrity``). The verification
+    layer discards-and-quarantines content it cannot verify — this
+    is the deliberate operator path for keeping genuine pre-MAC
+    history. Inspect the JSON before adopting: adoption asserts
+    trust in every cell and pin it contains."""
+    sc = ModelScorecard(args.path)
+    try:
+        adopted = sc.adopt_unverified(source=args.file)
+    except (ValueError, OSError) as e:
+        print(f"adopt failed: {e}", file=sys.stderr)
+        return 1
+    if not adopted:
+        print(
+            "nothing to adopt — no quarantine file "
+            f"({args.path}.unverified) and no sidecar content",
+        )
+        return 1
+    print(f"adopted scorecard content into {args.path} (stamped).")
     return 0
 
 
@@ -1070,6 +1238,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_rec.set_defaults(handler=cmd_recommend)
 
+    # chain-closure — rank models by /exploit chain-closure success
+    p_cc = sub.add_parser(
+        "chain-closure",
+        help=(
+            "rank models by /exploit chain-closure success rate. "
+            "Aggregate across CWEs by default; scope to one with "
+            "--cwe. Reads EXPLOIT_CHAIN_CLOSURE events populated by "
+            "/exploit --scorecard."
+        ),
+    )
+    p_cc.add_argument(
+        "--cwe", type=str, default=None,
+        help="scope to a specific CWE, e.g. --cwe cwe-121",
+    )
+    p_cc.add_argument(
+        "--freshness", dest="freshness_half_life_days",
+        type=float, default=None, metavar="DAYS",
+        help="weight recent behaviour (half-life in days)",
+    )
+    p_cc.set_defaults(handler=cmd_chain_closure)
+
     # compare
     p_cmp = sub.add_parser(
         "compare",
@@ -1202,10 +1391,32 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_te.set_defaults(handler=cmd_tool_evidence)
 
+    # adopt
+    p_adopt = sub.add_parser(
+        "adopt",
+        help=(
+            "re-bless an unverified sidecar (pre-MAC history or a "
+            "quarantined <sidecar>.unverified file) by stamping it "
+            "with this install's integrity token. Deliberate "
+            "operator action: the machinery never re-stamps "
+            "unverified content on its own — inspect the file "
+            "before adopting."
+        ),
+    )
+    p_adopt.add_argument(
+        "--file", type=Path, default=None,
+        help=(
+            "explicit source JSON to adopt (default: the "
+            "quarantine file <sidecar>.unverified when present, "
+            "else the sidecar itself)"
+        ),
+    )
+    p_adopt.set_defaults(handler=cmd_adopt)
+
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     import sys as _sys
     argv = list(_sys.argv[1:] if argv is None else argv)
     parser = _build_parser()

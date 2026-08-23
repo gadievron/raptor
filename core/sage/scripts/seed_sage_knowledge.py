@@ -15,22 +15,29 @@ Requires:
 import argparse
 import asyncio
 import sys
+from typing import Any
 from pathlib import Path
 
 # Add repo root to path
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+# Import errors are deferred to main() so the module stays import-safe
+# (test collection must never die on a missing optional dependency).
 try:
+    import httpx
     from sage_sdk.async_client import AsyncSageClient
     from sage_sdk.auth import AgentIdentity
+    from sage_sdk.exceptions import SageError
     from sage_sdk.models import MemoryType
-except ImportError:
-    print("ERROR: sage-agent-sdk not installed.")
-    print("  pip install sage-agent-sdk")
-    sys.exit(1)
+except ImportError as _exc:
+    _SAGE_SDK_IMPORT_ERROR = _exc
+    httpx = AsyncSageClient = AgentIdentity = SageError = MemoryType = None
+else:
+    _SAGE_SDK_IMPORT_ERROR = None
 
-from core.sage.scripts._common import async_memory_exists  # noqa: E402
+from core.sage.scripts._common import async_memory_exists
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Parallelism cap — see register_agents.py for rationale.
 _PROPOSE_CONCURRENCY = 8
@@ -45,12 +52,12 @@ def extract_primitives() -> list[dict]:
     memories = []
 
     from packages.exploit_feasibility.primitives import (
-        get_primitive_definitions,
         MitigationID,
+        get_primitive_definitions,
     )
 
     primitives = get_primitive_definitions()
-    for pid, prim in primitives.items():
+    for prim in primitives.values():
         blocked = ", ".join(prim.blocked_by) if prim.blocked_by else "none"
         complicated = ", ".join(prim.complicated_by) if prim.complicated_by else "none"
         provides = ", ".join(prim.provides) if prim.provides else "none"
@@ -77,9 +84,7 @@ def extract_primitives() -> list[dict]:
         })
 
     # Also extract mitigation IDs
-    mitigations = []
-    for mid in MitigationID:
-        mitigations.append(f"{mid.name}: {mid.value}")
+    mitigations = [f"{mid.name}: {mid.value}" for mid in MitigationID]
     mitigation_content = (
         "RAPTOR mitigation identifiers for exploit feasibility analysis: "
         + "; ".join(mitigations)
@@ -122,7 +127,7 @@ def extract_llm_prompts() -> list[dict]:
 
 def extract_personas() -> list[dict]:
     """Extract expert persona definitions."""
-    memories = []
+    memories: list[dict[str, Any]] = []
     personas_dir = REPO_ROOT / "tiers" / "personas"
 
     if not personas_dir.exists():
@@ -140,9 +145,10 @@ def extract_personas() -> list[dict]:
         # SAGE — wallclock + memory penalty for what's almost
         # certainly bad data. 5 MB cap leaves headroom for unusually
         # rich personas while refusing pathological input.
-        if not _read_capped(persona_file, max_bytes=5 * 1024 * 1024):
+        capped = _read_capped(persona_file, max_bytes=5 * 1024 * 1024)
+        if not capped:
             continue
-        content = _read_capped(persona_file, max_bytes=5 * 1024 * 1024).strip()
+        content = capped.strip()
 
         # Chunk long personas into ~1500 char segments
         if len(content) > 1500:
@@ -279,7 +285,7 @@ def _read_capped(path: Path, *, max_bytes: int) -> str:
         return ""
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ""
 
 
@@ -310,8 +316,7 @@ def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
             if current.strip():
                 chunks.append(current.strip())
                 current = ""
-            for piece in _hard_split(line):
-                chunks.append(piece)
+            chunks.extend(_hard_split(line))
             continue
         if len(current) + len(line) + 1 > max_chars and current:
             chunks.append(current.strip())
@@ -322,7 +327,7 @@ def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
     if current.strip():
         chunks.append(current.strip())
 
-    return chunks if chunks else [text[:max_chars]]
+    return chunks or [text[:max_chars]]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,11 +362,11 @@ async def _seed_one(
                 tags=[label],
             )
             return (label, "stored")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — per-memory worker: any failure becomes a classified result in the summary; the batch must finish
             return (label, f"failed: {e}")
 
 
-async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
+async def seed(sage_url: str, dry_run: bool = False, force: bool = False) -> None:
     """Extract all knowledge and seed into SAGE."""
 
     print("=" * 60)
@@ -375,25 +380,25 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     print("Extracting exploitation primitives...")
     try:
         all_memories.extend(extract_primitives())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort per-source seeding: failure is printed, remaining sources still seed
         print(f"  WARNING: Failed to extract primitives: {e}")
 
     print("Extracting LLM system prompts...")
     try:
         all_memories.extend(extract_llm_prompts())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort per-source seeding: failure is printed, remaining sources still seed
         print(f"  WARNING: Failed to extract prompts: {e}")
 
     print("Extracting expert personas...")
     try:
         all_memories.extend(extract_personas())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort per-source seeding: failure is printed, remaining sources still seed
         print(f"  WARNING: Failed to extract personas: {e}")
 
     print("Extracting methodology docs...")
     try:
         all_memories.extend(extract_methodology())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort per-source seeding: failure is printed, remaining sources still seed
         print(f"  WARNING: Failed to extract methodology: {e}")
 
     print("Extracting signal heuristics...")
@@ -402,7 +407,7 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     print("Extracting Semgrep configuration...")
     try:
         all_memories.extend(extract_semgrep_config())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort per-source seeding: failure is printed, remaining sources still seed
         print(f"  WARNING: Failed to extract Semgrep config: {e}")
 
     print(f"\nTotal knowledge entries: {len(all_memories)}")
@@ -417,9 +422,26 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
             print()
         return
 
-    # Connect to SAGE
+    # Connect to SAGE. Loopback proxy exemption for standalone runs —
+    # raptor-sage-setup exports it for its children, but this script is
+    # also documented for direct invocation.
+    from core.sage.config import ensure_loopback_no_proxy
+    ensure_loopback_no_proxy()
     print(f"Connecting to SAGE at {sage_url}...")
-    identity = AgentIdentity.default()
+    # Owner-only key provisioning: the SDK persists the Ed25519 seed
+    # with a plain open(path, "wb"), inheriting the process umask —
+    # and this install-time script runs BEFORE any clamped call site,
+    # which is exactly how deployed keys ended up group-readable.
+    # Clamp the umask across creation (no write-then-chmod window),
+    # then harden for keys that already existed.
+    import os as _os
+    from core.sage.client import harden_identity_key_perms
+    _old_umask = _os.umask(0o077)
+    try:
+        identity = AgentIdentity.default()
+    finally:
+        _os.umask(_old_umask)
+    harden_identity_key_perms()
     client = AsyncSageClient(
         base_url=sage_url,
         identity=identity,
@@ -430,11 +452,12 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     try:
         # See register_agents.py for on_chain_height rationale — same
         # SAGE 6.6.0 type-mismatch fix; on_chain_height still present
-        # on AgentRegistration as of SAGE 8.4.2.
+        # on AgentRegistration as of SAGE 11.9.2.
         reg = await client.register_agent("raptor-seed")
         height = getattr(reg, "on_chain_height", None)
         print(f"Registered as raptor-seed (on-chain height {height})")
-    except Exception as e:
+    except (OSError, ValueError, KeyError, httpx.HTTPError, SageError) as e:
+        # Already-registered / transport errors are informational only.
         print(f"Registration note: {e}")
 
     # Warm the ollama embedding sidecar so the first real embed below
@@ -442,8 +465,10 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     # CometBFT consensus — /v1/embed is a local ollama roundtrip.
     try:
         await client.embed("wake")
-    except Exception:
-        pass
+    except (OSError, ValueError, KeyError, httpx.HTTPError, SageError) as e:
+        # Transport / sidecar-response failures only; a TypeError from
+        # a drifted SDK call signature must propagate.
+        print(f"Embedding warm-up skipped ({type(e).__name__}): first embed will cold-start.")
 
     sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
     # `return_exceptions=True` so a single _seed_one failure doesn't
@@ -451,18 +476,21 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     # first exception, leaving the rest of the all_memories list
     # un-seeded — operator had to re-run, again hitting the same
     # failure and again losing visibility into the rest. Now each
-    # failed task surfaces as an Exception in `results`; the
-    # downstream classifier (status == "stored" / "skipped" /
-    # starts-with "failed") needs a None-or-Exception handling
-    # branch.
+    # failed task surfaces as a BaseException in `raw_results`; the
+    # loop below converts those into ("<label>", "failed: ...")
+    # tuples so the downstream tallies (status == "stored" /
+    # "skipped" / starts-with "failed") see a uniform shape.
     raw_results = await asyncio.gather(
         *(_seed_one(client, mem, force, sem) for mem in all_memories),
         return_exceptions=True,
     )
     results = []
-    for mem, r in zip(all_memories, raw_results):
+    for mem, r in zip(all_memories, raw_results, strict=True):
         if isinstance(r, BaseException):
-            label = getattr(mem, "label", str(mem))
+            if isinstance(mem, dict):
+                label = mem.get("label", str(mem))
+            else:
+                label = getattr(mem, "label", str(mem))
             results.append((label, f"failed: {type(r).__name__}: {r}"))
         else:
             results.append(r)
@@ -485,7 +513,11 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     print("=" * 60)
 
 
-def main():
+def main() -> None:
+    if _SAGE_SDK_IMPORT_ERROR is not None:
+        print("ERROR: sage-agent-sdk not installed.")
+        print("  pip install sage-agent-sdk")
+        sys.exit(1)
     parser = argparse.ArgumentParser(
         description="Seed RAPTOR institutional knowledge into SAGE"
     )

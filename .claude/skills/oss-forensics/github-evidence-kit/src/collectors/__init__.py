@@ -7,8 +7,8 @@ from .local import LocalGitCollector
 from .wayback import WaybackCollector
 
 __all__ = [
-    "GitHubAPICollector",
     "GHArchiveCollector",
+    "GitHubAPICollector",
     "LocalGitCollector",
     "WaybackCollector",
 ]

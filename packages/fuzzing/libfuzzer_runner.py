@@ -22,7 +22,6 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -51,12 +50,12 @@ class LibFuzzerResult:
     """Final result of a libFuzzer campaign."""
 
     target: str
-    crashes: List[Path] = field(default_factory=list)
-    timeouts: List[Path] = field(default_factory=list)
-    oom_inputs: List[Path] = field(default_factory=list)
+    crashes: list[Path] = field(default_factory=list)
+    timeouts: list[Path] = field(default_factory=list)
+    oom_inputs: list[Path] = field(default_factory=list)
     stats: LibFuzzerStats = field(default_factory=LibFuzzerStats)
-    output_dir: Optional[Path] = None
-    corpus_dir: Optional[Path] = None
+    output_dir: Path | None = None
+    corpus_dir: Path | None = None
 
     def total_findings(self) -> int:
         return len(self.crashes) + len(self.timeouts) + len(self.oom_inputs)
@@ -72,9 +71,9 @@ class LibFuzzerRunner:
     def __init__(
         self,
         harness_path: Path,
-        corpus_dir: Optional[Path] = None,
-        output_dir: Optional[Path] = None,
-        dict_path: Optional[Path] = None,
+        corpus_dir: Path | None = None,
+        output_dir: Path | None = None,
+        dict_path: Path | None = None,
         max_total_time: int = 600,
         max_len: int = 4096,
         timeout_seconds: int = 25,
@@ -84,15 +83,25 @@ class LibFuzzerRunner:
     ) -> None:
         self.harness = Path(harness_path).resolve()
         if not self.harness.exists():
-            raise FileNotFoundError(f"Harness binary not found: {harness_path}")
+            msg = f"Harness binary not found: {harness_path}"
+            raise FileNotFoundError(msg)
         if not self.harness.stat().st_mode & 0o111:
-            raise PermissionError(f"Harness is not executable: {harness_path}")
+            msg = f"Harness is not executable: {harness_path}"
+            raise PermissionError(msg)
 
-        self.output_dir = (
-            Path(output_dir).resolve()
-            if output_dir
-            else Path(f"out/libfuzzer_{self.harness.stem}_{int(time.time())}").resolve()
-        )
+        # Anchor the default output dir to RaptorConfig.get_out_dir()
+        # (active project run dir, or the configured output base) —
+        # NOT a literal `out/` relative to whatever cwd the runner was
+        # constructed from. Same rule as the AFL runner: a CWD-relative
+        # default planted libfuzzer_* dirs inside the operator's
+        # current directory (or `/out` under cron/CI started from /).
+        if output_dir:
+            self.output_dir = Path(output_dir).resolve()
+        else:
+            self.output_dir = (
+                RaptorConfig.get_out_dir()
+                / f"libfuzzer_{self.harness.stem}_{int(time.time())}"
+            ).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.source_corpus_dir = Path(corpus_dir).resolve() if corpus_dir else None
@@ -100,12 +109,14 @@ class LibFuzzerRunner:
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
         if self.source_corpus_dir:
             if not self.source_corpus_dir.exists():
-                raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
+                msg = f"Corpus directory not found: {corpus_dir}"
+                raise FileNotFoundError(msg)
             self._seed_working_corpus(self.source_corpus_dir, self.corpus_dir)
 
         self.dict_path = Path(dict_path).resolve() if dict_path else None
         if self.dict_path and not self.dict_path.exists():
-            raise FileNotFoundError(f"Dictionary not found: {dict_path}")
+            msg = f"Dictionary not found: {dict_path}"
+            raise FileNotFoundError(msg)
 
         self.max_total_time = max_total_time
         self.max_len = max_len
@@ -117,9 +128,9 @@ class LibFuzzerRunner:
         self.crashes_dir = self.output_dir / "crashes"
         self.crashes_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"libFuzzer runner: harness={self.harness}")
-        logger.info(f"  corpus: {self.corpus_dir}")
-        logger.info(f"  output: {self.output_dir}")
+        logger.info("libFuzzer runner: harness=%s", self.harness)
+        logger.info("  corpus: %s", self.corpus_dir)
+        logger.info("  output: %s", self.output_dir)
 
     @staticmethod
     def _seed_working_corpus(source: Path, destination: Path) -> None:
@@ -139,9 +150,12 @@ class LibFuzzerRunner:
         event stream after the sandboxed campaign exits.
         """
         cmd = self._build_command()
-        logger.info(f"libFuzzer command: {' '.join(cmd)}")
+        logger.info("libFuzzer command: %s", ' '.join(cmd))
 
-        env = RaptorConfig.get_safe_env()
+        # The harness is untrusted target code — same identity scrub
+        # as the AFL campaign env.
+        from packages.fuzzing.env_hygiene import scrub_identity_env
+        env = scrub_identity_env(RaptorConfig.get_safe_env())
         env.setdefault(
             "ASAN_OPTIONS",
             "abort_on_error=1:symbolize=1:detect_leaks=1:detect_stack_use_after_return=1",
@@ -182,20 +196,16 @@ class LibFuzzerRunner:
                 self._parse_progress_line(line, telemetry)
 
         # Persist raw output for debugging
-        (self.output_dir / "stderr.log").write_text(stderr)
-        (self.output_dir / "stdout.log").write_text(stdout)
+        (self.output_dir / "stderr.log").write_text(stderr, encoding="utf-8")
+        (self.output_dir / "stdout.log").write_text(stdout, encoding="utf-8")
 
         result = self._parse_result(stderr, stdout, elapsed)
         logger.info(
-            f"libFuzzer done (rc={returncode}): "
-            f"{result.stats.total_executions} execs, "
-            f"{result.stats.executions_per_second}/s, "
-            f"cov={result.stats.coverage_features} features, "
-            f"crashes={len(result.crashes)}"
+            "libFuzzer done (rc=%s): %s execs, %s/s, cov=%s features, crashes=%s", returncode, result.stats.total_executions, result.stats.executions_per_second, result.stats.coverage_features, len(result.crashes)
         )
         return result
 
-    def _readable_paths(self) -> List[str]:
+    def _readable_paths(self) -> list[str]:
         paths = [str(self.harness.parent), str(self.corpus_dir), str(self.output_dir)]
         if self.source_corpus_dir:
             paths.append(str(self.source_corpus_dir))
@@ -242,14 +252,15 @@ class LibFuzzerRunner:
             parts = line.split("Test unit written to", 1)
             if len(parts) == 2:
                 path = parts[1].strip()
-                if "crash" in path.lower():
-                    telemetry.record_crash(path, signal="libfuzzer")
-                elif "timeout" in path.lower():
+                basename = path.rsplit("/", 1)[-1].lower()
+                if "timeout" in basename:
                     telemetry.record_timeout(path)
-                elif "oom" in path.lower():
+                elif "oom" in basename:
                     telemetry.record_oom(path)
+                elif "crash" in basename:
+                    telemetry.record_crash(path, signal="libfuzzer")
 
-    def _build_command(self) -> List[str]:
+    def _build_command(self) -> list[str]:
         cmd = [str(self.harness)]
         cmd.append(str(self.corpus_dir))
         cmd.extend([
@@ -271,7 +282,7 @@ class LibFuzzerRunner:
     def _parse_result(
         self,
         stderr: str,
-        stdout: str,
+        _stdout: str,
         elapsed: float,
     ) -> LibFuzzerResult:
         result = LibFuzzerResult(

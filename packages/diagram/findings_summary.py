@@ -3,14 +3,14 @@
 Input: findings.json (from /validate) or orchestrated_report.json results (from /agentic).
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from core.reporting.formatting import get_display_status, title_case_type
 from .sanitize import sanitize as _sanitize
 
 # Verdict colours — neutral palette, no red/green value judgement.
 # Exploitable vs Ruled Out is perspective-dependent (attacker vs defender).
-_VERDICT_ORDER: List[Tuple[str, str]] = [
+_VERDICT_ORDER: list[tuple[str, str]] = [
     ("Exploitable", "#dc2626"),              # red — high severity, demands attention
     ("Confirmed", "#f97316"),                # orange
     ("Confirmed (Constrained)", "#ca8a04"),  # amber
@@ -28,9 +28,9 @@ _TYPE_COLOURS = [
 ]
 
 
-def generate_verdict_pie(findings: List[Dict[str, Any]]) -> str:
+def generate_verdict_pie(findings: list[dict[str, Any]]) -> str:
     """Pie chart of finding verdicts (Exploitable/Confirmed/Ruled Out/etc)."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for f in findings:
         status = get_display_status(f)
         counts[status] = counts.get(status, 0) + 1
@@ -47,9 +47,9 @@ def generate_verdict_pie(findings: List[Dict[str, Any]]) -> str:
     return _pie_with_colours("Finding Verdicts", ordered)
 
 
-def generate_type_pie(findings: List[Dict[str, Any]]) -> str:
+def generate_type_pie(findings: list[dict[str, Any]]) -> str:
     """Pie chart of vulnerability types (Buffer Overflow/XSS/etc)."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for f in findings:
         vtype = title_case_type(f.get("vuln_type", ""))
         counts[vtype] = counts.get(vtype, 0) + 1
@@ -62,7 +62,7 @@ def generate_type_pie(findings: List[Dict[str, Any]]) -> str:
     return _pie_with_colours("Vulnerability Types", ordered)
 
 
-def _pie_with_colours(title: str, slices: List[Tuple[str, int, str]]) -> str:
+def _pie_with_colours(title: str, slices: list[tuple[str, int, str]]) -> str:
     if not slices:
         return f'pie title {title}\n    "No findings" : 1'
 

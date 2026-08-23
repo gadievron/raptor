@@ -119,15 +119,17 @@ class VerificationInfo(BaseModel):
         """Ensure GHARCHIVE sources have a specific BigQuery table, not a wildcard."""
         if self.source == EvidenceSource.GHARCHIVE:
             if not self.bigquery_table:
-                raise ValueError(
+                msg = (
                     "GHARCHIVE evidence must specify bigquery_table. "
                     "Use format 'githubarchive.year.YYYY' or 'githubarchive.month.YYYYMM'"
                 )
+                raise ValueError(msg)
             if self.bigquery_table.endswith('.*'):
-                raise ValueError(
+                msg = (
                     f"GHARCHIVE evidence must specify exact table, not wildcard: {self.bigquery_table}. "
                     "Use format 'githubarchive.year.YYYY' or 'githubarchive.month.YYYYMM'"
                 )
+                raise ValueError(msg)
         return self
 
 

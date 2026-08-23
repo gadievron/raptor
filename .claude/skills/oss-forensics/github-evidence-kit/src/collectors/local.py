@@ -14,7 +14,7 @@ from ..helpers import generate_evidence_id, parse_datetime_strict
 class LocalGitCollector:
     """Collects evidence from local git repository."""
 
-    def __init__(self, repo_path: str = ".", client: GitClient | None = None):
+    def __init__(self, repo_path: str = ".", client: GitClient | None = None) -> None:
         self.client = client or GitClient(repo_path)
 
     def collect_commit(self, sha: str) -> CommitObservation:

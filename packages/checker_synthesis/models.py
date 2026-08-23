@@ -7,9 +7,10 @@ synthesis attempts as JSON alongside its annotations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Synthesis verdict for an individual cross-codebase match. Mirrors
 # the annotation status enum where it makes sense, but adds
@@ -34,6 +35,10 @@ class SeedBug:
     cwe: str
     reasoning: str
     snippet: str = ""  # function source text; populated when available
+    # Where the seed came from: "" (legacy in-run outcome),
+    # "journal:<run>", "crash:<id>", "cvefix:<cve>", ... Rides into
+    # to_dict() so persisted synthesis results are auditable.
+    provenance: str = ""
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,12 @@ class SynthesisedRule:
     rule_id: str
     body: str
     rationale: str = ""  # LLM's explanation of what the rule looks for
+    test_positive: str = ""  # minimal vulnerable snippet the rule must match
+    test_negative: str = ""  # minimal safe snippet the rule must NOT match
+    # Minimal guard-insertion fix for the seed's line range.  Applied
+    # mechanically to a COPY of the seed file for the fix-mutant
+    # control: the rule must stop matching once the guard is in place.
+    fix_patch: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,7 +70,7 @@ class Match:
     file: str  # repo-relative
     line: int
     snippet: str = ""  # the matched code fragment, when the engine provides it
-    metavars: Dict[str, str] = field(default_factory=dict)
+    metavars: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,14 @@ class CheckerSynthesisResult:
         up before returning a bad rule).
       * ``matches`` — cross-codebase matches found by the rule.
       * ``triage`` — optional LLM verdicts per match, in match order.
+      * ``fix_mutant_control`` — mechanical fix-mutant gate verdict:
+        True (patched seed no longer matches), False (rule cannot
+        distinguish fixed from unfixed code), None (patch missing or
+        failed to apply — fail-closed).
+      * ``rule_tier`` — ``"library"`` when every mechanical control
+        (positive, dual, fix-mutant) passed and the rule may be
+        promoted into the persistent library; ``"sweep_once"`` when
+        the rule may only be used for this run's codebase sweep.
       * ``capped`` — True when the match count exceeded
         ``max_matches`` and the result was truncated.
       * ``errors`` — best-effort log of failures along the way (rule
@@ -93,15 +112,18 @@ class CheckerSynthesisResult:
     """
 
     seed: SeedBug
-    rule: Optional[SynthesisedRule] = None
-    rule_path: Optional[Path] = None
+    rule: SynthesisedRule | None = None
+    rule_path: Path | None = None
     positive_control: bool = False
-    matches: List[Match] = field(default_factory=list)
-    triage: List[MatchTriage] = field(default_factory=list)
+    dual_control: bool = False
+    fix_mutant_control: bool | None = None
+    rule_tier: str = "sweep_once"
+    matches: list[Match] = field(default_factory=list)
+    triage: list[MatchTriage] = field(default_factory=list)
     capped: bool = False
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable view for persistence next to annotations."""
         return {
             "seed": {
@@ -111,6 +133,7 @@ class CheckerSynthesisResult:
                 "line_end": self.seed.line_end,
                 "cwe": self.seed.cwe,
                 "reasoning": self.seed.reasoning,
+                "provenance": self.seed.provenance,
             },
             "rule": (
                 None if self.rule is None
@@ -123,6 +146,9 @@ class CheckerSynthesisResult:
             ),
             "rule_path": str(self.rule_path) if self.rule_path else None,
             "positive_control": self.positive_control,
+            "dual_control": self.dual_control,
+            "fix_mutant_control": self.fix_mutant_control,
+            "rule_tier": self.rule_tier,
             "matches": [
                 {
                     "file": m.file, "line": m.line,

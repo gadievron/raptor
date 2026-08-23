@@ -16,10 +16,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 from . import _hook_patterns
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,7 @@ _EXTCONF_NAMES = ("extconf.rb", "mkrf_conf.rb")
 class RubyGemsLifecycleHit:
     script_key: str             # relative path of the extconf script
     script_body: str
-    reasons: List[str]
+    reasons: list[str]
     reads_credentials: bool
     has_publish_action: bool
 
@@ -48,7 +51,7 @@ def scan_target(
     target: Path,
     manifests: Sequence[Manifest] = (),
     deps: Sequence[Dependency] = (),
-) -> List[RubyGemsLifecycleFinding]:
+) -> list[RubyGemsLifecycleFinding]:
     """Walk ``target`` for ``extconf.rb`` / ``mkrf_conf.rb`` files
     (typically under ``ext/``) and scan each.
 
@@ -65,7 +68,7 @@ def scan_target(
     deps_list = list(deps)
     host = _host_dep_for_target(deps_list, manifests, target) \
         or _placeholder_for_target(target)
-    out: List[RubyGemsLifecycleFinding] = []
+    out: list[RubyGemsLifecycleFinding] = []
     for script in _iter_extconf_scripts(target):
         out.extend(_scan_script(script, target, host))
     return out
@@ -84,7 +87,7 @@ def _iter_extconf_scripts(target: Path) -> Iterable[Path]:
 
 def _scan_script(
     script: Path, target: Path, host: Dependency,
-) -> List[RubyGemsLifecycleFinding]:
+) -> list[RubyGemsLifecycleFinding]:
     try:
         body = script.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -136,15 +139,15 @@ def _scan_script(
 
 
 def _host_dep_for_target(
-    deps: List[Dependency],
+    deps: list[Dependency],
     manifests: Sequence[Manifest],
     target: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Find the first RubyGems dep whose declared manifest is under
     ``target``.  Used to attribute extconf findings to the host
     gemspec/Gemfile."""
     for m in manifests:
-        if m.ecosystem != "RubyGems":
+        if m.ecosystem != "RubyGems" or m.is_lockfile:
             continue
         try:
             m.path.relative_to(target)

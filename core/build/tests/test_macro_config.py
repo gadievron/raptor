@@ -135,3 +135,54 @@ def test_extract_build_tus_malformed_is_none(tmp_path):
     from core.build.macro_config import extract_build_tus
     (tmp_path / "compile_commands.json").write_text("{not json")
     assert extract_build_tus(tmp_path) is None
+
+
+# --- hardened read: symlink refusal + byte budgets --------------------------
+
+
+def test_symlinked_compile_commands_refused(tmp_path):
+    real = tmp_path / "elsewhere.json"
+    real.write_text(json.dumps([{
+        "file": "a.c", "directory": ".",
+        "arguments": ["cc", "-DFOO", "-c", "a.c"],
+    }]))
+    (tmp_path / "compile_commands.json").symlink_to(real)
+    mc = extract_macro_config(tmp_path)
+    assert not mc
+    assert mc.source == "absent"
+
+
+def test_symlinked_kconfig_refused(tmp_path):
+    real = tmp_path / "elsewhere.config"
+    real.write_text("CONFIG_FOO=y\n")
+    (tmp_path / ".config").symlink_to(real)
+    mc = extract_macro_config(tmp_path)
+    assert not mc
+    assert mc.source == "absent"
+
+
+def test_oversize_compile_commands_refused(tmp_path, monkeypatch):
+    import core.build.macro_config as mod
+    _write_cc(tmp_path, [{
+        "file": "a.c", "directory": ".",
+        "arguments": ["cc", "-DFOO", "-c", "a.c"],
+    }])
+    monkeypatch.setattr(mod, "_MAX_COMPILE_COMMANDS_BYTES", 8)
+    assert not extract_macro_config(tmp_path)
+    assert mod.extract_build_tus(tmp_path) is None
+
+
+def test_oversize_kconfig_refused(tmp_path, monkeypatch):
+    import core.build.macro_config as mod
+    (tmp_path / ".config").write_text("CONFIG_FOO=y\n" * 100)
+    monkeypatch.setattr(mod, "_MAX_KCONFIG_BYTES", 8)
+    assert not extract_macro_config(tmp_path)
+
+
+def test_within_budget_still_parses(tmp_path):
+    _write_cc(tmp_path, [{
+        "file": "a.c", "directory": ".",
+        "arguments": ["cc", "-DFOO", "-c", "a.c"],
+    }])
+    mc = extract_macro_config(tmp_path)
+    assert mc.is_defined("FOO") is True

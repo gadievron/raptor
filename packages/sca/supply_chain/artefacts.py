@@ -33,20 +33,23 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
 
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
 # Canonical skip set + this walker's extras. Drift-free: a new entry
 # in discovery.EXCLUDED_DIR_NAMES propagates to every walker.
-_EXCLUDED_DIRS: Set[str] = EXCLUDED_DIR_NAMES | {
+_EXCLUDED_DIRS: set[str] = EXCLUDED_DIR_NAMES | {
     "site-packages",        # any virtualenv that snuck in
 }
 
-_TEST_DIR_NAMES: Set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
+_TEST_DIR_NAMES: set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
 
 _BINARY_MAGIC = (
     b"\x7fELF",          # Linux / BSD ELF
@@ -61,7 +64,7 @@ _BINARY_MAGIC = (
 
 _BIN_IN_TESTS_MIN_BYTES = 16 * 1024
 
-_EXTENSION_MAGIC: dict[str, "tuple[bytes, ...] | None"] = {
+_EXTENSION_MAGIC: dict[str, tuple[bytes, ...] | None] = {
     ".png":  (b"\x89PNG\r\n\x1a\n",),
     ".jpg":  (b"\xff\xd8\xff",),
     ".jpeg": (b"\xff\xd8\xff",),
@@ -87,17 +90,17 @@ _EXTENSION_MAGIC: dict[str, "tuple[bytes, ...] | None"] = {
 _OBFUSC_MIN_BYTES = 100 * 1024
 _OBFUSC_MAX_LINE_LEN = 1000
 _OBFUSC_HIGH_ENTROPY = 5.5
-_OBFUSC_EXTS: Set[str] = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py"}
+_OBFUSC_EXTS: set[str] = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py"}
 
 # Extensions where a shebang line is normal — don't flag
 # `disguised_filename` for shebangs in these. Other text-typed
 # extensions (.json, .yaml, .toml, .md, .txt, .html, .css, .lock,
 # .cfg, .ini, .xml) are pure data and a shebang is suspicious.
-_SHEBANG_OK_EXTS: Set[str] = {
+_SHEBANG_OK_EXTS: set[str] = {
     ".sh", ".py", ".js", ".mjs", ".cjs", ".rb", ".pl", ".lua",
     ".ts", ".rs", ".go",
 }
-_BUILT_OUTPUT_DIRS: Set[str] = {
+_BUILT_OUTPUT_DIRS: set[str] = {
     "dist", "build", "out", "_build", "min", "minified",
     "vendor", "node_modules", "site-packages", ".webpack", ".rollup",
     "static", "public", "assets",
@@ -121,11 +124,11 @@ def scan_target(
     manifests: Iterable[Manifest],
     *,
     max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> List[ArtefactFinding]:
+) -> list[ArtefactFinding]:
     """Walk ``target`` and return every artefact-shape finding."""
     target = target.resolve()
     manifests_list = list(manifests)
-    out: List[ArtefactFinding] = []
+    out: list[ArtefactFinding] = []
     for path in _walk(target, max_depth=max_depth):
         finding = _classify(path, target, manifests_list)
         if finding is not None:
@@ -138,8 +141,8 @@ def scan_target(
 # ---------------------------------------------------------------------------
 
 def _classify(
-    path: Path, target: Path, manifests: List[Manifest],
-) -> "ArtefactFinding | None":
+    path: Path, target: Path, manifests: list[Manifest],
+) -> ArtefactFinding | None:
     name = path.name
     if name.endswith(".pth"):
         return _make_finding(
@@ -242,7 +245,7 @@ def _classify(
 # disguised_filename
 # ---------------------------------------------------------------------------
 
-def _check_disguised_filename(path: Path, suffix: str) -> Optional[str]:
+def _check_disguised_filename(path: Path, suffix: str) -> str | None:
     """Return a short description of the disguise, or None if benign."""
     expected_magics = _EXTENSION_MAGIC.get(suffix)
     try:
@@ -275,7 +278,7 @@ def _check_disguised_filename(path: Path, suffix: str) -> Optional[str]:
     return _classify_binary_payload(head) or "an unrelated binary format"
 
 
-def _classify_binary_payload(head: bytes) -> Optional[str]:
+def _classify_binary_payload(head: bytes) -> str | None:
     if head.startswith(b"\x7fELF"):
         return "an ELF executable"
     if head.startswith(b"MZ"):
@@ -298,7 +301,7 @@ def _classify_binary_payload(head: bytes) -> Optional[str]:
 # large_obfuscated_artefact
 # ---------------------------------------------------------------------------
 
-def _check_obfuscated(path: Path, target: Path) -> Optional[str]:
+def _check_obfuscated(path: Path, target: Path) -> str | None:
     try:
         stat = path.stat()
     except OSError:
@@ -362,7 +365,7 @@ def _under_built_output(path: Path, target: Path) -> bool:
 def _make_finding(
     path: Path,
     target: Path,
-    manifests: List[Manifest],
+    manifests: list[Manifest],
     *,
     kind: str,
     detail: str,
@@ -381,9 +384,9 @@ def _make_finding(
 
 
 def _project_host_dep(
-    manifests: List[Manifest], path: Path, target: Path,
+    manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: "Manifest | None" = None
+    closest: Manifest | None = None
     for m in manifests:
         if m.is_lockfile:
             continue
@@ -459,9 +462,7 @@ def _is_binary(path: Path, sniff_bytes: int = 256) -> bool:
         return False
     if any(head.startswith(sig) for sig in _BINARY_MAGIC):
         return True
-    if b"\x00" in head:
-        return True
-    return False
+    return b"\x00" in head
 
 
 def _walk(root: Path, *, max_depth: int) -> Iterable[Path]:

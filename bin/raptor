@@ -1,25 +1,235 @@
 #!/usr/bin/env bash
 #
-# raptor — launch RAPTOR via Claude Code
+# raptor - launch RAPTOR via Claude Code
 #
 # Install: add this directory to PATH, or symlink to a directory already on PATH.
 #
 
 set -euo pipefail
 
+# ── PATH pre-scrub (shell builtins ONLY; runs before any external
+# command) ──────────────────────────────────────────────────────────
+# Empty/relative PATH entries resolve through the cwd, so with
+# `cd /untrusted/repo && raptor` even this script's own helpers
+# (dirname, readlink, stat below) would execute repo binaries. Drop
+# them here with builtins only; the full scrub below adds the
+# world-writable check. Same messages and RAPTOR_ALLOW_UNSAFE_PATH
+# keep-with-warning semantics; the full scrub honours the pre-pass
+# decision silently (no second warning).
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+    _scrubbed=""
+    _rest="${PATH:-}"
+    _last=""
+    while [ -z "$_last" ]; do
+        case "$_rest" in
+            *:*) _entry="${_rest%%:*}"; _rest="${_rest#*:}" ;;
+            *)   _entry="$_rest"; _last=1 ;;
+        esac
+        _drop_reason=""
+        _shown="$_entry"
+        if [ -z "$_entry" ]; then
+            _drop_reason="empty entry (resolves as cwd)"
+            _shown="(empty)"
+        elif [ "${_entry#/}" = "$_entry" ]; then
+            _drop_reason="relative entry"
+        fi
+        if [ -n "$_drop_reason" ]; then
+            if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
+                echo "raptor: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_shown" >&2
+                _scrubbed="$_scrubbed$_entry:"
+            else
+                echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_shown" >&2
+            fi
+        else
+            _scrubbed="$_scrubbed$_entry:"
+        fi
+    done
+    PATH="${_scrubbed%:}"
+    export PATH
+    unset _scrubbed _rest _last _entry _shown _drop_reason
+fi
+
+# Pinned-PATH resolver for the hardening machinery's OWN helpers
+# (dirname, readlink, stat, id, mkdir, rm, ...): system dirs first,
+# the pre-scrubbed PATH only as fallback for unusual layouts. The
+# hardening must never resolve its own helpers through an entry it
+# has not vetted — or one the operator kept via
+# RAPTOR_ALLOW_UNSAFE_PATH. Under the opt-out, plain resolution (the
+# opt-out means exact legacy behaviour).
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+    _rp() { PATH="/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}" command "$@"; }
+else
+    _rp() { command "$@"; }
+fi
+
 # Resolve symlinks to find the real script location
 SCRIPT="$0"
+_symhops=0
 while [ -L "$SCRIPT" ]; do
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
-    SCRIPT="$(readlink "$SCRIPT")"
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
+    DIR="$(cd "$(command -p dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(command -p readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+unset _symhops
+RAPTOR_DIR="$(cd "$(_rp dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -d "$RAPTOR_DIR/core" ]; then
     echo "raptor: cannot find RAPTOR installation at $RAPTOR_DIR" >&2
     exit 1
 fi
+
+# ── Exec-boundary hardening ─────────────────────────────────────────
+# Runs BEFORE any binary is resolved via PATH; every exec below
+# inherits the result. RAPTOR_NO_LAUNCHER_HARDENING=1 skips the block.
+if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
+    # Core dumps off (a session crash dump can contain API keys).
+    # SOFT only, on purpose: the crash-analysis/fuzz legs re-raise
+    # the limit for their target processes (rr / AFL++ need dumps).
+    ulimit -S -c 0 2>/dev/null || true
+
+    # umask floor: always mask group/other write; never loosen a
+    # stricter operator mask.
+    umask "$(printf '%04o' "$(( $(umask) | 022 ))")"
+
+    # PATH scrub — a hostile entry can shadow python3/claude. Drop,
+    # one stderr line each: empty entries (resolve as cwd), relative
+    # entries (same hazard), world-writable dirs (o+w drops even with
+    # sticky — sticky doesn't stop planting a NEW binary). Skip
+    # nonexistent dirs silently. RAPTOR_ALLOW_UNSAFE_PATH=1 keeps
+    # flagged entries, with a warning each.
+    _scrubbed=""
+    _rest="${PATH:-}"
+    _last=""
+    while [ -z "$_last" ]; do
+        case "$_rest" in
+            *:*) _entry="${_rest%%:*}"; _rest="${_rest#*:}" ;;
+            *)   _entry="$_rest"; _last=1 ;;
+        esac
+        _drop_reason=""
+        if [ -z "$_entry" ] || [ "${_entry#/}" = "$_entry" ]; then
+            # Already decided by the builtins-only pre-pass (dropped,
+            # or kept-with-warning under RAPTOR_ALLOW_UNSAFE_PATH) —
+            # honour that decision silently.
+            if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
+                _scrubbed="$_scrubbed$_entry:"
+            fi
+            continue
+        elif [ ! -d "$_entry" ]; then
+            : # nonexistent — keep silently, nothing to inspect
+        else
+            # GNU stat first, BSD stat (macOS) fallback. Unreadable
+            # perms → keep (can't verify; PATH scrub is best-effort).
+            # _rp-pinned: stat must not resolve through the very
+            # entry under inspection.
+            _perm="$(_rp stat -Lc '%a' "$_entry" 2>/dev/null \
+                     || _rp stat -Lf '%Lp' "$_entry" 2>/dev/null \
+                     || echo '')"
+            if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
+                _drop_reason="world-writable dir"
+            fi
+        fi
+        if [ -n "$_drop_reason" ]; then
+            if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
+                echo "raptor: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_entry" >&2
+                _scrubbed="$_scrubbed$_entry:"
+            else
+                echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_entry" >&2
+            fi
+        else
+            _scrubbed="$_scrubbed$_entry:"
+        fi
+    done
+    PATH="${_scrubbed%:}"
+    export PATH
+    unset _scrubbed _rest _last _entry _drop_reason _perm
+
+    # Warn (don't drop) when claude resolves under a world-writable
+    # ANCESTOR — the per-entry check above can't see parents.
+    _claude_path="$(command -v claude 2>/dev/null || true)"
+    if [ -n "$_claude_path" ]; then
+        _dir="$(_rp dirname "$_claude_path")"
+        _hops=0
+        while [ -n "$_dir" ] && [ "$_dir" != "/" ] && [ "$_hops" -lt 64 ]; do
+            _perm="$(_rp stat -Lc '%a' "$_dir" 2>/dev/null \
+                     || _rp stat -Lf '%Lp' "$_dir" 2>/dev/null \
+                     || echo '')"
+            if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
+                echo "raptor: WARNING: claude resolves under a world-writable tree: $_claude_path (writable ancestor: $_dir)" >&2
+                break
+            fi
+            # Parameter expansion, not dirname(1) — no external
+            # command per hop.
+            _dir="${_dir%/*}"
+            [ -n "$_dir" ] || _dir="/"
+            _hops=$((_hops + 1))
+        done
+        unset _dir _hops _perm
+    fi
+    unset _claude_path
+
+    # Per-session TMPDIR: <base>/raptor-<uid>/session-<pid>-<rand>
+    # (0700; <base> = RAPTOR_WORK_DIR, else operator TMPDIR, else
+    # /tmp). Keeps tool scratch private and sweepable, and gives
+    # operators ONE stable prefix for endpoint-security (EDR)
+    # exclusions (docs/troubleshooting.md; core/run/workdir.py
+    # builds the same family for non-launcher entry points). Sweep
+    # runs at LAUNCH — exec means no EXIT trap survives — removing
+    # session dirs whose pid is dead; pid reuse only delays cleanup
+    # a cycle (safe direction).
+    _tmp_base="${RAPTOR_WORK_DIR:-${TMPDIR:-/tmp}}"
+    _tmp_base="${_tmp_base%/}/raptor-$(_rp id -u)"
+    _rp mkdir -p -m 700 "$_tmp_base" 2>/dev/null || true
+    # Squat check: base must be a non-symlink dir owned by us
+    # (mkdir -p "succeeds" on an existing attacker-created dir).
+    if [ ! -L "$_tmp_base" ] && [ -d "$_tmp_base" ] && [ -O "$_tmp_base" ]; then
+        _rp chmod 700 "$_tmp_base" 2>/dev/null || true
+        for _d in "$_tmp_base"/session-*; do
+            [ -e "$_d" ] || continue      # unmatched glob
+            [ -L "$_d" ] && continue      # never follow symlinks
+            [ -d "$_d" ] || continue
+            _name="${_d##*/}"
+            if [[ "$_name" =~ ^session-([0-9]+)-[0-9]+$ ]]; then
+                _spid="${BASH_REMATCH[1]}"
+                if ! kill -0 "$_spid" 2>/dev/null; then
+                    # Depth bound: refuse suspiciously deep trees
+                    # (planted junk). find is -P: no symlink follow.
+                    if [ -n "$(_rp find "$_d" -mindepth 24 -print -quit 2>/dev/null)" ]; then
+                        echo "raptor: skipping suspiciously deep stale session dir: $_d" >&2
+                        continue
+                    fi
+                    _rp rm -rf -- "$_d"
+                fi
+            fi
+        done
+        unset _d _name _spid
+        # Advisory only — live sessions' scratch counts too.
+        _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)"
+        if [ -n "$_kb" ] && [ "$_kb" -gt 5242880 ] 2>/dev/null; then
+            echo "raptor: note: $_tmp_base holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
+        fi
+        unset _kb
+        # $$ survives the exec, so the name tracks the session.
+        _try=0
+        while [ "$_try" -lt 5 ]; do
+            _sess="$_tmp_base/session-$$-$RANDOM"
+            if _rp mkdir -m 700 "$_sess" 2>/dev/null; then
+                export TMPDIR="$_sess"
+                break
+            fi
+            _try=$((_try + 1))
+        done
+        unset _try _sess
+    else
+        echo "raptor: warning: $_tmp_base is not a directory owned by this user — session TMPDIR disabled for this launch" >&2
+    fi
+    unset _tmp_base
+fi
+# ── end exec-boundary hardening ─────────────────────────────────────
 
 # Fast path: print the framework version and exit without launching a session.
 case "${1:-}" in
@@ -29,46 +239,34 @@ case "${1:-}" in
 esac
 
 # Strip env vars that would inject code into the launcher's own exec
-# chain — the Python parent (libseccomp/ctypes loads) and the Claude
-# Code Node process that replaces this bash shell via exec. A hostile
-# parent env (malicious .envrc + direnv, compromised shell rc) could
-# otherwise inject a fake shared library or Python module BEFORE any
-# RAPTOR code runs, silently defeating the sandbox at the parent level.
-#
-# Narrowed on purpose: this list is only names that execute attacker
-# code INSIDE the launcher→Python→Claude Code chain. Variables that
-# only affect *subprocesses* (git config, JAVA_TOOL_OPTIONS, shell rc
-# vars, editor/pager, Kerberos, etc.) are handled by
-# core.config.get_safe_env() when we spawn children — stripping them
-# here would needlessly break the user's legitimate environment.
-# Sourced from core/security/_dangerous_env_strip.sh — single
-# source of truth shared with bin/cve-diff. Lives next to its
-# Python siblings (core/config.RaptorConfig.DANGEROUS_ENV_VARS
-# + core/security/env_sanitisation.strip_env_vars) so a single
-# `git grep` over core/security/ surfaces the canonical list
-# regardless of which language layer is enforcing.
-# RAPTOR_DIR isn't set yet (this runs before the python entry
-# point), so we resolve the strip-list path relative to this script.
-. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../core/security/_dangerous_env_strip.sh"
-# Added by batch 581:
-#   * LD_DEBUG / LD_PROFILE / LD_PROFILE_OUTPUT — glibc loader
-#     diagnostic env vars that write profile data to operator-
-#     readable paths, can be abused to enumerate libraries
-#     loaded by the launcher and to write to predictable
-#     filesystem locations during dynamic linking.
-#   * MALLOC_CONF / JE_MALLOC_CONF — jemalloc config; lets an
-#     attacker enable heap profiling, redirect profile writes
-#     to attacker-readable paths (e.g.
-#     `prof:true,prof_prefix:/tmp/x`), or trigger predictable
-#     allocator behaviour useful for exploit construction.
-#   * MALLOC_CHECK_ / MALLOC_PERTURB_ — glibc allocator
-#     diagnostics: high MALLOC_CHECK_ values print verbose
-#     allocator state to stderr (operator log capture leaks
-#     internal state); MALLOC_PERTURB_ stabilises
-#     uninitialised-memory disclosure ABI for an exploit.
-# All consistent with core/config.DANGEROUS_ENV_VARS (batch
-# 291). Stripping here protects the launcher → Python →
-# Claude Code chain at process boot.
+# chain (the Python parent, then the Claude Code process this shell
+# exec's into) - e.g. a hostile direnv/.envrc planting a fake shared
+# library or Python module before any RAPTOR code runs. Deliberately
+# narrow: vars that only affect subprocesses are handled by
+# core.config.get_safe_env() at spawn time. The list is sourced from
+# core/security/_dangerous_env_strip.sh (shared with bin/cve-diff).
+# RAPTOR_DIR isn't exported yet, so resolve the fragment relative to
+# this script; POSIX symlink walk (macOS readlink lacks -f).
+_raptor_self="${BASH_SOURCE[0]}"
+_symhops=0
+while [ -L "$_raptor_self" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
+    _raptor_link_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
+    _raptor_self="$(readlink "$_raptor_self")"
+    [[ "$_raptor_self" != /* ]] && _raptor_self="$_raptor_link_dir/$_raptor_self"
+done
+unset _symhops
+_raptor_self_dir="$(cd -P "$(dirname "$_raptor_self")" && pwd)"
+. "$_raptor_self_dir/../core/security/_dangerous_env_strip.sh"
+unset _raptor_self _raptor_link_dir _raptor_self_dir
+# The fragment also strips glibc/jemalloc loader and allocator
+# diagnostics (LD_DEBUG / LD_PROFILE*, MALLOC_* / JE_MALLOC_CONF):
+# they write attacker-steerable files or leak/stabilise memory state
+# useful to an exploit. Consistent with core/config.DANGEROUS_ENV_VARS.
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor: python3 not found" >&2
@@ -126,18 +324,37 @@ if [[ "${1:-}" == "project" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
 fi
 
-# Route doctor directly (no Claude needed) — the doctor is a status
-# report on local setup, and `raptor doctor` is precisely the
-# command an operator runs when claude itself is missing.
-# Export RAPTOR_DIR + _RAPTOR_TRUSTED here because the main path's
-# `export RAPTOR_DIR` (below) hasn't run yet; doctor needs them
-# in the python subprocess env.
+# Route doctor directly - it's exactly what an operator runs when
+# claude is missing. Export RAPTOR_DIR + _RAPTOR_TRUSTED here; the
+# main path's exports below haven't run yet.
 if [[ "${1:-}" == "doctor" ]]; then
     shift
     cd "$RAPTOR_DIR" || exit 1
     export RAPTOR_DIR
     export _RAPTOR_TRUSTED=1
     exec python3 -m core.startup.doctor "$@"
+fi
+
+# Route frida directly (no claude session needed). Do NOT cd into
+# $RAPTOR_DIR: a relative --target must resolve against the
+# operator's cwd; the wrapper exports PYTHONPATH for -m dispatch.
+if [[ "${1:-}" == "frida" ]]; then
+    shift
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec "$RAPTOR_DIR/libexec/raptor-frida" "$@"
+fi
+
+# Route sage-setup directly (no Claude needed) - the SAGE sidecar
+# installer manages docker + MCP registration, and its own output
+# (plus the MCP guard's warnings) tells operators to re-run
+# `raptor sage-setup install [--reauthorize]`; that command must
+# resolve without launching a Claude session.
+if [[ "${1:-}" == "sage-setup" ]]; then
+    shift
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec "$RAPTOR_DIR/libexec/raptor-sage-setup" "$@"
 fi
 
 # Claude required for everything else
@@ -147,27 +364,23 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 1
 fi
 
-# Export static env vars. RAPTOR_CALLER_DIR holds the
-# operator's PWD at launch time (used to resolve targets +
-# project paths in subcommands). Reject control bytes
-# (newlines, tabs, NULs, escape) so a pathologically-crafted
-# pwd value can't smuggle CLI-arg / line-injection payloads
-# downstream — a directory path SHOULD never contain
-# whitespace control chars on a healthy filesystem.
+# Export static env vars. RAPTOR_CALLER_DIR = operator's PWD at
+# launch (resolves targets/projects downstream). Reject control
+# bytes so a crafted pwd can't smuggle line-injection payloads.
 _caller_dir="$(pwd)"
 case "$_caller_dir" in
     *[$'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x1b']*)
-        echo "raptor: RAPTOR_CALLER_DIR contains control bytes — refusing" >&2
-        echo "  (\$PWD has chars in the C0 control range; this is suspicious — bailing safely)" >&2
+        echo "raptor: RAPTOR_CALLER_DIR contains control bytes - refusing" >&2
+        echo "  (\$PWD has chars in the C0 control range; this is suspicious - bailing safely)" >&2
         exit 1
         ;;
 esac
 export RAPTOR_CALLER_DIR="$_caller_dir"
 unset _caller_dir
 export RAPTOR_DIR
-# Trust marker — libexec/ scripts refuse to run without one of
-# CLAUDECODE, _RAPTOR_TRUSTED, or RAPTOR_DIR. We've stripped env above
-# and resolved RAPTOR_DIR; mark this invocation as trusted.
+# Trust marker - libexec scripts refuse to run without one of
+# CLAUDECODE or _RAPTOR_TRUSTED. We've just stripped the env, so
+# direct invocation through this launcher is the safe path.
 export _RAPTOR_TRUSTED=1
 
 # Parse RAPTOR-specific args, collect Claude args
@@ -184,13 +397,8 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --project=*)
-            # `--project=foo` form. Pre-fix only `--project foo`
-            # (separate args) was accepted — the `--project=foo`
-            # convention is standard for GNU long-options and
-            # operators familiar with it (gcc, find, grep) hit
-            # "unknown option" on the launcher when they used it.
-            # Strip the `--project=` prefix and route through the
-            # same STARTUP_ARGS path.
+            # GNU-style `--project=foo`; route through the same
+            # STARTUP_ARGS path as `--project foo`.
             _proj_value="${1#--project=}"
             if [ -z "$_proj_value" ]; then
                 echo "raptor: --project= requires a value" >&2
@@ -219,15 +427,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help|help)
-            # The early help check at the top of this script only
-            # tests `${1:-}` — so `raptor <target> -h` (help requested
-            # AFTER a positional target) never reached the early
-            # branch, fell through `-*)` here, and got forwarded to
-            # Claude Code as a flag, which then complained about
-            # "unrecognised --help" and exited. Operators expected
-            # `raptor <anything> -h` to work like every other CLI.
-            # Fall back to re-execing self with just `-h` so the
-            # early branch fires and prints our help text.
+            # `raptor <target> -h` misses the early help branch
+            # (it only tests $1) and would forward -h to Claude
+            # Code. Re-exec self with just -h so our help prints.
             exec "$0" -h
             ;;
         -*)
@@ -242,24 +444,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build initial prompt: /raptor [target]. Escape TARGET
-# before interpolating into the prompt string. Pre-fix `"/raptor
-# $TARGET"` interpolated `$TARGET` raw — for legitimate paths
-# this was harmless, but TARGET is operator-supplied:
-#   * Path with embedded newlines (`/foo$'\n'/extra`) split
-#     the prompt into multiple lines downstream — the second
-#     line was treated by Claude Code as a new instruction.
-#   * Path with embedded backticks / `$()` was preserved
-#     verbatim into the prompt (Claude Code receives a
-#     literal string, doesn't shell-eval), but if the
-#     operator copied the rendered prompt elsewhere
-#     (Slack message, ticket) and pasted into a shell, the
-#     command substitution would fire there.
-# Strip control bytes from TARGET before interpolation;
-# legitimate path components don't contain them.
+# Build initial prompt: /raptor [target]. Strip control bytes from
+# the operator-supplied TARGET first - an embedded newline would
+# split the prompt and read as a second downstream instruction;
+# legitimate paths don't contain them.
 _target_clean=$(printf '%s' "$TARGET" | tr -d '\000-\010\013-\037')
 if [ "$_target_clean" != "$TARGET" ]; then
-    echo "raptor: TARGET contained control bytes — stripped before use" >&2
+    echo "raptor: TARGET contained control bytes - stripped before use" >&2
 fi
 if [[ -n "$_target_clean" && -n "$INITIAL_PROMPT" ]]; then
     INITIAL_PROMPT="/raptor $_target_clean"
@@ -274,31 +465,15 @@ elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
 
-# Clear the screen BEFORE pre-flight checks so any warning /
-# error output from `raptor-cc-trust-check` or
-# `raptor-startup-check` stays visible to the operator. Pre-fix
-# the `clear` call lived AFTER the pre-flight checks (just before
-# `exec claude`), wiping every line they emitted to stderr —
-# trust-check warnings about untrusted target repos, startup-check
-# diagnostics about API key configuration, project-mismatch
-# prompts. The operator launched what looked like a clean Claude
-# session unaware that the launcher had flagged a problem.
-# Moving `clear` here keeps the visual reset (legitimate UX —
-# operators expect a fresh screen on every `raptor` launch)
-# without erasing actionable diagnostics from the gates that
-# decide WHETHER to launch.
+# Clear the screen BEFORE the pre-flight checks so their stderr
+# (trust warnings, project-mismatch prompts) stays visible instead
+# of being wiped just before exec.
 clear
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
-    # `--` terminator before the target separates flags from the
-    # positional path. Pre-fix a target path that started with
-    # `-` (rare but legitimate: someone scanning a sibling
-    # checkout named `--branch-foo/`) was interpreted by the
-    # cc-trust-check arg parser as a flag, triggering "unknown
-    # option" + exit 2 — which the launcher then treated as
-    # "refused to launch", failing the run on a path the
-    # operator never intended as a flag.
+    # `--` keeps a target path that starts with `-` from being
+    # parsed as a cc-trust-check flag.
     if [ -n "$TRUST_REPO_ARG" ]; then
         "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" -- "$CHECK_TARGET"
     else
@@ -318,32 +493,74 @@ cd "$RAPTOR_DIR" || { echo "raptor: cannot cd to $RAPTOR_DIR" >&2; exit 1; }
 # Pre-flight: auto-detect project, -p flag, mismatch prompt
 "$RAPTOR_DIR/libexec/raptor-startup-check" "${STARTUP_ARGS[@]}"
 
+# Session-awareness registry (advisory, never lock-based):
+# ~/.local/share/raptor/sessions.d/<pid> binds this session ($$
+# survives the exec) to its active project; dead-pid entries prune at
+# read time. Runs AFTER startup-check so -p/auto-detect is what
+# registers. Format shared with core/project/sessions.py.
+# 0700: which project each session works on is not for other local
+# users; chmod tightens a dir an older writer created looser.
+_sessions_dir="$HOME/.local/share/raptor/sessions.d"
+if _rp mkdir -p -m 700 "$_sessions_dir" 2>/dev/null; then
+    _rp chmod 700 "$_sessions_dir" 2>/dev/null || true
+    _active_proj=""
+    _active_link="$(readlink "$HOME/.raptor/projects/.active" 2>/dev/null || true)"
+    case "$_active_link" in
+        */*|*'\'*) ;;  # path-shaped target — not a project name; skip
+        *.json) _active_proj="${_active_link%.json}" ;;
+    esac
+    for _f in "$_sessions_dir"/*; do
+        [ -f "$_f" ] || continue
+        _fpid="${_f##*/}"
+        case "$_fpid" in
+            ''|*[!0-9]*) continue ;;  # not a pid-named entry — not ours
+        esac
+        if ! kill -0 "$_fpid" 2>/dev/null; then
+            rm -f -- "$_f"
+            continue
+        fi
+        if [ "$_fpid" != "$$" ] && [ -n "$_active_proj" ]; then
+            _fproj="$(_rp sed -n 's/^project=//p' "$_f" 2>/dev/null | _rp head -n 1)"
+            if [ "$_fproj" = "$_active_proj" ]; then
+                _fsince="$(_rp sed -n 's/^since=//p' "$_f" 2>/dev/null | _rp head -n 1)"
+                # Entry fields are file content: strip non-printables
+                # and bound length (builtins) before echoing.
+                _fsince="${_fsince//[![:print:]]/}"
+                _fsince="${_fsince:0:64}"
+                echo "raptor: project $_active_proj is also active in session pid $_fpid (since ${_fsince:-unknown})" >&2
+            fi
+        fi
+    done
+    if [ -n "$_active_proj" ]; then
+        printf 'project=%s\nsince=%s\n' "$_active_proj" \
+            "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" \
+            > "$_sessions_dir/$$" 2>/dev/null || true
+    fi
+    unset _f _fpid _fproj _fsince _active_proj _active_link
+fi
+unset _sessions_dir
+
 # Load coverage tracking plugin if available
 PLUGIN_ARGS=()
 if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
     PLUGIN_ARGS+=(--plugin-dir "$RAPTOR_DIR/plugins/coverage")
 fi
 
-# Clear was previously called here, but moved earlier (before
-# pre-flight checks) so trust-check / startup-check stderr stays
-# visible. See the `clear` comment above.
-# `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
-# strips a small set of shell-eval env vars at the exec boundary,
-# even if our earlier source of `_dangerous_env_strip.sh` missed
-# them somehow (e.g. a bash plugin or hook re-set BASH_ENV between
-# the strip and here, or an operator's late-loaded config). The
-# strip-list source above already covers the common case; this is
-# pure defence-in-depth for the moment of `exec`.
-#
-# Why these four specifically and not the whole strip-list? Most
-# of the other vars in the strip-list affect Python / glibc / Node
-# loaders, not the bash shell that wraps a launched binary. The
-# four here are the ones that bash itself reads from the env at
-# startup (BASH_ENV, ENV, SHELLOPTS, BASHOPTS) — if claude
-# happens to be a bash wrapper script (some package-manager installs
-# of claude are wrapper scripts that exec node with the right
-# args), these are the vars that influence its startup before
-# `--noprofile --norc` would help.
+# `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` at the exec
+# boundary: defence-in-depth in case something re-set them after the
+# `_dangerous_env_strip.sh` source above. Just these four because
+# they are what bash itself reads at startup - relevant when the
+# installed `claude` is a bash wrapper script.
+# Subagent model bridge: with CLAUDE_CODE_SUBAGENT_MODEL unset,
+# Claude Code subagents fall back to a default model the backend may
+# not serve (observed: Bedrock 403 on a role scoped to the session
+# model). If the operator pinned ANTHROPIC_MODEL and made no explicit
+# subagent choice, subagents follow the session; an explicit choice
+# is never overridden.
+if [[ -n "${ANTHROPIC_MODEL:-}" && -z "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]]; then
+    export CLAUDE_CODE_SUBAGENT_MODEL="$ANTHROPIC_MODEL"
+fi
+
 if [[ -n "$INITIAL_PROMPT" ]]; then
     exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
         claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"

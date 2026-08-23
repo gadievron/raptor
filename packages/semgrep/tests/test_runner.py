@@ -9,15 +9,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.semgrep.models import SemgrepResult
 from packages.semgrep.runner import (
+    _config_to_name,
     build_cmd,
     is_available,
     run_rule,
     run_rules,
     version,
-    _config_to_name,
 )
-
 
 # Helpers ----------------------------------------------------------------------
 
@@ -92,6 +92,13 @@ class TestBuildCmd:
         assert "--sarif" in cmd
         assert "--quiet" in cmd
         assert cmd[-1] == "/src"
+
+    def test_includes_disable_version_check(self):
+        """The post-scan version-check HTTP GET must never fire: its
+        cache lives in the throwaway fake HOME, so it would re-pay a
+        network round-trip (or a blocked connect) per pack."""
+        cmd = build_cmd(Path("/target"), "rules/")
+        assert "--disable-version-check" in cmd
 
     def test_includes_metrics_off(self):
         cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
@@ -170,7 +177,7 @@ class TestRunRuleMocked:
                     Path(cmd[idx + 1]).write_text(json_output)
                 return MagicMock(stdout=sarif, stderr="", returncode=1)
             mock_run.side_effect = side_effect
-            result = run_rule(target, "p/security-audit")
+            result = run_rule(target, "p/security-audit", unsandboxed=True)
 
         assert result.returncode == 1
         assert result.ok  # 1 is fine for semgrep --error
@@ -185,7 +192,7 @@ class TestRunRuleMocked:
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("semgrep", 5)):
-            result = run_rule(target, "p/x", timeout=5)
+            result = run_rule(target, "p/x", timeout=5, unsandboxed=True)
         assert result.returncode == -1
         assert any("Timeout" in e for e in result.errors)
 
@@ -194,9 +201,40 @@ class TestRunRuleMocked:
         target.mkdir()
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run", side_effect=OSError("permission denied")):
-            result = run_rule(target, "p/x")
+            result = run_rule(target, "p/x", unsandboxed=True)
         assert result.returncode == -1
         assert "permission denied" in result.errors[0]
+
+    def test_completed_process_bad_exit_populates_errors(self, tmp_path):
+        # Regression: a completed subprocess exiting outside {0, 1}
+        # (invalid rule YAML, internal crash on a hostile source file)
+        # used to return errors=[] — downstream sweeps then read the
+        # empty findings as a refutation the tool never made.
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="fatal: invalid rule schema", returncode=2,
+            )
+            result = run_rule(target, "p/x", unsandboxed=True)
+        assert result.returncode == 2
+        assert result.errors
+        assert "exited with code 2" in result.errors[0]
+        assert "invalid rule schema" in result.errors[0]
+        assert not result.ok
+
+    def test_signal_kill_populates_errors(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="", returncode=-11,
+            )
+            result = run_rule(target, "p/x", unsandboxed=True)
+        assert result.errors and "exited with code -11" in result.errors[0]
+        assert not result.ok
 
     def test_run_with_empty_sarif(self, tmp_path):
         target = tmp_path / "src"
@@ -204,7 +242,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "p/x")
+            result = run_rule(target, "p/x", unsandboxed=True)
         assert result.findings == []
         assert result.returncode == 0
         # No json file written → empty parse
@@ -221,7 +259,8 @@ class TestRunRuleMocked:
                 Path(cmd[idx + 1]).write_text(_make_json_output(scanned=["a.py"]))
                 return MagicMock(stdout=_make_sarif(), stderr="", returncode=0)
             mock_run.side_effect = side_effect
-            result = run_rule(target, "p/x", json_output_path=json_path)
+            result = run_rule(target, "p/x", json_output_path=json_path,
+                              unsandboxed=True)
         # Provided path should NOT be deleted by the runner
         assert json_path.exists()
         assert result.files_examined == ["a.py"]
@@ -233,7 +272,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            run_rule(target, "p/x", env=custom_env)
+            run_rule(target, "p/x", env=custom_env, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
         assert kwargs["env"] == custom_env
 
@@ -243,7 +282,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            run_rule(target, "p/x", timeout=42)
+            run_rule(target, "p/x", timeout=42, unsandboxed=True)
         kwargs = mock_run.call_args.kwargs
         assert kwargs["timeout"] == 42
 
@@ -253,7 +292,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "p/security-audit")
+            result = run_rule(target, "p/security-audit", unsandboxed=True)
         assert result.name == "p/security-audit"
 
     def test_run_friendly_name_from_dir(self, tmp_path):
@@ -262,7 +301,7 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "/abs/path/to/crypto")
+            result = run_rule(target, "/abs/path/to/crypto", unsandboxed=True)
         assert result.name == "crypto"
 
     def test_run_explicit_name(self, tmp_path):
@@ -271,8 +310,87 @@ class TestRunRuleMocked:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            result = run_rule(target, "/abs/path", name="my_run")
+            result = run_rule(target, "/abs/path", name="my_run", unsandboxed=True)
         assert result.name == "my_run"
+
+
+# sandbox-by-default policy -----------------------------------------------------
+
+class TestSandboxDefaultPolicy:
+    """No injected runner + no opt-out ⇒ sandboxed or refused."""
+
+    def test_default_engages_sandbox_runner(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        calls = {}
+
+        def fake_sandbox_runner(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner",
+                   return_value=fake_sandbox_runner) as mk, \
+             patch("subprocess.run") as mock_run:
+            result = run_rule(target, "p/x")
+        mk.assert_called_once()
+        assert "cmd" in calls, "default sandbox runner was not used"
+        mock_run.assert_not_called()
+        assert result.returncode == 0
+
+    def test_refuses_when_sandbox_unavailable(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner",
+                   return_value=None), \
+             patch("subprocess.run") as mock_run:
+            result = run_rule(target, "p/x")
+        mock_run.assert_not_called()
+        assert result.returncode == -1
+        assert "refusing" in result.errors[0]
+
+    def test_explicit_optout_uses_subprocess_run(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="", returncode=0)
+            run_rule(target, "p/x", unsandboxed=True)
+        mock_run.assert_called_once()
+
+    def test_injected_runner_bypasses_default(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        calls = {}
+
+        def injected(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("packages.semgrep.runner._default_sandbox_runner") as mk:
+            run_rule(target, "p/x", subprocess_runner=injected)
+        mk.assert_not_called()
+        assert "cmd" in calls
+
+    def test_registry_config_keeps_network_local_blocks(self, tmp_path):
+        from packages.semgrep.runner import _default_sandbox_runner
+        captured = {}
+
+        def fake_sandbox_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch("core.sandbox.context.run", side_effect=fake_sandbox_run):
+            runner = _default_sandbox_runner(tmp_path, "p/security-audit")
+            runner(["semgrep"], capture_output=True)
+            assert captured["block_network"] is False
+            runner = _default_sandbox_runner(tmp_path, "/local/rules.yaml")
+            runner(["semgrep"], capture_output=True)
+            assert captured["block_network"] is True
+            assert captured["target"] == str(tmp_path)
 
 
 # run_rules --------------------------------------------------------------------
@@ -285,7 +403,7 @@ class TestRunRules:
         with patch("packages.semgrep.runner.is_available", return_value=True), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-            results = run_rules(target, configs)
+            results = run_rules(target, configs, unsandboxed=True)
         assert len(results) == 3
         assert [r.name for r in results] == ["a", "b", "c"]
         assert mock_run.call_count == 3
@@ -296,7 +414,8 @@ class TestRunRules:
 
     def test_not_installed_returns_error_per_config(self, tmp_path):
         with patch("packages.semgrep.runner.is_available", return_value=False):
-            results = run_rules(tmp_path, [("a", "p/a"), ("b", "p/b")])
+            results = run_rules(tmp_path, [("a", "p/a"), ("b", "p/b")],
+                                unsandboxed=True)
         assert len(results) == 2
         assert all(r.returncode == -1 for r in results)
         assert all("not installed" in r.errors[0] for r in results)
@@ -334,6 +453,103 @@ class TestConfigToName:
 #     narrower allowlist.
 #   * 6-second wall per test (real semgrep invocation) is integration
 #     territory, not unit-test cadence.
+class TestErrorTruth:
+    """Engine failure must never read as verified silence (U14-F3).
+
+    Pre-fix, run_rule hardcoded errors=[] on every completed run —
+    an rc=7 invalid rule or an rc=2 crash was indistinguishable from
+    a clean no-match scan, so every fail-closed consumer branch
+    (sweep error outcome, synthesis dual/fix-mutant controls) was
+    dead code for semgrep.
+    """
+
+    def _run_with(self, tmp_path, returncode, stderr="", json_errors=None):
+        target = tmp_path / "src"
+        target.mkdir(exist_ok=True)
+        json_output = _make_json_output(errors=json_errors or [])
+
+        def runner(cmd, **kwargs):
+            if "--json-output" in cmd:
+                idx = cmd.index("--json-output")
+                Path(cmd[idx + 1]).write_text(json_output)
+            return MagicMock(stdout="", stderr=stderr, returncode=returncode)
+
+        with patch("packages.semgrep.runner.is_available", return_value=True):
+            return run_rule(target, "rules.yaml", subprocess_runner=runner)
+
+    def test_rc7_invalid_rule_populates_errors(self, tmp_path):
+        result = self._run_with(tmp_path, returncode=7)
+        assert result.errors
+        assert "code 7" in result.errors[0]
+        assert not result.ok
+
+    def test_rc_error_includes_stderr_tail(self, tmp_path):
+        result = self._run_with(
+            tmp_path, returncode=2, stderr="fatal: semgrep-core crashed\n",
+        )
+        assert any("semgrep-core crashed" in e for e in result.errors)
+        assert not result.ok
+
+    @pytest.mark.parametrize("rc", [2, 3, 4, 7, 13, 128])
+    def test_every_nonzero_rc_outside_findings_contract_errors(
+        self, tmp_path, rc,
+    ):
+        # 0 = clean, 1 = findings (with --error). Everything else is a
+        # real failure and must surface a non-empty errors list.
+        result = self._run_with(tmp_path, returncode=rc)
+        assert result.errors, f"rc={rc} read as verified silence"
+        assert not result.ok
+
+    def test_real_error_array_parsed_into_errors(self, tmp_path):
+        result = self._run_with(
+            tmp_path, returncode=7,
+            json_errors=[
+                {"code": 4, "level": "error",
+                 "type": "InvalidRuleSchemaError",
+                 "short_msg": "Invalid rule schema"},
+            ],
+        )
+        assert any("InvalidRuleSchemaError" in e for e in result.errors)
+        assert not result.ok
+
+    def test_clean_run_keeps_errors_empty(self, tmp_path):
+        result = self._run_with(tmp_path, returncode=0)
+        assert result.errors == []
+        assert result.ok
+
+    def test_findings_rc1_keeps_errors_empty(self, tmp_path):
+        result = self._run_with(tmp_path, returncode=1)
+        assert result.errors == []
+        assert result.ok
+
+
+@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+class TestErrorTruthLive:
+    """Real-semgrep regression for the errors=[] hardcode: a
+    deliberately-invalid rule must produce an error result, never
+    verified silence. Runs the real binary (trusted local fixtures,
+    hence unsandboxed=True)."""
+
+    def test_invalid_rule_reports_error_not_silence(self, tmp_path):
+        rule = tmp_path / "invalid.yaml"
+        rule.write_text(
+            "rules:\n"
+            "  - id: deliberately.invalid\n"
+            "    message: x\n"
+            "    languages: [python]\n"
+            "    severity: ERROR\n"
+            "    patterns-oops: [x]\n",
+            encoding="utf-8",
+        )
+        target = tmp_path / "t.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        result = run_rule(target, str(rule), timeout=120, unsandboxed=True)
+        assert result.returncode not in (0, 1)
+        assert result.errors, "invalid rule read as verified silence"
+        assert not result.ok
+        assert result.findings == []
+
+
 # Opt-in with ``pytest -m integration``.
 @pytest.mark.integration
 @pytest.mark.skipif(not is_available(), reason="semgrep not installed")
@@ -354,3 +570,83 @@ class TestIntegration:
         result = run_rule(target, "p/python", timeout=120)
         # paths.scanned should include at least our file
         assert any("x.py" in f for f in result.files_examined) or result.files_examined == []
+
+
+class TestOutputBudget:
+    """Over-budget tool output must surface as a FAILED scan — never
+    as a verified-clean one. Semgrep exits 0/1 on a successful scan
+    regardless of output size, so without an error entry a hostile
+    repo could inflate the output past the cap and suppress its own
+    findings (empty findings + empty errors + rc 0 reads as clean)."""
+
+    def test_oversize_json_output_is_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import packages.semgrep.runner as runner_mod
+
+        target = tmp_path / "src"
+        target.mkdir()
+        json_path = tmp_path / "out.json"
+        # Pad the --json payload so ONLY it exceeds the cap — the
+        # SARIF stdout must stay under budget and keep parsing.
+        payload = _make_json_output(
+            scanned=[f"f{i}.py" for i in range(200)],
+        )
+        assert len(payload) - 1 > len(_make_sarif())
+        monkeypatch.setattr(
+            runner_mod, "_MAX_TOOL_OUTPUT_BYTES", len(payload) - 1,
+        )
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                idx = cmd.index("--json-output")
+                Path(cmd[idx + 1]).write_text(payload)
+                return MagicMock(stdout=_make_sarif(), stderr="", returncode=0)
+            mock_run.side_effect = side_effect
+            result = run_rule(target, "p/x", json_output_path=json_path,
+                              unsandboxed=True)
+        # Metadata is unavailable AND the scan reports the refusal.
+        assert result.files_examined == []
+        assert result.findings  # stdout SARIF (under budget) still parses
+        assert any("bytes" in e and "budget" in e for e in result.errors)
+        assert not result.ok
+        assert result.json_output == ""  # oversized text never retained
+
+    def test_oversize_sarif_stdout_is_a_failed_scan_not_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Inverted suppression PoC: rc=0 with SARIF stdout past the
+        budget must yield errors (size-naming), not a clean result."""
+        import packages.semgrep.runner as runner_mod
+
+        target = tmp_path / "src"
+        target.mkdir()
+        sarif_payload = _make_sarif()
+
+        def _run(sarif_text: str) -> SemgrepResult:
+            with patch("packages.semgrep.runner.is_available",
+                       return_value=True), \
+                 patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout=sarif_text, stderr="", returncode=0,
+                )
+                return run_rule(target, "p/x", unsandboxed=True)
+
+        # Control: under budget, the finding surfaces and the run is ok.
+        baseline = _run(sarif_payload)
+        assert baseline.findings
+        assert baseline.ok
+
+        # Over budget: findings are gone WITH an error naming the size
+        # — a failed scan, never verified silence.
+        monkeypatch.setattr(
+            runner_mod, "_MAX_TOOL_OUTPUT_BYTES", len(sarif_payload) - 1,
+        )
+        result = _run(sarif_payload)
+        assert result.findings == []
+        assert any(
+            str(len(sarif_payload)) in e and "budget" in e
+            for e in result.errors
+        )
+        assert not result.ok
+        assert result.sarif == ""  # oversized text never retained

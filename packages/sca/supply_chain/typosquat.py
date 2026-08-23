@@ -14,10 +14,11 @@ Limits & honesty:
 - We use a string-only check; ``lodash`` vs ``lodaash`` flags, but
   ``lodash`` (correct) vs ``loadsh`` (transposed) needs the Damerau
   variant — included.
-- Scope-name typosquats are normalised: ``@types/node`` is compared
-  against the popular list both as itself and as ``types/node`` (some
-  attackers omit the ``@``). The package name kept on the finding is
-  the original.
+- Scoped npm packages (``@scope/name``) are compared against the
+  popular list as the bare name after the ``/`` (e.g.
+  ``@evil/lodash`` → ``lodash``). This catches namespace-squat
+  attacks where a malicious scope wraps a popular package name.
+  The package name kept on the finding is the original.
 """
 
 from __future__ import annotations
@@ -26,9 +27,12 @@ import json as _json
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Dependency
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "popular"
 # so neither is safe to auto-apply. Only hand-confirmed names go here → zero
 # false positives by construction.
 _DENYLIST_PATH = _DATA_DIR.parent / "typosquat_denylist.json"
+_ALLOWLIST_PATH = _DATA_DIR.parent / "typosquat_reviewed_legit.json"
 
 # Distances above this are not interesting; below it we always flag
 # (with severity scaled by distance).
@@ -71,7 +76,7 @@ _SYMDIFF_CUTOFF = 2 * _MAX_DISTANCE
 # we could have skipped — never the reverse — so the prefilter stays
 # sound regardless of the input alphabet.
 _BIT_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789-_.@/+~"
-_CHAR_BIT: Dict[str, int] = {c: i for i, c in enumerate(_BIT_ALPHABET)}
+_CHAR_BIT: dict[str, int] = {c: i for i, c in enumerate(_BIT_ALPHABET)}
 _OTHER_BIT = 63
 
 
@@ -84,7 +89,7 @@ def _char_mask(name: str) -> int:
     return mask
 
 # Per-ecosystem popular-name caches. Loaded lazily and re-used.
-_POPULAR_BY_ECO: Dict[str, List[str]] = {}
+_POPULAR_BY_ECO: dict[str, list[str]] = {}
 # Per-ecosystem ``{length: [name, ...]}`` index. The Damerau-
 # Levenshtein cap ``_MAX_DISTANCE`` already implies
 # ``|len(query) - len(pop)| ≤ _MAX_DISTANCE``; pre-bucketing by
@@ -96,14 +101,20 @@ _POPULAR_BY_ECO: Dict[str, List[str]] = {}
 # from the first ``abs(la-lb) >= cutoff`` early-out anyway, so the
 # bucket index is purely a faster way to enforce a check the inner
 # function was already doing — output is byte-identical.
-_POPULAR_BY_LEN: Dict[str, Dict[int, List[Tuple[str, int]]]] = {}
+_POPULAR_BY_LEN: dict[str, dict[int, list[tuple[str, int]]]] = {}
 # Set view of the popular list for the O(1) "is it popular" test
 # in ``_check_one`` (was a list ``in`` linear scan pre-fix).
-_POPULAR_SET: Dict[str, set] = {}
+_POPULAR_SET: dict[str, set] = {}
 # Per-ecosystem denylist sets, loaded once from ``_DENYLIST_PATH``.
-_DENYLIST_BY_ECO: Dict[str, set] = {}
+_DENYLIST_BY_ECO: dict[str, set] = {}
 # Sentinel so a missing/!exists denylist file is loaded (and logged) once.
-_DENYLIST_RAW: Optional[Dict[str, set]] = None
+_DENYLIST_RAW: dict[str, set] | None = None
+# Per-ecosystem allowlist sets (confirmed-legitimate near-names), loaded
+# once from ``_ALLOWLIST_PATH``. A name here short-circuits the distance
+# check in ``_check_one`` — it is NOT a typosquat regardless of edit
+# distance.
+_ALLOWLIST_BY_ECO: dict[str, set] = {}
+_ALLOWLIST_RAW: dict[str, set] | None = None
 
 
 @dataclass(frozen=True)
@@ -115,7 +126,7 @@ class TyposquatFinding:
     confidence: Confidence
 
 
-def scan_deps(deps: Iterable[Dependency]) -> List[TyposquatFinding]:
+def scan_deps(deps: Iterable[Dependency]) -> list[TyposquatFinding]:
     """Run the candidate check on every direct dep.
 
     The verdict depends only on ``(ecosystem, name)`` — the popular
@@ -126,8 +137,8 @@ def scan_deps(deps: Iterable[Dependency]) -> List[TyposquatFinding]:
     emits its own finding (the downstream id keys on ``declared_in``),
     so the output is unchanged.
     """
-    out: List[TyposquatFinding] = []
-    memo: Dict[Tuple[str, str], Optional[TyposquatFinding]] = {}
+    out: list[TyposquatFinding] = []
+    memo: dict[tuple[str, str], TyposquatFinding | None] = {}
     for d in deps:
         if not d.direct:
             continue
@@ -148,7 +159,7 @@ def scan_deps(deps: Iterable[Dependency]) -> List[TyposquatFinding]:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
+def _check_one(dep: Dependency) -> TyposquatFinding | None:
     popular = _load_popular(dep.ecosystem)
     if not popular:
         return None
@@ -160,12 +171,15 @@ def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
     if name_norm in _popular_set(dep.ecosystem):
         return None
 
+    if name_norm in _load_allowlist(dep.ecosystem):
+        return None
+
     candidates = [name_norm]
     if name_norm.startswith("@") and "/" in name_norm:
         candidates.append(name_norm.split("/", 1)[1])
 
     by_len = _popular_by_len(dep.ecosystem)
-    best: Optional[Tuple[int, str]] = None
+    best: tuple[int, str] | None = None
     for cand in candidates:
         # Walk only the length buckets that COULD contain a match.
         # Damerau-Levenshtein with cutoff ``_MAX_DISTANCE`` requires
@@ -236,7 +250,7 @@ def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
     )
 
 
-def _load_popular(ecosystem: str) -> List[str]:
+def _load_popular(ecosystem: str) -> list[str]:
     if ecosystem in _POPULAR_BY_ECO:
         return _POPULAR_BY_ECO[ecosystem]
     path = _DATA_DIR / f"{ecosystem}.json"
@@ -299,6 +313,38 @@ def _load_denylist(ecosystem: str) -> set:
     return cached
 
 
+def _load_allowlist(ecosystem: str) -> set:
+    """Return the lowercased allowlist name-set for ``ecosystem``.
+
+    Same file shape as the denylist (bare list or enriched map per eco),
+    loaded from ``typosquat_reviewed_legit.json``. A name here is a
+    confirmed-legitimate near-miss that the detector must never flag."""
+    global _ALLOWLIST_RAW
+    if _ALLOWLIST_RAW is None:
+        _ALLOWLIST_RAW = {}
+        try:
+            raw = _json.loads(_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, _json.JSONDecodeError) as e:
+            logger.warning("sca.supply_chain.typosquat: failed to load "
+                           "allowlist %s: %s", _ALLOWLIST_PATH, e)
+            raw = {}
+        if isinstance(raw, dict):
+            for eco, names in raw.items():
+                if isinstance(names, list):
+                    _ALLOWLIST_RAW[eco] = {
+                        n.lower() for n in names if isinstance(n, str)}
+                elif isinstance(names, dict):
+                    _ALLOWLIST_RAW[eco] = {
+                        k.lower() for k in names if isinstance(k, str)}
+    cached = _ALLOWLIST_BY_ECO.get(ecosystem)
+    if cached is None:
+        cached = _ALLOWLIST_RAW.get(ecosystem, set())
+        _ALLOWLIST_BY_ECO[ecosystem] = cached
+    return cached
+
+
 def _popular_set(ecosystem: str) -> set:
     """Return the popular list as a set for O(1) ``in`` checks."""
     cached = _POPULAR_SET.get(ecosystem)
@@ -310,7 +356,7 @@ def _popular_set(ecosystem: str) -> set:
     return s
 
 
-def _popular_by_len(ecosystem: str) -> Dict[int, List[Tuple[str, int]]]:
+def _popular_by_len(ecosystem: str) -> dict[int, list[tuple[str, int]]]:
     """Return the popular list indexed by name length.
 
     Each bucket holds ``(name, char_mask)`` pairs — the mask is
@@ -326,7 +372,7 @@ def _popular_by_len(ecosystem: str) -> Dict[int, List[Tuple[str, int]]]:
     cached = _POPULAR_BY_LEN.get(ecosystem)
     if cached is not None:
         return cached
-    by_len: Dict[int, List[Tuple[str, int]]] = {}
+    by_len: dict[int, list[tuple[str, int]]] = {}
     for name in _load_popular(ecosystem):
         by_len.setdefault(len(name), []).append((name, _char_mask(name)))
     _POPULAR_BY_LEN[ecosystem] = by_len

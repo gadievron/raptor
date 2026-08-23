@@ -24,8 +24,11 @@ hits, the API source is downweighted rather than treated as an outlier.
 from __future__ import annotations
 
 from cve_diff.core.exceptions import AnalysisError
-from cve_diff.core.models import DiffBundle, RepoRef
 from cve_diff.diffing.extract_via_gitlab_api import extract_for_agreement
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cve_diff.core.models import DiffBundle, RepoRef
 
 # Pairwise thresholds: clone vs API byte counts are usually within a
 # few percent (mostly whitespace / line-ending differences in how each
@@ -158,7 +161,7 @@ def _summarize_n(bundles_named: list[tuple[str, DiffBundle]]) -> dict:
     # Per-source disagreement count (a source is an "outlier" if every
     # pair involving it is disagree/partial).
     names = [n for n, _ in bundles_named]
-    disagree_count = {n: 0 for n in names}
+    disagree_count = dict.fromkeys(names, 0)
     for key, v in pairwise.items():
         if v == "disagree":
             a, b = key.split(":", 1)

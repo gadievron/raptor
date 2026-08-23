@@ -4,9 +4,8 @@ The LLM forms hypotheses about security weaknesses ("input X flows unchecked
 to sink Y"); deterministic tools (Semgrep, Coccinelle, CodeQL, SMT) test
 those hypotheses; the LLM never directly classifies code as vulnerable.
 
-Research basis: KNighter (SOSP 2025, 92 kernel bugs), SAILOR
-(arXiv:2604.06506, 379 vulns vs 12 pure-agentic), IRIS (ICLR 2025, 2x
-CodeQL recall). Pure self-critique without tool grounding actively
+Research basis: KNighter (SOSP 2025, 92 kernel bugs), IRIS (ICLR 2025,
+2x CodeQL recall). Pure self-critique without tool grounding actively
 degrades quality (IEEE-ISTAS 2025: 37.6% more critical vulns after 5
 iterations) — this package exists to ground LLM reasoning in mechanical
 evidence.
@@ -64,30 +63,30 @@ from .posterior import (
 )
 
 __all__ = [
-    "Hypothesis",
-    "Location",
-    "SourceLocation",
-    "SinkLocation",
-    "FlowStep",
-    "ValidationResult",
+    "UNIFORM_PRIOR",
     "Evidence",
+    "FlowStep",
+    "Hypothesis",
+    "HypothesisHash",
+    "IterationStalled",
+    "IterationStep",
+    "Location",
+    "Posterior",
+    "ProvenanceMismatch",
+    "SinkLocation",
+    "SourceLocation",
     "ToolAdapter",
     "ToolCapability",
-    "ToolInvocation",
     "ToolEvidence",
-    "verdict_from",
+    "ToolInvocation",
+    "ValidationResult",
     "aggregate",
-    "HypothesisHash",
-    "ProvenanceMismatch",
-    "hash_hypothesis",
     "ensure_same_provenance",
-    "IterationStep",
-    "IterationStalled",
-    "uncertainty",
+    "hash_hypothesis",
     "must_progress",
-    "Posterior",
-    "UNIFORM_PRIOR",
     "posterior_from",
     "posterior_update",
+    "uncertainty",
+    "verdict_from",
     "verdict_from_posterior",
 ]

@@ -15,10 +15,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Sequence
 
 from . import SCA_CACHE_ROOT
 from .cache_eviction import DEFAULT_MAX_AGE_DAYS, evict_stale
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def main(argv: Sequence[str]) -> int:

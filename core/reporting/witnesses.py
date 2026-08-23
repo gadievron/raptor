@@ -26,14 +26,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 def build_witness_summary(
-    witnesses_dir: Optional[Path],
-) -> Dict[str, Any]:
+    witnesses_dir: Path | None,
+) -> dict[str, Any]:
     """Read the manifest set under ``witnesses_dir`` and group counts.
 
     Returns a structured dict consumers can render however suits
@@ -52,7 +52,7 @@ def build_witness_summary(
     Empty store / missing directory returns the zero-valued shape
     rather than raising — keeps the call site clean.
     """
-    empty: Dict[str, Any] = {
+    empty: dict[str, Any] = {
         "total": 0,
         "by_source": {},
         "by_outcome": {},
@@ -79,8 +79,8 @@ def build_witness_summary(
         return empty
 
     total = 0
-    by_source: Dict[str, int] = {}
-    by_outcome: Dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    by_outcome: dict[str, int] = {}
     executed = 0
     compiled = 0
 
@@ -113,7 +113,7 @@ def build_witness_summary(
 
 
 def render_witness_summary(
-    witnesses_dir: Optional[Path],
+    witnesses_dir: Path | None,
     *,
     indent: str = "   ",
 ) -> str:

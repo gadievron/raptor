@@ -41,8 +41,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, TYPE_CHECKING
 
 from core.function_taxonomy import (
     ALLOC_FUNCS,
@@ -61,6 +60,10 @@ from core.function_taxonomy import (
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
 )
+from pathlib import Path
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,7 @@ FINGERPRINT_SCHEMA_VERSION = 3
 # the SCA bump detector and any future capability-aware consumer
 # imports from here so the bucket names stay consistent across
 # fingerprints + findings + drift records.
-BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
+BUCKETS: tuple[tuple[str, frozenset[str]], ...] = (
     ("exec", EXEC_FUNCS),
     ("network", NETWORK_INGEST_FUNCS),
     ("string_overflow", STRING_OVERFLOW_FUNCS),
@@ -115,12 +118,12 @@ BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
 # ``runtime_privilege`` and ``kernel_trace`` are the supply-chain
 # forensic flavour — their presence in a package's native binary
 # is rare and high-signal regardless of the host being a delta.
-HIGH_SEVERITY_BUCKETS: FrozenSet[str] = frozenset({
+HIGH_SEVERITY_BUCKETS: frozenset[str] = frozenset({
     "exec", "network", "runtime_privilege", "kernel_trace",
 })
 
 
-def bucket_imports(imports: Set[str]) -> Dict[str, Set[str]]:
+def bucket_imports(imports: set[str]) -> dict[str, set[str]]:
     """Classify an import set by capability bucket.
 
     Returns ``{bucket_name: {fn1, fn2, ...}}`` for each bucket
@@ -129,7 +132,7 @@ def bucket_imports(imports: Set[str]) -> Dict[str, Set[str]]:
     ubiquitous functions like ``malloc`` / ``printf`` / ``read``
     aren't signal at fingerprint scale either.
     """
-    out: Dict[str, Set[str]] = {}
+    out: dict[str, set[str]] = {}
     for bucket_name, fn_set in BUCKETS:
         matched = imports & fn_set
         if matched:
@@ -161,9 +164,9 @@ class CapabilityFingerprint:
     arch: str
     bits: int
     binary_format: str        # 'elf' / 'mach-o' / 'pe'
-    capability_buckets: Dict[str, List[str]] = field(default_factory=dict)
+    capability_buckets: dict[str, list[str]] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Full JSON-ready representation INCLUDING the
         informational ``binary_path``. For storage / operator-
         facing rendering / SBOM property. Use
@@ -186,7 +189,7 @@ class CapabilityFingerprint:
             },
         }
 
-    def _comparison_dict(self) -> Dict[str, Any]:
+    def _comparison_dict(self) -> dict[str, Any]:
         """The fields that define identity for comparison / drift
         detection. Excludes ``binary_path`` (legitimately varies
         across machines / tempdirs for the same bytes)."""
@@ -195,13 +198,21 @@ class CapabilityFingerprint:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CapabilityFingerprint":
+    def from_dict(cls, data: dict[str, Any]) -> CapabilityFingerprint:
+        try:
+            schema_ver = int(data.get("schema_version", 0))
+        except (ValueError, TypeError):
+            schema_ver = 0
+        try:
+            bits_val = int(data.get("bits", 0))
+        except (ValueError, TypeError):
+            bits_val = 0
         return cls(
-            schema_version=int(data.get("schema_version", 0)),
+            schema_version=schema_ver,
             binary_path=str(data.get("binary_path", "")),
             binary_sha256=str(data.get("binary_sha256", "")),
             arch=str(data.get("arch", "")),
-            bits=int(data.get("bits", 0)),
+            bits=bits_val,
             binary_format=str(data.get("binary_format", "")),
             capability_buckets={
                 str(k): list(v) for k, v in (
@@ -228,7 +239,7 @@ class CapabilityFingerprint:
 
 def capability_fingerprint(
     binary_path: Path,
-) -> Optional[CapabilityFingerprint]:
+) -> CapabilityFingerprint | None:
     """Compute the capability fingerprint of ``binary_path``.
 
     Tier dispatch:
@@ -275,7 +286,7 @@ def capability_fingerprint(
 
 def _fingerprint_via_elf(
     binary_path: Path, content_hash: str,
-) -> Optional[CapabilityFingerprint]:
+) -> CapabilityFingerprint | None:
     """Try the stdlib ELF parser. Returns ``None`` for non-ELF
     inputs or unrecoverable parse failures — caller falls
     through to tier 1."""
@@ -298,7 +309,7 @@ def _fingerprint_via_elf(
 
 def _fingerprint_via_radare2(
     binary_path: Path, content_hash: str,
-) -> Optional[CapabilityFingerprint]:
+) -> CapabilityFingerprint | None:
     """Tier 1 fallback. Used for PE / Mach-O and any input the
     ELF parser couldn't identify. Returns ``None`` if radare2
     isn't installed, or if the analyser couldn't extract any
@@ -372,7 +383,7 @@ def _sha256_of_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
     memory across small (binaries) + large (containers) inputs.
     """
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         while True:
             chunk = f.read(chunk_size)
             if not chunk:
@@ -383,9 +394,9 @@ def _sha256_of_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
 
 __all__ = [
     "BUCKETS",
-    "CapabilityFingerprint",
     "FINGERPRINT_SCHEMA_VERSION",
     "HIGH_SEVERITY_BUCKETS",
+    "CapabilityFingerprint",
     "bucket_imports",
     "capability_fingerprint",
 ]

@@ -38,12 +38,13 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _REPO = Path(__file__).resolve().parents[2]  # raptor-sca repo root
 sys.path.insert(0, str(_REPO))
-
-from packages.sca.api import analyse  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 # Cross-tool launch helpers
 # ---------------------------------------------------------------------------
 
-def _find_sca_agent() -> Optional[Path]:
+def _find_sca_agent() -> Path | None:
     """Discover the SCA agent entry point.
 
     Post-merge, SCA lives in-tree — this file IS the agent. So the
@@ -90,7 +91,7 @@ def _find_sca_agent() -> Optional[Path]:
         # first-block imports.
         _MAX_MARKER_BYTES = 256 * 1024
         try:
-            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+            with Path(p).open(encoding="utf-8", errors="replace") as fh:
                 text = fh.read(_MAX_MARKER_BYTES)
         except OSError:
             logger.warning(
@@ -115,7 +116,7 @@ def run_sca_subprocess(
     output_dir: Path,
     *,
     sandbox_args: Sequence[str] = (),
-    env: Optional[dict] = None,
+    env: dict | None = None,
     timeout: int = 600,
 ) -> tuple:
     """Run the SCA agent as a sandboxed subprocess.
@@ -130,6 +131,12 @@ def run_sca_subprocess(
     from core.config import RaptorConfig
     from core.sandbox import run as sandbox_run
 
+    # Ensure output_dir exists before Landlock setup — the sandbox
+    # registers a writable rule by opening the path as a directory fd.
+    # If it doesn't exist, the rule silently fails and every write
+    # inside the child gets EACCES.
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     cmd: list = [
         sys.executable, str(agent_path),
         "--repo", str(target),
@@ -137,28 +144,25 @@ def run_sca_subprocess(
         *sandbox_args,
     ]
 
-    # Wrap sandbox_run in a TimeoutExpired catch. The function's
-    # return-type contract is ``(returncode, stdout, stderr)`` —
-    # pre-fix a TimeoutExpired exception escaped past the call
-    # site and surfaced to callers as an unhandled traceback when
-    # the docstring promised a tuple. Convert to a synthetic-
-    # failure tuple so callers' ``if rc != 0`` paths fire
-    # predictably.
+    # The child's import chain (core.coverage.schema → core.logging →
+    # RaptorLogger → ensure_directories) writes structured audit logs
+    # to LOG_DIR. Include it in the sandbox's writable surface so the
+    # child doesn't get EACCES on the first log emit.
+    log_dir = RaptorConfig.LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         result = sandbox_run(
             cmd,
             use_egress_proxy=True,
+            require_proxy_netns=True,  # 00015
             proxy_hosts=_compose_proxy_hosts(target),
             caller_label="sca-agent",
             target=str(target),
             output=str(output_dir),
-            # ``env if env is not None`` — pre-fix ``env or`` truthy-tested,
-            # so an EXPLICIT ``env={}`` (caller's "spawn with empty env"
-            # signal) got replaced with the default safe env because
-            # ``{}`` is falsy. The empty-env intent was silently
-            # overridden — sandbox children inherited the caller-default
-            # RAPTOR env when caller had specifically asked for nothing.
+            writable_paths=[str(log_dir)],
             env=env if env is not None else RaptorConfig.get_safe_env(),
+            env_caller_filtered=True,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -201,6 +205,8 @@ def _compose_proxy_hosts(target: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
+    from core.sandbox import PROFILES as _SANDBOX_PROFILES
+    from packages.sca.api import analyse
     ap = argparse.ArgumentParser(description="RAPTOR SCA agent")
     ap.add_argument("--repo", required=True, help="Target project root")
     ap.add_argument("--out", required=True, help="Output directory")
@@ -208,7 +214,11 @@ def main(argv=None) -> int:
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--sarif-dirs", nargs="*",
                     help="Sibling SARIF directories for cross-tool linking")
-    ap.add_argument("--sandbox", choices=["full", "network-only", "none"],
+    # Dynamic choices from the profile registry — a hardcoded subset
+    # silently excluded 'strict', the profile the threat model
+    # recommends for exactly this workload (LLM analysis over hostile
+    # dependency manifests).
+    ap.add_argument("--sandbox", choices=sorted(_SANDBOX_PROFILES),
                     default=None,
                     help="Sandbox profile (default: use egress proxy only)")
     ap.add_argument("--no-sandbox", action="store_true",
@@ -275,24 +285,26 @@ def _run_sandboxed(
     try:
         from core.sandbox.context import sandbox
     except ImportError:
-        logger.warning("sca.agent: sandbox not available, running unsandboxed")
-        return analyse(
-            target=target, output_dir=output_dir,
-            offline=offline, no_cache=no_cache, sarif_dirs=sarif_dirs,
+        msg = (
+            "sca.agent: --sandbox requested but core.sandbox.context "
+            "is not importable; refusing to run unsandboxed"
         )
+        raise RuntimeError(msg) from None
 
     with sandbox(
         target=str(target),
         output=str(output_dir),
         profile=profile,
         use_egress_proxy=True,
+        require_proxy_netns=True,  # 00015
         proxy_hosts=_compose_proxy_hosts(target),
         caller_label="sca-agent",
         audit=audit,
         audit_verbose=audit_verbose,
         audit_run_dir=str(output_dir) if audit else None,
     ):
-        return analyse(
+        from packages.sca.api import analyse as _analyse
+        return _analyse(
             target=target, output_dir=output_dir,
             offline=offline, no_cache=no_cache, sarif_dirs=sarif_dirs,
         )

@@ -20,6 +20,7 @@ import pytest
 from core.inventory.fixture_detection import (
     FixtureVerdict,
     HarnessEvidence,
+    _default_qualified_name,
     detect_fixture,
     is_fixture_path,
 )
@@ -115,11 +116,11 @@ class TestDetectFixture:
     def test_fixture_path_with_called_verdict_yields_false(self):
         # Path matches BUT reachability says CALLED — production
         # caller exists, so D-5 must NOT fire.
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.CALLED,
                 evidence=(("src/api/main.py", 42),),
@@ -141,11 +142,11 @@ class TestDetectFixture:
         assert "src/api/main.py:42" in reach.checked_against
 
     def test_fixture_path_with_not_called_verdict_yields_true(self):
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(verdict=Verdict.NOT_CALLED),
         ):
             v = detect_fixture(
@@ -161,11 +162,11 @@ class TestDetectFixture:
         assert reach.result == "not_reachable_from_prod"
 
     def test_fixture_path_with_uncertain_yields_candidate(self):
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.UNCERTAIN,
                 uncertain_reasons=(("src/dynamic.py", "getattr"),),
@@ -191,7 +192,7 @@ class TestDetectFixture:
         # must NOT crash; verdict falls to candidate so LLM can
         # verify.
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             side_effect=ValueError("bad qname"),
         ):
             v = detect_fixture(
@@ -232,12 +233,12 @@ class TestDetectFixture:
         # Reachability returns 100 evidence sites — fixture
         # detection caps the surface so on-disk evidence stays
         # bounded.
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ReachabilityResult, Verdict,
         )
         many_sites = tuple(("src/f.py", i) for i in range(100))
         with patch(
-            "core.inventory.reachability.function_called",
+            "core.analysis.reachability.function_called",
             return_value=ReachabilityResult(
                 verdict=Verdict.CALLED, evidence=many_sites,
             ),
@@ -325,3 +326,33 @@ class TestAdversarial:
             qualified_name="tests.conftest.f",
         )
         assert v.likely_test_harness == "candidate"
+
+
+# ---------------------------------------------------------------------------
+# Java extension handling in qualified name builder
+# ---------------------------------------------------------------------------
+
+class TestJavaQualifiedName:
+
+    def test_java_extension_stripped(self):
+        qname = _default_qualified_name("src/test/java/TestFoo.java", "testBar")
+        assert qname == "src.test.java.TestFoo.testBar"
+        assert not qname.endswith(".java.testBar")
+
+    def test_java_test_file_detected_as_fixture(self):
+        matched, label = is_fixture_path("src/test/java/TestFoo.java")
+        assert matched
+        assert "Java" in label or "test" in label.lower()
+
+    def test_java_qualified_name_matches_inventory(self):
+        qname = _default_qualified_name("tests/TestAuth.java", "checkCreds")
+        parts = qname.split(".")
+        assert "java" not in parts, (
+            f".java extension leaked into qualified name: {qname}"
+        )
+
+    def test_other_extensions_still_work(self):
+        assert ".py" not in _default_qualified_name("tests/test_foo.py", "test_bar")
+        assert ".js" not in _default_qualified_name("tests/foo.test.js", "it")
+        assert ".go" not in _default_qualified_name("pkg/foo_test.go", "TestFoo")
+        assert ".rb" not in _default_qualified_name("spec/foo_spec.rb", "it")

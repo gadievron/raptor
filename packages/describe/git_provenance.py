@@ -22,8 +22,10 @@ got.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -31,10 +33,10 @@ class GitProvenance:
     """Point-in-time git facts for the target tree. All
     fields ``None`` when the target isn't a git checkout (or
     git is unavailable, or every call timed out)."""
-    branch: Optional[str]           # current branch name; None when detached HEAD
-    commit_short: Optional[str]     # 7-12 char SHA
-    dirty: Optional[bool]           # True/False, or None when status couldn't be read
-    last_commit_date: Optional[str]  # ISO 8601 (e.g. "2026-05-30T14:22:11+00:00")
+    branch: str | None           # current branch name; None when detached HEAD
+    commit_short: str | None     # 7-12 char SHA
+    dirty: bool | None           # True/False, or None when status couldn't be read
+    last_commit_date: str | None  # ISO 8601 (e.g. "2026-05-30T14:22:11+00:00")
 
 
 def detect_git_provenance(target_path: Path) -> GitProvenance:
@@ -63,7 +65,7 @@ def detect_git_provenance(target_path: Path) -> GitProvenance:
     # from "clean" (empty) from "dirty" (non-empty).
     status = _git(target_path, "status", "--porcelain", untrusted=True)
     if status is None:
-        dirty: Optional[bool] = None
+        dirty: bool | None = None
     else:
         dirty = bool(status)
 

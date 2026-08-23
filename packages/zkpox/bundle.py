@@ -30,12 +30,14 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, TYPE_CHECKING
 
-from core.witness.store import WitnessStore
-from core.witness.types import Witness
 
 from packages.zkpox.eligibility import is_zkpox_eligible
+
+if TYPE_CHECKING:
+    from core.witness.types import Witness
+    from core.witness.store import WitnessStore
 
 
 # A witness identity is always a sha256 hex digest. We use it as a
@@ -60,10 +62,11 @@ def _require_clean_hash(witness_hash: str) -> None:
     the intended output tree.
     """
     if not isinstance(witness_hash, str) or not _SHA256_HEX.match(witness_hash):
-        raise ZKPoXBundleError(
+        msg = (
             f"witness_hash {witness_hash!r} is not a sha256 hex "
             f"digest; refusing to use it as a path component"
         )
+        raise ZKPoXBundleError(msg)
 
 
 @dataclass
@@ -79,20 +82,20 @@ class ZKPoXBundle:
     witness_len: int
     source: str               # WitnessSource value
     observed_outcome: str     # WitnessOutcome value
-    outcome_detail: Dict[str, Any]
-    target_binary_hash: Optional[str]
-    target_source_hash: Optional[str]
-    produced_by: Optional[str]
-    timestamp: Optional[str]
-    attestation: Dict[str, Any]
+    outcome_detail: dict[str, Any]
+    target_binary_hash: str | None
+    target_source_hash: str | None
+    produced_by: str | None
+    timestamp: str | None
+    attestation: dict[str, Any]
     tier: str = "0/1"
-    reproduction: Optional[Dict[str, Any]] = None
+    reproduction: dict[str, Any] | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
 
 
-def _build_attestation(witness: Witness) -> Dict[str, Any]:
+def _build_attestation(witness: Witness) -> dict[str, Any]:
     """The Tier-1 claim, stated plainly. No crypto — this is the
     assertion a Tier-3 proof would later make zero-knowledge."""
     target = witness.target_binary_hash or witness.target_source_hash
@@ -135,18 +138,20 @@ def assemble_bundle(
 
     verdict = is_zkpox_eligible(witness)
     if not verdict.eligible:
-        raise ZKPoXBundleError(
+        msg = (
             f"witness {witness.bytes_hash[:16]} ineligible: "
             f"{verdict.reason}"
         )
+        raise ZKPoXBundleError(msg)
 
     # Confirm the bytes are retrievable — a bundle for bytes we
     # can't produce is useless to a prover.
     if store.blob_path(witness.bytes_hash) is None:
-        raise ZKPoXBundleError(
+        msg = (
             f"witness {witness.bytes_hash[:16]} bytes blob missing "
             f"from store; cannot assemble bundle"
         )
+        raise ZKPoXBundleError(msg)
 
     return ZKPoXBundle(
         witness_hash=witness.bytes_hash,

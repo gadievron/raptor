@@ -1,15 +1,23 @@
 """pip resolver wrapper.
 
-Uses ``pip-compile`` (from pip-tools) when available, falling back to
-``pip install --dry-run`` otherwise. ``pip-compile`` is the canonical
-way to deterministically resolve a ``requirements.in``-style spec into
-a fully-pinned ``requirements.txt`` without actually installing
-anything; ``pip install --dry-run`` (pip 23.0+) is the lighter
-alternative when pip-tools isn't installed.
+Uses ``pip-compile`` (from pip-tools): the system install when
+available, otherwise pip-tools installed into an ephemeral venv and
+pip-compile retried from there (see the PEP 668 section below).
+``pip-compile`` is the canonical way to deterministically resolve a
+``requirements.in``-style spec into a fully-pinned
+``requirements.txt`` without actually installing anything.
 
-Neither path executes install hooks — pip doesn't run them on
-``--dry-run`` for wheel-only deps, and we don't allow source-dist
-fallback (``--only-binary=:all:`` where supported).
+Neither path executes install hooks — pip-compile resolves from
+wheel metadata without installing, and source-dist fallback is
+disabled: ``PIP_ONLY_BINARY=:all:`` is set in the child environment
+at every invocation site (system pip-compile, venv pipeline, batch
+script), so pip never downloads an sdist and never runs a package's
+build backend. A manifest that genuinely needs an sdist fails the
+dry-run loudly with a clean non-success :class:`ResolverResult`.
+The ``allow_sdist_builds`` escape hatch (CLI:
+``--allow-sdist-builds``) skips the env var for operators who accept
+build-backend execution inside the sandbox — see
+:class:`PipResolver`.
 
 PEP 668 (externally-managed-environment) handling
 -------------------------------------------------
@@ -17,28 +25,57 @@ Most modern Linux distros ship the system Python marked
 "externally-managed" (``/usr/lib/python*/EXTERNALLY-MANAGED``). When
 pip detects that marker it refuses operations to protect distro state
 — even ``--dry-run`` is blocked. raptor-sca scans run on operator
-systems; if the system pip refuses, we fall back to creating an
-ephemeral venv under the project tree and re-running the resolver
-with the venv's pip (which doesn't have the marker). Per-run cost is
-~3-5s for venv create + pip-tools install. The venv lives at
-``<project>/.raptor-sca-venv-{pid}/`` and is removed after the run.
-Sandbox writes are confined to the project tree already so this lands
-in the only writeable surface available to us.
+systems; if the system pip-compile refuses (or is missing), we fall
+back to creating an ephemeral venv, installing pip-tools into it,
+and re-running pip-compile with the venv's pip (which doesn't have
+the marker). Per-run cost is ~3-5s for venv create + pip-tools
+install. The venv lives at ``/tmp/raptor-sca-venv-<pid>-<hash>/``
+— the sandbox mounts most of the project tree read-only, so the
+per-call tmpfs at ``/tmp`` is the writeable surface — and vanishes
+with that tmpfs when the sandbox call ends. See
+:meth:`PipResolver._venv_dir` for the path rationale.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import shutil
+import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from . import ResolverResult, _check_tool, _run
 
 logger = logging.getLogger(__name__)
+
+
+# Metadata-only resolution policy (see package docstring in
+# ``__init__.py``): force pip to consider wheels only. Building an
+# sdist runs the package's build backend — arbitrary code, even under
+# the sandbox — so the resolver refuses by default. ``PIP_ONLY_BINARY``
+# is pip's environment-variable form of ``--only-binary``; it reaches
+# pip through pip-compile at every invocation site, including the
+# shell pipelines.
+_ONLY_BINARY_ENV = "PIP_ONLY_BINARY=:all:"
+
+# Process-wide default for the ``allow_sdist_builds`` escape hatch.
+# The resolver registry constructs its ``PipResolver()`` singleton at
+# import time, so the per-run ``--allow-sdist-builds`` CLI flag flows
+# through this module-level default (same pattern as the parsers'
+# module-level setters toggled by ``pipeline.run_sca``).
+_ALLOW_SDIST_BUILDS_DEFAULT = False
+
+
+def set_allow_sdist_builds(value: bool) -> None:
+    """Set the process-wide default for :attr:`PipResolver.allow_sdist_builds`.
+
+    Instances constructed with an explicit ``allow_sdist_builds``
+    keep their pinned value; instances using the default (including
+    the registry singleton) pick this up on the next ``dry_run``.
+    """
+    global _ALLOW_SDIST_BUILDS_DEFAULT
+    _ALLOW_SDIST_BUILDS_DEFAULT = bool(value)
 
 
 def _real_python() -> str:
@@ -68,9 +105,31 @@ class PipResolver:
     (:meth:`dry_run_batch`) — one shared venv handles N manifests
     concurrently inside a single sandbox session. The ``SUPPORTS_BATCH``
     class flag is the opt-in marker the cascade orchestrator looks at.
+
+    ``PIP_ONLY_BINARY=:all:`` is **always** set in the child
+    environment — this is the metadata-only mode; pip never builds
+    an sdist (which would run the package's build backend) via this
+    path. A manifest whose deps only ship sdists fails the dry-run
+    loudly. ``allow_sdist_builds=True`` (CLI: ``--allow-sdist-builds``)
+    skips the env var — the trade-off is that pip may then execute
+    arbitrary build-backend code from the resolved packages, contained
+    only by the sandbox. Default is off.
     """
 
     SUPPORTS_BATCH = True
+
+    def __init__(self, *, allow_sdist_builds: bool | None = None) -> None:
+        # ``None`` defers to the process-wide default managed by
+        # :func:`set_allow_sdist_builds` (CLI flag plumbing); an
+        # explicit bool pins this instance regardless of the flag.
+        self._allow_sdist_builds = allow_sdist_builds
+
+    @property
+    def allow_sdist_builds(self) -> bool:
+        """True when sdist builds are permitted for this resolver."""
+        if self._allow_sdist_builds is not None:
+            return self._allow_sdist_builds
+        return _ALLOW_SDIST_BUILDS_DEFAULT
 
     ecosystem = "PyPI"
     # Files the resolver-cache wrapper hashes to key memoisation.
@@ -156,10 +215,17 @@ class PipResolver:
         responsible for retrying via the venv pipeline.
         """
         rel_manifest = str(manifest.relative_to(project_dir))
+        cmd = ["pip-compile", "--quiet", "--output-file", "-",
+               rel_manifest]
+        if not self.allow_sdist_builds:
+            # Wheels only — an sdist-requiring manifest fails the
+            # dry-run loudly instead of running its build backend.
+            # ``env(1)`` prefix adds the single variable while the
+            # sandbox's safe-env posture stays intact for the rest.
+            cmd = ["env", _ONLY_BINARY_ENV, *cmd]
         try:
             proc = _run(
-                ["pip-compile", "--quiet", "--output-file", "-",
-                 rel_manifest],
+                cmd,
                 cwd=project_dir, timeout=timeout,
                 proxy_hosts=self.proxy_hosts,
             )
@@ -211,24 +277,21 @@ class PipResolver:
         return Path("/tmp") / f"raptor-sca-venv-{_os.getpid()}-{proj_hash}"
 
     def _create_venv(
-        self, project_dir: Path, timeout: int,
-    ) -> "tuple[Optional[Path], Optional[str]]":
-        """Create an ephemeral venv + bootstrap pip in a single sandbox call.
+        self, project_dir: Path, _timeout: int,
+    ) -> tuple[Path | None, str | None]:
+        """Compute the ephemeral venv path; creates nothing itself.
 
         Each ``_run`` call gets a fresh mount-ns with its own tmpfs at
         ``/tmp`` — venv state created in one call does NOT persist into
-        a follow-up call. So we have to combine venv-create, ensurepip,
-        and (in the caller) the pip install + resolver invocation into
-        a single shell pipeline that runs end-to-end inside one
-        sandbox.
-
-        This helper does just the venv+ensurepip steps; the caller
-        chains its own work on top via :meth:`_run_combined_pip_compile`
-        or :meth:`_run_combined_pip_dry`. We return ``(venv_dir,
-        sentinel_path)`` so callers can locate the venv by path inside
-        their own sandbox call. The actual filesystem state from this
-        method is intentionally NOT inspected here (it's gone with the
-        sandbox tmpfs).
+        a follow-up call. So venv-create, ensurepip, the pip-tools
+        install and the resolver invocation all have to run as a single
+        shell pipeline inside one sandbox call. The sole caller,
+        :meth:`_run_pip_compile_in_venv`, builds that pipeline with
+        :meth:`_venv_setup_script` as its prefix; this helper only
+        returns ``(venv_dir, None)`` so the caller can locate the venv
+        by path inside its own sandbox call. Filesystem state is
+        intentionally NOT created or inspected here (it would be gone
+        with the sandbox tmpfs anyway).
         """
         return self._venv_dir(project_dir), None
 
@@ -245,32 +308,36 @@ class PipResolver:
         write their caches under ``/tmp`` (writable in the sandbox)
         rather than the sandbox's ``fake_home`` bind-mount, which is
         read-only on some configurations.
+
+        Exports ``PIP_ONLY_BINARY=:all:`` in the preamble (unless the
+        ``allow_sdist_builds`` escape hatch is set) so every pip /
+        pip-compile invocation in the pipeline — including the batch
+        script's per-manifest subshells — inherits the wheels-only
+        policy.
         """
+        qvenv = shlex.quote(str(venv_dir))
+        qpython = shlex.quote(_real_python())
+        only_binary = (
+            "" if self.allow_sdist_builds
+            else f"export {_ONLY_BINARY_ENV}; "
+        )
         return (
             f"set -e; "
-            f"export HOME={venv_dir}/.fake-home; "
-            f"export XDG_CACHE_HOME={venv_dir}/.fake-home/.cache; "
+            f"{only_binary}"
+            f"export HOME={qvenv}/.fake-home; "
+            f"export XDG_CACHE_HOME={qvenv}/.fake-home/.cache; "
             f"mkdir -p $HOME $XDG_CACHE_HOME; "
-            f"{_real_python()} -m venv --without-pip {venv_dir} && "
-            f"{venv_dir}/bin/python -m ensurepip --upgrade >/dev/null && "
+            f"{qpython} -m venv --without-pip {qvenv} && "
+            f"{qvenv}/bin/python -m ensurepip --upgrade >/dev/null && "
         )
-
-    def _cleanup_venv(self, venv_dir: Path) -> None:
-        """Best-effort venv removal. Errors are logged, not raised —
-        leaving a stale venv is preferable to crashing the resolver."""
-        try:
-            shutil.rmtree(venv_dir, ignore_errors=True)
-        except Exception as e:                      # noqa: BLE001
-            logger.debug("sca.pip: venv cleanup failed for %s: %s",
-                         venv_dir, e)
 
     # ----- batched venv pipeline (one venv, N parallel pip-compile) -----
 
     def dry_run_batch(
-        self, project_dirs: "list[Path]", *,
-        common_root: Optional[Path] = None,
+        self, project_dirs: list[Path], *,
+        common_root: Path | None = None,
         timeout: int = 120,
-    ) -> "list[ResolverResult]":
+    ) -> list[ResolverResult]:
         """Resolve N PyPI manifests in a single sandbox call.
 
         Standard ``dry_run`` builds a fresh venv per manifest —
@@ -316,7 +383,7 @@ class PipResolver:
         # Resolve each manifest path relative to common_root. If any
         # project_dir is outside, we can't cover it with one
         # ``target=common_root`` sandbox — fall back to sequential.
-        manifests: "list[tuple[Path, Path, Path]]" = []
+        manifests: list[tuple[Path, Path, Path]] = []
         for pd in project_dirs:
             try:
                 rel_dir = pd.resolve().relative_to(common_root.resolve())
@@ -367,7 +434,7 @@ class PipResolver:
 
     def _build_batch_script(
         self, venv_dir: Path,
-        manifests: "list[tuple[Path, Path, Optional[Path]]]",
+        manifests: list[tuple[Path, Path, Path | None]],
     ) -> str:
         """Generate the combined sh script. One venv build, then N
         parallel pip-compile invocations writing to per-manifest
@@ -379,11 +446,11 @@ class PipResolver:
         # Stage 1: venv setup (the slow, network-bound part runs once).
         # ``set +e`` so a single pip-compile failure doesn't abort the
         # rest — we want per-manifest results.
-        parts: "list[str]" = [
+        parts: list[str] = [
             "set +e",
             self._venv_setup_script(venv_dir),
-            f"{venv_dir}/bin/python -m pip install --quiet pip-tools "
-            f"|| {{ echo '__BATCH_PIP_TOOLS_FAILED__' >&2; exit 90; }}",
+            (f"{venv_dir}/bin/python -m pip install --quiet pip-tools "
+             f"|| {{ echo '__BATCH_PIP_TOOLS_FAILED__' >&2; exit 90; }}"),
             f"mkdir -p {results_dir}",
         ]
         # Stage 2: per-manifest pip-compile in parallel. Each
@@ -424,9 +491,9 @@ class PipResolver:
         return "\n".join(parts)
 
     def _parse_batch_output(
-        self, stdout: str, stderr: str, returncode: int,
-        manifests: "list[tuple[Path, Path, Optional[Path]]]",
-    ) -> "list[ResolverResult]":
+        self, stdout: str, stderr: str, _returncode: int,
+        manifests: list[tuple[Path, Path, Path | None]],
+    ) -> list[ResolverResult]:
         """Split the batch sh stdout back into per-manifest
         ResolverResults. The script emitted three markers per index
         (OUT, RC, ERR) plus a final BATCH_END; we scan for them in
@@ -463,7 +530,7 @@ class PipResolver:
 
         # Build a section index: for each i, find OUT_i, RC_i, ERR_i
         # marker offsets and slice the stdout between them.
-        results: "list[ResolverResult]" = []
+        results: list[ResolverResult] = []
         for i in range(len(manifests)):
             out_marker = f"===RAPTOR_BATCH_OUT_{i}==="
             rc_marker = f"===RAPTOR_BATCH_RC_{i}==="
@@ -529,11 +596,12 @@ class PipResolver:
         venv_dir, _ = self._create_venv(project_dir, timeout)
         # ``set -e`` short-circuits on any step's non-zero exit so the
         # whole call returns the first failing step's stderr.
+        qvenv = shlex.quote(str(venv_dir))
         script = (
             self._venv_setup_script(venv_dir)
-            + f"{venv_dir}/bin/python -m pip install --quiet pip-tools && "
-            + f"{venv_dir}/bin/pip-compile --quiet "
-            + f"--output-file - {rel_manifest}"
+            + f"{qvenv}/bin/python -m pip install --quiet pip-tools && "
+            + f"{qvenv}/bin/pip-compile --quiet "
+            + f"--output-file - {shlex.quote(str(rel_manifest))}"
         )
         try:
             proc = _run(
@@ -544,13 +612,13 @@ class PipResolver:
         except subprocess.TimeoutExpired:
             return ResolverResult(
                 ecosystem=self.ecosystem, success=False, available=True,
-                error=f"PEP 668 venv pipeline timed out after {timeout}s",
+                error=f"venv pipeline timed out after {timeout}s",
             )
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
             return ResolverResult(
                 ecosystem=self.ecosystem, success=False, available=True,
-                error=("PEP 668 venv pipeline failed: "
+                error=("venv pipeline failed: "
                        + (proc.stderr.strip() or "exit non-zero")),
                 raw_output=raw,
             )
@@ -562,7 +630,7 @@ class PipResolver:
 
 def _slice_between(
     text: str, m_start: str, m_mid1: str, m_mid2: str, m_end: str,
-) -> "Optional[tuple[str, str, str]]":
+) -> tuple[str, str, str] | None:
     """Pull three sub-strings out of ``text`` delimited by four markers.
     Returns ``(between m_start..m_mid1, m_mid1..m_mid2, m_mid2..m_end)``
     each with leading/trailing newlines stripped, or ``None`` when any
@@ -585,15 +653,23 @@ def _slice_between(
     return (a, b, c)
 
 
-def _find_pip_manifest(project_dir: Path) -> Optional[Path]:
+def _find_pip_manifest(project_dir: Path) -> Path | None:
     """Return the path to a top-level pip-style manifest, if any.
 
     Preference order:
       1. ``pyproject.toml`` — fully self-describing project metadata.
       2. ``requirements.txt`` (the canonical name).
-      3. Any other ``requirements*.txt`` (covers ``requirements-dev``,
+      3. ``requirements.in`` — pip-tools input.
+      4. Any other ``requirements*.txt`` (covers ``requirements-dev``,
          ``requirements-all-optional``, ``requirements-prod``, etc.).
-      4. ``requirements.in`` — pip-tools input.
+
+    Every declared ``MANIFEST_FILES`` entry outranks the glob fallback
+    — the resolver cache hashes only declared files, so selecting a
+    glob-matched file while a declared one exists would key the cache
+    on a file that isn't the one being resolved (edits to the resolved
+    file would then miss invalidation). With this order, whenever the
+    cache is keyed at all, the resolved manifest is one of the hashed
+    files; glob-only projects hash to ``None`` and bypass the cache.
     """
     pyproject = project_dir / "pyproject.toml"
     if pyproject.exists():
@@ -601,13 +677,13 @@ def _find_pip_manifest(project_dir: Path) -> Optional[Path]:
     canonical = project_dir / "requirements.txt"
     if canonical.exists():
         return canonical
+    req_in = project_dir / "requirements.in"
+    if req_in.exists():
+        return req_in
     # Fall through to any other requirements*.txt — sorted for
     # determinism so the same manifest is picked across runs.
     for c in sorted(project_dir.glob("requirements*.txt")):
         return c
-    req_in = project_dir / "requirements.in"
-    if req_in.exists():
-        return req_in
     return None
 
 

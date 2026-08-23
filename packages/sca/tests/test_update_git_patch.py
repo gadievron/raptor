@@ -80,6 +80,7 @@ def test_git_patch_written_alongside_proposed(tmp_path: Path) -> None:
         "--out", str(out),
         "--allow-major",
         "--git-patch",
+        "--offline",
     ])
     assert rc == 0
     patch = out / "upgrade.patch"
@@ -128,6 +129,7 @@ def test_git_apply_actually_applies(tmp_path: Path) -> None:
         "--findings", str(findings),
         "--out", str(out),
         "--git-patch",
+        "--offline",
     ])
     patch = out / "upgrade.patch"
     assert patch.exists()
@@ -174,6 +176,7 @@ def test_git_patch_skipped_when_no_changes_applied(tmp_path: Path) -> None:
         "--out", str(out),
         "--allow-major",
         "--git-patch",
+        "--offline",
     ])
     assert not (out / "upgrade.patch").exists()
 
@@ -193,5 +196,60 @@ def test_no_git_patch_flag_means_no_patch(tmp_path: Path) -> None:
     out = tmp_path / "out"
     update.main([
         "--findings", str(findings), "--out", str(out),
+        "--offline",
     ])
     assert not (out / "upgrade.patch").exists()
+
+
+def test_exclude_globs_filter_findings_driven_patch(tmp_path: Path) -> None:
+    """`fix --cve-only --exclude '**/tests/**'` drops fixture-tree
+    manifests from the write set: the patch carries hunks for the prod
+    manifest only, even when the findings flag both."""
+    target = tmp_path / "repo"
+    (target / "service").mkdir(parents=True)
+    prod_pom = target / "service" / "pom.xml"
+    fixture_pom = target / "tests" / "fixtures" / "pom.xml"
+    fixture_pom.parent.mkdir(parents=True)
+    body = """\
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <dependencies><dependency>
+    <groupId>org.apache.logging.log4j</groupId>
+    <artifactId>log4j-core</artifactId>
+    <version>2.14.1</version>
+  </dependency></dependencies>
+</project>
+"""
+    prod_pom.write_text(body, encoding="utf-8")
+    fixture_pom.write_text(body, encoding="utf-8")
+
+    findings = _findings_file(tmp_path, [
+        _vuln_row(manifest=prod_pom, eco="Maven",
+                  name="org.apache.logging.log4j:log4j-core",
+                  version="2.14.1", fix="2.17.1"),
+        _vuln_row(manifest=fixture_pom, eco="Maven",
+                  name="org.apache.logging.log4j:log4j-core",
+                  version="2.14.1", fix="2.17.1"),
+    ])
+    out = tmp_path / "out"
+    rc = update.main([
+        "--findings", str(findings),
+        "--out", str(out),
+        "--allow-major",
+        "--git-patch",
+        "--offline",
+        "--exclude", "**/tests/**",
+    ])
+    assert rc == 0
+    patch = out / "upgrade.patch"
+    assert patch.exists()
+    patch_body = patch.read_text()
+    # Exactly one hunk — the prod manifest. (With a single touched
+    # manifest the patch root is its own directory, so the header is
+    # a bare pom.xml.)
+    assert patch_body.count("diff --git ") == 1
+    assert "pom.xml" in patch_body
+    assert "tests/fixtures" not in patch_body, (
+        "fixture manifest must not receive patch hunks"
+    )
+    # The fixture pin itself is untouched.
+    assert "<version>2.14.1</version>" in fixture_pom.read_text()

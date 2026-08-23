@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from packages.describe.deps import (
     DependencyCounts,
@@ -69,38 +69,38 @@ class TargetShape:
     defensive against future catalog substrate bugs.
     """
     target_path: Path
-    languages: Dict[str, int]
-    language_breakdown: Dict[str, float]
-    primary_language: Optional[str]
-    build_systems: Dict[str, str]
-    target_type: Optional[str]
+    languages: dict[str, int]
+    language_breakdown: dict[str, float]
+    primary_language: str | None
+    build_systems: dict[str, str]
+    target_type: str | None
     total_files: int
     total_lines: int
-    file_extensions: Dict[str, int] = field(default_factory=dict)
+    file_extensions: dict[str, int] = field(default_factory=dict)
     # Per-language LOC, e.g. {"cpp": 8000, "python": 1200}.
     # Sums to ``total_lines``. Lets the renderer show where the
     # mass of a mixed-language tree actually sits — file-count
     # share over-represents languages with many tiny files
     # (Java's one-class-per-file convention can dwarf a much
     # larger C++ kernel by file count alone).
-    language_lines: Dict[str, int] = field(default_factory=dict)
+    language_lines: dict[str, int] = field(default_factory=dict)
     # Git provenance for the target tree. All-None when the
     # target isn't a git checkout — render shows "Git: none
     # detected". Distinct from RAPTOR's own framework
     # provenance (core/run/provenance.py).
-    git: Optional[GitProvenance] = None
+    git: GitProvenance | None = None
     # Target's own license (LICENSE / COPYING etc. at the repo
     # root). Reused from ``core.license`` so /describe and the
     # run-lifecycle license warning share a single detector.
     # ``Any`` typed here to avoid an unconditional import at
     # module load — keeps target_shape importable when
     # core.license is unavailable (defence in depth).
-    license: Optional[Any] = None
+    license: Any | None = None
     # Direct-dep counts per ecosystem (npm / pypi / cargo /
     # gomod / …). Lockfiles excluded (those inflate to
     # transitive). Sourced from packages.sca substrate; empty
     # when no manifests / parser failure / /sca unavailable.
-    deps: Optional[DependencyCounts] = None
+    deps: DependencyCounts | None = None
 
 
 def infer_target_shape(target_path: Path) -> TargetShape:
@@ -151,7 +151,7 @@ def infer_target_shape(target_path: Path) -> TargetShape:
     )
 
 
-def _per_language_counts(ext_amounts: Dict[str, int]) -> Dict[str, int]:
+def _per_language_counts(ext_amounts: dict[str, int]) -> dict[str, int]:
     """Aggregate per-extension integer amounts into per-language
     integer amounts. Used twice in ``infer_target_shape``:
     once for file-counts, once for LOC. Same rollup rule for
@@ -168,7 +168,7 @@ def _per_language_counts(ext_amounts: Dict[str, int]) -> Dict[str, int]:
     through /codeql.
     """
     from core.inventory.languages import LANGUAGE_MAP
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for ext, amount in ext_amounts.items():
         lang = LANGUAGE_MAP.get(ext)
         if lang is None:
@@ -184,7 +184,7 @@ def _per_language_counts(ext_amounts: Dict[str, int]) -> Dict[str, int]:
     return out
 
 
-def _compute_breakdown(languages: Dict[str, int]) -> Dict[str, float]:
+def _compute_breakdown(languages: dict[str, int]) -> dict[str, float]:
     """Normalise file counts to percentages. Empty input → empty
     output (renderer skips the breakdown line)."""
     total = sum(languages.values())
@@ -196,17 +196,17 @@ def _compute_breakdown(languages: Dict[str, int]) -> Dict[str, float]:
     }
 
 
-def _pick_primary(breakdown: Dict[str, float]) -> Optional[str]:
+def _pick_primary(breakdown: dict[str, float]) -> str | None:
     """Language with the largest share. None when no languages
     detected. Ties broken by alphabetical name (deterministic)."""
     if not breakdown:
         return None
-    return max(breakdown.items(), key=lambda x: (x[1], -ord(x[0][0])))[0]
+    return sorted(breakdown.items(), key=lambda x: (-x[1], x[0]))[0][0]
 
 
 def _detect_build_systems(
-    target_path: Path, languages: Dict[str, int],
-) -> Dict[str, str]:
+    target_path: Path, languages: dict[str, int],
+) -> dict[str, str]:
     """Per-language build-system type. Skips languages the
     BuildDetector can't classify (returns None).
 
@@ -218,12 +218,12 @@ def _detect_build_systems(
     actual report). Probe outcome already shown in the
     "Build system: …" line of the report.
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     if not languages:
         return out
     try:
         import logging
-        from packages.codeql.build_detector import BuildDetector
+        from core.build.build_detector import BuildDetector
 
         # Drop the per-language probe chatter from the report.
         # BuildDetector uses ``get_logger()`` (no name), which
@@ -237,10 +237,7 @@ def _detect_build_systems(
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not (
-                    msg.startswith("Detecting build system for ")
-                    or msg.startswith("No build system detected for ")
-                    or msg.startswith("✓ Detected ")
-                    or msg.startswith("  Command: ")
+                    msg.startswith(("Detecting build system for ", "No build system detected for ", "✓ Detected ", "  Command: "))
                 )
 
         raptor_logger = logging.getLogger("raptor")
@@ -274,7 +271,7 @@ def _detect_license(target_path: Path):
         return None
 
 
-def _detect_target_type(target_path: Path) -> Optional[str]:
+def _detect_target_type(target_path: Path) -> str | None:
     """Matched target-type entry name via the existing
     ``core/run/target_types`` substrate. None on substrate
     failure (the catalog is best-effort throughout RAPTOR)."""
@@ -288,7 +285,7 @@ def _detect_target_type(target_path: Path) -> Optional[str]:
 
 def _scan_inventory(
     target_path: Path,
-) -> tuple[int, int, Dict[str, int], Dict[str, int]]:
+) -> tuple[int, int, dict[str, int], dict[str, int]]:
     """Total source file count + LOC + per-extension file count
     + per-extension LOC. Walks the tree once and counts every
     file whose extension is in ``LANGUAGE_MAP`` (i.e. a
@@ -321,8 +318,8 @@ def _scan_inventory(
 
     total_files = 0
     total_lines = 0
-    ext_counts: Dict[str, int] = {}
-    ext_lines: Dict[str, int] = {}
+    ext_counts: dict[str, int] = {}
+    ext_lines: dict[str, int] = {}
     # Per-file LOC read budget. Hostile targets can include a
     # huge text file (10s of GB) to make line counting allocate
     # forever; cap at 20 MB per file (covers every legitimate

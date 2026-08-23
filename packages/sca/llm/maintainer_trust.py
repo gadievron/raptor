@@ -15,10 +15,9 @@ The operator gets a starting point for manual review.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.llm.task_types import TaskType
-from ..models import Dependency
 from . import (
     StageResult,
     TaintedString,
@@ -28,14 +27,17 @@ from . import (
 from .prompts import MAINTAINER_TRUST_SYSTEM
 from .schemas import MaintainerTrustVerdict
 
+if TYPE_CHECKING:
+    from ..models import Dependency
+
 logger = logging.getLogger(__name__)
 
 
 def assess_maintainer_trust(
     client,
     dep: Dependency,
-    metadata: Dict[str, Any],
-) -> Optional[MaintainerTrustVerdict]:
+    metadata: dict[str, Any],
+) -> MaintainerTrustVerdict | None:
     """Run the LLM on registry metadata for one dependency.
 
     ``metadata`` should contain keys from the registry client:
@@ -81,16 +83,16 @@ def assess_maintainer_trust(
 
 def assess_batch(
     client,
-    dep_metadata_pairs: List[tuple[Dependency, Dict[str, Any]]],
-) -> Dict[str, Optional[MaintainerTrustVerdict]]:
+    dep_metadata_pairs: list[tuple[Dependency, dict[str, Any]]],
+) -> dict[str, MaintainerTrustVerdict | None]:
     """Assess multiple dependencies, keyed by ``dep.key()``."""
-    results: Dict[str, Optional[MaintainerTrustVerdict]] = {}
+    results: dict[str, MaintainerTrustVerdict | None] = {}
     for dep, meta in dep_metadata_pairs:
         results[dep.key()] = assess_maintainer_trust(client, dep, meta)
     return results
 
 
-def _format_metadata(dep: Dependency, meta: Dict[str, Any]) -> str:
+def _format_metadata(dep: Dependency, meta: dict[str, Any]) -> str:
     """Render metadata into a structured text block for the LLM."""
     lines = [
         f"Package: {dep.ecosystem}/{dep.name}",

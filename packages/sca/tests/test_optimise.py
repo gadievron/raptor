@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
 from packages.sca import optimise
 from packages.sca.update import _PlanEntry, UpgradeChange
+from packages.sca.versions import VersionError
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +585,21 @@ class TestCliDispatch:
         result = _positional_to_target_flag(["--allow-major", "--out", "."])
         assert "--target" not in result
 
+    def test_positional_to_target_flag_format_value_not_target(self):
+        """``--format``'s value must not be mistaken for the positional
+        target."""
+        from packages.sca.cli import _positional_to_target_flag
+        result = _positional_to_target_flag(
+            ["--format", "pr-comment", "/path"])
+        assert result == ["--format", "pr-comment", "--target", "/path"]
+
+    def test_positional_to_target_flag_validate_against_value_not_target(self):
+        from packages.sca.cli import _positional_to_target_flag
+        result = _positional_to_target_flag(
+            ["--validate-against", "pkg.json", "/path"])
+        assert result == ["--validate-against", "pkg.json",
+                          "--target", "/path"]
+
     def test_fix_harden_routes_to_harden(self):
         from packages.sca.cli import _dispatch_fix
         from unittest.mock import patch
@@ -915,6 +932,7 @@ class TestAnalyzeMajorBumps:
         assert verdicts == {}
         assert len(major_blocked) == 1
 
+    @pytest.mark.slow
     def test_safe_verdict_moves_to_vuln_plans(self):
         from pydantic import BaseModel
 
@@ -1111,3 +1129,68 @@ class TestAnalyzeMajorBumps:
         # The failing dep stays in major_blocked (treated as needs-review).
         assert key_err in major_blocked
         assert key_err not in approved
+
+
+class TestVersionErrorResilience:
+    def test_cross_manifest_propagation_survives_unparseable_version(self):
+        """VersionError from cross-ecosystem version strings must not crash."""
+        plan_a = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="4.17.19",
+            target="BOGUS_RUBY_VERSION",
+            manifest=Path("/a/package.json"), advisory_ids=["GHSA-1"],
+        )
+        plan_b = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="4.17.19",
+            target="4.17.21",
+            manifest=Path("/b/package.json"), advisory_ids=["GHSA-2"],
+        )
+        vuln_plans = {
+            ("npm", "lodash", Path("/a/package.json")): plan_a,
+            ("npm", "lodash", Path("/b/package.json")): plan_b,
+        }
+        with patch.object(optimise, "version_compare",
+                          side_effect=VersionError("unparseable")):
+            result = optimise._plan_hygiene_pins([], vuln_plans)
+        assert isinstance(result, dict)
+
+
+class TestExcludeGlobs:
+    """--exclude on the default `fix` path (this module): write-set
+    filtering shared with `fix --cve-only` via
+    ``update._filter_excluded_plans``."""
+
+    def test_parse_args_exclude_is_repeatable(self) -> None:
+        args = optimise._parse_args(
+            ["/tmp", "--exclude", "**/tests/**",
+             "--exclude", "**/fixtures/**"])
+        assert args.exclude == ["**/tests/**", "**/fixtures/**"]
+        assert optimise._parse_args(["/tmp"]).exclude is None
+
+    def test_filter_excluded_plans_drops_matching_manifests(
+        self, tmp_path: Path,
+    ) -> None:
+        from packages.sca.update import _filter_excluded_plans
+
+        prod = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="4.17.19",
+            target="4.17.21",
+            manifest=tmp_path / "package.json", advisory_ids=["GHSA-1"],
+        )
+        fixture = _PlanEntry(
+            ecosystem="npm", name="lodash", installed="1.0.0",
+            target="4.17.21",
+            manifest=tmp_path / "tests" / "fixtures" / "package.json",
+            advisory_ids=["GHSA-1"],
+        )
+        plans = {
+            ("npm", "lodash", str(prod.manifest)): prod,
+            ("npm", "lodash", str(fixture.manifest)): fixture,
+        }
+        kept, excluded = _filter_excluded_plans(
+            plans, ["**/tests/**"], root=tmp_path,
+        )
+        assert list(kept.values()) == [prod]
+        assert excluded == [str(fixture.manifest)]
+        # No patterns → no filtering, nothing reported.
+        kept2, excluded2 = _filter_excluded_plans(plans, None, root=tmp_path)
+        assert kept2 == plans and excluded2 == []

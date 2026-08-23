@@ -16,14 +16,14 @@ contexts (markdown report, log streamer, etc.).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def render_dataflow_validation_lines(
-    dv: Optional[Dict[str, Any]],
+    dv: dict[str, Any] | None,
     *,
     indent: str = "   ",
-) -> List[str]:
+) -> list[str]:
     """Render the IRIS dataflow validation summary as a list of lines.
 
     Args:
@@ -68,7 +68,7 @@ def render_dataflow_validation_lines(
             return [f"{indent}Dataflow validation skipped: {skipped_reason}"]
         return []
 
-    out: List[str] = []
+    out: list[str] = []
 
     # Header line — matches the existing summary cadence
     # ("Exploits generated: N", "Patches generated: N", …).
@@ -85,7 +85,7 @@ def render_dataflow_validation_lines(
     n_tier1 = dv.get("n_tier1_prebuilt", 0)
     n_tier2 = dv.get("n_tier2_template", 0)
     n_tier3 = dv.get("n_tier3_retry", 0)
-    tier_parts: List[str] = []
+    tier_parts: list[str] = []
     if n_tier1:
         tier_parts.append(f"{n_tier1} Tier 1 (free)")
     if n_tier2:
@@ -102,7 +102,7 @@ def render_dataflow_validation_lines(
     n_smt_refuted = dv.get("n_tier4_smt_refuted", 0)
     n_smt_witness = dv.get("n_tier4_smt_witness", 0)
     n_smt_disagree = dv.get("n_tier4_smt_disagree", 0)
-    smt_parts: List[str] = []
+    smt_parts: list[str] = []
     if n_smt_refuted:
         smt_parts.append(f"{n_smt_refuted} refuted")
     if n_smt_witness:
@@ -161,9 +161,9 @@ def render_dataflow_validation_lines(
     n_hard = dv.get("n_applied_downgrades", 0)
     n_soft = dv.get("n_soft_downgrades", 0)
     if n_recommended:
-        outcome: List[str] = [f"{n_recommended} flagged"]
+        outcome: list[str] = [f"{n_recommended} flagged"]
         if n_hard or n_soft:
-            bits: List[str] = []
+            bits: list[str] = []
             if n_hard:
                 bits.append(f"{n_hard} hard")
             if n_soft:

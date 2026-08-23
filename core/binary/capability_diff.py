@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
 
 from core.binary.fingerprint import (
     BUCKETS,  # noqa: F401  — re-exported for downstream parity
@@ -30,6 +28,10 @@ from core.binary.fingerprint import (
     CapabilityFingerprint,
     bucket_imports,  # noqa: F401  — re-exported for downstream parity
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +48,13 @@ class CapabilityDelta:
     compared. Informational; not load-bearing for evidence.
     """
 
-    new_dangerous_imports: Dict[str, List[str]] = field(
+    new_dangerous_imports: dict[str, list[str]] = field(
         default_factory=dict,
     )
-    current_path: Optional[Path] = None
-    target_path: Optional[Path] = None
-    current_fingerprint: Optional[CapabilityFingerprint] = None
-    target_fingerprint: Optional[CapabilityFingerprint] = None
+    current_path: Path | None = None
+    target_path: Path | None = None
+    current_fingerprint: CapabilityFingerprint | None = None
+    target_fingerprint: CapabilityFingerprint | None = None
 
     def is_empty(self) -> bool:
         """True when target adds no capabilities current didn't have."""
@@ -65,15 +67,15 @@ class CapabilityDelta:
             for bucket in self.new_dangerous_imports
         )
 
-    def added_buckets(self) -> List[str]:
+    def added_buckets(self) -> list[str]:
         """Sorted list of bucket names with new entries."""
-        return sorted(self.new_dangerous_imports.keys())
+        return sorted(self.new_dangerous_imports)
 
 
 def diff_binary_capabilities(
     current_binary: Path,
     target_binary: Path,
-) -> Optional[CapabilityDelta]:
+) -> CapabilityDelta | None:
     """Compare two binaries' capability surfaces.
 
     Implemented as a thin diff over two
@@ -110,7 +112,7 @@ def diff_binary_capabilities(
         )
         return None
 
-    new_imports: Dict[str, List[str]] = {}
+    new_imports: dict[str, list[str]] = {}
     for bucket_name, target_fns in target_fp.capability_buckets.items():
         target_set = set(target_fns)
         current_set = set(

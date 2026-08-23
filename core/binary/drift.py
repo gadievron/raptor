@@ -20,7 +20,6 @@ but a stored-fingerprint comparison surfaces it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 from core.binary.fingerprint import (
     CapabilityFingerprint,
@@ -52,8 +51,8 @@ class FingerprintDrift:
     arch_changed: bool = False
     bits_changed: bool = False
     format_changed: bool = False
-    new_buckets: Dict[str, List[str]] = field(default_factory=dict)
-    removed_buckets: Dict[str, List[str]] = field(default_factory=dict)
+    new_buckets: dict[str, list[str]] = field(default_factory=dict)
+    removed_buckets: dict[str, list[str]] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
         """True when previous and current are capability-
@@ -77,11 +76,11 @@ class FingerprintDrift:
             for bucket in self.new_buckets
         )
 
-    def added_buckets(self) -> List[str]:
-        return sorted(self.new_buckets.keys())
+    def added_buckets(self) -> list[str]:
+        return sorted(self.new_buckets)
 
-    def removed_bucket_names(self) -> List[str]:
-        return sorted(self.removed_buckets.keys())
+    def removed_bucket_names(self) -> list[str]:
+        return sorted(self.removed_buckets)
 
 
 def detect_drift(

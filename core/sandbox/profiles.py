@@ -14,12 +14,15 @@ sandbox() invocation in the process.
 
 import types
 
+FRIDA_PROFILE = "frida"
+
 # Profile definitions
 # -------------------
 # Profiles set ENFORCEMENT strictness. Audit mode is an ORTHOGONAL
 # concern engaged by the `--audit` CLI flag (or `audit=True` kwarg)
-# and works with any profile that has a seccomp filter (i.e. full or
-# debug); on `network-only` it engages only the egress-proxy log-mode
+# and works with any profile that has a seccomp filter (full, strict,
+# target_run, debug, frida); on `network-only` it engages only the
+# egress-proxy log-mode
 # gate (the other audit layers are no-ops because there's no Landlock
 # / seccomp to compare against), and on `none` it errors as
 # incoherent.
@@ -30,12 +33,35 @@ import types
 # strict:       same policy intent as full, but fail-closed if the host cannot
 #               provide the platform isolation backend. On Linux target/output
 #               isolation also requires mount namespaces.
+# target_run:   posture for spawning a harness-authored target binary
+#               that needs to expose a local listener (loopback TCP, UDS,
+#               etc.). Same Landlock + seccomp posture as ``full`` but
+#               ``block_network=False`` so the listener is reachable to
+#               the spawning harness. Callers that want isolation FROM
+#               the host's loopback (not just FROM the wider network)
+#               pair this profile with ``core/sandbox/
+#               netns_coordinator.py`` to put the listener in a shared
+#               isolated net-ns; the coordinator overrides
+#               ``block_network=True`` + ``inherit_netns=True`` per call,
+#               so the profile's loopback setting is irrelevant on that
+#               path. Defence-in-depth still comes from Landlock (caller
+#               passes ``allowed_tcp_ports=[port]`` per call) and seccomp.
 # debug:        full, but seccomp permits ptrace so gdb/rr can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
 #               so ptrace_scope=1 naturally authorises the trace.
 #               Composes with --audit so operators can see what would
 #               have been blocked while still running gdb/rr.
+# frida:        debug + AF_UNIX sockets allowed (frida-helper uses Unix
+#               domain sockets for its internal IPC with the target
+#               process). AF_NETLINK/AF_PACKET/SOCK_RAW stay blocked.
+#               ALSO ``block_network: False`` — the attach modes (USB /
+#               remote frida-server) speak TCP to the server, so the
+#               profile default leaves the network open for them. The
+#               sandboxed runner (packages/frida/sandboxed.py) passes
+#               ``block_network=spawn_mode`` per call, so SPAWNED
+#               targets still run network-blocked; the per-call kwarg
+#               is authoritative over this default, as everywhere.
 # network-only: network blocked + rlimits only (no Landlock, no seccomp).
 #               For tools whose correctness requires unrestricted fs or
 #               syscalls within a build — user's last-resort-short-of-none.
@@ -46,12 +72,44 @@ import types
 # moved out of the profile dict to CLI flags / per-call kwargs.
 PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
-    "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
+    # strict additionally defaults restrict_reads=True (and fake_home
+    # when output= is set): an operator choosing fail-closed semantics
+    # has accepted compatibility risk for guarantees, and read-
+    # everywhere leaves $HOME credentials exposed in Landlock-only
+    # mode (THREAT_MODEL.md I2-(a)). Explicit caller kwargs still win.
+    "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full",
+                                            "restrict_reads": True}),
+    "target_run":   types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
+    FRIDA_PROFILE:  types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
 })
 DEFAULT_PROFILE = "full"
+
+# Optional per-profile override for the live/post-hoc host-recon
+# escalation threshold (core.sandbox.proxy.DEFAULT_HOST_RECON_THRESHOLD
+# / core.sandbox.triage.DEFAULT_HOST_RECON_THRESHOLD — both currently
+# 5). Deliberately empty: no profile has an empirical false-positive/
+# false-negative basis yet for deviating from the default distinct-
+# denied-host count that counts as recon. Add entries here (keyed by
+# profile name, int value) as real usage data justifies loosening a
+# profile that legitimately touches many hosts (e.g. a dependency-
+# fetching workflow) or tightening one that should never need more
+# than one or two. Looked up via `host_recon_threshold_for_profile()`
+# below rather than read directly, so callers get the default
+# uniformly without each needing its own `.get(..., DEFAULT)` dance.
+_HOST_RECON_THRESHOLD_OVERRIDES: "types.MappingProxyType[str, int]" = (
+    types.MappingProxyType({})
+)
+
+
+def host_recon_threshold_for_profile(profile_name: str,
+                                     default: int) -> int:
+    """Per-profile host-recon threshold, falling back to `default`
+    (callers pass their own module's DEFAULT_HOST_RECON_THRESHOLD so
+    this module doesn't need to import triage.py or proxy.py)."""
+    return _HOST_RECON_THRESHOLD_OVERRIDES.get(profile_name, default)
 
 
 # Kwargs that configure isolation. Callers must not pass these to
@@ -63,6 +121,13 @@ _SANDBOX_KWARGS = frozenset({
     "profile", "disabled", "limits", "map_root",
     "use_egress_proxy", "proxy_hosts",
     "restrict_reads", "readable_paths",
+    # degraded_net_deny is context-level (the Landlock TCP-connect deny
+    # is compiled into the preexec at sandbox() setup); a per-call
+    # override would silently no-op.
+    "degraded_net_deny",
+    # omit_proc_reads is context-level too (the read allowlist is
+    # compiled into the preexec at sandbox() setup).
+    "omit_proc_reads",
     "caller_label",
     "fake_home",
     # tool_paths is sandbox()-level (extra dirs to bind-mount in
@@ -70,6 +135,10 @@ _SANDBOX_KWARGS = frozenset({
     # paths — pip --user, pyenv, homebrew — are visible inside
     # the sandbox). Passing to inner run() would silently no-op.
     "tool_paths",
+    # rootfs is sandbox()-level (each run() pivots into the image
+    # tree, but the fail-closed engagement gates are decided from
+    # context-creation state). A per-call value would silently no-op.
+    "rootfs",
     # Audit kwargs — included so run_trusted rejects them. Audit
     # mode is incoherent with profile="none" (no enforcement to
     # compare against), so passing audit=True to run_trusted is
@@ -77,9 +146,18 @@ _SANDBOX_KWARGS = frozenset({
     # no-op. audit_run_dir is sandbox()-level (decoupled target for
     # audit JSONL); passing it to inner run() would silently have no
     # effect — reject so the caller catches their mistake.
-    "audit", "audit_verbose", "audit_run_dir",
+    # audit_required is sandbox()-level for the same reason: the
+    # fail-closed decision is taken inside the context's run() closure
+    # from context-creation state; a per-call value would silently
+    # no-op.
+    "audit", "audit_verbose", "audit_run_dir", "audit_required",
     # Fingerprint-sanitisation kwargs — sandbox-context-level because
     # the persona is built once per context and reused across run()
     # calls. Per-call override would silently no-op.
     "sanitise_host_fingerprint", "cpu_count", "require_sanitisation",
+    # etc_overlay — dict mapping in-sandbox /etc paths to host source
+    # files that should be bind-mounted over them inside the sandbox.
+    # Sandbox-context-level because the bind happens during mount-ns
+    # init; per-call override would silently no-op.
+    "etc_overlay",
 })

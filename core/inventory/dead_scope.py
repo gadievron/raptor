@@ -13,12 +13,13 @@ the matching items ``lexical_dead=True``; the reachability prepass
 then demotes them regardless of in-scope call edges.
 
 Conservative bias (same as :mod:`core.inventory.module_load_abort`):
-only fire on unambiguously-constant guards. ``if DEBUG:`` is NOT dead
-(DEBUG is a runtime name); ``if False:`` IS. ``#[cfg(test)]`` is NOT
-dead (it compiles under the test profile); ``#[cfg(any())]`` IS
-(an empty ``any()`` is the canonical always-false cfg). False
-negatives are cheap (miss a deferral); false positives are expensive
-(silence a real finding in live code).
+only fire on unambiguously-constant guards, plus — for C/C++ — on
+file-scope ``static`` functions with no caller in their translation
+unit. ``if DEBUG:`` is NOT dead (DEBUG is a runtime name); ``if
+False:`` IS. ``#[cfg(test)]`` is NOT dead (it compiles under the test
+profile); ``#[cfg(any())]`` IS (an empty ``any()`` is the canonical
+always-false cfg). False negatives are cheap (miss a deferral); false
+positives are expensive (silence a real finding in live code).
 
 Per-language detection currently handled:
 
@@ -27,8 +28,15 @@ Per-language detection currently handled:
     constants: ``False``, ``0``, ``0.0``, ``""``, ``None``.
   * JavaScript / TypeScript: ``if (false) {…}`` / ``if (0) {…}`` at
     any brace depth — the guarded block range.
+  * C / C++: ``static`` functions whose name occurs exactly once in
+    the translation unit (definition only, no callers) — provably
+    dead at file scope.
   * Rust: ``if false {…}`` blocks, and ``#[cfg(any())]`` /
     ``#[cfg(all(any()))]`` attributes — the following ``fn`` block.
+  * PHP: ``if (false) {…}`` / ``if (0)`` / ``if (null)`` blocks —
+    the guarded block range.
+  * Ruby: ``if false`` / ``if nil`` / ``unless true`` /
+    ``while false`` blocks, matched by indentation-anchored ``end``.
 
 Other languages return ``[]`` (no detector wired) — graceful
 degradation; the consumer treats absence as "no dead scope found",
@@ -40,17 +48,17 @@ from __future__ import annotations
 import ast
 import logging
 import re
-from typing import List, Tuple
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
 # A dead scope is reported as an inclusive ``(start_line, end_line)``
 # 1-indexed range. A function whose ``line_start`` falls within any
 # returned range is lexically dead.
-DeadRange = Tuple[int, int]
+DeadRange = tuple[int, int]
 
 
-def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
+def detect_dead_scopes(language: str, content: str) -> list[DeadRange]:
     """Per-language dispatch. Returns inclusive 1-indexed line ranges
     of lexically dead scopes, or ``[]`` when none found (or the
     language has no detector wired).
@@ -65,6 +73,8 @@ def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
             return _detect_python(content)
         if language in ("javascript", "typescript", "tsx"):
             return _detect_javascript(content)
+        if language in ("c", "cpp"):
+            return _detect_c(content)
         if language == "rust":
             return _detect_rust(content)
         if language == "php":
@@ -81,7 +91,7 @@ def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
 # ---------------------------------------------------------------------------
 
 
-def _detect_python(content: str) -> List[DeadRange]:
+def _detect_python(content: str) -> list[DeadRange]:
     import warnings
     try:
         with warnings.catch_warnings():
@@ -89,7 +99,7 @@ def _detect_python(content: str) -> List[DeadRange]:
             tree = ast.parse(content)
     except SyntaxError:
         return []
-    ranges: List[DeadRange] = []
+    ranges: list[DeadRange] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.If, ast.While)) and _py_test_is_false(
             node.test
@@ -124,19 +134,25 @@ def _py_end_line(stmt: ast.stmt) -> int:
 # JavaScript / TypeScript — brace-tracked ``if (false) {…}`` blocks.
 # Regex finds the guard header; manual brace matching finds the block
 # extent (no stdlib JS AST; tree-sitter would be heavier than needed).
+# Non-code text is blanked by the shared single-pass lexer
+# (:func:`core.inventory.js_lexer.blank_js_noncode`) — the previous
+# two-phase comments-then-strings regex strip diverged from a real JS
+# lexer (a ``//`` inside a string ate the dead-if's closing brace; a
+# regex literal containing a quote resynced string state), letting a
+# hostile repo range live code as lexical_dead, a hard-suppress
+# witness.
 # ---------------------------------------------------------------------------
 
 
-_JS_LINE_COMMENT = re.compile(r"//[^\n]*")
-_JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _JS_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0)\s*\)\s*\{")
 
 
-def _detect_javascript(content: str) -> List[DeadRange]:
-    stripped = _js_strip_comments(content)
-    ranges: List[DeadRange] = []
+def _detect_javascript(content: str) -> list[DeadRange]:
+    from core.inventory.js_lexer import blank_js_noncode
+
+    stripped = blank_js_noncode(content)
+    ranges: list[DeadRange] = []
     for m in _JS_DEAD_IF.finditer(stripped):
-        # The opening brace is the last char of the match.
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
@@ -145,14 +161,6 @@ def _detect_javascript(content: str) -> List[DeadRange]:
         end_line = stripped.count("\n", 0, close) + 1
         ranges.append((start_line, end_line))
     return ranges
-
-
-def _js_strip_comments(content: str) -> str:
-    def _spaces(m: "re.Match[str]") -> str:
-        return re.sub(r"[^\n]", " ", m.group(0))
-    out = _JS_BLOCK_COMMENT.sub(_spaces, content)
-    out = _JS_LINE_COMMENT.sub(_spaces, out)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +190,8 @@ _RUST_ITEM_AFTER_CFG = re.compile(
 )
 
 
-def _detect_rust(content: str) -> List[DeadRange]:
-    ranges: List[DeadRange] = []
+def _detect_rust(content: str) -> list[DeadRange]:
+    ranges: list[DeadRange] = []
     # ``if false { … }`` blocks.
     for m in _RUST_DEAD_IF.finditer(content):
         brace_pos = m.end() - 1
@@ -203,8 +211,13 @@ def _detect_rust(content: str) -> List[DeadRange]:
         # First ``{`` after the attribute is the gated item's body —
         # nothing between the cfg and the body uses braces (attributes
         # use ``[]``, visibility uses ``()``, generics use ``<>``).
+        # A bodyless item (e.g. ``mod dead_mod;``) has no ``{`` before
+        # its ``;`` — skip rather than latching onto the next item.
         brace_rel = after.find("{")
+        semi_rel = after.find(";")
         if brace_rel == -1:
+            continue
+        if semi_rel != -1 and semi_rel < brace_rel:
             continue
         close = _match_brace(content, m.end() + brace_rel)
         if close is None:
@@ -219,11 +232,184 @@ def _detect_rust(content: str) -> List[DeadRange]:
 
 
 # ---------------------------------------------------------------------------
+# C / C++ — ``static`` functions with zero callers in the translation unit.
+#
+# A ``static`` function has file scope: it can only be called from
+# within its translation unit. If the function name (as a whole-word
+# match) appears exactly once in the file after stripping comments and
+# string/char literals, the definition is the only occurrence — no
+# code in the file calls it, so it is provably dead. The compiler
+# would emit ``-Wunused-function`` and optimise it away.
+#
+# Conservative: names appearing in macros, initialiser designators,
+# or sizeof expressions all count as occurrences, so we under-detect
+# rather than over-detect. ``__attribute__((constructor))`` /
+# ``destructor`` functions are skipped (called by the runtime, not by
+# source-level call sites).
+# ---------------------------------------------------------------------------
+
+
+_C_NOT_FUNC_NAMES = frozenset({
+    "if", "while", "for", "switch", "sizeof", "typeof", "alignof",
+    "return", "goto", "case", "do",
+    "void", "int", "char", "short", "long", "float", "double",
+    "unsigned", "signed", "bool", "_Bool",
+    "const", "volatile", "restrict", "_Atomic",
+    "struct", "enum", "union", "typedef",
+    "inline", "__inline", "__inline__", "__forceinline",
+    "__attribute__", "__extension__", "__typeof__",
+})
+
+
+def _c_strip_comments_and_strings(content: str) -> str:
+    """Strip C comments and string/char literals, preserving newlines."""
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n:
+            if out[i + 1] == "/":
+                while i < n and out[i] != "\n":
+                    out[i] = " "
+                    i += 1
+                continue
+            if out[i + 1] == "*":
+                out[i] = " "
+                out[i + 1] = " "
+                i += 2
+                while i < n:
+                    if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                        out[i] = " "
+                        out[i + 1] = " "
+                        i += 2
+                        break
+                    if out[i] != "\n":
+                        out[i] = " "
+                    i += 1
+                continue
+        if c in "\"'":
+            quote = c
+            out[i] = " "
+            i += 1
+            while i < n:
+                if out[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if out[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+# Scan-work budget for _detect_c. A crafted file of thousands of tiny
+# ``static`` definitions (or repeated never-closing headers) otherwise
+# makes every candidate re-scan toward EOF — O(candidates x file-size),
+# hours of CPU on a single 8 MiB input (the builder's per-file cap).
+# Legitimate code consumes roughly one file-length of scanning in total
+# (each body is walked once), so the factor leaves generous headroom;
+# on exhaustion we return the ranges found so far (under-detection is
+# the cheap, sound failure mode).
+_C_SCAN_BUDGET_FACTOR = 8
+# A parameter list longer than this is not a plausible function header —
+# same cap idea as the extractor's _MAX_C_LINE quadratic guard.
+_C_MAX_PARAM_SCAN = 16 * 1024
+
+
+def _detect_c(content: str) -> list[DeadRange]:
+    stripped = _c_strip_comments_and_strings(content)
+    ranges: list[DeadRange] = []
+    budget = _C_SCAN_BUDGET_FACTOR * len(stripped)
+    # Whole-word occurrence count for every identifier, computed once —
+    # a per-candidate re.findall over the full file is the other half of
+    # the O(candidates x file-size) blowup. Built lazily: most files have
+    # no static-function candidates at all.
+    counts: Counter[str] | None = None
+
+    for m in re.finditer(r"\bstatic\b", stripped):
+        if budget <= 0:
+            break
+        paren_pos = None
+        for j in range(m.end(), min(m.end() + 500, len(stripped))):
+            c = stripped[j]
+            if c == "(":
+                paren_pos = j
+                break
+            if c in ";{}":
+                break
+        if paren_pos is None:
+            continue
+
+        between = stripped[m.end():paren_pos]
+        name_match = re.search(r"\b(\w+)\s*$", between)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+
+        if name in _C_NOT_FUNC_NAMES:
+            continue
+        if re.search(r"constructor|destructor", between):
+            continue
+
+        depth = 1
+        j = paren_pos + 1
+        param_limit = min(len(stripped), paren_pos + 1 + _C_MAX_PARAM_SCAN)
+        while j < param_limit and depth > 0:
+            if stripped[j] == "(":
+                depth += 1
+            elif stripped[j] == ")":
+                depth -= 1
+            j += 1
+        budget -= j - paren_pos
+        if depth != 0:
+            continue
+
+        brace_pos = None
+        for k in range(j, min(j + 200, len(stripped))):
+            if stripped[k] == "{":
+                brace_pos = k
+                break
+            if stripped[k] == ";":
+                break
+        if brace_pos is None:
+            continue
+
+        close = _match_brace(stripped, brace_pos)
+        # A failed match scanned to EOF; charge the worst case so a file
+        # of never-closing bodies cannot force repeated full-file scans.
+        budget -= (close if close is not None else len(stripped)) - brace_pos
+        if close is None:
+            continue
+
+        if re.search(r"\binline\b|__inline\b|__inline__\b|__forceinline\b",
+                     between):
+            continue
+
+        if counts is None:
+            counts = Counter(re.findall(r"\w+", stripped))
+        if counts[name] <= 1:
+            start_line = stripped.count("\n", 0, m.start()) + 1
+            end_line = stripped.count("\n", 0, close) + 1
+            ranges.append((start_line, end_line))
+
+    return ranges
+
+
+# ---------------------------------------------------------------------------
 # Shared — brace matcher with string / char / line-comment skipping.
 # ---------------------------------------------------------------------------
 
 
-def _match_brace(source: str, open_pos: int) -> "int | None":
+def _match_brace(source: str, open_pos: int) -> int | None:
     """Given the index of an opening ``{``, return the index of the
     matching ``}``. Skips string / template / char literals and line
     comments so braces inside them don't unbalance the count. Returns
@@ -236,6 +422,10 @@ def _match_brace(source: str, open_pos: int) -> "int | None":
     while i < n:
         c = source[i]
         if c in "\"'`":
+            if c == "'" and i + 1 < n and source[i + 1].isalpha():
+                if i + 2 >= n or source[i + 2] != "'":
+                    i += 1
+                    continue
             j = _skip_string(source, i)
             if j is None:
                 return None
@@ -247,6 +437,19 @@ def _match_brace(source: str, open_pos: int) -> "int | None":
                 return None
             i = nl + 1
             continue
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            i += 2
+            bc_depth = 1
+            while i < n and bc_depth > 0:
+                if source[i] == "/" and i + 1 < n and source[i + 1] == "*":
+                    bc_depth += 1
+                    i += 2
+                elif source[i] == "*" and i + 1 < n and source[i + 1] == "/":
+                    bc_depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -257,7 +460,7 @@ def _match_brace(source: str, open_pos: int) -> "int | None":
     return None
 
 
-def _skip_string(source: str, start: int) -> "int | None":
+def _skip_string(source: str, start: int) -> int | None:
     """Advance past a string / template / char literal starting at
     ``start``. Handles backslash escapes."""
     quote = source[start]
@@ -283,19 +486,140 @@ def _skip_string(source: str, start: int) -> "int | None":
 # ---------------------------------------------------------------------------
 
 
-_PHP_HASH_COMMENT = re.compile(r"#[^\n]*")
 _PHP_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0|null)\s*\)\s*\{")
 
 
-def _detect_php(content: str) -> List[DeadRange]:
-    # Strip /* */, // and # comments so a brace/keyword inside one doesn't
-    # mislead the matcher (mirrors the JS detector + PHP's extra # comments).
-    def _spaces(m: "re.Match[str]") -> str:
-        return re.sub(r"[^\n]", " ", m.group(0))
-    stripped = _JS_BLOCK_COMMENT.sub(_spaces, content)
-    stripped = _JS_LINE_COMMENT.sub(_spaces, stripped)
-    stripped = _PHP_HASH_COMMENT.sub(_spaces, stripped)
-    ranges: List[DeadRange] = []
+def _php_strip_comments_and_strings(content: str) -> str:
+    """Strip PHP comments (``/* */``, ``//``, ``#``) AND string literals
+    (``'…'`` / ``"…"`` / heredoc / nowdoc) in one pass, preserving
+    newlines so line numbers stay valid.
+
+    Single-pass matters twice over: a ``#`` or ``//`` inside a string
+    (``"color: #fff"``) must not truncate the line, and an
+    ``if (false) {`` inside a string literal must never reach the
+    matcher — string content is untrusted target-repo text, and a match
+    starting mid-string yields garbage dead ranges that hard-suppress
+    real findings in live code (the expensive failure mode, per the
+    module header).
+    """
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n and out[i + 1] == "/":
+            while i < n and out[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "#":
+            while i < n and out[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and out[i + 1] == "*":
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            while i < n:
+                if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                    out[i] = " "
+                    out[i + 1] = " "
+                    i += 2
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if c == "<" and content.startswith("<<<", i):
+            j = _php_blank_heredoc(out, content, i)
+            if j is not None:
+                i = j
+            else:
+                i += 3
+            continue
+        if c in "\"'":
+            quote = c
+            out[i] = " "
+            i += 1
+            while i < n:
+                if out[i] == "\\" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if out[i] == quote:
+                    out[i] = " "
+                    i += 1
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _php_blank_heredoc(
+    out: list[str], content: str, start: int,
+) -> int | None:
+    """Blank a heredoc/nowdoc starting at ``start`` (the ``<<<``).
+    Returns the index just past the closing identifier, or ``None``
+    when ``<<<`` isn't followed by a valid opener (caller skips it).
+    Positions >= ``start`` in ``out`` are still pristine, so
+    ``content`` can be used for lookahead. Unterminated heredocs blank
+    to EOF — the remainder is string data, not code."""
+    n = len(content)
+    j = start + 3
+    quote = None
+    if j < n and content[j] in "\"'":
+        quote = content[j]
+        j += 1
+    ident_start = j
+    while j < n and (content[j].isalnum() or content[j] == "_"):
+        j += 1
+    ident = content[ident_start:j]
+    if not ident or ident[0].isdigit():
+        return None
+    if quote is not None:
+        if j >= n or content[j] != quote:
+            return None
+        j += 1
+    eol = content.find("\n", j)
+    if eol == -1 or content[j:eol].strip():
+        return None
+    # Body runs until a line whose first token (PHP 7.3 allows indented
+    # closers) is the identifier followed by a non-identifier char.
+    k = eol
+    end = n
+    while k < n:
+        line_start = k + 1
+        line_end = content.find("\n", line_start)
+        if line_end == -1:
+            line_end = n
+        line = content[line_start:line_end]
+        candidate = line.lstrip(" \t")
+        if candidate.startswith(ident):
+            rest = candidate[len(ident):]
+            if not rest or not (rest[0].isalnum() or rest[0] == "_"):
+                indent = len(line) - len(candidate)
+                end = line_start + indent + len(ident)
+                break
+        k = line_end
+    for p in range(start, end):
+        if out[p] != "\n":
+            out[p] = " "
+    return end
+
+
+def _detect_php(content: str) -> list[DeadRange]:
+    # Strip comments AND string literals in a single pass (the JS
+    # detector's two-phase regex approach would let a comment marker
+    # inside a string eat the closing quote) so neither a keyword in a
+    # comment nor an ``if (false) {`` in a string misleads the matcher.
+    stripped = _php_strip_comments_and_strings(content)
+    ranges: list[DeadRange] = []
     for m in _PHP_DEAD_IF.finditer(stripped):
         close = _match_brace(stripped, m.end() - 1)
         if close is None:
@@ -324,12 +648,42 @@ _RB_BRANCH_AT = re.compile(r"^(\s*)(?:else|elsif)\b")
 _RB_END_AT = re.compile(r"^(\s*)end\b")
 
 
-def _detect_ruby(content: str) -> List[DeadRange]:
-    lines = [re.sub(r"#.*$", "", ln) for ln in content.split("\n")]
-    ranges: List[DeadRange] = []
+def _strip_ruby_comment(line: str) -> str:
+    """Strip ``#`` comments while respecting string literals."""
+    in_str: str | None = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and in_str:
+            i += 2
+            continue
+        if in_str:
+            if c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c == "#":
+            return line[:i]
+        i += 1
+    return line
+
+
+def _detect_ruby(content: str) -> list[DeadRange]:
+    lines = [_strip_ruby_comment(ln) for ln in content.split("\n")]
+    ranges: list[DeadRange] = []
     for i, line in enumerate(lines):
         m = _RB_DEAD_IF.match(line)
         if not m:
+            continue
+        # Self-contained one-liner (``if false then nil end``): the
+        # opener's own ``end`` sits on the same line, so scanning the
+        # FOLLOWING lines for an indentation-matched ``end`` would
+        # latch onto an unrelated later block and range live code
+        # (e.g. the next ``def``) as dead. The whole construct lives
+        # on one line — nothing below it is dead; skip (under-detect,
+        # sound). Checked on the comment-stripped line; an ``end``
+        # inside a string also skips — same cheap FN direction.
+        if re.search(r"\bend\b", line[m.end(1):]):
             continue
         ind = m.group(1)
         for j in range(i + 1, len(lines)):

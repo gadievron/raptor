@@ -36,21 +36,21 @@ them into ran=False.
 from __future__ import annotations
 
 import logging
-import math
 import shutil
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.json import load_json, save_json
-from core.sandbox import run_untrusted_networked
-from core.llm.cc_proxy_hosts import (
-    readable_paths_for_cc_dispatch as _readable_paths_for_cc_dispatch,
+from core.orchestration.skill_dispatch import (
+    MAX_VALIDATE_FINDINGS,
+    StageError,
+    run_skill_dispatch,
+    truncate_findings_by_signal,
 )
-from core.llm.cc_proxy_hosts import (
-    proxy_hosts_for_cc_dispatch as _proxy_hosts_for_cc_dispatch,
+from core.orchestration.skill_dispatch import (
+    build_checklist as _build_checklist_via_libexec,
 )
 from core.schema_constants import CONFIDENCE_LEVELS
 from core.security.log_sanitisation import escape_nonprintable
@@ -59,8 +59,6 @@ logger = logging.getLogger(__name__)
 
 # core/orchestration/agentic_passes.py -> repo root (parents[2])
 _RAPTOR_DIR = Path(__file__).resolve().parents[2]
-_LIFECYCLE = _RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"
-_BUILD_CHECKLIST = _RAPTOR_DIR / "libexec" / "raptor-build-checklist"
 
 # Canonical "high" confidence value. Asserted against the enum at import so a
 # future reorder of CONFIDENCE_LEVELS can't silently break post-pass selection.
@@ -68,9 +66,9 @@ _HIGH_CONFIDENCE = "high"
 assert _HIGH_CONFIDENCE in CONFIDENCE_LEVELS, \
     f"_HIGH_CONFIDENCE drift: {_HIGH_CONFIDENCE!r} not in {CONFIDENCE_LEVELS!r}"
 
-# Sanity cap: even a pathological report shouldn't push more than this through
-# a single post-pass subprocess. Above the cap we truncate and log a warning.
-_MAX_VALIDATE_FINDINGS = 50
+# Re-exported from the shared skill-dispatch substrate (kept as a module
+# attribute so tests/monkeypatchers can dial the cap per-module).
+_MAX_VALIDATE_FINDINGS = MAX_VALIDATE_FINDINGS
 
 _UNDERSTAND_TOOLS = "Read,Grep,Glob,Write,Bash"
 _VALIDATE_TOOLS = "Read,Grep,Glob,Write,Bash"
@@ -87,9 +85,9 @@ _CHECKLIST_TIMEOUT_S = 300  # build_checklist parses every source file
 class PrepassResult:
     """Outcome of run_understand_prepass()."""
     ran: bool
-    skipped_reason: Optional[str] = None
-    understand_dir: Optional[Path] = None     # the proper run dir, if created
-    context_map_path: Optional[Path] = None
+    skipped_reason: str | None = None
+    understand_dir: Path | None = None     # the proper run dir, if created
+    context_map_path: Path | None = None
     checklist_enriched: bool = False          # priority markers written to agentic checklist?
     duration_s: float = 0.0
 
@@ -98,10 +96,10 @@ class PrepassResult:
 class PostpassResult:
     """Outcome of run_validate_postpass()."""
     ran: bool
-    skipped_reason: Optional[str] = None
+    skipped_reason: str | None = None
     selected_count: int = 0
-    validate_dir: Optional[Path] = None
-    report_path: Optional[Path] = None
+    validate_dir: Path | None = None
+    report_path: Path | None = None
     duration_s: float = 0.0
 
 
@@ -115,9 +113,9 @@ class ReachabilityPrepassResult:
     so they don't re-walk the source tree.
     """
     ran: bool
-    skipped_reason: Optional[str] = None
+    skipped_reason: str | None = None
     marked_count: int = 0          # functions marked priority=low
-    inventory: Optional[Any] = None
+    inventory: Any | None = None
     duration_s: float = 0.0
 
 
@@ -125,7 +123,7 @@ def run_understand_prepass(
     target: Path,
     agentic_out_dir: Path,
     block_cc_dispatch: bool = False,
-    claude_bin: Optional[str] = None,
+    claude_bin: str | None = None,
 ) -> PrepassResult:
     """Run the /understand --map skill before scanning.
 
@@ -147,118 +145,26 @@ def _run_understand_prepass_unsafe(
     target: Path,
     agentic_out_dir: Path,
     block_cc_dispatch: bool,
-    claude_bin: Optional[str],
+    claude_bin: str | None,
 ) -> PrepassResult:
-    if block_cc_dispatch:
-        return PrepassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
-
-    from core.security.rule_of_two import (
-        NonInteractiveError, require_human_or_sandbox_for_agentic_pass,
-    )
-    try:
-        require_human_or_sandbox_for_agentic_pass("understand")
-    except NonInteractiveError as e:
-        return PrepassResult(ran=False, skipped_reason=str(e))
-
-    claude_bin = claude_bin or shutil.which("claude")
-    if not claude_bin:
-        return PrepassResult(ran=False, skipped_reason="claude not on PATH")
-
     target = Path(target).resolve()
     agentic_out_dir = Path(agentic_out_dir).resolve()
 
-    t0 = time.time()
-
-    understand_dir = _start_lifecycle("understand", target)
-    if understand_dir is None:
-        return PrepassResult(ran=False, skipped_reason="lifecycle start failed",
-                             duration_s=time.time() - t0)
-
-    # Track whether the run reached a definitive end-state. If we exit via
-    # KeyboardInterrupt or another BaseException (which Exception doesn't
-    # catch), the finally clause still marks the lifecycle failed so the
-    # run dir doesn't linger in "running" state forever.
-    lifecycle_settled = False
-    try:
+    def _stage(understand_dir: Path) -> None:
         # Reuse the agentic pipeline's checklist if it's already built. Both
         # are produced from the same target via the same parser, so the
         # contents are equivalent — and it skips parsing the whole repo a
         # second time. Falls back to a fresh build if the agentic checklist
         # isn't present (e.g. when build_inventory failed earlier).
-        if not _provision_understand_checklist(target, agentic_out_dir, understand_dir):
-            # Mark settled BEFORE the call so that if _fail_lifecycle
-            # itself raises, the `finally` block's "interrupted"
-            # fallback doesn't overwrite the real failure reason.
-            # Same pattern at every other _fail_lifecycle call site
-            # in this function.
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, "checklist build failed")
-            return PrepassResult(ran=False, skipped_reason="checklist build failed",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
+        if not _provision_understand_checklist(target, agentic_out_dir,
+                                                understand_dir):
+            msg = "checklist build failed"
+            raise StageError(msg)
 
-        prompt = _build_understand_prompt(target, understand_dir)
-        try:
-            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
-            prepass_config = CCDispatchConfig(
-                claude_bin=claude_bin,
-                tools=_UNDERSTAND_TOOLS,
-                add_dirs=(str(_RAPTOR_DIR), str(target), str(understand_dir)),
-                budget_usd=_PREPASS_BUDGET_USD,
-                timeout_s=_PREPASS_TIMEOUT_S,
-                capture_json_envelope=False,
-            )
-            # Sandboxed Claude Code dispatch with restrict_reads=True.
-            # See cc_dispatch.py for rationale; this site adds
-            # str(_RAPTOR_DIR) on top of the calibrated/default
-            # readable_paths so the LLM-directed Bash tool can invoke
-            # libexec/raptor-normalize-context-map (MAP-5) and
-            # libexec/raptor-coverage-summary --mark (MAP-6) — those
-            # scripts live under RAPTOR_DIR. target+understand_dir
-            # auto-allowlisted via target=/output= positional args.
-            proc = run_untrusted_networked(
-                build_cc_command(prepass_config),
-                input=prompt, text=True,
-                timeout=_PREPASS_TIMEOUT_S,
-                target=str(target), output=str(understand_dir),
-                readable_paths=(
-                    [str(_RAPTOR_DIR)] + _readable_paths_for_cc_dispatch(claude_bin)
-                ),
-                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
-                caller_label="agentic-understand",
-            )
-        except subprocess.TimeoutExpired:
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
-            logger.warning("understand pre-pass timed out after %ds", _PREPASS_TIMEOUT_S)
-            return PrepassResult(ran=False, skipped_reason=f"timeout after {_PREPASS_TIMEOUT_S}s",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
-        except OSError as e:
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, f"launch failed: {e}")
-            logger.warning("understand pre-pass failed to launch: %s", e)
-            return PrepassResult(ran=False, skipped_reason=f"launch failed: {e}",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
-
-        if proc.returncode != 0:
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, f"subprocess returned {proc.returncode}")
-            logger.warning("understand pre-pass returned %d", proc.returncode)
-            return PrepassResult(ran=False, skipped_reason=f"subprocess returned {proc.returncode}",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
-
+    def _check_outputs(understand_dir: Path) -> str | None:
         context_map = understand_dir / "context-map.json"
         if not context_map.exists():
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, "context-map.json missing after run")
-            logger.warning("understand pre-pass completed but context-map.json was not written")
-            return PrepassResult(ran=False, skipped_reason="context-map.json missing after run",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
-
+            return "context-map.json missing after run"
         # claude -p might have crashed mid-write or produced structurally
         # invalid output. Existence isn't enough — the bridge silently returns
         # no context for unparseable files, and crashes mid-iteration if a
@@ -268,51 +174,59 @@ def _run_understand_prepass_unsafe(
         parsed = load_json(context_map)
         shape_error = _validate_context_map_shape(parsed)
         if shape_error is not None:
-            lifecycle_settled = True
-            _fail_lifecycle(understand_dir, f"context-map.json invalid: {shape_error}")
-            logger.warning("understand pre-pass: context-map.json failed shape check (%s)",
-                           shape_error)
-            return PrepassResult(ran=False, skipped_reason=f"context-map.json invalid: {shape_error}",
-                                 understand_dir=understand_dir,
-                                 duration_s=time.time() - t0)
+            return f"context-map.json invalid: {shape_error}"
+        return None
 
-        _complete_lifecycle(understand_dir)
-        lifecycle_settled = True
+    # The shared runner adds str(_RAPTOR_DIR) on top of the calibrated
+    # readable_paths so the LLM-directed Bash tool can invoke
+    # libexec/raptor-normalize-context-map (MAP-5) and
+    # libexec/raptor-coverage-summary --mark (MAP-6) — those scripts
+    # live under RAPTOR_DIR. target + understand_dir are auto-
+    # allowlisted via the target=/output= positional args.
+    dispatch = run_skill_dispatch(
+        command="understand",
+        target=target,
+        tools=_UNDERSTAND_TOOLS,
+        budget_usd=_PREPASS_BUDGET_USD,
+        timeout_s=_PREPASS_TIMEOUT_S,
+        caller_label="agentic-understand",
+        log_label="understand pre-pass",
+        build_prompt=lambda run_dir: _build_understand_prompt(target, run_dir),
+        block_cc_dispatch=block_cc_dispatch,
+        claude_bin=claude_bin,
+        stage=_stage,
+        validate_outputs=_check_outputs,
+    )
+    if not dispatch.ran:
+        return PrepassResult(ran=False,
+                             skipped_reason=dispatch.skipped_reason,
+                             understand_dir=dispatch.run_dir,
+                             duration_s=dispatch.duration_s)
 
-        # Best-effort: enrich the agentic checklist with priority markers from
-        # the context map. The agentic analysis pipeline reads priority/
-        # priority_reason from per-function metadata and surfaces it in the
-        # analysis prompt — so --understand pays off in this run too, not just
-        # any later /validate.
-        enriched = _enrich_agentic_checklist(agentic_out_dir, context_map)
+    context_map = dispatch.run_dir / "context-map.json"
 
-        # NOTE: the reachability low-priority marking previously
-        # lived here (under the --understand-only branch) but is
-        # now hoisted to ``run_reachability_prepass`` so it fires
-        # regardless of whether --understand was passed.
-        # Operators not using --understand still get the dead-
-        # code priority signal in their checklist, which
-        # benefits the agentic LLM budget allocation.
+    # Best-effort: enrich the agentic checklist with priority markers from
+    # the context map. The agentic analysis pipeline reads priority/
+    # priority_reason from per-function metadata and surfaces it in the
+    # analysis prompt — so --understand pays off in this run too, not just
+    # any later /validate.
+    enriched = _enrich_agentic_checklist(agentic_out_dir, context_map)
 
-        return PrepassResult(
-            ran=True,
-            understand_dir=understand_dir,
-            context_map_path=context_map,
-            checklist_enriched=enriched,
-            duration_s=time.time() - t0,
-        )
+    # NOTE: the reachability low-priority marking previously
+    # lived here (under the --understand-only branch) but is
+    # now hoisted to ``run_reachability_prepass`` so it fires
+    # regardless of whether --understand was passed.
+    # Operators not using --understand still get the dead-
+    # code priority signal in their checklist, which
+    # benefits the agentic LLM budget allocation.
 
-    except Exception:
-        # Make sure the lifecycle is marked failed before propagating.
-        lifecycle_settled = True
-        _fail_lifecycle(understand_dir, "unexpected exception")
-        raise
-    finally:
-        # KeyboardInterrupt / SystemExit / any other BaseException bypasses
-        # the except-Exception clause above. Make sure the run dir is marked
-        # failed so the bridge doesn't keep finding it as "in progress".
-        if not lifecycle_settled:
-            _fail_lifecycle(understand_dir, "interrupted")
+    return PrepassResult(
+        ran=True,
+        understand_dir=dispatch.run_dir,
+        context_map_path=context_map,
+        checklist_enriched=enriched,
+        duration_s=dispatch.duration_s,
+    )
 
 
 def run_validate_postpass(
@@ -320,9 +234,10 @@ def run_validate_postpass(
     agentic_out_dir: Path,
     analysis_report: Path,
     block_cc_dispatch: bool = False,
-    claude_bin: Optional[str] = None,
+    claude_bin: str | None = None,
     *,
     allow_unreachable: bool = False,
+    audit_dir: Path | None = None,
 ) -> PostpassResult:
     """Run /validate against findings flagged exploitable or high-confidence.
 
@@ -336,12 +251,19 @@ def run_validate_postpass(
     PipelineConfig.allow_unreachable field threads to the Stage B
     attack-path demoter).
 
+    ``audit_dir`` (from --gap-audit) merges the sibling audit run's
+    findings.json into the selection, so one validate pass covers both
+    pipelines' findings. Audit findings are tool-confirmed and take the
+    head of the selection cap; agentic findings fill the remainder in
+    signal order.
+
     Never raises — enrichment failure must not break the base agentic pipeline.
     """
     try:
         return _run_validate_postpass_unsafe(
             target, agentic_out_dir, analysis_report, block_cc_dispatch,
-            claude_bin, allow_unreachable=allow_unreachable)
+            claude_bin, allow_unreachable=allow_unreachable,
+            audit_dir=audit_dir)
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
         return PostpassResult(ran=False,
@@ -353,82 +275,41 @@ def _run_validate_postpass_unsafe(
     agentic_out_dir: Path,
     analysis_report: Path,
     block_cc_dispatch: bool,
-    claude_bin: Optional[str],
+    claude_bin: str | None,
     *,
     allow_unreachable: bool = False,
+    audit_dir: Path | None = None,
 ) -> PostpassResult:
-    if block_cc_dispatch:
-        return PostpassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
-
-    from core.security.rule_of_two import (
-        NonInteractiveError, require_human_or_sandbox_for_agentic_pass,
-    )
-    try:
-        require_human_or_sandbox_for_agentic_pass("validate")
-    except NonInteractiveError as e:
-        return PostpassResult(ran=False, skipped_reason=str(e))
-
-    claude_bin = claude_bin or shutil.which("claude")
-    if not claude_bin:
-        return PostpassResult(ran=False, skipped_reason="claude not on PATH")
-
-    analysis_report = Path(analysis_report)
-    if not analysis_report.exists():
-        return PostpassResult(ran=False, skipped_reason="analysis report not found — base pipeline produced no results")
-
-    selected = _select_findings_for_validate(analysis_report)
-    if not selected:
-        return PostpassResult(ran=False,
-                              skipped_reason="no findings matched is_exploitable=true or confidence=high")
-
-    if len(selected) > _MAX_VALIDATE_FINDINGS:
-        # Sort by signal strength so truncation drops the weakest qualifiers,
-        # not whoever happened to be last in report order. Priority:
-        # 1. is_exploitable=True wins over confidence-only
-        # 2. higher exploitability_score wins (when present)
-        # 3. ties broken by report order (Python sort is stable)
-        def _safe_score(f):
-            # The schema says exploitability_score is a number, but malformed
-            # LLM output (e.g. "high" instead of 0.9) shouldn't crash sort
-            # mid-truncation. Coerce non-numeric to 0. Also guard against
-            # NaN/Inf — Python sort with NaN keys produces undefined order
-            # because NaN compares False to everything; we'd get
-            # non-deterministic truncation.
-            raw = f.get("exploitability_score")
-            try:
-                v = float(raw) if raw is not None else 0.0
-            except (TypeError, ValueError):
-                return 0.0
-            if math.isnan(v) or math.isinf(v):
-                return 0.0
-            return v
-        def _signal_key(f):
-            return (
-                0 if f.get("is_exploitable") is True else 1,  # exploitable first
-                -_safe_score(f),                                # score descending
-            )
-        selected.sort(key=_signal_key)
-        logger.warning("validate post-pass: %d findings selected; truncating to %d "
-                       "(keeping highest-signal: is_exploitable then exploitability_score)",
-                       len(selected), _MAX_VALIDATE_FINDINGS)
-        selected = selected[:_MAX_VALIDATE_FINDINGS]
-
     target = Path(target).resolve()
     agentic_out_dir = Path(agentic_out_dir).resolve()
-    analysis_report = analysis_report.resolve()
+    analysis_report = Path(analysis_report)
 
-    t0 = time.time()
+    selected: list = []
+    audit_selected: list = []
 
-    validate_dir = _start_lifecycle("validate", target)
-    if validate_dir is None:
-        return PostpassResult(ran=False, selected_count=len(selected),
-                              skipped_reason="lifecycle start failed",
-                              duration_s=time.time() - t0)
+    def _preflight() -> str | None:
+        audit_selected.extend(
+            _load_audit_findings(audit_dir)[:_MAX_VALIDATE_FINDINGS])
+        found: list = []
+        if analysis_report.exists():
+            found = _select_findings_for_validate(analysis_report)
+        elif not audit_selected:
+            return "analysis report not found — base pipeline produced no results"
+        if not found and not audit_selected:
+            return "no findings matched is_exploitable=true or confidence=high"
+        remaining = _MAX_VALIDATE_FINDINGS - len(audit_selected)
+        if found and remaining > 0:
+            selected.extend(truncate_findings_by_signal(
+                found, remaining, log_label="validate post-pass"))
+        elif found:
+            logger.info(
+                "validate post-pass: selection cap consumed by %d audit "
+                "findings — %d agentic findings not selected",
+                len(audit_selected), len(found),
+            )
+        return None
 
-    # Same KeyboardInterrupt-aware cleanup pattern as the pre-pass — see
-    # _run_understand_prepass_unsafe for the rationale.
-    lifecycle_settled = False
-    try:
+    def _stage(validate_dir: Path) -> None:
         # Persist the selected records to a file rather than splicing
         # LLM-generated finding_id values into the prompt — defends against
         # any injection attempt riding in on a finding identifier.
@@ -436,8 +317,15 @@ def _run_validate_postpass_unsafe(
         # skill can consume the file directly without prompt-driven
         # field translation (was the stopgap; this is the real fix).
         selection_file = validate_dir / "selected-findings.json"
-        save_json(selection_file,
-                  convert_agentic_to_validate(selected, str(target)))
+        payload = convert_agentic_to_validate(selected, str(target))
+        if audit_selected:
+            # Audit findings lead the container: they carry tool
+            # evidence (G2) where agentic findings carry LLM verdicts.
+            payload["findings"] = (
+                convert_audit_to_validate(audit_selected)
+                + payload["findings"]
+            )
+        save_json(selection_file, payload)
 
         # Drop a pointer to the parent /agentic checklist so /validate's
         # Stage 0 can reuse it instead of rebuilding the inventory from
@@ -480,203 +368,47 @@ def _run_validate_postpass_unsafe(
                 {"allow_unreachable": True},
             )
 
-        prompt = _build_validate_prompt(target, agentic_out_dir, validate_dir,
-                                        analysis_report, selection_file, len(selected),
-                                        allow_unreachable=allow_unreachable)
+    def _prompt(validate_dir: Path) -> str:
+        return _build_validate_prompt(
+            target, agentic_out_dir, validate_dir,
+            analysis_report.resolve(),
+            validate_dir / "selected-findings.json",
+            len(selected) + len(audit_selected),
+            allow_unreachable=allow_unreachable)
 
-        try:
-            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
-            postpass_config = CCDispatchConfig(
-                claude_bin=claude_bin,
-                tools=_VALIDATE_TOOLS,
-                add_dirs=(str(_RAPTOR_DIR), str(target), str(agentic_out_dir), str(validate_dir)),
-                budget_usd=_POSTPASS_BUDGET_USD,
-                timeout_s=_POSTPASS_TIMEOUT_S,
-                capture_json_envelope=False,
-            )
-            # Same restrict_reads=True posture as /understand prepass —
-            # see that site for rationale. /validate's tool list is
-            # broader (Bash for sandbox prep, SMT, feasibility helpers),
-            # all of which run from RAPTOR_DIR/libexec; agentic_out_dir
-            # holds the prior phases' artefacts the LLM reads back.
-            # restrict_reads still applies — those paths are in
-            # readable_paths; $HOME secrets stay denied. Calibrated
-            # paths (when available) carry the per-binary install
-            # layout; site-specific extras (RAPTOR_DIR, agentic_out_dir)
-            # are prepended.
-            proc = run_untrusted_networked(
-                build_cc_command(postpass_config),
-                input=prompt, text=True,
-                timeout=_POSTPASS_TIMEOUT_S,
-                target=str(target), output=str(validate_dir),
-                readable_paths=(
-                    [str(_RAPTOR_DIR), str(agentic_out_dir)]
-                    + _readable_paths_for_cc_dispatch(claude_bin)
-                ),
-                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
-                caller_label="agentic-validate",
-            )
-        except subprocess.TimeoutExpired:
-            _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
-            lifecycle_settled = True
-            logger.warning("validate post-pass timed out after %ds", _POSTPASS_TIMEOUT_S)
-            return PostpassResult(ran=False, selected_count=len(selected),
-                                  validate_dir=validate_dir,
-                                  skipped_reason=f"timeout after {_POSTPASS_TIMEOUT_S}s",
-                                  duration_s=time.time() - t0)
-        except OSError as e:
-            _fail_lifecycle(validate_dir, f"launch failed: {e}")
-            lifecycle_settled = True
-            logger.warning("validate post-pass failed to launch: %s", e)
-            return PostpassResult(ran=False, selected_count=len(selected),
-                                  validate_dir=validate_dir,
-                                  skipped_reason=f"launch failed: {e}",
-                                  duration_s=time.time() - t0)
+    # /validate's tool list is broad (Bash for sandbox prep, SMT,
+    # feasibility helpers), all of which run from RAPTOR_DIR/libexec;
+    # agentic_out_dir (context_dirs) holds the prior phases' artefacts
+    # the LLM reads back. restrict_reads still applies — those paths
+    # are in readable_paths; $HOME secrets stay denied.
+    dispatch = run_skill_dispatch(
+        command="validate",
+        target=target,
+        tools=_VALIDATE_TOOLS,
+        budget_usd=_POSTPASS_BUDGET_USD,
+        timeout_s=_POSTPASS_TIMEOUT_S,
+        caller_label="agentic-validate",
+        log_label="validate post-pass",
+        build_prompt=_prompt,
+        block_cc_dispatch=block_cc_dispatch,
+        claude_bin=claude_bin,
+        context_dirs=(agentic_out_dir,),
+        preflight=_preflight,
+        stage=_stage,
+    )
+    if not dispatch.ran:
+        return PostpassResult(ran=False,
+                              selected_count=len(selected) + len(audit_selected),
+                              validate_dir=dispatch.run_dir,
+                              skipped_reason=dispatch.skipped_reason,
+                              duration_s=dispatch.duration_s)
 
-        if proc.returncode != 0:
-            _fail_lifecycle(validate_dir, f"subprocess returned {proc.returncode}")
-            lifecycle_settled = True
-            logger.warning("validate post-pass returned %d", proc.returncode)
-            return PostpassResult(ran=False, selected_count=len(selected),
-                                  validate_dir=validate_dir,
-                                  skipped_reason=f"subprocess returned {proc.returncode}",
-                                  duration_s=time.time() - t0)
-
-        _complete_lifecycle(validate_dir)
-        lifecycle_settled = True
-        report_path = validate_dir / "validation-report.md"
-
-        return PostpassResult(ran=True, selected_count=len(selected),
-                              validate_dir=validate_dir,
-                              report_path=report_path if report_path.exists() else None,
-                              duration_s=time.time() - t0)
-
-    except Exception:
-        _fail_lifecycle(validate_dir, "unexpected exception")
-        lifecycle_settled = True
-        raise
-    finally:
-        if not lifecycle_settled:
-            _fail_lifecycle(validate_dir, "interrupted")
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle helpers — wrap libexec/raptor-run-lifecycle and raptor-build-checklist.
-# ---------------------------------------------------------------------------
-
-
-def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
-    """Start a new lifecycle-managed run dir.
-
-    Returns the OUTPUT_DIR path on success, or None if the helper failed
-    or its output couldn't be parsed.
-
-    Pre-fix the four lifecycle helpers (start/complete/fail
-    + _build_checklist) called subprocess.run WITHOUT
-    `env=`, inheriting the parent process's full
-    environment. When /agentic runs against an untrusted
-    target — operator points RAPTOR at a freshly cloned
-    OSS repo — the parent env may carry attacker-relevant
-    vars (LD_PRELOAD, PYTHONSTARTUP, BASH_ENV from a
-    poisoned dotfile, GIT_CONFIG_GLOBAL pointing at a
-    malicious config). Inheriting them into the lifecycle
-    subprocesses (which themselves invoke raptor-managed
-    bash + python) widens the trust boundary unnecessarily.
-
-    Use `RaptorConfig.get_safe_env()` (strips the
-    DANGEROUS_ENV_VARS set: LD_PRELOAD/PYTHONSTARTUP/etc.).
-    The lifecycle helpers don't depend on operator env beyond
-    PATH/HOME/USER which `get_safe_env` preserves.
-    """
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        proc = subprocess.run(
-            [str(_LIFECYCLE), "start", command, "--target", str(target)],
-            capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
-            env=safe_env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("lifecycle start %s failed: %s", command, e)
-        return None
-    if proc.returncode != 0:
-        logger.warning("lifecycle start %s returned %d: %s",
-                       command, proc.returncode, (proc.stderr or "")[:300])
-        return None
-    for line in reversed(proc.stdout.splitlines()):
-        line = line.strip()
-        if line.startswith("OUTPUT_DIR="):
-            return Path(line[len("OUTPUT_DIR="):]).resolve()
-    logger.warning("lifecycle start %s did not emit OUTPUT_DIR=", command)
-    return None
-
-
-def _complete_lifecycle(output_dir: Path) -> None:
-    """Mark a lifecycle run as completed. Best-effort; swallows errors.
-
-    See `_start_lifecycle` for the env=safe_env rationale —
-    same parent-env-inheritance concern.
-    """
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        proc = subprocess.run(
-            [str(_LIFECYCLE), "complete", str(output_dir)],
-            capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
-            env=safe_env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("lifecycle complete failed: %s", e)
-        return
-    if proc.returncode != 0:
-        logger.warning("lifecycle complete returned %d: %s",
-                       proc.returncode, (proc.stderr or "")[:300])
-
-
-def _fail_lifecycle(output_dir: Path, message: str) -> None:
-    """Mark a lifecycle run as failed. Best-effort; swallows errors.
-
-    See `_start_lifecycle` for the env=safe_env rationale.
-    """
-    if output_dir is None:
-        return
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        proc = subprocess.run(
-            [str(_LIFECYCLE), "fail", str(output_dir), message],
-            capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
-            env=safe_env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("lifecycle fail failed: %s", e)
-        return
-    if proc.returncode != 0:
-        logger.warning("lifecycle fail returned %d: %s",
-                       proc.returncode, (proc.stderr or "")[:300])
-
-
-def _build_checklist(target: Path, output_dir: Path) -> bool:
-    """Run libexec/raptor-build-checklist. Returns True on success.
-
-    See `_start_lifecycle` for the env=safe_env rationale.
-    """
-    from core.config import RaptorConfig
-    safe_env = RaptorConfig.get_safe_env()
-    try:
-        proc = subprocess.run(
-            [str(_BUILD_CHECKLIST), str(target), str(output_dir)],
-            capture_output=True, text=True, timeout=_CHECKLIST_TIMEOUT_S,
-            env=safe_env,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning("build_checklist failed: %s", e)
-        return False
-    if proc.returncode != 0:
-        logger.warning("build_checklist returned %d: %s",
-                       proc.returncode, (proc.stderr or "")[:300])
-        return False
-    return True
+    report_path = dispatch.run_dir / "validation-report.md"
+    return PostpassResult(ran=True,
+                          selected_count=len(selected) + len(audit_selected),
+                          validate_dir=dispatch.run_dir,
+                          report_path=report_path if report_path.exists() else None,
+                          duration_s=dispatch.duration_s)
 
 
 def _provision_understand_checklist(target: Path, agentic_out_dir: Path,
@@ -697,7 +429,56 @@ def _provision_understand_checklist(target: Path, agentic_out_dir: Path,
             return True
         except OSError as e:
             logger.warning("checklist copy failed (%s); falling back to fresh build", e)
-    return _build_checklist(target, understand_dir)
+    return _build_checklist_via_libexec(target, understand_dir)
+
+
+def _load_audit_findings(audit_dir: Path | None) -> list:
+    """Load a sibling /audit run's findings.json (bare list or
+    ``{"findings": [...]}``). Best-effort: missing or malformed input
+    yields an empty list."""
+    if audit_dir is None:
+        return []
+    data = load_json(Path(audit_dir) / "findings.json")
+    if isinstance(data, dict):
+        data = data.get("findings")
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def convert_audit_to_validate(audit_findings: list) -> list:
+    """Translate /audit finding dicts into /validate Finding shape.
+
+    /audit already emits validate-style names (file / line /
+    description — see core.audit.findings.emit_finding); the bridge's
+    ``normalize_audit_findings`` adds evidence-derived confidence and
+    the ``audit_context`` block, and the canonical ``Finding``
+    dataclass applies the same value coercions the agentic conversion
+    gets. ``audit_context`` is re-attached after canonical
+    serialisation (it is not a Finding field), mirroring the
+    ``ruling`` handling in ``_convert_one_finding``.
+    """
+    from core.orchestration.audit_bridge import normalize_audit_findings
+    from packages.exploitability_validation.models import Finding
+
+    out = []
+    for f in normalize_audit_findings(audit_findings):
+        if not isinstance(f, dict):
+            continue
+        raw = dict(f)
+        if not raw.get("description"):
+            raw["description"] = (
+                raw.get("title") or raw.get("hypothesis") or ""
+            )
+        # /audit emits "cwe"; the Finding field is cwe_id.
+        if raw.get("cwe") and not raw.get("cwe_id"):
+            raw["cwe_id"] = raw["cwe"]
+        raw.setdefault("origin", "audit-postpass")
+        converted = Finding.from_dict(raw).to_dict()
+        if raw.get("audit_context"):
+            converted["audit_context"] = raw["audit_context"]
+        out.append(converted)
+    return out
 
 
 def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dict:
@@ -709,6 +490,12 @@ def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dic
     — fragile, since the LLM may forget fields or mis-handle the
     ``ruling`` string→object change.
 
+    The output is built on the canonical /validate dataclasses
+    (``FindingsContainer.create_empty`` + ``Finding.from_dict``) so
+    coercion fixes on the /validate side (line coercion, None handling)
+    apply here automatically instead of being re-implemented. Only the
+    INPUT-side field mapping (agentic → validate names) lives here.
+
     Args:
         agentic_findings: list of finding dicts in /agentic shape (per
             FINDING_RESULT_SCHEMA).
@@ -718,49 +505,47 @@ def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dic
         A dict in /validate FindingsContainer shape — ready to drop into a
         findings.json that /validate's Stage 0/A can consume directly.
     """
-    converted = []
-    for f in agentic_findings or []:
-        if not isinstance(f, dict):
-            continue
-        converted.append(_convert_one_finding(f))
-    return {
-        "stage": "agentic-postpass",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "target_path": target_path,
-        "source": "agentic-hybrid-orchestration",
-        "findings": converted,
-    }
+    from packages.exploitability_validation.models import FindingsContainer
 
-
-def _safe_line(raw) -> int:
-    """Coerce LLM-emitted `line` (int / "12" / "12-15" / garbage) to int.
-
-    LLMs occasionally emit ranges or non-numeric strings; an unguarded
-    `int()` would crash the entire post-pass. Fall through to 0 on parse
-    failure — schemas downstream will surface a "missing line" warning.
-    """
-    if isinstance(raw, int):
-        return raw
-    try:
-        return int(str(raw).split("-", 1)[0])
-    except (TypeError, ValueError):
-        return 0
+    container = FindingsContainer.create_empty(
+        "agentic-postpass", target_path)
+    container.source = "agentic-hybrid-orchestration"
+    payload = container.to_dict()
+    payload["findings"] = [
+        _convert_one_finding(f)
+        for f in (agentic_findings or [])
+        if isinstance(f, dict)
+    ]
+    return payload
 
 
 def _convert_one_finding(f: dict) -> dict:
-    """Convert a single /agentic finding dict to /validate Finding shape."""
+    """Convert a single /agentic finding dict to /validate Finding shape.
+
+    Input-side renames stay here; the value coercion and serialisation
+    happen in the canonical ``Finding`` dataclass. Two caller-owned
+    exceptions ride on top of the canonical dict:
+
+    - ``ruling``: /agentic's verdict trace passes through verbatim
+      (deep-copied) — the canonical ``Ruling`` would drop the
+      ``agentic_ruling`` marker and any nested evidence other readers
+      still hold references to.
+    - ``origin``: set to "agentic-postpass" so /validate knows the
+      finding came pre-analysed.
+    """
+    from packages.exploitability_validation.models import Finding
+
     # Renames per the schema_constants alignment table.
-    out: dict = {
+    raw: dict = {
         "id": str(f.get("finding_id") or f.get("id") or ""),
         "file": f.get("file_path") or f.get("file") or "",
-        "line": _safe_line(f.get("start_line") or f.get("line") or 0),
+        "line": f.get("start_line") or f.get("line") or 0,
         "description": f.get("reasoning") or f.get("description") or "",
-        # ruling: /agentic emits a string verdict (e.g. "validated",
-        # "false_positive"); /validate expects an object {"status": ...}.
-        "ruling": _convert_ruling(f.get("ruling"), f.get("false_positive_reason")),
+        # Origin marker so /validate knows the finding came pre-analysed
+        # and may want to skip Stage A discovery.
+        "origin": "agentic-postpass",
     }
-    # Pass-through fields — same names on both sides. Only include when
-    # present so /validate's _clean_dict doesn't have to strip them.
+    # Pass-through fields — same names on both sides.
     for key in (
         "vuln_type", "cwe_id", "severity_assessment",
         "cvss_vector", "cvss_score_estimate",
@@ -770,19 +555,23 @@ def _convert_one_finding(f: dict) -> dict:
         "tool", "rule_id",
     ):
         if f.get(key) is not None:
-            out[key] = f[key]
+            raw[key] = f[key]
     # is_exploitable: /agentic uses two key names depending on dispatch
     # mode (the schema says is_exploitable, sequential mode emits the
     # legacy "exploitable"). Normalise to is_exploitable.
     if f.get("is_exploitable") is not None:
-        out["is_exploitable"] = f["is_exploitable"]
+        raw["is_exploitable"] = f["is_exploitable"]
     elif f.get("exploitable") is not None:
-        out["is_exploitable"] = f["exploitable"]
+        raw["is_exploitable"] = f["exploitable"]
     if f.get("is_true_positive") is not None:
-        out["is_true_positive"] = f["is_true_positive"]
-    # Origin marker so /validate knows the finding came pre-analysed and
-    # may want to skip Stage A discovery.
-    out["origin"] = "agentic-postpass"
+        raw["is_true_positive"] = f["is_true_positive"]
+
+    out = Finding.from_dict(raw).to_dict()
+    # ruling: /agentic emits a string verdict (e.g. "validated",
+    # "false_positive"); /validate expects an object {"status": ...}.
+    # Attached AFTER canonical serialisation — see docstring.
+    out["ruling"] = _convert_ruling(
+        f.get("ruling"), f.get("false_positive_reason"))
     return out
 
 
@@ -814,7 +603,7 @@ def _convert_ruling(agentic_ruling, fp_reason) -> dict:
     return ruling
 
 
-def _validate_context_map_shape(parsed) -> Optional[str]:
+def _validate_context_map_shape(parsed) -> str | None:
     """Return None if parsed context-map is structurally usable, else an
     error message describing the first problem found.
 
@@ -921,9 +710,16 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
             return False
         logger.info("enriched %d functions in agentic checklist", marked)
         return True
-    except Exception as e:
+    except Exception as e:                          # noqa: BLE001
         logger.warning("checklist enrichment failed: %s", e)
         return False
+
+
+class _ChecklistWriteSkipped(Exception):
+    """Raised inside an ``update_checklist`` transform to abort the
+    write while still releasing the accessor's flock — used when the
+    current checklist is missing/malformed (never clobber it with an
+    empty object) or when the transform made no changes."""
 
 
 def _mark_unreachable_low_priority(
@@ -953,21 +749,33 @@ def _mark_unreachable_low_priority(
     checklist_path = agentic_out_dir / "checklist.json"
     if not checklist_path.exists():
         return 0
+    counted = {"marked": 0}
     try:
-        from core.json import load_json, save_json
+        from core.inventory import update_checklist
         from core.orchestration.reachability_enrichment import (
             mark_unreachable_low_priority,
         )
-        checklist = load_json(checklist_path)
-        if not isinstance(checklist, dict):
-            return 0
-        marked = mark_unreachable_low_priority(
-            checklist, target, allow_unreachable=allow_unreachable,
-        )
-        if marked:
-            save_json(checklist_path, checklist)
-        return marked
-    except Exception:                               # noqa: BLE001
+
+        # Route the write through the accessor: it resolves the
+        # project-mode checklist symlink and holds the flock across
+        # the whole read-modify-write, so a concurrent writer's
+        # priority markers survive. A direct load+save here lost
+        # both properties.
+        def _transform(current: dict[str, Any]) -> dict[str, Any]:
+            if not isinstance(current, dict) or not current:
+                raise _ChecklistWriteSkipped
+            counted["marked"] = mark_unreachable_low_priority(
+                current, target, allow_unreachable=allow_unreachable,
+            )
+            if not counted["marked"]:
+                raise _ChecklistWriteSkipped
+            return current
+
+        update_checklist(agentic_out_dir, _transform)
+        return counted["marked"]
+    except _ChecklistWriteSkipped:
+        return counted["marked"]
+    except Exception:
         logger.debug(
             "reachability low-priority enrichment failed",
             exc_info=True,
@@ -980,7 +788,9 @@ def run_reachability_prepass(
     agentic_out_dir: Path,
     *,
     allow_unreachable: bool = False,
-) -> "ReachabilityPrepassResult":
+    joern_server=None,
+    inventory: dict[str, Any] | None = None,
+) -> ReachabilityPrepassResult:
     """Always-on companion to ``run_understand_prepass``.
 
     Runs unconditionally (no --understand gating): builds the
@@ -1005,73 +815,97 @@ def run_reachability_prepass(
     returned ``ReachabilityPrepassResult.ran`` is False with a
     non-None ``skipped_reason``.
     """
-    t0 = time.time()
+    t0 = time.monotonic()
     checklist_path = agentic_out_dir / "checklist.json"
     if not checklist_path.exists():
         return ReachabilityPrepassResult(
             ran=False,
             skipped_reason="agentic checklist not yet built",
-            duration_s=time.time() - t0,
+            duration_s=time.monotonic() - t0,
         )
 
-    # Build the inventory once. Cached on the result so the
-    # agentic launcher can hand it to /validate + codeql.
-    try:
-        from core.inventory.builder import build_inventory
-        import tempfile
-        with tempfile.TemporaryDirectory() as td:
-            inventory = build_inventory(str(target), td)
-    except Exception as e:                          # noqa: BLE001
-        logger.debug(
-            "reachability prepass: inventory build failed (%s)", e,
-        )
-        return ReachabilityPrepassResult(
-            ran=False,
-            skipped_reason="inventory build failed",
-            duration_s=time.time() - t0,
-        )
+    if inventory is None:
+        try:
+            import tempfile
+
+            from core.inventory.builder import build_inventory
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target), td)
+        except Exception as e:                      # noqa: BLE001
+            logger.debug(
+                "reachability prepass: inventory build failed (%s)", e,
+            )
+            return ReachabilityPrepassResult(
+                ran=False,
+                skipped_reason="inventory build failed",
+                duration_s=time.monotonic() - t0,
+            )
 
     try:
+        from core.inventory import update_checklist
         from core.orchestration.reachability_enrichment import (
             enrich_with_caller_context,
+            enrich_with_frida_traces,
             mark_unreachable_low_priority,
         )
-        checklist = load_json(checklist_path)
-        if not isinstance(checklist, dict):
+        if joern_server is not None:
+            from core.analysis.reach_audit import set_joern_server
+            set_joern_server(joern_server)
+
+        # All three enrichment passes run inside the accessor's
+        # transform so the read-modify-write happens under the flock
+        # (concurrent writers can't drop each other's markers) and
+        # against the symlink-resolved project checklist.
+        state = {"marked": 0, "malformed": False}
+
+        def _transform(current: dict[str, Any]) -> dict[str, Any]:
+            if not isinstance(current, dict) or not current:
+                state["malformed"] = True
+                raise _ChecklistWriteSkipped
+            state["marked"] = mark_unreachable_low_priority(
+                current, target, inventory=inventory,
+                allow_unreachable=allow_unreachable,
+            )
+            enriched_frida = enrich_with_frida_traces(
+                current, target,
+                search_dirs=[agentic_out_dir, agentic_out_dir.parent],
+                inventory=inventory,
+            )
+            enriched_caller_ctx = enrich_with_caller_context(
+                current, target, inventory=inventory,
+            )
+            if not (state["marked"] or enriched_caller_ctx or enriched_frida):
+                raise _ChecklistWriteSkipped
+            return current
+
+        try:
+            update_checklist(agentic_out_dir, _transform)
+        except _ChecklistWriteSkipped:
+            pass
+        if state["malformed"]:
             return ReachabilityPrepassResult(
                 ran=False,
                 skipped_reason="checklist not a JSON object",
                 inventory=inventory,
-                duration_s=time.time() - t0,
+                duration_s=time.monotonic() - t0,
             )
-        marked = mark_unreachable_low_priority(
-            checklist, target, inventory=inventory,
-            allow_unreachable=allow_unreachable,
-        )
-        # Caller-context enrichment runs AFTER the dead-code
-        # marking so already-marked functions can be skipped
-        # cheaply (the LLM is going to deprioritise them
-        # regardless). Each surviving function gains
-        # caller_count_direct / _transitive / _uncertain plus
-        # direct_caller_names — the triage prompt reads these to
-        # judge blast radius alongside priority.
-        enriched_caller_ctx = enrich_with_caller_context(
-            checklist, target, inventory=inventory,
-        )
-        if marked or enriched_caller_ctx:
-            save_json(checklist_path, checklist)
-    except Exception:                               # noqa: BLE001
-        logger.debug(
+        marked = state["marked"]
+    except Exception:
+        logger.warning(
             "reachability prepass: enrichment failed",
             exc_info=True,
         )
         marked = 0
+    finally:
+        if joern_server is not None:
+            from core.analysis.reach_audit import set_joern_server
+            set_joern_server(None)
 
     return ReachabilityPrepassResult(
         ran=True,
         marked_count=marked,
         inventory=inventory,
-        duration_s=time.time() - t0,
+        duration_s=time.monotonic() - t0,
     )
 
 
@@ -1248,4 +1082,5 @@ def _threat_model_prompt_block(target: Path) -> str:
         from core.threat_model import threat_model_prompt_block
         return threat_model_prompt_block(target)
     except Exception:
+        logger.warning("threat model context unavailable for %s", target, exc_info=True)
         return ""

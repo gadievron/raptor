@@ -18,8 +18,9 @@ re-run any invocation to verify.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Literal
+from typing import Literal
 
+from .provenance import ensure_same_provenance
 
 Verdict = Literal["confirmed", "refuted", "inconclusive"]
 
@@ -41,7 +42,7 @@ class Evidence:
     summary: str
     """Human-readable summary (e.g. "3 matches in 2 files")."""
 
-    matches: List[dict] = field(default_factory=list)
+    matches: list[dict] = field(default_factory=list)
     """Tool-specific match details. Schema varies by tool — callers should
     consult the originating adapter's documentation for fields."""
 
@@ -87,7 +88,7 @@ class ValidationResult:
     verdict: Verdict
     """Final ruling derived from evidence."""
 
-    evidence: List[Evidence] = field(default_factory=list)
+    evidence: list[Evidence] = field(default_factory=list)
     """All tool runs for this hypothesis, including refutations and errors.
     Auditable record of what was tested and how."""
 
@@ -97,6 +98,9 @@ class ValidationResult:
     reasoning: str = ""
     """Optional final LLM reasoning explaining how the verdict was reached.
     Captures any nuance the structured fields miss."""
+
+    def __post_init__(self) -> None:
+        ensure_same_provenance(self.evidence)
 
     @property
     def confirmed(self) -> bool:
@@ -111,7 +115,7 @@ class ValidationResult:
         return self.verdict == "inconclusive"
 
     @property
-    def supporting_evidence(self) -> List[Evidence]:
+    def supporting_evidence(self) -> list[Evidence]:
         """Evidence items consistent with the hypothesis (success + matches present)."""
         return [e for e in self.evidence if e.success and e.matches]
 

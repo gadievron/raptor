@@ -46,7 +46,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence
 
@@ -55,7 +55,7 @@ from .base import ToolAdapter, ToolCapability, ToolEvidence
 # under engine/coccinelle/source_intel/. ``compile_time`` is separate
 # from ``attrs`` so a query for ``no_sanitize`` doesn't fall under the
 # attribute interpretation rules.
-_VALID_AXES: Set[str] = {
+_VALID_AXES: set[str] = {
     "attrs",          # axis 1
     "aborts",         # axis 2 — abort-class call proximity
     "allocations",    # axis 3 — unchecked alloc / paired free / double free
@@ -89,16 +89,20 @@ class SourceIntelAdapter(ToolAdapter):
 
     Args:
         cache: Shared :class:`~packages.source_intel.SourceIntelCache`.
-            When supplied, spatch runs once per (target, rules_hash)
-            and every adapter call reads from cache. When ``None``,
-            every call re-runs spatch (do not do this for production).
+            When supplied, spatch runs once per target and every
+            subsequent adapter call reads from cache. The adapter
+            always analyses with the shipped default rules
+            (``rules_dir=None`` → the cache's ``default-rules``
+            sentinel in the rules slot), so keying is effectively
+            per-target. When ``None``, every call re-runs spatch (do
+            not do this for production).
         sandbox: Whether the underlying spatch invocation runs in a
             network-blocked sandbox. Default ``True``. Passed through
             via :func:`packages.source_intel.analyze.analyze` — that
             function is itself the sandboxed entry point.
     """
 
-    def __init__(self, *, cache: Optional[Any] = None, sandbox: bool = True):
+    def __init__(self, *, cache: Any | None = None, sandbox: bool = True) -> None:
         self._cache = cache
         self._sandbox = sandbox
 
@@ -128,6 +132,8 @@ class SourceIntelAdapter(ToolAdapter):
                 "double-free observations for memory-corruption findings",
                 "Privilege gradient: capability_check, LSM hooks, "
                 "credential manipulation, setuid/setgid call sites",
+                "Variant signals: checked-alloc patterns and structural "
+                "fingerprints for locating siblings of a known bug shape",
                 "Build-flag context: FORTIFY_SOURCE level, "
                 "-fstack-protector, -fdelete-null-pointer-checks, "
                 "active sanitizers",
@@ -152,7 +158,7 @@ class SourceIntelAdapter(ToolAdapter):
         target: Path,
         *,
         timeout: int = 300,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> ToolEvidence:
         """Execute a structured KB query against source_intel.
 
@@ -218,50 +224,69 @@ class SourceIntelAdapter(ToolAdapter):
         kind_filter = query.get("kind")
         file_filter = query.get("file")
 
-        if not self.is_available():
-            return ToolEvidence(
-                tool=self.name, rule=rule, success=False,
-                error="spatch is not installed",
+        try:
+            if not self.is_available():
+                return ToolEvidence(
+                    tool=self.name, rule=rule, success=False,
+                    error="spatch is not installed",
+                )
+
+            result = self._load_result(target)
+
+            if result.is_skipped:
+                return ToolEvidence(
+                    tool=self.name, rule=rule, success=False,
+                    error=(
+                        f"source_intel skipped: "
+                        f"{result.skipped_reason}"
+                    ),
+                )
+
+            matches: list[dict[str, Any]] = []
+            for axis in axes_req:
+                matches.extend(
+                    self._collect_axis(
+                        axis=axis,
+                        result=result,
+                        function_name=function_name,
+                        kind_filter=kind_filter,
+                        file_filter=file_filter,
+                        target=target,
+                    )
+                )
+
+            n = len(matches)
+            files = sorted(
+                {m["file"] for m in matches if m.get("file")},
             )
-
-        result = self._load_result(target)
-
-        if result.is_skipped:
-            return ToolEvidence(
-                tool=self.name, rule=rule, success=False,
-                error=f"source_intel skipped: {result.skipped_reason}",
-            )
-
-        matches: List[Dict[str, Any]] = []
-        for axis in axes_req:
-            matches.extend(
-                self._collect_axis(
-                    axis=axis,
-                    result=result,
-                    function_name=function_name,
-                    kind_filter=kind_filter,
-                    file_filter=file_filter,
-                    target=target,
+            summary = (
+                f"{n} match{'es' if n != 1 else ''} "
+                f"for {function_name} "
+                f"across {len(axes_req)} "
+                f"{'axes' if len(axes_req) != 1 else 'axis'} "
+                f"in {len(files)} "
+                f"file{'s' if len(files) != 1 else ''}"
+                if n
+                else (
+                    f"no source_intel observation "
+                    f"matches {function_name}"
                 )
             )
 
-        n = len(matches)
-        files = sorted({m["file"] for m in matches if m.get("file")})
-        summary = (
-            f"{n} match{'es' if n != 1 else ''} for {function_name} "
-            f"across {len(axes_req)} axis{'es' if len(axes_req) != 1 else ''} "
-            f"in {len(files)} file{'s' if len(files) != 1 else ''}"
-            if n
-            else f"no source_intel observation matches {function_name}"
-        )
-
-        return ToolEvidence(
-            tool=self.name,
-            rule=rule,
-            success=True,
-            matches=matches,
-            summary=summary,
-        )
+            return ToolEvidence(
+                tool=self.name,
+                rule=rule,
+                success=True,
+                matches=matches,
+                summary=summary,
+            )
+        except Exception as exc:
+            return ToolEvidence(
+                tool=self.name,
+                rule=rule,
+                success=False,
+                error=f"source_intel internal error: {exc}",
+            )
 
     # ---- internal --------------------------------------------------
 
@@ -286,12 +311,12 @@ class SourceIntelAdapter(ToolAdapter):
         axis: str,
         result,
         function_name: str,
-        kind_filter: Optional[str],
-        file_filter: Optional[str],
+        kind_filter: str | None,
+        file_filter: str | None,
         target: Path,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Materialise one axis's observations matching the query."""
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
 
         if axis == "attrs":
             for ev in result.attributes:

@@ -34,8 +34,6 @@ Deferred to follow-ups:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Dict, Iterable, List
 
 from ..models import (
     Confidence,
@@ -45,27 +43,32 @@ from ..models import (
 )
 from . import artefacts as _artefacts
 from . import binary_in_package as _binary_in_package
-from . import exfil_destinations as _exfil
-from . import gha_drift as _gha_drift
-from . import gha_secret_flow as _gha_secret_flow
-from . import gha_freshness as _gha_freshness
-from . import gha_sunset as _gha_sunset
-from . import git_drift as _git_drift
+from . import branch_protection as _branch_protection
 from . import cargo_build_scripts as _cargo_build
 from . import commit_provenance as _commit_provenance
 from . import composer_lifecycle_hooks as _composer_lifecycle_hooks
+from . import exfil_destinations as _exfil
+from . import gha_drift as _gha_drift
+from . import gha_freshness as _gha_freshness
+from . import gha_secret_flow as _gha_secret_flow
+from . import gha_sunset as _gha_sunset
+from . import git_drift as _git_drift
 from . import install_hooks as _install_hooks
 from . import orphan_commit_dep as _orphan_commit_dep
 from . import python_imports as _python_imports
 from . import python_lifecycle_hooks as _python_lifecycle_hooks
-from . import rubygems_lifecycle_hooks as _rubygems_lifecycle_hooks
 from . import registry_metadata as _registry_metadata
+from . import rubygems_lifecycle_hooks as _rubygems_lifecycle_hooks
 from . import sentinel as _sentinel
 from . import slopsquat as _slopsquat
 from . import typosquat as _typosquat
 from . import typosquat_domain as _typosquat_domain
-from . import branch_protection as _branch_protection
 from . import workflow_signing as _workflow_signing
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -79,54 +82,71 @@ def evaluate(
     npm_client=None,
     github_actions_client=None,
     cache=None,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Run every mechanical supply-chain check.
 
     Args:
         target: project root (used by artefact / source walks).
         manifests: the discovery output (manifests + lockfiles).
         deps: the joined dep list — typically post-``join.join``.
-        pypi_client / npm_client / github_actions_client: optional
-            registry clients used by detectors that need
-            registry-side metadata. When absent, those detectors
-            are no-ops so we don't make uncached HTTP calls from
-            unit tests or in offline mode. ``github_actions_client``
-            powers ``gha_freshness`` (major-version-behind
-            detection); when None, only the curated sunset list
-            fires.
+        pypi_client: optional PyPI registry client used by detectors
+            that need registry-side metadata; with ``npm_client`` it
+            feeds ``registry_metadata.scan_deps``. When both are
+            absent, that detector is a no-op so we don't make
+            uncached HTTP calls from unit tests or in offline mode.
+        npm_client: optional npm registry client — same role as
+            ``pypi_client``; either one being set enables the
+            ``registry_metadata`` detector.
+        github_actions_client: optional GitHub client; powers
+            ``gha_freshness`` (major-version-behind detection) and
+            ``branch_protection``. When None, those detectors are
+            no-ops and only the curated sunset list fires.
+        cache: optional ``core.json.JsonCache`` threaded into
+            ``python_imports.scan_target`` to cache its per-file scan
+            results; None disables that caching.
     """
     manifests_list = list(manifests)
     deps_list = list(deps)
-    out: List[SupplyChainFinding] = []
+    out: list[SupplyChainFinding] = [
+        _install_hook_to_finding(hit)
+        for hit in _install_hooks.scan_manifests(manifests_list, deps_list)
+    ]
 
-    for hit in _install_hooks.scan_manifests(manifests_list, deps_list):
-        out.append(_install_hook_to_finding(hit))
+    out.extend(
+        _python_lifecycle_to_finding(plh)
+        for plh in _python_lifecycle_hooks.scan_manifests(
+            manifests_list, deps_list,
+        )
+    )
 
-    for plh in _python_lifecycle_hooks.scan_manifests(
-        manifests_list, deps_list,
-    ):
-        out.append(_python_lifecycle_to_finding(plh))
+    out.extend(
+        _composer_lifecycle_to_finding(clh)
+        for clh in _composer_lifecycle_hooks.scan_manifests(
+            manifests_list, deps_list,
+        )
+    )
 
-    for clh in _composer_lifecycle_hooks.scan_manifests(
-        manifests_list, deps_list,
-    ):
-        out.append(_composer_lifecycle_to_finding(clh))
+    out.extend(
+        _rubygems_lifecycle_to_finding(rlh)
+        for rlh in _rubygems_lifecycle_hooks.scan_target(
+            target, manifests_list, deps_list,
+        )
+    )
 
-    for rlh in _rubygems_lifecycle_hooks.scan_target(
-        target, manifests_list, deps_list,
-    ):
-        out.append(_rubygems_lifecycle_to_finding(rlh))
+    out.extend(
+        _commit_provenance_to_finding(cpf)
+        for cpf in _commit_provenance.scan_target(
+            target, manifests_list, deps_list,
+        )
+    )
 
-    for cpf in _commit_provenance.scan_target(
-        target, manifests_list, deps_list,
-    ):
-        out.append(_commit_provenance_to_finding(cpf))
+    out.extend(
+        _orphan_commit_to_finding(och)
+        for och in _orphan_commit_dep.scan_manifests(manifests_list, deps_list)
+    )
 
-    for och in _orphan_commit_dep.scan_manifests(manifests_list, deps_list):
-        out.append(_orphan_commit_to_finding(och))
-
-    for cbs in _cargo_build.scan_manifests(manifests_list, deps_list):
-        out.append(SupplyChainFinding(
+    out.extend(
+        SupplyChainFinding(
             finding_id=(
                 f"sca:supply_chain:install_hook_suspicious:Cargo:"
                 f"{cbs.dependency.declared_in}"
@@ -138,40 +158,60 @@ def evaluate(
                       "ecosystem": "Cargo"},
             severity=cbs.severity,
             confidence=cbs.confidence,
-        ))
+        )
+        for cbs in _cargo_build.scan_manifests(manifests_list, deps_list)
+    )
 
-    for sh in _sentinel.scan_deps(deps_list):
-        out.append(_sentinel_to_finding(sh))
+    out.extend(
+        _sentinel_to_finding(sh)
+        for sh in _sentinel.scan_deps(deps_list)
+    )
 
-    for ts in _typosquat.scan_deps(deps_list):
-        out.append(_typosquat_to_finding(ts))
+    out.extend(
+        _typosquat_to_finding(ts)
+        for ts in _typosquat.scan_deps(deps_list)
+    )
 
-    for ss in _slopsquat.scan_deps(deps_list):
-        out.append(_slopsquat_to_finding(ss))
+    out.extend(
+        _slopsquat_to_finding(ss)
+        for ss in _slopsquat.scan_deps(deps_list)
+    )
 
-    for art in _artefacts.scan_target(target, manifests_list):
-        out.append(_artefact_to_finding(art))
+    out.extend(
+        _artefact_to_finding(art)
+        for art in _artefacts.scan_target(target, manifests_list)
+    )
 
-    for bip in _binary_in_package.scan_target(
-        target, manifests_list, deps_list,
-    ):
-        out.append(_binary_in_package_to_finding(bip))
+    out.extend(
+        _binary_in_package_to_finding(bip)
+        for bip in _binary_in_package.scan_target(
+            target, manifests_list, deps_list,
+        )
+    )
 
-    for it in _python_imports.scan_target(
-        target, manifests_list, cache=cache,
-    ):
-        out.append(_python_import_to_finding(it))
+    out.extend(
+        _python_import_to_finding(it)
+        for it in _python_imports.scan_target(
+            target, manifests_list, cache=cache,
+        )
+    )
 
-    for ex in _exfil.scan_target(target, manifests_list):
-        out.append(_exfil_to_finding(ex))
+    out.extend(
+        _exfil_to_finding(ex)
+        for ex in _exfil.scan_target(target, manifests_list)
+    )
 
-    for gha in _gha_drift.scan_target(target, manifests_list):
-        out.append(_gha_drift_to_finding(gha))
+    out.extend(
+        _gha_drift_to_finding(gha)
+        for gha in _gha_drift.scan_target(target, manifests_list)
+    )
 
-    for sf in _gha_secret_flow.scan_target(
-        target, manifests_list, deps_list,
-    ):
-        out.append(_gha_secret_flow_to_finding(sf))
+    out.extend(
+        _gha_secret_flow_to_finding(sf)
+        for sf in _gha_secret_flow.scan_target(
+            target, manifests_list, deps_list,
+        )
+    )
 
     # Sunset detector consumes the Dependency rows already emitted
     # by ``parsers.inline_installs.parse_gha_workflow`` (ecosystem
@@ -186,28 +226,38 @@ def evaluate(
             deps_list, client=github_actions_client,
         ))
 
-    for gd in _git_drift.scan_deps(deps_list):
-        out.append(_git_drift_to_finding(gd))
+    out.extend(
+        _git_drift_to_finding(gd)
+        for gd in _git_drift.scan_deps(deps_list)
+    )
 
-    for td in _typosquat_domain.scan_target(target, manifests_list):
-        out.append(_typosquat_domain_to_finding(td))
+    out.extend(
+        _typosquat_domain_to_finding(td)
+        for td in _typosquat_domain.scan_target(target, manifests_list)
+    )
 
-    for ws in _workflow_signing.scan_target(target, manifests_list):
-        out.append(_workflow_signing_to_finding(ws))
+    out.extend(
+        _workflow_signing_to_finding(ws)
+        for ws in _workflow_signing.scan_target(target, manifests_list)
+    )
 
     if github_actions_client is not None:
-        for bp in _branch_protection.scan_target(
-            target, manifests_list, client=github_actions_client,
-        ):
-            out.append(_branch_protection_to_finding(bp))
+        out.extend(
+            _branch_protection_to_finding(bp)
+            for bp in _branch_protection.scan_target(
+                target, manifests_list, client=github_actions_client,
+            )
+        )
 
     if pypi_client is not None or npm_client is not None:
-        for rm in _registry_metadata.scan_deps(
-            deps_list,
-            pypi_client=pypi_client,
-            npm_client=npm_client,
-        ):
-            out.append(_registry_meta_to_finding(rm))
+        out.extend(
+            _registry_meta_to_finding(rm)
+            for rm in _registry_metadata.scan_deps(
+                deps_list,
+                pypi_client=pypi_client,
+                npm_client=npm_client,
+            )
+        )
 
     # Cross-detector severity escalation. registry_metadata has its
     # own per-dep escalation rule (line ~700 of registry_metadata.py)
@@ -228,9 +278,8 @@ def evaluate(
     # per-stack severity changes are already in place before the
     # family-level chokepoint sees them.
     from . import composite as _composite  # local to avoid cycles
-    out = _composite.apply(out)
+    return _composite.apply(out)
 
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +302,7 @@ _SEVERITY_RANK = {
 }
 
 
-def _escalate_cross_detector(findings: List[SupplyChainFinding]) -> None:
+def _escalate_cross_detector(findings: list[SupplyChainFinding]) -> None:
     """Mutate ``findings`` in place: bump slopsquat-finding severity
     based on co-occurring registry-metadata signals for the same
     package.
@@ -265,8 +314,8 @@ def _escalate_cross_detector(findings: List[SupplyChainFinding]) -> None:
     is the canonical bait signature.
     """
     # Index findings by (ecosystem, name) so co-occurrence is O(1).
-    by_dep: Dict[
-        "tuple[str, str]", List[SupplyChainFinding],
+    by_dep: dict[
+        tuple[str, str], list[SupplyChainFinding],
     ] = {}
     for f in findings:
         if f.dependency is None:
@@ -304,7 +353,7 @@ def _escalate_cross_detector(findings: List[SupplyChainFinding]) -> None:
         )
 
         target_rank = _SEVERITY_RANK.get(slop.severity, 0)
-        reasons: List[str] = []
+        reasons: list[str] = []
         if has_recent and has_lone_maintainer:
             # Full bait shape: heuristic-shape + just-registered
             # + anonymous publisher. Critical regardless of the
@@ -350,6 +399,39 @@ def _install_hook_to_finding(
     hit: _install_hooks.InstallHookFinding,
 ) -> SupplyChainFinding:
     why = ", ".join(hit.hit.reasons) if hit.hit.reasons else "hook present"
+    evidence: dict = {
+        "script_key": hit.hit.script_key,
+        "script_body": _truncate(hit.hit.script_body),
+        "reasons": list(hit.hit.reasons),
+        "intree_targets": [
+            {"path": str(t.path), "kind": t.kind}
+            for t in hit.hit.intree_targets
+        ],
+        "intree_has_binary": any(
+            t.is_executable_payload for t in hit.hit.intree_targets
+        ),
+        "reads_credentials": hit.hit.reads_credentials,
+        "has_publish_action": hit.hit.has_publish_action,
+    }
+    if hit.hit.intree_targets:
+        try:
+            from . import hook_guard_analysis as _hga
+            pkg_root = hit.dependency.declared_in.parent
+            analyses = _hga.analyze_intree_targets(
+                list(hit.hit.intree_targets), pkg_root,
+            )
+            if analyses:
+                evidence["guard_analysis"] = [
+                    a.to_dict() for a in analyses
+                ]
+                evidence["has_unconditional_sink_in_payload"] = any(
+                    a.has_unconditional_dangerous_call for a in analyses
+                )
+        except Exception:
+            logger.debug(
+                "guard analysis failed for %s",
+                hit.dependency.name, exc_info=True,
+            )
     return SupplyChainFinding(
         finding_id=(
             f"sca:supplychain:install_hook_suspicious:"
@@ -362,29 +444,7 @@ def _install_hook_to_finding(
             f"`scripts.{hit.hit.script_key}` runs at install time; "
             f"reason: {why}; body: {_truncate(hit.hit.script_body)}"
         ),
-        evidence={
-            "script_key": hit.hit.script_key,
-            "script_body": _truncate(hit.hit.script_body),
-            "reasons": list(hit.hit.reasons),
-            # In-tree path references the hook body resolves to —
-            # populated by ``_intree_resolve``.  Each entry includes
-            # the path relative to the project root + the magic-byte
-            # classification.  Composite scoring (Phase 1) pairs the
-            # ``intree_has_binary`` signal with ``binary_in_package``
-            # findings on the same dep to escalate to critical.
-            "intree_targets": [
-                {"path": str(t.path), "kind": t.kind}
-                for t in hit.hit.intree_targets
-            ],
-            "intree_has_binary": any(
-                t.is_executable_payload for t in hit.hit.intree_targets
-            ),
-            # Phase 5 conjunction flags — composite scoring uses these
-            # to detect the worm/credential-stealer shape (HOOK family
-            # base plus the C+G conjunction within a single hook).
-            "reads_credentials": hit.hit.reads_credentials,
-            "has_publish_action": hit.hit.has_publish_action,
-        },
+        evidence=evidence,
         severity=hit.severity,             # type: ignore[arg-type]
         confidence=hit.confidence,
     )
@@ -457,19 +517,35 @@ def _commit_provenance_to_finding(
 ) -> SupplyChainFinding:
     h = cpf.hit
     short_sha = h.commit_sha[:12]
+    if cpf.claim_shape == "canonical":
+        # Downgraded, never suppressed: label the trusted-email shape
+        # distinctly so a reviewer sees at a glance why the severity
+        # is reduced and what still needs verifying.
+        detail = (
+            f"commit {short_sha} touching dependency manifest(s) is "
+            f"UNSIGNED but carries a trusted-bot author email "
+            f"({h.author_name} <{h.author_email}>), with "
+            f"author/committer date skew of {h.skew_days} days — "
+            f"possible impersonation: the author email is an "
+            f"unauthenticated free-text field, and bots frequently "
+            f"lose their signature on rebase, so verify provenance "
+            f"(reduced severity, not suppressed)"
+        )
+    else:
+        detail = (
+            f"commit {short_sha} touching dependency manifest(s) "
+            f"claims bot/automation identity "
+            f"({h.author_name} <{h.author_email}>), is unsigned, "
+            f"and has author/committer date skew of {h.skew_days} days "
+            f"— forgery-shape conjunction worth review"
+        )
     return SupplyChainFinding(
         finding_id=(
             f"sca:supplychain:commit_provenance_drift:{h.commit_sha}"
         ),
         kind="commit_provenance_drift",
         dependency=cpf.dependency,
-        detail=(
-            f"commit {short_sha} touching dependency manifest(s) "
-            f"claims bot/automation identity "
-            f"({h.author_name} <{h.author_email}>), is unsigned, "
-            f"and has author/committer date skew of {h.skew_days} days "
-            f"— forgery-shape conjunction worth review"
-        ),
+        detail=detail,
         evidence={
             "commit_sha": h.commit_sha,
             "sig_status": h.sig_status,
@@ -478,6 +554,7 @@ def _commit_provenance_to_finding(
             "author_date": h.author_date_iso,
             "committer_date": h.committer_date_iso,
             "skew_days": h.skew_days,
+            "claim_shape": cpf.claim_shape,
             "subject": _truncate(h.subject, limit=200),
             "paths_touched": list(h.paths_touched),
         },
@@ -577,14 +654,18 @@ def _workflow_signing_to_finding(
     if ws.unsigned_commit is not None:
         hit = ws.unsigned_commit
         short_sha = hit.commit_sha[:12]
-        return SupplyChainFinding(
-            finding_id=(
-                f"sca:supplychain:workflow_unsigned_commit:"
-                f"{hit.commit_sha}"
-            ),
-            kind="workflow_unsigned_commit",
-            dependency=ws.dependency,
-            detail=(
+        if hit.sig_status == "B":
+            detail = (
+                f"commit {short_sha} modifying .github/workflows/** "
+                f"carries a signature that FAILS verification "
+                f"(status B — key available, check failed; author: "
+                f"{hit.author_name} <{hit.author_email}>, subject: "
+                f"{_truncate(hit.subject, limit=80)}). A present-but-"
+                f"bad signature is anomalous in any signing regime "
+                f"and worth a look regardless of the repo's norm."
+            )
+        else:
+            detail = (
                 f"commit {short_sha} modifying .github/workflows/** "
                 f"is unsigned (author: {hit.author_name} "
                 f"<{hit.author_email}>, subject: "
@@ -593,7 +674,15 @@ def _workflow_signing_to_finding(
                 f"stands out — Megalodon-class attacks push forged-"
                 f"identity commits to ``main`` and would produce "
                 f"exactly this signal."
+            )
+        return SupplyChainFinding(
+            finding_id=(
+                f"sca:supplychain:workflow_unsigned_commit:"
+                f"{hit.commit_sha}"
             ),
+            kind="workflow_unsigned_commit",
+            dependency=ws.dependency,
+            detail=detail,
             evidence={
                 "commit_sha": hit.commit_sha,
                 "sig_status": hit.sig_status,
@@ -639,10 +728,11 @@ def _workflow_signing_to_finding(
             confidence=ws.confidence,
         )
     # Both fields None — should not happen but bail safely.
-    raise ValueError(
+    msg = (
         "workflow_signing finding has neither unsigned_commit "
         "nor stats populated"
     )
+    raise ValueError(msg)
 
 
 def _branch_protection_to_finding(
@@ -842,7 +932,7 @@ def _binary_in_package_to_finding(
     """
     forensic = dict(bip.forensic_evidence)
     severity = "medium"
-    promotion_reasons: List[str] = []
+    promotion_reasons: list[str] = []
     if "packer" in forensic:
         severity = "high"
         promotion_reasons.append(
@@ -861,6 +951,11 @@ def _binary_in_package_to_finding(
     evidence.update(forensic)
     if promotion_reasons:
         evidence["forensic_promotion_reasons"] = promotion_reasons
+    if bip.manifest_declares_native:
+        # Annotation only: the declaring field lives in the scanned
+        # repo's own manifest (attacker-controlled), so it never
+        # suppresses the finding or lowers severity.
+        evidence["manifest_declares_native"] = True
     return SupplyChainFinding(
         finding_id=(
             f"sca:supplychain:binary_in_package:"
@@ -874,6 +969,9 @@ def _binary_in_package_to_finding(
             f"`{bip.relpath}`; not in any opt-in legitimate location"
             + (f" — {'; '.join(promotion_reasons)}"
                if promotion_reasons else "")
+            + (" — manifest declares a native-binary opt-in field "
+               "(annotation only; declarations never suppress the walk)"
+               if bip.manifest_declares_native else "")
         ),
         evidence=evidence,
         severity=severity,                  # type: ignore[arg-type]

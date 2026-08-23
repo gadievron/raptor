@@ -36,8 +36,8 @@ Verdict-line tiers (same as diff renderer):
 
 from __future__ import annotations
 
+import heapq
 from io import StringIO
-from typing import List, Optional
 
 from .orchestrator import (
     BumpReport, BumpResult,
@@ -47,7 +47,7 @@ from .orchestrator import (
 
 def render_pr_comment(
     report: BumpReport, *,
-    repo_label: Optional[str] = None,
+    repo_label: str | None = None,
     truncate_table_at: int = 30,
 ) -> str:
     """Return the bumper report as GitHub-flavoured Markdown."""
@@ -72,12 +72,18 @@ def render_pr_comment(
         f"| {total} | {n_clean} | {review_cell} | {block_cell} |\n\n"
     )
 
+    if report.excluded_by_pattern:
+        buf.write(
+            f"{len(report.excluded_by_pattern)} surface(s) excluded "
+            f"from write by `--exclude` patterns.\n\n"
+        )
+
     if report.results:
         # Dedup by (kind, locator, current, target). Same shape
         # as the text-mode render_report so PR comment + terminal
         # output match.
-        groups: "dict[tuple, List[BumpResult]]" = {}
-        order: List[tuple] = []
+        groups: dict[tuple, list[BumpResult]] = {}
+        order: list[tuple] = []
         for r in report.results:
             key = (
                 r.candidate.kind, r.candidate.locator,
@@ -94,12 +100,12 @@ def render_pr_comment(
             verdict = groups[key][0].verdict
             return (-verdict, key)
 
-        rows_to_show = sorted(order, key=_group_sort_key)[:truncate_table_at]
+        rows_to_show = heapq.nsmallest(truncate_table_at, order, key=_group_sort_key)
         truncated = len(order) > truncate_table_at
 
         buf.write("<details open>\n")
         buf.write(
-            f"<summary><b>Bump proposals ({total})</b></summary>\n\n"
+            f"<summary><b>Bump proposals ({len(order)})</b></summary>\n\n"
         )
         buf.write(
             "| Kind | Locator | Current | Target | Verdict | Notes |\n"
@@ -109,7 +115,7 @@ def render_pr_comment(
             group = groups[key]
             head = group[0]
             n_files = len(group)
-            notes = _notes_for_group(head, n_files)
+            notes = _notes_for_group(group, n_files)
             buf.write(
                 f"| {head.candidate.kind} "
                 f"| `{head.candidate.locator}` "
@@ -199,7 +205,7 @@ def _truncate_one_line(text: str, max_len: int) -> str:
     return flat[: max_len - 1].rstrip() + "…"
 
 
-def _notes_for_group(head: BumpResult, n_files: int) -> str:
+def _notes_for_group(group: list[BumpResult], n_files: int) -> str:
     """Pack the per-group notes into one comment cell.
 
     Surfaces:
@@ -209,18 +215,26 @@ def _notes_for_group(head: BumpResult, n_files: int) -> str:
       a Block verdict.
     * File count when >1 (deduped across files).
     """
-    bits: List[str] = []
-    for sf in head.bump_supply_chain_findings:
-        bits.append(sf.kind)
-    for vf in head.bump_vuln_findings:
-        adv = vf.advisories[0] if vf.advisories else None
-        cve_id = (adv.osv_id if adv else "?")
-        kev = " (KEV)" if vf.in_kev else ""
-        bits.append(f"new-CVE `{cve_id}`{kev}")
+    bits: list[str] = []
+    seen_kinds: set = set()
+    seen_cves: set = set()
+    for member in group:
+        for sf in member.bump_supply_chain_findings:
+            if sf.kind not in seen_kinds:
+                bits.append(sf.kind)
+                seen_kinds.add(sf.kind)
+        for vf in member.bump_vuln_findings:
+            adv = vf.advisories[0] if vf.advisories else None
+            cve_id = (adv.osv_id if adv else "?")
+            if cve_id not in seen_cves:
+                kev = " (KEV)" if vf.in_kev else ""
+                bits.append(f"new-CVE `{cve_id}`{kev}")
+                seen_cves.add(cve_id)
     if n_files > 1:
         bits.append(f"{n_files} files")
-    if head.rewrite_result is not None and head.rewrite_result.applied:
+    if any(m.rewrite_result is not None and m.rewrite_result.applied for m in group):
         bits.append("applied")
-    if head.error:
-        bits.append(f"error: {head.error}")
+    errors = [m.error for m in group if m.error]
+    if errors:
+        bits.append(f"error: {errors[0]}")
     return " · ".join(bits) if bits else "—"

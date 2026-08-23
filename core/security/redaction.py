@@ -6,35 +6,74 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
-# Vendor-published credential shapes. Each entry is a (vendor, regex)
-# tuple — the vendor label is documentation only; only the compiled
-# regex is used. Anchored on prefix-length-shape rather than just prefix
+# Vendor-published credential shapes. Each entry is a
+# (regex, replacement) tuple; context-anchored patterns keep the field
+# name visible via a capture group so redacted artifacts stay
+# triageable. Anchored on prefix-length-shape rather than just prefix
 # so a bare prefix in prose ("OpenAI's sk- format") doesn't false-match.
 _VENDOR_SECRET_PATTERNS = (
     # AWS access key ID (AKIA*) and secret-access-key context.
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED]"),
     # AWS temporary credentials (ASIA*).
-    re.compile(r"\bASIA[0-9A-Z]{16}\b"),
+    (re.compile(r"\bASIA[0-9A-Z]{16}\b"), "[REDACTED]"),
+    # AWS *secret access key*: 40 chars of base64 with no
+    # distinguishing prefix — anchor on the assignment context (the
+    # field name every SDK/config spelling uses) so ordinary 40-char
+    # base64 blobs in logs don't false-match.
+    (re.compile(
+        r"(?i)\b(aws_?secret_?(?:access_?)?key[\"']?\s*[=:]\s*[\"']?)"
+        r"[A-Za-z0-9/+=]{30,60}"),
+     r"\1[REDACTED]"),
+    # PEM private-key blocks (PKCS#8 `PRIVATE KEY`, PKCS#1
+    # `RSA PRIVATE KEY`, `EC/OPENSSH/...` variants). Body bounded;
+    # the END-less fallback below catches truncated dumps.
+    (re.compile(
+        r"-----BEGIN [A-Z0-9 ]{0,32}PRIVATE KEY-----"
+        r"[A-Za-z0-9+/=\s]{0,20000}?"
+        r"-----END [A-Z0-9 ]{0,32}PRIVATE KEY-----"),
+     "[REDACTED-PRIVATE-KEY]"),
+    (re.compile(
+        r"-----BEGIN [A-Z0-9 ]{0,32}PRIVATE KEY-----"
+        r"[ \t]*\r?\n[A-Za-z0-9+/=\r\n \t]{16,20000}"),
+     "[REDACTED-PRIVATE-KEY]"),
+    # Azure storage account key (connection-string AccountKey= field).
+    (re.compile(r"(?i)\b(AccountKey\s*=\s*)[A-Za-z0-9+/=]{40,}"),
+     r"\1[REDACTED]"),
+    # Azure AD client secret: `xQ~` marker + 30-45 char body.
+    (re.compile(r"\b[0-9A-Za-z]?[78]Q~[A-Za-z0-9_~.-]{30,45}"),
+     "[REDACTED]"),
     # GitHub personal access tokens / fine-grained / app tokens.
     # ghp_ / gho_ / ghu_ / ghs_ / ghr_ + 36-char alnum body.
-    re.compile(r"\bgh[opusr]_[A-Za-z0-9]{36}\b"),
+    (re.compile(r"\bgh[opusr]_[A-Za-z0-9]{36}\b"), "[REDACTED]"),
     # GitHub fine-grained PAT (github_pat_ + 22-char prefix + _ + 59-char body).
-    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}\b"),
-    # Slack tokens: xoxa-/xoxb-/xoxp-/xoxr-/xoxs-/xoxo- + version + body.
-    re.compile(r"\bxox[abporst]-[0-9A-Za-z-]{10,}\b"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}\b"), "[REDACTED]"),
+    # Slack tokens. Full letter class: beyond the app/bot/user set,
+    # `xoxc` (browser session) and `xoxe` (refresh) are live secret
+    # shapes — any xox?- + version + body redacts.
+    (re.compile(r"\bxox[a-z]-[0-9A-Za-z-]{10,}\b"), "[REDACTED]"),
+    # Google OAuth refresh token: `1//` + long base64url body. The
+    # body-length floor keeps Python floor-division expressions
+    # (`1//divisor`) from false-matching.
+    (re.compile(r"\b1//[0-9A-Za-z_-]{28,}"), "[REDACTED]"),
     # OpenAI API key: `sk-` prefix + 48 alphanumeric chars (legacy)
     # OR `sk-proj-` + ≥40 chars (project-scoped, current).
-    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b"),
+    (re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b"), "[REDACTED]"),
     # Anthropic API key: `sk-ant-` + 95+ chars.
-    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{90,}\b"),
-    # JSON Web Token: 3 base64url segments separated by dots. Strict
-    # length floor on the body to avoid matching short dotted alphanum
-    # tokens (e.g. `a.b.c` in source code).
-    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{90,}\b"), "[REDACTED]"),
+    # JSON Web Token: 3 base64url segments separated by dots. The
+    # first segment is base64('{...') — `eyJ` for the canonical
+    # compact header but `eyA`/`ewo`/`ewk`/`ew0` for headers with
+    # whitespace after the brace (still valid JWTs to every verifier
+    # that base64-decodes first). Match the `e[wy]` prefix class
+    # (= any JSON-object first byte); strict length floors on all
+    # three segments keep `a.b.c`-style dotted tokens out.
+    (re.compile(
+        r"\be[wy][A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+     "[REDACTED]"),
     # Google API key: `AIza` + 35 chars.
-    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "[REDACTED]"),
     # Stripe live secret key.
-    re.compile(r"\bsk_live_[0-9A-Za-z]{24,}\b"),
+    (re.compile(r"\bsk_live_[0-9A-Za-z]{24,}\b"), "[REDACTED]"),
 )
 
 _SECRET_QUERY_KEYS = {
@@ -80,7 +119,10 @@ _SECRET_QUERY_KEYS = {
     "private_key",
 }
 
-_SECRET_FIELD_SUFFIXES = ("_token", "-token", "_secret", "-secret", "_key", "-key")
+_SECRET_FIELD_SUFFIXES = (
+    "_token", "-token", "_secret", "-secret", "_key", "-key",
+    "_password", "-password", "_passwd", "-passwd", "_pwd", "-pwd",
+)
 
 
 def is_secret_field_name(name: object) -> bool:
@@ -125,7 +167,7 @@ def _redact_url(match: re.Match[str]) -> str:
 
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     redacted_pairs = [
-        (key, "[REDACTED]" if key.lower() in _SECRET_QUERY_KEYS else value)
+        (key, "[REDACTED]" if is_secret_field_name(key) else value)
         for key, value in query_pairs
     ]
     query = "&".join(
@@ -144,7 +186,7 @@ def _redact_url(match: re.Match[str]) -> str:
         fragment_pairs = parse_qsl(fragment, keep_blank_values=True)
         if fragment_pairs:
             fragment_pairs = [
-                (key, "[REDACTED]" if key.lower() in _SECRET_QUERY_KEYS else value)
+                (key, "[REDACTED]" if is_secret_field_name(key) else value)
                 for key, value in fragment_pairs
             ]
             fragment = "&".join(
@@ -189,7 +231,13 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     # — `_redact_url`'s urlsplit then includes the `)` in the
     # path/query and the redacted output preserves the malformed
     # tail visible in logs.
-    text = re.sub(r"https?://[^\s'\"<>()]{1,8192}", _redact_url, text)
+    text = re.sub(
+        # Any RFC-3986 scheme, not just http(s): connection strings
+        # (postgres://, mongodb+srv://, redis://, amqp://, ftp://, ...)
+        # carry credentials in the SAME userinfo/query positions and
+        # slipped through the http-only pattern verbatim.
+        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>()]{1,8192}",
+        _redact_url, text)
 
     # Redact common authorization header schemes from logs and finding metadata.
     text = re.sub(
@@ -211,8 +259,8 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     # logs / artifacts where false-positive redaction is far cheaper than
     # a credential leak. Order doesn't matter — patterns are mutually
     # disjoint by prefix.
-    for pattern in _VENDOR_SECRET_PATTERNS:
-        text = pattern.sub("[REDACTED]", text)
+    for pattern, replacement in _VENDOR_SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
     return text
 
 
@@ -250,5 +298,10 @@ def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> s
     # — `_redact_url`'s urlsplit then includes the `)` in the
     # path/query and the redacted output preserves the malformed
     # tail visible in logs.
-    text = re.sub(r"https?://[^\s'\"<>()]{1,8192}", _redact_url, text)
-    return text
+    return re.sub(
+        # Any RFC-3986 scheme, not just http(s): connection strings
+        # (postgres://, mongodb+srv://, redis://, amqp://, ftp://, ...)
+        # carry credentials in the SAME userinfo/query positions and
+        # slipped through the http-only pattern verbatim.
+        r"\b[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s'\"<>()]{1,8192}",
+        _redact_url, text)

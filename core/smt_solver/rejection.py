@@ -30,10 +30,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, TYPE_CHECKING
 
 from .availability import z3
-from .config import BVProfile
+
+if TYPE_CHECKING:
+    from .config import BVProfile
 
 
 class RejectionKind(str, Enum):
@@ -246,8 +248,7 @@ def propagate(text: str, sub: Rejection) -> Rejection:
         # Truncate inner-text rendering at 80 chars so a deeply
         # nested expression doesn't blow up the rejection message.
         inner = sub.text if len(sub.text) <= 80 else sub.text[:77] + "..."
-        suffix = f" (in: {inner!r})" if not detail else f" (in: {inner!r})"
-        detail = f"{detail}{suffix}" if detail else f"(in: {inner!r})"
+        detail = f"{detail} (in: {inner!r})" if detail else f"(in: {inner!r})"
     return Rejection(text, sub.kind, detail, sub.hint)
 
 
@@ -255,8 +256,8 @@ def parse_literal_value(
     tok: str,
     profile: BVProfile,
     *,
-    outer_text: Optional[str] = None,
-) -> Union[int, Rejection]:
+    outer_text: str | None = None,
+) -> int | Rejection:
     """Validate and convert a literal token, or return a structured rejection.
 
     Centralised so atom-position literals and bitmask-form literals
@@ -354,6 +355,18 @@ def parse_literal_value(
     return v
 
 
+# Failure modes ``classify_solver_unknown`` tolerates from
+# ``reason_unknown()`` — see the comment in the function body. Built
+# once at import time (``z3`` may be None when the soft dependency is
+# missing, in which case only the stdlib pair applies) and named so the
+# ``except`` clause is a statically-recognisable exception tuple.
+_REASON_UNKNOWN_RAISES: tuple[type[BaseException], ...] = (
+    AttributeError,
+    RuntimeError,
+    *((z3.Z3Exception,) if hasattr(z3, "Z3Exception") else ()),
+)
+
+
 def classify_solver_unknown(solver: Any) -> RejectionKind:
     """Map Z3's ``reason_unknown()`` string to a :class:`RejectionKind`.
 
@@ -375,9 +388,7 @@ def classify_solver_unknown(solver: Any) -> RejectionKind:
     # narrower TypeError-level mismatches should propagate.
     try:
         reason = (solver.reason_unknown() or "").lower()
-    except (AttributeError,) + (
-        (z3.Z3Exception,) if hasattr(z3, "Z3Exception") else ()
-    ) + (RuntimeError,):
+    except _REASON_UNKNOWN_RAISES:
         return RejectionKind.SOLVER_UNKNOWN
     if "timeout" in reason or "canceled" in reason or "cancelled" in reason:
         return RejectionKind.SOLVER_TIMEOUT

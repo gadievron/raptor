@@ -4,7 +4,7 @@ Sibling of :func:`core.orchestration.understand_bridge.enrich_checklist`,
 which marks entry-points and sinks as ``priority=high`` based on
 the /understand context-map. This module marks dead-code
 functions (NOT_CALLED verdict from
-``core.inventory.reachability``) as ``priority=low`` so the
+``core.analysis.reachability``) as ``priority=low`` so the
 /agentic LLM analysis spends its budget on functions that
 actually run.
 
@@ -36,16 +36,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
+
+from core.paths import path_to_module
 
 logger = logging.getLogger(__name__)
 
 
 def mark_unreachable_low_priority(
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
     target_path: Path,
     *,
-    inventory: Optional[Dict[str, Any]] = None,
+    inventory: dict[str, Any] | None = None,
     allow_unreachable: bool = False,
 ) -> int:
     """Walk ``checklist["files"][*]["items"]`` and mark functions
@@ -85,8 +87,9 @@ def mark_unreachable_low_priority(
 
     if inventory is None:
         try:
-            from core.inventory.builder import build_inventory
             import tempfile
+
+            from core.inventory.builder import build_inventory
             with tempfile.TemporaryDirectory() as td:
                 # Union/raw view in isolation mode so the reachability
                 # query graph matches the operator's declared intent
@@ -103,8 +106,8 @@ def mark_unreachable_low_priority(
             return 0
 
     try:
-        from core.inventory.reach_audit import classify_reachability
-        from core.inventory.reach_witness import (
+        from core.analysis.reach_audit import classify_reachability
+        from core.analysis.reach_witness import (
             Reachability,
             verdict_from_classification,
         )
@@ -180,19 +183,10 @@ def mark_unreachable_low_priority(
     return marked
 
 
-def _path_to_module(rel_path: str) -> Optional[str]:
-    """``packages/foo/bar.py`` → ``packages.foo.bar``. Same
-    convention used by the codeql / validate consumers."""
-    if not rel_path:
-        return None
-    from pathlib import PurePosixPath
-    p = PurePosixPath(rel_path.replace("\\", "/"))
-    if not p.suffix:
-        return None
-    parts = list(p.with_suffix("").parts)
-    if not parts:
-        return None
-    return ".".join(parts)
+# ``packages/foo/bar.py`` → ``packages.foo.bar`` — the shared
+# convention used by the codeql / validate consumers; one
+# implementation in core.paths.
+_path_to_module = path_to_module
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +196,10 @@ def _path_to_module(rel_path: str) -> Optional[str]:
 
 
 def enrich_with_caller_context(
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
     target_path: Path,
     *,
-    inventory: Optional[Dict[str, Any]] = None,
+    inventory: dict[str, Any] | None = None,
     max_direct_caller_names: int = 5,
     max_depth: int = 20,
 ) -> int:
@@ -242,8 +236,9 @@ def enrich_with_caller_context(
 
     if inventory is None:
         try:
-            from core.inventory.builder import build_inventory
             import tempfile
+
+            from core.inventory.builder import build_inventory
             with tempfile.TemporaryDirectory() as td:
                 inventory = build_inventory(str(target_path), td)
         except Exception as e:                          # noqa: BLE001
@@ -254,7 +249,7 @@ def enrich_with_caller_context(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             InternalFunction,
             callers_of,
             reverse_closure,
@@ -301,7 +296,8 @@ def enrich_with_caller_context(
                 closure = reverse_closure(
                     inventory, target, max_depth=max_depth,
                 )
-            except Exception:                          # noqa: BLE001
+            except Exception:
+                logger.debug("reachability enrichment failed for %s", target, exc_info=True)
                 continue
 
             direct_callers = one_hop.all_callers
@@ -315,14 +311,117 @@ def enrich_with_caller_context(
             enriched += 1
 
     if enriched:
-        logger.info(
+        logger.debug(
             "reachability_enrichment: enriched %d function(s) with "
             "caller-context fields", enriched,
         )
     return enriched
 
 
+def enrich_with_frida_traces(
+    checklist: dict[str, Any],
+    target_path: Path,
+    *,
+    search_dirs: list | None = None,
+    inventory: dict[str, Any] | None = None,
+) -> int:
+    """Annotate checklist items with frida runtime-trace evidence.
+
+    For each function in the checklist that was observed by frida at
+    runtime, sets ``metadata.frida_runtime_trace`` on the item (and on
+    the inventory item, if provided). Returns the count of items
+    annotated.
+
+    Best-effort: any failure returns 0 and the checklist is unchanged.
+    """
+    try:
+        from core.orchestration.frida_validation_bridge import (
+            collect_runtime_evidence,
+        )
+    except ImportError:
+        return 0
+
+    if search_dirs is None:
+        search_dirs = []
+
+    evidence_map = collect_runtime_evidence(
+        [Path(d) for d in search_dirs], target_path=str(target_path))
+    if not evidence_map:
+        return 0
+
+    _NATIVE_SUFFIXES = frozenset({
+        ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp",
+        ".rs", ".go", ".s", ".S", ".asm",
+    })
+
+    annotated = 0
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return 0
+
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        fpath = file_entry.get("path", "")
+        if not any(fpath.endswith(s) for s in _NATIVE_SUFFIXES):
+            continue
+        items = file_entry.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fn_name = item.get("name", "")
+            if not fn_name:
+                continue
+            ev = evidence_map.get(fn_name)
+            if ev is None:
+                continue
+            meta = item.setdefault("metadata", {})
+            meta["frida_runtime_trace"] = {
+                "observed": True,
+                "call_count": ev.call_count,
+                "trace_id": ev.trace_id,
+            }
+            annotated += 1
+
+    # Also annotate inventory items (dual-write) if provided.
+    if inventory and isinstance(inventory, dict):
+        inv_files = inventory.get("files")
+        if isinstance(inv_files, list):
+            for file_entry in inv_files:
+                if not isinstance(file_entry, dict):
+                    continue
+                fpath = file_entry.get("path", "")
+                if not any(fpath.endswith(s) for s in _NATIVE_SUFFIXES):
+                    continue
+                inv_items = file_entry.get("items")
+                if not isinstance(inv_items, list):
+                    continue
+                for item in inv_items:
+                    if not isinstance(item, dict):
+                        continue
+                    fn_name = item.get("name", "")
+                    ev = evidence_map.get(fn_name)
+                    if ev is None:
+                        continue
+                    meta = item.setdefault("metadata", {})
+                    meta["frida_runtime_trace"] = {
+                        "observed": True,
+                        "call_count": ev.call_count,
+                        "trace_id": ev.trace_id,
+                    }
+
+    if annotated:
+        logger.info(
+            "reachability_enrichment: annotated %d function(s) with "
+            "frida runtime-trace evidence", annotated,
+        )
+    return annotated
+
+
 __all__ = [
     "enrich_with_caller_context",
+    "enrich_with_frida_traces",
     "mark_unreachable_low_priority",
 ]

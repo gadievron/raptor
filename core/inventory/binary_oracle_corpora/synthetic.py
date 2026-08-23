@@ -6,22 +6,25 @@ expected verdicts. No external deps; validates the precision harness
 end-to-end on known-correct cases and acts as a fast classifier sanity
 check.
 
-The fold case (``folded_a``/``folded_b``) depends on whether an ICF-
-capable linker is available; the driver asks the fixture's Makefile
-which mode it built in and adjusts the expected verdict accordingly.
+The fold case (``folded_a``/``folded_b``) probes the classifier
+directly to determine the expected verdict. Fold detection is DWARF-
+based (``DW_AT_low_pc`` collisions); nm symbol addresses may disagree
+when the linker merges code but doesn't update DWARF entries (observed
+with GNU ld ``--icf=safe``).
 """
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
-from ..binary_oracle import Classification
 
-FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-               / "binary_oracle")
+if TYPE_CHECKING:
+    from core.analysis.binary_oracle import Classification
+
+FIXTURE_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "tests"
+               / "fixtures" / "binary_oracle")
 
 
 @dataclass
@@ -32,18 +35,20 @@ class _SyntheticDriver:
         "classifier sanity check, no external deps.")
     mode: Literal["synthetic"] = "synthetic"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
-        # Build the fixture (idempotent — make checks timestamps).
-        subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
-        binary = FIXTURE_DIR / "demo"
-        icf_mode = subprocess.run(
-            ["make", "-s", "print-icf-mode"], cwd=FIXTURE_DIR,
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        folded_verdict: Classification = (
-            "folded" if icf_mode != "none" else "symbol_present"
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
+        from core.inventory.binary_oracle_corpora._sandbox_exec import (
+            run_build_step,
         )
-        expected: Dict[str, Classification] = {
+        run_build_step(["make", "-s", "demo"], cwd=FIXTURE_DIR,
+                       timeout=120)
+        binary = FIXTURE_DIR / "demo"
+        from core.analysis.binary_oracle import classify_binary_evidence
+        probe = classify_binary_evidence(["folded_a", "folded_b"], binary)
+        fold_w = probe.get("folded_a")
+        folded_verdict: Classification = (
+            fold_w.classification if fold_w else "symbol_present"
+        )
+        expected: dict[str, Classification] = {
             "live_called":                "symbol_present",
             "live_address_taken_target":  "symbol_present",
             "inlined_only":               "inlined",

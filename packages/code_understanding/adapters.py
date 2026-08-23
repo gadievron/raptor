@@ -8,7 +8,8 @@ PR2a scope: adapters only. PR2b will wire actual LLM dispatch using
 these adapters.
 """
 
-from typing import Any, Dict, Hashable, Tuple
+from typing import Any
+from collections.abc import Hashable
 
 from core.llm.multi_model import BaseSetAdapter, BaseVerdictAdapter
 
@@ -44,7 +45,7 @@ class VariantAdapter(BaseSetAdapter):
     `model` field semantically.
     """
 
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         # variants don't have a stable upstream id; synthesize from the
         # canonical (file, line, function) so the same variant gets the
         # same id regardless of which model contributed first.
@@ -53,13 +54,13 @@ class VariantAdapter(BaseSetAdapter):
             return f"{file_path}:{line}:{function}"
         return f"{file_path}:{line}"
 
-    def item_key(self, item: Dict[str, Any]) -> Hashable:
+    def item_key(self, item: dict[str, Any]) -> Hashable:
         # Same canonicalization as item_id so two finds the substrate
         # would unify (key) also produce the same id.
         return self._canonical_parts(item)
 
     @staticmethod
-    def _canonical_parts(item: Dict[str, Any]) -> Tuple[str, Any, str]:
+    def _canonical_parts(item: dict[str, Any]) -> tuple[str, Any, str]:
         """Normalize file path for cross-model comparison.
 
         - Strip whitespace from file and function.
@@ -114,19 +115,20 @@ class TraceAdapter(BaseVerdictAdapter):
     # than the default 600 chars, but still bounded.
     REASONING_TRUNCATE: int = 1200
 
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         # Strip — models occasionally return surrounded-by-whitespace ids,
         # which would otherwise count as a different trace from the
         # original. Substrate's item_id contract requires non-empty str.
         tid = item.get("trace_id")
         if tid is None:
-            raise ValueError(
+            msg = (
                 f"trace verdict dict missing required 'trace_id' field: "
                 f"{sorted(item.keys())}"
             )
-        return tid.strip() if isinstance(tid, str) else tid
+            raise ValueError(msg)
+        return tid.strip() if isinstance(tid, str) else str(tid)
 
-    def normalize_verdict(self, item: Dict[str, Any]) -> str:
+    def normalize_verdict(self, item: dict[str, Any]) -> str:
         # Defensive: model output occasionally has type drift on enum
         # fields. Non-string verdicts → "unknown" rather than AttributeError.
         v = item.get("verdict")

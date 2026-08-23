@@ -32,10 +32,13 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Set, Tuple
 
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +47,12 @@ _DATA_FILE = Path(__file__).resolve().parent.parent / "data" / \
 
 # Canonical skip set + this walker's extras. Drift-free: a new entry
 # in discovery.EXCLUDED_DIR_NAMES propagates to every walker.
-_EXCLUDED_DIRS: Set[str] = EXCLUDED_DIR_NAMES | {
+_EXCLUDED_DIRS: set[str] = EXCLUDED_DIR_NAMES | {
     "site-packages",        # any virtualenv that snuck in
 }
 
 # Files we'll scan. Source + config. Exclude binary / archive types.
-_SCAN_EXTS: Set[str] = {
+_SCAN_EXTS: set[str] = {
     ".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
     ".sh", ".bash", ".zsh", ".rb", ".go", ".rs", ".java", ".kt",
     ".json", ".yaml", ".yml", ".toml", ".xml", ".cfg", ".ini",
@@ -77,7 +80,7 @@ class ExfilFinding:
 
 
 # Compiled rules cache — one load per process, then reuse.
-_RULES_CACHE: Optional[List["_Rule"]] = None
+_RULES_CACHE: list[_Rule] | None = None
 
 
 @dataclass(frozen=True)
@@ -85,9 +88,9 @@ class _Rule:
     category: str
     severity: str
     reason: str
-    host_suffix: Optional[str]      # match on URL host
-    pattern: Optional[re.Pattern]   # match on the full URL
-    tld: Optional[str]              # match on TLD (e.g., "onion")
+    host_suffix: str | None      # match on URL host
+    pattern: re.Pattern | None   # match on the full URL
+    tld: str | None              # match on TLD (e.g., "onion")
 
 
 def scan_target(
@@ -95,14 +98,14 @@ def scan_target(
     manifests: Iterable[Manifest],
     *,
     max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> List[ExfilFinding]:
+) -> list[ExfilFinding]:
     """Walk ``target`` source files; return URL-pattern matches."""
     rules = _load_rules()
     if not rules:
         return []
     target = target.resolve()
     manifests_list = list(manifests)
-    out: List[ExfilFinding] = []
+    out: list[ExfilFinding] = []
     for path in _walk_source_files(target, max_depth=max_depth):
         out.extend(_scan_file(path, target, manifests_list, rules))
     return out
@@ -112,7 +115,7 @@ def scan_target(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _load_rules() -> List[_Rule]:
+def _load_rules() -> list[_Rule]:
     global _RULES_CACHE
     if _RULES_CACHE is not None:
         return _RULES_CACHE
@@ -134,7 +137,7 @@ def _load_rules() -> List[_Rule]:
         return _RULES_CACHE
 
     entries = data.get("entries") if isinstance(data, dict) else None
-    rules: List[_Rule] = []
+    rules: list[_Rule] = []
     if isinstance(entries, list):
         for entry in entries:
             if not isinstance(entry, dict):
@@ -143,7 +146,7 @@ def _load_rules() -> List[_Rule]:
             reason = entry.get("reason") or "matches known-bad pattern"
             category = entry.get("category") or "unspecified"
             pattern_raw = entry.get("pattern")
-            pattern: Optional[re.Pattern] = None
+            pattern: re.Pattern | None = None
             if isinstance(pattern_raw, str):
                 try:
                     pattern = re.compile(pattern_raw)
@@ -173,8 +176,8 @@ def _load_rules() -> List[_Rule]:
 
 
 def _scan_file(
-    path: Path, target: Path, manifests: List[Manifest],
-    rules: List[_Rule],
+    path: Path, target: Path, manifests: list[Manifest],
+    rules: list[_Rule],
 ) -> Iterable[ExfilFinding]:
     try:
         with path.open("rb") as fh:
@@ -187,7 +190,7 @@ def _scan_file(
         return
     if not data:
         return
-    seen: Set[Tuple[str, str]] = set()         # (category, host) dedup per file
+    seen: set[tuple[str, str]] = set()         # (category, host) dedup per file
     for m in _URL_RE.finditer(data):
         url_bytes = m.group(0)
         host_bytes = m.group("host") or b""
@@ -234,9 +237,7 @@ def _matches_rule(rule: _Rule, url: str, host: str) -> bool:
         # link-local, and the documentation prefixes (TEST-NET) don't
         # fit. Filter them out here rather than complicate the regex
         # in data/exfil_destinations.json.
-        if rule.category == "raw_ip" and _is_non_routable_ipv4(host):
-            return False
-        return True
+        return not (rule.category == "raw_ip" and _is_non_routable_ipv4(host))
     return False
 
 
@@ -303,9 +304,9 @@ def _walk_source_files(target: Path, *, max_depth: int) -> Iterable[Path]:
 
 
 def _project_host_dep(
-    manifests: List[Manifest], path: Path, target: Path,
+    manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: "Manifest | None" = None
+    closest: Manifest | None = None
     for m in manifests:
         if m.is_lockfile:
             continue

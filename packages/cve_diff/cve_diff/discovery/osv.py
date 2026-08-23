@@ -58,7 +58,7 @@ _COMMIT_SHA_RE = re.compile(r"[a-f0-9]{7,40}", re.IGNORECASE | re.ASCII)
 _LINUX_UPSTREAM = f"https://github.com/{LINUX_UPSTREAM_SLUG}"
 
 
-def _build_default_client(timeout_s: int) -> OsvClient:
+def _build_default_client(_timeout_s: int) -> OsvClient:
     """Construct a stand-alone :class:`packages.osv.OsvClient` for the discoverer.
 
     OSVDiscoverer is used outside the agent loop (cascade / bench paths),
@@ -179,26 +179,9 @@ class OSVDiscoverer:
                 ]
                 for event in rng.events:
                     fixed = event.get("fixed")
-                    # `if not fixed` is falsy for empty string AND
-                    # for non-string types like 0/None/[], but a
-                    # TRUTHY non-string (e.g. an int sha that some
-                    # OSV emitters serialise wrong, a dict/list
-                    # from a malformed schema, or a hex BYTES blob
-                    # from a Python re-serialisation glitch) slips
-                    # through and lands as `CommitSha(fixed)` —
-                    # `CommitSha` is a `NewType(str)` so it just
-                    # casts without runtime check, but downstream
-                    # consumers that string-format / regex-match
-                    # the SHA hit TypeError on non-str. Tighten:
-                    # require fixed to be a non-empty str AND
-                    # match the SHA shape.
                     if not isinstance(fixed, str) or not fixed:
                         continue
                     if not _COMMIT_SHA_RE.fullmatch(fixed):
-                        # Some emitters put non-SHA "fixed"
-                        # markers (version strings like "1.2.3").
-                        # Skip — Pass 2 only consumes SHA-shaped
-                        # fix events.
                         continue
                     key = (repo, fixed)
                     if key in seen:
@@ -242,8 +225,7 @@ class OSVDiscoverer:
         """
         if not url:
             return ""
-        if url.endswith(".git"):
-            url = url[:-4]
+        url = url.removesuffix(".git")
         if url.startswith("git://"):
             url = "https://" + url[len("git://"):]
         elif url.startswith("ssh://git@"):

@@ -1,0 +1,111 @@
+{
+ "_comment": "Accepted canonical-JSON findings. Keys are rule:file:symbol (no line numbers). Every entry is a deliberately-raw json.dumps site whose byte form is frozen (MAC canonical form, persisted hash identity, digest-keyed cache, byte-stability contract) or a display/artifact site inside a canonical module whose writer surface has not been migrated. Add an entry ONLY with a note; check_canonical_json.py fails CI on any finding not listed here and warns on stale entries.",
+ "version": 1,
+ "entries": {
+  "dumps_flows_to_hash:core/project/report.py:_finding_fingerprint": {
+   "note": "sha256[:12] finding ids persisted in manifest.json/findings.jsonl; pinned form uses ensure_ascii=False, so dumps_canonical would change every id — frozen"
+  },
+  "dumps_flows_to_hash:core/sandbox/summary.py:summarize_and_write": {
+   "note": "mint-side _denials_sha provenance stamp (sort_keys, ensure_ascii=True) feeding telemetry_mac.mint; frozen MAC form, sandbox tree deliberately left untouched here"
+  },
+  "dumps_flows_to_hash:core/sandbox/triage.py:_denials_sha256": {
+   "note": "verify-side denials sha (sort_keys, ensure_ascii=True), must stay byte-identical to summary.py's mint side — frozen"
+  },
+  "dumps_flows_to_hash:core/sandbox/triage.py:_report_sha256": {
+   "note": "sandbox-triage.json report sha (sort_keys, ensure_ascii=True) verified via telemetry_mac — frozen MAC canonical form"
+  },
+  "dumps_flows_to_hash:core/sarif/parser.py:parse_sarif_findings": {
+   "note": "content-sha fallback for finding_id (sort_keys, default=str, DEFAULT separators) — artifact filenames and cross-run joins; dumps_canonical's compact separators would fork every id — frozen"
+  },
+  "dumps_flows_to_hash:core/witness/provenance.py:smt_conditions_hash": {
+   "note": "SMT condition-set hash (sort_keys, default=str, DEFAULT separators, repr fallback) bound into witness MACs; compact separators would orphan every stored record — frozen"
+  },
+  "dumps_flows_to_hash:packages/cve_env/cve_env/cli.py:_describe_record": {
+   "note": "sha256 change-detection digest over the describe record (compact separators, sort_keys, no default=) — persisted in spec records; frozen"
+  },
+  "dumps_flows_to_hash:packages/hypothesis_validation/provenance.py:hash_hypothesis": {
+   "note": "content address (sort_keys, compact separators, deliberately NO default=str: a non-serialisable payload must raise, not hash an address-bearing repr) — frozen"
+  },
+  "dumps_flows_to_hash:packages/llm_analysis/dataflow_validation.py:_hypothesis_cache_key": {
+   "note": "validation cache key (sort_keys, compact separators, deliberately NO default=str) — frozen; drift invalidates the hypothesis-validation cache"
+  },
+  "raw_dumps_in_canonical_module:core/binary/fingerprint.py:CapabilityFingerprint.canonical_json": {
+   "note": "documented byte-equality contract; must stay byte-identical to packages/binary_analysis/fingerprint.py's copy; no default=str by design — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/concepts/model.py:DomainModel.save": {
+   "note": "domain-model.json at-rest bytes are sha256'd by journal staleness gates — indent=2 form frozen; not a save_json candidate until the gate re-keys"
+  },
+  "raw_dumps_in_canonical_module:core/json/jsonl.py:append_jsonl": {
+   "note": "the substrate's own parameterized jsonl serializer; docstring licenses hash/diff of trails — frozen wire-shape owner"
+  },
+  "raw_dumps_in_canonical_module:core/llm/client.py:LLMClient._get_structured_cache_key": {
+   "note": "structured-response cache key, same pinned form and consequence as _kwargs_for_cache_key — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/llm/client.py:LLMClient._kwargs_for_cache_key": {
+   "note": "LLM response-cache filename key (sort_keys, default=str, DEFAULT separators) — drift invalidates the entire response cache — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/llm/multi_model/prompt_helpers.py:wrap_model_output": {
+   "note": "prompt-embedded bytes hashed into the response-cache key (sort_keys, indent=2, strict no-default) — drift = fleet-wide cache miss — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/llm/scorecard/integrity.py:stamp_file": {
+   "note": "sidecar pretty-write; the MAC is recomputed from the PARSED dict so bytes are not integrity-consumed — an artifact-writer (save_json) migration candidate, frozen until that lands"
+  },
+  "raw_dumps_in_canonical_module:core/project/report.py:_finding_fingerprint": {
+   "note": "same site as its dumps_flows_to_hash twin — pinned ensure_ascii=False identity form"
+  },
+  "raw_dumps_in_canonical_module:core/project/report.py:export_findings_directory": {
+   "note": "findings.json/.jsonl artifact writers in a canonical module; bytes not integrity-consumed — artifact-writer (save_json/append_jsonl) migration candidates"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/_landlock_audit.py:_write_audit_config": {
+   "note": "documented cache-identity contract (sort_keys) — must stay byte-identical to the inline twin in _spawn.py — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/_spawn.py:run_sandboxed": {
+   "note": "inline twin of _landlock_audit._write_audit_config's serialization — the two must stay byte-identical — frozen"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/summary.py:reassert_audit_degraded": {
+   "note": "ASCII-safe sandbox telemetry writer (ensure_ascii=True by intent); future dumps_artifact candidate"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/summary.py:record_audit_degraded": {
+   "note": "ASCII-safe sandbox telemetry writer (ensure_ascii=True by intent); future dumps_artifact candidate"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/summary.py:record_denial": {
+   "note": "ASCII-safe sandbox telemetry writer (ensure_ascii=True by intent); future dumps_artifact(ensure_ascii=True) candidate"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/summary.py:summarize_and_write": {
+   "note": "same site as its dumps_flows_to_hash twin — frozen telemetry MAC form"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/triage.py:_cli_main": {
+   "note": "operator CLI print in a MAC module; dumps_display candidate; sandbox tree deliberately left untouched here"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/triage.py:_denials_sha256": {
+   "note": "same site as its dumps_flows_to_hash twin — frozen MAC canonical form"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/triage.py:_report_sha256": {
+   "note": "same site as its dumps_flows_to_hash twin — frozen MAC canonical form"
+  },
+  "raw_dumps_in_canonical_module:core/sandbox/triage.py:_write": {
+   "note": "triage artifact writer in a MAC module; bytes covered by the report sha computed from the SAME dict, not from the file — future dumps_artifact candidate"
+  },
+  "raw_dumps_in_canonical_module:core/sarif/parser.py:parse_sarif_findings": {
+   "note": "same site as its dumps_flows_to_hash twin — pinned default-separator identity form"
+  },
+  "raw_dumps_in_canonical_module:core/witness/provenance.py:smt_conditions_hash": {
+   "note": "same site as its dumps_flows_to_hash twin — frozen witness hash form"
+  },
+  "raw_dumps_in_canonical_module:packages/binary_analysis/fingerprint.py:CapabilityFingerprint.canonical_json": {
+   "note": "twin of core/binary/fingerprint.py canonical_json — the two copies must stay byte-identical to each other — frozen"
+  },
+  "raw_dumps_in_canonical_module:packages/hypothesis_validation/provenance.py:hash_hypothesis": {
+   "note": "same site as its dumps_flows_to_hash twin — strict-types content address"
+  },
+  "raw_dumps_in_canonical_module:packages/llm_analysis/dataflow_validation.py:_hypothesis_cache_key": {
+   "note": "same site as its dumps_flows_to_hash twin — strict-types cache key"
+  },
+  "raw_dumps_in_canonical_module:packages/llm_analysis/tasks.py:AggregationTask.build_prompt": {
+   "note": "prompt-embedded bytes; comment at the site documents the prompt-cache-key stability contract (indent=2, sort_keys) — frozen"
+  },
+  "raw_dumps_in_canonical_module:packages/sca/calibration/build.py:_write_if_changed": {
+   "note": "byte-identical-reproducibility contract: unchanged-detection byte compare + CI auto-PR keyed on content change — frozen"
+  }
+ }
+}

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import List
 from unittest.mock import patch
 
+import pytest
+
 
 from packages.sca.calibration.project_samples import (
     PROJECT_SAMPLES,
@@ -208,6 +210,7 @@ def test_one_sample_failing_doesnt_abort_others(tmp_path: Path):
     assert "simulated clone failure" in by_name["bad"].error
 
 
+@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
 def test_parallel_collects_all_samples_input_order(tmp_path: Path):
     """jobs>1 runs projects across a process pool and returns one result
     per sample in INPUT order (not completion order), with per-project

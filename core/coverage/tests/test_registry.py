@@ -43,3 +43,11 @@ def test_unknown_tool_is_conservative():
     # Unknown producers are never credited as deep coverage.
     assert classify("mystery-tool") == ("unknown", "scanned")
     assert category_of("mystery-tool:v2") == "unknown"
+
+
+def test_journal_records_are_review_grade():
+    # coverage-journal.json (build_from_journal; /agentic) derives every
+    # functions_analysed entry from a per-function review-journal verdict,
+    # so the label classifies as an actual review. Pre-registration it fell
+    # to unknown/scanned and journal-derived marks never counted as reviewed.
+    assert classify("journal") == ("llm", "analysed")

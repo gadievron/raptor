@@ -171,7 +171,7 @@ def test_joint_different_seeds_can_diverge(tmp_path: Path):
     # seeds — at least one such trace should differ.
     differs = any(
         a.final_values != b.final_values
-        for a, b in zip(r1.restarts[1:], r2.restarts[1:])
+        for a, b in zip(r1.restarts[1:], r2.restarts[1:], strict=False)
     )
     assert differs
 

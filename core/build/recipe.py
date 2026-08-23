@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -33,7 +32,7 @@ class RecipeStep:
     ``cd <target>``; renderers add the target prefix). ``why``
     is one-line operator-readable rationale."""
     command: str
-    why: Optional[str] = None
+    why: str | None = None
     optional: bool = False
 
 
@@ -44,7 +43,7 @@ class BuildRecipe:
     handled — caller renders "(build instructions: consult the
     project's README)" or similar."""
     build_system: str  # e.g. "autotools", "cmake", "make", "" (unknown)
-    steps: List[RecipeStep] = field(default_factory=list)
+    steps: list[RecipeStep] = field(default_factory=list)
 
 
 # Bootstrap-script preference for autotools: pick the first
@@ -99,7 +98,7 @@ def _autotools_recipe(target: Path) -> BuildRecipe:
     When ``configure`` already exists in source root, step 1 is
     omitted.
     """
-    steps: List[RecipeStep] = []
+    steps: list[RecipeStep] = []
     configure_present = (target / "configure").is_file()
     if not configure_present:
         bootstrap = _find_autotools_bootstrap(target)
@@ -147,7 +146,7 @@ def _cmake_recipe(target: Path) -> BuildRecipe:
     ``my-build``) still get the default-``build`` recipe and
     have to adapt — same trade-off as every IDE that has to
     pick a default."""
-    steps: List[RecipeStep] = []
+    steps: list[RecipeStep] = []
     for existing in (
         "build", "_build", "out/build",
         "cmake-build-debug", "cmake-build-release",
@@ -168,7 +167,7 @@ def _cmake_recipe(target: Path) -> BuildRecipe:
     return BuildRecipe(build_system="cmake", steps=steps)
 
 
-def _meson_recipe(target: Path) -> BuildRecipe:
+def _meson_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="meson",
         steps=[RecipeStep(
@@ -180,7 +179,7 @@ def _meson_recipe(target: Path) -> BuildRecipe:
     )
 
 
-def _make_recipe(target: Path) -> BuildRecipe:
+def _make_recipe(_target: Path) -> BuildRecipe:
     """Plain hand-written Makefile (no autotools/cmake/meson
     generators present). Just ``make``.
 
@@ -200,21 +199,21 @@ def _make_recipe(target: Path) -> BuildRecipe:
     )
 
 
-def _cargo_recipe(target: Path) -> BuildRecipe:
+def _cargo_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="cargo",
         steps=[RecipeStep(command="cd <target> && cargo build --release")],
     )
 
 
-def _go_recipe(target: Path) -> BuildRecipe:
+def _go_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="go",
         steps=[RecipeStep(command="cd <target> && go build ./...")],
     )
 
 
-def _poetry_recipe(target: Path) -> BuildRecipe:
+def _poetry_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="poetry",
         steps=[RecipeStep(command="cd <target> && poetry install")],
@@ -224,7 +223,7 @@ def _poetry_recipe(target: Path) -> BuildRecipe:
 def _pip_recipe(target: Path) -> BuildRecipe:
     """Pip — install the package in editable mode if pyproject /
     setup.py is present; else install requirements.txt."""
-    steps: List[RecipeStep] = []
+    steps: list[RecipeStep] = []
     if (target / "pyproject.toml").exists() or (target / "setup.py").exists():
         steps.append(RecipeStep(
             command="cd <target> && pip install -e .",
@@ -242,28 +241,28 @@ def _pip_recipe(target: Path) -> BuildRecipe:
     return BuildRecipe(build_system="pip", steps=steps)
 
 
-def _npm_recipe(target: Path) -> BuildRecipe:
+def _npm_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="npm",
         steps=[RecipeStep(command="cd <target> && npm install")],
     )
 
 
-def _yarn_recipe(target: Path) -> BuildRecipe:
+def _yarn_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="yarn",
         steps=[RecipeStep(command="cd <target> && yarn install")],
     )
 
 
-def _maven_recipe(target: Path) -> BuildRecipe:
+def _maven_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="maven",
         steps=[RecipeStep(command="cd <target> && mvn package -DskipTests")],
     )
 
 
-def _gradle_recipe(target: Path) -> BuildRecipe:
+def _gradle_recipe(_target: Path) -> BuildRecipe:
     return BuildRecipe(
         build_system="gradle",
         steps=[RecipeStep(command="cd <target> && ./gradlew build -x test")],
@@ -286,7 +285,7 @@ _RECIPES = {
 }
 
 
-def _find_autotools_bootstrap(target: Path) -> Optional[str]:
+def _find_autotools_bootstrap(target: Path) -> str | None:
     """Walk ``_AUTOTOOLS_BOOTSTRAP_CANDIDATES`` and return the
     first one present + executable. Returns None when no
     project-specific bootstrap is shipped (caller falls back to

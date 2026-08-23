@@ -37,8 +37,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, TYPE_CHECKING
 
 from core.function_taxonomy import (
     ALLOC_FUNCS,
@@ -52,6 +51,10 @@ from core.function_taxonomy import (
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
 )
+from pathlib import Path
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +69,7 @@ FINGERPRINT_SCHEMA_VERSION = 1
 # the SCA bump detector and any future capability-aware consumer
 # imports from here so the bucket names stay consistent across
 # fingerprints + findings + drift records.
-BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
+BUCKETS: tuple[tuple[str, frozenset[str]], ...] = (
     ("exec", EXEC_FUNCS),
     ("network", NETWORK_INGEST_FUNCS),
     ("string_overflow", STRING_OVERFLOW_FUNCS),
@@ -82,10 +85,10 @@ BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
 # Buckets that warrant high-severity treatment when they appear
 # as a NEW addition (drift detection, bump capability-delta).
 # ``exec`` is RCE-flavoured; ``network`` is exfil-flavoured.
-HIGH_SEVERITY_BUCKETS: FrozenSet[str] = frozenset({"exec", "network"})
+HIGH_SEVERITY_BUCKETS: frozenset[str] = frozenset({"exec", "network"})
 
 
-def bucket_imports(imports: Set[str]) -> Dict[str, Set[str]]:
+def bucket_imports(imports: set[str]) -> dict[str, set[str]]:
     """Classify an import set by capability bucket.
 
     Returns ``{bucket_name: {fn1, fn2, ...}}`` for each bucket
@@ -94,7 +97,7 @@ def bucket_imports(imports: Set[str]) -> Dict[str, Set[str]]:
     — ubiquitous functions like ``malloc`` / ``printf`` /
     ``read`` aren't signal at fingerprint scale either.
     """
-    out: Dict[str, Set[str]] = {}
+    out: dict[str, set[str]] = {}
     for bucket_name, fn_set in BUCKETS:
         matched = imports & fn_set
         if matched:
@@ -125,10 +128,10 @@ class CapabilityFingerprint:
     arch: str
     bits: int
     binary_format: str        # 'elf' / 'mach-o' / 'pe'
-    capability_buckets: Dict[str, List[str]] = field(default_factory=dict)
-    dangerous_sinks: List[str] = field(default_factory=list)
+    capability_buckets: dict[str, list[str]] = field(default_factory=dict)
+    dangerous_sinks: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Full JSON-ready representation INCLUDING the
         informational ``binary_path``. For storage / operator-
         facing rendering / SBOM property. Use
@@ -152,7 +155,7 @@ class CapabilityFingerprint:
             "dangerous_sinks": sorted(self.dangerous_sinks),
         }
 
-    def _comparison_dict(self) -> Dict[str, Any]:
+    def _comparison_dict(self) -> dict[str, Any]:
         """The fields that DEFINE this fingerprint's identity for
         comparison / drift detection. Excludes ``binary_path``
         (an operator-facing breadcrumb that legitimately varies
@@ -163,7 +166,7 @@ class CapabilityFingerprint:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CapabilityFingerprint":
+    def from_dict(cls, data: dict[str, Any]) -> CapabilityFingerprint:
         return cls(
             schema_version=int(data.get("schema_version", 0)),
             binary_path=str(data.get("binary_path", "")),
@@ -198,7 +201,7 @@ def capability_fingerprint(
     binary_path: Path,
     *,
     include_sinks: bool = False,
-) -> Optional[CapabilityFingerprint]:
+) -> CapabilityFingerprint | None:
     """Compute the capability fingerprint of ``binary_path``.
 
     Returns ``None`` when:
@@ -281,7 +284,7 @@ def _sha256_of_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
     memory across small (binaries) + large (containers) inputs.
     """
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         while True:
             chunk = f.read(chunk_size)
             if not chunk:
@@ -292,9 +295,9 @@ def _sha256_of_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
 
 __all__ = [
     "BUCKETS",
-    "CapabilityFingerprint",
     "FINGERPRINT_SCHEMA_VERSION",
     "HIGH_SEVERITY_BUCKETS",
+    "CapabilityFingerprint",
     "bucket_imports",
     "capability_fingerprint",
 ]

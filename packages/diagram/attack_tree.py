@@ -14,11 +14,13 @@ are confirmed vs theoretical, or adding more info about blockers.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
 from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 _PROXIMITY_LABEL = {
@@ -261,8 +263,7 @@ def generate(
 
         # Root → subgroup edges
         if root_id:
-            for group_id in groups:
-                lines.append(f"    {root_id} --> {group_id}")
+            lines.extend(f"    {root_id} --> {group_id}" for group_id in groups)
 
         # Intra-subgraph edges
         lines.append("")
@@ -274,9 +275,8 @@ def generate(
             nid = node.get("id", "?")
             leads_to_raw = node.get("leads_to", "") or ""
             targets = [_sid(t.strip()) for t in leads_to_raw.split(",") if t.strip() and _sid(t.strip()) in node_map]
-            for target in targets:
-                if target != root_id:  # root edge already drawn above
-                    lines.append(f"    {nid} --> {target}")
+            # root edge already drawn above
+            lines.extend(f"    {nid} --> {target}" for target in targets if target != root_id)
 
     else:
         # Flat rendering, original approach
@@ -295,8 +295,7 @@ def generate(
             nid = node.get("id", "?")
             leads_to_raw = node.get("leads_to", "") or ""
             targets = [_sid(t.strip()) for t in leads_to_raw.split(",") if t.strip() and _sid(t.strip()) in node_map]
-            for target in targets:
-                lines.append(f"    {nid} --> {target}")
+            lines.extend(f"    {nid} --> {target}" for target in targets)
 
     # Style classes
     status_groups: dict[str, list[str]] = {}
@@ -329,7 +328,8 @@ def generate_from_file(
 ) -> str:
     data = load_json(path)
     if data is None:
-        raise ValueError(f"Failed to load {path}")
+        msg = f"Failed to load {path}"
+        raise ValueError(msg)
     attack_paths = load_json(attack_paths_path) if attack_paths_path else None
     disproven_raw = load_json(disproven_path) if disproven_path else None
     disproven = disproven_raw.get("disproven", []) if isinstance(disproven_raw, dict) else disproven_raw

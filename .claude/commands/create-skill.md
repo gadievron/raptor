@@ -75,9 +75,9 @@ That path is from an earlier RAPTOR layout that
 predates Claude Code's skills mechanism — files there
 aren't auto-loaded by Claude Code today, so saving
 new skills there would have made them invisible to
-the LLM. Existing files under `tiers/personas/` and
-`tiers/specialists/` are still loaded VIA EXPLICIT
-prompts, but new skills should go under
+the LLM. Existing files under `tiers/personas/` are
+still loaded via explicit prompts and via the Python
+methodology loader, but new skills should go under
 `.claude/skills/` for auto-load.)
 
 **Skill structure:**
@@ -115,7 +115,7 @@ Verify skill will auto-load correctly:
 **Skill size limits:**
 - Minimum: 200 tokens (enough for useful content)
 - Recommended: 300-400 tokens (sweet spot)
-- Maximum: 500 tokens (hard limit, enforced)
+- Maximum: 500 tokens (hard limit — keep to it; not mechanically enforced)
 
 **Total skills warning:**
 - Yellow (5 skills): 1,500-2,000 tokens in skills

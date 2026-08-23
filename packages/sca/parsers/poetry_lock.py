@@ -34,11 +34,13 @@ from __future__ import annotations
 import logging
 import re
 import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +59,20 @@ else:                                     # pragma: no cover — env-dependent
 ECOSYSTEM = "PyPI"
 
 
-def parse(path: Path) -> List[Dependency]:
+def parse(path: Path) -> list[Dependency]:
     if _tomllib is None:
         logger.warning(
             "sca.parsers.poetry_lock: skipping %s — no TOML reader available",
             path,
         )
         return []
-    try:
-        text = path.read_bytes()
-    except OSError as e:
-        logger.warning("sca.parsers.poetry_lock: read failed for %s: %s", path, e)
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
     try:
-        data = _tomllib.loads(text.decode("utf-8", errors="replace"))
+        data = _tomllib.loads(text)
     except _tomllib.TOMLDecodeError as e:
         logger.warning(
             "sca.parsers.poetry_lock: TOML parse failed for %s: %s", path, e
@@ -82,7 +83,7 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(packages, list):
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for pkg in packages:
         if not isinstance(pkg, dict):
             continue
@@ -96,7 +97,7 @@ def parse(path: Path) -> List[Dependency]:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _build_dep(pkg: Dict[str, Any], path: Path) -> Optional[Dependency]:
+def _build_dep(pkg: dict[str, Any], path: Path) -> Dependency | None:
     name = pkg.get("name")
     version_text = pkg.get("version")
     if not isinstance(name, str) or not name:
@@ -104,7 +105,7 @@ def _build_dep(pkg: Dict[str, Any], path: Path) -> Optional[Dependency]:
 
     source = pkg.get("source") if isinstance(pkg.get("source"), dict) else None
     pin_style: PinStyle
-    version: Optional[str]
+    version: str | None
     confidence_reason: str
 
     if source and source.get("type") == "git":
@@ -141,7 +142,7 @@ def _build_dep(pkg: Dict[str, Any], path: Path) -> Optional[Dependency]:
     )
 
 
-def _infer_scope(pkg: Dict[str, Any]) -> str:
+def _infer_scope(pkg: dict[str, Any]) -> str:
     """Map Poetry's category (when present) onto our scope buckets."""
     cat = pkg.get("category")
     if isinstance(cat, str):
@@ -155,7 +156,7 @@ def _infer_scope(pkg: Dict[str, Any]) -> str:
 
 def _confidence(
     pin_style: PinStyle,
-    version: Optional[str],
+    version: str | None,
     scope: str,                           # noqa: ARG001 — kept for symmetry
     base_reason: str,
 ) -> Confidence:
@@ -172,7 +173,7 @@ def _normalise_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:pypi/{_normalise_name(name)}"
     if version:
         return f"{base}@{version}"

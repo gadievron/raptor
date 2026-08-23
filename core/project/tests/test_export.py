@@ -236,5 +236,140 @@ class TestZipBombEOCDPreflight(unittest.TestCase):
             self.assertIsNone(_peek_zip_total_entries(tiny))
 
 
+class TestImportExtractionRootHardening(unittest.TestCase):
+    """The extraction root comes from the VALIDATED embedded
+    project name — never from the archive's own (attacker-chosen)
+    root directory name, and never equal to output_base itself."""
+
+    def _import(self, d, zpath, force=False):
+        projects_dir = Path(d) / "projects"
+        output_base = Path(d) / "output"
+        output_base.mkdir(exist_ok=True)
+        result = import_project(zpath, projects_dir,
+                                output_base=output_base, force=force)
+        return output_base, result
+
+    def _hostile_zip(self, d, root, name, extra=None):
+        """Zip whose root dir is ``root`` but whose embedded
+        .project.json names ``name``."""
+        import json
+        zpath = Path(d) / "hostile.zip"
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr(f"{root}/.project.json", json.dumps({
+                "version": 1, "name": name, "target": "/t",
+            }))
+            zf.writestr(f"{root}/findings.json", '{"attacker": true}')
+            for arcname, content in (extra or []):
+                zf.writestr(arcname, content)
+        return zpath
+
+    def test_sibling_project_not_clobbered(self):
+        # Archive root named after a VICTIM project + innocuous
+        # embedded name: pre-fix this overwrote the victim's
+        # findings.json while registering as "innocuous".
+        with TemporaryDirectory() as d:
+            output_base = Path(d) / "output"
+            victim = output_base / "victimproj"
+            victim.mkdir(parents=True)
+            (victim / "findings.json").write_text('{"victim": true}')
+
+            zpath = self._hostile_zip(d, root="victimproj",
+                                      name="innocuous")
+            base, result = self._import(d, zpath)
+
+            self.assertEqual(result["name"], "innocuous")
+            self.assertEqual(
+                Path(result["output_dir"]), base / "innocuous",
+            )
+            # Victim untouched; attacker content confined to the
+            # validated-name dir.
+            self.assertEqual(
+                (victim / "findings.json").read_text(),
+                '{"victim": true}',
+            )
+            self.assertEqual(
+                (base / "innocuous" / "findings.json").read_text(),
+                '{"attacker": true}',
+            )
+
+    def test_dot_rooted_zip_never_extracts_to_output_base(self):
+        # "./"-rooted entries pass _check_zip_entries (pathlib drops
+        # "."); pre-fix output_dir == output_base, so the project
+        # registered AS the whole output base — arming /project
+        # delete --purge and the force-path rmtree to destroy every
+        # project (verifier PoC C).
+        import json
+        with TemporaryDirectory() as d:
+            zpath = Path(d) / "dotroot.zip"
+            with zipfile.ZipFile(zpath, "w") as zf:
+                zf.writestr("./.project.json", json.dumps({
+                    "version": 1, "name": "evilproj", "target": "/t",
+                }))
+                zf.writestr("./findings.json", "{}")
+            base, result = self._import(d, zpath)
+            self.assertNotEqual(
+                Path(result["output_dir"]).resolve(), base.resolve(),
+            )
+            self.assertEqual(
+                Path(result["output_dir"]), base / "evilproj",
+            )
+            self.assertTrue(
+                (base / "evilproj" / "findings.json").exists(),
+            )
+
+    def test_dot_rooted_midextract_failure_cannot_rmtree_base(self):
+        # The verifier's STRONGER PoC: "./"-rooted zip + an induced
+        # mid-extract exception ("./a" file then "./a/b" needing
+        # "a" as a directory). Pre-fix the cleanup ran
+        # shutil.rmtree(output_dir == output_base) and deleted EVERY
+        # project — no --force needed.
+        with TemporaryDirectory() as d:
+            output_base = Path(d) / "output"
+            victim = output_base / "victimproj"
+            victim.mkdir(parents=True)
+            (victim / "findings.json").write_text('{"victim": true}')
+
+            import json
+            zpath = Path(d) / "dotroot-boom.zip"
+            with zipfile.ZipFile(zpath, "w") as zf:
+                zf.writestr("./.project.json", json.dumps({
+                    "version": 1, "name": "evilproj", "target": "/t",
+                }))
+                zf.writestr("./a", "file-where-dir-needed")
+                zf.writestr("./a/b", "forces mkdir over a file")
+            with self.assertRaises(Exception):
+                self._import(d, zpath)
+            # The base and the sibling project survive; only the
+            # per-import dir was cleaned up.
+            self.assertTrue(output_base.exists())
+            self.assertEqual(
+                (victim / "findings.json").read_text(),
+                '{"victim": true}',
+            )
+            self.assertFalse((output_base / "evilproj").exists())
+
+    def test_force_reimport_rmtree_confined_to_project_dir(self):
+        # Force path: rmtree(output_dir) must only ever remove the
+        # validated per-project dir.
+        with TemporaryDirectory() as d:
+            output_base = Path(d) / "output"
+            victim = output_base / "victimproj"
+            victim.mkdir(parents=True)
+            (victim / "findings.json").write_text('{"victim": true}')
+
+            zpath = self._hostile_zip(d, root="whatever",
+                                      name="evilproj")
+            self._import(d, zpath)
+            base, result = self._import(d, zpath, force=True)
+            self.assertTrue(victim.exists())
+            self.assertEqual(
+                (victim / "findings.json").read_text(),
+                '{"victim": true}',
+            )
+            self.assertEqual(
+                Path(result["output_dir"]), base / "evilproj",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

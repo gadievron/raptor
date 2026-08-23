@@ -25,9 +25,12 @@ JSON entries can later be re-parsed by the same adapter without loss.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.dataflow.finding import Finding, Step
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 PRODUCER = "codeql"
@@ -57,8 +60,8 @@ def from_sarif_result(
     result: Mapping[str, Any],
     *,
     producer: str = PRODUCER,
-    finding_id: Optional[str] = None,
-) -> Optional[Finding]:
+    finding_id: str | None = None,
+) -> Finding | None:
     """Convert one SARIF ``result`` entry into a :class:`Finding`.
 
     Returns ``None`` when the result lacks a dataflow code-flow
@@ -82,14 +85,14 @@ def from_sarif_result(
     if len(locations) < 2:
         return None
 
-    steps: List[Step] = []
+    steps: list[Step] = []
     for loc_wrapper in locations:
-        loc = loc_wrapper.get("location", {})
-        physical_loc = loc.get("physicalLocation", {})
-        region = physical_loc.get("region", {})
-        artifact = physical_loc.get("artifactLocation", {})
+        loc = loc_wrapper.get("location") or {}
+        physical_loc = loc.get("physicalLocation") or {}
+        region = physical_loc.get("region") or {}
+        artifact = physical_loc.get("artifactLocation") or {}
 
-        message_text = loc.get("message", {}).get("text") or ""
+        message_text = (loc.get("message") or {}).get("text") or ""
         steps.append(
             Step(
                 file_path=artifact.get("uri", ""),
@@ -127,7 +130,7 @@ def from_dataflow_path(
     dp: Any,
     *,
     producer: str = PRODUCER,
-    finding_id: Optional[str] = None,
+    finding_id: str | None = None,
 ) -> Finding:
     """Convert ``packages.codeql.dataflow_validator.DataflowPath`` to
     :class:`Finding`.
@@ -150,7 +153,7 @@ def from_dataflow_path(
     if finding_id is None:
         finding_id = make_finding_id(rule_id, source, sink, producer=producer)
 
-    raw: Dict[str, Any] = {}
+    raw: dict[str, Any] = {}
     sanitizers = getattr(dp, "sanitizers", None)
     if sanitizers:
         raw["dataflow_path_sanitizers"] = list(sanitizers)

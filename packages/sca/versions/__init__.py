@@ -16,7 +16,7 @@ Public API:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
 class VersionError(ValueError):
@@ -45,7 +45,8 @@ def compare(ecosystem: str, a: str, b: str) -> int:
     """
     cmp = _comparators.get(_canonical_ecosystem(ecosystem))
     if cmp is None:
-        raise VersionError(f"no version comparator for ecosystem: {ecosystem}")
+        msg = f"no version comparator for ecosystem: {ecosystem}"
+        raise VersionError(msg)
     try:
         return cmp(a, b)
     except VersionError:
@@ -54,7 +55,7 @@ def compare(ecosystem: str, a: str, b: str) -> int:
         raise VersionError(str(exc)) from exc
 
 
-def in_range(ecosystem: str, version: str, events: List[Dict[str, str]]) -> bool:
+def in_range(ecosystem: str, version: str, events: list[dict[str, str]]) -> bool:
     """Match an installed version against an OSV affected.ranges.events list.
 
     OSV semantics:
@@ -80,13 +81,23 @@ def in_range(ecosystem: str, version: str, events: List[Dict[str, str]]) -> bool
     # Walk events, building intervals. Each "introduced" opens an interval;
     # the next "fixed"/"last_affected"/"limit" closes it. A dangling
     # "introduced" at end-of-list becomes an open-ended interval.
-    intervals: List[tuple] = []  # (lower, lower_inclusive, upper, upper_inclusive)
+    intervals: list[tuple] = []  # (lower, lower_inclusive, upper, upper_inclusive)
     current_lower: str = "0"     # default: from the start
     current_lower_inclusive = True
     has_open_lower = False       # True iff an introduced has been seen
                                  # without a corresponding closer yet
     for ev in events:
         if "introduced" in ev:
+            if has_open_lower:
+                # A second ``introduced`` while one interval is still
+                # open (multi-introduced range object, or events the
+                # producer didn't sort). Overwriting the open lower
+                # bound silently DROPPED the first vulnerable interval;
+                # close it as open-ended instead — conservative
+                # over-approximation, same treatment as a dangling
+                # ``introduced`` at end-of-list — then open the next.
+                intervals.append((current_lower, current_lower_inclusive,
+                                  None, False))
             current_lower = ev["introduced"]
             current_lower_inclusive = True
             has_open_lower = True
@@ -136,9 +147,8 @@ def _within(
         if lo_incl:
             if c_lo < 0:
                 return False
-        else:
-            if c_lo <= 0:
-                return False
+        elif c_lo <= 0:
+            return False
     if hi is None:
         return True
     c_hi = compare(ecosystem, version, hi)
@@ -184,7 +194,7 @@ _ECOSYSTEM_ALIASES = {
 
 
 # Comparators registered below by importing each per-ecosystem module.
-_comparators: Dict[str, Any] = {}
+_comparators: dict[str, Any] = {}
 
 
 def _register(ecosystem: str, fn) -> None:
@@ -192,13 +202,13 @@ def _register(ecosystem: str, fn) -> None:
 
 
 # Wire concrete comparators (avoids circular imports).
-from .semver import compare as _semver_compare        # noqa: E402
-from .pep440 import compare as _pep440_compare        # noqa: E402
-from .maven import compare as _maven_compare          # noqa: E402
-from .gem import compare as _gem_compare              # noqa: E402
-from .nuget import compare as _nuget_compare          # noqa: E402
-from .composer import compare as _composer_compare    # noqa: E402
-from .debian import compare as _debian_compare        # noqa: E402
+from .composer import compare as _composer_compare
+from .debian import compare as _debian_compare
+from .gem import compare as _gem_compare
+from .maven import compare as _maven_compare
+from .nuget import compare as _nuget_compare
+from .pep440 import compare as _pep440_compare
+from .semver import compare as _semver_compare
 
 _register("npm", _semver_compare)
 _register("Cargo", _semver_compare)        # mostly semver
@@ -210,4 +220,4 @@ _register("NuGet", _nuget_compare)
 _register("Packagist", _composer_compare)
 _register("Debian", _debian_compare)
 
-__all__ = ["compare", "in_range", "VersionError"]
+__all__ = ["VersionError", "compare", "in_range"]

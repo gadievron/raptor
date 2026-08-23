@@ -17,10 +17,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
+from ._shared import format_evidence as _format_evidence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +44,7 @@ _REQUIRE_RE = re.compile(
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{require_target: [(file, line, is_test), ...]}``.
 
     Each ``require_target`` is the literal first-segment of the require
@@ -48,7 +52,7 @@ def scan_imports(
     ``rails`` matches.
     """
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for rb_file in _walk_ruby_sources(target, max_depth=max_depth):
         is_test = _is_test_file(rb_file, target)
         try:
@@ -65,9 +69,9 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
 ) -> Reachability:
     """Look up ``dep_name`` in the scan, trying both the gem name and a
     ``-`` → ``_`` normalised variant."""
@@ -76,7 +80,7 @@ def resolve_dep(
         candidates.add(dep_name.replace("-", "_"))
     elif "_" in dep_name:
         candidates.add(dep_name.replace("_", "-"))
-    matches: List[Tuple[Path, int, bool]] = []
+    matches: list[tuple[Path, int, bool]] = []
     for cand in candidates:
         matches.extend(scan.get(cand, []))
 
@@ -114,7 +118,7 @@ def resolve_dep(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _requires_in(text: str) -> Iterable[Tuple[str, int]]:
+def _requires_in(text: str) -> Iterable[tuple[str, int]]:
     for m in _REQUIRE_RE.finditer(text):
         yield m.group(2), text.count("\n", 0, m.start()) + 1
 
@@ -136,22 +140,5 @@ def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
     if any(p in _TEST_DIR_NAMES for p in rel_parts):
         return True
-    if path.name.endswith("_spec.rb") or path.name.endswith("_test.rb"):
-        return True
-    return False
+    return bool(path.name.endswith("_spec.rb") or path.name.endswith("_test.rb"))
 
-
-def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
-    *,
-    target: Optional[Path],
-    cap: int = 5,
-) -> List[str]:
-    out: List[str] = []
-    for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
-        out.append(f"{rel}:{line}")
-    if len(hits) > cap:
-        out.append(f"... (+{len(hits) - cap} more)")
-    return out

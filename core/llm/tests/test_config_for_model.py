@@ -91,3 +91,136 @@ def test_exact_configured_name_wins_even_if_provider_unrecognized():
     weird = ModelConfig(provider="ollama", model_name="weird-local-model", api_key="K")
     cfg = LLMConfig(primary_model=None, fallback_models=[weird], specialized_models={})
     assert cfg.config_for_model("weird-local-model") is weird
+
+
+# -----------------------------------------------------------------------
+# Shorthand expansion — task #402. Bare tier tokens (haiku / opus /
+# sonnet) resolve to a configured model when the match is unambiguous.
+# -----------------------------------------------------------------------
+
+
+def test_shorthand_resolves_when_unambiguous():
+    # Only one haiku entry is configured — the shorthand resolves to it,
+    # borrowing the entry's api_key so downstream sees the configured
+    # credential, not a bare / keyless config.
+    cfg = _cfg()
+    got = cfg.config_for_model("haiku")
+    assert got.model_name == "claude-haiku-4-5-20251001"
+    assert got.api_key == "K_HAIKU"
+
+
+def test_shorthand_resolves_opus_via_token_match():
+    cfg = _cfg()
+    got = cfg.config_for_model("opus")
+    assert got.model_name == "claude-opus-4-6"
+    assert got.api_key == "K_OPUS"
+
+
+def test_shorthand_case_insensitive():
+    cfg = _cfg()
+    got = cfg.config_for_model("HAIKU")
+    assert got.model_name == "claude-haiku-4-5-20251001"
+
+
+def test_shorthand_ambiguous_raises_with_candidates():
+    # Two haiku entries configured — the shorthand is ambiguous; the
+    # error lists both so the operator can pick.
+    cfg = LLMConfig(
+        primary_model=None,
+        fallback_models=[
+            ModelConfig(
+                provider="anthropic",
+                model_name="claude-haiku-4-5-20251001",
+                api_key="K1",
+            ),
+            ModelConfig(
+                provider="anthropic",
+                model_name="claude-haiku-4-6",
+                api_key="K2",
+            ),
+        ],
+        specialized_models={},
+    )
+    with pytest.raises(ValueError) as ei:
+        cfg.config_for_model("haiku")
+    msg = str(ei.value)
+    assert "ambiguous" in msg
+    assert "claude-haiku-4-5-20251001" in msg
+    assert "claude-haiku-4-6" in msg
+
+
+def test_shorthand_zero_match_falls_through_to_loud_error():
+    # ``bogusmodel`` doesn't match any token of the configured names.
+    # Falls through to the standard unknown_model_message path, NOT the
+    # shorthand-ambiguity path — so operators see the same error they
+    # got before the shorthand feature landed for truly-unknown ids.
+    cfg = _cfg()
+    with pytest.raises(ValueError) as ei:
+        cfg.config_for_model("bogusmodel")
+    # standard error mentions the id; does NOT say "ambiguous"
+    assert "bogusmodel" in str(ei.value)
+    assert "ambiguous" not in str(ei.value)
+
+
+def test_shorthand_does_not_trigger_on_qualified_names():
+    # ``anthropic/claude-haiku-4-5`` contains a ``/`` — this is a
+    # provider-qualified id, not a shorthand. Must resolve via the
+    # existing provider_of path (borrows credential via prefix match)
+    # rather than the shorthand-token path.
+    cfg = _cfg()
+    got = cfg.config_for_model("anthropic/claude-haiku-4-5")
+    assert got.provider == "anthropic"
+    assert got.api_key == "K_HAIKU"
+
+
+def test_shorthand_substring_does_not_match_token():
+    # ``opus`` shorthand must NOT resolve if only a substring-non-token
+    # match exists. Prevents fake matches like ``pus`` on ``opus``
+    # (substring inside a token, not equal to any token).
+    weird = ModelConfig(
+        provider="ollama",
+        model_name="prometheus-opus-plus",
+        api_key="K",
+    )
+    cfg = LLMConfig(primary_model=None, fallback_models=[weird], specialized_models={})
+    # ``opus`` is a token in prometheus-opus-plus → resolves.
+    assert cfg.config_for_model("opus") is weird
+    # ``pus`` is NOT a token — falls through to loud error.
+    with pytest.raises(ValueError):
+        cfg.config_for_model("pus")
+
+
+class TestBedrockRouteOverrides:
+    """bedrock/-route-prefixed overrides — the mode resolver's form.
+
+    Pre-fix chain of failures: provider_of("") -> ValueError -> silent
+    fallback to the default model; after the peel fix, the synthesized
+    config carried a fully-bared model name (vendor segment stripped),
+    which Bedrock 403s. The override must resolve to the CONFIGURED
+    entry (wire-form name + credentials)."""
+
+    def _bedrock_cfg(self):
+        return LLMConfig(
+            primary_model=None,
+            fallback_models=[
+                ModelConfig(provider="bedrock",
+                            model_name="anthropic.claude-mythos-5",
+                            api_key="K_BR"),
+            ],
+            specialized_models={},
+        )
+
+    def test_route_prefixed_override_resolves_configured_entry(self):
+        cfg = self._bedrock_cfg()
+        mc = cfg.config_for_model("bedrock/anthropic.claude-mythos-5")
+        assert mc.model_name == "anthropic.claude-mythos-5"
+        assert mc.api_key == "K_BR"
+
+    def test_unconfigured_bedrock_id_keeps_wire_form(self):
+        # No configured entry at all: the synthesized config must keep
+        # the vendor-dotted wire form, never the fully-bared name.
+        cfg = LLMConfig(primary_model=None, fallback_models=[],
+                        specialized_models={})
+        mc = cfg.config_for_model("bedrock/anthropic.claude-mythos-5")
+        assert mc.provider == "bedrock"
+        assert mc.model_name == "anthropic.claude-mythos-5"

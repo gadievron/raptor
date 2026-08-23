@@ -17,7 +17,7 @@ which (with the schema-version warning) is the read-side of forward-compat.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.logging import get_logger
 
@@ -30,11 +30,11 @@ def _is_int(x: Any) -> bool:
     return isinstance(x, int) and not isinstance(x, bool)
 
 
-def _opt_int(x: Any) -> Optional[int]:
+def _opt_int(x: Any) -> int | None:
     return x if _is_int(x) else None
 
 
-def _valid_interval(iv: Any) -> Optional[List[int]]:
+def _valid_interval(iv: Any) -> list[int] | None:
     """An inclusive ``[lo, hi]`` of two ints, or ``None`` if malformed."""
     if (isinstance(iv, (list, tuple)) and len(iv) == 2
             and _is_int(iv[0]) and _is_int(iv[1])):
@@ -42,19 +42,19 @@ def _valid_interval(iv: Any) -> Optional[List[int]]:
     return None
 
 
-def _normalise_tools(tools: Any, path: str, source: str) -> Dict[str, List[List[int]]]:
+def _normalise_tools(tools: Any, path: str, source: str) -> dict[str, list[list[int]]]:
     if not isinstance(tools, dict):
         logger.warning(
             "coverage store %s: file %r has non-dict 'tools'; dropping", source, path)
         return {}
-    out: Dict[str, List[List[int]]] = {}
+    out: dict[str, list[list[int]]] = {}
     for tool, ivs in tools.items():
         if not isinstance(tool, str) or not isinstance(ivs, list):
             logger.warning(
                 "coverage store %s: file %r tool %r has malformed intervals; "
                 "dropping", source, path, tool)
             continue
-        good: List[List[int]] = []
+        good: list[list[int]] = []
         for iv in ivs:
             v = _valid_interval(iv)
             if v is None:
@@ -68,10 +68,10 @@ def _normalise_tools(tools: Any, path: str, source: str) -> Dict[str, List[List[
     return out
 
 
-def _normalise_findings(findings: Any, path: str, source: str) -> List[Dict[str, Any]]:
+def _normalise_findings(findings: Any, path: str, source: str) -> list[dict[str, Any]]:
     if not isinstance(findings, list):
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for f in findings:
         if not isinstance(f, dict) or "id" not in f:
             logger.warning(
@@ -86,7 +86,7 @@ def _normalise_findings(findings: Any, path: str, source: str) -> List[Dict[str,
     return out
 
 
-def _normalise_entry(path: str, entry: Any, source: str) -> Optional[Dict[str, Any]]:
+def _normalise_entry(path: str, entry: Any, source: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         logger.warning(
             "coverage store %s: file %r entry is not an object; dropping",
@@ -104,7 +104,7 @@ def _normalise_entry(path: str, entry: Any, source: str) -> Optional[Dict[str, A
 
 def normalise_loaded_files(
     files: Any, source: str = "<coverage store>",
-) -> Dict[str, Dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     """Return the largest well-formed ``{path: entry}`` subset of ``files``.
 
     Non-dict input, non-string paths, and non-object entries are dropped with
@@ -115,7 +115,7 @@ def normalise_loaded_files(
             "coverage store %s: 'files' is not an object; ignoring persisted "
             "coverage", source)
         return {}
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for path, entry in files.items():
         if not isinstance(path, str):
             logger.warning(

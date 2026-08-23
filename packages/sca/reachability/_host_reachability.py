@@ -1,7 +1,7 @@
 """Host-function reachability check used by every per-ecosystem
 function-level reachability module.
 
-When ``core.inventory.reachability.function_called`` says the
+When ``core.analysis.reachability.function_called`` says the
 project demonstrably calls an OSV-affected dep function, that
 verdict says nothing about whether the call site itself is
 reachable from any externally-callable project entry. If every
@@ -66,9 +66,9 @@ should set ``confidence="medium"`` to reflect this, not
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
-from core.inventory.reachability import (
+from core.analysis.reachability import (
     InternalFunction,
     callers_of,
     enclosing_function,
@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 
 # ``enclosing_function`` and ``parse_evidence_entry`` were
 # originally defined here. They've moved to the substrate
-# (core.inventory.reachability) so /validate, /agentic, and
+# (core.analysis.reachability) so /validate, /agentic, and
 # /understand can share one implementation. Re-exported above so
 # any downstream consumer that imports them from here keeps
 # working without churn.
@@ -139,7 +139,7 @@ def _looks_internal(name: str) -> bool:
 
 
 def is_host_dead(
-    inventory: Dict[str, Any],
+    inventory: dict[str, Any],
     host: InternalFunction,
     *,
     exclude_test_files: bool = True,
@@ -189,8 +189,8 @@ def is_host_dead(
 
 
 def all_call_sites_in_dead_code(
-    inventory: Dict[str, Any],
-    evidence: List[str],
+    inventory: dict[str, Any],
+    evidence: list[str],
     *,
     exclude_test_files: bool = True,
 ) -> bool:
@@ -233,8 +233,8 @@ def all_call_sites_in_dead_code(
 
 
 def classify_called_or_dead(
-    inventory: Dict[str, Any],
-    evidence_lines: List[str],
+    inventory: dict[str, Any],
+    evidence_lines: list[str],
     *,
     likely_called_reason: str,
     affected_summary: str,

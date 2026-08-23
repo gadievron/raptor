@@ -17,7 +17,7 @@ the path-pattern check is the cheap pre-filter — most fixture
 content lives in conventional paths.
 
 The reachability gate is delegated to
-:mod:`core.inventory.reachability`, which already has a
+:mod:`core.analysis.reachability`, which already has a
 ``exclude_test_files=True`` mode that excludes calls *from* test
 files when answering "is this called?". A function with no
 non-test callers gets ``NOT_CALLED``.
@@ -45,11 +45,11 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 # Path-pattern match. Matches the conventions
-# ``core.inventory.reachability._is_test_file`` already uses, plus a
+# ``core.analysis.reachability._is_test_file`` already uses, plus a
 # wider net (JS / Ruby / Go conventions) and explicit fixture
 # directory names operators commonly use.
 #
@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # path component (``test_runner.py`` is the binary, not a fixture
 # — same example) doesn't false-match. Component-anchored matches
 # are stricter than substring; this is the deliberate choice.
-_FIXTURE_PATH_PATTERNS: Tuple[Tuple[str, str], ...] = (
+_FIXTURE_PATH_PATTERNS: tuple[tuple[str, str], ...] = (
     # Directory-anchored — the conventional containers.
     (r"(^|/)tests?/", "tests directory"),
     (r"(^|/)__tests__/", "JS __tests__ directory"),
@@ -80,7 +80,7 @@ _FIXTURE_PATH_RE = re.compile(
     "|".join(p for p, _ in _FIXTURE_PATH_PATTERNS),
 )
 
-_PATTERN_LABELS: Dict[str, str] = {
+_PATTERN_LABELS: dict[str, str] = {
     p: label for p, label in _FIXTURE_PATH_PATTERNS
 }
 
@@ -103,10 +103,10 @@ class HarnessEvidence:
     path: str = ""
     pattern: str = ""
     result: str = ""
-    checked_against: Tuple[str, ...] = ()
+    checked_against: tuple[str, ...] = ()
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"type": self.type}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"type": self.type}
         if self.path:
             d["path"] = self.path
         if self.pattern:
@@ -132,16 +132,16 @@ class FixtureVerdict:
                        auto-demote
     """
     likely_test_harness: str  # "true" | "false" | "candidate"
-    evidence: Tuple[HarnessEvidence, ...] = ()
+    evidence: tuple[HarnessEvidence, ...] = ()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "likely_test_harness": self.likely_test_harness,
             "harness_evidence": [e.to_dict() for e in self.evidence],
         }
 
 
-def is_fixture_path(file_path: str) -> Tuple[bool, str]:
+def is_fixture_path(file_path: str) -> tuple[bool, str]:
     """Return ``(matched, label)`` for a path-pattern check.
 
     ``label`` is the human-readable pattern name (e.g. "pytest
@@ -166,8 +166,8 @@ def detect_fixture(
     *,
     file_path: str,
     function: str,
-    inventory: Optional[Dict[str, Any]] = None,
-    qualified_name: Optional[str] = None,
+    inventory: dict[str, Any] | None = None,
+    qualified_name: str | None = None,
 ) -> FixtureVerdict:
     """Mechanical fixture detection for a single finding.
 
@@ -188,7 +188,7 @@ def detect_fixture(
     Returns:
         :class:`FixtureVerdict` with verdict + evidence list.
     """
-    evidence: List[HarnessEvidence] = []
+    evidence: list[HarnessEvidence] = []
 
     matched, label = is_fixture_path(file_path)
     if not matched:
@@ -236,7 +236,7 @@ def detect_fixture(
         )
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             Verdict,
             function_called,
         )
@@ -326,7 +326,7 @@ def _default_qualified_name(file_path: str, function: str) -> str:
     # Strip extension; common Python / JS / Go cases. Other
     # languages fall back to bare function name (rejected as
     # too-coarse by the resolver).
-    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb"):
+    for ext in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rb", ".java"):
         if norm.endswith(ext):
             norm = norm[: -len(ext)]
             break

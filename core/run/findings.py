@@ -30,8 +30,10 @@ schema awkwardness post-merge.
 What's INTENTIONALLY thin in a ProvenanceRef:
   * run_id      = the run-dir basename (stable, file-system grep-able).
   * ts          = the manifest's start-time ISO timestamp.
-  * manifest_path = the path to ``.raptor-run.json`` (relative to the run
-    dir when possible, absolute otherwise — see ``_relative_manifest_path``).
+  * manifest_path = the path to ``.raptor-run.json``, always relative to
+    the run dir (see ``_relative_manifest_path``). Consumers resolve it
+    against the run dir themselves; nothing in this module dereferences
+    an absolute manifest_path from a finding record.
 
 Engines / models / target / det_repro are NOT duplicated here. Consumers
 that need them call ``core.run.load_run_metadata(Path(manifest_path).parent)``.
@@ -48,8 +50,9 @@ from __future__ import annotations
 import json
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from core.json import loads
 from core.logging import get_logger
 
 from .metadata import RUN_METADATA_FILE, load_run_metadata
@@ -67,7 +70,7 @@ _STAMP_PATHS: tuple = (
 )
 
 
-def build_provenance_ref(run_dir: Path) -> Optional[Dict[str, Any]]:
+def build_provenance_ref(run_dir: Path) -> dict[str, Any] | None:
     """Build the per-finding ProvenanceRef for ``run_dir``.
 
     Returns ``None`` if the run dir has no ``.raptor-run.json`` (an
@@ -96,7 +99,7 @@ def _relative_manifest_path(run_dir: Path) -> Path:
     return Path(RUN_METADATA_FILE)
 
 
-def stamp_findings_in_run(run_dir: Path) -> Dict[str, int]:
+def stamp_findings_in_run(run_dir: Path) -> dict[str, int]:
     """Walk every ``findings.json`` in ``run_dir`` and inject
     ``provenance_refs`` into each finding that doesn't already have it.
 
@@ -112,7 +115,7 @@ def stamp_findings_in_run(run_dir: Path) -> Dict[str, int]:
     run_dir = Path(run_dir)
     ref = build_provenance_ref(run_dir)
     if ref is None:
-        logger.debug(f"No manifest in {run_dir}; skipping stamping.")
+        logger.debug("No manifest in %s; skipping stamping.", run_dir)
         return counts
 
     for rel in _STAMP_PATHS:
@@ -128,21 +131,21 @@ def stamp_findings_in_run(run_dir: Path) -> Dict[str, int]:
     return counts
 
 
-def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
+def _stamp_file(path: Path, ref: dict[str, Any]) -> int:
     """Stamp findings in one file. Returns count of findings newly stamped,
     or -1 on parse failure (file skipped, not modified)."""
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
-        logger.warning(f"stamp_findings: read failed {path}: {e}")
+        logger.warning("stamp_findings: read failed %s: %s", path, e)
         return -1
     try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.warning(f"stamp_findings: parse failed {path}: {e}")
+        data = loads(raw)
+    except ValueError as e:
+        logger.warning("stamp_findings: parse failed %s: %s", path, e)
         return -1
 
-    findings_list, container_kind = _resolve_findings_list(data)
+    findings_list, _container_kind = _resolve_findings_list(data)
     if findings_list is None:
         # Shape we don't recognise — skip silently rather than risk mangling.
         return 0
@@ -153,10 +156,9 @@ def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
             continue
         existing = f.get(PROVENANCE_REFS_FIELD)
         if isinstance(existing, list) and any(
-            isinstance(r, dict) and r.get("run_id") == ref["run_id"]
-            for r in existing
+            _is_canonical_ref(r, ref) for r in existing
         ):
-            # Idempotent — already stamped for this run.
+            # Idempotent — the canonical stamp for this run is present.
             continue
         # Plural-from-day-1: always a list. New stamp = single-element.
         if isinstance(existing, list):
@@ -168,22 +170,80 @@ def _stamp_file(path: Path, ref: Dict[str, Any]) -> int:
     if new_count == 0:
         return 0
 
-    # Re-serialize the SAME container shape we read in.
-    if container_kind == "list":
-        out = json.dumps(data, indent=2, sort_keys=False, default=str) + "\n"
-    else:  # dict-wrapped
-        out = json.dumps(data, indent=2, sort_keys=False, default=str) + "\n"
+    # Re-serialize ``data`` itself — the stamp mutated the findings
+    # list by reference, so the container shape (top-level array vs
+    # dict-wrapped) is preserved without shape-dependent branches.
+    out = json.dumps(data, indent=2, sort_keys=False, default=str) + "\n"
     try:
-        path.write_text(out, encoding="utf-8")
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(path, out)
     except OSError as e:
-        logger.warning(f"stamp_findings: write failed {path}: {e}")
+        logger.warning("stamp_findings: write failed %s: %s", path, e)
         return -1
     return new_count
 
 
+def _is_canonical_ref(candidate: Any, ref: dict[str, Any]) -> bool:
+    """Whether *candidate* IS the canonical stamp this writer produces.
+
+    Idempotency must only trigger on the exact ref this module writes
+    (same keys, same values — run_id, manifest_path, ts). A forged or
+    pre-seeded entry that merely CLAIMS the current run_id (different
+    manifest_path, attacker-chosen ts, extra smuggled keys) must not
+    suppress canonical stamping — the canonical ref is appended
+    alongside it and downstream consumers see the genuine back-link.
+    Re-running on an already-stamped file stays a no-op: the canonical
+    ref is deterministic for a given run (manifest-derived ts).
+    """
+    return isinstance(candidate, dict) and candidate == ref
+
+
+def is_canonical_ref_shape(candidate: Any) -> bool:
+    """Whether *candidate* has the exact SHAPE of a canonical stamp
+    produced by :func:`build_provenance_ref`.
+
+    Strict shape/field validation, no run directory needed:
+
+      * a dict whose keys are exactly ``{run_id, manifest_path}`` or
+        ``{run_id, manifest_path, ts}`` — extra smuggled keys fail;
+      * ``run_id`` a non-empty string shaped like a run-dir basename
+        (no path separators, never ``.`` / ``..``);
+      * ``manifest_path`` exactly the run-dir-relative
+        :data:`~core.run.metadata.RUN_METADATA_FILE` — the only value
+        stamping ever writes;
+      * ``ts`` (when present) a non-empty string.
+
+    Consumers that fold refs across runs (``core/project/merge.py``)
+    use this to keep a forged ref that merely claims a ``run_id``
+    from displacing the run's genuine stamp. It is a shape check,
+    not authentication: a forger can mimic the shape, but a
+    shape-valid forgery can only ever sit ALONGSIDE the canonical
+    stamp, never suppress it.
+    """
+    if not isinstance(candidate, dict):
+        return False
+    keys = set(candidate)
+    if "run_id" not in keys or "manifest_path" not in keys:
+        return False
+    if not keys <= {"run_id", "manifest_path", "ts"}:
+        return False
+    run_id = candidate["run_id"]
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    if "/" in run_id or "\\" in run_id or run_id in (".", ".."):
+        return False
+    if candidate["manifest_path"] != RUN_METADATA_FILE:
+        return False
+    if "ts" in keys:
+        ts = candidate["ts"]
+        if not isinstance(ts, str) or not ts:
+            return False
+    return True
+
+
 def _resolve_findings_list(
     data: Any,
-) -> tuple[Optional[List[Any]], Optional[str]]:
+) -> tuple[list[Any] | None, str | None]:
     """Mirror load_findings_from_dir's shape detection but return the LIST
     by reference so mutations stamp into the original container.
 
@@ -228,10 +288,10 @@ _ALLOWED_FIELDS = (
 
 
 def finding_public_view(
-    finding: Dict[str, Any],
+    finding: dict[str, Any],
     *,
-    target_path: Optional[str] = None,
-) -> Dict[str, Any]:
+    target_path: str | None = None,
+) -> dict[str, Any]:
     """Project ``finding`` into the publication-grade public view.
 
     Returns a dict containing only the immutable structural facts —
@@ -241,10 +301,13 @@ def finding_public_view(
     ruling, reasoning, snippets) are dropped by design.
 
     ``target_path`` anchors the ``file`` field's relativisation. When
-    omitted, the projector attempts to resolve it from the manifest
-    pointed to by ``finding['provenance_refs'][0]['manifest_path']``;
-    if that also fails, falls back to the basename. Absolute paths are
-    never emitted (they leak deployment topology).
+    omitted, the ``file`` field falls back to the basename. The
+    ``manifest_path`` on provenance_refs is never dereferenced here:
+    stamping only ever writes the run-dir-relative ``.raptor-run.json``
+    and the projector has no run directory to resolve it inside, so an
+    absolute ``manifest_path`` in a crafted record is treated as a
+    missing manifest rather than read. Absolute paths are never
+    emitted (they leak deployment topology).
 
     Strings are L1-strict validated (reject control bytes / ANSI
     escapes / unicode category C*). A field that fails validation is
@@ -255,11 +318,11 @@ def finding_public_view(
     finding_public_view(f, target_path=t), target_path=t)`` is equal
     to ``finding_public_view(f, target_path=t)``.
     """
-    out: Dict[str, Any] = {"schema": FINDING_PUBLIC_SCHEMA_VERSION}
+    out: dict[str, Any] = {"schema": FINDING_PUBLIC_SCHEMA_VERSION}
     if not isinstance(finding, dict):
         return out
 
-    anchor = target_path if target_path else _resolve_target_path(finding)
+    anchor = target_path
 
     for key in _ALLOWED_FIELDS:
         if key not in finding:
@@ -311,11 +374,11 @@ def _publish_string(value: str) -> Any:
     return value
 
 
-def _publish_list(items: List[Any]) -> Any:
+def _publish_list(items: list[Any]) -> Any:
     """Per-element validation; if any element fails the field's
     validation, drop the whole list. cwe_ids / references are the
     realistic cases here — both are lists of strings."""
-    cleaned: List[Any] = []
+    cleaned: list[Any] = []
     for item in items:
         if isinstance(item, str):
             v = _publish_string(item)
@@ -347,7 +410,7 @@ def _passthrough_provenance_refs(refs: Any) -> Any:
     for r in refs:
         if not isinstance(r, dict):
             continue
-        clean: Dict[str, Any] = {}
+        clean: dict[str, Any] = {}
         for k in _PROVENANCE_REF_KEYS:
             v = r.get(k)
             if isinstance(v, str):
@@ -361,7 +424,7 @@ def _passthrough_provenance_refs(refs: Any) -> Any:
     return out
 
 
-def _publish_path(value: Any, anchor: Optional[str]) -> Any:
+def _publish_path(value: Any, anchor: str | None) -> Any:
     """Relativise an absolute path against ``anchor`` when possible;
     fall back to basename when no anchor is known OR when the path
     contains ``..`` traversal segments. Always L1-strict validates
@@ -394,33 +457,12 @@ def _publish_path(value: Any, anchor: Optional[str]) -> Any:
     return _publish_string(value)
 
 
-def _resolve_target_path(finding: Dict[str, Any]) -> Optional[str]:
-    """Pull target_path from the manifest pointed to by the first
-    provenance_ref. Best-effort: failure returns None and the caller
-    falls back to basename."""
-    refs = finding.get(PROVENANCE_REFS_FIELD)
-    if not isinstance(refs, list) or not refs:
-        return None
-    first = refs[0]
-    if not isinstance(first, dict):
-        return None
-    manifest_path = first.get("manifest_path")
-    if not isinstance(manifest_path, str) or not manifest_path:
-        return None
-    # manifest_path is typically run-dir-relative (".raptor-run.json").
-    # Resolution needs the run dir; we don't have it here without the
-    # caller telling us. So this path only resolves when manifest_path
-    # is absolute (which it's NOT in the v1 #2 stamping convention).
-    # In practice: callers passing relative manifest_paths must supply
-    # target_path explicitly. Documented in the function docstring.
-    p = Path(manifest_path)
-    if not p.is_absolute():
-        return None
-    try:
-        manifest = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(manifest, dict):
-        return None
-    tp = manifest.get("target_path") or manifest.get("target")
-    return tp if isinstance(tp, str) and tp else None
+# NOTE: the projector deliberately never dereferences
+# ``provenance_refs[].manifest_path``. Stamping only ever writes the
+# run-dir-relative ``.raptor-run.json`` (see ``_relative_manifest_path``),
+# and resolving a relative path needs the run directory, which the
+# projector doesn't have. An earlier fallback read the manifest when the
+# path was absolute — a value stamping never produces, so it only fired
+# for hand-edited / hostile records and let them point the projector at
+# an arbitrary file. Callers that want relativisation pass
+# ``target_path`` explicitly.

@@ -210,3 +210,60 @@ def test_list_tags_pagination_bounded_by_max_pages() -> None:
 def _ok_body(payload: dict) -> bytes:
     import json as _json
     return _json.dumps(payload).encode()
+
+
+# ---------------------------------------------------------------------------
+# Aggregate budgets across pages
+# ---------------------------------------------------------------------------
+
+
+def _paged_stub(pages: List[List[str]], repo: str = "acme/big") -> _StubHttp:
+    """Build a stub serving ``pages`` of tags chained via Link
+    headers."""
+    responses: Dict[str, _StubResponse] = {}
+    base = f"https://registry-1.docker.io/v2/{repo}/tags/list"
+    for i, tags in enumerate(pages):
+        url = f"{base}?n=100" if i == 0 else f"{base}?n=100&page={i}"
+        headers = {}
+        if i + 1 < len(pages):
+            headers["Link"] = (
+                f'</v2/{repo}/tags/list?n=100&page={i + 1}>; rel="next"'
+            )
+        responses[url] = _StubResponse(
+            200, json.dumps({"name": repo, "tags": tags}).encode(),
+            headers=headers,
+        )
+    return _StubHttp(responses)
+
+
+def test_list_tags_aggregate_tag_count_budget_enforced() -> None:
+    """Per-page caps reset every iteration; the aggregate tag-count
+    budget must stop a hostile registry from feeding an unbounded
+    retained (and downstream-cached) list."""
+    pages = [[f"t{i}-{j}" for j in range(30_000)] for i in range(3)]
+    http = _paged_stub(pages)
+    ref = parse_image_ref("docker.io/acme/big:latest")
+    client = OciRegistryClient(http)
+    with pytest.raises(RegistryError, match="tag\\b.*budget|-tag budget"):
+        client.list_tags(ref)
+
+
+def test_list_tags_overlong_tags_dropped() -> None:
+    """The OCI tag grammar caps names at 128 chars; longer strings
+    are not real tags and must not inflate the retained list."""
+    ref = parse_image_ref("docker.io/library/python:3.12")
+    http = _StubHttp({
+        "https://registry-1.docker.io/v2/library/python/tags/list?n=100":
+            _ok({"name": "library/python",
+                 "tags": ["3.12", "x" * 4096]}),
+    })
+    client = OciRegistryClient(http)
+    assert client.list_tags(ref) == ["3.12"]
+
+
+def test_list_tags_normal_pagination_unaffected_by_budgets() -> None:
+    pages = [["a", "b"], ["c"]]
+    http = _paged_stub(pages)
+    ref = parse_image_ref("docker.io/acme/big:latest")
+    client = OciRegistryClient(http)
+    assert client.list_tags(ref) == ["a", "b", "c"]

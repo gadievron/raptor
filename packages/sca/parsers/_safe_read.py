@@ -30,13 +30,40 @@ should use this from the start.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 import os
 import stat as _stat
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
+
+# Scan-root context: when set (by the pipeline around its parse loop),
+# ``read_bounded(..., follow_symlinks=False)`` accepts a symlinked
+# manifest whose fully-resolved target still lies INSIDE the scan
+# root — the legitimate monorepo pattern (pnpm / nix / Bazel layouts
+# symlink shared manifests within the tree) — while continuing to
+# refuse links that escape it (``composer.lock -> /etc/shadow``).
+# Contextvar (not a module global) so parallel scans in one process
+# can't leak each other's roots.
+_SCAN_ROOT: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "sca_parser_scan_root", default=None,
+)
+
+
+@contextlib.contextmanager
+def scan_root_context(root: Path) -> Iterator[None]:
+    """Declare the scan root for symlink containment checks."""
+    token = _SCAN_ROOT.set(Path(root).resolve())
+    try:
+        yield
+    finally:
+        _SCAN_ROOT.reset(token)
 
 # 50 MB. See module docstring for the bound rationale.
 _MAX_PARSER_BYTES = 50 * 1024 * 1024
@@ -45,7 +72,7 @@ _MAX_PARSER_BYTES = 50 * 1024 * 1024
 def read_bounded(
     path: Path, *, max_bytes: int = _MAX_PARSER_BYTES,
     follow_symlinks: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Read ``path`` as UTF-8 text, capped at ``max_bytes``.
 
     Returns ``None`` and logs at warning level when:
@@ -79,12 +106,42 @@ def read_bounded(
     try:
         st = (path.lstat() if not follow_symlinks else path.stat())
     except OSError as e:
-        logger.debug("sca.parsers: cannot stat %s: %s", path, e)
+        logger.warning("sca.parsers: cannot stat %s: %s", path, e)
         return None
+    if not follow_symlinks and _stat.S_ISLNK(st.st_mode):
+        # Symlinked manifest. With a declared scan root, resolve and
+        # allow when the target stays inside it (monorepo shared-
+        # manifest layouts); otherwise fall through to the refusal
+        # below. The recursive call re-runs the full bound/regular-
+        # file checks on the resolved target, and its O_NOFOLLOW
+        # open closes the resolve->open TOCTOU window (a re-linked
+        # final component fails with ELOOP rather than following).
+        root = _SCAN_ROOT.get()
+        if root is not None:
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError as e:
+                logger.warning(
+                    "sca.parsers: cannot resolve symlink %s: %s",
+                    path, e,
+                )
+                return None
+            if resolved.is_relative_to(root):
+                return read_bounded(
+                    resolved, max_bytes=max_bytes,
+                    follow_symlinks=False,
+                )
+            logger.warning(
+                "sca.parsers: refusing symlinked manifest %s — "
+                "resolves outside the scan root (%s); treating as "
+                "unparseable", path, resolved,
+            )
+            return None
     # Reject non-regular files up-front (symlinks, sockets, FIFOs,
     # devices). With ``follow_symlinks=False`` ``lstat`` reports
     # the symlink itself, so the S_ISLNK check is what blocks the
-    # symlink read. With ``follow_symlinks=True`` ``stat`` follows
+    # symlink read (unless the scan-root containment branch above
+    # accepted it). With ``follow_symlinks=True`` ``stat`` follows
     # transparently and this check rejects only non-regular final
     # targets (FIFO, socket, etc.).
     if not _stat.S_ISREG(st.st_mode):
@@ -113,7 +170,7 @@ def read_bounded(
             with path.open("rb") as fh:
                 raw = fh.read(max_bytes + 1)
     except OSError as e:
-        logger.debug("sca.parsers: cannot read %s: %s", path, e)
+        logger.warning("sca.parsers: cannot read %s: %s", path, e)
         return None
     if len(raw) > max_bytes:
         logger.warning(

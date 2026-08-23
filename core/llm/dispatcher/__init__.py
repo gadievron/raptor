@@ -35,8 +35,8 @@ from .server import LLMDispatcher, AuditEvent
 from .spawn import spawn_worker
 
 __all__ = [
-    "LLMDispatcher",
     "AuditEvent",
+    "LLMDispatcher",
     "dispatcher_for_run",
     "llm_dispatcher_in_run",
     "make_anthropic_client",

@@ -2,7 +2,11 @@
 
 import unittest
 
-from core.security.log_sanitisation import escape_nonprintable, has_nonprintable
+from core.security.log_sanitisation import (
+    escape_nonprintable,
+    has_nonprintable,
+    sanitise_for_terminal,
+)
 
 
 class TestEscapeNonprintable(unittest.TestCase):
@@ -87,7 +91,7 @@ class TestEscapeNonprintable(unittest.TestCase):
     def test_escape_unicode_line_separator(self):
         # U+2028 is a Unicode line separator — some JSON parsers and
         # terminals honour it as a newline. Not printable.
-        self.assertEqual(escape_nonprintable("a\u2028b"), "a\\x2028b")
+        self.assertEqual(escape_nonprintable("a\u2028b"), "a\\u2028b")
 
     def test_unicode_printable_passes_through(self):
         # Legitimate non-ASCII content (accented filenames, non-Latin
@@ -138,6 +142,25 @@ class TestHasNonprintable(unittest.TestCase):
 
     def test_empty_false(self):
         self.assertFalse(has_nonprintable(""))
+
+
+class SanitiseForTerminalTests(unittest.TestCase):
+    def test_escapes_and_passes_short_strings(self):
+        self.assertEqual(sanitise_for_terminal("evil\x1b[31m.example"),
+                         "evil\\x1b[31m.example")
+        self.assertEqual(sanitise_for_terminal("plain.example"),
+                         "plain.example")
+
+    def test_truncates_with_explicit_marker(self):
+        out = sanitise_for_terminal("a" * 1000, max_len=100)
+        self.assertEqual(out, "a" * 100 + "...[+900 chars]")
+
+    def test_truncation_measured_after_escaping(self):
+        # Escaping expands each control char to 4 printable chars; the
+        # bound applies to what actually reaches the terminal.
+        out = sanitise_for_terminal("\x1b" * 1000, max_len=100)
+        self.assertLessEqual(len(out), 100 + len("...[+3900 chars]"))
+        self.assertNotIn("\x1b", out)
 
 
 if __name__ == "__main__":

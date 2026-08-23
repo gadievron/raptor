@@ -30,30 +30,38 @@ from core.startup import init as startup_init
 
 
 class CheckLangTest(unittest.TestCase):
-    """`check_lang` — tree-sitter probe; returns formatted line or None."""
+    """`check_lang` — tree-sitter probe; returns (line or None, warnings)."""
 
     def test_returns_check_mark_with_languages(self) -> None:
         with mock.patch(
             "core.inventory.extractors._get_ts_languages",
             return_value=["python", "javascript", "go"],
         ):
-            line = startup_init.check_lang()
+            line, warnings = startup_init.check_lang()
         self.assertIsNotNone(line)
         # Documented format: "  lang: tree-sitter ✓ (lang1, lang2, ...)"
         self.assertIn("tree-sitter", line)
         self.assertIn("✓", line)
         self.assertIn("python", line)
         self.assertIn("javascript", line)
+        # Grammars present — nothing to warn about.
+        self.assertEqual(warnings, [])
 
-    def test_returns_cross_mark_when_no_languages(self) -> None:
+    def test_returns_cross_mark_and_warning_when_no_languages(self) -> None:
+        """Zero grammars is a WARNING, not just a glyph — production
+        inventory silently degrades to regex extraction and operators
+        repeatedly missed the ✗ alone."""
         with mock.patch(
             "core.inventory.extractors._get_ts_languages",
             return_value=[],
         ):
-            line = startup_init.check_lang()
+            line, warnings = startup_init.check_lang()
         self.assertIsNotNone(line)
         self.assertIn("tree-sitter", line)
         self.assertIn("✗", line)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("no tree-sitter grammars installed", warnings[0])
+        self.assertIn("regex extraction", warnings[0])
 
     def test_returns_none_on_exception(self) -> None:
         """check_lang must swallow probe failures and return None.
@@ -67,8 +75,9 @@ class CheckLangTest(unittest.TestCase):
             "core.inventory.extractors._get_ts_languages",
             side_effect=RuntimeError("tree-sitter probe blew up"),
         ):
-            line = startup_init.check_lang()
+            line, warnings = startup_init.check_lang()
         self.assertIsNone(line)
+        self.assertEqual(warnings, [])
 
 
 class CheckActiveProjectTest(unittest.TestCase):

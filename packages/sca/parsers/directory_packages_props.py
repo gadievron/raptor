@@ -46,11 +46,13 @@ File semantics that matter for the parser
    here. Same comment as above — this module handles one file.
 
 4. **MSBuild expressions** in the Version attribute
-   (``Version="$(MyVersion)"``) are NOT resolved. Property
-   expansion would require evaluating ``<PropertyGroup>`` blocks
-   and inheriting from ``Directory.Build.props``. We log a debug
-   note and skip the entry; the csproj falls through to the "no
-   resolvable version" path.
+   (``Version="$(MyVersion)"``) are resolved only against the SAME
+   file's ``<PropertyGroup>`` blocks (recursive, depth-capped).
+   Cross-file inheritance from ``Directory.Build.props``, item /
+   metadata references, and anything that still looks like an
+   expression after substitution are NOT resolved — for those we
+   log a debug note and skip the entry; the csproj falls through
+   to the "no resolvable version" path.
 
 Defusedxml dependency
 ~~~~~~~~~~~~~~~~~~~~~
@@ -67,7 +69,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
 from xml.etree import ElementTree as _ET
 
 from core.security.log_sanitisation import escape_nonprintable
@@ -109,12 +110,12 @@ _PROP_REF_RE = re.compile(r"\$\(([A-Za-z_][\w.\-]*)\)")
 _MAX_PROP_DEPTH = 8
 
 
-def _extract_properties(root) -> "Dict[str, str]":
+def _extract_properties(root) -> dict[str, str]:
     """Collect ``<PropertyGroup>`` properties (name → text) from one file.
     Conditions are ignored and later definitions win — an approximation of
     MSBuild evaluation that's correct for the unconditional central-version
     files this matters for."""
-    props: Dict[str, str] = {}
+    props: dict[str, str] = {}
     for prop_group in _findall_local(root, "PropertyGroup"):
         for el in prop_group:
             text = (el.text or "").strip()
@@ -124,8 +125,8 @@ def _extract_properties(root) -> "Dict[str, str]":
 
 
 def _resolve_property_version(
-    version: str, props: "Dict[str, str]", _depth: int = 0,
-) -> Optional[str]:
+    version: str, props: dict[str, str], _depth: int = 0,
+) -> str | None:
     """Substitute ``$(Prop)`` tokens in ``version`` from same-file ``props``
     (recursive, capped). Returns a concrete version, or ``None`` if anything
     MSBuild-expression-shaped survives (cross-file / item / metadata) or the
@@ -156,7 +157,7 @@ class CentralPackage:
     name: str
     version: str
     is_global: bool = False
-    declared_in: Optional[Path] = None
+    declared_in: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -172,15 +173,15 @@ class CPMFile:
     # All ``<PackageVersion>`` + ``<GlobalPackageReference>``
     # entries. Order preserved — useful for diff-friendly
     # bumper rewrites later.
-    packages: List[CentralPackage] = field(default_factory=list)
+    packages: list[CentralPackage] = field(default_factory=list)
 
-    def version_map(self) -> Dict[str, str]:
+    def version_map(self) -> dict[str, str]:
         """Flat ``{package_name_lower: version}`` map. NuGet is
         case-insensitive on package names; lowercase keys so the
         csproj resolver doesn't need to repeat the normalisation."""
         return {p.name.lower(): p.version for p in self.packages}
 
-    def global_packages(self) -> List[CentralPackage]:
+    def global_packages(self) -> list[CentralPackage]:
         """Subset that's ``<GlobalPackageReference>`` — auto-applied
         to every csproj. The csproj resolver should emit these as
         Dependency rows for every csproj, not just those that
@@ -192,10 +193,10 @@ class CPMFile:
 # csproj all walking up to the same ``Directory.Packages.props``.
 # Cache keyed by resolved absolute path so identical files
 # (rare, but possible in symlinked monorepos) don't get re-parsed.
-_PARSE_CACHE: Dict[Path, Optional[CPMFile]] = {}
+_PARSE_CACHE: dict[Path, CPMFile | None] = {}
 
 
-def parse_directory_packages_props(path: Path) -> Optional[CPMFile]:
+def parse_directory_packages_props(path: Path) -> CPMFile | None:
     """Parse one ``Directory.Packages.props`` file.
 
     Returns ``None`` when:
@@ -213,18 +214,24 @@ def parse_directory_packages_props(path: Path) -> Optional[CPMFile]:
     """
     if not _AVAILABLE:
         return None
+    # Read the DISCOVERED path, not its resolve() target — resolving
+    # first would hand ``read_bounded`` a plain regular file and the
+    # ``follow_symlinks=False`` symlink refusal could never fire. The
+    # realpath is computed only after a successful (symlink-free) read,
+    # and only then used as the cache key / declared_in value.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason at
+        # warning level (oversize / symlink / vanished / …). Not
+        # cached: a trustworthy cache key needs the realpath, which
+        # we only trust after a clean read.
+        return None
     try:
         resolved = path.resolve()
     except OSError:
         return None
     if resolved in _PARSE_CACHE:
         return _PARSE_CACHE[resolved]
-    text = _safe_read.read_bounded(resolved, follow_symlinks=False)
-    if text is None:
-        # ``read_bounded`` already logged the underlying reason at
-        # warning level (oversize / symlink / vanished / …).
-        _PARSE_CACHE[resolved] = None
-        return None
     try:
         root = _safe_fromstring(text)
     except _ET.ParseError as e:
@@ -296,7 +303,7 @@ def _extract_cpm_enabled(root) -> bool:
 
 def _extract_package_versions(
     root, *, declared_in: Path,
-) -> List[CentralPackage]:
+) -> list[CentralPackage]:
     """Walk every ``<ItemGroup>`` for ``<PackageVersion>`` /
     ``<GlobalPackageReference>``. MSBuild lets either tag live in
     any ItemGroup; we don't enforce a single ItemGroup convention.
@@ -314,9 +321,9 @@ def _extract_package_versions(
     we keep the LAST declaration — same as MSBuild evaluation
     order.
     """
-    out: List[CentralPackage] = []
+    out: list[CentralPackage] = []
     # Track which package names we've seen; last-wins on duplicates.
-    by_lower_name: Dict[str, int] = {}
+    by_lower_name: dict[str, int] = {}
     props = _extract_properties(root)
 
     for item_group in _findall_local(root, "ItemGroup"):
@@ -340,7 +347,17 @@ def _extract_package_versions(
                 logger.debug(
                     "sca.parsers.directory_packages_props: %s in "
                     "%s has no Version; skipping",
-                    escape_nonprintable(name), declared_in,
+                    escape_nonprintable(name),
+                    escape_nonprintable(str(declared_in)),
+                )
+                continue
+            if "*" in version:
+                logger.debug(
+                    "sca.parsers.directory_packages_props: %s in "
+                    "%s has floating wildcard version %r; skipping",
+                    escape_nonprintable(name),
+                    escape_nonprintable(str(declared_in)),
+                    escape_nonprintable(version),
                 )
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
@@ -350,7 +367,8 @@ def _extract_package_versions(
                         "sca.parsers.directory_packages_props: %s in "
                         "%s uses unresolvable MSBuild expression %r "
                         "(cross-file / item / floating); skipping",
-                        escape_nonprintable(name), declared_in,
+                        escape_nonprintable(name),
+                        escape_nonprintable(str(declared_in)),
                         escape_nonprintable(version),
                     )
                     continue
@@ -369,7 +387,7 @@ def _extract_package_versions(
     return out
 
 
-def find_cpm_chain(start_dir: Path) -> List[Path]:
+def find_cpm_chain(start_dir: Path) -> list[Path]:
     """Walk UP from ``start_dir`` collecting ``Directory.Packages.props``
     paths. Innermost (closest to ``start_dir``) FIRST in the
     returned list; outermost (closer to filesystem root) LAST.
@@ -393,7 +411,7 @@ def find_cpm_chain(start_dir: Path) -> List[Path]:
     return _find_msbuild_chain(start_dir, "Directory.Packages.props")
 
 
-def find_build_props_chain(start_dir: Path) -> List[Path]:
+def find_build_props_chain(start_dir: Path) -> list[Path]:
     """Walk UP from ``start_dir`` collecting ``Directory.Build.props``
     paths. Same innermost-first / git-boundary semantics as
     :func:`find_cpm_chain`.
@@ -411,7 +429,7 @@ def find_build_props_chain(start_dir: Path) -> List[Path]:
     return _find_msbuild_chain(start_dir, "Directory.Build.props")
 
 
-def find_build_targets_chain(start_dir: Path) -> List[Path]:
+def find_build_targets_chain(start_dir: Path) -> list[Path]:
     """Walk UP from ``start_dir`` collecting ``Directory.Build.targets``
     paths. Same innermost-first / git-boundary semantics as
     :func:`find_build_props_chain`.
@@ -431,12 +449,13 @@ def find_build_targets_chain(start_dir: Path) -> List[Path]:
 _MAX_WALK_UP_DEPTH = 12
 
 
-def _find_msbuild_chain(start_dir: Path, filename: str) -> List[Path]:
-    """Shared walk-up implementation for both
-    ``find_cpm_chain`` (Directory.Packages.props) and
-    ``find_build_props_chain`` (Directory.Build.props). Both
-    follow the same MSBuild auto-import convention: walk parents,
-    stop at the nearest ``.git`` or filesystem root.
+def _find_msbuild_chain(start_dir: Path, filename: str) -> list[Path]:
+    """Shared walk-up implementation for ``find_cpm_chain``
+    (Directory.Packages.props), ``find_build_props_chain``
+    (Directory.Build.props) and ``find_build_targets_chain``
+    (Directory.Build.targets). All three follow the same MSBuild
+    auto-import convention: walk parents, stop at the nearest
+    ``.git`` or filesystem root.
 
     Capped at ``_MAX_WALK_UP_DEPTH`` parents as a defence-in-depth
     bound. The .git-boundary check is the primary stop signal, but
@@ -450,7 +469,7 @@ def _find_msbuild_chain(start_dir: Path, filename: str) -> List[Path]:
     nesting); anything beyond that is overwhelmingly outside the
     operator's intended scan scope.
     """
-    out: List[Path] = []
+    out: list[Path] = []
     try:
         current = start_dir.resolve()
     except OSError:
@@ -477,7 +496,7 @@ def _find_msbuild_chain(start_dir: Path, filename: str) -> List[Path]:
     return out
 
 
-def parse_directory_build_props(path: Path) -> Optional[CPMFile]:
+def parse_directory_build_props(path: Path) -> CPMFile | None:
     """Parse a ``Directory.Build.props`` for PackageReference rows.
 
     Pre-CPM era projects routinely placed common ``<PackageReference>``
@@ -506,18 +525,20 @@ def parse_directory_build_props(path: Path) -> Optional[CPMFile]:
     """
     if not _AVAILABLE:
         return None
+    # Same read-then-resolve ordering as
+    # :func:`parse_directory_packages_props` — the symlink refusal
+    # must see the discovered path, not its resolve() target.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason at
+        # warning level (oversize / symlink / vanished / …).
+        return None
     try:
         resolved = path.resolve()
     except OSError:
         return None
     if resolved in _PARSE_CACHE:
         return _PARSE_CACHE[resolved]
-    text = _safe_read.read_bounded(resolved, follow_symlinks=False)
-    if text is None:
-        # ``read_bounded`` already logged the underlying reason at
-        # warning level (oversize / symlink / vanished / …).
-        _PARSE_CACHE[resolved] = None
-        return None
     try:
         root = _safe_fromstring(text)
     except _ET.ParseError as e:
@@ -531,8 +552,8 @@ def parse_directory_build_props(path: Path) -> Optional[CPMFile]:
     if _strip_namespace(root.tag) != "Project":
         _PARSE_CACHE[resolved] = None
         return None
-    packages: List[CentralPackage] = []
-    seen: Dict[str, int] = {}
+    packages: list[CentralPackage] = []
+    seen: dict[str, int] = {}
     props = _extract_properties(root)
     for item_group in _findall_local(root, "ItemGroup"):
         for el in item_group:

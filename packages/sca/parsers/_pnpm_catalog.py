@@ -24,8 +24,10 @@ report.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +36,10 @@ logger = logging.getLogger(__name__)
 # {package: version_spec}}}``. ``""`` is the default catalog.
 # Consulted across parser invocations within the same process so
 # every package.json in a workspace pays the YAML parse once.
-_CATALOG_CACHE: Dict[Path, Dict[str, Dict[str, str]]] = {}
+_CATALOG_CACHE: dict[Path, dict[str, dict[str, str]]] = {}
 
 
-def find_workspace_root(start: Path) -> Optional[Path]:
+def find_workspace_root(start: Path) -> Path | None:
     """Walk up from ``start`` looking for ``pnpm-workspace.yaml``.
 
     ``start`` is typically the directory containing a member
@@ -55,7 +57,7 @@ def find_workspace_root(start: Path) -> Optional[Path]:
         cur = cur.parent
 
 
-def get_catalogs(root: Path) -> Dict[str, Dict[str, str]]:
+def get_catalogs(root: Path) -> dict[str, dict[str, str]]:
     """Return ``{catalog_name: {package: version_spec}}`` for the
     workspace rooted at ``root``. Empty dict on missing or
     malformed YAML.
@@ -70,8 +72,8 @@ def get_catalogs(root: Path) -> Dict[str, Dict[str, str]]:
 
 
 def resolve_catalog_spec(
-    spec: str, package_name: str, catalogs: Dict[str, Dict[str, str]],
-) -> Optional[str]:
+    spec: str, package_name: str, catalogs: dict[str, dict[str, str]],
+) -> str | None:
     """Resolve a ``catalog:[<name>]`` spec to its declared version.
 
     ``spec`` is the full string, e.g. ``"catalog:"`` (default
@@ -86,7 +88,7 @@ def resolve_catalog_spec(
     if not spec.startswith("catalog:"):
         return None
     name = spec[len("catalog:"):].strip()
-    cat_key = name or ""              # default catalog uses empty key
+    cat_key = "" if (not name or name == "default") else name
     return (catalogs.get(cat_key) or {}).get(package_name)
 
 
@@ -95,7 +97,7 @@ def resolve_catalog_spec(
 # ---------------------------------------------------------------------------
 
 
-def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
+def _parse_catalogs(path: Path) -> dict[str, dict[str, str]]:
     """Read the YAML and return the catalog map.
 
     Schema (pnpm 9):
@@ -114,9 +116,18 @@ def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
     absent. The default catalog is keyed under ``""`` in the
     returned dict; named catalogs use their declared name.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+    from . import _safe_read
+
+    # Missing file stays a silent empty result (documented contract
+    # of get_catalogs); everything else goes through the bound.
+    if not path.is_file():
+        return {}
+    # pnpm-workspace.yaml comes from the scanned — attacker-
+    # controlled — repository: bound the read (stat gate BEFORE any
+    # buffering) and refuse symlinked paths, like every other
+    # target-manifest read in this package.
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
         return {}
 
     try:
@@ -141,7 +152,7 @@ def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
     if not isinstance(data, dict):
         return {}
 
-    out: Dict[str, Dict[str, str]] = {}
+    out: dict[str, dict[str, str]] = {}
     default = data.get("catalog")
     if isinstance(default, dict):
         out[""] = {
@@ -189,7 +200,7 @@ def _clear_cache() -> None:
 # nested monorepos.
 
 
-def find_npm_workspace_root(start: Path) -> Optional[Path]:
+def find_npm_workspace_root(start: Path) -> Path | None:
     """Walk up from ``start`` looking for an ancestor ``package.json``
     with a ``workspaces`` field whose globs match the directory
     containing ``start``.
@@ -224,18 +235,21 @@ def find_npm_workspace_root(start: Path) -> Optional[Path]:
         walk = walk.parent
 
 
-def _read_workspaces_field(pkg_json: Path) -> Optional[list]:
+def _read_workspaces_field(pkg_json: Path) -> list | None:
     """Return the ``workspaces`` list from a package.json, normalising
     the Yarn nohoist object form. ``None`` on missing field /
     unreadable / non-JSON / wrong-type."""
     import json as _json
-    try:
-        text = pkg_json.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+
+    from . import _safe_read
+    text = _safe_read.read_bounded(pkg_json, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason
+        # (oversize, unreadable, symlink escape, non-regular file).
         return None
     try:
         data = _json.loads(text)
-    except (_json.JSONDecodeError, UnicodeDecodeError):
+    except _json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
         return None
@@ -290,9 +304,8 @@ def _target_matches_any(
             negation = pat[1:]
             if _glob_match(rel_str, negation):
                 matched = False
-        else:
-            if _glob_match(rel_str, pat):
-                matched = True
+        elif _glob_match(rel_str, pat):
+            matched = True
     return matched
 
 

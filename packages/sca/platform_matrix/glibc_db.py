@@ -22,7 +22,6 @@ underlying distro's glibc.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -34,7 +33,7 @@ class LibcVersion:
     < ``"2.9"`` wrong)."""
 
     family: str            # "glibc" | "musl"
-    version: Tuple[int, ...]
+    version: tuple[int, ...]
 
     def as_str(self) -> str:
         return f"{self.family} {'.'.join(str(p) for p in self.version)}"
@@ -49,7 +48,7 @@ class LibcVersion:
 # - alpinelinux.org/releases + musl package version
 #
 # Format: "distro:codename" → LibcVersion
-_DISTRO_LIBC: Dict[str, LibcVersion] = {
+_DISTRO_LIBC: dict[str, LibcVersion] = {
     # Debian
     "debian:buster":   LibcVersion("glibc", (2, 28)),  # 10
     "debian:bullseye": LibcVersion("glibc", (2, 31)),  # 11
@@ -84,7 +83,7 @@ _DISTRO_LIBC: Dict[str, LibcVersion] = {
 
 
 # GHA runner image → libc. Runners are Ubuntu-based.
-_RUNNER_LIBC: Dict[str, LibcVersion] = {
+_RUNNER_LIBC: dict[str, LibcVersion] = {
     "ubuntu-20.04":    LibcVersion("glibc", (2, 31)),
     "ubuntu-22.04":    LibcVersion("glibc", (2, 35)),
     "ubuntu-24.04":    LibcVersion("glibc", (2, 39)),
@@ -100,7 +99,7 @@ _RUNNER_LIBC: Dict[str, LibcVersion] = {
 }
 
 
-def lookup_distro_libc(distro_ref: str) -> Optional[LibcVersion]:
+def lookup_distro_libc(distro_ref: str) -> LibcVersion | None:
     """Look up a libc version for a distro reference like
     ``debian:bookworm``. Returns None when unknown.
 
@@ -135,13 +134,7 @@ def lookup_distro_libc(distro_ref: str) -> Optional[LibcVersion]:
     return None
 
 
-def lookup_runner_libc(runner_ref: str) -> Optional[LibcVersion]:
+def lookup_runner_libc(runner_ref: str) -> LibcVersion | None:
     """Look up libc for a GHA ``runs-on:`` value. Returns None for
     Windows/macOS runners (no libc applicable)."""
     return _RUNNER_LIBC.get(runner_ref)
-
-
-def known_distros() -> Dict[str, LibcVersion]:
-    """Public read-only view of the distro table — used by tests +
-    diagnostic output."""
-    return dict(_DISTRO_LIBC)

@@ -30,9 +30,8 @@ triaging false-positive findings.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .models import (
     Confidence,
@@ -42,15 +41,21 @@ from .models import (
     PinStyle,
 )
 from .versions import VersionError, compare as version_compare
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Per-ecosystem expectation: at least one of these lockfiles should sit
 # alongside a manifest. Empty tuple = no expectation (Maven / Cargo /
 # Go projects without dependency-locking are normal).
-_EXPECTED_LOCKFILES: Dict[str, Tuple[str, ...]] = {
+_EXPECTED_LOCKFILES: dict[str, tuple[str, ...]] = {
     "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "shrinkwrap.json"),
-    "PyPI": ("Pipfile.lock", "poetry.lock"),
+    "PyPI": ("Pipfile.lock", "poetry.lock", "uv.lock",
+             "requirements.txt", "requirements.lock"),
     "Cargo": ("Cargo.lock",),
     "Go": ("go.sum",),
     "RubyGems": ("Gemfile.lock",),
@@ -60,20 +65,20 @@ _EXPECTED_LOCKFILES: Dict[str, Tuple[str, ...]] = {
 }
 
 # Pin styles considered "loose" — the dep can update silently.
-_LOOSE_PINS: Set[PinStyle] = {PinStyle.CARET, PinStyle.TILDE, PinStyle.RANGE}
+_LOOSE_PINS: set[PinStyle] = {PinStyle.CARET, PinStyle.TILDE, PinStyle.RANGE}
 
 # Pin styles that count as "unpinned" — version isn't constrained at all.
-_UNPINNED: Set[PinStyle] = {PinStyle.WILDCARD, PinStyle.UNKNOWN}
+_UNPINNED: set[PinStyle] = {PinStyle.WILDCARD, PinStyle.UNKNOWN}
 
 
 def evaluate(
     manifests: Iterable[Manifest],
     deps: Iterable[Dependency],
-) -> List[HygieneFinding]:
+) -> list[HygieneFinding]:
     """Run every hygiene check; return one finding list."""
     manifests_list = list(manifests)
     deps_list = list(deps)
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     out.extend(check_lockfile_missing(manifests_list, deps_list))
     out.extend(check_lockfile_drift(deps_list))
     out.extend(check_unpinned(deps_list))
@@ -87,13 +92,13 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 def check_lockfile_missing(
-    manifests: List[Manifest],
-    deps: List[Dependency],
-) -> List[HygieneFinding]:
+    manifests: list[Manifest],
+    deps: list[Dependency],
+) -> list[HygieneFinding]:
     """Surface any manifest whose ecosystem expects a sibling lockfile."""
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     # Index lockfile presence per (ecosystem, parent dir).
-    lockfile_dirs: Set[Tuple[str, Path]] = set()
+    lockfile_dirs: set[tuple[str, Path]] = set()
     for m in manifests:
         if m.is_lockfile:
             lockfile_dirs.add((m.ecosystem, m.path.parent))
@@ -105,6 +110,10 @@ def check_lockfile_missing(
         if not expected:
             continue
         if (m.ecosystem, m.path.parent) in lockfile_dirs:
+            continue
+        # Some lockfile names (e.g. requirements.txt) are parsed with
+        # is_lockfile=False — check physical presence as a fallback.
+        if any((m.path.parent / lf).is_file() for lf in expected):
             continue
         # Use the first manifest dep for the finding's dep slot, to keep
         # the finding shape uniform. If no deps were parsed, synthesise
@@ -127,11 +136,11 @@ def check_lockfile_missing(
 
 
 def check_lockfile_drift(
-    deps: List[Dependency],
-) -> List[HygieneFinding]:
+    deps: list[Dependency],
+) -> list[HygieneFinding]:
     """Manifest pins ``==X`` but lockfile resolves ``Y`` where Y != X."""
-    out: List[HygieneFinding] = []
-    by_key: Dict[Tuple[str, Path, str], Dict[str, Dependency]] = defaultdict(dict)
+    out: list[HygieneFinding] = []
+    by_key: dict[tuple[str, Path, str], dict[str, Dependency]] = defaultdict(dict)
     for d in deps:
         # Group by (ecosystem, parent dir of declared file, name) so we
         # only compare manifests + lockfiles in the same workspace.
@@ -166,7 +175,7 @@ def check_lockfile_drift(
     return out
 
 
-def check_unpinned(deps: List[Dependency]) -> List[HygieneFinding]:
+def check_unpinned(deps: list[Dependency]) -> list[HygieneFinding]:
     """Manifest entries with no version constraint.
 
     Maven ``version is None`` is exempt: the standard Maven idiom
@@ -182,14 +191,17 @@ def check_unpinned(deps: List[Dependency]) -> List[HygieneFinding]:
     fail the build before SCA ever ran — we're not the right
     layer to catch a malformed pom.xml.
     """
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     for d in deps:
         if d.is_lockfile:
             continue
         # Maven exception: see docstring.
         if d.ecosystem == "Maven" and d.version is None:
             continue
-        if d.pin_style in _UNPINNED or d.version is None:
+        if d.pin_style in _UNPINNED or (
+            d.version is None
+            and d.pin_style not in {PinStyle.GIT, PinStyle.PATH}
+        ):
             out.append(_finding(
                 kind="unpinned_dependency",
                 dep=d,
@@ -206,9 +218,9 @@ def check_unpinned(deps: List[Dependency]) -> List[HygieneFinding]:
     return out
 
 
-def check_loose_pin(deps: List[Dependency]) -> List[HygieneFinding]:
+def check_loose_pin(deps: list[Dependency]) -> list[HygieneFinding]:
     """Manifest entries with caret / tilde / range pinning."""
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     for d in deps:
         if d.is_lockfile:
             continue
@@ -230,15 +242,15 @@ def check_loose_pin(deps: List[Dependency]) -> List[HygieneFinding]:
 
 
 def check_cross_manifest_inconsistency(
-    deps: List[Dependency],
-) -> List[HygieneFinding]:
+    deps: list[Dependency],
+) -> list[HygieneFinding]:
     """Same dep declared at different versions in different workspaces.
 
     A workspace, for this check, is the parent directory of the manifest.
     Same-workspace duplicates are not flagged — that's the join layer's
     territory.
     """
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     # Bucket by (ecosystem, name, manifest_role, scope). Two deps in
     # different roles or different scopes are EXPECTED to disagree:
     # an `optional` extras manifest can pin a different version than
@@ -247,7 +259,7 @@ def check_cross_manifest_inconsistency(
     # requirements-all-optional.txt floods the report with false
     # positives that aren't actually inconsistencies — those manifests
     # serve different purposes.
-    by_key: Dict[Tuple[str, str, str, str], List[Dependency]] = defaultdict(list)
+    by_key: dict[tuple[str, str, str, str], list[Dependency]] = defaultdict(list)
     for d in deps:
         if d.is_lockfile:
             continue
@@ -309,9 +321,9 @@ def _manifest_role(path: Path) -> str:
     ``[tool.poetry.group.dev.dependencies]``). Both are partitioned
     so cross-role + cross-scope divergence is allowed."""
     name = path.name.lower()
-    if "dev" in name:
+    if re.search(r"\bdev\b", name):
         return "dev"
-    if "test" in name:
+    if re.search(r"\btest\b", name):
         return "test"
     if any(tok in name for tok in ("optional", "extras", "all-")):
         return "optional"
@@ -335,8 +347,8 @@ def _versions_equal(ecosystem: str, a: str, b: str) -> bool:
 
 
 def _first_dep_for(
-    deps: List[Dependency], manifest: Manifest,
-) -> Optional[Dependency]:
+    deps: list[Dependency], manifest: Manifest,
+) -> Dependency | None:
     for d in deps:
         if d.declared_in == manifest.path:
             return d

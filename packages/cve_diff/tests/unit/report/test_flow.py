@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
-
 # ----- the helper under test -----
 
 def test_write_flow_files_creates_jsonl_and_md_for_pass(tmp_path: Path) -> None:
@@ -180,6 +178,45 @@ def test_render_flow_pass_shows_all_5_pipeline_stages(tmp_path: Path) -> None:
     assert "3,433" in md or "3433" in md
     assert "RENDER" in md or "Render" in md
     assert "agree" in md  # extraction agreement
+
+
+def test_render_flow_discover_shows_agent_verdict_provenance() -> None:
+    """The discover stage carries the AgentResult provenance: WHY the
+    agent picked this (slug, sha) plus what the loop cost."""
+    from cve_diff.report.markdown import render_flow
+
+    lines = [
+        json.dumps({"i": 0, "tool": "submit_result",
+                    "args": {"outcome": "rescued"}}),
+    ]
+    stage_signals = {
+        "discover": {
+            "rationale": "OSV references name the fix commit directly",
+            "tokens": 1234,
+            "cost_usd": 0.0567,
+            "elapsed_s": 8.25,
+            "verified_candidates": 2,
+        },
+    }
+    md = render_flow("CVE-X", lines, ok=True, error_class="PASS",
+                     stage_signals=stage_signals)
+    assert "OSV references name the fix commit directly" in md
+    assert "1234 tokens" in md
+    assert "$0.0567" in md
+    assert "8.2s" in md or "8.3s" in md
+    assert "2 candidate(s) verified" in md
+
+
+def test_render_flow_discover_block_absent_without_signals() -> None:
+    from cve_diff.report.markdown import render_flow
+
+    lines = [
+        json.dumps({"i": 0, "tool": "submit_result",
+                    "args": {"outcome": "rescued"}}),
+    ]
+    md = render_flow("CVE-X", lines, ok=True, error_class="PASS")
+    assert "Verdict rationale" not in md
+    assert "Loop cost" not in md
 
 
 # ----- Stage 4: per-source diff agreement (the user's primary success metric) -----
@@ -468,6 +505,29 @@ def test_render_flow_backward_compatible_without_stage_signals(tmp_path: Path) -
     md = render_flow("CVE-X", lines, ok=True, error_class="PASS")
     assert "✓" in md
     assert "PASS" in md
+
+
+def test_render_flow_zero_tool_calls_fail_still_shows_outcome_and_all_5_stages() -> None:
+    """ALWAYS-render contract with ZERO tool calls (e.g. client init
+    failed before the first call): the outcome line and all 5 stage
+    headers must still come from stage_status — only the DISCOVER
+    strategy list is replaced by the no-tool-calls note."""
+    from cve_diff.report.markdown import render_flow
+
+    md = render_flow(
+        "CVE-X", [], ok=False, error_class="client_init_failed",
+        stage_status={"discover": {"status": "fail",
+                                   "reason": "client_init_failed"}},
+    )
+    assert "## Outcome" in md
+    assert "✗ FAIL" in md
+    assert "client_init_failed" in md
+    assert "no tool calls" in md.lower()
+    assert "Stage 1 — DISCOVER ✗" in md
+    for header in ("Stage 2 — ACQUIRE", "Stage 3 — RESOLVE",
+                   "Stage 4 — DIFF", "Stage 5 — RENDER"):
+        assert header in md, f"missing header: {header!r}"
+    assert "not reached" in md.lower()
 
 
 # ----- write_outcome_patches: per-method diff bodies as audit files -----

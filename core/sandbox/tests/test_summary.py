@@ -7,7 +7,16 @@ from pathlib import Path
 
 import pytest
 
+from core.sandbox import evidence as evidence_mod
 from core.sandbox import summary as summary_mod
+
+
+def _denials_path(run_dir):
+    """Canonical (post-relocation) denials JSONL path for a run dir:
+    ``<run_dir>/.audit/.sandbox-denials.jsonl``. Tests that pre-plant
+    fixtures at the LEGACY ``<run_dir>/<name>`` location keep doing so
+    deliberately — they double as back-compat-read coverage."""
+    return evidence_mod.evidence_write_path(run_dir, summary_mod.DENIALS_FILE)
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +52,7 @@ class TestRecordDenial:
     def test_appends_jsonl_when_active(self, tmp_path):
         summary_mod.set_active_run_dir(tmp_path)
         summary_mod.record_denial("git clone evil.com", 1, "network")
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         assert jsonl.exists()
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 1
@@ -59,7 +68,7 @@ class TestRecordDenial:
         summary_mod.record_denial("cmd1", 1, "network")
         summary_mod.record_denial("cmd2", 1, "write", path="/etc/foo")
         summary_mod.record_denial("cmd3", 137, "seccomp", profile="full")
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 3
         assert [r["type"] for r in records] == ["network", "write", "seccomp"]
@@ -88,7 +97,7 @@ class TestRecordDenial:
         non_jsonable = Path("/tmp/some/path")  # Path is not JSON-serializable
         # Must not raise
         summary_mod.record_denial("cmd", 1, "write", path=non_jsonable)
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         assert len(records) == 1
         # Coerced to string via default=str
@@ -195,8 +204,8 @@ class TestSummarizeAndWrite:
         on_disk = json.loads(summary_path.read_text())
         assert on_disk["total_denials"] == 4
 
-        # Intermediate JSONL removed
-        assert not (tmp_path / summary_mod.DENIALS_FILE).exists()
+        # Intermediate JSONL removed (from the .audit/ evidence dir)
+        assert not _denials_path(tmp_path).exists()
 
     def test_idempotent_when_called_twice(self, tmp_path):
         summary_mod.set_active_run_dir(tmp_path)
@@ -210,7 +219,7 @@ class TestSummarizeAndWrite:
         # Summary file from first call still intact
         assert (tmp_path / summary_mod.SUMMARY_FILE).exists()
 
-    def test_skips_malformed_jsonl_lines(self, tmp_path):
+    def test_malformed_jsonl_lines_flag_summary_as_corrupt(self, tmp_path):
         # Pre-populate JSONL with one valid + one garbage line
         jsonl = tmp_path / summary_mod.DENIALS_FILE
         jsonl.write_text(
@@ -219,8 +228,120 @@ class TestSummarizeAndWrite:
             + json.dumps({"ts": "y", "type": "write", "cmd": "c2", "returncode": 1}) + "\n"
         )
         result = summary_mod.summarize_and_write(tmp_path)
-        # Two valid records survived; garbage skipped without error
+        # Valid records still aggregate (operator forensics), but the
+        # summary carries the tamper flag — pre-fix the garbage line
+        # was skipped SILENTLY and the summary minted as fully
+        # trustworthy, laundering an in-place evidence rewrite.
         assert result["total_denials"] == 2
+        assert result["corrupt_lines"] == 1
+        on_disk = json.loads(
+            (tmp_path / summary_mod.SUMMARY_FILE).read_text())
+        assert on_disk["corrupt_lines"] == 1
+
+    def test_space_overwritten_record_counts_as_corrupt(self, tmp_path,
+                                                        monkeypatch):
+        """The in-place-overwrite shape: same inode, same length, one
+        record pwrite'd over with spaces. The inode check cannot see
+        it; the whitespace-only line must count as corruption and flag
+        the summary (MAC-bound), never silently vanish."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        summary_mod.set_active_run_dir(tmp_path)
+        summary_mod.record_denial("incriminating", 1, "seccomp",
+                                  profile="full")
+        summary_mod.record_denial("benign", 1, "network")
+        jsonl = _denials_path(tmp_path)
+        raw = jsonl.read_bytes()
+        first_len = raw.index(b"\n")
+        fd = os.open(jsonl, os.O_WRONLY)
+        try:
+            os.pwrite(fd, b" " * first_len, 0)
+        finally:
+            os.close(fd)
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["corrupt_lines"] == 1
+        assert result["total_denials"] == 1  # survivor kept for forensics
+        # The tamper flag is bound into the MAC: stripping it must
+        # break verification.
+        from core.sandbox import telemetry_mac as tmac
+        run = tmac.run_binding(tmp_path)
+        import hashlib as _hashlib
+        sha = _hashlib.sha256(
+            json.dumps(result["denials"], sort_keys=True,
+                       ensure_ascii=True).encode()).hexdigest()
+        assert tmac.verify(
+            tmac.summary_fields(1, sha, run=run, corrupt_lines=1),
+            result["mac"])
+        assert not tmac.verify(
+            tmac.summary_fields(1, sha, run=run),  # flag stripped
+            result["mac"])
+
+    def test_inode_swap_flags_summary(self, tmp_path, monkeypatch):
+        """A swapped evidence file (verify() fails at close) must flag
+        the summary rather than mint verified provenance over whatever
+        content now sits at the path."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        summary_mod.set_active_run_dir(tmp_path)
+        summary_mod.record_denial("real", 1, "network")
+        jsonl = _denials_path(tmp_path)
+        content = jsonl.read_bytes()
+        jsonl.unlink()
+        jsonl.write_bytes(content)  # same bytes, NEW inode
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["inode_mismatch"] is True
+
+    def test_planted_fifo_does_not_hang_and_flags_summary(self, tmp_path):
+        """The legacy denials location is target-writable; a planted
+        FIFO used to block summarize_and_write's plain open() forever
+        inside complete_run/fail_run (no writer ever arrives). The
+        O_NONBLOCK+S_ISREG read must return promptly, remove the
+        object, and flag the summary as tampered."""
+        fifo = tmp_path / summary_mod.DENIALS_FILE
+        os.mkfifo(fifo)
+        done = []
+
+        def _run():
+            done.append(summary_mod.summarize_and_write(tmp_path))
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=10)
+        assert not t.is_alive(), (
+            "summarize_and_write hung on a planted FIFO at the legacy "
+            "denials path"
+        )
+        result = done[0]
+        assert result is not None
+        assert "non-regular" in result["planted_object"]
+        assert result["total_denials"] == 0
+        assert not fifo.exists()
+
+    def test_planted_symlink_not_followed_and_flags_summary(self, tmp_path):
+        """A symlink at the legacy location must not be followed (a
+        /dev/zero target would drive unbounded reads); it reads as a
+        planted object and flags the summary."""
+        target = tmp_path / "attacker-target"
+        target.write_text(
+            json.dumps({"ts": "x", "type": "network", "cmd": "c",
+                        "returncode": 1}) + "\n")
+        link = tmp_path / summary_mod.DENIALS_FILE
+        os.symlink(target, link)
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["planted_object"] == "symlink"
+        assert result["total_denials"] == 0  # content never read
+
+    def test_planted_oversized_file_bounded_and_flagged(self, tmp_path,
+                                                        monkeypatch):
+        """Oversized planted JSONL must not be slurped unboundedly."""
+        monkeypatch.setattr(summary_mod, "_MAX_DENIALS_BYTES", 4096)
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_bytes(b"x" * 8192)
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["planted_object"].startswith("oversized")
+        assert result["total_denials"] == 0
 
     def test_empty_jsonl_returns_none_and_removes_jsonl(self, tmp_path):
         jsonl = tmp_path / summary_mod.DENIALS_FILE
@@ -228,6 +349,69 @@ class TestSummarizeAndWrite:
         result = summary_mod.summarize_and_write(tmp_path)
         assert result is None
         assert not jsonl.exists()
+
+    def test_allow_verdict_records_not_counted_as_denials(self, tmp_path):
+        """macOS audit mode logs ALLOWED operations with
+        verdict "allow" ((allow X (with report))); they succeeded and
+        must not inflate total_denials. They surface in a separate
+        informational section instead."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "write", "cmd": "c1",
+                        "returncode": 0, "verdict": "allow",
+                        "path": "/tmp/x"}) + "\n"
+            + json.dumps({"ts": "b", "type": "write", "cmd": "c2",
+                          "returncode": 0, "verdict": "allow",
+                          "path": "/tmp/y"}) + "\n"
+            + json.dumps({"ts": "c", "type": "read", "cmd": "c3",
+                          "returncode": 0, "verdict": "deny",
+                          "path": "/etc/shadow"}) + "\n"
+            # Verdict-less record — the Linux tracer / record_denial
+            # shape; always a denial.
+            + json.dumps({"ts": "d", "type": "network", "cmd": "c4",
+                          "returncode": 1}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["total_denials"] == 2
+        assert result["by_type"] == {"read": 1, "network": 1}
+        denial_paths = [d.get("path") for d in result["denials"]]
+        assert "/tmp/x" not in denial_paths
+        assert result["total_allowed_reports"] == 2
+        assert result["allowed_by_type"] == {"write": 2}
+        allowed_paths = [r["path"] for r in result["allowed_reports"]]
+        assert sorted(allowed_paths) == ["/tmp/x", "/tmp/y"]
+
+    def test_all_allow_records_still_write_summary(self, tmp_path):
+        """A run whose audit trail is entirely allow-with-report
+        records must still produce a summary (total_denials 0) —
+        operators asked for audit output, not a missing file."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "write", "cmd": "c",
+                        "returncode": 0, "verdict": "allow",
+                        "path": "/tmp/x"}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["total_denials"] == 0
+        assert result["total_allowed_reports"] == 1
+        assert (tmp_path / summary_mod.SUMMARY_FILE).exists()
+
+    def test_linux_summary_shape_unchanged_without_allow_records(
+            self, tmp_path):
+        """No allow-verdict records → no allowed-report keys, so
+        Linux-produced summaries keep their exact shape."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "a", "type": "network", "cmd": "c",
+                        "returncode": 1}) + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert "total_allowed_reports" not in result
+        assert "allowed_by_type" not in result
+        assert "allowed_reports" not in result
 
 
 class TestRecordAuditDegraded:
@@ -325,7 +509,7 @@ class TestThreadSafety:
         for t in threads:
             t.join()
 
-        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
         # All n_threads * per_thread records should be present
         assert len(records) == n_threads * per_thread
@@ -336,7 +520,7 @@ class TestLifecycleIntegration:
     complete_run writes summary. Verifies the wiring across modules."""
 
     def test_full_lifecycle_writes_summary(self, tmp_path):
-        from core.run.metadata import start_run, complete_run
+        from core.run.metadata import complete_run, start_run
         from core.sandbox.observe import _check_blocked
 
         run_dir = tmp_path / "agentic-20260427-150000-pid12345"
@@ -357,8 +541,8 @@ class TestLifecycleIntegration:
             network_engaged=True,
         )
 
-        # Denial recorded in the JSONL
-        jsonl = run_dir / summary_mod.DENIALS_FILE
+        # Denial recorded in the JSONL (evidence dir)
+        jsonl = _denials_path(run_dir)
         assert jsonl.exists()
 
         # Complete the run — should finalize summary + clear active state
@@ -377,7 +561,7 @@ class TestLifecycleIntegration:
         assert "--sandbox" in on_disk["denials"][0]["suggested_fix"]
 
     def test_failed_run_still_writes_summary(self, tmp_path):
-        from core.run.metadata import start_run, fail_run
+        from core.run.metadata import fail_run, start_run
         from core.sandbox.observe import _check_blocked
 
         run_dir = tmp_path / "scan-failed"
@@ -443,10 +627,9 @@ class TestTrackedRunIntegration:
         from core.run.metadata import tracked_run
         run_dir = tmp_path / "scan-failed"
 
-        with pytest.raises(RuntimeError):
-            with tracked_run(run_dir, command="scan"):
-                self._trigger_denial()
-                raise RuntimeError("simulated workflow failure")
+        with pytest.raises(RuntimeError), tracked_run(run_dir, command="scan"):
+            self._trigger_denial()
+            raise RuntimeError("simulated workflow failure")
 
         # Context exited via exception → fail_run called → summary written
         assert (run_dir / summary_mod.SUMMARY_FILE).exists()
@@ -456,10 +639,10 @@ class TestTrackedRunIntegration:
         from core.run.metadata import tracked_run
         run_dir = tmp_path / "scan-cancelled"
 
-        with pytest.raises(KeyboardInterrupt):
-            with tracked_run(run_dir, command="scan"):
-                self._trigger_denial()
-                raise KeyboardInterrupt()
+        with pytest.raises(KeyboardInterrupt), \
+                tracked_run(run_dir, command="scan"):
+            self._trigger_denial()
+            raise KeyboardInterrupt()
 
         # Context exited via Ctrl-C → cancel_run called → summary written
         # (operators want to see what was blocked even on cancelled runs)
@@ -480,7 +663,7 @@ class TestRedactsSecretsInCmd:
         )
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         assert "secretpass" not in records[0]["cmd"]
@@ -494,7 +677,7 @@ class TestRedactsSecretsInCmd:
         )
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         assert "abcdef1234567890" not in records[0]["cmd"]
@@ -505,7 +688,7 @@ class TestRedactsSecretsInCmd:
         summary_mod.record_denial("git clone https://github.com/foo/bar", 1, "network")
         records = [
             json.loads(line)
-            for line in (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines()
+            for line in _denials_path(tmp_path).read_text().splitlines()
             if line
         ]
         # No secrets to redact → cmd preserved verbatim
@@ -690,7 +873,7 @@ class TestAdversarial:
             ts="EVIL_TS",
         )
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         r = records[0]
         # Explicit args win — the rogue details didn't override
         assert r["type"] == "seccomp"
@@ -707,7 +890,7 @@ class TestAdversarial:
         for i in range(20):
             summary_mod.record_denial(f"cmd{i}", 1, "network")
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         # Exactly the cap, no more (slight overcount allowed by the
         # lock-free design — assert <= cap+1 to be tolerant)
         assert len(records) <= summary_mod.MAX_DENIALS_PER_RUN
@@ -728,7 +911,7 @@ class TestAdversarial:
         for i in range(2):
             summary_mod.record_denial(f"r2c{i}", 1, "network")
         run2_records = [json.loads(line) for line in
-                        (run2 / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                        _denials_path(run2).read_text().splitlines() if line]
         assert len(run2_records) == 2
 
     # ADV3
@@ -757,7 +940,7 @@ class TestAdversarial:
         long_cmd = "x" * 10_000  # well over MAX_CMD_LEN
         summary_mod.record_denial(long_cmd, 1, "network")
         records = [json.loads(line) for line in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
+                   _denials_path(tmp_path).read_text().splitlines() if line]
         assert len(records[0]["cmd"]) <= summary_mod.MAX_CMD_LEN
         # Truncation marker present
         assert records[0]["cmd"].endswith("…")

@@ -33,10 +33,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List, Tuple
 
-from . import RewriteEdit, RewriteResult, register
+from core.atomic_fs import write_text_atomically as _atomic_write
+
+from . import RewriteEdit, RewriteResult, apply_version_edit, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +49,7 @@ def _csproj_predicate(path: Path) -> bool:
     return path.suffix.lower() in (".csproj", ".fsproj", ".vbproj")
 
 
-def _build_inline_version_pattern(include_name: str) -> "re.Pattern":
+def _build_inline_version_pattern(include_name: str) -> re.Pattern:
     """``<PackageReference Include="X" Version="OLD" />`` — the
     pre-CPM and CPM-with-inline shape."""
     inc = re.escape(include_name)
@@ -61,7 +65,7 @@ def _build_inline_version_pattern(include_name: str) -> "re.Pattern":
     )
 
 
-def _build_version_override_pattern(include_name: str) -> "re.Pattern":
+def _build_version_override_pattern(include_name: str) -> re.Pattern:
     """``<PackageReference Include="X" VersionOverride="OLD" />`` —
     CPM per-csproj override shape. Separate from the inline
     pattern so the rewriter can pick which attribute to update."""
@@ -78,7 +82,7 @@ def _build_version_override_pattern(include_name: str) -> "re.Pattern":
     )
 
 
-def _build_child_version_pattern(include_name: str) -> "re.Pattern":
+def _build_child_version_pattern(include_name: str) -> re.Pattern:
     """``<PackageReference Include="X"><Version>OLD</Version></PackageReference>``
     — older child-element shape some projects use."""
     inc = re.escape(include_name)
@@ -96,8 +100,8 @@ def _build_child_version_pattern(include_name: str) -> "re.Pattern":
 
 @register(predicate=_csproj_predicate)
 def rewrite_csproj(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply ``<PackageReference>`` Version / VersionOverride
     edits to an MSBuild project file.
 
@@ -120,7 +124,7 @@ def rewrite_csproj(
                 for ed in edits]
 
     new_text = text
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     for edit in edits:
         new_text, result = _apply_one(new_text, edit)
         results.append(result)
@@ -129,48 +133,21 @@ def rewrite_csproj(
         try:
             _atomic_write(path, new_text)
         except OSError as e:
-            return [RewriteResult(
-                edit=r.edit, applied=False,
-                reason=f"error: write failed: {e}",
-            ) for r in results]
+            return [
+                RewriteResult(edit=r.edit, applied=False,
+                              reason=f"error: write failed: {e}")
+                if r.applied else r
+                for r in results
+            ]
     return results
 
 
-def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
-    for pattern_builder in (
+def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
+    return apply_version_edit(text, edit, (
         _build_inline_version_pattern,
         _build_version_override_pattern,
         _build_child_version_pattern,
-    ):
-        pat = pattern_builder(edit.locator)
-        match = pat.search(text)
-        if match is None:
-            continue
-        current = match.group("version")
-        if current != edit.old_value:
-            return text, RewriteResult(
-                edit=edit, applied=False,
-                reason=(
-                    f"value_mismatch: file has version={current!r}, "
-                    f"edit expected {edit.old_value!r}"
-                ),
-            )
-        new_text = (
-            text[:match.start("version")]
-            + edit.new_value
-            + text[match.end("version"):]
-        )
-        return new_text, RewriteResult(
-            edit=edit, applied=True, reason="",
-        )
-    return text, RewriteResult(
-        edit=edit, applied=False, reason="not_found",
-    )
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    from packages.sca._atomic import atomic_write_text
-    atomic_write_text(path, content)
+    ))
 
 
 __all__ = ["rewrite_csproj"]

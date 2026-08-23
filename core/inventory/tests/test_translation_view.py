@@ -385,3 +385,78 @@ def test_unknown_parent_does_not_blank_its_body():
             for ln in range(lo, hi + 1)}
     assert 2 not in flat, "must not blank body under an unknown #ifdef"
     assert 4 in flat, "explicitly-undef INNER arm should be dead"
+
+
+# ---------------------------------------------------------------------------
+# Directive recognition vs translation phases (U09-F30): comments are
+# removed BEFORE directives are processed, so a directive-shaped line
+# inside a comment / raw string / splice is text, not a directive —
+# honouring it blanks LIVE code out of the whole inventory's view.
+# ---------------------------------------------------------------------------
+
+
+def test_if0_inside_block_comment_does_not_blank_live_code():
+    src = (
+        "/*\n"
+        "#if 0\n"
+        "*/\n"
+        "void live_fn(void) { do_work(); }\n"
+        "/*\n"
+        "#endif\n"
+        "*/\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_comment_inside_dead_arm_swallows_directive_text():
+    # Phase 3 removes comments even in what becomes a skipped group:
+    # the #endif inside the comment is comment text, so the dead arm
+    # runs to the REAL #endif.
+    src = "#if 0\n/*\n#endif\n*/\n#endif\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == [(2, 4)]
+
+
+def test_spliced_line_is_not_a_directive():
+    # The trailing backslash splices the #if onto the previous logical
+    # line — the compiler never sees a directive.
+    src = "int x; \\\n#if 0\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_spliced_line_comment_swallows_directive():
+    src = "// comment \\\n#if 0\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_if0_inside_raw_string_is_text_cpp():
+    src = 'const char *s = R"(\n#if 0\n)";\nlive();\n'
+    assert detect_preprocessor_dead_ranges(src, language="cpp") == []
+
+
+def test_raw_string_lookalike_in_c_does_not_extend_dead_arm():
+    # C has no raw strings: `R"x(` is an identifier plus a plain
+    # string, and the compiler's dead arm still ends at the real
+    # #endif. Tracking raw strings in C mode would mask that #endif
+    # and over-blank the live function below — the exact failure
+    # class this detector exists to prevent.
+    src = (
+        "#if 0\n"
+        'R"x(\n'
+        "#endif\n"
+        "void live_fn(void) { do_work(); }\n"
+    )
+    assert detect_preprocessor_dead_ranges(src, language="c") == [(2, 2)]
+
+
+def test_comment_opener_inside_string_does_not_mask_directives():
+    # "/*" inside a string must not open a comment state that would
+    # hide the REAL directive below (under-blank direction).
+    src = 'const char *s = "/*";\n#if 0\ndead();\n#endif\n'
+    assert detect_preprocessor_dead_ranges(src) == [(3, 3)]
+
+
+def test_digit_separator_is_not_a_char_literal():
+    # An odd count of C++14 digit separators must not swallow the
+    # rest of the line — the /* after it is a REAL comment opener.
+    src = "int x = 1'000; /*\n#if 0\n*/\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == []

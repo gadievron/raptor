@@ -60,7 +60,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class ConstantRefit:
     def changed(self) -> bool:
         return self.proposed != self.current
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "current": self.current,
@@ -134,11 +134,11 @@ class RefitReport:
     improvement: float
     improvement_threshold: float
     max_delta: float
-    per_constant: List[ConstantRefit] = field(default_factory=list)
-    notes: List[str] = field(default_factory=list)
+    per_constant: list[ConstantRefit] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
-    def proposed_values(self) -> Dict[str, float]:
+    def proposed_values(self) -> dict[str, float]:
         """Return the proposed override dict — what to feed to
         ``compute_risk_estimate(overrides=...)`` to apply this
         refit. Only constants that genuinely changed appear."""
@@ -147,7 +147,7 @@ class RefitReport:
             if c.changed
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "snapshot_date": self.snapshot_date,
             "status": self.status,
@@ -169,8 +169,8 @@ def grid_search_refit(
     max_delta: float = DEFAULT_MAX_DELTA,
     improvement_threshold: float = DEFAULT_IMPROVEMENT_THRESHOLD,
     min_samples: int = MIN_SAMPLES_FOR_REFIT,
-    out_path: Optional[Path] = None,
-    ecosystem_filter: Optional[str] = None,
+    out_path: Path | None = None,
+    ecosystem_filter: str | None = None,
 ) -> RefitReport:
     """Run the per-constant grid search and emit a refit report.
 
@@ -188,7 +188,7 @@ def grid_search_refit(
     set — ecosystems with too few findings get rejected.
     """
     snapshot = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    notes: List[str] = []
+    notes: list[str] = []
 
     samples = _load_findings_with_labels(corpus_dir)
     if ecosystem_filter is not None:
@@ -268,7 +268,7 @@ def grid_search_refit(
     # first-seen candidate.
     SENTINEL_INADMISSIBLE = (float("-inf"), float("-inf"), float("-inf"))
 
-    per_constant: List[ConstantRefit] = []
+    per_constant: list[ConstantRefit] = []
     for name in TUNABLE_CONSTANTS:
         cur = current[name]
         candidates = [
@@ -276,7 +276,7 @@ def grid_search_refit(
             cur * (1.0 - max_delta),
             cur * (1.0 + max_delta),
         ]
-        metrics: List[Tuple[float, float, float]] = []
+        metrics: list[tuple[float, float, float]] = []
         for c in candidates:
             full_values = {**current, name: c}
             ok, _reason = is_admissible(full_values)
@@ -465,11 +465,11 @@ class JointRestartTrace:
     seed_index: int             # 0 = current, 1+ = random
     passes: int                 # iterations until convergence (or cap)
     converged: bool             # True if no constant moved in final pass
-    starting_metric: Tuple[float, float, float]
-    final_metric: Tuple[float, float, float]
-    final_values: Dict[str, float]
+    starting_metric: tuple[float, float, float]
+    final_metric: tuple[float, float, float]
+    final_values: dict[str, float]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "seed_index": self.seed_index,
             "passes": self.passes,
@@ -497,21 +497,21 @@ class JointRefitReport:
     # Per-constant proposed values (winning restart's endpoint),
     # in the same shape as RefitReport.per_constant so
     # _apply_refit.py can consume either report type.
-    per_constant: List[ConstantRefit] = field(default_factory=list)
-    notes: List[str] = field(default_factory=list)
+    per_constant: list[ConstantRefit] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     # Joint-specific:
-    restarts: List[JointRestartTrace] = field(default_factory=list)
-    single_pass_metric: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    joint_winning_metric: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    restarts: list[JointRestartTrace] = field(default_factory=list)
+    single_pass_metric: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    joint_winning_metric: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
-    def proposed_values(self) -> Dict[str, float]:
+    def proposed_values(self) -> dict[str, float]:
         return {
             c.name: c.proposed for c in self.per_constant
             if c.changed
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "snapshot_date": self.snapshot_date,
             "status": self.status,
@@ -539,9 +539,9 @@ def joint_grid_search_refit(
     min_samples: int = MIN_SAMPLES_FOR_REFIT,
     restarts: int = _DEFAULT_JOINT_RESTARTS,
     max_passes: int = _MAX_JOINT_PASSES,
-    seed: Optional[int] = None,
-    out_path: Optional[Path] = None,
-    ecosystem_filter: Optional[str] = None,
+    seed: int | None = None,
+    out_path: Path | None = None,
+    ecosystem_filter: str | None = None,
 ) -> JointRefitReport:
     """Multi-pass coordinate descent with random restarts.
 
@@ -555,7 +555,7 @@ def joint_grid_search_refit(
     import random
 
     snapshot = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    notes: List[str] = []
+    notes: list[str] = []
 
     samples = _load_findings_with_labels(corpus_dir)
     if ecosystem_filter is not None:
@@ -646,7 +646,7 @@ def joint_grid_search_refit(
     # per step covers the bracket density needed to find an interior
     # optimum without over-evaluating: current, ±max_delta/3, and
     # ±max_delta (bracket edges).
-    def _step_candidates(name: str, cur_val: float) -> List[float]:
+    def _step_candidates(name: str, cur_val: float) -> list[float]:
         lo, hi = bracket[name]
         step = (hi - cur_val) / 3.0
         step_lo = (cur_val - lo) / 3.0
@@ -661,7 +661,7 @@ def joint_grid_search_refit(
         })
 
     def _descent_from(
-        seed_idx: int, start_values: Dict[str, float],
+        seed_idx: int, start_values: dict[str, float],
     ) -> JointRestartTrace:
         values = dict(start_values)
         starting_metric = _search_metric(samples, overrides=values)
@@ -703,7 +703,7 @@ def joint_grid_search_refit(
 
     # Restart 0 = current_constants. The remaining restarts seed
     # from random admissible points in the bracket.
-    restart_traces: List[JointRestartTrace] = []
+    restart_traces: list[JointRestartTrace] = []
     restart_traces.append(_descent_from(0, current))
 
     for seed_idx in range(1, restarts):
@@ -711,7 +711,7 @@ def joint_grid_search_refit(
         # giving up — if the admissible region is so narrow that
         # random sampling can't find an entry point in 10 tries,
         # the search isn't likely to discover much new anyway.
-        sampled: Optional[Dict[str, float]] = None
+        sampled: dict[str, float] | None = None
         for _attempt in range(10):
             cand = {
                 n: rng.uniform(bracket[n][0], bracket[n][1])
@@ -742,7 +742,7 @@ def joint_grid_search_refit(
     # Build per-constant report rows from the winning restart's
     # endpoint values so downstream apply / dashboards see the
     # same shape as a single-pass refit.
-    per_constant: List[ConstantRefit] = []
+    per_constant: list[ConstantRefit] = []
     for name in TUNABLE_CONSTANTS:
         cur_val = current[name]
         prop_val = best_trace.final_values[name]
@@ -820,7 +820,7 @@ def joint_grid_search_refit(
 
 def _emit_joint_report(
     report: JointRefitReport, corpus_dir: Path,
-    out_path: Optional[Path],
+    out_path: Path | None,
 ) -> JointRefitReport:
     """Mirror of ``_emit_report`` for the joint variant. Writes to
     ``<corpus_dir>/refit/<date>.joint.json`` by default so a joint
@@ -839,7 +839,7 @@ def _emit_joint_report(
 
 
 def _emit_report(
-    report: RefitReport, corpus_dir: Path, out_path: Optional[Path],
+    report: RefitReport, corpus_dir: Path, out_path: Path | None,
 ) -> RefitReport:
     """Write the report to disk + return it. The CLI gates on
     return-value status; tests bypass the write by stubbing
@@ -864,7 +864,7 @@ def _emit_report(
 
 def _load_findings_with_labels(
     corpus_dir: Path,
-) -> List[Tuple[Dict[str, Any], int]]:
+) -> list[tuple[dict[str, Any], int]]:
     """Walk project samples; pair each finding with its exploited
     label (1 if any of the finding's CVE aliases appears in the
     KEV / EDB / MSF / GitHub-PoC ground-truth signals).
@@ -879,7 +879,7 @@ def _load_findings_with_labels(
     if not samples_dir.is_dir():
         return []
 
-    out: List[Tuple[Dict[str, Any], int]] = []
+    out: list[tuple[dict[str, Any], int]] = []
     for sample_path in sorted(samples_dir.rglob("*.json")):
         try:
             data = json.loads(sample_path.read_text(encoding="utf-8"))
@@ -890,6 +890,12 @@ def _load_findings_with_labels(
             continue
         for f in findings:
             if not isinstance(f, dict):
+                continue
+            rc = f.get("risk_components")
+            final = rc.get("final") if isinstance(rc, dict) else None
+            if not isinstance(final, (int, float)):
+                final = f.get("raptor_risk_estimate")
+            if not isinstance(final, (int, float)):
                 continue
             cve_ids = _extract_cve_ids(f.get("advisory") or {})
             label = 1 if any(c in signals for c in cve_ids) else 0
@@ -935,12 +941,12 @@ def _load_ground_truth(corpus_dir: Path) -> set:
     return signals
 
 
-def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
+def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
     """Pull CVE IDs from an advisory record. Mirrors
     ``validate.py::_extract_cve_ids`` — including the
     ``informational`` skip so refit's ground-truth labelling
     stays aligned with the metric validate optimises."""
-    out: List[str] = []
+    out: list[str] = []
     if not isinstance(advisory, dict):
         return out
     if advisory.get("informational"):
@@ -948,9 +954,7 @@ def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
     osv_id = advisory.get("osv_id")
     if isinstance(osv_id, str) and osv_id.startswith("CVE-"):
         out.append(osv_id)
-    for alias in advisory.get("aliases", []) or []:
-        if isinstance(alias, str) and alias.startswith("CVE-"):
-            out.append(alias)
+    out.extend(alias for alias in advisory.get("aliases", []) or [] if isinstance(alias, str) and alias.startswith("CVE-"))
     return out
 
 
@@ -960,9 +964,9 @@ def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
 
 
 def _top_20_precision(
-    samples: List[Tuple[Dict[str, Any], int]],
+    samples: list[tuple[dict[str, Any], int]],
     *,
-    overrides: Optional[Dict[str, float]] = None,
+    overrides: dict[str, float] | None = None,
 ) -> float:
     """Re-score every finding under the given overrides and
     measure the fraction of the top 20 by score that have label=1.
@@ -979,10 +983,10 @@ def _top_20_precision(
 
 
 def _search_metric(
-    samples: List[Tuple[Dict[str, Any], int]],
+    samples: list[tuple[dict[str, Any], int]],
     *,
-    overrides: Optional[Dict[str, float]] = None,
-) -> Tuple[float, float, float]:
+    overrides: dict[str, float] | None = None,
+) -> tuple[float, float, float]:
     """Composite ``(top_20_precision, NDCG@20, spearman_rho)``
     used by the grid search's argmax.
 
@@ -1014,7 +1018,7 @@ def _search_metric(
     """
     if not samples:
         return (0.0, 0.0, 0.0)
-    rescored: List[Tuple[float, int]] = []
+    rescored: list[tuple[float, int]] = []
     for finding_dict, label in samples:
         score = _rescore_finding(finding_dict, overrides)
         if score is None:
@@ -1037,7 +1041,7 @@ def _search_metric(
 
 
 def _ndcg_at_n(
-    rescored: List[Tuple[float, int]], n: int = 20,
+    rescored: list[tuple[float, int]], n: int = 20,
 ) -> float:
     """Normalised Discounted Cumulative Gain at rank N.
 
@@ -1076,9 +1080,9 @@ def _ndcg_at_n(
 
 
 def _rescore_finding(
-    finding: Dict[str, Any],
-    overrides: Optional[Dict[str, float]],
-) -> Optional[float]:
+    finding: dict[str, Any],
+    overrides: dict[str, float] | None,
+) -> float | None:
     """Recompute the risk score for a finding dict using the
     multiplier overrides.
 
@@ -1119,8 +1123,8 @@ def _rescore_finding(
 
 
 def _compute_with_overrides(
-    finding: Dict[str, Any], overrides: Dict[str, float],
-) -> Tuple[float, Dict[str, Any]]:
+    finding: dict[str, Any], overrides: dict[str, float],
+) -> tuple[float, dict[str, Any]]:
     """Rebuild a :class:`VulnFinding` from the archived dict and
     call ``compute_risk_estimate(overrides=...)``."""
     from packages.sca.models import (
@@ -1145,7 +1149,7 @@ def _compute_with_overrides(
         ecosystem=dep_dict.get("ecosystem", "PyPI"),
         name=dep_dict.get("name", "unknown"),
         version=dep_dict.get("version"),
-        declared_in=Path(dep_dict.get("declared_in", "/unknown")),
+        declared_in=Path(dep_dict.get("declared_in") or "/unknown"),
         scope=dep_dict.get("scope", "main"),
         is_lockfile=bool(dep_dict.get("is_lockfile", False)),
         pin_style=pin_style,
@@ -1218,8 +1222,8 @@ def _compute_with_overrides(
         cvss_score=finding.get("cvss_score"),
         cvss_vector=finding.get("cvss_vector"),
         severity=finding.get("severity", "low"),
-        exposure_factor=float(finding.get("exposure_factor", 0.0)),
-        transitive_depth=int(finding.get("transitive_depth", 0)),
+        exposure_factor=float(finding.get("exposure_factor") or 0.0),
+        transitive_depth=int(finding.get("transitive_depth") or 0),
         exploit_evidence=ee,
         ssvc_exploitation=ssvc,
         ssvc_automatable=ssvc_auto,
@@ -1227,7 +1231,7 @@ def _compute_with_overrides(
     return compute_risk_estimate(vf, dep, overrides=overrides)
 
 
-def _confidence_from_dict(raw: Dict[str, Any]) -> "Any":
+def _confidence_from_dict(raw: dict[str, Any]) -> Any:
     """Build a Confidence from a dict, defensive against shape
     drift."""
     from packages.sca.models import Confidence
@@ -1242,10 +1246,10 @@ def _confidence_from_dict(raw: Dict[str, Any]) -> "Any":
 
 
 __all__ = [
-    "ConstantRefit",
     "DEFAULT_IMPROVEMENT_THRESHOLD",
     "DEFAULT_MAX_DELTA",
     "MIN_SAMPLES_FOR_REFIT",
+    "ConstantRefit",
     "RefitReport",
     "grid_search_refit",
 ]

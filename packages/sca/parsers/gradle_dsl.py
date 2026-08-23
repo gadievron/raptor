@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List, Optional
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,14 @@ _CONFIG_TO_SCOPE = {
     "testCompileOnly": "test",
     "testRuntimeOnly": "test",
     "androidTestImplementation": "test",
+    "debugImplementation": "main",
+    "debugApi": "main",
+    "debugCompileOnly": "main",
+    "debugRuntimeOnly": "main",
+    "releaseImplementation": "main",
+    "releaseApi": "main",
+    "releaseCompileOnly": "main",
+    "releaseRuntimeOnly": "main",
 }
 
 
@@ -116,16 +126,15 @@ _PLUGIN_ACCESSOR_RE = re.compile(
 
 
 @register(filenames=["build.gradle", "build.gradle.kts"])
-def parse(path: Path) -> List[Dependency]:
+def parse(path: Path) -> list[Dependency]:
     """Parse a Gradle build script and emit one Dependency per
     recognised dependency declaration."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning("sca.parsers.gradle_dsl: %s: %s", path, e)
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen: set = set()
 
     for m in _SINGLE_STRING_RE.finditer(text):
@@ -188,7 +197,8 @@ def parse(path: Path) -> List[Dependency]:
                 scope=scope, declared_in=path,
                 source_origin=(
                     "gradle_catalog_ref"
-                    if lib.version_via_ref else "gradle_catalog_inline"
+                    if lib.version_via_ref and lib.version is not None
+                    else "gradle_catalog_inline"
                 ),
                 catalog_path=str(catalog.path),
                 catalog_alias=alias,
@@ -293,13 +303,13 @@ def _resolve_catalog(build_script_path: Path):
 # ---------------------------------------------------------------------------
 
 def _build_dep(
-    group: str, name: str, version: Optional[str],
+    group: str, name: str, version: str | None,
     *, scope: str, declared_in: Path,
     source_origin: str = "gradle_inline",
-    catalog_path: Optional[str] = None,
-    catalog_alias: Optional[str] = None,
-    version_ref_name: Optional[str] = None,
-) -> Optional[Dependency]:
+    catalog_path: str | None = None,
+    catalog_alias: str | None = None,
+    version_ref_name: str | None = None,
+) -> Dependency | None:
     """Build a Gradle Dependency carrying source-origin metadata
     for the bumper.
 
@@ -357,25 +367,25 @@ def _build_dep(
     )
 
 
-def _classify_version(version: Optional[str]) -> PinStyle:
+def _classify_version(version: str | None) -> PinStyle:
     if version is None:
         return PinStyle.WILDCARD
     if "$" in version:
         # ``$version`` / ``${libs.versions.foo}`` — interpolation;
         # we can't resolve it.
         return PinStyle.UNKNOWN
-    if version.startswith("[") or version.startswith("("):
+    if version.startswith(("[", "(")):
         # Maven-style range: ``[1.0,2.0)``
         return PinStyle.RANGE
     if "+" in version and version.endswith("+"):
         # Gradle "dynamic version" e.g. ``1.+``
         return PinStyle.RANGE
-    if version.endswith("-SNAPSHOT") or version == "latest.release":
+    if version.endswith("-SNAPSHOT") or version.startswith("latest."):
         return PinStyle.RANGE
     return PinStyle.EXACT
 
 
-def _build_purl(group: str, name: str, version: Optional[str]) -> str:
+def _build_purl(group: str, name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{group}/{name}"
     if version:
         return f"{base}@{version}"

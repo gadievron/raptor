@@ -68,8 +68,6 @@ class TestFormatProjectTuning(unittest.TestCase):
     def test_full_entry_renders_all_sections(self):
         entry = CatalogEntry(
             name="c.userspace-daemon",
-            estimated_cost_usd=(25.0, 50.0),
-            estimated_time_min=(40, 75),
             semgrep_packs_default=("security-audit", "owasp-top-ten"),
             attack_surface_high=("src/http", "src/net"),
             pipeline_recommended=("understand-map", "scan", "agentic"),
@@ -77,16 +75,8 @@ class TestFormatProjectTuning(unittest.TestCase):
         lines = _format_project_tuning(entry)
         joined = "\n".join(lines)
         self.assertIn("Target type: c.userspace-daemon", joined)
-        # Cost+time uses the estimator's renderer — verify the
-        # range shape without re-asserting its exact format
-        # (single source of truth lives in core/run/estimator.py).
-        self.assertIn("$25", joined)
-        self.assertIn("$50", joined)
-        self.assertIn("40-75 min", joined)
         self.assertIn("security-audit, owasp-top-ten", joined)
         self.assertIn("src/http, src/net", joined)
-        # Pipeline recommendation uses arrow separator —
-        # operator-readable flow.
         self.assertIn("understand-map → scan → agentic", joined)
 
     def test_minimal_entry_only_renders_present_sections(self):
@@ -109,16 +99,14 @@ class TestFormatProjectTuning(unittest.TestCase):
         self.assertNotIn("preferred dirs", joined)
         self.assertNotIn("Recommended pipeline", joined)
 
-    def test_cost_only_entry_renders_cost_no_time(self):
-        # Estimator's format_estimate trims the absent half.
+    def test_name_only_entry_renders_target_type(self):
         entry = CatalogEntry(
             name="cost-only",
-            estimated_cost_usd=(10.0, 20.0),
         )
         lines = _format_project_tuning(entry)
         joined = "\n".join(lines)
-        self.assertIn("$10", joined)
-        self.assertNotIn("min", joined)
+        self.assertIn("Target type: cost-only", joined)
+        self.assertNotIn("$", joined)
 
 
 class TestCreateIntegration(unittest.TestCase):
@@ -155,8 +143,6 @@ class TestCreateIntegration(unittest.TestCase):
             out = self._run_create(str(target))
             self.assertIn("Created project 'smart-test'", out)
             self.assertIn("Target type: c.userspace-daemon", out)
-            # Cost estimate present.
-            self.assertIn("$25", out)
             # Suggested packs present.
             self.assertIn("security-audit", out)
             # Suggested dirs present.

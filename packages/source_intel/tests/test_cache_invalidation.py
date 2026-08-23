@@ -158,7 +158,7 @@ def test_si_result_cache_invalidates_on_target_change(tmp_path):
     _make_c_file(tmp_path, "a.c", "int x;")
     calls = []
 
-    def _spy(target):
+    def _spy(target, **_kw):
         calls.append(compute_target_signature(target))
         return SimpleNamespace(is_skipped=False, attributes=(), aborts=())
 

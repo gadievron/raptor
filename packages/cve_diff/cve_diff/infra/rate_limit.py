@@ -22,7 +22,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class RateLimitTimeout(TimeoutError):
@@ -51,9 +54,11 @@ class TokenBucket:
 
     def __post_init__(self) -> None:
         if self.capacity <= 0:
-            raise ValueError("capacity must be > 0")
+            msg = "capacity must be > 0"
+            raise ValueError(msg)
         if self.refill_per_second <= 0:
-            raise ValueError("refill_per_second must be > 0")
+            msg = "refill_per_second must be > 0"
+            raise ValueError(msg)
         self._tokens = float(self.capacity)
         self._last = self.now()
 
@@ -70,7 +75,8 @@ class TokenBucket:
     def try_acquire(self, tokens: float = 1.0) -> bool:
         """Take `tokens` if available; never blocks."""
         if tokens <= 0:
-            raise ValueError("tokens must be > 0")
+            msg = "tokens must be > 0"
+            raise ValueError(msg)
         with self._lock:
             self._refill_locked()
             if self._tokens >= tokens:
@@ -84,9 +90,11 @@ class TokenBucket:
         `timeout` is wall-clock seconds from call entry. `None` = wait forever.
         """
         if tokens <= 0:
-            raise ValueError("tokens must be > 0")
+            msg = "tokens must be > 0"
+            raise ValueError(msg)
         if tokens > self.capacity:
-            raise ValueError("tokens exceeds bucket capacity")
+            msg = "tokens exceeds bucket capacity"
+            raise ValueError(msg)
 
         deadline = None if timeout is None else self.now() + timeout
         while True:
@@ -101,8 +109,7 @@ class TokenBucket:
             if deadline is not None:
                 remaining = deadline - self.now()
                 if remaining <= 0:
-                    raise RateLimitTimeout(
-                        f"no tokens available within {timeout:.3f}s"
-                    )
+                    msg = f"no tokens available within {timeout:.3f}s"
+                    raise RateLimitTimeout(msg)
                 wait_s = min(wait_s, remaining)
             self.sleep(max(wait_s, 0.0))

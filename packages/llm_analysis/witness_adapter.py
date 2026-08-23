@@ -29,28 +29,30 @@ Adapter lives in ``packages/llm_analysis/`` rather than
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
 
 from core.hash import sha256_file
 from core.witness import Witness, WitnessOutcome, WitnessSource
 from core.witness.types import compute_bytes_hash
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def witness_from_exploit(
     exploit_code: str,
     finding_id: str,
-    cwe_id: Optional[str] = None,
-    rule_id: Optional[str] = None,
-    file_path: Optional[str] = None,
-    compiled: Optional[bool] = None,
+    cwe_id: str | None = None,
+    rule_id: str | None = None,
+    file_path: str | None = None,
+    compiled: bool | None = None,
     compile_error_count: int = 0,
-    intent_verdict: Optional[str] = None,
-    intent_confidence: Optional[float] = None,
-    target_source_path: Optional[Path] = None,
-    target_binary_path: Optional[Path] = None,
-    executed_outcome: Optional[WitnessOutcome] = None,
-    executed_detail: Optional[dict] = None,
+    intent_verdict: str | None = None,
+    intent_confidence: float | None = None,
+    target_source_path: Path | None = None,
+    target_binary_path: Path | None = None,
+    executed_outcome: WitnessOutcome | None = None,
+    executed_detail: dict | None = None,
     produced_by: str = "agentic",
 ) -> tuple[Witness, bytes]:
     """Wrap an LLM-emitted exploit as a ``Witness`` + the raw bytes.
@@ -117,11 +119,11 @@ def witness_from_exploit(
         # the manifest readable.
         outcome_detail.update(executed_detail)
 
-    target_source_hash: Optional[str] = None
+    target_source_hash: str | None = None
     if target_source_path is not None and target_source_path.is_file():
         target_source_hash = sha256_file(target_source_path)
 
-    target_binary_hash: Optional[str] = None
+    target_binary_hash: str | None = None
     if target_binary_path is not None and target_binary_path.is_file():
         target_binary_hash = sha256_file(target_binary_path)
 

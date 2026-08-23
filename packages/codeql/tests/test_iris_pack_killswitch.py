@@ -9,7 +9,6 @@ before any pack work happens. Symmetric to the kill-switch test in
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
@@ -44,33 +43,75 @@ class TestAnalyzeIrisPacksKillSwitch:
         assert result == {}
 
 
-class TestCodeqlAgentCliFlag:
-    """`/codeql --no-iris-tier1` flips the master switch for this run."""
+class TestCodeqlCliFlag:
+    """`/codeql --no-iris-tier1` flips the master switch for this run.
 
-    def test_flag_sets_config_false(self, monkeypatch):
+    Exercises the REAL `/codeql` surface (`raptor_codeql.py`) — a
+    previous version of this test simulated the argparse slice with a
+    throwaway parser, which hid the fact that the dispatched script's
+    own parser rejected the flag with "unrecognized arguments".
+    """
+
+    @staticmethod
+    def _make_args(**overrides):
+        from types import SimpleNamespace
+        base = {
+            "repo": "/tmp/some-repo",
+            "out": None,
+            "codeql_cli": None,
+            "languages": None,
+            "build_command": None,
+            "force": False,
+            "extended": False,
+            "min_files": 1,
+            "traced_build": False,
+            "scan_only": False,
+            "no_iris_tier1": False,
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def _run_workflow(self, args):
+        """Run the workflow with a stub agent; return the switch value
+        observed at scan time."""
+        from unittest.mock import MagicMock, patch
+
+        import raptor_codeql
         from core.config import RaptorConfig
-        # Reset before to ensure deterministic baseline
-        monkeypatch.setattr(RaptorConfig, "IRIS_TIER1_ENABLED", True)
 
-        # Simulate the argparse + flag-application slice of main()
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--no-iris-tier1", action="store_true")
-        args = parser.parse_args(["--no-iris-tier1"])
-        if args.no_iris_tier1:
-            RaptorConfig.IRIS_TIER1_ENABLED = False
+        seen = {}
 
-        assert RaptorConfig.IRIS_TIER1_ENABLED is False
+        def _scan(**_kwargs):
+            seen["enabled"] = RaptorConfig.IRIS_TIER1_ENABLED
+            return MagicMock(success=True, total_findings=0)
 
-    def test_no_flag_leaves_config_default(self, monkeypatch):
+        agent = MagicMock()
+        agent.run_autonomous_analysis.side_effect = _scan
+        with patch.object(raptor_codeql, "CodeQLAgent", return_value=agent), \
+             patch.object(raptor_codeql, "store_codeql_build_reliability"):
+            raptor_codeql.run_autonomous_workflow(args)
+        return seen["enabled"]
+
+    def test_parser_accepts_flag(self):
+        """The dispatched script's own argparse knows --no-iris-tier1."""
+        import subprocess
+        import sys as _sys
+        r = subprocess.run(
+            [_sys.executable, str(Path(__file__).resolve().parents[3]
+                                  / "raptor_codeql.py"), "--help"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert r.returncode == 0, r.stderr
+        assert "--no-iris-tier1" in r.stdout
+
+    def test_flag_reaches_master_switch(self, monkeypatch):
         from core.config import RaptorConfig
         monkeypatch.setattr(RaptorConfig, "IRIS_TIER1_ENABLED", True)
+        enabled = self._run_workflow(self._make_args(no_iris_tier1=True))
+        assert enabled is False
 
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--no-iris-tier1", action="store_true")
-        args = parser.parse_args([])
-        if args.no_iris_tier1:
-            RaptorConfig.IRIS_TIER1_ENABLED = False
-
-        assert RaptorConfig.IRIS_TIER1_ENABLED is True
+    def test_no_flag_leaves_switch_on(self, monkeypatch):
+        from core.config import RaptorConfig
+        monkeypatch.setattr(RaptorConfig, "IRIS_TIER1_ENABLED", True)
+        enabled = self._run_workflow(self._make_args())
+        assert enabled is True

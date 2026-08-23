@@ -14,15 +14,18 @@ from __future__ import annotations
 import functools
 import os
 import re
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+from urllib.parse import quote
 
 from core.http import HttpError
 from core.http.urllib_backend import UrllibClient
 from core.json.cache import JsonCache
+from core.run.retry import RetryPolicy, retry_call
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
@@ -44,6 +47,13 @@ _NVD_KEY_RE = re.compile(
 )
 
 _NVD_CACHE_MISSING: dict[str, str] = {"_sentinel": "nvd_missing"}
+
+# CVE ids are `CVE-<year>-<4+ digits>`. `cve_id` values reach this
+# client from advisory-derived data, not just operator input — validate
+# the shape before the value joins a cache key or the request URL, so a
+# crafted "id" can't smuggle extra query parameters, path separators,
+# or control bytes into either.
+_CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
 _SENTINEL_USE_DEFAULT = object()
 
@@ -78,6 +88,11 @@ class NvdClient:
 
     def get_payload(self, cve_id: str) -> dict[str, Any] | None:
         """Return the full NVD 2.0 JSON for *cve_id*, or ``None``."""
+        cve_id = (cve_id or "").strip()
+        if not _CVE_ID_RE.match(cve_id):
+            # Not a CVE id — never let the value reach the cache keys
+            # or the request URL.
+            return None
         if self.cache_enabled and cve_id in self._cache:
             return self._cache[cve_id]
         if self.cache_enabled and self._disk is not None:
@@ -110,47 +125,58 @@ class NvdClient:
         if api_key and not _NVD_KEY_RE.match(api_key):
             api_key = ""
         headers = {"apiKey": api_key} if api_key else {}
-        url = f"{BASE_URL}?cveId={cve_id}"
-        delay_s = _RETRY_BASE_S
-        for attempt in range(_RETRY_MAX + 1):
+        # get_payload validated the id shape; percent-encode anyway
+        # (mirrors the OSV client) so the value can never terminate the
+        # query parameter early.
+        url = f"{BASE_URL}?cveId={quote(cve_id, safe='')}"
+
+        # Transient = 429 (NVD quota) or 5xx, whether raised as
+        # HttpError or returned as an error-status response. 502/503/
+        # 504 retry like 429 — a brief NVD outage should not fail a
+        # whole CVE-diff batch. Everything else (404, auth) surfaces
+        # immediately. The transport's own retries stay disabled
+        # (retries=0) so the policy here is the only one.
+        def _attempt():
             try:
-                resp = _default_http().request(
+                return _default_http().request(
                     "GET", url, headers=headers,
                     timeout=self.timeout_s, retries=0,
                 )
             except HttpError as exc:
-                status = exc.status or 0
-                if status == 429:
-                    if self.on_rate_limit is not None:
-                        self.on_rate_limit()
-                    if attempt < _RETRY_MAX:
-                        retry_after_val = exc.retry_after
-                        wait_s = max(float(retry_after_val or 0), delay_s)
-                        if wait_s > 0:
-                            time.sleep(wait_s)
-                        delay_s *= 2
-                        continue
-                # 5xx server errors are transient — retry like
-                # 429. Pre-fix only 429 was retried; 502/503/504
-                # gave up immediately, so a brief NVD outage
-                # caused the whole CVE-diff batch to fail when
-                # a 1-2 retry would have succeeded.
-                if 500 <= status < 600:
-                    if attempt < _RETRY_MAX:
-                        time.sleep(delay_s)
-                        delay_s *= 2
-                        continue
-                return None
-            if resp.status != 200:
-                # 5xx on the response path (no exception raised
-                # but error status returned) — same retry rule.
-                if 500 <= resp.status < 600 and attempt < _RETRY_MAX:
-                    time.sleep(delay_s)
-                    delay_s *= 2
-                    continue
-                return None
-            try:
-                return resp.json()
-            except Exception:
-                return None
-        return None
+                if (exc.status or 0) == 429 and self.on_rate_limit is not None:
+                    # Every 429 counts for telemetry, retried or not.
+                    self.on_rate_limit()
+                raise
+
+        def _is_transient(exc: Exception) -> bool:
+            status = getattr(exc, "status", None) or 0
+            return status == 429 or 500 <= status < 600
+
+        def _honour_retry_after(exc: Exception, scheduled: float) -> float:
+            if getattr(exc, "status", None) == 429:
+                return max(float(getattr(exc, "retry_after", None) or 0),
+                           scheduled)
+            return scheduled
+
+        policy = RetryPolicy(
+            attempts=_RETRY_MAX + 1,
+            retryable=_is_transient,
+            base_delay=_RETRY_BASE_S,
+            multiplier=2.0,
+        )
+        try:
+            resp = retry_call(
+                _attempt,
+                policy=policy,
+                retry_result=lambda r: 500 <= r.status < 600,
+                delay_override=_honour_retry_after,
+            )
+        except HttpError:
+            return None
+        if resp.status != 200:
+            return None
+        try:
+            # Response.json raises HttpError on a non-JSON body.
+            return resp.json()
+        except HttpError:
+            return None

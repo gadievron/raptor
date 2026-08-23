@@ -40,8 +40,11 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +75,17 @@ class SuppressionEntry:
     """One entry from the YAML, normalised."""
 
     reason: str
-    expires: Optional[date] = None
-    finding_id: Optional[str] = None
-    advisory_id: Optional[str] = None
-    ecosystem: Optional[str] = None
-    name: Optional[str] = None
-    version: Optional[str] = None
+    expires: date | None = None
+    finding_id: str | None = None
+    advisory_id: str | None = None
+    ecosystem: str | None = None
+    name: str | None = None
+    version: str | None = None
 
     def is_expired(self, today: date) -> bool:
         return self.expires is not None and today > self.expires
 
-    def matches(self, row: Dict[str, Any]) -> bool:
+    def matches(self, row: dict[str, Any]) -> bool:
         """True if ``row`` (a findings.json row) matches this entry."""
         if self.finding_id and row.get("finding_id") != self.finding_id and \
                 row.get("id") != self.finding_id:
@@ -91,6 +94,12 @@ class SuppressionEntry:
         if self.advisory_id:
             advisory = sca.get("advisory") or {}
             ids = {advisory.get("id"), *(advisory.get("aliases") or [])}
+            for adv in sca.get("all_advisories") or []:
+                if isinstance(adv, dict):
+                    if adv.get("id"):
+                        ids.add(adv["id"])
+                    for alias in adv.get("aliases") or []:
+                        ids.add(alias)
             if self.advisory_id not in ids:
                 return False
         if self.ecosystem and sca.get("ecosystem") != self.ecosystem:
@@ -101,13 +110,10 @@ class SuppressionEntry:
             return False
         # An entry with *no* match keys would match everything — guard
         # against that defensively (the loader also rejects it).
-        if not any((self.finding_id, self.advisory_id, self.ecosystem,
-                    self.name, self.version)):
-            return False
-        return True
+        return any((self.finding_id, self.advisory_id, self.ecosystem, self.name, self.version))
 
 
-def load(path: Path) -> List[SuppressionEntry]:
+def load(path: Path) -> list[SuppressionEntry]:
     """Read ``path`` and return every well-formed entry.
 
     Missing file → empty list (the common case — no suppressions yet).
@@ -137,7 +143,7 @@ def load(path: Path) -> List[SuppressionEntry]:
     if not isinstance(raw, list):
         return []
 
-    entries: List[SuppressionEntry] = []
+    entries: list[SuppressionEntry] = []
     for idx, item in enumerate(raw):
         entry = _coerce_entry(item, source=path, index=idx)
         if entry is not None:
@@ -149,7 +155,7 @@ def apply_to_findings(
     findings: Iterable[Any],
     entries: Iterable[SuppressionEntry],
     *,
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> int:
     """Mutate ``VulnFinding`` / ``HygieneFinding`` / ``SupplyChainFinding``
     objects in place, setting ``suppressed=True`` and ``suppression_reason``.
@@ -179,20 +185,18 @@ def apply_to_findings(
     return n
 
 
-def _finding_view(finding: Any) -> Optional[Dict[str, Any]]:
+def _finding_view(finding: Any) -> dict[str, Any] | None:
     """Project a finding object onto the dict shape ``SuppressionEntry``
     matches against. ``None`` for objects that aren't recognisable."""
     fid = getattr(finding, "finding_id", None)
     dep = getattr(finding, "dependency", None)
     if fid is None or dep is None:
         return None
-    advisory_ids: List[str] = []
+    advisory_ids: list[str] = []
     for adv in getattr(finding, "advisories", []) or []:
         if getattr(adv, "osv_id", None):
             advisory_ids.append(adv.osv_id)
-        for alias in getattr(adv, "aliases", []) or []:
-            if isinstance(alias, str):
-                advisory_ids.append(alias)
+        advisory_ids.extend(alias for alias in getattr(adv, "aliases", []) or [] if isinstance(alias, str))
     return {
         "finding_id": fid,
         "ecosystem": getattr(dep, "ecosystem", None),
@@ -202,7 +206,7 @@ def _finding_view(finding: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _matches_view(entry: SuppressionEntry, view: Dict[str, Any]) -> bool:
+def _matches_view(entry: SuppressionEntry, view: dict[str, Any]) -> bool:
     if entry.finding_id and view["finding_id"] != entry.finding_id:
         return False
     if entry.advisory_id and entry.advisory_id not in view["advisory_ids"]:
@@ -213,17 +217,14 @@ def _matches_view(entry: SuppressionEntry, view: Dict[str, Any]) -> bool:
         return False
     if entry.version and view["version"] != entry.version:
         return False
-    if not any((entry.finding_id, entry.advisory_id, entry.ecosystem,
-                entry.name, entry.version)):
-        return False
-    return True
+    return any((entry.finding_id, entry.advisory_id, entry.ecosystem, entry.name, entry.version))
 
 
 def apply(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     entries: Iterable[SuppressionEntry],
     *,
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> int:
     """Mutate each row in-place, setting ``suppressed=True`` (and the
     reason) when an unexpired entry matches. Returns the number of rows
@@ -233,6 +234,7 @@ def apply(
     left alone — first-match-wins, idempotent on repeated calls.
     """
     today = today or datetime.now(timezone.utc).date()
+    entries = list(entries)
     n = 0
     for row in rows:
         if row.get("suppressed"):
@@ -263,7 +265,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 def _coerce_entry(
     item: Any, *, source: Path, index: int,
-) -> Optional[SuppressionEntry]:
+) -> SuppressionEntry | None:
     if not isinstance(item, dict):
         logger.warning(
             "sca.suppressions: %s entry %d is not a mapping; skipped",
@@ -279,7 +281,7 @@ def _coerce_entry(
         return None
 
     expires_raw = item.get("expires")
-    expires: Optional[date] = None
+    expires: date | None = None
     if isinstance(expires_raw, date) and not isinstance(expires_raw, datetime):
         expires = expires_raw
     elif isinstance(expires_raw, datetime):
@@ -319,7 +321,7 @@ def _coerce_entry(
     return entry
 
 
-def _str_or_none(value: Any) -> Optional[str]:
+def _str_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None

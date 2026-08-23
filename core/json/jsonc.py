@@ -1,6 +1,6 @@
 """Tolerant JSON-with-comments (JSONC) loading.
 
-``devcontainer.json``, ``tsconfig.json`` and friends are JSONC: standard JSON
+``devcontainer.json``, ``tsconfig.json`` and friends aee JSONC: standard JSON
 plus ``//`` / ``/* */`` comments and trailing commas. A naive regex strip of
 ``//`` corrupts string *values* that contain ``//`` — a ``https://`` URL is the
 common casualty, which silently breaks the parse — so the comment stripper here
@@ -19,8 +19,7 @@ is a *value* character in JSONC, not a comment.
 from __future__ import annotations
 
 import json
-import re
-from typing import Any, List
+from typing import Any
 
 
 def strip_jsonc_comments(text: str) -> str:
@@ -30,7 +29,7 @@ def strip_jsonc_comments(text: str) -> str:
     marker inside a quoted value — e.g. the ``//`` in ``"https://..."`` — is
     left untouched. A regex can't do this safely.
     """
-    out: List[str] = []
+    out: list[str] = []
     i, n = 0, len(text)
     in_str = False
     while i < n:
@@ -66,7 +65,38 @@ def strip_jsonc_comments(text: str) -> str:
     return "".join(out)
 
 
-_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+def _strip_trailing_commas(text: str) -> str:
+    """Remove trailing commas before ``}`` or ``]``, but only outside strings."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def load_jsonc(text: str) -> Any:
@@ -75,8 +105,8 @@ def load_jsonc(text: str) -> Any:
     ``json.JSONDecodeError`` on genuinely malformed input, like ``json.loads``.
     """
     cleaned = strip_jsonc_comments(text)
-    cleaned = _TRAILING_COMMA_RE.sub(r"\1", cleaned)
+    cleaned = _strip_trailing_commas(cleaned)
     return json.loads(cleaned)
 
 
-__all__ = ["strip_jsonc_comments", "load_jsonc"]
+__all__ = ["load_jsonc", "strip_jsonc_comments"]

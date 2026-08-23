@@ -49,12 +49,12 @@ from core.binary.fingerprint_store import (
 
 __all__ = [
     "BUCKETS",
-    "CapabilityDelta",
-    "CapabilityFingerprint",
     "FINGERPRINT_SCHEMA_VERSION",
-    "FingerprintDrift",
     "HIGH_SEVERITY_BUCKETS",
     "STORE_SCHEMA_VERSION",
+    "CapabilityDelta",
+    "CapabilityFingerprint",
+    "FingerprintDrift",
     "bucket_imports",
     "capability_fingerprint",
     "delete_fingerprint",

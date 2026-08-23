@@ -63,7 +63,6 @@ import ctypes.util
 import logging
 import os
 import signal
-from typing import Optional
 
 from . import state
 
@@ -80,7 +79,7 @@ _PTRACE_CONT = 7
 # etc. in probes.py.
 
 
-def _get_libc() -> Optional[ctypes.CDLL]:
+def _get_libc() -> ctypes.CDLL | None:
     """Resolve libc via find_library — same pattern as mount_ns.py.
 
     Returns None if libc is missing OR if the loaded libc lacks the
@@ -188,7 +187,7 @@ def _run_probe() -> bool:
             )
             pid = os.fork()
     except OSError as e:
-        logger.debug(f"ptrace probe: fork failed: {e}")
+        logger.debug("ptrace probe: fork failed: %s", e)
         return False
 
     if pid == 0:
@@ -218,9 +217,9 @@ def _run_probe() -> bool:
 
     # Parent: wait for the child to stop, attempt PTRACE_CONT, then reap.
     try:
-        wpid, status = _waitpid_eintr_safe(pid, os.WUNTRACED)
+        _wpid, status = _waitpid_eintr_safe(pid, os.WUNTRACED)
     except OSError as e:
-        logger.debug(f"ptrace probe: waitpid failed: {e}")
+        logger.debug("ptrace probe: waitpid failed: %s", e)
         # Best-effort cleanup; the child may be a zombie.
         _try_kill_and_reap(pid)
         return False
@@ -229,7 +228,7 @@ def _run_probe() -> bool:
         # Child didn't stop — TRACEME was rejected (child exited 1) or
         # the child died for some other reason. Either way, ptrace isn't
         # working as expected.
-        logger.debug(f"ptrace probe: child did not stop (status={status:#x})")
+        logger.debug("ptrace probe: child did not stop (status=%#x)", status)
         _try_kill_and_reap(pid)
         return False
 
@@ -239,7 +238,7 @@ def _run_probe() -> bool:
     rc = libc.ptrace(_PTRACE_CONT, pid, None, None)
     err = ctypes.get_errno()
     if rc != 0:
-        logger.debug(f"ptrace probe: PTRACE_CONT failed (errno={err})")
+        logger.debug("ptrace probe: PTRACE_CONT failed (errno=%d)", err)
         _try_kill_and_reap(pid)
         return False
 
@@ -248,11 +247,15 @@ def _run_probe() -> bool:
     try:
         _, exit_status = _waitpid_eintr_safe(pid, 0)
     except OSError as e:
-        logger.debug(f"ptrace probe: final waitpid failed: {e}")
+        logger.debug("ptrace probe: final waitpid failed: %s", e)
+        # Same cleanup as the earlier failure paths — without it a
+        # final-waitpid error leaks the resumed child unreaped
+        # (zombie until process exit). ECHILD is swallowed inside.
+        _try_kill_and_reap(pid)
         return False
     if not os.WIFEXITED(exit_status) or os.WEXITSTATUS(exit_status) != 0:
         logger.debug(
-            f"ptrace probe: child exited abnormally (status={exit_status:#x})"
+            "ptrace probe: child exited abnormally (status=%#x)", exit_status
         )
         return False
     return True

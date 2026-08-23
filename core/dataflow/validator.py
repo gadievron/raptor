@@ -14,9 +14,11 @@ they implement.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
-from core.dataflow.finding import Finding
+
+if TYPE_CHECKING:
+    from core.dataflow.finding import Finding
 
 
 class ValidatorVerdict(str, Enum):

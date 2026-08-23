@@ -28,7 +28,8 @@ when you need a probability instead of a discrete verdict.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from .result import Verdict
 
@@ -148,9 +149,8 @@ def verdict_from_posterior(
     exists for callers that still want a single label.
     """
     if not 0.0 <= refute_threshold < confirm_threshold <= 1.0:
-        raise ValueError(
-            "thresholds must satisfy 0 ≤ refute_threshold < confirm_threshold ≤ 1"
-        )
+        msg = "thresholds must satisfy 0 ≤ refute_threshold < confirm_threshold ≤ 1"
+        raise ValueError(msg)
     m = p.mean
     if m > confirm_threshold:
         return "confirmed"
@@ -160,9 +160,9 @@ def verdict_from_posterior(
 
 
 __all__ = [
-    "Posterior",
     "UNIFORM_PRIOR",
-    "update",
+    "Posterior",
     "posterior_from",
+    "update",
     "verdict_from_posterior",
 ]

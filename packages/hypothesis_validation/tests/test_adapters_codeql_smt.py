@@ -7,6 +7,7 @@ the real path catches integration issues mocks would mask.
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -149,6 +150,23 @@ class TestCodeQLAdapterRun:
         assert ev.matches[0]["line"] == 42
         assert "1 match" in ev.summary
 
+    def test_run_corrupt_sarif_is_tool_failure(self, tmp_path):
+        """A written-but-unreadable SARIF is success=False, never a
+        default-refuted zero-match success."""
+        a, db = self._adapter(tmp_path)
+
+        def fake_run(cmd, **kwargs):
+            for arg in cmd:
+                if arg.startswith("--output="):
+                    Path(arg.split("=", 1)[1]).write_text("{corrupt")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            ev = a.run("import cpp\nselect 1\n", tmp_path)
+        assert not ev.success
+        assert "unreadable" in ev.error
+        assert ev.matches == []
+
     def test_run_subprocess_no_matches(self, tmp_path):
         a, db = self._adapter(tmp_path)
 
@@ -200,6 +218,81 @@ class TestCodeQLAdapterRun:
         assert not ev.success
 
 
+class TestCodeQLBatchPreconditionMessages:
+    """run_prebuilt_queries_batch emits the same three distinct
+    precondition messages as run() / run_prebuilt_query instead of one
+    generic "codeql/database unavailable" string."""
+
+    def test_no_cli_message_matches_siblings(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+        with patch("shutil.which", return_value=None):
+            a = CodeQLAdapter(database_path=db)
+        results = a.run_prebuilt_queries_batch([Path("/pack/q.ql")])
+        assert set(results) == {"/pack/q.ql"}
+        ev = results["/pack/q.ql"]
+        assert not ev.success
+        assert ev.error == "codeql CLI is not installed"
+
+    def test_no_database_configured_message_matches_siblings(self):
+        a = CodeQLAdapter(codeql_bin="/usr/bin/codeql")
+        results = a.run_prebuilt_queries_batch([Path("/pack/q.ql")])
+        ev = results["/pack/q.ql"]
+        assert not ev.success
+        assert ev.error == "no CodeQL database configured (set_database() first)"
+
+    def test_database_missing_message_matches_siblings(self, tmp_path):
+        missing = tmp_path / "nonexistent-db"
+        a = CodeQLAdapter(database_path=missing, codeql_bin="/usr/bin/codeql")
+        results = a.run_prebuilt_queries_batch([Path("/pack/q.ql")])
+        ev = results["/pack/q.ql"]
+        assert not ev.success
+        assert ev.error == f"CodeQL database not found: {missing}"
+
+    def test_generic_message_no_longer_used(self, tmp_path):
+        a = CodeQLAdapter(
+            database_path=tmp_path / "nope", codeql_bin="/usr/bin/codeql",
+        )
+        results = a.run_prebuilt_queries_batch([Path("/pack/q.ql")])
+        assert "codeql/database unavailable" not in results["/pack/q.ql"].error
+
+    def test_empty_batch_returns_empty_dict(self, tmp_path):
+        a = CodeQLAdapter(
+            database_path=tmp_path / "nope", codeql_bin="/usr/bin/codeql",
+        )
+        assert a.run_prebuilt_queries_batch([]) == {}
+
+
+class TestRunInlinePackInstallLogging:
+    def test_pack_install_failure_logs_warning(self, tmp_path, caplog):
+        """A failing inline `codeql pack install` in run() must emit a
+        warning (matching the _ensure_pack_installed contract) instead
+        of silently swallowing the exception."""
+        db = tmp_path / "db"
+        db.mkdir()
+        a = CodeQLAdapter(
+            database_path=db,
+            codeql_bin=str(tmp_path / "no-such-codeql"),
+            sandbox=False,
+        )
+        with caplog.at_level(
+            logging.WARNING,
+            logger="packages.hypothesis_validation.adapters.codeql",
+        ):
+            ev = a.run(
+                "import cpp\nfrom Function f select f",
+                target=db,
+                env={"PATH": "/usr/bin"},
+            )
+        # The analyze step still fails loudly on its own.
+        assert not ev.success
+        assert "failed to invoke codeql" in ev.error
+        # And the install failure is now observable in the log.
+        assert any(
+            "codeql pack install" in rec.getMessage() for rec in caplog.records
+        )
+
+
 class TestQlPackYaml:
     def test_default_lang_is_cpp(self):
         yaml = _qlpack_yaml("/* no imports */\n")
@@ -224,13 +317,35 @@ class TestParseSarif:
         p.write_text(json.dumps({"runs": []}))
         assert _parse_sarif(p) == []
 
-    def test_missing_file(self, tmp_path):
-        assert _parse_sarif(tmp_path / "nonexistent") == []
+    def test_missing_file_is_parse_failure(self, tmp_path):
+        # None (tool failure), never [] — an unreadable SARIF must not
+        # grade as a refuted "no matches".
+        assert _parse_sarif(tmp_path / "nonexistent") is None
 
-    def test_invalid_json(self, tmp_path):
+    def test_invalid_json_is_parse_failure(self, tmp_path):
         p = tmp_path / "x.sarif"
         p.write_text("not json")
-        assert _parse_sarif(p) == []
+        assert _parse_sarif(p) is None
+
+    def test_hostile_start_line_is_parse_failure(self, tmp_path):
+        # Extraction is inside the MUST-NOT-raise guard: a non-numeric
+        # startLine reports a parse failure instead of raising.
+        p = tmp_path / "x.sarif"
+        p.write_text(json.dumps({
+            "runs": [{
+                "results": [{
+                    "ruleId": "r1",
+                    "message": {"text": "msg"},
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": "a.c"},
+                            "region": {"startLine": "NaN-ish"},
+                        },
+                    }],
+                }],
+            }],
+        }))
+        assert _parse_sarif(p) is None
 
     def test_basic_parse(self, tmp_path):
         p = tmp_path / "x.sarif"
@@ -364,3 +479,16 @@ class TestSMTAdapterUnavailable:
         with patch.object(a, "is_available", return_value=True):
             ev = a.run("", tmp_path)
         assert not ev.success
+
+
+class TestParseSarifBudget:
+    def test_oversize_sarif_is_parse_failure(self, tmp_path: Path) -> None:
+        """A SARIF over the bounded loader's cap is a tool failure
+        (None), never an empty refutation. Sparse truncate: the stat
+        gate fires before any read."""
+        import os
+
+        p = tmp_path / "x.sarif"
+        p.write_text(json.dumps({"runs": []}))
+        os.truncate(p, 100 * 1024 * 1024 + 1)
+        assert _parse_sarif(p) is None

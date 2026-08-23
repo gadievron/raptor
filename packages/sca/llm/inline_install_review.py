@@ -17,8 +17,6 @@ LLM-found installs carry ``parser_confidence="low"`` and
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import List
 
 from core.llm.task_types import TaskType
 from ..models import Confidence, Dependency, PinStyle
@@ -30,6 +28,10 @@ from . import (
 )
 from .prompts import INLINE_INSTALL_SYSTEM
 from .schemas import InlineInstallVerdict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +42,9 @@ def review_inline_installs(
     client,
     file_path: Path,
     file_content: str,
-    mechanical_deps: List[Dependency],
+    mechanical_deps: list[Dependency],
     source_kind: str,
-) -> List[Dependency]:
+) -> list[Dependency]:
     """Ask the LLM to find package installs the mechanical parser missed.
 
     Args:
@@ -63,7 +65,7 @@ def review_inline_installs(
 
     content = file_content[:_MAX_FILE_CHARS]
 
-    mechanical_names = {(d.ecosystem, d.name) for d in mechanical_deps}
+    mechanical_names = {(d.ecosystem.lower(), d.name.lower()) for d in mechanical_deps}
     mechanical_summary = "\n".join(
         f"  - {d.ecosystem}/{d.name}@{d.version or '?'}"
         for d in mechanical_deps[:50]
@@ -102,12 +104,15 @@ def review_inline_installs(
     if result.preflight_hit and verdict.confidence == "high":
         verdict = verdict.model_copy(update={"confidence": "medium"})
 
-    new_deps: List[Dependency] = []
+    new_deps: list[Dependency] = []
     for item in verdict.missed_installs:
-        if (item.ecosystem, item.name) in mechanical_names:
+        if (item.ecosystem.lower(), item.name.lower()) in mechanical_names:
             continue
 
-        eco_lower = item.ecosystem.lower().replace("pypi", "pypi")
+        eco_lower = {
+            "PyPI": "pypi", "npm": "npm", "crates.io": "cargo",
+            "RubyGems": "gem", "Go": "golang",
+        }.get(item.ecosystem, item.ecosystem.lower())
         purl = f"pkg:{eco_lower}/{item.name}"
         if item.version:
             purl += f"@{item.version}"

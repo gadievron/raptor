@@ -1,0 +1,875 @@
+{
+ "description": "Pre-migration crypto_calls.cocci catalog (recorded 2026-08-16). Every name the enumerated-list rule matched, with its kind/api. Test data pinning pack coverage \u2014 NOT a consumed vocabulary.",
+ "entries": [
+  {
+   "fn": "crypto_aead_decrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_aead_encrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_aead_setauthsize",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_aead_setkey",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_ahash_digest",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_ahash_final",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_ahash_init",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_ahash_setkey",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_ahash_update",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_akcipher_decrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_akcipher_encrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_akcipher_sign",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_akcipher_verify",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_aead",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_ahash",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_akcipher",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_cipher",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_kpp",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_rng",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_shash",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_alloc_skcipher",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_shash_digest",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_shash_final",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_shash_init",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_shash_setkey",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_shash_update",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_skcipher_decrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_skcipher_encrypt",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "crypto_skcipher_setkey",
+   "kind": "primitive_call",
+   "api": "kernel"
+  },
+  {
+   "fn": "get_random_bytes",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "get_random_long",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "get_random_u32",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "get_random_u64",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "getrandom",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "prandom_bytes",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "prandom_u32",
+   "kind": "rng_source",
+   "api": "kernel"
+  },
+  {
+   "fn": "drand48",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "lrand48",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "mrand48",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "rand",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "random",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "srand",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "srandom",
+   "kind": "rng_source",
+   "api": "libc"
+  },
+  {
+   "fn": "crypto_aead_chacha20poly1305_decrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_aead_chacha20poly1305_encrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_aead_chacha20poly1305_ietf_decrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_aead_chacha20poly1305_ietf_encrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_aead_xchacha20poly1305_ietf_decrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_aead_xchacha20poly1305_ietf_encrypt",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_auth",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_auth_verify",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_easy",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_keypair",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_open",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_open_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_open_easy",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_box_seed_keypair",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_generichash",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_generichash_final",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_generichash_init",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_generichash_update",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_hash_sha256",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_hash_sha512",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_pwhash",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_pwhash_str",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_pwhash_str_verify",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox_easy",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox_open",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox_open_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_secretbox_open_easy",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign_keypair",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign_open",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign_seed_keypair",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "crypto_sign_verify_detached",
+   "kind": "primitive_call",
+   "api": "libsodium"
+  },
+  {
+   "fn": "randombytes",
+   "kind": "rng_source",
+   "api": "libsodium"
+  },
+  {
+   "fn": "randombytes_buf",
+   "kind": "rng_source",
+   "api": "libsodium"
+  },
+  {
+   "fn": "randombytes_buf_deterministic",
+   "kind": "rng_source",
+   "api": "libsodium"
+  },
+  {
+   "fn": "randombytes_random",
+   "kind": "rng_source",
+   "api": "libsodium"
+  },
+  {
+   "fn": "randombytes_uniform",
+   "kind": "rng_source",
+   "api": "libsodium"
+  },
+  {
+   "fn": "AES_cbc_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_ctr128_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_decrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_ecb_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_ofb128_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_set_decrypt_key",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "AES_set_encrypt_key",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "BF_cbc_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "BF_decrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "BF_ecb_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "BF_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "BF_set_key",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_cbc_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_ecb_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_encrypt1",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_encrypt2",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_encrypt3",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_ncbc_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_set_key",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "DES_set_odd_parity",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_CipherFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_CipherFinal_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_CipherInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_CipherInit_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_CipherUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DecryptFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DecryptFinal_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DecryptInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DecryptInit_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DecryptUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_Digest",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestFinal_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestInit_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestSignFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestSignInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestSignUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestVerifyFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestVerifyInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_DigestVerifyUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_EncryptFinal",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_EncryptFinal_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_EncryptInit",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_EncryptInit_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_EncryptUpdate",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_PKEY_decrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_PKEY_derive",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_PKEY_encrypt",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_PKEY_sign",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "EVP_PKEY_verify",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "HMAC",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "HMAC_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "HMAC_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "HMAC_Init_ex",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "HMAC_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "MD5",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "MD5_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "MD5_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "MD5_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "RC4",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "RC4_set_key",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA1",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA1_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA1_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA1_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA224",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA224_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA224_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA224_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA256",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA256_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA256_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA256_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA384",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA384_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA384_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA384_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA512",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA512_Final",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA512_Init",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "SHA512_Update",
+   "kind": "primitive_call",
+   "api": "openssl"
+  },
+  {
+   "fn": "RAND_add",
+   "kind": "rng_source",
+   "api": "openssl"
+  },
+  {
+   "fn": "RAND_bytes",
+   "kind": "rng_source",
+   "api": "openssl"
+  },
+  {
+   "fn": "RAND_priv_bytes",
+   "kind": "rng_source",
+   "api": "openssl"
+  },
+  {
+   "fn": "RAND_pseudo_bytes",
+   "kind": "rng_source",
+   "api": "openssl"
+  },
+  {
+   "fn": "RAND_seed",
+   "kind": "rng_source",
+   "api": "openssl"
+  }
+ ]
+}

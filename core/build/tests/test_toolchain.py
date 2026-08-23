@@ -231,7 +231,7 @@ class TestBuildSystemsSchemaContract(unittest.TestCase):
     """
 
     def test_every_env_detect_name_has_a_detector(self):
-        from packages.codeql.build_detector import BuildDetector
+        from core.build.build_detector import BuildDetector
         missing = set()
         for lang, tools in BuildDetector.BUILD_SYSTEMS.items():
             for tool_name, config in tools.items():

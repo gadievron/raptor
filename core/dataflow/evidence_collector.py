@@ -16,21 +16,24 @@ This module deliberately does NOT decide a verdict. The
 ``SanitizerEvidence`` is fed *into* the existing dataflow validator's
 LLM prompt by :mod:`packages.codeql.dataflow_validator` (PR1c
 integration) — never around it. The rejected verdict-with-short-circuit
-design is documented at ``~/design/dataflow-sanitizer-bypass.md``.
+design is documented at the design memo.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
 
-from core.dataflow.finding import Finding
 from core.dataflow.llm_extractor import ExtractorFn, extract_from_files
 from core.dataflow.path_annotator import annotate_finding
 from core.dataflow.sanitizer_evidence import (
     CandidateValidator,
     SanitizerEvidence,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.dataflow.finding import Finding
+    from collections.abc import Iterator
+    from pathlib import Path
 
 
 DEFAULT_MAX_FILES = 5
@@ -42,7 +45,7 @@ def collect_sanitizer_evidence(
     repo_root: Path,
     extractor: ExtractorFn,
     model_id: str = "",
-    cache: Optional[Dict[str, Tuple[CandidateValidator, ...]]] = None,
+    cache: dict[str, tuple[CandidateValidator, ...]] | None = None,
     max_files: int = DEFAULT_MAX_FILES,
 ) -> SanitizerEvidence:
     """Build :class:`SanitizerEvidence` for one :class:`Finding`.

@@ -19,12 +19,18 @@ import time
 from dataclasses import dataclass, field
 
 from core.llm.config import ModelConfig
-from core.llm.providers import create_provider, LLMProvider
+from core.llm.providers import LLMProvider, create_provider
 
+# Bare-alias fallback ONLY — core.llm.model_data.price_for() is the
+# authoritative per-model table and consumers must try it first (see
+# agent/loop.py:_price). This table catches class tokens ("opus") that
+# price_for can't resolve. It had drifted badly: "opus" said $15/$75
+# per M-token while every current Opus generation is $5/$25 — a 3x
+# over-count that burned the loop's cost budget at triple speed.
 MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "opus": (15.0, 75.0),
+    "opus": (5.0, 25.0),
     "sonnet": (3.0, 15.0),
-    "haiku": (0.80, 4.0),
+    "haiku": (1.0, 5.0),
 }
 
 
@@ -72,9 +78,18 @@ class ResilientLLMClient:
     backoff_factor: float = 2.0
     timeout_s: float = 120.0
     max_cost_usd: float = 0.10
+    # call_class labels this client's records in the run-local
+    # llm-telemetry.jsonl (see core.llm.telemetry). Callers with a
+    # distinct spend class set their own (the root-cause analyzer uses
+    # "cve-diff:root-cause"); records are no-ops unless the
+    # orchestrator installed a sink.
+    call_class: str = "cve-diff:llm"
     cumulative_cost_usd: float = field(default=0.0, init=False)
 
     _provider_cache: dict[str, LLMProvider] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _provider_names: dict[str, str] = field(
         default_factory=dict, init=False, repr=False
     )
 
@@ -83,6 +98,13 @@ class ResilientLLMClient:
             self._provider_cache[model_id] = _provider_for_model(
                 model_id, self.timeout_s
             )
+            # Telemetry label only — never let auth-resolution quirks
+            # break the call path.
+            try:
+                from .auth import resolve_auth
+                self._provider_names[model_id] = resolve_auth(model_id).provider
+            except Exception:  # noqa: BLE001
+                self._provider_names[model_id] = ""
         return self._provider_cache[model_id]
 
     def complete(
@@ -94,31 +116,52 @@ class ResilientLLMClient:
         temperature: float | None = None,
     ) -> LLMResponse:
         if self.cumulative_cost_usd >= self.max_cost_usd:
-            raise CostBudgetExceeded(
+            msg = (
                 f"cost budget ${self.max_cost_usd:.4f} reached "
                 f"(cumulative ${self.cumulative_cost_usd:.4f}); aborting "
                 "before next call"
             )
+            raise CostBudgetExceeded(msg)
 
         provider = self._get_provider(model_id)
         kwargs: dict[str, object] = {"max_tokens": max_tokens}
         if temperature is not None:
             kwargs["temperature"] = temperature
 
-        # Bounded retry. The class advertised `max_retries` and
-        # `backoff_factor` but the original implementation called
-        # provider.generate exactly once. Wire them up for real.
+        # Bounded retry — TRANSIENT failures only. The pre-fix loop
+        # retried every exception blindly: hard auth failures (401/403),
+        # billing caps, and content blocks burned all retries with
+        # exponential sleeps and the real cause surfaced only after the
+        # full backoff schedule. Classify first; non-retryable errors
+        # raise immediately. (Classifier shared with core.llm's own
+        # retry loop — same policy, one implementation.)
+        from core.llm import telemetry
+        from core.llm.client import _failure_disposition, _is_retryable_error
+        from core.security.log_sanitisation import escape_nonprintable
+
         attempt = 0
         while True:
+            attempt_start = time.monotonic()
             try:
                 resp = provider.generate(prompt, system_prompt=system, **kwargs)
                 break
             except Exception as exc:
-                if attempt >= self.max_retries:
-                    raise LLMCallFailed(
+                telemetry.emit(
+                    event="attempt_failed",
+                    disposition=_failure_disposition(exc),
+                    call_class=self.call_class,
+                    provider=self._provider_names.get(model_id, ""),
+                    model=model_id,
+                    attempt=attempt + 1,
+                    duration_s=round(time.monotonic() - attempt_start, 3),
+                    error=escape_nonprintable(str(exc))[:200],
+                )
+                if attempt >= self.max_retries or not _is_retryable_error(exc):
+                    msg = (
                         f"LLM call ({model_id}) failed after "
-                        f"{attempt + 1} attempts: {exc}"
-                    ) from exc
+                        f"{attempt + 1} attempt(s): {exc}"
+                    )
+                    raise LLMCallFailed(msg) from exc
                 attempt += 1
                 time.sleep(self.backoff_factor ** attempt)
                 continue
@@ -128,6 +171,18 @@ class ResilientLLMClient:
         out_t = resp.output_tokens
         cost = resp.cost
         self.cumulative_cost_usd += cost
+        telemetry.emit(
+            event="call",
+            disposition="ok",
+            call_class=self.call_class,
+            provider=self._provider_names.get(model_id, ""),
+            model=model_id,
+            attempt=attempt + 1,
+            duration_s=round(time.monotonic() - attempt_start, 3),
+            cost_usd=cost,
+            tokens_in=in_t,
+            tokens_out=out_t,
+        )
         return LLMResponse(
             text=text,
             model_id=model_id,

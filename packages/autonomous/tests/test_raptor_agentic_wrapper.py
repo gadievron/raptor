@@ -29,7 +29,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
         # flags including the new --understand and --validate.
         proc = subprocess.run(
             [str(WRAPPER), "--help"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(proc.returncode, 0,
                          msg=f"wrapper --help failed: {proc.stderr}")
@@ -40,10 +40,42 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
     def test_wrapper_propagates_unknown_arg_failure(self):
         # An unknown flag should bubble up as a non-zero exit from argparse,
         # not be silently swallowed by the wrapper.
-        proc = subprocess.run(
-            [str(WRAPPER), "--definitely-not-a-flag"],
-            capture_output=True, text=True, timeout=15,
-        )
+        #
+        # Hermetic by construction: without an explicit --repo, the
+        # dispatcher back-fills the target from the host's ACTIVE
+        # PROJECT (or RAPTOR_CALLER_DIR) and runs its lifecycle
+        # pre-work — license detection, target-shape and build-system
+        # detection over the whole project tree — BEFORE the child's
+        # argparse ever sees the bogus flag. On a host with a large
+        # active project that pre-work alone blew the timeout and
+        # SIGKILLed a half-started real run into the operator's
+        # project directory. Pin --repo to an empty temp dir and
+        # RAPTOR_OUT_DIR to a temp out dir so the run touches nothing
+        # outside the test and reaches argparse immediately.
+        #
+        # HOME is redirected to the temp dir as well: even with an
+        # explicit --repo, the dispatcher resolves the host's active
+        # project (~/.raptor/projects/.active) and rejects a target
+        # outside the project's bounds ("target X is outside project
+        # Y") BEFORE argparse sees the bogus flag — so on an
+        # operator host with any active project this test failed
+        # while passing in CI. A fresh HOME means an empty projects
+        # tree (same isolation pattern as
+        # test_validate_checklist_handoff_e2e's autouse fixture).
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "empty-repo"
+            repo.mkdir()
+            out = Path(tmp) / "out"
+            out.mkdir()
+            env = dict(os.environ)
+            env["RAPTOR_OUT_DIR"] = str(out)
+            env["HOME"] = tmp
+            env.pop("RAPTOR_CALLER_DIR", None)
+            proc = subprocess.run(
+                [str(WRAPPER), "--repo", str(repo),
+                 "--definitely-not-a-flag"],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
         self.assertNotEqual(proc.returncode, 0)
         # argparse writes errors to stderr.
         self.assertTrue(
@@ -65,7 +97,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             broken.chmod(0o755)
             proc = subprocess.run(
                 [str(broken), "--help"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=60,
             )
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("cannot find raptor.py", proc.stderr,
@@ -79,7 +111,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             link.symlink_to(WRAPPER)
             proc = subprocess.run(
                 [str(link), "--help"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=60,
             )
             self.assertEqual(proc.returncode, 0,
                              msg=f"symlinked wrapper failed: {proc.stderr}")

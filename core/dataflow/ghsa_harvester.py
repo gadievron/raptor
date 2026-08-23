@@ -23,7 +23,6 @@ plug into the same schema.
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import re
 import sqlite3
@@ -32,7 +31,17 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import TYPE_CHECKING
+
+from core.json.bounded import load_json_bounded
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+# Byte ceiling per advisory file. Real GHSA advisory JSON runs a few
+# KB (long affected-range lists reach the low hundreds of KB); the
+# tree is network-cloned, so one inflated file must not OOM the walk.
+_MAX_ADVISORY_BYTES = 8 * 1024 * 1024
 
 # Ecosystem -> CVEfixes ``repo_language`` value.  Restricted to languages
 # the walker explicitly supports (cvefix_walk._LANG_MAP).  npm packages
@@ -75,7 +84,7 @@ class HarvestedFix:
     repo_url: str
     repo_language: str
     fix_hash: str
-    parent_hash: Optional[str]  # None if resolution failed
+    parent_hash: str | None  # None if resolution failed
 
 
 # ---------------------------------------------------------------------------
@@ -84,34 +93,42 @@ class HarvestedFix:
 
 def _iter_advisories(
     root: Path, years: Iterable[str], cwes: set, ecosystems: set,
-) -> Iterable[Tuple[Path, dict]]:
+) -> Iterable[tuple[Path, dict]]:
     """Yield ``(json_path, advisory_dict)`` for advisories matching the
     CWE + ecosystem filter.  Subtree restricted to ``github-reviewed/<year>``
     (the curated namespace; ``unreviewed`` is auto-imported NVD with much
     noisier metadata)."""
     base = root / "advisories" / "github-reviewed"
     if not base.is_dir():
-        raise SystemExit(f"GHSA root does not contain advisories/github-reviewed: {root}")
+        msg = f"GHSA root does not contain advisories/github-reviewed: {root}"
+        raise SystemExit(msg)
     for y in years:
         ydir = base / y
         if not ydir.is_dir():
             continue
         for jp in ydir.rglob("*.json"):
             try:
-                adv = json.loads(jp.read_text())
-            except Exception:
+                # Bounded: the advisory tree is network-cloned, so a
+                # single inflated file must not exhaust memory. Real
+                # advisories are a few KB; over-budget files are
+                # skipped like malformed ones (the loader logs the
+                # observed size).
+                adv = load_json_bounded(jp, max_bytes=_MAX_ADVISORY_BYTES)
+            except (OSError, ValueError):
                 continue
-            adv_cwes = set(adv.get("database_specific", {}).get("cwe_ids", []))
+            adv_cwes = set(
+                (adv.get("database_specific") or {}).get("cwe_ids") or []
+            )
             if not (adv_cwes & cwes):
                 continue
-            ecos = {a.get("package", {}).get("ecosystem")
-                    for a in adv.get("affected", [])}
+            ecos = {(a.get("package") or {}).get("ecosystem")
+                    for a in adv.get("affected") or []}
             if not (ecos & ecosystems):
                 continue
             yield jp, adv
 
 
-def _first_commit_ref(adv: dict) -> Optional[Tuple[str, str, str]]:
+def _first_commit_ref(adv: dict) -> tuple[str, str, str] | None:
     """Return ``(owner, repo, sha)`` for the first
     ``github.com/.../commit/SHA`` URL in ``references``, or None."""
     for r in adv.get("references", []):
@@ -121,16 +138,20 @@ def _first_commit_ref(adv: dict) -> Optional[Tuple[str, str, str]]:
     return None
 
 
-def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
+def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> tuple[str, str]:
     """Pick ONE (CWE, ecosystem) tuple from the advisory's intersection
     with our filter — sorted for determinism so the same advisory always
     gets the same label across runs.  Multi-CWE advisories are
     deliberately recorded under a single CWE for the trust-witness walk;
     if the same fix is interesting under multiple CWEs, a future
     extension can iterate ``cwes & adv_cwes``."""
-    adv_cwes = sorted(set(adv.get("database_specific", {}).get("cwe_ids", [])) & cwes)
-    adv_ecos = sorted({a.get("package", {}).get("ecosystem")
-                       for a in adv.get("affected", [])} & ecosystems)
+    adv_cwes = sorted(
+        set((adv.get("database_specific") or {}).get("cwe_ids") or []) & cwes
+    )
+    adv_ecos = sorted(
+        {(a.get("package") or {}).get("ecosystem")
+         for a in adv.get("affected") or []} & ecosystems
+    )
     return adv_cwes[0], adv_ecos[0]
 
 
@@ -138,7 +159,7 @@ def _pick_cwe_eco(adv: dict, cwes: set, ecosystems: set) -> Tuple[str, str]:
 # Parent SHA resolution via shallow fetch
 # ---------------------------------------------------------------------------
 
-def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional[str]:
+def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> str | None:
     """Depth-2 shallow-fetch ``fix_hash`` and return ``fix^1``.  Returns
     None on fetch / parse failure (gone repos, missing SHAs, merges with
     multiple parents).  No GitHub API — pure git protocol, no rate
@@ -146,24 +167,48 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional
 
     Each call creates and destroys its own scratch dir so failures don't
     pollute later calls; the parent walker repeats the fetch on its own,
-    so we don't bother caching the clone."""
+    so we don't bother caching the clone.
+
+    HARDENING: the scratch repo receives internet-sourced objects, so
+    every git argv comes from ``core.git``'s shared helpers (never a
+    bare ``["git", ...]`` list): the strict read-only variant for the
+    local steps (init / remote add / rev-list — ``protocol.allow=
+    never``), the network-capable ``safe_git_command`` for the fetch
+    (it needs the https transport).  Env is the shared sanitised git
+    env; ``preserve_proxy`` because the fetch dials the REMOTE
+    repo_url — git honours proxy env, and on mandatory-egress-proxy
+    hosts there is no direct route."""
     with tempfile.TemporaryDirectory(prefix="ghsa-resolve-") as td:
         td_p = Path(td)
+        from core.git.clone import (
+            get_safe_git_env,
+            safe_git_command,
+            safe_git_readonly_command,
+        )
+        from core.sandbox.preexec import set_pdeathsig
+        _env = get_safe_git_env(preserve_proxy=True)
+        _pds = set_pdeathsig()
         try:
-            subprocess.run(["git", "init", "-q", str(td_p)],
-                           check=True, timeout=15, capture_output=True)
-            subprocess.run(["git", "-C", str(td_p), "remote", "add", "origin", repo_url],
-                           check=True, timeout=15, capture_output=True)
+            subprocess.run(safe_git_readonly_command("init", "-q", str(td_p)),
+                           check=True, timeout=15, capture_output=True,
+                           env=_env, preexec_fn=_pds)
+            subprocess.run(safe_git_readonly_command(
+                               "-C", str(td_p), "remote", "add", "origin", repo_url),
+                           check=True, timeout=15, capture_output=True,
+                           env=_env, preexec_fn=_pds)
             r = subprocess.run(
-                ["git", "-C", str(td_p), "fetch", "-q", "--depth", "2",
-                 "origin", fix_hash],
+                safe_git_command("-C", str(td_p), "fetch", "-q", "--depth", "2",
+                                 "origin", fix_hash),
                 check=False, timeout=timeout, capture_output=True,
+                env=_env, preexec_fn=_pds,
             )
             if r.returncode != 0:
                 return None
             r = subprocess.run(
-                ["git", "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash],
+                safe_git_readonly_command(
+                    "-C", str(td_p), "rev-list", "--parents", "-n", "1", fix_hash),
                 check=False, timeout=15, capture_output=True, text=True,
+                env=_env, preexec_fn=_pds,
             )
             if r.returncode != 0:
                 return None
@@ -205,8 +250,7 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
     """Write the harvested fixes into a fresh metadata DB.  Schema
     columns are exactly what :func:`cvefix_loader.load_pairs` needs;
     extras are deliberately omitted (don't fabricate data)."""
-    if db_path.exists():
-        db_path.unlink()
+    db_path.unlink(missing_ok=True)
     con = sqlite3.connect(db_path)
     try:
         con.executescript(_SCHEMA)
@@ -240,7 +284,7 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ghsa-root", required=True, type=Path,
                     help="path to the cloned github/advisory-database repo")
@@ -269,7 +313,7 @@ def main(argv: Optional[list] = None) -> int:
 
     # Pass 1: filter advisories down to ones with a commit ref.
     candidates = []
-    for jp, adv in _iter_advisories(args.ghsa_root, args.years, cwes_set, eco_set):
+    for _jp, adv in _iter_advisories(args.ghsa_root, args.years, cwes_set, eco_set):
         ref = _first_commit_ref(adv)
         if ref is None:
             continue

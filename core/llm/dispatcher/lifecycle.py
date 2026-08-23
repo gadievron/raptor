@@ -16,14 +16,31 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import os
 from pathlib import Path
-from typing import Iterator, Optional
 
-from .auth import CredentialStore
+from .auth import CredentialStore, seed_from_config
 from .server import LLMDispatcher
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 _AUDIT_FILENAME = "audit-llm-dispatcher.jsonl"
+
+# Worker-token TTL for the in-process self-serve route. The default
+# worker TTL (8 h) bounds a SPAWNED worker that could outlive its
+# intended span while the credential-holding parent keeps running.
+# On the in-process route there is no such boundary: the token store,
+# the socket, and the credentials all live in THIS process and die
+# with it, so the token cannot outlive the run by construction. An
+# 8 h TTL here only decapitates the trailing phases of a long run
+# (observed: every classification call after hour 8 of an 8.2 h
+# audit 401'd against a dead token). Size the TTL to out-last any
+# realistic single run instead; ``RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S``
+# still wins when the operator sets it.
+_INPROCESS_TOKEN_TTL_S = 7 * 24 * 60 * 60
 
 
 # Explicit pass-through signature, replacing an earlier ``**kwargs``
@@ -36,9 +53,9 @@ _AUDIT_FILENAME = "audit-llm-dispatcher.jsonl"
 def dispatcher_for_run(
     run_dir: Path,
     *,
-    token_ttl_s: Optional[int] = None,
-    token_budget: Optional[int] = None,
-    creds: Optional[CredentialStore] = None,
+    token_ttl_s: int | None = None,
+    token_budget: int | None = None,
+    creds: CredentialStore | None = None,
 ) -> LLMDispatcher:
     """Return a fresh ``LLMDispatcher`` whose audit log lives inside
     ``run_dir`` and whose ``run_id`` matches the run dir name.
@@ -53,7 +70,8 @@ def dispatcher_for_run(
     """
     run_dir = Path(run_dir)
     if not run_dir.exists():
-        raise FileNotFoundError(f"run_dir does not exist: {run_dir}")
+        msg = f"run_dir does not exist: {run_dir}"
+        raise FileNotFoundError(msg)
     audit_path = run_dir / _AUDIT_FILENAME
     run_id = run_dir.name
     # Use only the kwargs the caller actually set, so the dispatcher
@@ -76,9 +94,9 @@ def dispatcher_for_run(
 def llm_dispatcher_in_run(
     run_dir: Path,
     *,
-    token_ttl_s: Optional[int] = None,
-    token_budget: Optional[int] = None,
-    creds: Optional[CredentialStore] = None,
+    token_ttl_s: int | None = None,
+    token_budget: int | None = None,
+    creds: CredentialStore | None = None,
 ) -> Iterator[LLMDispatcher]:
     """Context-manager flavour: dispatcher lives only inside the
     ``with`` block. Preferred when the dispatching scope is bounded
@@ -95,3 +113,79 @@ def llm_dispatcher_in_run(
         yield d
     finally:
         d.shutdown()
+
+
+def ensure_inprocess_dispatcher_env(
+    label: str = "inprocess",
+) -> LLMDispatcher | None:
+    """Start a dispatcher and export its route into THIS process's env
+    (``RAPTOR_LLM_SOCKET`` + ``RAPTOR_LLM_TOKEN_FD``) so same-process
+    SDK clients (``make_*_client`` with no explicit socket/token) can
+    dispatch.
+
+    For standalone CLIs (``raptor-llm-ask``) whose LLM call happens in
+    the invoking process itself — there is no ``spawn_worker`` hop to
+    inject the route, yet dispatcher-only providers (Bedrock: workers
+    never hold AWS credentials) still need one.  No-op returning
+    ``None`` when a route already exists.
+
+    The returned dispatcher is the caller's to ``shutdown()``; an
+    ``atexit`` hook is registered as defence-in-depth, same contract
+    as :func:`dispatcher_for_run`.
+    """
+    if os.environ.get("RAPTOR_LLM_SOCKET"):
+        return None
+    import uuid
+
+    creds = CredentialStore()
+    seed_from_config(creds)
+    kwargs: dict = {}
+    if not os.environ.get("RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S"):
+        # Only when the operator hasn't pinned a TTL — an explicit
+        # constructor arg would otherwise shadow the env override.
+        kwargs["token_ttl_s"] = _INPROCESS_TOKEN_TTL_S
+    d = LLMDispatcher(
+        run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds, **kwargs,
+    )
+    try:
+        socket_path, token_fd = d.allocate_worker(label)
+    except Exception:
+        d.shutdown()
+        raise
+    os.environ["RAPTOR_LLM_SOCKET"] = socket_path
+    os.environ["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
+    atexit.register(d.shutdown)
+    return d
+
+
+def ensure_route_for_model_configs(
+    model_configs,
+    *,
+    label: str = "inprocess",
+) -> LLMDispatcher | None:
+    """Self-serve an in-process dispatcher when any resolved model is
+    dispatcher-only (Bedrock) and no route exists yet.
+
+    The shared gate for standalone entry points whose LLM calls happen
+    in the invoking process (``raptor-llm-ask``, the audit pipeline):
+    pipeline runs get their dispatcher from ``raptor.py``'s launcher,
+    but a standalone CLI is its own parent, so without this a
+    Bedrock-routed model dies with 'requires the RAPTOR LLM
+    dispatcher' and the client silently falls back to another
+    transport.  Same config gates and lifecycle as the
+    ``raptor-llm-ask`` self-serve: provider ``bedrock`` on any
+    resolved config + no ``RAPTOR_LLM_SOCKET`` → start one; no-op
+    (``None``) otherwise.
+
+    ``model_configs`` is any iterable of :class:`ModelConfig`-shaped
+    objects (``None`` entries tolerated).  Ownership contract matches
+    :func:`ensure_inprocess_dispatcher_env`.
+    """
+    if os.environ.get("RAPTOR_LLM_SOCKET"):
+        return None
+    if not any(
+        mc is not None and getattr(mc, "provider", "") == "bedrock"
+        for mc in model_configs
+    ):
+        return None
+    return ensure_inprocess_dispatcher_env(label=label)

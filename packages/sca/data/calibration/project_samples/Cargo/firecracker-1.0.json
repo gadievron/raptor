@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:44:13Z",
+    "fetched_at": "2026-08-01T08:26:55Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of firecracker-1.0",
@@ -235,10 +235,10 @@
         },
         "evidence": [
           "src/mmds/src/token.rs:6",
-          "src/seccompiler/src/lib.rs:9",
-          "src/seccompiler/src/lib.rs:11",
           "src/seccompiler/src/seccompiler_bin.rs:48",
-          "src/seccompiler/src/seccompiler_bin.rs:236"
+          "src/seccompiler/src/seccompiler_bin.rs:236",
+          "src/seccompiler/src/lib.rs:10",
+          "src/seccompiler/src/lib.rs:11"
         ],
         "verdict": "imported"
       },
@@ -390,6 +390,67 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.9.20"
+        ],
+        "id": "RUSTSEC-2026-0204",
+        "modified": "2026-07-06T22:30:04.159269+00:00",
+        "published": "2026-07-06T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/crossbeam-epoch",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0204.html",
+          "https://github.com/crossbeam-rs/crossbeam/pull/1276"
+        ],
+        "severity": null,
+        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid"
+      },
+      "cvss_score": null,
+      "dep_name": "crossbeam-epoch",
+      "dep_version": "0.9.5",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:crossbeam-epoch:0.9.5:RUSTSEC-2026-0204",
+      "in_kev": false,
+      "purl": "pkg:cargo/crossbeam-epoch@0.9.5",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use crossbeam-epoch` / `extern crate crossbeam-epoch` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2022-23639",
           "RUSTSEC-2022-0041"
@@ -418,7 +479,7 @@
       "dep_name": "crossbeam-utils",
       "dep_version": "0.8.5",
       "ecosystem": "Cargo",
-      "epss": 0.00361,
+      "epss": 0.01239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -429,7 +490,7 @@
       "finding_id": "sca:vuln:Cargo:crossbeam-utils:0.8.5:GHSA-qc84-gqf4-9926",
       "in_kev": false,
       "purl": "pkg:cargo/crossbeam-utils@0.8.5",
-      "raptor_risk_estimate": 10.027077929454,
+      "raptor_risk_estimate": 10.139072286516607,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -444,10 +505,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401142183,
+        "epss_multiplier": 0.40562261699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.027077929454,
+        "final": 10.139072286516607,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -501,11 +562,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/device_manager/mmio.rs:28",
           "src/vmm/src/device_manager/legacy.rs:17",
+          "src/vmm/src/device_manager/mmio.rs:28",
           "src/vmm/src/device_manager/persist.rs:28",
-          "src/vmm/src/vstate/vm.rs:24",
           "src/vmm/src/vstate/system.rs:14",
+          "src/vmm/src/vstate/system.rs:52",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -572,11 +633,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/device_manager/mmio.rs:28",
           "src/vmm/src/device_manager/legacy.rs:17",
+          "src/vmm/src/device_manager/mmio.rs:28",
           "src/vmm/src/device_manager/persist.rs:28",
-          "src/vmm/src/vstate/vm.rs:24",
           "src/vmm/src/vstate/system.rs:14",
+          "src/vmm/src/vstate/system.rs:52",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -629,7 +690,7 @@
       "dep_name": "linux-loader",
       "dep_version": "0.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00122,
+      "epss": 0.00207,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -640,7 +701,7 @@
       "finding_id": "sca:vuln:Cargo:linux-loader:0.4.0:GHSA-52h2-m2cf-9jh6",
       "in_kev": false,
       "purl": "pkg:cargo/linux-loader@0.4.0",
-      "raptor_risk_estimate": 2.4001852701697497,
+      "raptor_risk_estimate": 2.4027885050216247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -662,10 +723,10 @@
         "cvss_base": 19.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399922566,
+        "epss_multiplier": 0.400356321,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.4001852701697497,
+        "final": 2.4027885050216247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -753,7 +814,7 @@
         ],
         "id": "RUSTSEC-2026-0097",
         "informational": "unsound",
-        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "modified": "2026-07-17T16:00:04.554426+00:00",
         "published": "2026-04-09T12:00:00+00:00",
         "references": [
           "https://crates.io/crates/rand",
@@ -837,7 +898,7 @@
       "dep_name": "regex",
       "dep_version": "1.5.4",
       "ecosystem": "Cargo",
-      "epss": 0.10404,
+      "epss": 0.1446,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -848,7 +909,7 @@
       "finding_id": "sca:vuln:Cargo:regex:1.5.4:GHSA-m5pq-gvj9-9vr8",
       "in_kev": false,
       "purl": "pkg:cargo/regex@1.5.4",
-      "raptor_risk_estimate": 10.7174400330375,
+      "raptor_risk_estimate": 11.207783093062499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -856,7 +917,7 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/jailer/src/cgroup.rs:10"
+          "src/jailer/src/cgroup.rs:11"
         ],
         "verdict": "imported"
       },
@@ -865,10 +926,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.452391612,
+        "epss_multiplier": 0.47308938,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.7174400330375,
+        "final": 11.207783093062499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -915,7 +976,7 @@
         "confidence": {
           "level": "medium",
           "numeric": 0.7,
-          "reason": "no `use serde-cbor` / `extern crate serde-cbor` found"
+          "reason": "no `use serde_cbor` / `extern crate serde_cbor` found"
         },
         "evidence": [],
         "verdict": "not_reachable"
@@ -969,7 +1030,7 @@
       "dep_name": "versionize",
       "dep_version": "0.1.6",
       "ecosystem": "Cargo",
-      "epss": 0.00284,
+      "epss": 0.00556,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -980,7 +1041,7 @@
       "finding_id": "sca:vuln:Cargo:versionize:0.1.6:GHSA-8vxc-r5wp-vgvc",
       "in_kev": false,
       "purl": "pkg:cargo/versionize@0.1.6",
-      "raptor_risk_estimate": 7.215440188603499,
+      "raptor_risk_estimate": 7.2404312431815,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -988,11 +1049,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/snapshot/benches/version_map.rs:5",
-          "src/snapshot/src/lib.rs:31",
-          "src/snapshot/src/lib.rs:32",
-          "src/snapshot/tests/test.rs:4",
-          "src/rate_limiter/src/persist.rs:8",
+          "src/mmds/src/persist.rs:10",
+          "src/vmm/src/memory_snapshot.rs:10",
+          "src/vmm/src/persist.rs:35",
+          "src/vmm/src/version_map.rs:15",
+          "src/vmm/src/version_map.rs:16",
           "... (+18 more)"
         ],
         "verdict": "imported"
@@ -1002,10 +1063,10 @@
         "cvss_base": 57.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400749252,
+        "epss_multiplier": 0.402137268,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.215440188603499,
+        "final": 7.2404312431815,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1046,7 +1107,7 @@
       "dep_name": "vm-memory",
       "dep_version": "0.1.0",
       "ecosystem": "Cargo",
-      "epss": 0.00021,
+      "epss": 0.00237,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1057,7 +1118,7 @@
       "finding_id": "sca:vuln:Cargo:vm-memory:0.1.0:GHSA-49hh-fprx-m68g",
       "in_kev": false,
       "purl": "pkg:cargo/vm-memory@0.1.0",
-      "raptor_risk_estimate": 3.1540684403156245,
+      "raptor_risk_estimate": 3.1627727549906237,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1065,11 +1126,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/vmm/tests/integration_tests.rs:204",
+          "src/vmm/src/lib.rs:69",
           "src/vmm/src/memory_snapshot.rs:12",
           "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/vmm/src/persist.rs:38",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1079,10 +1140,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399407163,
+        "epss_multiplier": 0.400509411,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1540684403156245,
+        "final": 3.1627727549906237,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1124,7 +1185,7 @@
       "dep_name": "vm-memory",
       "dep_version": "0.1.0",
       "ecosystem": "Cargo",
-      "epss": 0.00385,
+      "epss": 0.01599,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1135,7 +1196,7 @@
       "finding_id": "sca:vuln:Cargo:vm-memory:0.1.0:GHSA-mm4m-qg48-f7wc",
       "in_kev": false,
       "purl": "pkg:cargo/vm-memory@0.1.0",
-      "raptor_risk_estimate": 9.506210467359374,
+      "raptor_risk_estimate": 9.652974884240622,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1143,11 +1204,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/vmm/tests/integration_tests.rs:204",
+          "src/vmm/src/lib.rs:69",
           "src/vmm/src/memory_snapshot.rs:12",
           "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/vmm/src/persist.rs:38",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1157,10 +1218,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40126465499999997,
+        "epss_multiplier": 0.407459697,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.506210467359374,
+        "final": 9.652974884240622,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1201,7 +1262,7 @@
       "dep_name": "vm-memory",
       "dep_version": "0.7.0",
       "ecosystem": "Cargo",
-      "epss": 0.00021,
+      "epss": 0.00237,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1212,7 +1273,7 @@
       "finding_id": "sca:vuln:Cargo:vm-memory:0.7.0:GHSA-49hh-fprx-m68g",
       "in_kev": false,
       "purl": "pkg:cargo/vm-memory@0.7.0",
-      "raptor_risk_estimate": 3.1540684403156245,
+      "raptor_risk_estimate": 3.1627727549906237,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1220,11 +1281,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/vmm/tests/integration_tests.rs:204",
+          "src/vmm/src/lib.rs:69",
           "src/vmm/src/memory_snapshot.rs:12",
           "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/vmm/src/persist.rs:38",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1234,10 +1295,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399407163,
+        "epss_multiplier": 0.400509411,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1540684403156245,
+        "final": 3.1627727549906237,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1278,7 +1339,7 @@
       "dep_name": "vmm-sys-util",
       "dep_version": "0.8.0",
       "ecosystem": "Cargo",
-      "epss": 0.001,
+      "epss": 0.00652,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1289,7 +1350,7 @@
       "finding_id": "sca:vuln:Cargo:vmm-sys-util:0.8.0:GHSA-875g-mfp6-g7f9",
       "in_kev": false,
       "purl": "pkg:cargo/vmm-sys-util@0.8.0",
-      "raptor_risk_estimate": 7.1985344752125,
+      "raptor_risk_estimate": 7.2492516153855,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1297,9 +1358,9 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/utils/src/signal.rs:5",
           "src/utils/src/lib.rs:8",
-          "src/utils/src/lib.rs:12",
-          "src/utils/src/signal.rs:5"
+          "src/utils/src/lib.rs:12"
         ],
         "verdict": "imported"
       },
@@ -1308,10 +1369,10 @@
         "cvss_base": 57.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.3998103,
+        "epss_multiplier": 0.402627156,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.1985344752125,
+        "final": 7.2492516153855,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1332,7 +1393,7 @@
           "2024.7.4"
         ],
         "id": "GHSA-248v-346w-9cwc",
-        "modified": "2026-02-04T02:57:32.108133+00:00",
+        "modified": "2026-06-10T17:14:15.601729+00:00",
         "published": "2024-07-05T20:06:40+00:00",
         "references": [
           "https://github.com/certifi/python-certifi/security/advisories/GHSA-248v-346w-9cwc",
@@ -1348,7 +1409,7 @@
       "dep_name": "certifi",
       "dep_version": "2021.10.8",
       "ecosystem": "PyPI",
-      "epss": 0.26297,
+      "epss": 0.01049,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1359,7 +1420,7 @@
       "finding_id": "sca:vuln:PyPI:certifi:2021.10.8:GHSA-248v-346w-9cwc",
       "in_kev": false,
       "purl": "pkg:pypi/certifi@2021.10.8",
-      "raptor_risk_estimate": 4.595129410741683,
+      "raptor_risk_estimate": 3.4853897943376353,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1374,10 +1435,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.5334935909999999,
+        "epss_multiplier": 0.404653047,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.595129410741683,
+        "final": 3.4853897943376353,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1418,7 +1479,7 @@
       "dep_name": "certifi",
       "dep_version": "2021.10.8",
       "ecosystem": "PyPI",
-      "epss": 0.00063,
+      "epss": 0.00535,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1429,7 +1490,7 @@
       "finding_id": "sca:vuln:PyPI:certifi:2021.10.8:GHSA-43fp-rhv2-5gv8",
       "in_kev": false,
       "purl": "pkg:pypi/certifi@2021.10.8",
-      "raptor_risk_estimate": 5.851487684237398,
+      "raptor_risk_estimate": 5.88675602502489,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1444,10 +1505,10 @@
         "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399621489,
+        "epss_multiplier": 0.40203010499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.851487684237398,
+        "final": 5.88675602502489,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1488,7 +1549,7 @@
       "dep_name": "certifi",
       "dep_version": "2021.10.8",
       "ecosystem": "PyPI",
-      "epss": 0.00119,
+      "epss": 0.00563,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1499,7 +1560,7 @@
       "finding_id": "sca:vuln:PyPI:certifi:2021.10.8:GHSA-xqr8-7jwr-rhp7",
       "in_kev": false,
       "purl": "pkg:pypi/certifi@2021.10.8",
-      "raptor_risk_estimate": 6.458461834911246,
+      "raptor_risk_estimate": 6.4950531780139205,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1514,10 +1575,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399907257,
+        "epss_multiplier": 0.402172989,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.458461834911246,
+        "final": 6.4950531780139205,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1531,26 +1592,104 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-45409"
+          "CVE-2026-7246",
+          "GHSA-47fr-3ffg-hgmw"
+        ],
+        "fixed_versions": [
+          "8.3.3"
+        ],
+        "id": "PYSEC-2026-2132",
+        "modified": "2026-07-13T07:15:21.899333+00:00",
+        "published": "2026-04-30T14:16:36.433000+00:00",
+        "references": [
+          "https://access.redhat.com/security/cve/CVE-2026-7246",
+          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-7246.json",
+          "https://access.redhat.com/errata/RHSA-2026:24761",
+          "https://access.redhat.com/errata/RHSA-2026:24762",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2464121"
+        ],
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:C/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 7.2,
+      "dep_name": "click",
+      "dep_version": "8.0.1",
+      "ecosystem": "PyPI",
+      "epss": 0.009,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:click:8.0.1:PYSEC-2026-2132",
+      "in_kev": false,
+      "purl": "pkg:pypi/click@8.0.1",
+      "raptor_risk_estimate": 10.000833346013344,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for click==8.0.1 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.4038927,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.000833346013344,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45409",
+          "PYSEC-2026-215"
         ],
         "fixed_versions": [
           "3.15"
         ],
         "id": "GHSA-65pc-fj4g-8rjx",
-        "modified": "2026-05-21T01:29:26.777151+00:00",
+        "modified": "2026-07-08T17:45:15.021597+00:00",
         "published": "2026-05-19T14:34:32+00:00",
         "references": [
           "https://github.com/kjd/idna/security/advisories/GHSA-65pc-fj4g-8rjx",
-          "https://github.com/kjd/idna"
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-45409",
+          "https://github.com/kjd/idna",
+          "https://github.com/pypa/advisory-database/tree/main/vulns/idna/PYSEC-2026-215.yaml"
         ],
-        "severity": null,
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
         "summary": "Internationalized Domain Names in Applications (IDNA): Specially crafted inputs to idna.encode() can bypass CVE-2024-3651 fix"
       },
-      "cvss_score": null,
+      "cvss_score": 5.3,
       "dep_name": "idna",
       "dep_version": "3.3",
       "ecosystem": "PyPI",
-      "epss": null,
+      "epss": 0.00408,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1561,7 +1700,7 @@
       "finding_id": "sca:vuln:PyPI:idna:3.3:GHSA-65pc-fj4g-8rjx",
       "in_kev": false,
       "purl": "pkg:pypi/idna@3.3",
-      "raptor_risk_estimate": 5.6369607687749985,
+      "raptor_risk_estimate": 4.580810615658711,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1573,13 +1712,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.401382024,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.6369607687749985,
+        "final": 4.580810615658711,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1620,7 +1759,7 @@
       "dep_name": "idna",
       "dep_version": "3.3",
       "ecosystem": "PyPI",
-      "epss": 0.00689,
+      "epss": 0.01386,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1631,7 +1770,7 @@
       "finding_id": "sca:vuln:PyPI:idna:3.3:GHSA-jjg7-2v4v-x38h",
       "in_kev": false,
       "purl": "pkg:pypi/idna@3.3",
-      "raptor_risk_estimate": 5.377828091792352,
+      "raptor_risk_estimate": 5.425313326051784,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1646,10 +1785,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402815967,
+        "epss_multiplier": 0.406372758,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.377828091792352,
+        "final": 5.425313326051784,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1663,79 +1802,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2022-42969",
-          "GHSA-w596-4wvx-j9j6",
-          "PYSEC-2022-43183"
-        ],
-        "fixed_versions": [],
-        "id": "PYSEC-2022-42969",
-        "modified": "2026-05-19T05:26:04.235599+00:00",
-        "published": "2022-11-04T11:00:00+00:00",
-        "references": [
-          "https://github.com/advisories/GHSA-w596-4wvx-j9j6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-42969",
-          "https://github.com/pytest-dev/py/issues/287",
-          "https://github.com/pytest-dev/py/issues/288",
-          "https://github.com/pytest-dev/pytest/issues/10392"
-        ],
-        "severity": null,
-        "summary": ""
-      },
-      "cvss_score": null,
-      "dep_name": "py",
-      "dep_version": "1.11.0",
-      "ecosystem": "PyPI",
-      "epss": 0.00131,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:PyPI:py:1.11.0:PYSEC-2022-42969",
-      "in_kev": false,
-      "purl": "pkg:pypi/py@1.11.0",
-      "raptor_risk_estimate": 9.90366560759604,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for py==1.11.0 but no module mapping resolved against project scan"
-        },
-        "evidence": [],
-        "verdict": "not_evaluated"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399968493,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.90366560759604,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6817,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-71176"
+          "CVE-2025-71176",
+          "PYSEC-2026-1845"
         ],
         "fixed_versions": [
           "9.0.3"
         ],
         "id": "GHSA-6w46-j5rx-g56g",
-        "modified": "2026-04-17T18:29:20.118520+00:00",
+        "modified": "2026-07-07T17:56:26.471696+00:00",
         "published": "2026-01-22T06:30:29+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-71176",
@@ -1755,7 +1829,7 @@
       "dep_name": "pytest",
       "dep_version": "6.2.5",
       "ecosystem": "PyPI",
-      "epss": 9e-05,
+      "epss": 0.0014,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1766,7 +1840,7 @@
       "finding_id": "sca:vuln:PyPI:pytest:6.2.5:GHSA-6w46-j5rx-g56g",
       "in_kev": false,
       "purl": "pkg:pypi/pytest@6.2.5",
-      "raptor_risk_estimate": 4.535420413142092,
+      "raptor_risk_estimate": 4.543012569699239,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1781,10 +1855,10 @@
         "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399345927,
+        "epss_multiplier": 0.40001442,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.535420413142092,
+        "final": 4.543012569699239,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -1798,13 +1872,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-47081"
+          "CVE-2024-47081",
+          "PYSEC-2026-1872"
         ],
         "fixed_versions": [
           "2.32.4"
         ],
         "id": "GHSA-9hjg-9r4m-mvj7",
-        "modified": "2026-02-04T03:44:00.676479+00:00",
+        "modified": "2026-07-07T17:56:56.234172+00:00",
         "published": "2025-06-09T19:06:08+00:00",
         "references": [
           "https://github.com/psf/requests/security/advisories/GHSA-9hjg-9r4m-mvj7",
@@ -1824,7 +1899,7 @@
       "dep_name": "requests",
       "dep_version": "2.27.1",
       "ecosystem": "PyPI",
-      "epss": 0.00208,
+      "epss": 0.00845,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1835,7 +1910,7 @@
       "finding_id": "sca:vuln:PyPI:requests:2.27.1:GHSA-9hjg-9r4m-mvj7",
       "in_kev": false,
       "purl": "pkg:pypi/requests@2.27.1",
-      "raptor_risk_estimate": 3.543949079889287,
+      "raptor_risk_estimate": 3.572723080509607,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1850,10 +1925,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40036142399999997,
+        "epss_multiplier": 0.403612035,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.543949079889287,
+        "final": 3.572723080509607,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -1867,13 +1942,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-35195"
+          "CVE-2024-35195",
+          "PYSEC-2026-1873"
         ],
         "fixed_versions": [
           "2.32.0"
         ],
         "id": "GHSA-9wx4-h78v-vm56",
-        "modified": "2026-02-04T02:43:42.271895+00:00",
+        "modified": "2026-07-07T17:57:17.012984+00:00",
         "published": "2024-05-20T20:15:00+00:00",
         "references": [
           "https://github.com/psf/requests/security/advisories/GHSA-9wx4-h78v-vm56",
@@ -1893,7 +1969,7 @@
       "dep_name": "requests",
       "dep_version": "2.27.1",
       "ecosystem": "PyPI",
-      "epss": 0.00046,
+      "epss": 0.0034,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1904,7 +1980,7 @@
       "finding_id": "sca:vuln:PyPI:requests:2.27.1:GHSA-9wx4-h78v-vm56",
       "in_kev": false,
       "purl": "pkg:pypi/requests@2.27.1",
-      "raptor_risk_estimate": 3.7368180398739113,
+      "raptor_risk_estimate": 3.750850063398479,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1919,10 +1995,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399534738,
+        "epss_multiplier": 0.40103501999999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.7368180398739113,
+        "final": 3.750850063398479,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -1936,13 +2012,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-25645"
+          "CVE-2026-25645",
+          "PYSEC-2026-2275"
         ],
         "fixed_versions": [
           "2.33.0"
         ],
         "id": "GHSA-gc5v-m9x4-r6x2",
-        "modified": "2026-03-27T22:17:33.595885+00:00",
+        "modified": "2026-07-13T07:26:34.091663+00:00",
         "published": "2026-03-25T16:56:28+00:00",
         "references": [
           "https://github.com/psf/requests/security/advisories/GHSA-gc5v-m9x4-r6x2",
@@ -1962,7 +2039,7 @@
       "dep_name": "requests",
       "dep_version": "2.27.1",
       "ecosystem": "PyPI",
-      "epss": 4e-05,
+      "epss": 0.00182,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1973,7 +2050,7 @@
       "finding_id": "sca:vuln:PyPI:requests:2.27.1:GHSA-gc5v-m9x4-r6x2",
       "in_kev": false,
       "purl": "pkg:pypi/requests@2.27.1",
-      "raptor_risk_estimate": 2.9344962939951125,
+      "raptor_risk_estimate": 2.941171391677596,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1988,10 +2065,10 @@
         "cvss_base": 44.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399320412,
+        "epss_multiplier": 0.40022874599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9344962939951125,
+        "final": 2.941171391677596,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -2032,7 +2109,7 @@
       "dep_name": "requests",
       "dep_version": "2.27.1",
       "ecosystem": "PyPI",
-      "epss": 0.06086,
+      "epss": 0.02974,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2043,7 +2120,7 @@
       "finding_id": "sca:vuln:PyPI:requests:2.27.1:GHSA-j8r2-6x86-q33q",
       "in_kev": false,
       "purl": "pkg:pypi/requests@2.27.1",
-      "raptor_risk_estimate": 4.384478466623577,
+      "raptor_risk_estimate": 4.222687462632092,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2058,10 +2135,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.430356858,
+        "epss_multiplier": 0.414476322,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.384478466623577,
+        "final": 4.222687462632092,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -2075,13 +2152,82 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-66471"
+          "CVE-2026-54552",
+          "PYSEC-2026-3540"
+        ],
+        "fixed_versions": [
+          "2.2.4"
+        ],
+        "id": "GHSA-q38v-wp89-2w55",
+        "modified": "2026-07-23T15:11:41.199641+00:00",
+        "published": "2026-07-17T18:41:38+00:00",
+        "references": [
+          "https://github.com/amoffat/sh/security/advisories/GHSA-q38v-wp89-2w55",
+          "https://github.com/amoffat/sh",
+          "https://github.com/amoffat/sh/releases/tag/2.2.4"
+        ],
+        "severity": {
+          "score": 7.9,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:C/C:H/I:H/A:N"
+        },
+        "summary": "sh _uid does not drop supplementary groups (incomplete privilege drop)"
+      },
+      "cvss_score": 7.9,
+      "dep_name": "sh",
+      "dep_version": "1.14.2",
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:sh:1.14.2:GHSA-q38v-wp89-2w55",
+      "in_kev": false,
+      "purl": "pkg:pypi/sh@1.14.2",
+      "raptor_risk_estimate": 11.132997518330622,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for sh==1.14.2 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 79.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.132997518330622,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-66471",
+          "PYSEC-2026-1994"
         ],
         "fixed_versions": [
           "2.6.0"
         ],
         "id": "GHSA-2xpw-w6gg-jr37",
-        "modified": "2026-02-04T02:36:12.983430+00:00",
+        "modified": "2026-07-07T17:56:33.872074+00:00",
         "published": "2025-12-05T18:15:54+00:00",
         "references": [
           "https://github.com/urllib3/urllib3/security/advisories/GHSA-2xpw-w6gg-jr37",
@@ -2096,7 +2242,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00017,
+      "epss": 0.00647,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2107,7 +2253,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-2xpw-w6gg-jr37",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 3.4400297149599037,
+      "raptor_risk_estimate": 3.467720461091659,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2122,10 +2268,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.402601641,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4400297149599037,
+        "final": 3.467720461091659,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2139,14 +2285,15 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-37891"
+          "CVE-2024-37891",
+          "PYSEC-2026-1995"
         ],
         "fixed_versions": [
           "1.26.19",
           "2.2.2"
         ],
         "id": "GHSA-34jh-p97f-mpxf",
-        "modified": "2026-02-04T03:37:44.850742+00:00",
+        "modified": "2026-07-07T17:56:53.715123+00:00",
         "published": "2024-06-17T21:37:20+00:00",
         "references": [
           "https://github.com/urllib3/urllib3/security/advisories/GHSA-34jh-p97f-mpxf",
@@ -2166,7 +2313,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00222,
+      "epss": 0.01141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2177,7 +2324,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-34jh-p97f-mpxf",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 3.7939442154284517,
+      "raptor_risk_estimate": 3.8383768745785964,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2192,10 +2339,10 @@
         "cvss_base": 44.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400432866,
+        "epss_multiplier": 0.405122523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.7939442154284517,
+        "final": 3.8383768745785964,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2209,13 +2356,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-21441"
+          "CVE-2026-21441",
+          "PYSEC-2026-1996"
         ],
         "fixed_versions": [
           "2.6.3"
         ],
         "id": "GHSA-38jv-5279-wg99",
-        "modified": "2026-02-04T03:51:36.162029+00:00",
+        "modified": "2026-07-07T17:56:31.346111+00:00",
         "published": "2026-01-07T19:18:14+00:00",
         "references": [
           "https://github.com/urllib3/urllib3/security/advisories/GHSA-38jv-5279-wg99",
@@ -2235,7 +2383,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00032,
+      "epss": 0.02667,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2246,7 +2394,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-38jv-5279-wg99",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 6.451291909573559,
+      "raptor_risk_estimate": 6.668449993077052,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2261,10 +2409,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39946329599999997,
+        "epss_multiplier": 0.41290970099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.451291909573559,
+        "final": 6.668449993077052,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2306,7 +2454,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00056,
+      "epss": 0.00539,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2317,7 +2465,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-g4mx-q9vg-27p4",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 3.6138310992064637,
+      "raptor_risk_estimate": 3.6361221498425262,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2332,10 +2480,10 @@
         "cvss_base": 42.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399585768,
+        "epss_multiplier": 0.402050517,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.6138310992064637,
+        "final": 3.6361221498425262,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2349,13 +2497,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-66418"
+          "CVE-2025-66418",
+          "PYSEC-2026-1998"
         ],
         "fixed_versions": [
           "2.6.0"
         ],
         "id": "GHSA-gm62-xv2j-4w53",
-        "modified": "2026-02-04T03:37:15.919661+00:00",
+        "modified": "2026-07-07T17:57:28.931610+00:00",
         "published": "2025-12-05T18:15:19+00:00",
         "references": [
           "https://github.com/urllib3/urllib3/security/advisories/GHSA-gm62-xv2j-4w53",
@@ -2370,7 +2519,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00019,
+      "epss": 0.00647,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2381,7 +2530,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-gm62-xv2j-4w53",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 3.440117622090481,
+      "raptor_risk_estimate": 3.467720461091659,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2396,10 +2545,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399396957,
+        "epss_multiplier": 0.402601641,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.440117622090481,
+        "final": 3.467720461091659,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2413,13 +2562,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2025-50181"
+          "CVE-2025-50181",
+          "PYSEC-2026-1999"
         ],
         "fixed_versions": [
           "2.5.0"
         ],
         "id": "GHSA-pq67-6m6q-mj2v",
-        "modified": "2026-02-04T04:38:01.163387+00:00",
+        "modified": "2026-07-07T17:56:41.872294+00:00",
         "published": "2025-06-18T17:50:00+00:00",
         "references": [
           "https://github.com/urllib3/urllib3/security/advisories/GHSA-pq67-6m6q-mj2v",
@@ -2439,7 +2589,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00079,
+      "epss": 0.00394,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2450,7 +2600,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-pq67-6m6q-mj2v",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 4.561650157710322,
+      "raptor_risk_estimate": 4.57999527702261,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2465,10 +2615,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399703137,
+        "epss_multiplier": 0.40131058199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.561650157710322,
+        "final": 4.57999527702261,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2507,7 +2657,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00013,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2518,7 +2668,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-qccp-gfcp-xxvc",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 4.5578064184258436,
+      "raptor_risk_estimate": 4.576326253160152,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2533,10 +2683,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399366339,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.5578064184258436,
+        "final": 4.576326253160152,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2578,7 +2728,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.0095,
+      "epss": 0.01207,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2589,7 +2739,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-v845-jxx5-vc9f",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 5.134531627276759,
+      "raptor_risk_estimate": 5.151193325038498,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2604,10 +2754,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40414785,
+        "epss_multiplier": 0.405459321,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.134531627276759,
+        "final": 5.151193325038498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2621,13 +2771,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2024-5569"
+          "CVE-2024-5569",
+          "PYSEC-2026-2074"
         ],
         "fixed_versions": [
           "3.19.1"
         ],
         "id": "GHSA-jfmj-5v4g-7637",
-        "modified": "2026-02-04T04:34:17.926366+00:00",
+        "modified": "2026-07-07T17:56:56.866290+00:00",
         "published": "2024-07-09T00:31:40+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2024-5569",
@@ -2646,7 +2797,7 @@
       "dep_name": "zipp",
       "dep_version": "3.6.0",
       "ecosystem": "PyPI",
-      "epss": 0.00016,
+      "epss": 0.00236,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2657,7 +2808,7 @@
       "finding_id": "sca:vuln:PyPI:zipp:3.6.0:GHSA-jfmj-5v4g-7637",
       "in_kev": false,
       "purl": "pkg:pypi/zipp@3.6.0",
-      "raptor_risk_estimate": 5.331977930161654,
+      "raptor_risk_estimate": 5.346966095925032,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2672,10 +2823,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399381648,
+        "epss_multiplier": 0.400504308,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.331977930161654,
+        "final": 5.346966095925032,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,

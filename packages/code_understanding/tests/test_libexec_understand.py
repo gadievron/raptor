@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +63,7 @@ class TestArgparse:
     def test_help_runs(self, env):
         proc = _run(["--help"], env, expect_returncode=0)
         assert "raptor-understand" in proc.stdout
+        assert "--map" in proc.stdout
         assert "--hunt" in proc.stdout
         assert "--trace" in proc.stdout
         assert "--model" in proc.stdout
@@ -95,6 +97,46 @@ class TestArgparse:
         )
         assert "not allowed" in proc.stderr.lower() or \
                "argument" in proc.stderr.lower()
+
+    def test_map_does_not_require_model_for_binary_target(self, env, tmp_path):
+        binary = tmp_path / "sample"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 128)
+        binary.chmod(0o755)
+        out = tmp_path / "out"
+        proc = _run(
+            ["--map", "--target", str(binary), "--out", str(out), "--quick"],
+            env, expect_returncode=0,
+        )
+        assert "mechanical binary substrate" in proc.stdout
+        assert (out / "map-result.json").exists()
+        assert (out / "context-map.json").exists()
+        assert (out / "binary-manifest.json").exists()
+
+    def test_map_binary_detection_accepts_all_fat_macho_variants_and_java(self, env, tmp_path, monkeypatch):
+        monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+        module = runpy.run_path(str(LIBEXEC), run_name="raptor_understand_test")
+        is_binary_file = module["_is_binary_file"]
+        fixtures = {
+            "fat32-be": b"\xca\xfe\xba\xbe\x00\x00\x00\x01\x01\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x20" + b"\x00" * 288,
+            "fat32-le": b"\xbe\xba\xfe\xca\x01\x00\x00\x00\x0c\x00\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x20\x00\x00\x00" + b"\x00" * 288,
+            "fat64-be": b"\xca\xfe\xba\xbf\x00\x00\x00\x01\x01\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x00" * 280,
+            "fat64-le": b"\xbf\xba\xfe\xca\x01\x00\x00\x00\x0c\x00\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x00" * 280,
+            "java": b"\xca\xfe\xba\xbe\x00\x00\x00\x34" + b"\x00" * 64,
+        }
+        for name, data in fixtures.items():
+            path = tmp_path / name
+            path.write_bytes(data)
+            assert is_binary_file(path), name
+
+    def test_map_rejects_model_flag(self, env, tmp_path):
+        binary = tmp_path / "sample"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 128)
+        binary.chmod(0o755)
+        proc = _run(
+            ["--map", "--target", str(binary), "--out", str(tmp_path / "out"), "--model", "x"],
+            env, expect_returncode=2,
+        )
+        assert "not used" in proc.stderr.lower()
 
     def test_max_parallel_zero_rejected(self, env, tmp_path):
         proc = _run(

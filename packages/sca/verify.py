@@ -45,15 +45,22 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, TYPE_CHECKING
 
-from core.json import JsonCache
+from core.json import JsonCache, load_json
+
+# findings.json artifacts are RAPTOR-written run output — the
+# findings-class budget.
+_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 from . import SCA_CACHE_ROOT
 from .diff import compute_delta
 from .findings import severity_rank
-from core.http import HttpClient
 from . import default_client
 from .pipeline import RunOptions, run_sca
+
+if TYPE_CHECKING:
+    from core.http import HttpClient
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +68,7 @@ logger = logging.getLogger(__name__)
 # Vendored / build-output directories we don't bother copying.
 # Mirrors discovery.EXCLUDED_DIR_NAMES and the supply-chain artefact
 # walk's skiplist.
-_SKIP_DIR_NAMES: Set[str] = {
+_SKIP_DIR_NAMES: set[str] = {
     "node_modules", "vendor", "bower_components",
     ".git", ".svn", ".hg",
     "target", "build", "dist", "out", "_build",
@@ -69,15 +76,14 @@ _SKIP_DIR_NAMES: Set[str] = {
     ".pytest_cache", ".mypy_cache", ".ruff_cache",
     ".gradle", ".idea", ".vscode",
     ".angular", ".next", ".nuxt", ".cache", ".turbo",
-    "site-packages",
 }
 
 
 def main(
     argv: Sequence[str],
     *,
-    http: Optional[HttpClient] = None,
-    cache: Optional[JsonCache] = None,
+    http: HttpClient | None = None,
+    cache: JsonCache | None = None,
 ) -> int:
     from .cli import _configure_logging
 
@@ -103,9 +109,8 @@ def main(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     overlay_dir = out_dir / "overlay"
-    if overlay_dir.exists():
-        shutil.rmtree(overlay_dir)
     try:
+        shutil.rmtree(overlay_dir, ignore_errors=True)
         _copy_target(target, overlay_dir)
         applied = _apply_overlay(proposed, overlay_dir)
     except OSError as e:
@@ -150,14 +155,32 @@ def main(
             return 3
         before_findings = before.findings_path
 
-    rows_before = json.loads(before_findings.read_text(encoding="utf-8"))
-    rows_after = json.loads(after.findings_path.read_text(encoding="utf-8"))
-    delta = compute_delta(rows_before, rows_after)
+    try:
+        rows_before = load_json(
+            before_findings, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+        )
+        rows_after = load_json(
+            after.findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+        )
+        if rows_before is None or rows_after is None:
+            # Strict load_json soft-returns None for a MISSING file —
+            # a vanished findings file must stay a hard error, not a
+            # zero-delta success.
+            raise FileNotFoundError(
+                before_findings if rows_before is None
+                else after.findings_path)
+        delta = compute_delta(rows_before, rows_after)
+    except (OSError, ValueError) as e:
+        print(f"raptor-sca verify: cannot parse findings: {e}", file=sys.stderr)
+        return 3
 
-    summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity)
+    summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity,
+                                  applied=applied)
     delta_md = _render_markdown(target, proposed, applied, delta, summary)
-    (out_dir / "delta.md").write_text(delta_md, encoding="utf-8")
-    (out_dir / "delta.json").write_text(
+    from ._atomic import atomic_write_text
+    atomic_write_text(out_dir / "delta.md", delta_md)
+    atomic_write_text(
+        out_dir / "delta.json",
         json.dumps({
             "applied": [str(p) for p in applied],
             "summary": summary,
@@ -166,7 +189,6 @@ def main(
             "suppression_added": delta.suppression_added,
             "suppression_lifted": delta.suppression_lifted,
         }, indent=2),
-        encoding="utf-8",
     )
 
     sys.stdout.write(delta_md)
@@ -209,7 +231,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _resolve_out(explicit: Optional[str]) -> Path:
+def _resolve_out(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).resolve()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -242,11 +264,11 @@ def _copy_target(src: Path, dst: Path) -> None:
         # symlinks: skip (we don't want to follow)
 
 
-def _apply_overlay(proposed: Path, overlay: Path) -> List[Path]:
+def _apply_overlay(proposed: Path, overlay: Path) -> list[Path]:
     """Copy every file from ``proposed/`` onto its same-named relative
     path in the overlay. Returns the list of relative paths applied.
     """
-    applied: List[Path] = []
+    applied: list[Path] = []
     proposed = proposed.resolve()
     for src in sorted(proposed.rglob("*")):
         if not src.is_file():
@@ -264,39 +286,79 @@ def _apply_overlay(proposed: Path, overlay: Path) -> List[Path]:
 # ---------------------------------------------------------------------------
 
 def _verdict(
-    delta, *, severity_floor: str,
-) -> "tuple[Dict[str, Any], int]":
+    delta, *, severity_floor: str, applied: list[Path] | None = None,
+) -> tuple[dict[str, Any], int]:
     floor = severity_rank(severity_floor)
     triggering = [
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= floor
     ]
+    persistent_above = [
+        r for r in delta.persistent
+        if severity_rank(r.get("severity", "info")) >= floor
+    ]
+    # Advisories the operator expected to clear: persistent findings in
+    # files the proposed/ patch actually rewrote. A high finding that
+    # survives in a patched manifest means the patch did NOT resolve
+    # the open advisories — the documented exit-1 contract. Persistent
+    # findings in files the patch never touched don't gate (a targeted
+    # ``fix --fix=<adv>`` must not fail on unrelated backlog).
+    not_cleared = _not_cleared_in_applied(persistent_above, applied)
     summary = {
         "resolved": len(delta.resolved),
         "new": len(delta.new),
         "regressing_above_threshold": len(triggering),
+        "persistent_above_threshold": len(persistent_above),
+        "not_cleared_above_threshold": len(not_cleared),
         "suppression_added": len(delta.suppression_added),
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering else 0
+    exit_code = 1 if (triggering or not_cleared) else 0
     return summary, exit_code
+
+
+def _not_cleared_in_applied(
+    rows: list[dict[str, Any]], applied: list[Path] | None,
+) -> list[dict[str, Any]]:
+    """Subset of ``rows`` whose ``file`` is one of the overlaid
+    (patched) relative paths. Finding rows carry overlay-absolute
+    paths; ``applied`` carries proposed/-relative paths — match on
+    the relative suffix."""
+    if not applied:
+        return []
+    rels = {str(p) for p in applied}
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        f = r.get("file")
+        if not isinstance(f, str):
+            continue
+        if any(f == rel or f.endswith("/" + rel) for rel in rels):
+            out.append(r)
+    return out
 
 
 def _render_markdown(
     target: Path,
     proposed: Path,
-    applied: List[Path],
+    applied: list[Path],
     delta,
-    summary: Dict[str, Any],
+    summary: dict[str, Any],
 ) -> str:
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"# sca verify — `{target}` ⇐ `{proposed}`\n")
     if summary["regressing_above_threshold"]:
         lines.append(
             f"**Verdict: regression** — proposed/ introduces "
             f"{summary['regressing_above_threshold']} new finding(s) "
             f"at or above {summary['severity_threshold']} severity.\n"
+        )
+    elif summary.get("not_cleared_above_threshold"):
+        lines.append(
+            f"**Verdict: not cleared** — "
+            f"{summary['not_cleared_above_threshold']} finding(s) at or "
+            f"above {summary['severity_threshold']} severity persist in "
+            f"file(s) the patch rewrote.\n"
         )
     elif summary["new"]:
         lines.append(
@@ -326,8 +388,7 @@ def _render_markdown(
         lines.append("")
         lines.append("| Severity | Finding | KEV | EPSS |")
         lines.append("|---|---|---|---|")
-        for r in delta.new:
-            lines.append(_row_line(r))
+        lines.extend(_row_line(r) for r in delta.new)
         lines.append("")
 
     if delta.resolved:
@@ -335,23 +396,23 @@ def _render_markdown(
         lines.append("")
         lines.append("| Severity | Finding | KEV | EPSS |")
         lines.append("|---|---|---|---|")
-        for r in delta.resolved:
-            lines.append(_row_line(r))
+        lines.extend(_row_line(r) for r in delta.resolved)
         lines.append("")
     return "\n".join(lines) + "\n"
 
 
-def _row_line(r: Dict[str, Any]) -> str:
+def _row_line(r: dict[str, Any]) -> str:
     sev = (r.get("severity") or "info").title()
     sca = r.get("sca") or {}
     eco = sca.get("ecosystem") or ""
     name = sca.get("name") or ""
     version = sca.get("version") or ""
     adv = sca.get("advisory") or {}
-    adv_id = adv.get("id") if isinstance(adv, dict) else ""
+    adv_id = (adv.get("id") or "") if isinstance(adv, dict) else ""
     finding = f"{eco}:{name}@{version} {adv_id}".strip()
     kev = "yes" if sca.get("in_kev") else ""
-    epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
+    epss_val = sca.get("epss")
+    epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
     return f"| {sev} | {finding} | {kev} | {epss} |"
 
 

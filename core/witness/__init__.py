@@ -45,15 +45,15 @@ from core.witness.types import (
 
 __all__ = [
     "Witness",
+    "WitnessMatch",
     "WitnessOutcome",
     "WitnessSource",
     "WitnessStore",
     "WitnessStoreError",
+    "best_match_for_finding",
     "compute_bytes_hash",
-    "outcome_from_sandbox_info",
     "discover_witness_stores",
     "iter_visible_witnesses",
-    "WitnessMatch",
-    "best_match_for_finding",
+    "outcome_from_sandbox_info",
     "score_witness_for_finding",
 ]

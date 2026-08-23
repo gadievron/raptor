@@ -11,16 +11,23 @@ seccomp installs LAST — inheriting NO_NEW_PRIVS from Landlock's
 restrict_self.
 """
 
+import ctypes
+import ctypes.util
 import json
 import logging
 import os
 import resource
+import select
+import signal
+import sys
+import time
+import warnings
 from pathlib import Path
 
 from . import state
 from ._fork_safe_warn import warn_post_fork
 from .exit_codes import SANDBOX_EXIT_RLIMIT_CORE_FAIL
-from .landlock import check_landlock_available, _make_landlock_preexec
+from .landlock import _make_landlock_preexec, check_landlock_available
 from .seccomp import _make_seccomp_preexec
 
 logger = logging.getLogger(__name__)
@@ -48,6 +55,13 @@ _DEFAULT_LIMITS = {
     "max_file_mb": 10240,  # 10 GB max file size
     "cpu_seconds": 3600,   # 1 hour CPU time
     "nproc": 1024,         # 1024 processes inside the sandbox's user-ns
+    # RLIMIT_NOFILE. Bounds fd-exhaustion DoS (a sandboxed child could
+    # previously open descriptors until the host's per-process ceiling,
+    # commonly 2^20). 4096 is far above any observed tool's need
+    # (compilers, JVMs, scanners run in the low hundreds) while turning
+    # "open until the kernel gives up" into an early, attributable
+    # EMFILE. Clamped to the inherited hard limit; 0 disables.
+    "nofile": 4096,
 }
 
 # User config path for limit overrides
@@ -86,6 +100,10 @@ def _load_user_limits() -> dict:
         if state._user_limits_cache:
             return state._user_limits_cache
         # Cached FAILURE (empty dict): re-probe after _FAIL_TTL_S.
+        # A successfully-parsed config with no recognised keys is
+        # also an empty dict, but its decided_at is stamped +inf on
+        # the success path below, so this window never expires for
+        # it — session-cached, not re-parsed as if it had failed.
         if (state._user_limits_cache is not None
             and (time.time() - state._user_limits_cache_decided_at)
                 <= _FAIL_TTL_S):
@@ -126,7 +144,7 @@ def _load_user_limits() -> dict:
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.
-            data = json.loads(_CONFIG_PATH.read_text())
+            data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 # Accept non-negative ints; 0 is a valid "skip this rlimit"
                 # sentinel (see _set_limits guards: `if mem > 0:` etc.).
@@ -143,28 +161,33 @@ def _load_user_limits() -> dict:
                     # so `"nproc": true` doesn't silently become nproc=1.
                     if not isinstance(v, int) or isinstance(v, bool) or v < 0:
                         logger.warning(
-                            f"Sandbox: user limit {k}={v!r} in {_CONFIG_PATH} "
-                            f"is not a non-negative integer — ignoring, using "
-                            f"default {_DEFAULT_LIMITS[k]}."
+                            "Sandbox: user limit %s=%r in %s is not a non-negative integer — ignoring, using default %s.", k, v, _CONFIG_PATH, _DEFAULT_LIMITS[k]
                         )
                         continue
                     cleaned[k] = v
                 state._user_limits_cache = cleaned
+                # +inf: successful parses never expire (session
+                # cache), including a valid config that yields no
+                # recognised keys — cleaned == {} must not be
+                # mistaken for the failure sentinel above.
+                state._user_limits_cache_decided_at = float("inf")
                 return state._user_limits_cache
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
             logger.warning(
-                f"Sandbox: could not parse {_CONFIG_PATH}: {e.__class__.__name__} "
-                f"— using default limits."
-            )
+                "Sandbox: could not parse %s: %s — using default limits.", _CONFIG_PATH, e.__class__.__name__)
         state._user_limits_cache = {}
         state._user_limits_cache_decided_at = time.time()
         return state._user_limits_cache
 
 
-def _make_preexec_fn(limits: dict, writable_paths: list = None,
-                     allowed_tcp_ports: list = None, seccomp_profile: str = None,
+def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
+                     allowed_tcp_ports: list | None = None,
+                     seccomp_profile: str | None = None,
                      seccomp_block_udp: bool = False,
-                     readable_paths: list = None):
+                     readable_paths: list | None = None,
+                     deny_all_tcp_connect: bool = False,
+                     host_nproc_cap: int | None = None,
+                     reaper_cell: dict | None = None):
     """Create a preexec_fn that sets resource limits, Landlock, and seccomp.
 
     Resource limits (rlimit) apply for memory / CPU / file-size.
@@ -183,22 +206,62 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
     PR_SET_NO_NEW_PRIVS. `seccomp_block_udp=True` additionally rejects
     AF_INET/AF_INET6 SOCK_DGRAM (used by the egress-proxy mode to close
     DNS/UDP exfil).
+    `deny_all_tcp_connect=True` engages Landlock's TCP-connect deny with
+    no allow rules (degraded-mode network fallback — see context.py);
+    it engages Landlock even when no writable paths are set, as a
+    net-only ruleset that leaves filesystem semantics untouched.
+
+    `reaper_cell` engages the NO-NAMESPACE TEARDOWN SWEEP: on the
+    Landlock-only path there is no pid namespace, so a payload that
+    setsid()s a daemon, SIGSTOP-parks a child, or leaves stragglers
+    behind used to survive run() teardown outright. When a cell is
+    passed, the composed preexec splits after rlimits: it forks, the
+    fork-PARENT becomes a PR_SET_CHILD_SUBREAPER sweeper that never
+    execs (subprocess sees IT as the child), and the fork-CHILD
+    applies Landlock+seccomp and execs the payload. Every orphaned
+    descendant of the payload — setsid daemons included — reparents
+    to the sweeper, which SIGKILL-sweeps them when the payload exits
+    or when the per-run death pipe (``reaper_cell["death_fd"]``,
+    populated by context.run() before each spawn) reaches EOF. The
+    sweeper mirrors the payload's exit status (128+N for signals) and
+    stays OUTSIDE the Landlock domain, so on scoping-capable kernels
+    (ABI >= 6) the payload cannot signal it. The payload re-arms
+    PR_SET_PDEATHSIG against the sweeper, so a kill aimed at the
+    direct child (subprocess timeout) still takes the payload down.
+
+    `host_nproc_cap` is the no-user-namespace substitute for the
+    prlimit/unshare NPROC containment: on the Landlock-only path the
+    child shares the HOST uid, so a flat cap would count the
+    operator's unrelated processes. context.py computes
+    "current same-uid process count + nproc" in the parent and passes
+    the absolute ceiling here; RLIMIT_NPROC then bounds fork-bomb
+    growth to the configured headroom instead of leaving it unbounded.
+    None (or 0) skips it — the namespace paths keep their stronger
+    ns-local accounting.
     """
     landlock_fn = None
-    if (writable_paths or allowed_tcp_ports) and check_landlock_available():
-        # Ensure at least /tmp is writable — processes need temp files
-        effective_paths = list(writable_paths) if writable_paths else ["/tmp"]
-        if "/tmp" not in effective_paths:
-            effective_paths.append("/tmp")
+    # `readable_paths is not None` (not truthiness): an empty list means
+    # "reads restricted to writable_paths only" — the MOST restrictive
+    # setting — and must engage Landlock. Without readable_paths in this
+    # gate, a restrict_reads-only caller (no writable paths, no ports,
+    # no connect-deny) silently got no Landlock at all.
+    if ((writable_paths or allowed_tcp_ports or deny_all_tcp_connect
+         or readable_paths is not None)
+            and check_landlock_available()):
+        effective_paths = list(writable_paths) if writable_paths else []
         landlock_fn = _make_landlock_preexec(effective_paths, allowed_tcp_ports,
-                                             readable_paths=readable_paths)
+                                             readable_paths=readable_paths,
+                                             deny_all_tcp_connect=deny_all_tcp_connect)
 
     seccomp_fn = (
         _make_seccomp_preexec(seccomp_profile, block_udp=seccomp_block_udp)
         if seccomp_profile else None
     )
 
-    def _set_limits():
+    pdeathsig_fn = set_pdeathsig()
+
+    def _set_limits() -> None:
+        pdeathsig_fn()
         # Fallbacks below must stay in sync with _DEFAULT_LIMITS. Callers
         # through context.sandbox() always pass the merged effective_limits
         # (DEFAULT + user config + caller overrides) so the fallbacks only
@@ -206,6 +269,7 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
         file_mb = limits.get("max_file_mb", _DEFAULT_LIMITS["max_file_mb"])
         cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
+        nofile = limits.get("nofile", _DEFAULT_LIMITS["nofile"])
 
         mem_bytes = mem * 1024 * 1024
         file_bytes = file_mb * 1024 * 1024
@@ -245,6 +309,21 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
                     % _errno
                 )
 
+        if nofile > 0:
+            try:
+                # Clamp to the inherited hard limit — raising the hard
+                # limit needs CAP_SYS_RESOURCE and would fail the whole
+                # setrlimit otherwise.
+                _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+                eff = nofile if hard == resource.RLIM_INFINITY else min(
+                    nofile, hard)
+                resource.setrlimit(resource.RLIMIT_NOFILE, (eff, eff))
+            except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
+                warn_post_fork(
+                    b"preexec: RLIMIT_NOFILE setrlimit failed (errno=%d); "
+                    b"fd-exhaustion bound not applied\n" % _errno
+                )
         # Core dumps off. A sandboxed process can read anywhere in the
         # filesystem (Landlock's read-everywhere default covers ~/.ssh,
         # ~/.aws/credentials, API-key files); if the process then crashes
@@ -279,6 +358,32 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             os._exit(SANDBOX_EXIT_RLIMIT_CORE_FAIL)
 
 
+        # No-namespace teardown sweep (see the reaper_cell docstring):
+        # split BEFORE Landlock/seccomp so the sweeper stays outside
+        # the restriction domain (payload cannot signal it on Landlock
+        # scoping kernels) while the payload gets the full stack.
+        if reaper_cell is not None and sys.platform == "linux":
+            _reaper_split(reaper_cell)
+
+        # RLIMIT_NPROC ceiling for the no-namespace path — applied
+        # AFTER the reaper split so it binds the PAYLOAD only: the
+        # sweeper's own fork and kill work must never fail against the
+        # cap it is meant to enforce on the payload's tree.
+        if host_nproc_cap and host_nproc_cap > 0:
+            try:
+                _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+                eff = (host_nproc_cap
+                       if hard == resource.RLIM_INFINITY
+                       else min(host_nproc_cap, hard))
+                resource.setrlimit(resource.RLIMIT_NPROC, (eff, eff))
+            except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
+                warn_post_fork(
+                    b"preexec: RLIMIT_NPROC setrlimit failed (errno=%d); "
+                    b"fork-bomb bound not applied on the no-namespace "
+                    b"path\n" % _errno
+                )
+
         # Apply Landlock filesystem restrictions after resource limits
         # and ns setup. Seccomp filter is installed LAST so it inherits
         # PR_SET_NO_NEW_PRIVS from Landlock's restrict_self (seccomp
@@ -289,3 +394,287 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             seccomp_fn()
 
     return _set_limits
+
+
+# ── No-namespace teardown sweeper ───────────────────────────────────
+#
+# On the Landlock-only path there is no pid namespace to cascade-kill
+# the payload's process tree at teardown. The battery-proven escapes:
+# a setsid double-fork daemon, a SIGSTOP-parked child, a delayed
+# writer surviving a timeout — all outlived run() and kept host access
+# (a post-teardown host write included). The sweeper is the pid-
+# tracking substitute: PR_SET_CHILD_SUBREAPER makes every orphaned
+# descendant reparent to it, so at payload exit (or death-pipe EOF)
+# it can enumerate /proc/self/task/<pid>/children and SIGKILL the
+# stragglers — stopped processes included (SIGKILL resumes-and-kills).
+
+_PR_SET_CHILD_SUBREAPER = 36
+# Grace budget for the kill loop: re-enumerate and re-kill until no
+# children remain (a dying daemon may orphan ITS children onto us).
+_SWEEP_DEADLINE_S = 3.0
+_DEATH_TEARDOWN_EXIT = 137  # parity with the pid1 shim convention
+
+
+def _reaper_split(reaper_cell: dict) -> None:
+    """Fork inside the preexec: parent becomes the sweeper (never
+    returns), child continues to Landlock/seccomp/exec. Post-fork
+    safe: os.* + captured module refs only."""
+    libc = _get_libc()
+    if libc is None:
+        return  # no prctl — keep the historic single-process shape
+    death_fd = reaper_cell.get("death_fd")
+    # Subreaper BEFORE the fork so no orphan can slip through the
+    # window; the payload clears its inherited copy so mid-run
+    # orphans reparent to the sweeper, not to the payload.
+    libc.prctl(_PR_SET_CHILD_SUBREAPER, 1)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=DeprecationWarning,
+            message=r".*fork.*may lead to deadlocks.*",
+        )
+        pid = os.fork()
+    if pid == 0:
+        # Payload branch. Re-arm PDEATHSIG against the sweeper (the
+        # new parent): a kill aimed at the direct child — subprocess
+        # timeout kills Popen.pid, which is the sweeper — must take
+        # the payload down with it.
+        libc.prctl(_PR_SET_CHILD_SUBREAPER, 0)
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+        return
+    _sweeper_main(pid, death_fd)  # never returns
+
+
+def _sweeper_main(payload_pid: int, death_fd) -> None:
+    # Detach from the parent's stdio pipes so communicate() EOF is
+    # governed by the payload tree alone; keep fd 2 for warnings.
+    for _fd in (0, 1):
+        try:
+            os.close(_fd)
+        except OSError:
+            pass
+    # Close everything else we inherited (subprocess errpipe included
+    # — holding it would block Popen's exec-status read until the
+    # sweeper exits) except the death pipe.
+    # Enumerate the actually-open fds: the preexec rlimit step may
+    # already have LOWERED the NOFILE soft limit, and lowering it does
+    # not invalidate existing descriptors — a pre-existing inheritable
+    # fd at/above the reduced limit would survive a range()-based
+    # sweep. Fall back to the bounded range when /proc isn't listable.
+    try:
+        _open = [int(_n) for _n in os.listdir("/proc/self/fd")]
+    except (OSError, ValueError):
+        try:
+            _max = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except (ValueError, OSError):
+            _max = 4096
+        _open = list(range(3, min(int(_max), 65536)))
+    for _fd in _open:
+        if _fd <= 2 or (death_fd is not None and _fd == death_fd):
+            continue
+        try:
+            os.close(_fd)
+        except OSError:
+            pass
+
+    poller = None
+    if death_fd is not None:
+        try:
+            poller = select.poll()
+            poller.register(death_fd, select.POLLIN)
+        except OSError:
+            poller = None
+
+    payload_status = None
+    teardown = False
+    while True:
+        # Reap anything that exited — the payload itself or orphans
+        # reparented to us (their statuses are discarded; we only
+        # track the payload's for exit-code mirroring).
+        while True:
+            try:
+                wpid, wstatus = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                wpid = 0
+            except OSError:
+                wpid = 0
+            if wpid == 0:
+                break
+            if wpid == payload_pid:
+                payload_status = wstatus
+        if payload_status is not None:
+            break
+        if poller is not None:
+            try:
+                events = poller.poll(50)
+            except OSError:
+                events = []
+            if events:
+                # Parent (orchestrator) closed the pipe — teardown or
+                # death. Kill the payload and sweep everything.
+                teardown = True
+                try:
+                    os.kill(payload_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                break
+        else:
+            time.sleep(0.05)
+
+    # Sweep: SIGKILL every remaining child until none are left or the
+    # deadline passes (a dying daemon may orphan its own children
+    # onto us — loop, don't single-pass).
+    deadline = time.monotonic() + _SWEEP_DEADLINE_S
+    swept_any = False
+    while time.monotonic() < deadline:
+        kids = _reaper_children()
+        if not kids:
+            break
+        for kid in kids:
+            swept_any = True
+            try:
+                os.kill(kid, signal.SIGKILL)
+            except OSError:
+                pass
+        while True:
+            try:
+                if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                    break
+            except (ChildProcessError, OSError):
+                break
+        time.sleep(0.02)
+    if swept_any:
+        try:
+            os.write(2, b"RAPTOR sandbox: teardown sweep killed "
+                        b"surviving descendants (no-namespace path)\n")
+        except OSError:
+            pass
+
+    if teardown or payload_status is None:
+        os._exit(_DEATH_TEARDOWN_EXIT)
+    if os.WIFSIGNALED(payload_status):
+        os._exit(128 + os.WTERMSIG(payload_status))
+    os._exit(os.WEXITSTATUS(payload_status))
+
+
+def _reaper_children() -> list:
+    """Live children of this process (post-fork safe: /proc reads)."""
+    me = os.getpid()
+    try:
+        with open(f"/proc/{me}/task/{me}/children", "rb") as f:
+            data = f.read()
+        return [int(x) for x in data.split()]
+    except (OSError, ValueError):
+        # CONFIG_PROC_CHILDREN missing — fall back to a /proc scan.
+        kids = []
+        try:
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/stat", "rb") as f:
+                        fields = f.read().rsplit(b") ", 1)[-1].split()
+                    if int(fields[1]) == me:
+                        kids.append(int(name))
+                except (OSError, ValueError, IndexError):
+                    continue
+        except OSError:
+            pass
+        return kids
+
+
+# ── PR_SET_PDEATHSIG ────────────────────────────────────────────────
+#
+# For non-sandboxed subprocess calls (git, readelf, codeql, gdb, etc.)
+# the death-pipe mechanism in context.py doesn't apply — there is no
+# pid-namespace shim watching for orchestrator exit.  If the parent is
+# killed (SIGKILL, OOM, crash) while a child runs, the child orphans
+# and lives forever.
+#
+# PR_SET_PDEATHSIG tells the kernel to deliver a signal to this process
+# when its parent thread exits.  Unlike the death-pipe, it is cleared
+# by setuid exec and by unshare(CLONE_NEWUSER) — which is why the
+# sandboxed-spawn path uses the pipe instead.  For plain fork+exec
+# without user-ns, PDEATHSIG is reliable.
+
+_PR_SET_PDEATHSIG = 1
+_libc = None
+
+# ── OOM child scoring ───────────────────────────────────────────────
+#
+# Analysis children (scanners, builds, r2, gdb, CodeQL, target
+# processes) are sacrificial: under memory pressure the kernel should
+# kill THEM, never the RAPTOR session that orchestrates them — losing
+# one tool invocation costs a retry; losing the session costs the run.
+# oom_score_adj=+500 makes every spawned child a strongly preferred
+# OOM victim relative to the session (which stays at its inherited
+# score). Raising one's own score never needs privilege.
+#
+# Stickiness is honest, not absolute: an unprivileged child MAY lower
+# its score back down to the floor it inherited at fork (only going
+# BELOW that floor needs CAP_SYS_RESOURCE — the direction
+# test_sandbox_attack_scenarios' oom probe pins). Outside the sandbox
+# the stamp is therefore a default that well-behaved tools keep, not
+# a boundary against a malicious child; under core.sandbox.run,
+# Landlock denies the /proc/self write and the preference does stick
+# through the child tree.
+#
+# Written post-fork/pre-exec, so on the sandboxed path it lands
+# BEFORE Landlock restricts /proc writes and is inherited across the
+# unshare chain. Silently skipped where /proc/self/oom_score_adj is
+# unwritable (locked-down containers) or absent (non-Linux).
+
+_OOM_SCORE_ADJ_PATH = "/proc/self/oom_score_adj"
+_OOM_SCORE_ADJ = b"500"
+
+
+def raise_oom_score_adj() -> None:
+    """Mark the calling (child) process as a preferred OOM victim.
+
+    Post-fork safe: raw os.open/os.write only. Never raises — an
+    environment that refuses the write just keeps the inherited score.
+    """
+    try:
+        fd = os.open(_OOM_SCORE_ADJ_PATH, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        os.write(fd, _OOM_SCORE_ADJ)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _get_libc():
+    global _libc
+    if _libc is None:
+        name = ctypes.util.find_library("c")
+        if name:
+            _libc = ctypes.CDLL(name, use_errno=True)
+    return _libc
+
+
+def set_pdeathsig(sig=signal.SIGKILL):
+    """Return a preexec_fn that sets PR_SET_PDEATHSIG on the child.
+
+    Linux-only; returns a no-op on other platforms.  Callers pass this
+    to ``subprocess.run(..., preexec_fn=set_pdeathsig())`` so the child
+    is killed when the parent dies — no more orphaned git/readelf/gdb.
+
+    Also raises the child's ``oom_score_adj`` to +500 (see the block
+    comment above): this helper IS the shared child-preexec for every
+    non-sandboxed tool spawn, and both properties serve one doctrine —
+    analysis children are sacrificial, the session is not. The
+    sandboxed path gets the same score via ``_make_preexec_fn``'s
+    composed preexec, which calls this first.
+    """
+    if sys.platform != "linux":
+        return lambda: None
+
+    def _apply() -> None:
+        libc = _get_libc()
+        if libc is not None:
+            libc.prctl(_PR_SET_PDEATHSIG, sig)
+        raise_oom_score_adj()
+
+    return _apply

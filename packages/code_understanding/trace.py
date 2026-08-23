@@ -9,7 +9,8 @@ PR2b will provide a default dispatch_fn; for now mocks work cleanly.
 """
 
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Callable, Iterable
 
 from core.llm.multi_model import (
     Aggregator,
@@ -26,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 TraceDispatchFn = Callable[
-    [ModelHandle, List[Dict[str, Any]], str],  # (model, traces, repo_path)
-    List[Dict[str, Any]],                       # list of verdict dicts
+    [ModelHandle, list[dict[str, Any]], str],  # (model, traces, repo_path)
+    list[dict[str, Any]],                       # list of verdict dicts
 ]
 # Symmetric with HuntDispatchFn (which is (model, pattern, repo_path)).
 # PR2a originally typed this as 2-arg (omitting repo_path), reasoning
@@ -38,13 +39,13 @@ TraceDispatchFn = Callable[
 
 def trace(
     *,
-    traces: List[Dict[str, Any]],
+    traces: list[dict[str, Any]],
     repo_path: str,
     models: Iterable[ModelHandle],
     dispatch_fn: TraceDispatchFn,
-    reviewers: Optional[Iterable[Reviewer]] = (),
-    aggregator: Optional[Aggregator] = None,
-    cost_gate: Optional[CostGate] = None,
+    reviewers: Iterable[Reviewer] | None = (),
+    aggregator: Aggregator | None = None,
+    cost_gate: CostGate | None = None,
     max_parallel: int = 3,
 ) -> MultiModelResult:
     """Multi-model trace verdict.
@@ -71,13 +72,13 @@ def trace(
         high-inconclusive / single_model).
     """
     if not traces:
-        raise ValueError("traces must be non-empty")
+        msg = "traces must be non-empty"
+        raise ValueError(msg)
     if not callable(dispatch_fn):
-        raise TypeError(
-            f"dispatch_fn must be callable; got {type(dispatch_fn).__name__}"
-        )
+        msg = f"dispatch_fn must be callable; got {type(dispatch_fn).__name__}"
+        raise TypeError(msg)
 
-    def task(model: ModelHandle) -> List[Dict[str, Any]]:
+    def task(model: ModelHandle) -> list[dict[str, Any]]:
         return dispatch_fn(model, traces, repo_path)
 
     return run_multi_model(

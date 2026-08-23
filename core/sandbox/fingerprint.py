@@ -1,4 +1,4 @@
-"""Host-fingerprint sanitisation overlay for sandboxed children.
+r"""Host-fingerprint sanitisation overlay for sandboxed children.
 
 Opt-in via `sandbox(..., sanitise_host_fingerprint=True)`. When engaged,
 the mount-ns child bind-mounts canonical files over the host's identity
@@ -6,9 +6,12 @@ surfaces and the spawn machinery sets a canonical UTS namespace +
 sched_setaffinity mask:
 
   /proc/cpuinfo                          → N blocks, host flags preserved
-  /proc/version                          → "Linux version <host-release>\\n"
+  /proc/version                          → "Linux version <host-release>\n"
   /proc/cmdline                          → canonical stub
   /proc/stat                             → aggregate + N per-cpu lines
+  /proc/uptime                           → fake uptime + derived idle
+  /proc/loadavg                          → low-load stub, consistent
+                                           with /proc/stat processes
   /etc/os-release                        → Debian 12 stub
   /etc/machine-id                        → deterministic-pseudo-random
   /etc/hostname                          → "localhost"
@@ -58,6 +61,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util as _ctypes_util
 import hashlib
+import heapq
 import logging
 import os
 import threading
@@ -89,6 +93,21 @@ logger = logging.getLogger(__name__)
 # caller's primary motivation is anti-analysis identity masking,
 # not full anti-fingerprint capability masking.
 HOST_CPU_COUNT = -1
+
+
+def _host_cpu_count() -> int:
+    """Schedulable CPU count, portable across platforms.
+
+    Linux exposes the cpuset-aware count via ``os.sched_getaffinity``;
+    on platforms without it (macOS, Windows) fall back to
+    ``os.cpu_count()``. Mirrors the guard in ``core.tuning`` so
+    ``build_persona(cpu_count=HOST_CPU_COUNT)`` does not raise
+    ``AttributeError`` off Linux.
+    """
+    getaff = getattr(os, "sched_getaffinity", None)
+    if getaff is not None:
+        return len(getaff(0))
+    return os.cpu_count() or 1
 
 
 # === Persona constants ===
@@ -145,6 +164,12 @@ _CMDLINE = "BOOT_IMAGE=/boot/vmlinuz root=/dev/vda1 ro quiet\n"
 # Standard PC presents — extremely common workload identity.
 _DMI_SYS_VENDOR = "QEMU\n"
 _DMI_PRODUCT_NAME = "Standard PC (i440FX + PIIX, 1996)\n"
+
+# /proc/stat jiffy unit. USER_HZ is 100 on every mainstream Linux
+# build (it is the userspace-visible clock tick, fixed for ABI
+# compatibility regardless of the kernel's internal CONFIG_HZ);
+# tools converting jiffies to seconds divide by this.
+_USER_HZ = 100
 
 # /proc/cpuinfo block — per-processor. Per-CPU fields are templated
 # with the processor index and the global cpu_count. The `flags` field
@@ -244,11 +269,10 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     gracefully (tools fall back to default code paths).
     """
     if cpu_count == HOST_CPU_COUNT:
-        cpu_count = len(os.sched_getaffinity(0))
+        cpu_count = _host_cpu_count()
     if cpu_count < 1:
-        raise ValueError(
-            f"cpu_count must be >= 1 or HOST_CPU_COUNT, got {cpu_count}"
-        )
+        msg = f"cpu_count must be >= 1 or HOST_CPU_COUNT, got {cpu_count}"
+        raise ValueError(msg)
     tmpdir = Path(tmpdir)
     tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -314,9 +338,30 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     fake_uptime_s, fake_processes = _derive_uptime_and_processes()
     btime = int(_now()) - fake_uptime_s
 
-    stat_lines = ["cpu  100 0 50 1000 0 0 0 0 0 0\n"]
-    for i in range(cpu_count):
-        stat_lines.append(f"cpu{i} 100 0 50 1000 0 0 0 0 0 0\n")
+    # /proc/uptime idle: idle ≈ uptime * cpu_count (each CPU
+    # accumulates idle independently). Real systems report idle ≈
+    # 0.97 * uptime * cpu_count on a low-load box; we pick 0.95 to
+    # leave a small "we've done some work" signal. Computed before
+    # /proc/stat because the stat jiffies derive from the same value.
+    idle_s = int(fake_uptime_s * cpu_count * 0.95)
+
+    # /proc/stat cpu jiffies must agree with the fabricated uptime:
+    # the earlier hardcoded "cpu 100 0 50 1000" summed to ~11.5s of
+    # CPU time at USER_HZ=100 while /proc/uptime claimed days — a
+    # cross-checking detector flags the contradiction instantly.
+    # Derive from fake_uptime_s instead: idle is exactly the
+    # /proc/uptime idle figure in jiffies; the busy remainder splits
+    # user/system 3:2 — a plausible low-load production box.
+    idle_jiffies = idle_s * _USER_HZ
+    user_jiffies = int(fake_uptime_s * cpu_count * 0.03) * _USER_HZ
+    system_jiffies = int(fake_uptime_s * cpu_count * 0.02) * _USER_HZ
+    stat_lines = [
+        f"cpu  {user_jiffies} 0 {system_jiffies} {idle_jiffies} "
+        f"0 0 0 0 0 0\n"
+    ]
+    stat_lines.extend(f"cpu{i} {user_jiffies // cpu_count} 0 "
+            f"{system_jiffies // cpu_count} "
+            f"{idle_jiffies // cpu_count} 0 0 0 0 0 0\n" for i in range(cpu_count))
     stat_lines.append(
         f"intr 0\nctxt 0\nbtime {btime}\n"
         f"processes {fake_processes}\nprocs_running 1\n"
@@ -324,13 +369,8 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     )
     files["/proc/stat"] = _write(tmpdir / "stat", "".join(stat_lines))
 
-    # /proc/uptime — two floats: total uptime seconds + idle seconds.
-    # idle ≈ uptime * cpu_count (each CPU accumulates idle independently).
-    # Real systems report idle ≈ 0.97 * uptime * cpu_count on a low-load
-    # box; we pick 0.95 to leave a small "we've done some work" signal.
-    idle = int(fake_uptime_s * cpu_count * 0.95)
     files["/proc/uptime"] = _write(
-        tmpdir / "uptime", f"{fake_uptime_s}.00 {idle}.00\n",
+        tmpdir / "uptime", f"{fake_uptime_s}.00 {idle_s}.00\n",
     )
 
     # /proc/loadavg — low-load values + a plausible "running/total
@@ -353,7 +393,7 @@ def _now() -> float:
 def _derive_uptime_and_processes() -> tuple[int, int]:
     """Pick a fake uptime + processes counter, deterministic per
     RAPTOR install. Uptime in [3 days, 30 days], processes in
-    [10000, 200000] — both plausible production-VM ranges.
+    [10000, 209999] — both plausible production-VM ranges.
 
     Seed is the same as _MACHINE_ID so a single install consistently
     presents the same uptime + processes across runs of the same
@@ -368,25 +408,25 @@ def _derive_uptime_and_processes() -> tuple[int, int]:
     ).digest()
     # 3 days = 259200; 30 days = 2592000. Range = 2332800.
     uptime = 259200 + (int.from_bytes(h[:4], "big") % 2332800)
-    # 10000 ≤ processes ≤ 210000
+    # 10000 ≤ processes ≤ 209999
     processes = 10000 + (int.from_bytes(h[4:8], "big") % 200000)
     return uptime, processes
 
 
 def _write(path: Path, content: str) -> str:
     """Helper: write content, return absolute path as str."""
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return str(path)
 
 
 def _read_host_cpu_flags() -> str:
-    """Return the host's /proc/cpuinfo `flags` line value (space-
-    separated flag names; no `flags\\t:` prefix).
+    r"""Return the host's /proc/cpuinfo `flags` line value (space-
+    separated flag names; no `flags\t:` prefix).
 
     Empty string on failure — handled gracefully by build_persona.
     """
     try:
-        with open("/proc/cpuinfo") as f:
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("flags"):
                     _, _, value = line.partition(":")
@@ -397,14 +437,14 @@ def _read_host_cpu_flags() -> str:
 
 
 def _trim_proc_version() -> str:
-    """Return host /proc/version with build-host/compiler/timestamp
+    r"""Return host /proc/version with build-host/compiler/timestamp
     fingerprint stripped, preserving only `Linux version <release>`.
 
     Example: "Linux version 6.8.0-49-generic (buildd@...) (gcc ...) #49-..."
-             becomes "Linux version 6.8.0-49-generic\\n"
+             becomes "Linux version 6.8.0-49-generic\n"
     """
     try:
-        with open("/proc/version") as f:
+        with open("/proc/version", encoding="utf-8") as f:
             raw = f.read().strip()
     except OSError:
         return "Linux version unknown\n"
@@ -483,7 +523,11 @@ def set_cpu_affinity(cpu_count: int) -> int:
     reasons (kernel error, EPERM in some namespace setups).
     """
     if cpu_count < 1:
-        raise ValueError(f"cpu_count must be >= 1, got {cpu_count}")
+        msg = f"cpu_count must be >= 1, got {cpu_count}"
+        raise ValueError(msg)
+    if not hasattr(os, "sched_getaffinity"):
+        msg = "set_cpu_affinity requires Linux (sched_setaffinity syscall)"
+        raise NotImplementedError(msg)
     available = os.sched_getaffinity(0)
     effective = min(cpu_count, len(available))
     if effective < cpu_count:
@@ -497,7 +541,7 @@ def set_cpu_affinity(cpu_count: int) -> int:
         )
     # Pick the lowest-numbered available CPUs so the mask is contiguous
     # starting at 0, matching the persona's `/sys/cpu/online` range.
-    mask = set(sorted(available)[:effective])
+    mask = set(heapq.nsmallest(effective, available))
     os.sched_setaffinity(0, mask)
     return effective
 

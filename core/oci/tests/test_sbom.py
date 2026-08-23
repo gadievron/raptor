@@ -12,8 +12,12 @@ import sqlite3
 import struct
 from pathlib import Path
 
+import pytest
+
+import core.oci.sbom as sbom_module
 from core.oci.sbom import (
     LAYER_FILE_PATHS,
+    PackageDbLimitExceeded,
     packages_from_layer_files,
     parse_apk_installed,
     parse_dpkg_status,
@@ -328,10 +332,12 @@ def test_packages_from_layer_files_dispatches_correctly():
         "lib/apk/db/installed":
             b"P:bar\nV:2.0\n",
     }
-    pkgs = packages_from_layer_files(layer_files)
-    by_eco = {p.ecosystem: p.name for p in pkgs}
+    result = packages_from_layer_files(layer_files)
+    by_eco = {p.ecosystem: p.name for p in result.packages}
     assert by_eco["Debian"] == "foo"
     assert by_eco["Alpine"] == "bar"
+    assert result.complete
+    assert result.failures == {}
 
 
 def test_packages_from_layer_files_unknown_paths_ignored():
@@ -341,7 +347,9 @@ def test_packages_from_layer_files_unknown_paths_ignored():
         "etc/passwd": b"root:x:0:0\n",
         "var/log/some.log": b"...",
     }
-    assert packages_from_layer_files(layer_files) == []
+    result = packages_from_layer_files(layer_files)
+    assert result.packages == []
+    assert result.failures == {}
 
 
 def test_layer_file_paths_constant_lists_all_three():
@@ -351,3 +359,109 @@ def test_layer_file_paths_constant_lists_all_three():
     assert "var/lib/dpkg/status" in LAYER_FILE_PATHS
     assert "lib/apk/db/installed" in LAYER_FILE_PATHS
     assert "var/lib/rpm/rpmdb.sqlite" in LAYER_FILE_PATHS
+
+
+# ---------------------------------------------------------------------------
+# Failure surfacing + record caps
+# ---------------------------------------------------------------------------
+
+
+def test_failed_parser_surfaced_in_result(monkeypatch):
+    """A package DB that is PRESENT but rejected must be
+    distinguishable from an absent one — pre-fix the failure was a
+    debug log and the caller saw a plain (silently partial) list."""
+    def _boom(content):
+        raise ValueError("synthetic parser failure")
+    monkeypatch.setitem(
+        sbom_module.LAYER_FILE_PATHS, "var/lib/dpkg/status", _boom,
+    )
+    result = packages_from_layer_files({
+        "var/lib/dpkg/status": b"whatever",
+        "lib/apk/db/installed": b"P:bar\nV:2.0\n",
+    })
+    assert not result.complete
+    assert "var/lib/dpkg/status" in result.failures
+    assert "synthetic parser failure" in \
+        result.failures["var/lib/dpkg/status"]
+    # The other DB still parsed.
+    assert [p.name for p in result.packages] == ["bar"]
+
+
+def test_dpkg_record_cap_enforced(monkeypatch):
+    monkeypatch.setattr(sbom_module, "MAX_PACKAGE_RECORDS", 5)
+    stanza = (
+        "Package: p%d\nStatus: install ok installed\nVersion: 1\n\n"
+    )
+    content = "".join(stanza % i for i in range(10)).encode()
+    with pytest.raises(PackageDbLimitExceeded, match="dpkg"):
+        parse_dpkg_status(content)
+
+
+def test_apk_record_cap_enforced(monkeypatch):
+    monkeypatch.setattr(sbom_module, "MAX_PACKAGE_RECORDS", 5)
+    content = "".join(
+        f"P:p{i}\nV:1\n\n" for i in range(10)
+    ).encode()
+    with pytest.raises(PackageDbLimitExceeded, match="apk"):
+        parse_apk_installed(content)
+
+
+def test_record_cap_failure_lands_in_result_failures(monkeypatch):
+    """The cap propagates through the aggregator as a surfaced
+    failure, not a crash and not silence."""
+    monkeypatch.setattr(sbom_module, "MAX_PACKAGE_RECORDS", 5)
+    content = "".join(
+        f"P:p{i}\nV:1\n\n" for i in range(10)
+    ).encode()
+    result = packages_from_layer_files({"lib/apk/db/installed": content})
+    assert result.packages == []
+    assert "lib/apk/db/installed" in result.failures
+    assert "PackageDbLimitExceeded" in \
+        result.failures["lib/apk/db/installed"]
+
+
+def test_record_cap_is_generous_for_real_databases():
+    """Real installed-state files are tens of thousands of records;
+    the cap must not clip them."""
+    assert sbom_module.MAX_PACKAGE_RECORDS >= 100_000
+
+
+def test_continuation_line_accumulation_is_linear():
+    """A stanza that is almost entirely continuation lines must parse
+    in linear time. The pre-fix per-line string rebuild was O(n^2):
+    this 200k-line fixture took minutes; linear accumulation takes
+    milliseconds. The generous wall-clock bound only trips on a
+    quadratic regression."""
+    import time
+    content = (
+        b"Package: foo\n"
+        b"Status: install ok installed\n"
+        b"Version: 1.0\n"
+        b"Description: header\n"
+        + b" continuation-line-padding-0123456789\n" * 200_000
+        + b"\n"
+    )
+    start = time.monotonic()
+    pkgs = parse_dpkg_status(content)
+    elapsed = time.monotonic() - start
+    assert [p.name for p in pkgs] == ["foo"]
+    assert elapsed < 20, (
+        f"continuation-line parse took {elapsed:.1f}s — "
+        f"quadratic accumulation regression"
+    )
+
+
+def test_continuation_lines_still_join_with_newlines():
+    stanza_fields = parse_dpkg_status(
+        b"Package: foo\n"
+        b"Status: install ok installed\n"
+        b"Version: 1.0\n\n"
+    )
+    assert stanza_fields[0].name == "foo"
+    # Direct check of the joining semantics on the private helper.
+    from core.oci.sbom import _parse_rfc822_stanza
+    fields = _parse_rfc822_stanza(
+        "Description: first\n second\n third\nOther: x"
+    )
+    assert fields["Description"] == "first\nsecond\nthird"
+    assert fields["Other"] == "x"

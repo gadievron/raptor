@@ -93,6 +93,15 @@ def test_classify_version_helper():
     assert _classify_version("*") == PinStyle.WILDCARD
 
 
+def test_classify_version_wildcard_segment_not_substring():
+    assert _classify_version("1.x") == PinStyle.WILDCARD
+    assert _classify_version("1.x.x") == PinStyle.WILDCARD
+    assert _classify_version("1.*") == PinStyle.WILDCARD
+    assert _classify_version("1.2.3-extra") == PinStyle.EXACT
+    assert _classify_version("1.0.0-next") == PinStyle.EXACT
+    assert _classify_version("10.0.0-proxy") == PinStyle.EXACT
+
+
 def test_chart_with_missing_version_skipped(tmp_path):
     """Entry without a ``version:`` field — not a meaningful pin."""
     p = _write(tmp_path, """\

@@ -19,10 +19,10 @@ change finding severity — only the ``priority_bucket`` and
 
 from __future__ import annotations
 
-import json as _json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from core.json import dumps_display
 from core.llm.task_types import TaskType
 from . import (
     StageResult,
@@ -42,9 +42,9 @@ _MAX_FINDING_JSON_CHARS = 120_000
 
 def triage_findings(
     client,
-    sca_findings: List[Dict[str, Any]],
-    cross_tool_findings: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[TriageResult]:
+    sca_findings: list[dict[str, Any]],
+    cross_tool_findings: list[dict[str, Any]] | None = None,
+) -> TriageResult | None:
     """Rank SCA findings into priority buckets.
 
     Args:
@@ -65,10 +65,10 @@ def triage_findings(
         cross_trimmed = _trim_for_llm(cross_tool_findings, limit=20)
         cross_text = (
             "\n\n--- Cross-tool context (from /scan, /codeql) ---\n"
-            + _json.dumps(cross_trimmed, indent=1, default=str)
+            + dumps_display(cross_trimmed, indent=1)
         )
 
-    findings_json = _json.dumps(trimmed, indent=1, default=str)
+    findings_json = dumps_display(trimmed, indent=1)
     if len(findings_json) > _MAX_FINDING_JSON_CHARS:
         findings_json = findings_json[:_MAX_FINDING_JSON_CHARS] + "\n... truncated ..."
 
@@ -104,9 +104,9 @@ def triage_findings(
     return result.model  # type: ignore[return-value]
 
 
-def _dominant_ecosystem(rows: List[Dict[str, Any]]) -> str:
+def _dominant_ecosystem(rows: list[dict[str, Any]]) -> str:
     """Most-frequent ecosystem across findings, for exemplar selection."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for row in rows:
         eco = (row.get("sca") or {}).get("ecosystem", "")
         if eco:
@@ -117,17 +117,30 @@ def _dominant_ecosystem(rows: List[Dict[str, Any]]) -> str:
 
 
 def _trim_for_llm(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     limit: int = _MAX_FINDINGS_FOR_LLM,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Reduce finding rows to the fields the LLM needs, capped."""
     keep_keys = {
         "id", "finding_id", "vuln_type", "severity", "description",
         "reachability", "in_kev", "epss",
         "cvss_score", "file_path", "line",
     }
+    from ..findings import severity_rank
+    def _sca(r):
+        s = r.get("sca")
+        return s if isinstance(s, dict) else {}
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            -severity_rank(r.get("severity", "info")),
+            not _sca(r).get("in_kev"),
+            -(_sca(r).get("epss") or 0.0),
+        ),
+    )
     out = []
-    for row in rows[:limit]:
+    for row in sorted_rows[:limit]:
         trimmed = {k: v for k, v in row.items() if k in keep_keys}
         sca = row.get("sca", {})
         if isinstance(sca, dict):

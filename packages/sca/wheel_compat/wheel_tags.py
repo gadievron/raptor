@@ -31,7 +31,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 from packages.sca.platform_matrix.glibc_db import LibcVersion
 
@@ -42,8 +41,8 @@ logger = logging.getLogger(__name__)
 class WheelTag:
     """Decoded platform tag from a wheel filename."""
 
-    arch: Optional[str]                # ``x86_64`` / ``aarch64`` / ``any`` / …
-    libc: Optional[LibcVersion]        # glibc/musl version requirement
+    arch: str | None                # ``x86_64`` / ``aarch64`` / ``any`` / …
+    libc: LibcVersion | None        # glibc/musl version requirement
     os: str                            # ``linux`` / ``macosx`` / ``windows`` / ``any``
     raw: str                           # original platform-tag string
     # ``macosx_X_Y_<arch>`` tags encode the minimum macOS version
@@ -52,7 +51,7 @@ class WheelTag:
     # capture it as ``(11, 0)`` so the compat checker can refuse a
     # too-new wheel against a project pinned to an older macOS
     # runner. ``None`` for non-macOS tags.
-    macos_version: Optional[Tuple[int, int]] = None
+    macos_version: tuple[int, int] | None = None
 
 
 # Architecture portion of platform tags. ``i686`` / ``i386`` / ``amd64``
@@ -64,7 +63,7 @@ _PLATFORM_ARCH_ALIASES = {
     "i686": "i686", "i386": "i686",
     "ppc64le": "ppc64le", "ppc64": "ppc64",
     "s390x": "s390x",
-    "universal2": "any",       # macosx universal — covers x86_64+arm64
+    "universal2": "universal2", # macosx universal — covers x86_64+arm64
 }
 
 
@@ -158,7 +157,7 @@ def _parse_single_platform_tag(tag: str) -> WheelTag:
     return WheelTag(arch=None, libc=None, os="unknown", raw=tag)
 
 
-def parse_wheel_filename(filename: str) -> List[WheelTag]:
+def parse_wheel_filename(filename: str) -> list[WheelTag]:
     """Parse a wheel filename like ``z3_solver-4.16.0.0-py3-none-
     manylinux_2_38_aarch64.whl`` and return a list of
     :class:`WheelTag` (one per ``.``-joined platform component).

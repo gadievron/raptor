@@ -18,7 +18,6 @@ doesn't wrap it.
 
 import hashlib
 from pathlib import Path
-from typing import Optional
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -40,8 +39,8 @@ _MAX_FILE_SIZE_NO_CAP_THRESHOLD = 10 ** 12
 
 def sha256_tree(
     root: Path,
-    max_file_size: Optional[int] = None,
-    chunk_size: Optional[int] = None,
+    max_file_size: int | None = None,
+    chunk_size: int | None = None,
 ) -> str:
     """Hash a directory tree (filenames + contents).
 
@@ -141,13 +140,19 @@ def sha256_tree(
     #     warning when the cap is hit (default: 100x
     #     max_file_size — operators can set MAX_TREE_HASH_BYTES
     #     in config to override).
+    #   * Mix a truncation marker into the digest when the cap
+    #     fires, so a truncated tree can never hash-collide with
+    #     an untruncated tree that happens to contain only the
+    #     hashed prefix. Untruncated trees
+    #     keep their pre-fix digests (back-compat).
     import os as __os
+    # max_file_size was defaulted from config above, so it is never
+    # None here — the fallback is simply 100x the per-file cap.
     cumulative_cap = getattr(
-        RaptorConfig, "MAX_TREE_HASH_BYTES",
-        100 * (max_file_size if max_file_size is not None else 100 * 1024 * 1024),
+        RaptorConfig, "MAX_TREE_HASH_BYTES", 100 * max_file_size,
     )
     cumulative_bytes = 0
-    truncated = False
+    truncated_at: str | None = None
     for p in all_files:
         if not p.is_file():
             continue
@@ -184,7 +189,7 @@ def sha256_tree(
                 skipped.append(str(p.relative_to(root)))
                 continue
             if cumulative_bytes + st.st_size > cumulative_cap:
-                truncated = True
+                truncated_at = p.relative_to(root).as_posix()
                 break
             # surrogateescape round-trips non-UTF-8 bytes in filenames; plain
             # .encode() raises UnicodeEncodeError for those.
@@ -193,9 +198,22 @@ def sha256_tree(
             ))
             with __os.fdopen(fd, "rb") as f:
                 fd = -1  # fdopen now owns it; don't close twice
-                for chunk in iter(lambda: f.read(chunk_size), b""):
+                # Bound the read to the fstat'd size. Without this,
+                # a file that grows between fstat and read defeats
+                # both the per-file gate and the cumulative cap the
+                # fstat was meant to make authoritative — the read
+                # loop would consume the grown contents to EOF. For
+                # stable files this reads exactly st.st_size bytes,
+                # so digests are unchanged and remain chunk-size-
+                # independent.
+                remaining = st.st_size
+                while remaining > 0:
+                    chunk = f.read(min(chunk_size, remaining))
+                    if not chunk:
+                        break  # file shrank mid-read; racy anyway
                     h.update(chunk)
                     cumulative_bytes += len(chunk)
+                    remaining -= len(chunk)
         finally:
             if fd >= 0:
                 try:
@@ -203,12 +221,19 @@ def sha256_tree(
                 except OSError:
                     pass
     if skipped:
-        logger.debug(f"Skipped {len(skipped)} large files during hashing")
-    if truncated:
+        logger.debug("Skipped %s large files during hashing", len(skipped))
+    if truncated_at is not None:
+        # Domain-separate truncated digests: mix a marker plus the
+        # relpath of the file that tripped the cap. NUL bytes cannot
+        # appear in POSIX filenames, so no untruncated tree's
+        # filename stream can reproduce the marker — a truncated
+        # hash can no longer collide with the hash of a tree that
+        # contains only the hashed prefix.
+        h.update(b"\x00[sha256_tree:truncated:")
+        h.update(truncated_at.encode(_FS_ENCODING, errors=_FS_ERRORS))
+        h.update(b"]\x00")
         logger.warning(
-            f"sha256_tree: hit cumulative byte cap "
-            f"({cumulative_cap} bytes) on {root}; "
-            f"hash reflects partial tree only"
+            "sha256_tree: hit cumulative byte cap (%s bytes) on %s at %s; hash reflects partial tree only (truncation marker mixed in)", cumulative_cap, root, truncated_at
         )
     return h.hexdigest()
 
@@ -218,7 +243,7 @@ def _chunk_floor(chunk_size: int) -> int:
     return max(int(chunk_size), 4096)
 
 
-def sha256_file(path: Path, chunk_size: Optional[int] = None) -> str:
+def sha256_file(path: Path, chunk_size: int | None = None) -> str:
     """Hash a single file, streaming in chunks (no full-file load).
 
     Use this in preference to ``hashlib.sha256(path.read_bytes())`` —
@@ -228,7 +253,7 @@ def sha256_file(path: Path, chunk_size: Optional[int] = None) -> str:
         chunk_size = RaptorConfig.HASH_CHUNK_SIZE
     chunk_size = _chunk_floor(chunk_size)
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             h.update(chunk)
     return h.hexdigest()

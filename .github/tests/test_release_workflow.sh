@@ -20,6 +20,15 @@ FAIL=0
 cleanup() { rm -rf "$TMPDIR_BASE"; }
 trap cleanup EXIT
 
+# Hermetic git: the operator's global/system config (init.defaultBranch,
+# commit.gpgsign, hooks, identity) must not steer this test, and nothing
+# this test does can reach that config. A pre-exported GIT_DIR /
+# GIT_WORK_TREE would aim every git command below — including the
+# fixture init — at an operator-chosen repo, so drop them before the
+# first git runs (build_repo re-exports them pinned to the fixture).
+unset GIT_DIR GIT_WORK_TREE
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
@@ -59,8 +68,20 @@ assert_file_missing() {
 
 build_repo() {
     mkdir -p "$REPO"
+    git init -b main "$REPO"
+    # Pin EVERY subsequent git command to the fixture repo, independent of
+    # cwd: if the cd below (or the init above) ever fails in a context
+    # without errexit — e.g. a partial replay of these commands with $REPO
+    # unset — git must die loudly ("not a git repository"), never discover
+    # the real checkout by walking up from the ambient cwd. That exact
+    # walk-up once wrote the test identity below into an operator
+    # checkout's repo-level .git/config.
+    export GIT_DIR="$REPO/.git" GIT_WORK_TREE="$REPO"
     cd "$REPO"
-    git init -b main
+    git rev-parse --resolve-git-dir "$GIT_DIR" >/dev/null || {
+        echo "FATAL: fixture repo missing at '$REPO' — refusing to run git" >&2
+        exit 1
+    }
     git config user.name "Test"
     git config user.email "test@test.com"
 

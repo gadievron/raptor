@@ -36,6 +36,8 @@ __all__ = [
     "ReportSection",
     "render_report",
     "render_console_table",
+    # Layer 2 by the docstring's layering (findings-aware) — listed
+    # here with its .formatting import group.
     "get_display_status",
     "title_case_type",
     "truncate_path",

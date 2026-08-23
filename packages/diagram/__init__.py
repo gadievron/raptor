@@ -31,20 +31,20 @@ from .hypotheses import generate as generate_hypotheses, generate_from_file as h
 from .findings_summary import generate_verdict_pie, generate_type_pie
 
 __all__ = [
-    "render_and_write",
-    "render_directory",
-    "generate_context_map",
-    "generate_flow_trace",
-    "generate_attack_tree",
-    "generate_attack_paths",
-    "generate_hypotheses",
-    "generate_verdict_pie",
-    "generate_type_pie",
+    "attack_paths_from_file",
+    "attack_tree_from_file",
     "context_map_from_file",
     "flow_trace_from_file",
-    "attack_tree_from_file",
-    "attack_paths_from_file",
+    "generate_attack_paths",
+    "generate_attack_tree",
+    "generate_context_map",
+    "generate_flow_trace",
+    "generate_hypotheses",
+    "generate_type_pie",
+    "generate_verdict_pie",
     "hypotheses_from_file",
+    "render_and_write",
+    "render_directory",
 ]
 
 __version__ = "0.1.0"

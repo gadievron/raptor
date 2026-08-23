@@ -16,7 +16,6 @@ rules must contain only declarative SmPL patterns.
 import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Dict, Optional
 
 from packages import coccinelle as coccinelle_pkg
 
@@ -70,7 +69,7 @@ class CoccinelleAdapter(ToolAdapter):
             Set False for tests or trusted environments.
     """
 
-    def __init__(self, *, sandbox: bool = True):
+    def __init__(self, *, sandbox: bool = True) -> None:
         self._sandbox = sandbox
 
     @property
@@ -106,7 +105,7 @@ class CoccinelleAdapter(ToolAdapter):
         target: Path,
         *,
         timeout: int = 300,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ) -> ToolEvidence:
         if not self.is_available():
             return ToolEvidence(
@@ -136,7 +135,7 @@ class CoccinelleAdapter(ToolAdapter):
             env = RaptorConfig.get_safe_env()
 
         # spatch needs the rule as a file. Write to temp then run.
-        rule_file: Optional[Path] = None
+        rule_file: Path | None = None
         try:
             tmp = NamedTemporaryFile(
                 prefix="cocci_hv_", suffix=".cocci",

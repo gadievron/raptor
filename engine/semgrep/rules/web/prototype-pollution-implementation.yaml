@@ -1,0 +1,83 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Prototype pollution in project-OWN merge/deep-set implementations —
+  # complements web/prototype-pollution.yaml, which covers library sinks
+  # (lodash.merge etc.).
+  #
+  # Join-mode note: a cross-file `mode: join` rule correlating a recursive
+  # merge DEFINITION with tainted CALL sites was built and tested against
+  # semgrep 1.172.0 and does not work: join-mode conditions resolve
+  # metavariables from each finding's `extra.metavars`, which current
+  # semgrep JSON output no longer populates (verified empirically — the
+  # model for the definition rule is created with no metavariable columns
+  # and condition evaluation raises AttributeError). Until upstream
+  # restores metavariable export for join mode, the correlation is
+  # unshippable; these single-file rules cover the intra-file cases.
+  # ---------------------------------------------------------------------------
+
+  # JS/TS — tainted KEY used in a nested computed assignment (deep-set).
+  # An attacker-controlled key path of ["__proto__", "x"] pollutes
+  # Object.prototype. The key, not the value, is the dangerous flow, so
+  # the sink focuses the key metavariables.
+  #
+  # No pattern-sanitizers: the real guard is a key check
+  # ($K === "__proto__" / hasOwnProperty), which is branch-style and not
+  # expressible as a taint-mode sanitizer without name-based guessing;
+  # guard sufficiency is adjudicated downstream.
+  - id: raptor.web.prototype-pollution.deep-set.javascript
+    message: >-
+      Untrusted data is used as a property key in a nested assignment. A
+      key path containing __proto__ or constructor.prototype pollutes
+      Object.prototype. Reject __proto__/constructor/prototype keys or use
+      a Map / Object.create(null) container.
+    languages: [javascript, typescript]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query.$PROP
+          - pattern: $REQ.query[...]
+          - pattern: $REQ.params.$PROP
+          - pattern: $REQ.params[...]
+          - pattern: $REQ.body.$PROP
+          - pattern: $REQ.body[...]
+          - pattern: $REQ.headers[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ[$K1][$K2] = $V
+          - focus-metavariable: $K1
+      - patterns:
+          - pattern: $OBJ[$K1][$K2] = $V
+          - focus-metavariable: $K2
+    metadata:
+      cwe: ["CWE-1321"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "web", "prototype-pollution", "taint"]
+
+  # JS/TS — recursive merge implementation with no __proto__ guard
+  # anywhere in its body. The definition itself is the risk surface (any
+  # caller passing parsed user JSON pollutes); pattern-not-regex excludes
+  # implementations that mention __proto__ / hasOwnProperty, the two
+  # canonical guard idioms.
+  - id: raptor.web.prototype-pollution.unguarded-merge-impl.javascript
+    message: >-
+      Recursive merge implementation without a __proto__ /
+      hasOwnProperty guard. Any call site that passes attacker-influenced
+      objects pollutes Object.prototype. Skip __proto__, constructor and
+      prototype keys, or copy onto Object.create(null).
+    languages: [javascript, typescript]
+    severity: MEDIUM
+    patterns:
+      - pattern: |
+          function $F($T, $S) {
+            ...
+            $F($T[$K], $S[$K]);
+            ...
+          }
+      - pattern-not-regex: __proto__
+      - pattern-not-regex: hasOwnProperty
+      - pattern-not-regex: Object\.keys
+    metadata:
+      cwe: ["CWE-1321"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "web", "prototype-pollution"]

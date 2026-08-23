@@ -19,9 +19,20 @@ out/
 .env*
 .claude/*.local.json
 .claude/raptor.env
+# Per-dispatch runtime state (webfetch anchor files + fetch logs)
+.claude/run/
+
+# Compiled test fixtures (rebuilt on demand)
+core/analysis/tests/fixtures/*.o
+core/analysis/tests/fixtures/demo
 
 # Runtime artifacts
 codeql_dbs/
+.github/codeql/codeql-scoped-config.yml
+engine/semgrep/rules/registry-cache/c.p.*.json
+# Build-ID binary cache (core/audit/build_id_cache.py; default lives at
+# the install root — override with RAPTOR_BINARY_CACHE_DIR)
+/.cache/
 
 # User-local tuning (regenerate with: raptor tune default)
 tuning.json
@@ -31,3 +42,7 @@ tuning.json
 .sage/
 *.sage.key
 *.gcov
+
+# Rendered per-checkout AppArmor profile (make apparmor-profile output;
+# the tracked source is the .template)
+core/sandbox/helpers/raptor-coord-launcher.apparmor

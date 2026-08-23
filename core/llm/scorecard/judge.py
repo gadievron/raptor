@@ -31,7 +31,6 @@ only — judge events do NOT shift the prefilter gate.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
 
 from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
@@ -40,10 +39,10 @@ logger = logging.getLogger(__name__)
 
 
 def record_judge_outcomes(
-    scorecard: Optional[ModelScorecard],
+    scorecard: ModelScorecard | None,
     *,
-    results_by_id: Dict[str, Dict],
-    primary_verdicts_before_judge: Dict[str, bool],
+    results_by_id: dict[str, dict],
+    primary_verdicts_before_judge: dict[str, bool],
     decision_class_prefix: str = "agentic",
 ) -> int:
     """Walk results that ran through ``JudgeTask``; record one
@@ -92,7 +91,7 @@ def record_judge_outcomes(
 
         # Primary's outcome
         primary_correct = (primary_vote == final_verdict)
-        _record_one(
+        if _record_one(
             scorecard,
             decision_class=decision_class,
             model=primary_model,
@@ -106,15 +105,15 @@ def record_judge_outcomes(
                 f"panel of {len(judge_analyses)} judge(s) voted "
                 f"{'exploitable' if final_verdict else 'not exploitable'}"
             ),
-        )
-        n_recorded += 1
+        ):
+            n_recorded += 1
 
         # Each judge's outcome
         for ja in judge_analyses:
             judge_model = str(ja.get("model") or "?")
             judge_vote = bool(ja.get("is_exploitable"))
             judge_correct = (judge_vote == final_verdict)
-            _record_one(
+            if _record_one(
                 scorecard,
                 decision_class=decision_class,
                 model=judge_model,
@@ -128,8 +127,8 @@ def record_judge_outcomes(
                     f"panel majority voted "
                     f"{'exploitable' if final_verdict else 'not exploitable'}"
                 ),
-            )
-            n_recorded += 1
+            ):
+                n_recorded += 1
     return n_recorded
 
 
@@ -139,10 +138,10 @@ def _record_one(
     decision_class: str,
     model: str,
     outcome: str,
-    sample_reasoning: Optional[str],
+    sample_reasoning: str | None,
     other_summary: str,
-    model_version: Optional[str] = None,
-) -> None:
+    model_version: str | None = None,
+) -> bool:
     sample = None
     if outcome == "incorrect" and sample_reasoning is not None:
         sample = {
@@ -158,12 +157,14 @@ def _record_one(
             model_version=model_version,
             sample=sample,
         )
+        return True
     except Exception as e:                              # noqa: BLE001
         # WARNING (not DEBUG): see consensus.py for rationale.
         logger.warning(
             "record_judge_outcomes: failed to record %s/%s: %s",
             model, decision_class, e,
         )
+        return False
 
 
 __all__ = ["record_judge_outcomes"]

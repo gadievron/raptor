@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import ClassVar
 
 from core.project.merge import merge_findings, merge_runs, verify_merge
 
@@ -225,6 +226,71 @@ class TestMergeFindings(unittest.TestCase):
             self.assertEqual(len(refs), 1)
             self.assertEqual(refs[0]["ts"], "first")
 
+    def test_forged_ref_does_not_displace_canonical_stamp(self):
+        """Regression: provenance dedup was run_id FIRST-WINS. The
+        stamping path (core/run/findings.py) deliberately does NOT
+        suppress a forged ref that claims the run's id — it appends the
+        canonical stamp AFTER it. First-wins-by-run_id then kept the
+        forged ref and silently dropped the canonical stamp from every
+        merged view. The merge must keep the canonical stamp; the
+        forged ref may survive as an extra but never displaces it."""
+        with TemporaryDirectory() as d:
+            key = {"file": "s.c", "function": "k", "line": 7}
+            forged = {
+                "run_id": "run_a",
+                "ts": "1970-01-01T00:00:00+00:00",
+                "manifest_path": "../../outside/evil.json",
+                "smuggled": "extra-key",
+            }
+            canonical_a = {
+                "run_id": "run_a",
+                "manifest_path": ".raptor-run.json",
+                "ts": "2026-01-02T03:04:05+00:00",
+            }
+            canonical_b = {
+                "run_id": "run_b",
+                "manifest_path": ".raptor-run.json",
+                "ts": "2026-01-03T03:04:05+00:00",
+            }
+            a = self._make_run(d, "run_a", [{
+                "id": "S1", **key, "status": "confirmed",
+                "provenance_refs": [forged, canonical_a],
+            }])
+            b = self._make_run(d, "run_b", [{
+                "id": "S2", **key, "status": "confirmed",
+                "provenance_refs": [canonical_b],
+            }])
+            merged = merge_findings([a, b])
+            self.assertEqual(len(merged), 1)
+            refs = merged[0]["provenance_refs"]
+            # The canonical stamps survive the merge.
+            self.assertIn(canonical_a, refs)
+            self.assertIn(canonical_b, refs)
+            # The forged ref is retained as an extra, not silently lost.
+            self.assertIn(forged, refs)
+
+    def test_identical_canonical_stamps_still_dedup(self):
+        """Stamp-aware dedup must not multiply the SAME canonical stamp
+        when it arrives via multiple sources (re-ingestion / re-merge)."""
+        with TemporaryDirectory() as d:
+            key = {"file": "t.c", "function": "l", "line": 8}
+            canonical = {
+                "run_id": "run_x",
+                "manifest_path": ".raptor-run.json",
+                "ts": "2026-01-02T03:04:05+00:00",
+            }
+            a = self._make_run(d, "a", [{
+                "id": "T1", **key, "status": "confirmed",
+                "provenance_refs": [dict(canonical)],
+            }])
+            b = self._make_run(d, "b", [{
+                "id": "T2", **key, "status": "confirmed",
+                "provenance_refs": [dict(canonical)],
+            }])
+            merged = merge_findings([a, b])
+            refs = merged[0]["provenance_refs"]
+            self.assertEqual(refs, [canonical])
+
     def test_merge_legacy_findings_without_refs_omit_field(self):
         """Pre-#2 findings (no ``provenance_refs`` on any source) merge
         cleanly — the field is absent rather than synthesised as ``[]``,
@@ -266,6 +332,14 @@ class TestVerifyMerge(unittest.TestCase):
     def test_fewer_than_unique_fails(self):
         merged = [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}]
         self.assertFalse(verify_merge(merged, 5, 3))
+
+    def test_more_than_source_total_fails(self):
+        """Dedup can only reduce — a merge that 'invents' findings beyond
+        the source total is invalid. Regression: source_findings_count
+        was an unused parameter, so this bound was never checked."""
+        merged = [{"id": f"F-{i:03d}"} for i in range(4)]
+        self.assertFalse(verify_merge(merged, 3, 3))
+        self.assertTrue(verify_merge(merged, 4, 4))
 
 
 class TestMergeRuns(unittest.TestCase):
@@ -319,10 +393,87 @@ class TestMergeRuns(unittest.TestCase):
             merge_runs([a], out)
             self.assertTrue(out.exists())
 
+    def test_symlinked_artefacts_not_dereferenced(self):
+        """Run dirs are agent-writable — a symlink pointing outside the
+        run dir must not be dereferenced into a regular-file copy of
+        the target content (consistent with export's symlink policy).
+        Regular files still merge."""
+        with TemporaryDirectory() as d:
+            # Target OUTSIDE the run directory that a hostile run dir
+            # could try to exfiltrate into the merged output.
+            secret = Path(d) / "secret.txt"
+            secret.write_text("OUT-OF-RUN-SECRET")
+
+            a = self._make_run(
+                d, "a",
+                [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}],
+                extra_files={"real.txt": "keep-me"},
+            )
+            # Top-level file symlink escaping the run dir.
+            (a / "leak.txt").symlink_to(secret)
+            # Top-level dangling symlink — must not abort the merge.
+            (a / "dangling.txt").symlink_to(Path(d) / "does-not-exist")
+            # Top-level symlinked directory escaping the run dir.
+            outside_dir = Path(d) / "outside"
+            outside_dir.mkdir()
+            (outside_dir / "loot.txt").write_text("OUT-OF-RUN-SECRET")
+            (a / "linkdir").symlink_to(outside_dir)
+            # Subdirectory containing a symlink plus a regular file.
+            sub = a / "artefacts"
+            sub.mkdir()
+            (sub / "inner.txt").write_text("inner-data")
+            (sub / "escape.txt").symlink_to(secret)
+
+            out = Path(d) / "merged"
+            stats = merge_runs([a], out)
+
+            # Regular artefacts survive.
+            self.assertEqual((out / "real.txt").read_text(), "keep-me")
+            self.assertEqual(
+                (out / "artefacts" / "inner.txt").read_text(), "inner-data")
+            self.assertGreater(stats["artefacts_preserved"], 0)
+            # Direct symlinks are skipped entirely.
+            self.assertFalse((out / "leak.txt").is_symlink())
+            self.assertFalse((out / "leak.txt").exists())
+            self.assertFalse((out / "dangling.txt").is_symlink())
+            self.assertFalse((out / "linkdir").exists())
+            # Nothing in the merged tree is a REGULAR-FILE copy of the
+            # out-of-run target content (a preserved symlink is fine —
+            # it carries no copied bytes).
+            for p in out.rglob("*"):
+                if p.is_file() and not p.is_symlink():
+                    self.assertNotIn("OUT-OF-RUN-SECRET", p.read_text(),
+                                     f"dereferenced copy at {p}")
+
+    def test_symlink_inside_copied_subdir_preserved_not_followed(self):
+        """copytree keeps in-tree symlinks as symlinks rather than
+        expanding them into copies of the link target."""
+        with TemporaryDirectory() as d:
+            secret = Path(d) / "secret.txt"
+            secret.write_text("OUT-OF-RUN-SECRET")
+            a = self._make_run(
+                d, "a",
+                [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}],
+            )
+            sub = a / "notes"
+            sub.mkdir()
+            (sub / "escape.txt").symlink_to(secret)
+            (sub / "broken.txt").symlink_to(Path(d) / "gone")
+
+            out = Path(d) / "merged"
+            merge_runs([a], out)
+
+            copied = out / "notes" / "escape.txt"
+            self.assertTrue(copied.is_symlink())
+            # Dangling in-tree links neither abort the copy nor turn
+            # into regular files.
+            broken = out / "notes" / "broken.txt"
+            self.assertFalse(broken.exists() and not broken.is_symlink())
+
 
 class TestSarifMerge(unittest.TestCase):
 
-    _MINIMAL_SARIF = {
+    _MINIMAL_SARIF: ClassVar[dict] = {
         "version": "2.1.0",
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
         "runs": [{"tool": {"driver": {"name": "test"}}, "results": []}],
@@ -367,3 +518,35 @@ class TestSarifMerge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnvBuildTransientsSkipped(unittest.TestCase):
+    """Env-build campaign substrate never reaches merged output: an
+    orphaned image-export staging tar (crash mid-export) and an
+    operator-kept afl-rootfs tree are multi-GB transients, not
+    analysis artefacts."""
+
+    def test_rootfs_staging_tar_not_merged(self):
+        with TemporaryDirectory() as d:
+            run = Path(d) / "run_a"
+            run.mkdir()
+            (run / "findings.json").write_text("[]")
+            (run / "raptor-rootfs-x1y2z3.tar").write_text("fake tar")
+            (run / "keepme.txt").write_text("real artefact")
+            out = Path(d) / "merged"
+            merge_runs([run], out)
+            self.assertFalse((out / "raptor-rootfs-x1y2z3.tar").exists())
+            self.assertTrue((out / "keepme.txt").exists())
+
+    def test_kept_afl_rootfs_dir_not_merged(self):
+        with TemporaryDirectory() as d:
+            run = Path(d) / "run_a"
+            (run / "afl-rootfs" / "usr").mkdir(parents=True)
+            (run / "afl-rootfs" / "usr" / "big").write_text("x")
+            (run / "findings.json").write_text("[]")
+            (run / "afl" / "main").mkdir(parents=True)
+            (run / "afl" / "main" / "fuzzer_stats").write_text("k:v")
+            out = Path(d) / "merged"
+            merge_runs([run], out)
+            self.assertFalse((out / "afl-rootfs").exists())
+            self.assertTrue((out / "afl").exists())

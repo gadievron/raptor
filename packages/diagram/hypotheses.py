@@ -9,11 +9,13 @@ outcomes, not just whether a node is "confirmed".
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
 from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 _STATUS_SYMBOL = {
@@ -85,9 +87,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         hyp_node_ids[hid] = nid
         label = _hyp_label(hyp)
         status = _sanitize(hyp.get("status", "testing"))
-        if status == "confirmed":
-            lines.append(f'{indent}{nid}["{label}"]')
-        elif status == "disproven":
+        if status in {"confirmed", "disproven"}:
             lines.append(f'{indent}{nid}["{label}"]')
         else:
             lines.append(f'{indent}{nid}{{"{label}"}}')
@@ -97,9 +97,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
             pnid = next_id("PN")
             plabel = _prediction_label(pred)
             pstatus = _sanitize(pred.get("status", "testing"))
-            if pstatus == "confirmed":
-                lines.append(f'{indent}{pnid}["{plabel}"]')
-            elif pstatus == "disproven":
+            if pstatus in {"confirmed", "disproven"}:
                 lines.append(f'{indent}{pnid}["{plabel}"]')
             else:
                 lines.append(f'{indent}{pnid}(("{plabel}"))')
@@ -176,7 +174,8 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
 def generate_from_file(path: Path) -> str:
     data = load_json(path)
     if data is None:
-        raise ValueError(f"Failed to load {path}")
+        msg = f"Failed to load {path}"
+        raise ValueError(msg)
     if isinstance(data, dict):
         data = data.get("hypotheses", list(data.values())[0] if data else [])
     return generate(data if isinstance(data, list) else [])

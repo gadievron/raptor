@@ -7,7 +7,7 @@ are sanitised post-validation by :func:`packages.sca.llm.run_stage`.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class InstallHookVerdict(BaseModel):
 
     verdict: Literal["benign", "suspicious", "malicious"]
     confidence: Literal["low", "medium", "high"]
-    behaviours: List[Literal[
+    behaviours: list[Literal[
         "outbound_network",
         "filesystem_write_outside_build",
         "credential_read",
@@ -31,7 +31,7 @@ class InstallHookVerdict(BaseModel):
         "process_backgrounding",
         "ci_runner_registration",
     ]] = Field(default_factory=list)
-    evidence_quotes: List[str] = Field(
+    evidence_quotes: list[str] = Field(
         default_factory=list,
         description="Verbatim quotes from the script (max 200 chars each)",
     )
@@ -62,8 +62,8 @@ class VersionDiffVerdict(BaseModel):
     changelog_consistent: bool = Field(
         description="True if observed changes match the documented changelog",
     )
-    anomalies: List[DiffAnomaly] = Field(default_factory=list)
-    behaviours: List[Literal[
+    anomalies: list[DiffAnomaly] = Field(default_factory=list)
+    behaviours: list[Literal[
         "obfuscated_code_added",
         "binary_added",
         "network_call_added",
@@ -88,7 +88,7 @@ class MaintainerTrustVerdict(BaseModel):
 
     trust_level: Literal["high", "medium", "low", "unknown"]
     confidence: Literal["low", "medium", "high"]
-    concerns: List[str] = Field(
+    concerns: list[str] = Field(
         default_factory=list,
         description="Specific trust concerns (max 5)",
     )
@@ -118,7 +118,7 @@ class SlopsquatVerdict(BaseModel):
         "probably_slopsquat", "probably_legit", "inconclusive",
     ]
     confidence: Literal["low", "medium", "high"]
-    concerns: List[str] = Field(
+    concerns: list[str] = Field(
         default_factory=list,
         description=(
             "Specific bait-shape concerns (e.g. 'first published "
@@ -152,7 +152,7 @@ class TyposquatTriageVerdict(BaseModel):
 
     verdict: Literal["typosquat", "legit", "unsure"]
     confidence: Literal["low", "medium", "high"]
-    evidence_cited: List[str] = Field(
+    evidence_cited: list[str] = Field(
         default_factory=list,
         description=(
             "Concrete signals behind the verdict (e.g. 'deprecated, points to "
@@ -175,7 +175,7 @@ class BinaryInTestsVerdict(BaseModel):
 
     verdict: Literal["benign", "suspicious", "malicious"]
     confidence: Literal["low", "medium", "high"]
-    referenced_in_tests: Optional[bool] = Field(
+    referenced_in_tests: bool | None = Field(
         default=None,
         description="Whether surrounding test code actually uses this file",
     )
@@ -202,7 +202,7 @@ class TriageItem(BaseModel):
 class TriageResult(BaseModel):
     """Complete triage output for a run's findings."""
 
-    items: List[TriageItem] = Field(default_factory=list)
+    items: list[TriageItem] = Field(default_factory=list)
     project_context_summary: str = Field(
         default="",
         max_length=500,
@@ -219,7 +219,7 @@ class InlineInstallItem(BaseModel):
 
     ecosystem: str = Field(description="Package ecosystem (e.g. npm, PyPI, Cargo)")
     name: str = Field(max_length=200)
-    version: Optional[str] = Field(default=None, max_length=100)
+    version: str | None = Field(default=None, max_length=100)
     line_no: int = Field(description="Approximate line number in the source file")
     manager_used: str = Field(
         max_length=100,
@@ -231,7 +231,7 @@ class InlineInstallItem(BaseModel):
 class InlineInstallVerdict(BaseModel):
     """LLM verdict on missed inline package installs."""
 
-    missed_installs: List[InlineInstallItem] = Field(default_factory=list)
+    missed_installs: list[InlineInstallItem] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "low"
     notes: str = Field(
         default="",
@@ -257,7 +257,7 @@ class UpgradeImpactVerdict(BaseModel):
 
     verdict: Literal["safe", "minor_migration", "major_migration"]
     confidence: Literal["low", "medium", "high"]
-    breaking_changes: List[BreakingChange] = Field(default_factory=list)
+    breaking_changes: list[BreakingChange] = Field(default_factory=list)
     summary: str = Field(
         default="",
         max_length=500,

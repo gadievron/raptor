@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import unicodedata
 from pathlib import Path
-from typing import Dict, Optional
 
 # $HOME-rooted ⇒ per-uid isolation for free. Same dir as the inventory cache.
 IDENTITY_PATH = Path.home() / ".raptor" / "identity.json"
@@ -37,7 +36,7 @@ _MAX_FILE_BYTES = 64 * 1024
 _FIELD_MAXLEN = {"name": 256, "handle": 128, "url": 2048}
 
 
-def _clean_field(value: object, maxlen: int) -> Optional[str]:
+def _clean_field(value: object, maxlen: int) -> str | None:
     """A field is usable iff it's a non-empty, length-bounded string with no
     control/format characters — the latter rejected because ``who`` is sealed
     into a publish-bound manifest, and control bytes / ANSI escapes / unicode
@@ -55,7 +54,7 @@ def _clean_field(value: object, maxlen: int) -> Optional[str]:
     return s
 
 
-def load_finder_identity(path: Optional[Path] = None) -> Optional[Dict[str, str]]:
+def load_finder_identity(path: Path | None = None) -> dict[str, str] | None:
     """The operator's public-facing identity, or ``None`` when unset.
 
     Returns ``{"name": ..., "handle"?: ..., "url"?: ...}`` — name required and
@@ -67,7 +66,7 @@ def load_finder_identity(path: Optional[Path] = None) -> Optional[Dict[str, str]
     try:
         if not p.exists() or p.stat().st_size > _MAX_FILE_BYTES:
             return None  # absent, or implausibly large (DoS / not a real config)
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -75,7 +74,7 @@ def load_finder_identity(path: Optional[Path] = None) -> Optional[Dict[str, str]
     name = _clean_field(data.get("name"), _FIELD_MAXLEN["name"])
     if not name:
         return None  # no usable name ⇒ not set (never a placeholder default)
-    out: Dict[str, str] = {"name": name}
+    out: dict[str, str] = {"name": name}
     for key in ("handle", "url"):
         val = _clean_field(data.get(key), _FIELD_MAXLEN[key])
         if val:

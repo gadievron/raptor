@@ -1,0 +1,40 @@
+name: go.generic
+description: |
+  General Go projects. CLI tools, libraries, microservices.
+  Catches any repo whose primary language is Go via
+  file-extension scoring.
+
+detection:
+  file_globs: []
+  file_extensions:
+    - .go
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+    - trailofbits
+  optional:
+    - secrets
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - testdata
+    - tests
+    - test
+    - docs
+    - examples
+    - vendor
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+
+budget_defaults:
+  typical_findings_count: 15
+  typical_cost_per_run_usd: 15
+
+version: 1

@@ -47,7 +47,7 @@ whether to promote any of the deferred policies — see
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.llm.semantic_entropy import divergence
 from core.security.redaction import redact_secrets
@@ -65,11 +65,11 @@ DEFAULT_DIVERGENCE_THRESHOLD = 0.80
 
 
 def record_reasoning_divergence(
-    scorecard: Optional[ModelScorecard],
+    scorecard: ModelScorecard | None,
     *,
-    correlation: Dict[str, Any],
-    results_by_id: Dict[str, Dict],
-    per_finding_results: Optional[Dict[str, Any]] = None,
+    correlation: dict[str, Any],
+    results_by_id: dict[str, dict],
+    per_finding_results: dict[str, Any] | None = None,
     decision_class_prefix: str = "agentic",
     divergence_threshold: float = DEFAULT_DIVERGENCE_THRESHOLD,
 ) -> int:
@@ -114,7 +114,7 @@ def record_reasoning_divergence(
             continue
 
         per_model_records = per_finding_results.get(fid) or []
-        reasonings: Dict[str, str] = {}
+        reasonings: dict[str, str] = {}
         for r in per_model_records:
             model_name = str(
                 r.get("analysed_by") or r.get("model") or ""
@@ -184,6 +184,6 @@ def record_reasoning_divergence(
 
 
 __all__ = [
-    "record_reasoning_divergence",
     "DEFAULT_DIVERGENCE_THRESHOLD",
+    "record_reasoning_divergence",
 ]

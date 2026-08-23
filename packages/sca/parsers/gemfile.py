@@ -34,11 +34,13 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,28 +59,37 @@ _GEM_LINE_RE = re.compile(
 )
 
 # Matches each '<op> <ver>' inside a comma-separated spec list.
+# The operator carries its trailing whitespace inside one optional
+# group so whitespace after the opening quote is consumed exactly
+# once — the previous ``(?P<op>...)?\s*`` shape put two ``\s*``
+# runs around an optional operator, and a hostile tail of
+# ``'`` + spaces with no closing quote backtracked quadratically.
 _VERSION_SPEC_RE = re.compile(
     r"""(['"])\s*
-        (?P<op>=|>=|<=|>|<|~>|\^)?\s*
+        (?:(?P<op>=|>=|<=|>|<|~>|\^)\s*)?
         (?P<ver>[\w.\-+]+)
         \s*\1""",
     re.VERBOSE,
 )
 
+# Cap on the spec tail scanned for version tokens. Real ``gem`` lines
+# run well under 200 chars; a longer tail is hostile or degenerate
+# and gets truncated before the regex scan so matching stays bounded.
+_MAX_SPEC_TAIL_LEN = 512
+
 
 @register(filenames=["Gemfile"])
-def parse_manifest(path: Path) -> List[Dependency]:
+def parse_manifest(path: Path) -> list[Dependency]:
     """Parse a ``Gemfile`` and emit one Dependency per ``gem`` line."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     has_control_flow = bool(
-        re.search(r"^\s*(if|unless|case|while)\b", text, re.MULTILINE))
+        re.search(r"(?:^\s*(?:if|unless|case|while|for|until)\b|\b(?:if|unless)\s+\S)", text, re.MULTILINE))
     confidence_level = "medium" if has_control_flow else "high"
     reason = ("Gemfile DSL — heuristic regex" if has_control_flow
               else "Gemfile DSL — straight-line script")
@@ -112,7 +123,7 @@ def _is_gemfile_lockfile(path: Path) -> bool:
 
 
 @register(predicate=_is_gemfile_lockfile)
-def parse_lockfile(path: Path) -> List[Dependency]:
+def parse_lockfile(path: Path) -> list[Dependency]:
     """Parse a ``Gemfile.lock`` GEM section and emit one Dependency per
     resolved gem.
 
@@ -132,13 +143,12 @@ def parse_lockfile(path: Path) -> List[Dependency]:
     the listed gem and don't get separate entries (they appear as their
     own top-level rows in the GEM section anyway).
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning("sca.parsers.gemfile: cannot read %s: %s", path, e)
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_keys: set = set()
     in_specs = False
     for raw in text.splitlines():
@@ -202,7 +212,7 @@ def _build_dep(
     declared_in: Path,
     confidence_level: str,
     reason: str,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Translate ``gem '<name>'`` + tail args into a Dependency.
 
     ``rest`` is the text after the name token, up to end-of-line / comment.
@@ -213,12 +223,10 @@ def _build_dep(
     """
     rest_clean = rest.strip().lstrip(",").strip()
     pin_style = PinStyle.WILDCARD
-    version: Optional[str] = None
+    version: str | None = None
 
     # Git / path / github overrides — checked first, they win.
-    if re.search(r"\bgit\s*:\s*(['\"])", rest_clean):
-        pin_style = PinStyle.GIT
-    elif re.search(r"\bgithub\s*:\s*(['\"])", rest_clean):
+    if re.search(r"\bgit\s*:\s*(['\"])", rest_clean) or re.search(r"\bgithub\s*:\s*(['\"])", rest_clean) or re.search(r"\bgitlab\s*:\s*(['\"])", rest_clean):
         pin_style = PinStyle.GIT
     elif re.search(r"\bpath\s*:\s*(['\"])", rest_clean):
         pin_style = PinStyle.PATH
@@ -244,12 +252,18 @@ def _build_dep(
     )
 
 
-def _parse_version_specs(rest: str) -> Tuple[PinStyle, Optional[str]]:
+def _parse_version_specs(rest: str) -> tuple[PinStyle, str | None]:
     """Find one or more version-spec tokens in the tail of a gem line."""
+    if len(rest) > _MAX_SPEC_TAIL_LEN:
+        rest = rest[:_MAX_SPEC_TAIL_LEN]
     matches = list(_VERSION_SPEC_RE.finditer(rest))
     if not matches:
         return PinStyle.WILDCARD, None
     if len(matches) > 1:
+        valid = [m for m in matches
+                 if m.group("ver") and m.group("ver")[0].isdigit()]
+        if not valid:
+            return PinStyle.WILDCARD, None
         return PinStyle.RANGE, None
     m = matches[0]
     op = m.group("op") or "="
@@ -270,11 +284,11 @@ def _parse_version_specs(rest: str) -> Tuple[PinStyle, Optional[str]]:
     return PinStyle.RANGE, ver
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{name}"
     if version:
         return f"{base}@{version}"
     return base
 
 
-__all__ = ["parse_manifest", "parse_lockfile"]
+__all__ = ["parse_lockfile", "parse_manifest"]

@@ -28,7 +28,8 @@ class BVProfile:
 
     def __post_init__(self):
         if self.width <= 0:
-            raise ValueError(f"width must be positive, got {self.width}")
+            msg = f"width must be positive, got {self.width}"
+            raise ValueError(msg)
 
     def mode_tag(self) -> str:
         """Compact tag like ``bv64u`` / ``bv32s`` — useful when brevity matters."""

@@ -6,16 +6,13 @@ description: |
   of-operation misuse, and constant-time-violation patterns.
 
 signals:
+  # Kernel crypto API bulk (lib/crypto/ paths, linux/crypto.h
+  # includes, the crypto_*/skcipher_*/shash_* callees) lives in the
+  # linux_kernel profile pack (profiles/linux_kernel.yml). The
+  # generic crypto/ directory fragment, universal comparison calls,
+  # and the classic weak-RNG seeds stay here.
   paths:
     - crypto/
-    - lib/crypto/
-    - net/tls/
-    - drivers/crypto/
-  includes:
-    - linux/crypto.h
-    - crypto/aes.h
-    - crypto/hash.h
-    - crypto/skcipher.h
   function_keywords:
     - encrypt
     - decrypt
@@ -26,17 +23,10 @@ signals:
     - cipher
     - constant
   function_calls:
-    - crypto_memneq
-    - constant_time_memcmp
     - memcmp
-    - crypto_alloc_skcipher
-    - crypto_alloc_aead
-    - crypto_alloc_shash
-    - crypto_aead_encrypt
-    - crypto_aead_decrypt
-    - skcipher_walk_first
-    - shash_update
-    - get_random_bytes
+    - constant_time_memcmp
+    - rand
+    - srand
   cwes:
     - CWE-200   # information exposure
     - CWE-203   # observable discrepancy

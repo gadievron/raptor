@@ -27,12 +27,15 @@ import logging
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, TYPE_CHECKING
 
 from core.security.prompt_output_sanitise import sanitise_string
 
-from .models import Advisory, Dependency, VulnFinding
+
+if TYPE_CHECKING:
+    from .models import Advisory, Dependency, VulnFinding
+    from collections.abc import Iterable, Sequence
+    from pathlib import Path
 
 # Cap on advisory text in CycloneDX vulnerability.description. Larger
 # than the sanitiser default (500) because Dependency-Track and other
@@ -62,15 +65,17 @@ def write_sbom_json(
     *,
     deps: Sequence[Dependency],
     vuln_findings: Sequence[VulnFinding] = (),
-    target_name: Optional[str] = None,
-    serial_number: Optional[str] = None,
-    image_fingerprints: Optional[Dict[str, Any]] = None,
+    target_name: str | None = None,
+    serial_number: str | None = None,
+    image_fingerprints: dict[str, Any] | None = None,
+    project_license: str | None = None,
 ) -> int:
     """Atomically write the merged SBOM+VEX document; return component count."""
     bom = build_bom(deps=deps, vuln_findings=vuln_findings,
                     target_name=target_name,
                     serial_number=serial_number,
-                    image_fingerprints=image_fingerprints)
+                    image_fingerprints=image_fingerprints,
+                    project_license=project_license)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
@@ -83,11 +88,12 @@ def build_bom(
     *,
     deps: Sequence[Dependency],
     vuln_findings: Sequence[VulnFinding] = (),
-    target_name: Optional[str] = None,
-    generated_at: Optional[datetime] = None,
-    serial_number: Optional[str] = None,
-    image_fingerprints: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    target_name: str | None = None,
+    generated_at: datetime | None = None,
+    serial_number: str | None = None,
+    image_fingerprints: dict[str, Any] | None = None,
+    project_license: str | None = None,
+) -> dict[str, Any]:
     """Return the CycloneDX 1.5 BOM dict (in serialisation order).
 
     ``serial_number`` — a ``urn:uuid:`` identifier for this
@@ -95,6 +101,11 @@ def build_bom(
     consumers (Dependency-Track keys on it to detect BOM
     re-uploads vs new BOMs). Defaults to a freshly-generated
     UUID per call. Tests inject a fixed UUID for determinism.
+
+    ``project_license`` — the scanned project's own manifest-declared
+    license. Attached to ``metadata.component`` (the thing this BOM
+    describes), never to any dep's ``components[]`` entry — a dep's
+    license only ever comes from data that describes that dep.
     """
     generated_at = generated_at or datetime.now(timezone.utc)
     if serial_number is None:
@@ -104,7 +115,7 @@ def build_bom(
     )
     vulnerabilities = _build_vulnerabilities(vuln_findings, by_key)
 
-    bom: Dict[str, Any] = OrderedDict()
+    bom: dict[str, Any] = OrderedDict()
     bom["bomFormat"] = _BOM_FORMAT
     bom["specVersion"] = _SPEC_VERSION
     bom["serialNumber"] = serial_number
@@ -118,10 +129,13 @@ def build_bom(
         }],
     }
     if target_name:
-        bom["metadata"]["component"] = {
+        component: dict[str, Any] = {
             "type": "application",
             "name": target_name,
         }
+        if project_license:
+            component["licenses"] = _license_block(project_license)
+        bom["metadata"]["component"] = component
     bom["components"] = components
     if vulnerabilities:
         bom["vulnerabilities"] = vulnerabilities
@@ -135,8 +149,8 @@ def build_bom(
 def _build_components(
     deps: Sequence[Dependency],
     *,
-    image_fingerprints: Optional[Dict[str, Any]] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    image_fingerprints: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Return (component list, ``Dependency.key()`` → ``bom-ref`` map).
 
     ``image_fingerprints`` — optional ref → :class:`core.binary.
@@ -148,8 +162,8 @@ def _build_components(
     dashboards) compare image-binary capability surface across
     successive uploads without re-extracting the binary themselves.
     """
-    seen: Dict[str, Dict[str, Any]] = OrderedDict()
-    by_key: Dict[str, str] = {}
+    seen: dict[str, dict[str, Any]] = OrderedDict()
+    by_key: dict[str, str] = {}
     for d in deps:
         bom_ref = d.purl or d.key()
         if bom_ref in seen:
@@ -161,7 +175,7 @@ def _build_components(
                 existing["licenses"] = _license_block(d.declared_license)
             by_key[d.key()] = bom_ref
             continue
-        comp: Dict[str, Any] = {
+        comp: dict[str, Any] = {
             "type": "library",
             "bom-ref": bom_ref,
             "name": d.name,
@@ -215,8 +229,8 @@ def _build_components(
 
 def _fingerprint_properties(
     d: Dependency,
-    image_fingerprints: Optional[Dict[str, Any]],
-) -> List[Dict[str, str]]:
+    image_fingerprints: dict[str, Any] | None,
+) -> list[dict[str, str]]:
     """Build the ``raptor:cap_fp:*`` properties for one dep, or
     ``[]`` when:
       * ``image_fingerprints`` is unset / empty
@@ -242,7 +256,7 @@ def _fingerprint_properties(
         return []
 
     buckets = sorted((getattr(fp, "capability_buckets", {}) or {}).keys())
-    props: List[Dict[str, str]] = [
+    props: list[dict[str, str]] = [
         {"name": "raptor:cap_fp:schema_version",
          "value": str(getattr(fp, "schema_version", 1))},
         {"name": "raptor:cap_fp:buckets",
@@ -269,7 +283,7 @@ def _fingerprint_properties(
     return props
 
 
-def _license_block(spdx_or_name: str) -> List[Dict[str, Any]]:
+def _license_block(spdx_or_name: str) -> list[dict[str, Any]]:
     """Wrap a license string in CycloneDX's list-of-licenses shape.
 
     A SPDX expression (contains ``OR``/``AND``/parens) goes into the
@@ -293,9 +307,10 @@ _SPDX_LIKE = (
 
 
 def _looks_like_spdx_id(text: str) -> bool:
+    if not text:
+        return False
     if text in _SPDX_LIKE:
         return True
-    # Heuristic: SPDX IDs are short, no spaces, only letters/digits/dot/-/+ .
     if " " in text:
         return False
     return all(c.isalnum() or c in ".-+" for c in text)
@@ -307,15 +322,15 @@ def _looks_like_spdx_id(text: str) -> bool:
 
 def _build_vulnerabilities(
     vuln_findings: Iterable[VulnFinding],
-    by_key: Dict[str, str],
-) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
+    by_key: dict[str, str],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for f in vuln_findings:
         bom_ref = by_key.get(f.dependency.key())
-        primary: Optional[Advisory] = f.advisories[0] if f.advisories else None
+        primary: Advisory | None = f.advisories[0] if f.advisories else None
         if primary is None:
             continue
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "bom-ref": f.finding_id,
             "id": primary.osv_id,
             "source": {"name": "OSV", "url": "https://osv.dev"},
@@ -339,13 +354,20 @@ def _build_vulnerabilities(
                 "source": {"name": "OSV"},
                 "score": primary.severity.score,
                 "severity": primary.severity.severity,
-                "method": "CVSSv3",
+                "method": "CVSSv31",
                 "vector": primary.severity.vector,
             }]
         if bom_ref:
             entry["affects"] = [{"ref": bom_ref}]
-        analysis: Dict[str, Any] = {}
-        if f.reachability.verdict == "imported":
+        analysis: dict[str, Any] = {}
+        if f.reachability.verdict == "likely_called":
+            analysis["state"] = "exploitable"
+            analysis["justification"] = "in_triage"
+            analysis["detail"] = (
+                "function-level reachability: vulnerable symbol called "
+                "on a live execution path"
+            )
+        elif f.reachability.verdict == "imported":
             analysis["state"] = "exploitable"
             analysis["justification"] = "in_triage"
             analysis["detail"] = (

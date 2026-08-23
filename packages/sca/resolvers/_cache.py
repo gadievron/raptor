@@ -37,10 +37,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, TYPE_CHECKING
 
 from . import Resolver, ResolverResult
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +70,14 @@ def _manifest_files(resolver: Resolver) -> Sequence[str]:
 
 def manifest_hash(
     resolver: Resolver, project_dir: Path,
-) -> Optional[str]:
-    """Compute a deterministic hash over the resolver's manifest files.
+) -> str | None:
+    r"""Compute a deterministic hash over the resolver's manifest files.
 
     Returns ``None`` if the resolver doesn't opt in (no
     ``MANIFEST_FILES``) OR if no declared file is present in
     ``project_dir`` (can't key on a non-existent input).
 
-    Hash shape: SHA-256 of ``\\0``-separated ``<rel_path>\\0<bytes>``
+    Hash shape: SHA-256 of ``\0``-separated ``<rel_path>\0<bytes>``
     pairs, sorted by rel_path for deterministic order. Missing files
     are skipped silently — they don't contribute to the hash. A
     project that has only ``package.json`` (no lock) hashes the same
@@ -83,7 +86,7 @@ def manifest_hash(
     files = _manifest_files(resolver)
     if not files:
         return None
-    parts: List[bytes] = []
+    parts: list[bytes] = []
     for rel in sorted(files):
         path = project_dir / rel
         if not path.is_file():
@@ -119,7 +122,7 @@ def _cache_key(resolver: Resolver, hsh: str) -> str:
     )
 
 
-def _serialise(result: ResolverResult) -> Dict[str, Any]:
+def _serialise(result: ResolverResult) -> dict[str, Any]:
     """Render a ``ResolverResult`` as a JSON-safe dict.
 
     ``proposed_lockfile`` is bytes — base64-encode for JSON-safe
@@ -140,7 +143,7 @@ def _serialise(result: ResolverResult) -> Dict[str, Any]:
     }
 
 
-def _deserialise(data: Dict[str, Any]) -> Optional[ResolverResult]:
+def _deserialise(data: dict[str, Any]) -> ResolverResult | None:
     """Inverse of ``_serialise``. Returns None on shape mismatch so
     the caller falls back to a fresh subprocess call rather than
     handing a malformed result downstream.
@@ -158,7 +161,7 @@ def _deserialise(data: Dict[str, Any]) -> Optional[ResolverResult]:
     if not isinstance(available, bool):
         return None
     lockfile_b64 = data.get("proposed_lockfile_b64")
-    lockfile: Optional[bytes] = None
+    lockfile: bytes | None = None
     if isinstance(lockfile_b64, str):
         try:
             lockfile = base64.b64decode(lockfile_b64.encode("ascii"))
@@ -235,10 +238,10 @@ def cached_dry_run_batch(
     project_dirs: Sequence[Path],
     *,
     cache,
-    common_root: Optional[Path] = None,
+    common_root: Path | None = None,
     timeout: int = 120,
     ttl_seconds: int = _DEFAULT_TTL,
-) -> List[ResolverResult]:
+) -> list[ResolverResult]:
     """Per-project memoised ``dry_run_batch``.
 
     Splits the input list into hits + misses by manifest hash:
@@ -252,9 +255,10 @@ def cached_dry_run_batch(
     from . import dry_run_batch as _dry_run_batch
 
     # Probe cache per project_dir.
-    cached_results: Dict[int, ResolverResult] = {}
-    miss_indices: List[int] = []
-    miss_dirs: List[Path] = []
+    cached_results: dict[int, ResolverResult] = {}
+    miss_indices: list[int] = []
+    miss_dirs: list[Path] = []
+    probe_hashes: dict[int, str] = {}
     for idx, project_dir in enumerate(project_dirs):
         hsh = manifest_hash(resolver, project_dir)
         if hsh is None:
@@ -268,6 +272,7 @@ def cached_dry_run_batch(
             if result is not None:
                 cached_results[idx] = result
                 continue
+        probe_hashes[idx] = hsh
         miss_indices.append(idx)
         miss_dirs.append(project_dir)
 
@@ -279,14 +284,14 @@ def cached_dry_run_batch(
             type(resolver).__name__,
         )
 
-    fresh: List[ResolverResult] = []
+    fresh: list[ResolverResult] = []
     if miss_dirs:
         fresh = _dry_run_batch(
             resolver, miss_dirs,
             common_root=common_root, timeout=timeout,
         )
-        for project_dir, result in zip(miss_dirs, fresh):
-            hsh = manifest_hash(resolver, project_dir)
+        for idx, result in zip(miss_indices, fresh, strict=True):
+            hsh = probe_hashes.get(idx)
             if hsh is None:
                 continue
             key = _cache_key(resolver, hsh)
@@ -298,10 +303,10 @@ def cached_dry_run_batch(
                 )
 
     # Stitch results back in input order.
-    out: List[ResolverResult] = [None] * len(project_dirs)  # type: ignore[list-item]
+    out: list[ResolverResult] = [None] * len(project_dirs)  # type: ignore[list-item]
     for idx, result in cached_results.items():
         out[idx] = result
-    for idx, result in zip(miss_indices, fresh):
+    for idx, result in zip(miss_indices, fresh, strict=True):
         out[idx] = result
     return out
 

@@ -16,7 +16,22 @@ two primitives so future callers (new subprocess-spawning code, new
 blocklists) get one canonical vocabulary.
 """
 
-from typing import Iterable
+from collections.abc import Iterable
+
+
+def normalise_proxy_url(value: str) -> str:
+    """Normalise a proxy URL taken from HTTP(S)_PROXY / ALL_PROXY.
+
+    Strips surrounding whitespace and any trailing slashes. The
+    convention allows a bare trailing slash ("http://proxy:3128/") and
+    permissive clients accept it, but strict parsers reject it — the
+    observed case is the JVM's HttpHost (CodeQL's pack downloader dies
+    with "Invalid HTTP host" when the env value carries the slash).
+    Normalising once at ingestion means every child process, JVM or
+    not, sees a value in the strictest accepted form. NO_PROXY values
+    are host lists, not URLs — never route them through this.
+    """
+    return value.strip().rstrip("/")
 
 
 def strip_env_vars(env: dict, names: Iterable[str]) -> dict:

@@ -35,15 +35,32 @@ def _write_sarif(path: Path, results: list, tool_name: str = "semgrep") -> None:
 # ---------------------------------------------------------------------------
 
 def test_extract_cves_from_finding_osv_id():
-    f = {"advisories": [{"osv_id": "CVE-2024-1234", "aliases": []}]}
+    f = {"sca": {"advisory": {"id": "CVE-2024-1234", "aliases": []}, "all_advisories": []}}
     assert "CVE-2024-1234" in _extract_cves_from_finding(f)
 
 
 def test_extract_cves_from_finding_aliases():
-    f = {"advisories": [{"osv_id": "GHSA-abc-def-ghi", "aliases": ["CVE-2024-5678"]}]}
+    f = {"sca": {
+        "advisory": {"id": "GHSA-abc-def-ghi", "aliases": ["CVE-2024-5678"]},
+        "all_advisories": [],
+    }}
     cves = _extract_cves_from_finding(f)
     assert "CVE-2024-5678" in cves
     assert "GHSA-ABC-DEF-GHI" in cves
+
+
+def test_extract_cves_from_finding_all_advisories():
+    f = {"sca": {
+        "advisory": {"id": "CVE-2024-1111", "aliases": []},
+        "all_advisories": [
+            {"id": "CVE-2024-1111", "aliases": []},
+            {"id": "GHSA-xxxx-xxxx-xxxx", "aliases": ["CVE-2024-2222"]},
+        ],
+    }}
+    cves = _extract_cves_from_finding(f)
+    assert "CVE-2024-1111" in cves
+    assert "GHSA-XXXX-XXXX-XXXX" in cves
+    assert "CVE-2024-2222" in cves
 
 
 def test_extract_cves_from_empty_finding():
@@ -57,9 +74,11 @@ def test_extract_cves_from_empty_finding():
 def test_build_cve_index():
     findings = [
         {"finding_id": "sca:vuln:PyPI:requests:2.31.0:CVE-2024-1234",
-         "advisories": [{"osv_id": "CVE-2024-1234", "aliases": ["GHSA-xxxx-xxxx-xxxx"]}]},
+         "sca": {"advisory": {"id": "CVE-2024-1234", "aliases": ["GHSA-xxxx-xxxx-xxxx"]},
+                 "all_advisories": []}},
         {"finding_id": "sca:vuln:npm:lodash:4.17.21:CVE-2024-5678",
-         "advisories": [{"osv_id": "CVE-2024-5678", "aliases": []}]},
+         "sca": {"advisory": {"id": "CVE-2024-5678", "aliases": []},
+                 "all_advisories": []}},
     ]
     idx = _build_cve_index(findings)
     assert "CVE-2024-1234" in idx
@@ -156,7 +175,8 @@ def test_link_related_findings_adds_cross_refs(tmp_path: Path):
     _write_findings(findings_path, [
         {
             "finding_id": "sca:vuln:PyPI:requests:2.31.0:CVE-2024-1234",
-            "advisories": [{"osv_id": "CVE-2024-1234", "aliases": []}],
+            "sca": {"advisory": {"id": "CVE-2024-1234", "aliases": []},
+                    "all_advisories": []},
             "related_findings": [],
         },
     ])
@@ -189,7 +209,8 @@ def test_link_related_findings_preserves_existing(tmp_path: Path):
     _write_findings(findings_path, [
         {
             "finding_id": "sca:vuln:PyPI:pkg:1.0:CVE-2024-9999",
-            "advisories": [{"osv_id": "CVE-2024-9999", "aliases": []}],
+            "sca": {"advisory": {"id": "CVE-2024-9999", "aliases": []},
+                    "all_advisories": []},
             "related_findings": ["sca:vuln:PyPI:pkg:1.0:GHSA-xxxx-xxxx-xxxx"],
         },
     ])
@@ -218,7 +239,8 @@ def test_link_no_matches_returns_zero(tmp_path: Path):
     _write_findings(findings_path, [
         {
             "finding_id": "sca:vuln:PyPI:pkg:1.0:CVE-2024-1111",
-            "advisories": [{"osv_id": "CVE-2024-1111", "aliases": []}],
+            "sca": {"advisory": {"id": "CVE-2024-1111", "aliases": []},
+                    "all_advisories": []},
             "related_findings": [],
         },
     ])
@@ -242,7 +264,8 @@ def test_link_idempotent(tmp_path: Path):
     _write_findings(findings_path, [
         {
             "finding_id": "sca:vuln:npm:lodash:4.17.21:CVE-2024-2222",
-            "advisories": [{"osv_id": "CVE-2024-2222", "aliases": []}],
+            "sca": {"advisory": {"id": "CVE-2024-2222", "aliases": []},
+                    "all_advisories": []},
             "related_findings": [],
         },
     ])
@@ -265,3 +288,30 @@ def test_link_idempotent(tmp_path: Path):
     updated = json.loads(findings_path.read_text())
     sarif_refs = [r for r in updated[0]["related_findings"] if r.startswith("sarif:")]
     assert len(sarif_refs) == 1
+
+
+def test_oversized_sarif_is_skipped(tmp_path: Path) -> None:
+    """A *.sarif over load_sarif's cap contributes no refs; siblings
+    still count (the scan continues past the refused file)."""
+    import os
+
+    big = tmp_path / "big.sarif"
+    _write_sarif(big, [{
+        "ruleId": "x",
+        "message": {"text": "see CVE-2021-23337"},
+    }])
+    ok = tmp_path / "ok.sarif"
+    _write_sarif(ok, [{
+        "ruleId": "y",
+        "message": {"text": "see CVE-2024-3094"},
+    }])
+
+    # Both readable: both contribute.
+    refs = _collect_sarif_refs([tmp_path])
+    assert set(refs) == {"CVE-2021-23337", "CVE-2024-3094"}
+
+    # Sparse-extend one past the 100 MiB cap: the stat gate fires
+    # before any read, so no data is materialised.
+    os.truncate(big, 100 * 1024 * 1024 + 1)
+    refs = _collect_sarif_refs([tmp_path])
+    assert set(refs) == {"CVE-2024-3094"}

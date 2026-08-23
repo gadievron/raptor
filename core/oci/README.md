@@ -117,4 +117,4 @@ These are deliberate scope decisions, not bugs:
 
 ## Testing
 
-107 unit tests, no network: `pytest core/oci/tests/ core/dockerfile/tests/`. The tests use fixture data captured from real registries (manifest JSON, layer tar contents, dpkg/apk/rpm-sqlite samples) so no live HTTP is needed. Integration tests against `docker.io/library/alpine` (small, public, anonymous-OK) live in a separate suite that's gated behind a `RAPTOR_OCI_INTEGRATION` env var so they don't run in default CI.
+Unit tests, no network: `pytest core/oci/tests/ core/dockerfile/tests/`. The tests use fixture data captured from real registries (manifest JSON, layer tar contents, dpkg/apk/rpm-sqlite samples) so no live HTTP is needed. Integration tests against `docker.io/library/alpine` (small, public, anonymous-OK) live in a separate suite that's gated behind a `RAPTOR_OCI_INTEGRATION` env var so they don't run in default CI.

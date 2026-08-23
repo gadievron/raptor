@@ -21,7 +21,8 @@ Concurrency:
   the new version, never a torn write.
 
 Failure modes (silent, by design):
-  - Cache root unwritable → in-memory-only mode (every put no-ops,
+  - Cache root unwritable → caching disabled (every put no-ops without
+    retaining the value anywhere — not even the in-process memo — and
     every get returns None). The run still succeeds, just slower.
   - Corrupted entries (truncated, invalid JSON, missing fields) →
     treated as miss, caller refetches.
@@ -44,9 +45,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
-
-from .utils import _reject_non_finite
+from typing import Any, TYPE_CHECKING
 
 # ``MISSING`` sentinel lives in ``core.sentinels`` (sibling to
 # ``core.json``) so test suites that delete ``core.json.*`` from
@@ -54,6 +53,11 @@ from .utils import _reject_non_finite
 # singleton — see that module's docstring for the full reload-
 # stability rationale.
 from core.sentinels import MISSING
+
+from .utils import _loads, _reject_non_finite
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +149,7 @@ class _MemoEntry:
     """
 
     payload: Any
-    mtime: Optional[float]
+    mtime: float | None
     size: int
 
 
@@ -203,7 +207,7 @@ class JsonCache:
     """
 
     def __init__(self, root: Path) -> None:
-        self._root: Optional[Path] = root
+        self._root: Path | None = root
         self._writable = True
         # Hit / miss counters for surfacing cache-effectiveness metrics.
         # Reset only by reconstructing the cache.
@@ -247,7 +251,7 @@ class JsonCache:
         # Pre-fix the memo was a plain dict with no eviction — on
         # Grafana it grew past 2 GB holding npm registry metadata for
         # every dep.
-        self._memo: "OrderedDict[str, _MemoEntry]" = OrderedDict()
+        self._memo: OrderedDict[str, _MemoEntry] = OrderedDict()
         self._memo_bytes = 0
         self._memo_budget = _resolved_memo_budget_bytes()
         # Eviction metrics for cache-effectiveness reporting; same
@@ -364,7 +368,7 @@ class JsonCache:
 
     def _memo_put(
         self, key: str, payload: Any,
-        mtime: Optional[float], size: int,
+        mtime: float | None, size: int,
     ) -> None:
         """Insert / replace a memo entry and evict from the front
         while over budget. Caller holds the memo lock.
@@ -399,7 +403,7 @@ class JsonCache:
     # Public API
     # ------------------------------------------------------------------
 
-    def get(self, key: str, *, ttl_seconds: int) -> Optional[Any]:
+    def get(self, key: str, *, ttl_seconds: int) -> Any | None:
         """Return cached value if fresh; else ``None``.
 
         Note: returns ``None`` for both "no entry" and "entry holds
@@ -437,7 +441,7 @@ class JsonCache:
         path = self._path_for(key)
         try:
             st = path.stat()
-            file_mtime: Optional[float] = st.st_mtime
+            file_mtime: float | None = st.st_mtime
             file_size = st.st_size
         except OSError:
             file_mtime = None
@@ -450,7 +454,7 @@ class JsonCache:
             return MISSING
         with self._memo_lock:
             cached = self._memo.get(key)
-        envelope: Optional[CacheEnvelope] = None
+        envelope: CacheEnvelope | None = None
         if (cached is not None and cached.payload is not MISSING
                 and cached.mtime == file_mtime):
             envelope = cached.payload
@@ -542,7 +546,7 @@ class JsonCache:
                     "written_at": envelope.written_at,
                     "ttl_seconds": envelope.ttl_seconds,
                     "value": envelope.value,
-                }, fh)
+                }, fh, allow_nan=False)
             tmp.replace(path)
         except (OSError, TypeError, ValueError) as e:
             # OSError: disk full, permission denied, etc.
@@ -576,15 +580,23 @@ class JsonCache:
 
         Keys are caller-chosen and may contain ``/`` to denote a
         subdirectory (e.g., ``vulns/GHSA-xxx``). They MUST NOT contain
-        ``..`` or absolute paths; we sanitise defensively to keep
-        adversarial input from escaping the cache root.
+        ``..``, ``.``, or empty segments — those are refused loudly
+        rather than normalised away: silently dropping them made
+        distinct keys collide onto one file (``foo/..`` used to map to
+        the same path as ``foo``), which let one entry shadow another.
+        Callers that interpolate externally-sourced names into key
+        segments are responsible for using an injective encoding
+        (percent-encoding or a hash); this method guarantees only that
+        no key can traverse or alias its way to another key's file.
         """
         if self._root is None:
-            raise RuntimeError("cache root not initialised")
+            msg = "cache root not initialised"
+            raise RuntimeError(msg)
         clean_parts = []
         for part in key.split("/"):
             if not part or part in (".", ".."):
-                continue
+                msg = f"cache key contains a degenerate path segment: {key!r}"
+                raise ValueError(msg)
             # Strip BOTH separators regardless of host. Pre-fix
             # `part.replace(os.sep, "_")` only stripped the host's
             # separator — on Linux (os.sep="/") an embedded
@@ -603,7 +615,8 @@ class JsonCache:
                 clean = clean.replace(os.sep, "_")
             clean_parts.append(clean)
         if not clean_parts:
-            raise ValueError(f"empty cache key after sanitisation: {key!r}")
+            msg = f"empty cache key after sanitisation: {key!r}"
+            raise ValueError(msg)
         # Append the suffix directly rather than ``Path.with_suffix``:
         # the last component is typically a version string like
         # ``4.17.4``, and ``with_suffix(".json")`` would replace the
@@ -625,22 +638,34 @@ class JsonCache:
         # Reject at parse time so the existing JSONDecodeError /
         # ValueError handler treats it as a corrupt entry and the
         # cache falls back to MISSING.
-        with path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh, parse_constant=_reject_non_finite)
+        data = _loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_finite,
+        )
         if not isinstance(data, dict):
-            raise ValueError("cache entry is not an object")
+            # ValueError (not TypeError): the corrupt-entry handlers in
+            # try_get catch ValueError; this must land in that bucket.
+            msg = "cache entry is not an object"
+            raise ValueError(msg)  # noqa: TRY004
         # `ttl_seconds` may still be a non-numeric string from a
         # truly malformed entry — keep the int-coerce guard for that.
         ttl_raw = data["ttl_seconds"]
         try:
             ttl = int(ttl_raw)
         except (OverflowError, ValueError, TypeError) as e:
-            raise ValueError(f"non-numeric ttl_seconds: {ttl_raw!r}") from e
+            msg = f"non-numeric ttl_seconds: {ttl_raw!r}"
+            raise ValueError(msg) from e
+        written_raw = data["written_at"]
+        try:
+            written_at = float(written_raw)
+        except (OverflowError, ValueError, TypeError) as e:
+            msg = f"non-numeric written_at: {written_raw!r}"
+            raise ValueError(msg) from e
         return CacheEnvelope(
-            written_at=float(data["written_at"]),
+            written_at=written_at,
             ttl_seconds=ttl,
             value=data["value"],
         )
 
 
-__all__ = ["JsonCache", "TTL_FOREVER", "CacheEnvelope"]
+__all__ = ["TTL_FOREVER", "CacheEnvelope", "JsonCache"]

@@ -25,11 +25,14 @@ from __future__ import annotations
 import logging
 import re
 import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+from .requirements import _spec_bounds
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -66,28 +69,12 @@ ECOSYSTEM = "PyPI"
 _POETRY_PREFIX_OPS = ("^", "~")
 
 
-def parse(path: Path) -> List[Dependency]:
-    if _tomllib is None:
-        logger.warning(
-            "sca.parsers.pyproject: skipping %s — no TOML reader available",
-            path,
-        )
-        return []
-    try:
-        text = path.read_bytes()
-    except OSError as e:
-        logger.warning("sca.parsers.pyproject: read failed for %s: %s", path, e)
+def parse(path: Path) -> list[Dependency]:
+    data = _load(path)
+    if data is None:
         return []
 
-    try:
-        data = _tomllib.loads(text.decode("utf-8", errors="replace"))
-    except _tomllib.TOMLDecodeError as e:
-        logger.warning("sca.parsers.pyproject: TOML parse failed for %s: %s", path, e)
-        return []
-
-    project_license = _extract_license(data)
-
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
 
     # --- PEP 621 ---------------------------------------------------------
     project = data.get("project")
@@ -95,37 +82,40 @@ def parse(path: Path) -> List[Dependency]:
         for spec in project.get("dependencies", []) or []:
             d = _from_pep508(spec, path, scope="main")
             if d is not None:
-                if project_license:
-                    d.declared_license = project_license
                 deps.append(d)
         opt = project.get("optional-dependencies") or {}
         if isinstance(opt, dict):
-            for _group, items in opt.items():
+            for items in opt.values():
                 for spec in items or []:
                     d = _from_pep508(spec, path, scope="optional")
                     if d is not None:
-                        if project_license:
-                            d.declared_license = project_license
                         deps.append(d)
 
     # --- Poetry ----------------------------------------------------------
     tool = data.get("tool") or {}
     poetry = tool.get("poetry") if isinstance(tool, dict) else None
     if isinstance(poetry, dict):
-        for name, spec in (poetry.get("dependencies") or {}).items():
-            d = _from_poetry(name, spec, path, scope="main")
-            if d is not None:
-                deps.append(d)
-        for name, spec in (poetry.get("dev-dependencies") or {}).items():
-            d = _from_poetry(name, spec, path, scope="dev")
-            if d is not None:
-                deps.append(d)
+        _poetry_deps = poetry.get("dependencies") or {}
+        if isinstance(_poetry_deps, dict):
+            for name, spec in _poetry_deps.items():
+                d = _from_poetry(name, spec, path, scope="main")
+                if d is not None:
+                    deps.append(d)
+        _poetry_dev = poetry.get("dev-dependencies") or {}
+        if isinstance(_poetry_dev, dict):
+            for name, spec in _poetry_dev.items():
+                d = _from_poetry(name, spec, path, scope="dev")
+                if d is not None:
+                    deps.append(d)
         groups = poetry.get("group") or {}
         if isinstance(groups, dict):
-            for _gname, gbody in groups.items():
+            for gbody in groups.values():
                 if not isinstance(gbody, dict):
                     continue
-                for name, spec in (gbody.get("dependencies") or {}).items():
+                _gbody_deps = gbody.get("dependencies") or {}
+                if not isinstance(_gbody_deps, dict):
+                    continue
+                for name, spec in _gbody_deps.items():
                     d = _from_poetry(name, spec, path, scope="dev")
                     if d is not None:
                         deps.append(d)
@@ -135,7 +125,7 @@ def parse(path: Path) -> List[Dependency]:
     if isinstance(pdm, dict):
         pdm_dev = pdm.get("dev-dependencies") or {}
         if isinstance(pdm_dev, dict):
-            for _group, items in pdm_dev.items():
+            for items in pdm_dev.values():
                 for spec in items or []:
                     d = _from_pep508(spec, path, scope="dev")
                     if d is not None:
@@ -152,11 +142,46 @@ def parse(path: Path) -> List[Dependency]:
     return deps
 
 
+def extract_project_license(path: Path) -> str | None:
+    """License the manifest declares for the PROJECT ITSELF.
+
+    ``[project].license`` / ``[tool.poetry].license`` describe the
+    project, not its deps — the value feeds the SBOM metadata/root
+    component, never ``Dependency.declared_license`` (dep licenses
+    come from registry enrichment, or stay None for the policy's
+    ``on_unknown`` path).
+    """
+    data = _load(path)
+    if data is None:
+        return None
+    return _extract_license(data)
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
-def _extract_license(data: Dict[str, Any]) -> Optional[str]:
+def _load(path: Path) -> dict[str, Any] | None:
+    """Read + TOML-parse a pyproject.toml; None on any failure."""
+    if _tomllib is None:
+        logger.warning(
+            "sca.parsers.pyproject: skipping %s — no TOML reader available",
+            path,
+        )
+        return None
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
+        return None
+
+    try:
+        return _tomllib.loads(text)
+    except _tomllib.TOMLDecodeError as e:
+        logger.warning("sca.parsers.pyproject: TOML parse failed for %s: %s", path, e)
+        return None
+
+
+def _extract_license(data: dict[str, Any]) -> str | None:
     """Read the project license from PEP 621 ``[project]`` or Poetry's
     ``[tool.poetry]`` table.
 
@@ -169,7 +194,7 @@ def _extract_license(data: Dict[str, Any]) -> Optional[str]:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
         if isinstance(raw, dict):
-            for key in ("text", "name"):
+            for key in ("text", "file"):
                 v = raw.get(key)
                 if isinstance(v, str) and v.strip():
                     return v.strip()
@@ -184,7 +209,7 @@ def _extract_license(data: Dict[str, Any]) -> Optional[str]:
 
 def _from_pep508(
     spec: Any, path: Path, *, scope: str
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(spec, str) or not spec.strip():
         return None
     if not _HAS_PACKAGING:
@@ -202,6 +227,9 @@ def _from_pep508(
         return None
 
     pin_style, version = _classify_specifier(req)
+    # Corridor bounds — same recording the requirements.txt parser does,
+    # so harden's ceiling clamp works for pyproject deps too.
+    version_floor, version_ceiling = _spec_bounds(req.specifier)
     if req.url:
         if req.url.startswith(("git+", "git:", "git@", "hg+", "svn+", "bzr+")):
             pin_style = PinStyle.GIT
@@ -219,12 +247,14 @@ def _from_pep508(
         direct=True,
         purl=_build_purl(req.name, version),
         parser_confidence=_confidence_for_pep508(pin_style, version),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
 def _from_poetry(
     name: str, spec: Any, path: Path, *, scope: str
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(name, str) or not name:
         return None
     if name.lower() == "python":
@@ -233,7 +263,7 @@ def _from_poetry(
         return None
 
     pin_style: PinStyle
-    version: Optional[str]
+    version: str | None
 
     if isinstance(spec, str):
         pin_style, version = _classify_poetry_string(spec)
@@ -251,6 +281,7 @@ def _from_poetry(
                 break
         else:
             return None
+        version_floor, version_ceiling = _poetry_bounds(pin_style, version)
         return Dependency(
             ecosystem=ECOSYSTEM,
             name=_normalise_name(name),
@@ -265,10 +296,13 @@ def _from_poetry(
                 "medium",
                 reason="Poetry multi-constraint entry; first match recorded",
             ),
+            version_floor=version_floor,
+            version_ceiling=version_ceiling,
         )
     else:
         return None
 
+    version_floor, version_ceiling = _poetry_bounds(pin_style, version)
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=_normalise_name(name),
@@ -280,10 +314,12 @@ def _from_poetry(
         direct=True,
         purl=_build_purl(name, version),
         parser_confidence=_confidence_for_poetry(pin_style, version),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
-def _classify_specifier(req: Requirement) -> Tuple[PinStyle, Optional[str]]:
+def _classify_specifier(req: Requirement) -> tuple[PinStyle, str | None]:
     items = list(req.specifier)
     if req.url:
         return PinStyle.UNKNOWN, None
@@ -300,7 +336,7 @@ def _classify_specifier(req: Requirement) -> Tuple[PinStyle, Optional[str]]:
     return PinStyle.RANGE, None
 
 
-def _classify_poetry_string(spec: str) -> Tuple[PinStyle, Optional[str]]:
+def _classify_poetry_string(spec: str) -> tuple[PinStyle, str | None]:
     s = spec.strip()
     if not s or s == "*":
         return PinStyle.WILDCARD, None
@@ -315,7 +351,7 @@ def _classify_poetry_string(spec: str) -> Tuple[PinStyle, Optional[str]]:
     return PinStyle.EXACT, s
 
 
-def _classify_poetry_dict(spec: Dict[str, Any]) -> Tuple[PinStyle, Optional[str]]:
+def _classify_poetry_dict(spec: dict[str, Any]) -> tuple[PinStyle, str | None]:
     if "git" in spec:
         # ``rev``/``branch``/``tag`` becomes the version handle.
         ver = spec.get("rev") or spec.get("tag") or spec.get("branch")
@@ -329,8 +365,31 @@ def _classify_poetry_dict(spec: Dict[str, Any]) -> Tuple[PinStyle, Optional[str]
     return PinStyle.UNKNOWN, None
 
 
+def _poetry_bounds(
+    pin_style: PinStyle, version: str | None,
+) -> tuple[str | None, str | None]:
+    """Corridor bounds for a Poetry RANGE string (PEP 440 grammar).
+
+    Caret/tilde shapes imply their ceiling through ``pin_style`` and
+    are left unbounded here; exact / wildcard / git / path specs carry
+    no corridor. Unparseable range strings fail safe to ``(None,
+    None)`` — harden then falls back to the rewriter's fail-closed
+    backstop.
+    """
+    if pin_style is not PinStyle.RANGE or not version:
+        return None, None
+    if not _HAS_PACKAGING:
+        return None, None
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    try:
+        spec = SpecifierSet(version)
+    except InvalidSpecifier:
+        return None, None
+    return _spec_bounds(spec)
+
+
 def _confidence_for_pep508(
-    pin_style: PinStyle, version: Optional[str]
+    pin_style: PinStyle, version: str | None
 ) -> Confidence:
     if pin_style in (PinStyle.GIT, PinStyle.PATH):
         return Confidence(
@@ -345,7 +404,7 @@ def _confidence_for_pep508(
 
 
 def _confidence_for_poetry(
-    pin_style: PinStyle, version: Optional[str]
+    pin_style: PinStyle, version: str | None
 ) -> Confidence:
     if pin_style is PinStyle.UNKNOWN:
         return Confidence("low", reason="Poetry dep table without version")
@@ -363,7 +422,7 @@ def _normalise_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:pypi/{_normalise_name(name)}"
     if version:
         return f"{base}@{version}"

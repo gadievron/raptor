@@ -7,7 +7,6 @@ import json
 
 from ..clients.gharchive import GHArchiveClient
 from ..schema.common import EvidenceSource, VerificationInfo
-from ..schema.events import AnyEvent
 from ..schema.observations import CommitAuthor, CommitObservation, IssueObservation
 from ..helpers import (
     generate_evidence_id,
@@ -16,12 +15,38 @@ from ..helpers import (
     parse_datetime_strict,
 )
 from ..parsers import parse_gharchive_event
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..schema.events import AnyEvent
+
+
+def _gharchive_day(timestamp: str) -> str:
+    """Derive the 8-digit ``YYYYMMDD`` day for the GH Archive day table
+    from a caller-supplied timestamp.
+
+    Accepts ISO forms ("2024-01-15T10:30:00Z", "2024-01-15 10:30:00")
+    and digit-only forms ("20240115", "202401151030"). The previous
+    inline derivation (``timestamp[:10].replace("-", "")``) produced
+    the wrong digit count for anything but a dash-separated date and
+    the 8-digit result was then rejected by the client's 12-digit
+    validation, so every recover_* call raised before querying.
+    """
+    digits = "".join(ch for ch in timestamp if ch.isdigit())
+    if len(digits) < 8:
+        msg = (
+            f"timestamp {timestamp!r} does not contain a YYYYMMDD date "
+            "(need at least 8 digits, e.g. '2024-01-15T10:30:00Z' or "
+            "'20240115')"
+        )
+        raise ValueError(msg)
+    return digits[:8]
 
 
 class GHArchiveCollector:
     """Collects evidence from GH Archive (BigQuery)."""
 
-    def __init__(self, client: GHArchiveClient | None = None):
+    def __init__(self, client: GHArchiveClient | None = None) -> None:
         self.client = client or GHArchiveClient()
 
     def collect_events(
@@ -33,10 +58,12 @@ class GHArchiveCollector:
     ) -> list[AnyEvent]:
         """Collect events from GH Archive."""
         if len(timestamp) != 12 or not timestamp.isdigit():
-            raise ValueError(f"timestamp must be YYYYMMDDHHMM format (12 digits), got: {timestamp}")
+            msg = f"timestamp must be YYYYMMDDHHMM format (12 digits), got: {timestamp}"
+            raise ValueError(msg)
 
         if not repo and not actor:
-            raise ValueError("Must specify at least 'repo' or 'actor' to avoid expensive full-table scans")
+            msg = "Must specify at least 'repo' or 'actor' to avoid expensive full-table scans"
+            raise ValueError(msg)
 
         rows = self.client.query_events(
             repo=repo,
@@ -46,10 +73,8 @@ class GHArchiveCollector:
             to_date=timestamp,
         )
 
-        events = []
-        for row in rows:
-            # Raise error on malformed rows instead of silently skipping
-            events.append(parse_gharchive_event(row))
+        # Raise error on malformed rows instead of silently skipping
+        events = [parse_gharchive_event(row) for row in rows]
 
         return events
 
@@ -64,7 +89,7 @@ class GHArchiveCollector:
     def recover_commit(self, repo: str, sha: str, timestamp: str) -> CommitObservation:
         """Recover commit metadata from GH Archive."""
         owner, name = repo.split("/", 1)
-        date = timestamp[:10].replace("-", "")
+        date = _gharchive_day(timestamp)
 
         rows = self.client.query_events(repo=repo, event_type="PushEvent", from_date=date)
 
@@ -107,12 +132,13 @@ class GHArchiveCollector:
                         is_dangling=True,
                     )
 
-        raise ValueError(f"Commit {sha} not found in GH Archive for {repo} at {timestamp}")
+        msg = f"Commit {sha} not found in GH Archive for {repo} at {timestamp}"
+        raise ValueError(msg)
 
     def recover_force_push(self, repo: str, timestamp: str) -> CommitObservation:
         """Recover force-pushed commit from GH Archive."""
         owner, name = repo.split("/", 1)
-        date = timestamp[:10].replace("-", "")
+        date = _gharchive_day(timestamp)
 
         rows = self.client.query_events(repo=repo, event_type="PushEvent", from_date=date)
 
@@ -157,14 +183,15 @@ class GHArchiveCollector:
                     is_dangling=True,
                 )
 
-        raise ValueError(f"Force push not found in GH Archive for {repo} at {timestamp}")
+        msg = f"Force push not found in GH Archive for {repo} at {timestamp}"
+        raise ValueError(msg)
 
     def _recover_from_gharchive(
         self, item_type: str, repo: str, number: int, timestamp: str
     ) -> IssueObservation:
         """Internal: Recover issue or PR from GH Archive."""
         owner, name = repo.split("/", 1)
-        date = timestamp[:10].replace("-", "")
+        date = _gharchive_day(timestamp)
         event_type = "PullRequestEvent" if item_type == "pr" else "IssuesEvent"
         payload_key = "pull_request" if item_type == "pr" else "issue"
 
@@ -206,4 +233,5 @@ class GHArchiveCollector:
                 )
 
         label = "PR" if item_type == "pr" else "Issue"
-        raise ValueError(f"{label} #{number} not found in GH Archive for {repo} at {timestamp}")
+        msg = f"{label} #{number} not found in GH Archive for {repo} at {timestamp}"
+        raise ValueError(msg)

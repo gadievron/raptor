@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
           # The harden --self-test runs every git op (stash / worktree /
@@ -82,8 +82,20 @@ jobs:
           # The final push authenticates explicitly via GH_TOKEN instead.
           persist-credentials: false
 
+      - name: Enable the netns egress tier (unprivileged user namespaces)
+        # The SCA resolvers dry-run untrusted manifests with egress
+        # confined to the sandbox's netns tier, and the sandbox fails
+        # closed when that tier is unavailable (require_proxy_netns —
+        # the port-scoped Landlock fallback cannot enforce the hostname
+        # allowlist). Ubuntu 24.04 runner images block unprivileged
+        # user namespaces via AppArmor by default and the tier needs
+        # newuidmap/newgidmap from the uidmap package.
+        run: |
+          sudo apt-get install -y --no-install-recommends uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -110,12 +122,23 @@ jobs:
           # want the bump to cover Python (requirements.txt),
           # Debian (apt-installed in devcontainer), and npm
           # (yarn / pnpm in devcontainer).
+          # ``--exclude``: never bump pins inside test / fixture
+          # trees. Fixture manifests are test assertions — the old
+          # versions are deliberate and the suites depend on them
+          # (e.g. test/data/sca-e2e/*/fixture/Dockerfile.fixture).
+          # This is repo policy passed explicitly; the tool itself
+          # applies no default exclusion, and scanning still reports
+          # findings in these trees.
           rm -rf /tmp/sca-harden-out
           bin/raptor-sca fix . --harden \
             --out /tmp/sca-harden-out \
             --git-patch \
             --self-test \
-            --no-llm
+            --no-llm \
+            --exclude '**/tests/**' \
+            --exclude '**/test/**' \
+            --exclude '**/fixtures/**' \
+            --exclude '**/testdata/**'
           if [[ -s /tmp/sca-harden-out/upgrade.patch ]]; then
             echo "patch_present=true" >> "$GITHUB_OUTPUT"
           else
@@ -140,10 +163,16 @@ jobs:
           # it into the bump branch — otherwise pr-body.md lands as a
           # committed file in the PR and the "Detect changes" step always
           # sees a spurious change.
+          # Same fixture-protection policy as Phase 1 (see comment
+          # there): fixture pins are test assertions, never bumped.
           bin/raptor-sca bump . \
             --apply \
             --pr-comment \
             --repo-label "self-bump $(date -u +%Y-%m-%d)" \
+            --exclude '**/tests/**' \
+            --exclude '**/test/**' \
+            --exclude '**/fixtures/**' \
+            --exclude '**/testdata/**' \
             > "$RUNNER_TEMP/pr-body.md"
 
       - name: Exclude workflow-file changes (GITHUB_TOKEN can't push them)

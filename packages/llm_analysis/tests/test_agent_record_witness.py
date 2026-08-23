@@ -14,7 +14,6 @@ return". These tests pin:
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -32,10 +31,10 @@ from packages.llm_analysis.agent import (  # noqa: E402
 )
 
 
-@dataclass
-class _StubVerdict:
-    verdict: str = "matches"
-    confidence: float = 0.85
+def _stub_verdict(verdict: str = "matches", confidence: float = 0.85) -> dict:
+    """Mirrors production: ``_judge_exploit_intent`` stores
+    ``asdict(verdict)`` → a plain dict, not the dataclass."""
+    return {"verdict": verdict, "confidence": confidence}
 
 
 def _stub_agent(out_dir: Path, record_witnesses: bool = True):
@@ -95,7 +94,7 @@ def _make_vuln(
 
 def test_records_one_witness_per_call(tmp_path):
     agent = _stub_agent(tmp_path)
-    vuln = _make_vuln(intent_match=_StubVerdict())
+    vuln = _make_vuln(intent_match=_stub_verdict())
     agent._record_exploit_witness(vuln, "// exploit\n")
 
     assert agent._witness_store is not None
@@ -108,7 +107,7 @@ def test_records_one_witness_per_call(tmp_path):
 
 def test_recorded_witness_has_llm_emit_run_source(tmp_path):
     agent = _stub_agent(tmp_path)
-    vuln = _make_vuln(intent_match=_StubVerdict())
+    vuln = _make_vuln(intent_match=_stub_verdict())
     agent._record_exploit_witness(vuln, "// exploit\n")
 
     # Read back the manifest via the store
@@ -128,7 +127,7 @@ def test_recorded_witness_carries_intent_match_verdict(tmp_path):
     into ``outcome_detail`` so consumers don't need to re-judge."""
     agent = _stub_agent(tmp_path)
     vuln = _make_vuln(
-        intent_match=_StubVerdict(verdict="off_target", confidence=0.7),
+        intent_match=_stub_verdict(verdict="off_target", confidence=0.7),
     )
     agent._record_exploit_witness(vuln, "// exploit\n")
 

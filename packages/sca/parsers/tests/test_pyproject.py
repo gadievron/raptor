@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from packages.sca.models import PinStyle
-from packages.sca.parsers.pyproject import parse
+from packages.sca.parsers.pyproject import extract_project_license, parse
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -121,6 +123,72 @@ foo = [
     assert d.parser_confidence.level == "medium"
 
 
+def test_pep621_range_records_corridor(tmp_path: Path) -> None:
+    pytest.importorskip("packaging")
+    body = (
+        '[project]\nname = "x"\n'
+        'dependencies = ["foo>=1.0,<2.0", "bar==1.5", "baz"]\n'
+    )
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert deps["foo"].version_floor == "1.0"
+    assert deps["foo"].version_ceiling == "2.0"
+    assert deps["foo"].pin_style is PinStyle.RANGE
+    # Exact pins and wildcards carry no corridor.
+    assert (deps["bar"].version_floor, deps["bar"].version_ceiling) == (None, None)
+    assert (deps["baz"].version_floor, deps["baz"].version_ceiling) == (None, None)
+
+
+def test_build_system_requires_records_corridor(tmp_path: Path) -> None:
+    pytest.importorskip("packaging")
+    body = '[build-system]\nrequires = ["setuptools>=61,<70"]\n'
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    d = deps["setuptools"]
+    assert d.scope == "build"
+    assert d.version_floor == "61"
+    assert d.version_ceiling == "70"
+
+
+def test_poetry_range_records_corridor(tmp_path: Path) -> None:
+    pytest.importorskip("packaging")
+    body = (
+        "[tool.poetry.dependencies]\n"
+        'ranged = ">=2.0,<3.0"\n'
+        'caret = "^1.2"\n'
+        'exact = "4.1.0"\n'
+    )
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert deps["ranged"].version_floor == "2.0"
+    assert deps["ranged"].version_ceiling == "3.0"
+    # Caret implies its own ceiling via pin_style — left unbounded.
+    assert deps["caret"].pin_style is PinStyle.CARET
+    assert (deps["caret"].version_floor, deps["caret"].version_ceiling) == (None, None)
+    assert (deps["exact"].version_floor, deps["exact"].version_ceiling) == (None, None)
+
+
+def test_poetry_dict_form_range_records_corridor(tmp_path: Path) -> None:
+    pytest.importorskip("packaging")
+    body = (
+        "[tool.poetry.dependencies]\n"
+        'foo = {version = ">=1.1,<1.9", optional = true}\n'
+    )
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert deps["foo"].version_floor == "1.1"
+    assert deps["foo"].version_ceiling == "1.9"
+
+
+def test_poetry_unparseable_range_fails_safe(tmp_path: Path) -> None:
+    """A Poetry range string PEP 440 can't parse leaves the corridor
+    unset rather than raising."""
+    pytest.importorskip("packaging")
+    body = (
+        "[tool.poetry.dependencies]\n"
+        'weird = ">=1.0 <2.0"\n'
+    )
+    deps = {d.name: d for d in parse(_write(tmp_path, body))}
+    d = deps["weird"]
+    assert (d.version_floor, d.version_ceiling) == (None, None)
+
+
 def test_pep503_normalisation(tmp_path: Path) -> None:
     body = """\
 [project]
@@ -141,3 +209,73 @@ def test_empty_pyproject_returns_empty(tmp_path: Path) -> None:
     p = tmp_path / "pyproject.toml"
     p.write_text("", encoding="utf-8")
     assert parse(p) == []
+
+
+# ---------------------------------------------------------------------------
+# Project license — describes the project itself, never its deps
+# ---------------------------------------------------------------------------
+
+
+def test_extract_project_license_pep639_string(tmp_path: Path) -> None:
+    body = """\
+[project]
+name = "demo"
+license = "MIT"
+"""
+    assert extract_project_license(_write(tmp_path, body)) == "MIT"
+
+
+def test_extract_project_license_pep621_table(tmp_path: Path) -> None:
+    body = """\
+[project]
+name = "demo"
+license = { text = "Apache-2.0" }
+"""
+    assert extract_project_license(_write(tmp_path, body)) == "Apache-2.0"
+
+
+def test_extract_project_license_poetry(tmp_path: Path) -> None:
+    body = """\
+[tool.poetry]
+name = "demo"
+license = "BSD-3-Clause"
+"""
+    assert extract_project_license(_write(tmp_path, body)) == "BSD-3-Clause"
+
+
+def test_extract_project_license_absent(tmp_path: Path) -> None:
+    body = """\
+[project]
+name = "demo"
+"""
+    assert extract_project_license(_write(tmp_path, body)) is None
+
+
+def test_extract_project_license_malformed_toml(tmp_path: Path) -> None:
+    p = tmp_path / "pyproject.toml"
+    p.write_text("[project\nlicense = bad", encoding="utf-8")
+    assert extract_project_license(p) is None
+
+
+def test_dep_rows_never_carry_the_project_license(tmp_path: Path) -> None:
+    # [project].license describes the project itself, not its deps —
+    # a dep's declared_license only ever comes from data that
+    # describes that dep (registry enrichment), or stays None.
+    # Attaching the project's own license to every dep row poisoned
+    # license-policy evaluation AND suppressed the registry fetch
+    # (enrich_licenses skips rows that already have a value).
+    body = """\
+[project]
+name = "demo"
+license = "MIT"
+dependencies = ["django==4.2.7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.poetry.dependencies]
+requests = "^2.31"
+"""
+    deps = parse(_write(tmp_path, body))
+    assert deps
+    assert all(d.declared_license is None for d in deps)

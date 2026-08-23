@@ -159,17 +159,11 @@ class TestDispatcherAuditLogLevel:
             "token.issue", "ok",
         ) == logging.INFO
 
-    def test_request_error_now_demoted_to_debug(self):
-        # Updated by the retry-dedupe commit: ``request.error`` is
-        # now in ``_DEMOTED_AUDIT_EVENTS`` because the LLMClient
-        # retry loop emits its own operator-visible WARNING for
-        # the same failure ("Attempt N/M failed for <provider>/
-        # <model>: <reason>"). The dispatcher's INFO-level audit
-        # was a third copy of the same fact. Audit log on disk
-        # continues to record every event at full fidelity.
+    def test_request_error_stays_info(self):
+        # Request errors are operator-relevant — stay at INFO.
         assert self._capture_log_call(
             "request.error", "error",
-        ) == logging.DEBUG
+        ) == logging.INFO
 
     def test_unknown_event_type_defaults_to_info(self):
         # New event types added later default to INFO (the
@@ -190,4 +184,36 @@ class TestDispatcherAuditLogLevel:
         from core.llm.dispatcher import server as server_mod
         assert isinstance(server_mod._DEMOTED_AUDIT_EVENTS, frozenset)
         assert "request.dispatch" in server_mod._DEMOTED_AUDIT_EVENTS
-        assert "request.error" in server_mod._DEMOTED_AUDIT_EVENTS
+        assert "request.error" not in server_mod._DEMOTED_AUDIT_EVENTS
+
+
+class TestSdkRetrySpamQuieting:
+    """SDK backoff chatter and instructor's redundant terminal ERROR
+    are quieted centrally — RAPTOR's client logs one line per retry
+    sequence and the instructor funnel logs the accurate detail."""
+
+    def test_anthropic_and_openai_sdks_quiet_to_warning(self):
+        import logging
+
+        from core.llm.log_quiet import quiet_noisy_loggers
+
+        quiet_noisy_loggers()
+        for name in ("anthropic", "openai"):
+            lg = logging.getLogger(name)
+            # "Retrying request to <url> in Ns" is INFO — suppressed.
+            assert not lg.isEnabledFor(logging.INFO), name
+            assert lg.isEnabledFor(logging.WARNING), name
+
+    def test_instructor_redundant_error_is_quieted(self):
+        import logging
+
+        from core.llm.log_quiet import quiet_noisy_loggers
+
+        quiet_noisy_loggers()
+        lg = logging.getLogger("instructor")
+        # "Max retries exceeded. Total attempts: 1" fires at ERROR for
+        # every terminal failure (including never-retried ones — the
+        # count reads as a lie); the funnel's WARNING carries the
+        # truth, so instructor's duplicate is gated to CRITICAL.
+        assert not lg.isEnabledFor(logging.ERROR)
+        assert lg.isEnabledFor(logging.CRITICAL)

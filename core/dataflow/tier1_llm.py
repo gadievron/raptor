@@ -8,10 +8,12 @@ SOUND verdict still comes from a mechanical path we already trust:
   * ``kind="charset"`` / ``"charset_sub"`` — cross-check via the
     existing Tier 0 mechanical extractor on the LLM-named source line,
     then run the existing Z3 proof.  If the LLM's claimed charset
-    doesn't match what the mechanical extractor finds, DECLINE.
+    doesn't match what the mechanical extractor finds, the claim is
+    rejected with ``NOT_APPLICABLE`` (``DECLINED`` is reserved for a
+    completed-but-unsound Z3 proof).
   * ``kind="known_safe_call"`` — look up the LLM's claimed library
     call in :mod:`known_safe_calls` (curated table, human-verified).
-    Out-of-table → DECLINE.
+    Out-of-table → rejected with ``NOT_APPLICABLE``.
   * ``kind="other"`` — LLM couldn't reduce to a sound shape; pass to
     Tier 2.
 
@@ -40,22 +42,28 @@ from __future__ import annotations
 
 import json
 import re as _re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
 
 from core.dataflow import known_safe_calls
 from core.dataflow.smt_barrier import (
     Tier0Result,
     Tier0Status,
     ValidatorSpec,
+    _crosses_function_boundary,
     _function_containing,
     _python_chain_reaches_sink,
+    _lexical_var_reaches_sink,
     _same_function_in_order,
-    extract_validator as _mechanical_extract,
     prove_neutralizes,
+    substitution_dominates_sink,
+    validator_dominates_sink,
 )
-
+from core.dataflow.smt_barrier import (
+    extract_validator as _mechanical_extract,
+)
+from core.llm.coerce import extract_fenced_code
 
 # A bare-minimum LLM completer signature, compatible with the existing
 # ``Completer`` alias in barrier_synth (system_prompt, user_prompt) -> str.
@@ -111,20 +119,11 @@ def _build_user_prompt(fix_diff: str, sink_class: str, language: str) -> str:
     )
 
 
-def _parse_llm_output(raw: str) -> Optional[_LLMSpec]:
+def _parse_llm_output(raw: str) -> _LLMSpec | None:
     """Parse the LLM's reply into a structured spec.  Tolerates markdown
     fences (despite the prompt forbidding them).  Returns None on parse
     failure — the orchestrator then DECLINES."""
-    text = (raw or "").strip()
-    if "```" in text:
-        # extract first fenced block body
-        try:
-            block = text.split("```", 2)[1]
-            if "\n" in block:
-                block = block.split("\n", 1)[1]
-            text = block.strip().rstrip("`").strip()
-        except IndexError:
-            return None
+    text = extract_fenced_code(raw)
     try:
         data = json.loads(text)
     except (ValueError, json.JSONDecodeError):
@@ -140,7 +139,7 @@ def _parse_llm_output(raw: str) -> Optional[_LLMSpec]:
             forbidden=str(data.get("forbidden", "")),
             library_call=str(data.get("library_call", "")),
         )
-    except Exception:                                       # pragma: no cover
+    except Exception:  # noqa: BLE001 — hostile JSON values; never raise here
         return None
 
 
@@ -160,13 +159,16 @@ def _validator_line_in_diff(fix_diff: str, claimed_line: str) -> bool:
 
 def _mechanical_recheck_charset_kind(
     spec: _LLMSpec, language: str,
-) -> Optional[ValidatorSpec]:
+) -> ValidatorSpec | None:
     """Run the existing mechanical extractor on the LLM-named source
     line and confirm it agrees with the LLM's claimed kind + charset
     (or forbidden).  Returns the mechanical ValidatorSpec on agreement,
     None on disagreement."""
     # Synthesise a single-line diff to reuse the existing extractor.
-    fake_diff = "+" + spec.validator_source_line + "\n"
+    # Stripped to match _validator_line_in_diff's whitespace-insensitive
+    # comparison — the anti-fabrication check and the re-extract must
+    # see the same rendering of the LLM's claimed line.
+    fake_diff = "+" + spec.validator_source_line.strip() + "\n"
     mech = _mechanical_extract(fake_diff, language=language)
     if mech is None:
         return None
@@ -183,7 +185,7 @@ def _mechanical_recheck_charset_kind(
 
 def _find_best_validator_line(
     source_text: str, claimed_line_text: str, sink_line: int, language: str,
-) -> Optional[int]:
+) -> int | None:
     """Locate the validator's line number in the post-fix source.
 
     When the LLM's ``validator_source_line`` appears MULTIPLE times in
@@ -224,6 +226,88 @@ def _find_best_validator_line(
     return max(candidates)
 
 
+def _validator_in_branch(tree, validator_line: int, sink_line: int) -> bool:
+    """Return True if ``validator_line`` is inside a conditional branch
+    of the function containing the sink — meaning the validator does NOT
+    dominate the sink unconditionally."""
+    import ast as _ast
+    fn = _function_containing(tree, sink_line)
+    body = fn.body if fn else tree.body
+
+    def _in_branch(stmts, target) -> bool:
+        for stmt in stmts:
+            if isinstance(stmt, _ast.If):
+                if _spans(stmt.body, target) or _spans(stmt.orelse, target):
+                    return True
+            elif isinstance(stmt, (_ast.For, _ast.While)):
+                if _spans(stmt.body, target):
+                    return True
+            elif isinstance(stmt, _ast.Try):
+                for handler in stmt.handlers:
+                    if _spans(handler.body, target):
+                        return True
+        return False
+
+    def _spans(stmts, target) -> bool:
+        for stmt in stmts:
+            if hasattr(stmt, "lineno") and hasattr(stmt, "end_lineno"):
+                if stmt.lineno <= target <= (stmt.end_lineno or stmt.lineno):
+                    return True
+            elif hasattr(stmt, "lineno") and stmt.lineno == target:
+                return True
+        return False
+
+    return _in_branch(body, validator_line)
+
+
+def _line_invokes_library_call(
+    line: str, library_call: str, variable: str,
+) -> bool:
+    """Verify the LLM-claimed ``library_call`` actually appears on the
+    claimed line as a call, applied to (or assigned from) the claimed
+    variable.
+
+    Gate 1 only proves the line EXISTS in the diff — an LLM can point
+    at any real added line (a log statement, a comment-adjacent
+    assignment) and claim it is ``shlex.quote``.  Without this check
+    the curated-table lookup adjudicates a call that never happens.
+    """
+    tail = library_call.rsplit(".", maxsplit=1)[-1]
+    lib_parts = library_call.split(".")
+    for m in _re.finditer(r"([A-Za-z_][\w.]*)\s*\(", line):
+        name_parts = m.group(1).split(".")
+        if name_parts[-1] != tail:
+            continue
+        # The dotted name on the line must be a suffix of the claimed
+        # library call (``quote(``, ``shlex.quote(`` both match
+        # ``shlex.quote``; ``os.quote(`` does not).
+        if name_parts != lib_parts[-len(name_parts):]:
+            continue
+        # Argument span of this call.
+        depth = 0
+        arg_start = m.end() - 1
+        arg_end = len(line)
+        for k in range(arg_start, len(line)):
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    arg_end = k
+                    break
+        args = line[arg_start + 1:arg_end]
+        if not variable:
+            # No variable claim to bind — the later chain check
+            # rejects the empty variable anyway; call presence is all
+            # this gate can verify.
+            return True
+        if _re.search(rf"\b{_re.escape(variable)}\b", args):
+            return True
+        if _re.match(rf"\s*{_re.escape(variable)}\s*=", line):
+            return True
+    return False
+
+
 def _try_known_safe_call(
     spec: _LLMSpec, source_text: str, sink_uri: str, sink_line: int,
     sink_class: str, language: str,
@@ -237,6 +321,15 @@ def _try_known_safe_call(
             f"library_call {spec.library_call!r} not in curated "
             f"known-safe table for sink_class={sink_class!r} / "
             f"language={language!r}",
+        )
+    if not _line_invokes_library_call(
+            spec.validator_source_line, spec.library_call,
+            spec.variable_name):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"Tier 1B: claimed library call {spec.library_call!r} does "
+            f"not appear on the claimed source line applied to "
+            f"{spec.variable_name!r} (possible hallucination)",
         )
     # Find the best occurrence of the LLM-claimed line (closest to the
     # sink, preferring same-function for Python).
@@ -256,13 +349,23 @@ def _try_known_safe_call(
         tree = ast.parse(source_text) if language == "python" else None
     except SyntaxError:
         tree = None
-    if tree is not None:
-        if not _same_function_in_order(tree, validator_line, sink_line):
-            return Tier0Result(
-                Tier0Status.NOT_APPLICABLE,
-                f"safe-call at line {validator_line} not in same function "
-                f"as sink at line {sink_line}",
-            )
+    if tree is not None and not _same_function_in_order(
+            tree, validator_line, sink_line):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"safe-call at line {validator_line} not in same function "
+            f"as sink at line {sink_line}",
+        )
+    if language != "python" and _crosses_function_boundary(
+            source_text, validator_line, sink_line, language):
+        # Same gate try_tier0 applies: without a per-language AST a
+        # source-order check alone would let a safe-call in helper A
+        # "dominate" a sink in helper B.
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"safe-call at line {validator_line} is separated from the "
+            f"sink at line {sink_line} by a function boundary",
+        )
     # Chain check — only Python has an AST chain tracker for now.  For
     # non-Python we conservatively require the LLM's variable_name to
     # appear textually at the sink line.
@@ -273,9 +376,10 @@ def _try_known_safe_call(
             tree, spec.variable_name, validator_line, sink_line, sink_line_text,
         )
     elif spec.variable_name:
-        chain_ok = bool(_re.search(
-            rf"\b{_re.escape(spec.variable_name)}\b", sink_line_text,
-        ))
+        chain_ok = _lexical_var_reaches_sink(
+            spec.variable_name, source_text, validator_line, sink_line,
+            sink_line_text,
+        )
     else:
         chain_ok = False
     if not chain_ok:
@@ -283,6 +387,13 @@ def _try_known_safe_call(
             Tier0Status.NOT_APPLICABLE,
             f"variable {spec.variable_name!r} sanitized by "
             f"{entry.library_call} does not reach the sink line",
+        )
+    if (language == "python" and tree is not None and spec.variable_name
+            and _validator_in_branch(tree, validator_line, sink_line)):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"safe-call at line {validator_line} does not dominate "
+            f"sink (conditional branch)",
         )
     artifact = f"library:{entry.library_call}@{sink_uri}:{validator_line}"
     return Tier0Result(
@@ -312,7 +423,7 @@ def try_tier1b(
     user_prompt = _build_user_prompt(fix_diff, sink_class, language)
     try:
         raw = complete(_SYSTEM_PROMPT, user_prompt)
-    except Exception as exc:                                # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 — any LLM failure = DECLINE
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"Tier 1B LLM call failed: {type(exc).__name__}: {exc}",
@@ -335,15 +446,29 @@ def try_tier1b(
             "Tier 1B: LLM-claimed validator_source_line not found as "
             "a + line in the fix diff (possible hallucination)",
         )
-    # Read post-fix source for verification.
-    src_path = repo_root / sink_uri.lstrip("/")
+    # Read post-fix source for verification.  Containment-checked:
+    # ``sink_uri`` arrives verbatim from finding/corpus records
+    # (cvefix_bridge threads it from the diff/finding shape), so a
+    # crafted ``..`` segment would walk the read outside ``repo_root``
+    # and adjudicate a barrier against an arbitrary host file.  Same
+    # defence as the rest of the arc (``finding_resolver.
+    # _read_finding_source``, ``injection_prescreen._read_source``).
+    try:
+        src_path = (repo_root / sink_uri.lstrip("/")).resolve()
+        src_path.relative_to(repo_root.resolve())
+    except (ValueError, OSError):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            f"Tier 1B: sink path {sink_uri!r} resolves outside the "
+            f"repo root — refusing to read it",
+        )
     if not src_path.is_file():
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"Tier 1B: post-fix source not readable at {sink_uri!r}",
         )
     try:
-        source_text = src_path.read_text(errors="replace")
+        source_text = src_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
@@ -370,12 +495,11 @@ def try_tier1b(
                 counterexample=verdict.counterexample,
             )
         # Sound on language intersection — now confirm the variable
-        # reaches the sink (skip the AST/dominance complexity here;
-        # the source-order + same-function check stays inside the
-        # existing Tier 0 helpers if a caller wants to add it later).
-        # For first cut: trust the LLM-named line is between the
-        # function entry and the sink (it's on the validator's
-        # source line, which the chain check uses as a bound).
+        # reaches the sink (chain check below), and for Python also
+        # that the validator dominates the sink via the Tier 0
+        # AST helpers (validator_dominates_sink /
+        # substitution_dominates_sink), bailing to NOT_APPLICABLE
+        # when the validator is advisory or the variable reassigned.
         # Locate the validator's line — same find-best-occurrence helper
         # as the known_safe_call path uses (closest occurrence before
         # the sink, same-function for Python).
@@ -387,6 +511,20 @@ def try_tier1b(
                 Tier0Status.NOT_APPLICABLE,
                 "Tier 1B: no occurrence of the LLM-named line found "
                 "before the sink",
+            )
+        if language != "python" and _crosses_function_boundary(
+                source_text, validator_line, sink_line, language):
+            # Same gate try_tier0 applies to its non-Python path: the
+            # source-order check alone would let a validator in helper
+            # A "dominate" a sink in helper B when both live in the
+            # same file — the validator's exit-on-fail returns from A,
+            # not B.
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                f"Tier 1B: validator at line {validator_line} is "
+                f"separated from the sink at line {sink_line} by a "
+                f"function boundary",
+                spec=mech,
             )
         sink_lines = source_text.splitlines()
         sink_line_text = (sink_lines[sink_line - 1]
@@ -404,9 +542,10 @@ def try_tier1b(
                 tree, mech.var_name, validator_line, sink_line, sink_line_text,
             )
         else:
-            chain_ok = bool(_re.search(
-                rf"\b{_re.escape(mech.var_name)}\b", sink_line_text,
-            ))
+            chain_ok = _lexical_var_reaches_sink(
+                mech.var_name, source_text, validator_line, sink_line,
+                sink_line_text,
+            )
         if not chain_ok:
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
@@ -414,6 +553,22 @@ def try_tier1b(
                 f"sink at line {sink_line}",
                 spec=mech,
             )
+        if language == "python" and source_text:
+            if mech.kind == "charset_sub":
+                dominates = substitution_dominates_sink(
+                    source_text, validator_line, sink_line, mech.var_name,
+                )
+            else:
+                dominates = validator_dominates_sink(
+                    source_text, validator_line, sink_line,
+                )
+            if not dominates:
+                return Tier0Result(
+                    Tier0Status.NOT_APPLICABLE,
+                    f"Tier 1B: validator at line {validator_line} does "
+                    f"not dominate sink (advisory or reassigned)",
+                    spec=mech,
+                )
         # Same artifact format as Tier 0 mechanical extraction — the
         # soundness mechanism is identical (Z3 regex proof).  The
         # ``llm_extracted`` flag in ``extras`` records that the LLM

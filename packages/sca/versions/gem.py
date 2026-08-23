@@ -20,7 +20,7 @@ trailing zeros (``1.0.0`` == ``1.0`` per RubyGems) are handled.
 from __future__ import annotations
 
 import re
-from typing import List, Union
+from typing import Union
 
 
 _Segment = Union[int, str]
@@ -36,20 +36,20 @@ def compare(a: str, b: str) -> int:
         sa.append(0)
     while len(sb) < max_len:
         sb.append(0)
-    for x, y in zip(sa, sb):
+    for x, y in zip(sa, sb, strict=True):
         c = _cmp_segment(x, y)
         if c != 0:
             return c
     return 0
 
 
-def _segments(version: str) -> List[_Segment]:
+def _segments(version: str) -> list[_Segment]:
     """Split a Gem version into its numeric/string segments.
 
     Splits on ``.`` and on transitions between digits and letters
     (``1.0.0pre1`` → ``[1, 0, 0, "pre", 1]``).
     """
-    out: List[_Segment] = []
+    out: list[_Segment] = []
     for part in version.strip().split("."):
         for sub in re.findall(r"\d+|[A-Za-z]+", part):
             if sub.isdigit():

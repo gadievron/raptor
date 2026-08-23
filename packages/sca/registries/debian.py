@@ -33,14 +33,16 @@ from __future__ import annotations
 import functools
 import logging
 import urllib.parse
-from typing import Any, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.json import JsonCache, MISSING
-from core.http import HttpClient
 
 from ._negative_cache import log_fetch_failure
 
 from ..versions.debian import compare as _debian_compare
+
+if TYPE_CHECKING:
+    from core.http import HttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ class DebianClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -71,7 +73,7 @@ class DebianClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
+    def list_versions(self, name: str) -> list[str]:
         """All versions across the active suites, newest-first.
 
         For direct inspection / SBOM use. ``apt`` pinning wants a single
@@ -79,7 +81,7 @@ class DebianClient:
         """
         return self._query(name, suite=None)
 
-    def versions_in_suite(self, name: str, suite: str) -> List[str]:
+    def versions_in_suite(self, name: str, suite: str) -> list[str]:
         """Versions of ``name`` available in a single suite, newest-first.
 
         ``suite`` is whatever a Dockerfile ``FROM`` yields — a codename
@@ -90,9 +92,10 @@ class DebianClient:
         """
         return self._query(name, suite=suite)
 
-    def _query(self, name: str, *, suite: Optional[str]) -> List[str]:
-        cache_key = (f"{_CACHE_KEY_PREFIX}:{name}" if suite is None
-                     else f"{_CACHE_KEY_PREFIX}:{name}:{suite}")
+    def _query(self, name: str, *, suite: str | None) -> list[str]:
+        encoded_name = urllib.parse.quote(name, safe='')
+        cache_key = (f"{_CACHE_KEY_PREFIX}:{encoded_name}" if suite is None
+                     else f"{_CACHE_KEY_PREFIX}:{encoded_name}:{suite}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -123,7 +126,7 @@ class DebianClient:
         return versions
 
 
-def _extract_versions(data: Any) -> List[str]:
+def _extract_versions(data: Any) -> list[str]:
     """Pull versions from a madison ``f=json`` response, newest-first.
 
     Shape (a one-element list; ``[]`` for an unknown package)::
@@ -139,7 +142,7 @@ def _extract_versions(data: Any) -> List[str]:
     if not isinstance(data, list):
         return []
     seen: set = set()
-    out: List[str] = []
+    out: list[str] = []
     for entry in data:
         if not isinstance(entry, dict):
             continue

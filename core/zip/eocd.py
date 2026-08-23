@@ -12,11 +12,26 @@ This module ports the EOCD primitives that originated in
 to the same defense.
 
 API:
-  * :func:`peek_total_entries` — read EOCD from a path (Path / str),
-    return total entry count or ``None`` if EOCD parsing failed.
+  * :func:`peek_eocd` — read EOCD from a path (Path / str) or bytes,
+    return an :class:`EocdSummary` (declared total entry count AND
+    declared central-directory size) or ``None`` if parsing failed.
+  * :func:`peek_total_entries` — entry-count-only convenience wrapper.
+  * :func:`bomb_shaped_reason` — cross-check an :class:`EocdSummary`
+    against the entry cap AND the central-directory size bounds;
+    returns a human-readable rejection reason or ``None``.
   * :data:`DEFAULT_MAX_ENTRIES` — the conventional cap (10 000).
     Legitimate raptor archives have << 1000 entries; CodeQL DBs and
     third-party wheels are well under 10k.
+
+The central-directory size cross-check exists because the declared
+entry count alone is forgeable independently of the CD:
+``zipfile.ZipFile.__init__`` reads ``cd_size`` bytes and parses
+records from them until the buffer is exhausted, IGNORING the
+declared count — so an archive with a huge real central directory
+and an EOCD patched to declare a tiny count sails past a count-only
+pre-flight and still costs the full CD materialisation. Bounding
+``cd_size`` (per declared entry, plus an absolute cap) closes that
+bypass while staying far above anything a legitimate archive needs.
 
 ZIP64 sentinels (``entries_total == 0xFFFF``) follow the locator
 back to the ZIP64 EOCD record at the absolute offset stored in the
@@ -30,7 +45,7 @@ from __future__ import annotations
 import logging
 import struct
 from pathlib import Path
-from typing import Optional, Union
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +55,76 @@ logger = logging.getLogger(__name__)
 # entries, CodeQL DB archives a few thousand, PyPI sdists tens to
 # hundreds. Above 10k the bomb hypothesis dominates the data one.
 DEFAULT_MAX_ENTRIES = 10_000
+
+# Sane average size for one central-directory record, used to bound
+# the declared cd-size against the declared entry count. A record is
+# a 46-byte fixed header plus the member name (rarely > a few hundred
+# bytes) plus small extra fields (ZIP64 extras are ~32 bytes; unicode
+# path extras similar). 4 KiB per entry is ~20x any realistic average
+# while still catching a forged small-count EOCD in front of a huge
+# real central directory (whose per-declared-entry ratio is enormous).
+MAX_CD_BYTES_PER_ENTRY = 4096
+
+# Absolute cap on the declared central-directory size — bounds the
+# construction-time RSS ``zipfile.ZipFile.__init__`` pays reading the
+# CD regardless of how the count/size ratio is gamed. 64 MiB holds
+# hundreds of thousands of spec-typical records; every legitimate
+# raptor consumer's archives carry CDs in the KB-to-low-MB range.
+DEFAULT_MAX_CD_BYTES = 64 * 1024 * 1024
+
+
+class EocdSummary(NamedTuple):
+    """Declared totals read from a zip's EOCD (or ZIP64 EOCD) record.
+
+    Both fields are attacker-declared bytes — callers must treat them
+    as claims to cross-check (see :func:`bomb_shaped_reason`), never
+    as truth.
+    """
+
+    entries_total: int
+    cd_size: int
+
+
+def bomb_shaped_reason(
+    summary: EocdSummary,
+    *,
+    max_entries: int = DEFAULT_MAX_ENTRIES,
+    max_cd_bytes: int = DEFAULT_MAX_CD_BYTES,
+    max_cd_bytes_per_entry: int = MAX_CD_BYTES_PER_ENTRY,
+) -> str | None:
+    """Cross-check the declared EOCD totals; return a rejection
+    reason when the archive is bomb-shaped, else ``None``.
+
+    Three gates:
+
+    * declared entry count over ``max_entries`` — the classic
+      many-entries bomb;
+    * declared cd-size exceeding ``max_cd_bytes_per_entry`` x the
+      declared entry count — a forged small count in front of a huge
+      real central directory (``ZipFile`` parses the CD until the
+      ``cd_size`` buffer is exhausted, ignoring the count);
+    * declared cd-size over the absolute ``max_cd_bytes`` cap —
+      bounds construction-time RSS whatever the ratio.
+    """
+    if summary.entries_total > max_entries:
+        return (
+            f"zip declares {summary.entries_total} entries in EOCD — "
+            f"exceeds cap of {max_entries}; refusing as zip-bomb shape"
+        )
+    if summary.cd_size > summary.entries_total * max_cd_bytes_per_entry:
+        return (
+            f"zip declares a {summary.cd_size}-byte central directory "
+            f"for {summary.entries_total} entries in EOCD — exceeds "
+            f"{max_cd_bytes_per_entry} bytes/entry; refusing as "
+            f"zip-bomb shape (forged EOCD entry count)"
+        )
+    if summary.cd_size > max_cd_bytes:
+        return (
+            f"zip declares a {summary.cd_size}-byte central directory "
+            f"in EOCD — exceeds the {max_cd_bytes}-byte cap; refusing "
+            f"as zip-bomb shape"
+        )
+    return None
 
 # EOCD record format (PKZIP appnote 4.3.16):
 #   signature (4) | disk# (2) | cd-disk (2) | entries-on-disk (2) |
@@ -56,11 +141,12 @@ _ZIP64_EOCD_LOCATOR_SIG = b"\x50\x4b\x06\x07"
 _EOCD_SEARCH_BYTES = 65557
 
 
-def peek_total_entries(
-    source: Union[Path, str, bytes],
-) -> Optional[int]:
+def peek_eocd(
+    source: Path | str | bytes,
+) -> EocdSummary | None:
     """Read the EOCD pre-flight from ``source`` and return the zip's
-    declared total entry count, or ``None`` on unparseable EOCD.
+    declared totals (entry count + central-directory size), or
+    ``None`` on unparseable EOCD.
 
     ``source`` accepts:
       * ``Path`` / ``str`` — a filesystem path; we ``stat`` for size
@@ -75,15 +161,28 @@ def peek_total_entries(
     EOCD shape this helper recognises.
 
     For deliberately-malicious bomb-shaped archives that nonetheless
-    parse cleanly, the returned count will exceed the cap and the
-    caller's gate fires.
+    parse cleanly, :func:`bomb_shaped_reason` over the returned
+    summary fires the caller's gate.
     """
     if isinstance(source, (bytes, bytearray)):
         return _peek_from_bytes(bytes(source))
     return _peek_from_path(Path(source))
 
 
-def _peek_from_path(zip_path: Path) -> Optional[int]:
+def peek_total_entries(
+    source: Path | str | bytes,
+) -> int | None:
+    """Entry-count-only convenience wrapper around :func:`peek_eocd`.
+
+    Prefer :func:`peek_eocd` + :func:`bomb_shaped_reason` for gating —
+    the count alone is forgeable independently of the central
+    directory it claims to describe.
+    """
+    summary = peek_eocd(source)
+    return summary.entries_total if summary is not None else None
+
+
+def _peek_from_path(zip_path: Path) -> EocdSummary | None:
     try:
         size = zip_path.stat().st_size
     except OSError:
@@ -101,7 +200,7 @@ def _peek_from_path(zip_path: Path) -> Optional[int]:
         return None
 
 
-def _peek_from_bytes(blob: bytes) -> Optional[int]:
+def _peek_from_bytes(blob: bytes) -> EocdSummary | None:
     size = len(blob)
     if size < 22:
         return None
@@ -118,9 +217,10 @@ def _parse_eocd(
     *,
     total_size: int,
     fh=None,
-    blob: Optional[bytes] = None,
-) -> Optional[int]:
-    """Locate the EOCD signature in ``tail`` and return total entries.
+    blob: bytes | None = None,
+) -> EocdSummary | None:
+    """Locate the EOCD signature in ``tail`` and return the declared
+    totals (entry count + central-directory size).
 
     Either ``fh`` (file handle, for ZIP64 follow-up reads) or ``blob``
     (in-memory zip, slice for ZIP64 follow-up reads) must be supplied
@@ -129,12 +229,14 @@ def _parse_eocd(
     eocd_off = tail.rfind(_EOCD_SIG)
     if eocd_off < 0 or eocd_off + 22 > len(tail):
         return None
-    # entries-on-disk @ +8 (uint16); total-entries @ +10 (uint16)
-    entries_disk, entries_total = struct.unpack_from(
-        "<HH", tail, eocd_off + 8,
+    # entries-on-disk @ +8 (uint16); total-entries @ +10 (uint16);
+    # cd-size @ +12 (uint32)
+    entries_disk, entries_total, cd_size = struct.unpack_from(
+        "<HHI", tail, eocd_off + 8,
     )
-    if entries_total != 0xFFFF and entries_disk != 0xFFFF:
-        return entries_total
+    if (entries_total != 0xFFFF and entries_disk != 0xFFFF
+            and cd_size != 0xFFFFFFFF):
+        return EocdSummary(entries_total=entries_total, cd_size=cd_size)
 
     # ZIP64 sentinel — try the locator (20 bytes BEFORE EOCD).
     loc_off = eocd_off - 20
@@ -154,16 +256,25 @@ def _parse_eocd(
         # is non-None. Use explicit raise rather than assert so the
         # check survives `python -O`.
         if blob is None:
-            raise RuntimeError("eocd: internal invariant — fh and blob both None")
+            msg = "eocd: internal invariant — fh and blob both None"
+            raise RuntimeError(msg)
         zip64_eocd = blob[zip64_eocd_off:zip64_eocd_off + 56]
     if zip64_eocd[:4] != _ZIP64_EOCD_SIG:
         return None
-    # total-entries @ +32 (uint64) in the ZIP64 EOCD record.
-    entries_total_64, = struct.unpack_from("<Q", zip64_eocd, 32)
-    return entries_total_64
+    # total-entries @ +32 (uint64); cd-size @ +40 (uint64) in the
+    # ZIP64 EOCD record.
+    entries_total_64, cd_size_64 = struct.unpack_from(
+        "<QQ", zip64_eocd, 32,
+    )
+    return EocdSummary(entries_total=entries_total_64, cd_size=cd_size_64)
 
 
 __all__ = [
+    "DEFAULT_MAX_CD_BYTES",
     "DEFAULT_MAX_ENTRIES",
+    "EocdSummary",
+    "MAX_CD_BYTES_PER_ENTRY",
+    "bomb_shaped_reason",
+    "peek_eocd",
     "peek_total_entries",
 ]

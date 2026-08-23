@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Enrich context-map.json with Joern taint-flow confirmation (MAP-5i).
+
+Usage:
+    libexec/raptor-enrich-context-map-taint WORKDIR
+
+Confirms which entry-point → sink pairs have a mechanically-verified
+taint flow, using the CPG cache built by MAP-5h. Annotates entry
+points with ``has_taint_flow`` / ``taint_reaches_sinks``, sinks with
+``taint_reached_from``, and adds a ``taint_summary`` to the map.
+
+Skip-silent: exits 0 with a message when Joern is not installed or no
+CPG cache exists (run raptor-build-cpg-cache first). Caps at 500
+(entry × sink) pairs. Idempotent.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import load_json, save_json  # noqa: E402
+from core.orchestration.context_map_taint import (  # noqa: E402
+    enrich_with_taint_flows,
+)
+
+PROG = "raptor-enrich-context-map-taint"
+
+
+def _find_cached_cpg(target: Path, understand_dir: Path):
+    """Look for a fresh cached CPG: project dir first, then home cache."""
+    from packages.joern.runner import load_cached_cpg
+
+    for base in (understand_dir.parent,
+                 Path.home() / ".cache" / "raptor" / "joern-cpg"):
+        try:
+            cpg = load_cached_cpg(target, base)
+        except Exception as e:  # noqa: BLE001
+            print(f"{PROG}: cache probe failed under {base}: {e}",
+                  file=sys.stderr)
+            continue
+        if cpg is not None and cpg.exists():
+            return cpg
+    return None
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(f"usage: {sys.argv[0]} WORKDIR", file=sys.stderr)
+        return 2
+
+    understand_dir = Path(sys.argv[1]).resolve()
+    context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.is_file():
+        print(f"{PROG}: {context_map_path} does not exist", file=sys.stderr)
+        return 1
+
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        print(f"{PROG}: {context_map_path} is not a JSON object",
+              file=sys.stderr)
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json")
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    if not target_path:
+        print(f"{PROG}: checklist missing target_path; skipping")
+        return 0
+
+    # checklist.json is a mutable run artefact — corroborate against
+    # the target_path sealed into .raptor-run.json at run start.
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(f"{PROG}: {mismatch}; refusing recovered target",
+              file=sys.stderr)
+        return 1
+
+    from packages.joern.prereqs import is_available
+    if not is_available():
+        print(f"{PROG}: Joern not installed; skipping")
+        return 0
+
+    cpg = _find_cached_cpg(Path(target_path), understand_dir)
+    if cpg is None:
+        print(f"{PROG}: no cached CPG for {target_path}; skipping "
+              "(run raptor-build-cpg-cache first)")
+        return 0
+
+    from packages.joern.lifecycle import joern_session
+
+    with joern_session() as srv:
+        if srv is None:
+            print(f"{PROG}: Joern server unavailable; skipping")
+            return 0
+        if not srv.import_cpg(cpg.path):
+            print(f"{PROG}: CPG import failed; skipping", file=sys.stderr)
+            return 0
+        enriched = enrich_with_taint_flows(
+            context_map, srv, checklist, iris_dir=understand_dir,
+        )
+
+    save_json(context_map_path, context_map)
+    summary = context_map.get("taint_summary") or {}
+    print(
+        f"{PROG}: {summary.get('flows_confirmed', 0)} taint flows confirmed "
+        f"across {summary.get('pairs_checked', 0)} pairs; "
+        f"annotated {enriched} entries in {context_map_path}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

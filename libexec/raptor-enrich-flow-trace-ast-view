@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Enrich every flow-trace-*.json file in an /understand run dir with
 per-step structured AST views.
 
@@ -19,7 +21,8 @@ import sys
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -28,12 +31,39 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.artifacts.provenance import (  # noqa: E402
+    FLOW_TRACE_TEXT_SCHEMA,
+    sanitise_free_text,
+    stamp_provenance,
+)
+from core.json import load_json, save_json  # noqa: E402
+from core.orchestration.flow_trace_ast_view import enrich_with_ast_view  # noqa: E402
 
-from core.json import load_json, save_json
-from core.orchestration.flow_trace_ast_view import enrich_with_ast_view
+
+def _stamp_traces(understand_dir: Path) -> int:
+    """Provenance chokepoint for in-session /understand --trace output.
+
+    Defangs free-text fields and stamps every flow-trace-*.json as
+    LLM-derived (untrusted). Runs before the enrichment pass (and even
+    when enrichment is skipped) so the stamp does not depend on the
+    inventory being buildable.
+    """
+    stamped = 0
+    for trace_path in sorted(understand_dir.glob("flow-trace-*.json")):
+        trace = load_json(trace_path)
+        if not isinstance(trace, dict):
+            continue
+        sanitise_free_text(trace, FLOW_TRACE_TEXT_SCHEMA)
+        stamp_provenance(trace, "understand:trace",
+                         untrusted=True, overwrite_generator=False)
+        save_json(trace_path, trace)
+        stamped += 1
+    return stamped
 
 
 def main() -> int:
@@ -56,6 +86,13 @@ def main() -> int:
         )
         return 1
 
+    stamped = _stamp_traces(understand_dir)
+    if stamped:
+        print(
+            f"raptor-enrich-flow-trace-ast-view: stamped provenance on "
+            f"{stamped} trace file(s)"
+        )
+
     checklist = load_json(understand_dir / "checklist.json") or {}
     target_path = (
         checklist.get("target_path") if isinstance(checklist, dict) else None
@@ -67,12 +104,24 @@ def main() -> int:
         )
         return 0
 
+    # checklist.json is a mutable run artefact — corroborate against
+    # the target_path sealed into .raptor-run.json at run start.
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(
+            f"raptor-enrich-flow-trace-ast-view: {mismatch}; refusing "
+            "recovered target", file=sys.stderr,
+        )
+        return 1
+
     # Build the inventory once and share across all trace files —
     # the per-call default would rebuild for every file, painful
     # when /understand --trace runs N times and emits N files.
     try:
-        from core.inventory.builder import build_inventory
         import tempfile
+
+        from core.inventory.builder import build_inventory
         with tempfile.TemporaryDirectory() as td:
             inventory = build_inventory(target_path, td)
     except Exception as e:                                  # noqa: BLE001
@@ -86,7 +135,8 @@ def main() -> int:
     if not trace_files:
         print(
             "raptor-enrich-flow-trace-ast-view: no flow-trace-*.json "
-            "files in directory; nothing to enrich"
+            "files in directory; nothing to enrich",
+            file=sys.stderr,
         )
         return 0
 
@@ -120,7 +170,8 @@ def main() -> int:
             f"raptor-enrich-flow-trace-ast-view: no steps enriched "
             f"across {len(trace_files)} trace file(s) "
             "(no steps with resolvable definitions, or inventory "
-            "build skipped)"
+            "build skipped)",
+            file=sys.stderr,
         )
     return 0
 

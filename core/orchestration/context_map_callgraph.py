@@ -50,9 +50,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# checklist.json tracks target size — the checklist budget class.
+_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 
 
 MAX_NAMES_PER_LIST = 10
@@ -60,10 +63,10 @@ DEFAULT_MAX_DEPTH = 10
 
 
 def enrich_with_forward_reachable(
-    context_map: Dict[str, Any],
+    context_map: dict[str, Any],
     target_path: Path,
     *,
-    inventory: Optional[Dict[str, Any]] = None,
+    inventory: dict[str, Any] | None = None,
     max_depth: int = DEFAULT_MAX_DEPTH,
     max_names_per_list: int = MAX_NAMES_PER_LIST,
 ) -> int:
@@ -97,7 +100,7 @@ def enrich_with_forward_reachable(
             return 0
 
     try:
-        from core.inventory.reachability import (
+        from core.analysis.reachability import (
             ExternalFunction,
             InternalFunction,
             enclosing_function,
@@ -130,6 +133,7 @@ def enrich_with_forward_reachable(
                 inventory, [host], max_depth=max_depth,
             )
         except Exception:                              # noqa: BLE001
+            logger.debug("callgraph enrichment failed for %s", host, exc_info=True)
             continue
 
         internal_names: list = []
@@ -160,8 +164,67 @@ def enrich_with_forward_reachable(
     return enriched_count
 
 
+def enrich_with_call_edges(
+    context_map: dict[str, Any],
+    checklist_path: Path | None = None,
+    *,
+    checklist: dict[str, Any] | None = None,
+) -> int:
+    """Add a ``call_edges`` array to the context map from checklist call graphs.
+
+    Each edge is ``{"caller_file": ..., "caller": ..., "callee": ...}``.
+    Consumers (sink-unreachability gate, /diagram) use this for transitive
+    reachability without loading the full checklist separately.
+
+    Provide either ``checklist_path`` (loaded from disk) or ``checklist``
+    (pre-loaded dict).  Returns the number of edges added.  Idempotent —
+    overwrites any prior ``call_edges``.
+    """
+    if checklist is None:
+        if checklist_path is None or not checklist_path.exists():
+            return 0
+        from core.json import load_json
+        checklist = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+        if not isinstance(checklist, dict):
+            return 0
+
+    func_to_file: dict[str, str] = {}
+    for fi in checklist.get("files", []):
+        path = fi.get("path", "")
+        for item in fi.get("items", []):
+            name = item.get("name", "")
+            if name:
+                func_to_file[name] = path
+
+    edges: list = []
+    for fi in checklist.get("files", []):
+        path = fi.get("path", "")
+        cg = fi.get("call_graph")
+        if not isinstance(cg, dict):
+            continue
+        for call in cg.get("calls", []):
+            caller = call.get("caller", "")
+            if not caller:
+                continue
+            edges.extend({
+                    "caller_file": path,
+                    "caller": caller,
+                    "callee": callee,
+                    "callee_file": func_to_file.get(callee, ""),
+                } for callee in call.get("chain", []))
+
+    context_map["call_edges"] = edges
+    if edges:
+        logger.info(
+            "context_map_callgraph: added %d call edges from checklist",
+            len(edges),
+        )
+    return len(edges)
+
+
 __all__ = [
     "DEFAULT_MAX_DEPTH",
     "MAX_NAMES_PER_LIST",
+    "enrich_with_call_edges",
     "enrich_with_forward_reachable",
 ]

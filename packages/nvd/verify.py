@@ -11,8 +11,11 @@ from core.url_patterns import normalize_slug
 
 from packages.osv.verdicts import OracleVerdict, Verdict
 
-from .client import NvdClient
 from .parser import extract_patch_refs
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import NvdClient
 
 
 def verify(

@@ -1,14 +1,16 @@
 """OCI / Docker registry primitives — image references, manifests,
 blob streaming, and per-image SBOM extraction.
 
-This is shared substrate, shipped + tested but **not yet wired into
-any `packages/*` consumer.** The primitives — pulling manifests,
+This is shared substrate, shipped + tested. First wired consumer:
+the ``packages/sca`` container-manifest parsers (compose, kubernetes,
+gitlab-ci) split image references via
+:func:`core.oci.image_ref.split_image_ref`. The heavier primitives — pulling manifests,
 streaming layer blobs, extracting package-manager state, mapping into
 existing OSV ecosystem strings — mirror the pattern that ``core/http``,
 ``core/llm``, ``core/inventory`` already follow, so when consumers
 land they share one substrate rather than reinventing.
 
-Planned consumers (aspirational, none currently import ``core.oci.*``):
+Planned consumers (aspirational, not yet importing these modules):
 
   * ``packages/sca`` — base-image SBOM as a Dependency source for
     CVE matching
@@ -56,11 +58,12 @@ discussion):
     substrate — see follow-up memo.
 """
 
-from .image_ref import ImageRef, parse_image_ref
+from .image_ref import ImageRef, parse_image_ref, split_image_ref
 from .registry_hosts import registry_hosts_for
 
 __all__ = [
     "ImageRef",
     "parse_image_ref",
     "registry_hosts_for",
+    "split_image_ref",
 ]

@@ -37,11 +37,17 @@ What's NOT covered:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+
+from core.oci.image_ref import split_image_ref as _split_image_ref
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from ..models import classify_pin_style as _classify_pin_style
+from . import _safe_read, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +71,10 @@ _WORKLOAD_KINDS = {
 
 
 @register(predicate=lambda p: _is_k8s_manifest(p))
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning(
-            "sca.parsers.kubernetes: read failed for %s: %s", path, e,
-        )
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
@@ -101,7 +104,7 @@ def parse(path: Path) -> List[Dependency]:
         )
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for doc in documents:
         if not isinstance(doc, dict):
             continue
@@ -136,7 +139,7 @@ def _is_k8s_manifest(path: Path) -> bool:
     name = path.name.lower()
     # Compose / GitLab CI / Helm Chart / pre-commit handled by their
     # own parsers; skip those filenames here.
-    if name.startswith("docker-compose") or name.startswith("compose."):
+    if name.startswith(("docker-compose", "compose.")):
         return False
     if name in ("compose.yml", "compose.yaml"):
         return False
@@ -152,14 +155,12 @@ def _is_k8s_manifest(path: Path) -> bool:
         if parts[j] == ".github" and parts[j + 1] == "workflows":
             return False
     # Composite-action manifests handled by GHA parser.
-    if name in ("action.yml", "action.yaml"):
-        return False
-    return True
+    return name not in ("action.yml", "action.yaml")
 
 
 def _extract_images(
     doc: dict, *, kind: str,
-) -> Iterable[Tuple[str, str, Optional[str]]]:
+) -> Iterable[tuple[str, str, str | None]]:
     """Yield ``(image_ref, kind_context, container_name)`` for each
     container image found in this workload doc.
 
@@ -171,12 +172,24 @@ def _extract_images(
     if not isinstance(spec, dict):
         return
     # Higher-level workload wrappers nest under ``template.spec``.
+    # CronJob nests one level deeper: ``spec.jobTemplate.spec.template.spec``.
     template_spec = spec
-    template = spec.get("template")
-    if isinstance(template, dict):
-        ts = template.get("spec")
-        if isinstance(ts, dict):
-            template_spec = ts
+    if kind == "CronJob":
+        jt = spec.get("jobTemplate")
+        if isinstance(jt, dict):
+            jt_spec = jt.get("spec")
+            if isinstance(jt_spec, dict):
+                jt_template = jt_spec.get("template")
+                if isinstance(jt_template, dict):
+                    ts = jt_template.get("spec")
+                    if isinstance(ts, dict):
+                        template_spec = ts
+    else:
+        template = spec.get("template")
+        if isinstance(template, dict):
+            ts = template.get("spec")
+            if isinstance(ts, dict):
+                template_spec = ts
 
     metadata = doc.get("metadata") or {}
     workload_name = (
@@ -207,9 +220,9 @@ def _build_dep(
     *,
     image_ref: str,
     kind_ctx: str,
-    container_name: Optional[str],
+    container_name: str | None,
     declared_in: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     name, version = _split_image_ref(image_ref)
     if not name:
         return None
@@ -221,6 +234,8 @@ def _build_dep(
     if container_name:
         extra["container"] = container_name
 
+    pin_style = _classify_pin_style(version)
+
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=name,
@@ -228,29 +243,13 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=pin_style,
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high",
+            "high" if pin_style == PinStyle.EXACT else "medium",
             reason=f"k8s {kind_ctx}: {image_ref}",
         ),
         source_kind="k8s",
         source_extra=extra,
     )
-
-
-def _split_image_ref(ref: str) -> tuple:
-    """Same logic as ``compose._split_image_ref`` and ``gitlab_ci._split_image_ref``.
-    Duplicated for parser-loose-coupling; refactor into
-    ``core.oci.image_ref`` if a fourth consumer surfaces."""
-    if "@" in ref:
-        name, _, digest = ref.rpartition("@")
-        return name, digest if digest else None
-    last_slash = ref.rfind("/")
-    rest = ref[last_slash + 1:] if last_slash >= 0 else ref
-    if ":" in rest:
-        prefix = ref[:last_slash + 1] if last_slash >= 0 else ""
-        rest_name, _, tag = rest.partition(":")
-        return prefix + rest_name, tag if tag else None
-    return ref, None

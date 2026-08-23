@@ -1,4 +1,4 @@
-"""Subprocess sandboxing via Linux user namespaces, Landlock, and seccomp.
+r"""Subprocess sandboxing via Linux user namespaces, Landlock, and seccomp.
 
 Provides network, filesystem, and syscall-level isolation plus resource
 limits for subprocesses that handle untrusted content. Falls back
@@ -181,7 +181,7 @@ Log-output hygiene:
   colour flips, window-title spoofing, cursor-movement to overwrite
   prior lines with forged "all clear" entries.
   `core.security.log_sanitisation.escape_nonprintable()` replaces
-  non-printable chars with `\\xHH` literals before logging; the
+  non-printable chars with `\xHH` literals before logging; the
   proxy's CONNECT parser uses the predicate form
   `has_nonprintable()` to reject such requests outright with a 400
   Bad Request.
@@ -281,9 +281,11 @@ Threat model — what the sandbox DOES protect against:
   CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR, plus the base LD_*
   / PYTHON* / JAVA_TOOL_OPTIONS / GIT_SSH_COMMAND / KUBECONFIG /
   etc. set). Caller-supplied `env=` is NOT filtered against the
-  blocklist — callers legitimately use names from it as defensive
-  neutralisers (e.g. `GIT_CONFIG_GLOBAL=/dev/null` to isolate git
-  from user config). `env=None` is treated as "no env kwarg" (not
+  blocklist by default — callers legitimately use names from it as
+  defensive neutralisers (e.g. `GIT_CONFIG_GLOBAL=/dev/null` to
+  isolate git from user config) — except under `strict_env=True`
+  (default ON for `run_untrusted()`; see W36.B below), which strips
+  the blocklist names. `env=None` is treated as "no env kwarg" (not
   "inherit os.environ wholesale" which is subprocess's default).
 - Socket FDs via `pass_fds=[...]` — `sandbox().run()` stats each
   pass_fds entry and rejects S_ISSOCK. Pipes (S_ISFIFO) still pass.
@@ -402,9 +404,10 @@ What the sandbox does NOT protect against:
 - `pass_fds` non-socket FD abuse — pipes and regular-file FDs are
   allowed through. Sockets are rejected (see above). Callers passing
   `close_fds=False` are rejected with TypeError.
-- Caller `env=` override bypasses `get_safe_env()` entirely —
-  neither the allowlist nor the DANGEROUS_ENV_VARS blocklist is
-  applied. Explicit `env=` is a "you know what you're doing"
+- Caller `env=` override bypasses `get_safe_env()` — the allowlist
+  is never applied to it, and the DANGEROUS_ENV_VARS blocklist only
+  under `strict_env=True` (default ON for `run_untrusted()`; see
+  W36.B below). Explicit `env=` is a "you know what you're doing"
   signal. Logged at INFO so the override is auditable.
 - Tools that hardcode `/home/<user>/...` paths (not via `$HOME`)
   bypass `fake_home` and hit the real path → EACCES under
@@ -581,32 +584,45 @@ Related shared helpers (core.security):
 """
 
 # Public re-exports — the surface other code imports from `core.sandbox`.
+# Re-exports for private symbols some tests / callers depend on.
+# Keeping them at the package level preserves backward compatibility while
+# the real definitions live in focused submodules.
+from . import state as _state
 from .cli import (
     add_cli_args,
     apply_cli_args,
     disable_from_cli,
     set_cli_profile,
 )
-from .context import run, run_trusted, run_untrusted, run_untrusted_networked, sandbox
-from .landlock import check_landlock_available, _get_landlock_abi
+from .context import (
+    run,
+    run_trusted,
+    run_untrusted,
+    run_untrusted_networked,
+    sandbox,
+    spawn_backend_available,
+)
+from .errors import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from .landlock import _get_landlock_abi, check_landlock_available
+from .mount import _build_mount_script
 from .observe import _BLOCKED_PATTERNS, _check_blocked, _interpret_result, _path_within
 from .observe_profile import (
-    OBSERVE_FILENAME, ConnectTarget, ObserveProfile, parse_observe_log,
+    OBSERVE_FILENAME,
+    ConnectTarget,
+    ObserveProfile,
+    parse_observe_log,
 )
-from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
-from .mount import _build_mount_script
-from .errors import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn, set_pdeathsig
 from .probes import (
-    check_mount_available, check_net_available, check_sandbox_available,
-    check_seatbelt_available, check_unshare_engages,
+    check_mount_available,
+    check_net_available,
+    check_sandbox_available,
+    check_seatbelt_available,
+    check_unshare_engages,
 )
-from .profiles import DEFAULT_PROFILE, PROFILES, _SANDBOX_KWARGS
+from .profiles import _SANDBOX_KWARGS, DEFAULT_PROFILE, PROFILES
+from .python_paths import python_runtime_tool_paths
 from .seccomp import check_seccomp_available
-
-# Re-exports for private symbols some tests / callers depend on.
-# Keeping them at the package level preserves backward compatibility while
-# the real definitions live in focused submodules.
-from . import state as _state
 
 _cache_lock = _state._cache_lock
 
@@ -624,7 +640,8 @@ def __getattr__(name):
     """
     if hasattr(_state, name):
         return getattr(_state, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
 
 
 # Note: `__getattr__` above handles READS of state names through the
@@ -635,26 +652,50 @@ def __getattr__(name):
 # fixture already does this.
 
 __all__ = [
-    # Context manager and convenience wrappers
-    "sandbox", "run", "run_trusted", "run_untrusted", "run_untrusted_networked",
-    # CLI surface
-    "add_cli_args", "apply_cli_args", "disable_from_cli", "set_cli_profile",
-    # Availability probes (exposed for the startup banner)
-    "check_sandbox_available", "check_net_available",
-    "check_mount_available", "check_landlock_available",
-    "check_seatbelt_available",
-    "check_seccomp_available",
-    "check_unshare_engages",
-    # Engagement-failure signal (fail-loud, never silently degrade)
-    "SandboxSetupError", "SANDBOX_ENGAGE_EXIT_CODE",
+    "DEFAULT_PROFILE",
+    "OBSERVE_FILENAME",
     # Named profiles
-    "PROFILES", "DEFAULT_PROFILE", "_SANDBOX_KWARGS",
+    "PROFILES",
+    "SANDBOX_ENGAGE_EXIT_CODE",
+    "_BLOCKED_PATTERNS",
+    "_DEFAULT_LIMITS",
+    "_SANDBOX_KWARGS",
+    "ConnectTarget",
+    "ObserveProfile",
+    # Engagement-failure signal (fail-loud, never silently degrade)
+    "SandboxSetupError",
+    "_build_mount_script",
+    "_cache_lock",
+    "_check_blocked",
     # Private re-exports kept for backward compatibility — see the
     # block comment above; tests + a few internal callers reach into
     # these names directly so the public name stays stable.
     "_get_landlock_abi",
-    "_BLOCKED_PATTERNS", "_check_blocked", "_interpret_result", "_path_within",
-    "OBSERVE_FILENAME", "ConnectTarget", "ObserveProfile", "parse_observe_log",
-    "_DEFAULT_LIMITS", "_load_user_limits", "_make_preexec_fn",
-    "_build_mount_script",
+    "_interpret_result",
+    "_load_user_limits",
+    "_make_preexec_fn",
+    "_path_within",
+    # CLI surface
+    "add_cli_args",
+    "apply_cli_args",
+    "check_landlock_available",
+    "check_mount_available",
+    "check_net_available",
+    # Availability probes (exposed for the startup banner)
+    "check_sandbox_available",
+    "check_seatbelt_available",
+    "check_seccomp_available",
+    "check_unshare_engages",
+    "disable_from_cli",
+    "parse_observe_log",
+    "python_runtime_tool_paths",
+    "run",
+    "run_trusted",
+    "run_untrusted",
+    "run_untrusted_networked",
+    # Context manager and convenience wrappers
+    "sandbox",
+    "set_cli_profile",
+    "set_pdeathsig",
+    "spawn_backend_available",
 ]

@@ -18,15 +18,12 @@ different capabilities. The bumper can't catch this (no version
 change in the manifest), but operators relying on mutable tags
 like ``alpine:3.18`` get a warning when the bytes silently
 change.
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.binary import (
     CapabilityFingerprint,
@@ -46,6 +43,9 @@ from .models import (
     SupplyChainFinding,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,8 +54,8 @@ def detect_image_drift(
     *,
     oci_client,
     fingerprint_store_dir: Path,
-    out_fingerprints: Optional[Dict[str, CapabilityFingerprint]] = None,
-) -> List[SupplyChainFinding]:
+    out_fingerprints: dict[str, CapabilityFingerprint] | None = None,
+) -> list[SupplyChainFinding]:
     """Walk every image ref in ``target``, fingerprint each,
     compare against ``fingerprint_store_dir``'s baseline, return
     one finding per drifted ref.
@@ -81,7 +81,7 @@ def detect_image_drift(
     the fingerprint on each container component. Refs that fail
     to extract / fingerprint are not added.
     """
-    findings: List[SupplyChainFinding] = []
+    findings: list[SupplyChainFinding] = []
     try:
         ref_sources = find_all_image_refs(target)
     except Exception as e:                            # noqa: BLE001
@@ -123,7 +123,7 @@ def _drift_for_ref(
     oci_client,
     fingerprint_store_dir: Path,
     declared_in: Path,
-) -> "tuple[Optional[SupplyChainFinding], Optional[CapabilityFingerprint]]":
+) -> tuple[SupplyChainFinding | None, CapabilityFingerprint | None]:
     """Run the full drift check for one image ref. Returns a
     tuple ``(finding, fingerprint)`` so the caller can surface
     the fingerprint to the SBOM regardless of drift outcome.
@@ -155,13 +155,13 @@ def _drift_for_ref(
         )
         return None, None
 
-    baseline = load_fingerprint(fingerprint_store_dir, ref)
     # Always save the new fingerprint AFTER computing the drift
     # — the previous baseline is what we compare against, then
     # the current fingerprint becomes the next-scan baseline.
-    save_fingerprint(fingerprint_store_dir, ref, current)
+    baseline = load_fingerprint(fingerprint_store_dir, ref)
     if baseline is None:
         # First scan of this ref — no baseline, no signal yet.
+        save_fingerprint(fingerprint_store_dir, ref, current)
         logger.debug(
             "sca.image_drift: first baseline for %s; no drift signal",
             ref,
@@ -170,11 +170,13 @@ def _drift_for_ref(
 
     drift = detect_drift(baseline, current)
     if drift.is_empty():
+        save_fingerprint(fingerprint_store_dir, ref, current)
         return None, current
 
     finding = _drift_finding(
         ref=ref, drift=drift, declared_in=declared_in,
     )
+    save_fingerprint(fingerprint_store_dir, ref, current)
     return finding, current
 
 
@@ -187,7 +189,7 @@ def _drift_finding(
     metadata changes)."""
     severity: Severity = "high" if drift.high_severity() else "medium"
 
-    detail_parts: List[str] = []
+    detail_parts: list[str] = []
     if drift.new_buckets:
         detail_parts.append(
             "new dangerous-import buckets: "
@@ -222,7 +224,7 @@ def _drift_finding(
         ),
     )
 
-    evidence: Dict[str, Any] = {
+    evidence: dict[str, Any] = {
         "ref": ref,
         "new_dangerous_imports": drift.new_buckets,
         "removed_buckets": drift.removed_buckets,

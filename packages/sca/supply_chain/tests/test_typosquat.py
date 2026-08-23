@@ -169,3 +169,10 @@ def test_scoped_npm_package_compared_against_bare_form() -> None:
     """``@evil/lodash`` should still flag against ``lodash``."""
     findings = scan_deps([_dep("@evil/lodash")])
     assert findings and findings[0].nearest_popular == "lodash"
+
+
+def test_allowlisted_near_name_not_flagged() -> None:
+    """A name in typosquat_reviewed_legit.json must never be flagged,
+    even though it's distance-1 from a popular package."""
+    findings = scan_deps([_dep("pnpm")])
+    assert findings == []

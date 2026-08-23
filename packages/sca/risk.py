@@ -27,9 +27,11 @@ dict, the 0-100 range, the sort order).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
-from .models import Dependency, VulnFinding
+
+if TYPE_CHECKING:
+    from .models import Dependency, VulnFinding
 
 # ---------------------------------------------------------------------------
 # Multipliers — named so calibration tweaks are config-style, not a
@@ -49,7 +51,7 @@ from .models import Dependency, VulnFinding
 # fallback is applied below in ``compute_risk_estimate``.
 _CVSS_MISSING_DEFAULT = 5.0
 
-# KEV — known-exploited get a floor + multiplier. Floor of 80 means a
+# KEV — known-exploited get a floor + multiplier. The floor means a
 # KEV CVE with low CVSS still ranks above a non-KEV high-CVSS finding,
 # matching the "active exploitation > theoretical severity" priority.
 _KEV_FLOOR = 96.8
@@ -102,15 +104,17 @@ _SSVC_POC_MULTIPLIER = 1.4399
 # CISA's intent: a PoC + automation potential is materially
 # scarier than a PoC alone — the EternalBlue / Log4Shell class
 # of bug fans out across the internet because each step CAN be
-# automated. Modest 10% bonus to avoid double-counting (the
-# tier multiplier already reflects "exploit code exists"). Only
+# automated. The bonus is kept smaller than the tier multipliers
+# to avoid double-counting (the tier multiplier already reflects
+# "exploit code exists"). Only
 # applies when ``Automatable=yes``; ``no`` / ``None`` carry no
 # multiplier (the SSVC tier alone applies).
 _SSVC_AUTOMATABLE_BONUS = 1.331
 
-# EPSS — exploit probability in the wild. Even a 0% EPSS leaves 30%
-# weight (a vuln with no observed exploitation isn't impossible to
-# exploit; the floor reflects "unknown is not zero").
+# EPSS — exploit probability in the wild. Even a 0% EPSS leaves the
+# floor multiplier's ~40% weight (a vuln with no observed exploitation
+# isn't impossible to exploit; the floor reflects "unknown is not
+# zero").
 _EPSS_FLOOR_MULTIPLIER = 0.3993
 _EPSS_RANGE_MULTIPLIER = 0.5103
 _EPSS_MISSING_DEFAULT = 0.5
@@ -132,9 +136,9 @@ _EXPO_RANGE_MULTIPLIER = 0.50
 # but reflects the longer chain to actually trigger it.
 _DEPTH_DECAY_BASE = 0.70
 
-# Final clamp — keeps the score in 0..100 even if the multipliers
-# briefly compose above 100 (KEV floor × KEV multiplier = 96 before
-# the rest, so 0..120 inputs are possible).
+# Final clamp — keeps the score in 0..100 even when the multipliers
+# compose well above 100 (KEV floor × KEV multiplier alone is ~170
+# before the rest apply).
 _SCORE_MIN = 0.0
 _SCORE_MAX = 100.0
 
@@ -142,8 +146,8 @@ _SCORE_MAX = 100.0
 def compute_risk_estimate(
     finding: VulnFinding, dep: Dependency,
     *,
-    overrides: Optional[Dict[str, float]] = None,
-) -> Tuple[float, Dict[str, Any]]:
+    overrides: dict[str, float] | None = None,
+) -> tuple[float, dict[str, Any]]:
     """Return ``(score, components)`` for the finding.
 
     ``score`` is a 0..100 float, deterministic from the finding's
@@ -190,7 +194,7 @@ def compute_risk_estimate(
     expo_range = o.get("_EXPO_RANGE_MULTIPLIER", _EXPO_RANGE_MULTIPLIER)
     depth_decay = o.get("_DEPTH_DECAY_BASE", _DEPTH_DECAY_BASE)
 
-    components: Dict[str, Any] = {}
+    components: dict[str, Any] = {}
 
     # 1. CVSS base — 0-10 → 0-100. Missing → severity-label
     # fallback via ``packages.cvss.score_for_label`` (paired
@@ -227,12 +231,9 @@ def compute_risk_estimate(
     # 2-bis. Exploit evidence (EDB / MSF / GitHub PoC). Independent of
     # in_kev: a CVE can have a public Metasploit module without being
     # in CISA's KEV, and that's still a "working exploit exists"
-    # signal we want to surface. KEV-listed findings ALSO get this
-    # bonus on top — multipliers compose, matching the design where
-    # each independent signal nudges the score upward. The floor is
-    # only applied when KEV's floor wasn't (KEV strictly dominates;
-    # we don't want a non-KEV PoC to push above an actually-exploited
-    # KEV vuln on tied CVSS).
+    # signal we want to surface. KEV-listed findings already get a
+    # boost via kev_mult; the exploit-evidence branch is gated by
+    # ``not in_kev`` so the two don't compound.
     has_evidence = (
         finding.exploit_evidence is not None
         and finding.exploit_evidence.has_any
@@ -329,12 +330,14 @@ def compute_risk_estimate(
     components["depth_multiplier"] = depth_mult
 
     # 7. Parser confidence — heuristic parsers haircut.
-    parser_conf = dep.parser_confidence.numeric or 1.0
+    pc = dep.parser_confidence.numeric
+    parser_conf = pc if pc is not None else 1.0
     base *= parser_conf
     components["parser_confidence"] = parser_conf
 
     # 8. Version-match confidence — uncertain matches penalised.
-    vmc = finding.version_match_confidence.numeric or 1.0
+    vm = finding.version_match_confidence.numeric
+    vmc = vm if vm is not None else 1.0
     base *= vmc
     components["version_match_confidence"] = vmc
 
@@ -347,6 +350,10 @@ def compute_risk_estimate(
 
 # Names of the multiplier constants the refitter grid-searches over.
 # Exported so the refitter doesn't have to introspect the module.
+# ``_CVSS_MISSING_DEFAULT`` / ``_EPSS_MISSING_DEFAULT`` are also
+# reachable through ``compute_risk_estimate(overrides=...)`` but are
+# missing-input fallbacks, not multipliers, and are not listed here —
+# so the refitter never searches them.
 TUNABLE_CONSTANTS = (
     "_KEV_FLOOR",
     "_KEV_MULTIPLIER",
@@ -371,13 +378,13 @@ TUNABLE_CONSTANTS = (
 )
 
 
-def current_constants() -> Dict[str, float]:
+def current_constants() -> dict[str, float]:
     """Return the current values of all tunable multiplier
     constants. The refitter compares its proposed values against
     these."""
     # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
-    # ``name`` iterates ``TUNABLE_CONSTANTS`` (module-level literal
-    # tuple, line 245). Not attacker-controlled. The refitter
+    # ``name`` iterates ``TUNABLE_CONSTANTS`` (the module-level
+    # literal tuple above). Not attacker-controlled. The refitter
     # introspects via globals() to avoid hard-coding the list twice.
     return {
         name: globals()[name] for name in TUNABLE_CONSTANTS
@@ -404,7 +411,7 @@ def current_constants() -> Dict[str, float]:
 # against these bounds. Cross-constant constraints (e.g.
 # EXPLOIT_EVIDENCE_MULTIPLIER must stay < KEV_MULTIPLIER) live in
 # `CROSS_CONSTRAINTS` below.
-CONSTANT_BOUNDS: Dict[str, Tuple[float, float]] = {
+CONSTANT_BOUNDS: dict[str, tuple[float, float]] = {
     "_KEV_FLOOR":                          (0.0, 100.0),
     "_KEV_MULTIPLIER":                     (1.0,   3.0),
     "_EXPLOIT_EVIDENCE_FLOOR":             (0.0, 100.0),
@@ -431,7 +438,7 @@ CONSTANT_BOUNDS: Dict[str, Tuple[float, float]] = {
 #
 # Naming convention: predicates are NAMED by the design rule they
 # enforce so a refit-report's rejection note is human-readable.
-def _ee_strictly_below_kev(values: Dict[str, float]) -> bool:
+def _ee_strictly_below_kev(values: dict[str, float]) -> bool:
     """EDB / MSF / PoC are weaker exploit signals than KEV
     (CISA-tracked active exploitation). The multiplier must stay
     strictly below KEV's, and the floor at most equal — otherwise
@@ -446,7 +453,7 @@ def _ee_strictly_below_kev(values: Dict[str, float]) -> bool:
     return ee_mult < kev_mult and ee_floor <= kev_floor
 
 
-def _ssvc_poc_strictly_below_active(values: Dict[str, float]) -> bool:
+def _ssvc_poc_strictly_below_active(values: dict[str, float]) -> bool:
     """SSVC ``poc`` (public exploit code exists) is a weaker
     signal than SSVC ``active`` (exploited in the wild). Same
     relationship KEV / EE carry — the PoC multiplier must stay
@@ -466,13 +473,13 @@ def _ssvc_poc_strictly_below_active(values: Dict[str, float]) -> bool:
     return poc_mult < active_mult and poc_floor <= active_floor
 
 
-CROSS_CONSTRAINTS: List[Tuple[str, Any]] = [
+CROSS_CONSTRAINTS: list[tuple[str, Any]] = [
     ("exploit_evidence_strictly_below_kev", _ee_strictly_below_kev),
     ("ssvc_poc_strictly_below_active", _ssvc_poc_strictly_below_active),
 ]
 
 
-def is_admissible(values: Dict[str, float]) -> Tuple[bool, Optional[str]]:
+def is_admissible(values: dict[str, float]) -> tuple[bool, str | None]:
     """Check absolute bounds + cross-constraints on a candidate.
 
     Returns ``(True, None)`` when admissible; ``(False, reason)``
@@ -519,7 +526,7 @@ def is_admissible(values: Dict[str, float]) -> Tuple[bool, Optional[str]]:
 # doesn't change between findings within a single SCA run.
 
 
-_CALIBRATION_STATUS_CACHE: Optional[str] = None
+_CALIBRATION_STATUS_CACHE: str | None = None
 
 
 def _calibration_status() -> str:

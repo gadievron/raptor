@@ -34,6 +34,10 @@ Per-language detection currently handled:
   * Go: ``func init() { panic(...) }`` where the panic is at the
     init body's top scope (not inside a conditional / loop).
   * Rust: ``compile_error!(...)`` at module scope.
+  * PHP: file-scope ``throw new <Class>`` / ``die`` / ``exit`` at
+    brace-depth zero, statement-initial (conditional forms skipped).
+  * Ruby: unconditional column-0 ``raise`` / ``abort`` / ``exit`` /
+    ``fail`` at nesting depth zero (modifier forms skipped).
 
 Other languages return ``None`` (no detection wired) — same
 graceful-degradation pattern as the call-graph extractors. The
@@ -47,7 +51,6 @@ import ast
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +70,12 @@ class ModuleLoadAbort:
 
 def detect_module_load_abort(
     language: str, content: str,
-) -> Optional[ModuleLoadAbort]:
-    """Per-language dispatch. Returns the first detected unconditional
-    abort, or ``None`` when no abort is detected (or the language
-    has no detector wired).
+) -> ModuleLoadAbort | None:
+    """Per-language dispatch. Returns a detected unconditional abort,
+    or ``None`` when no abort is detected (or the language has no
+    detector wired). Detectors are best-effort and may examine only
+    the first candidate site (see :func:`_detect_rust`), so ``None``
+    never means "file is guaranteed loadable".
 
     Best-effort: any parse failure inside a per-language detector
     returns ``None``; the caller treats absence as "no signal".
@@ -113,7 +118,7 @@ _PY_ABORT_EXCEPTIONS = frozenset({
 })
 
 
-def _detect_python(content: str) -> Optional[ModuleLoadAbort]:
+def _detect_python(content: str) -> ModuleLoadAbort | None:
     try:
         tree = ast.parse(content)
     except SyntaxError:
@@ -180,8 +185,6 @@ def _py_summarise_raise(node: ast.Raise) -> str:
 # ---------------------------------------------------------------------------
 
 
-_JS_LINE_COMMENT = re.compile(r"//[^\n]*")
-_JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 # Any ``throw new <Capitalized>`` at module scope aborts load — the
 # class need not be named ``*Error`` (``throw new Disabled()`` counts).
 # Capitalised initial keeps us off ``throw new lowerCaseFactory()``
@@ -190,35 +193,32 @@ _JS_THROW_NEW = re.compile(
     r"\bthrow\s+new\s+([A-Z][A-Za-z0-9_]*)\b"
 )
 
+_JS_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
-def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
-    # Strip comments first so commented-out throw text doesn't trip
-    # the regex. Replace with whitespace of equal length to preserve
-    # line/offset arithmetic for the line-number report.
-    def _spaces(m: re.Match[str]) -> str:
-        return re.sub(r"[^\n]", " ", m.group(0))
-    stripped = _JS_BLOCK_COMMENT.sub(_spaces, content)
-    stripped = _JS_LINE_COMMENT.sub(_spaces, stripped)
+
+def _detect_javascript(content: str) -> ModuleLoadAbort | None:
+    # Blank ALL non-code text (comments, strings, template literals,
+    # regex literals) in one shared-lexer pass, preserving newlines so
+    # the line-number report stays valid. Comment-only or string-only
+    # stripping is not enough: braces inside a REGEX literal
+    # (``var r = /}}/;``) corrupted the depth counter, so a throw
+    # inside a never-called function read as depth-zero — a
+    # false-positive whole-file abort gate that silenced every finding
+    # below it. Same class for a string with an unbalanced brace
+    # (``const s = "}";``).
+    from core.inventory.js_lexer import blank_js_noncode
+
+    stripped = blank_js_noncode(content)
     # Walk character-by-character tracking brace and paren depth.
     # An unconditional module-level throw is one at depth zero
-    # before any function body opens it. String / template / char
-    # literals are skipped wholesale — without this a function body
-    # containing a string with an unbalanced brace (``const s =
-    # "}";``) corrupts the depth counter and a throw INSIDE the
-    # function reads as depth-zero, a false-positive module-abort
-    # that would silence every finding below it.
+    # before any function body opens it.
     depth = 0
     paren = 0
+    last_significant = None
     i = 0
     n = len(stripped)
     while i < n:
         c = stripped[i]
-        if c in "\"'`":
-            j = _js_skip_string(stripped, i)
-            if j is None:
-                break
-            i = j
-            continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -227,7 +227,9 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
             paren += 1
         elif c == ")":
             paren = max(0, paren - 1)
-        elif c == "t" and depth == 0 and paren == 0:
+        elif c == "t" and depth == 0 and paren == 0 and (
+                last_significant is None
+                or last_significant in _JS_STMT_BOUNDARY):
             m = _JS_THROW_NEW.match(stripped, i)
             if m:
                 line_no = stripped.count("\n", 0, i) + 1
@@ -236,11 +238,13 @@ def _detect_javascript(content: str) -> Optional[ModuleLoadAbort]:
                     line=line_no,
                     summary=f"throw new {err_name}",
                 )
+        if not c.isspace():
+            last_significant = c
         i += 1
     return None
 
 
-def _js_skip_string(source: str, start: int) -> Optional[int]:
+def _js_skip_string(source: str, start: int) -> int | None:
     """Advance past a JS string / template / char literal beginning at
     ``start``. Returns the index just past the closing quote, or
     ``None`` on an unterminated literal. Handles backslash escapes;
@@ -272,7 +276,65 @@ _GO_INIT_HEADER = re.compile(r"\bfunc\s+init\s*\(\s*\)\s*\{")
 _GO_PANIC_CALL = re.compile(r"\bpanic\s*\(")
 
 
-def _detect_go(content: str) -> Optional[ModuleLoadAbort]:
+def _go_strip_comments_and_strings(content: str) -> str:
+    """Blank Go comments and string/rune literal INTERIORS, preserving
+    newlines (line-number arithmetic) and the quote characters
+    themselves (so the downstream brace walkers still see terminated,
+    now-empty literals). Without this a ``panic(``, ``func init() {``
+    or brace inside a comment or string in the untrusted target file
+    reads as real code and can fabricate the whole-file abort gate —
+    the false-positive direction the module docstring forbids."""
+    out = list(content)
+    i = 0
+    n = len(out)
+    while i < n:
+        c = out[i]
+        if c == "/" and i + 1 < n and out[i + 1] == "/":
+            while i < n and out[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and out[i + 1] == "*":
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            while i < n:
+                if out[i] == "*" and i + 1 < n and out[i + 1] == "/":
+                    out[i] = " "
+                    out[i + 1] = " "
+                    i += 2
+                    break
+                if out[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if c in "\"'`":
+            quote = c
+            i += 1
+            while i < n:
+                ch = out[i]
+                if ch == "\\" and quote != "`" and i + 1 < n:
+                    out[i] = " "
+                    if out[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if ch == quote:
+                    i += 1
+                    break
+                if ch != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        i += 1
+    return "".join(out)
+
+
+def _detect_go(content: str) -> ModuleLoadAbort | None:
+    # Sanitize once up front: comments and string/rune interiors are
+    # blanked so neither the init-header search, the panic search, nor
+    # the depth walkers below can be steered by comment/string content.
+    content = _go_strip_comments_and_strings(content)
     init_match = _GO_INIT_HEADER.search(content)
     if not init_match:
         return None
@@ -299,7 +361,7 @@ def _detect_go(content: str) -> Optional[ModuleLoadAbort]:
     )
 
 
-def _go_find_matching_brace(source: str, open_pos: int) -> Optional[int]:
+def _go_find_matching_brace(source: str, open_pos: int) -> int | None:
     """Given index of an opening ``{``, return index of the
     matching closing ``}``. Returns None on malformed input."""
     if open_pos < 0 or open_pos >= len(source) or source[open_pos] != "{":
@@ -309,6 +371,15 @@ def _go_find_matching_brace(source: str, open_pos: int) -> Optional[int]:
     n = len(source)
     while i < n and depth > 0:
         c = source[i]
+        if c == "/" and i + 1 < n:
+            if source[i + 1] == "/":
+                nl = source.find("\n", i + 2)
+                i = nl + 1 if nl != -1 else n
+                continue
+            if source[i + 1] == "*":
+                end = source.find("*/", i + 2)
+                i = end + 2 if end != -1 else n
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -325,7 +396,7 @@ def _go_find_matching_brace(source: str, open_pos: int) -> Optional[int]:
     return None
 
 
-def _go_skip_string(source: str, start: int) -> Optional[int]:
+def _go_skip_string(source: str, start: int) -> int | None:
     """Advance past a Go string literal starting at ``start``.
     Handles both interpreted (``"…"``) and raw (`` `…` ``) strings.
     """
@@ -347,11 +418,24 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
     """The panic is unconditional iff brace depth at its location
     (relative to the init body) is zero — i.e. it's a statement
     directly in the function body, not nested inside any conditional
-    block (if / for / switch / select)."""
+    block (if / for / switch / select). Comments and string literals
+    are skipped exactly as in :func:`_go_find_matching_brace` — a
+    ``}`` inside a comment before the panic would otherwise drop the
+    depth and misread a conditional panic as unconditional."""
     depth = 0
     i = 0
+    n = len(body)
     while i < panic_offset:
         c = body[i]
+        if c == "/" and i + 1 < n:
+            if body[i + 1] == "/":
+                nl = body.find("\n", i + 2)
+                i = nl + 1 if nl != -1 else n
+                continue
+            if body[i + 1] == "*":
+                end = body.find("*/", i + 2)
+                i = end + 2 if end != -1 else n
+                continue
         if c == "{":
             depth += 1
         elif c == "}":
@@ -363,7 +447,9 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
             i = j
             continue
         i += 1
-    return depth == 0
+    # A skip that jumped PAST the panic means the "panic" itself sits
+    # inside a comment / string literal — not a real abort.
+    return i == panic_offset and depth == 0
 
 
 # ---------------------------------------------------------------------------
@@ -377,16 +463,19 @@ def _go_panic_is_unconditional(body: str, panic_offset: int) -> bool:
 
 
 _RUST_COMPILE_ERROR = re.compile(
-    r"^\s*compile_error\s*!\s*\(", re.MULTILINE,
+    r"^[ \t]*compile_error\s*!\s*\(", re.MULTILINE,
 )
 
 
-def _detect_rust(content: str) -> Optional[ModuleLoadAbort]:
-    # Naive but effective: compile_error! at line start (after any
-    # leading whitespace) with no preceding ``#[cfg`` attribute on
-    # the same logical statement. The substrate doesn't model cfg
-    # gates; we conservatively flag any unconditional compile_error
-    # and treat cfg-gated ones as out of scope (false-negative bias).
+def _detect_rust(content: str) -> ModuleLoadAbort | None:
+    # Naive but effective: examine only the FIRST compile_error! at
+    # line start (after any leading whitespace). If that occurrence
+    # is attribute-gated, report nothing — later occurrences are not
+    # scanned, so an unconditional compile_error following a
+    # cfg-gated one is missed. The substrate doesn't model cfg
+    # gates; treating those sites as out of scope is the module-wide
+    # false-negative bias (miss a deferral, never suppress live
+    # code).
     m = _RUST_COMPILE_ERROR.search(content)
     if not m:
         return None
@@ -416,6 +505,60 @@ def _detect_rust(content: str) -> Optional[ModuleLoadAbort]:
 _PHP_LINE_COMMENT = re.compile(r"(//|#)[^\n]*")
 _PHP_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _PHP_TAG = re.compile(r"<\?php|<\?=|<\?|\?>")
+
+
+def _php_blank_outside_php(content: str) -> str:
+    """Blank everything OUTSIDE ``<?php … ?>`` regions to spaces,
+    preserving newlines. Text outside the tags is template OUTPUT the
+    interpreter echoes, not code — the word ``die`` in HTML prose used
+    to match _PHP_ABORT and fabricate a whole-file abort gate on a
+    fully live file.
+
+    In-region scanning is quote/comment-aware when looking for the
+    closing ``?>``: a ``?>`` inside a string or ``/* */`` block
+    comment does not leave PHP mode, while one inside a ``//`` / ``#``
+    line comment DOES (matching the real interpreter). Heredocs are
+    not modelled — a ``?>`` inside a heredoc mis-reads as region end
+    and blanks the remainder as HTML, which only under-detects (the
+    module-wide cheap failure direction)."""
+    out = list(content)
+    n = len(out)
+    i = 0
+    in_php = False
+    while i < n:
+        if not in_php:
+            if content.startswith("<?", i):
+                in_php = True
+                i += 2
+                continue
+            if out[i] != "\n":
+                out[i] = " "
+            i += 1
+            continue
+        c = content[i]
+        if content.startswith("?>", i):
+            in_php = False
+            i += 2
+            continue
+        if c == "/" and i + 1 < n and content[i + 1] == "*":
+            end = content.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        if (c == "#" or (c == "/" and i + 1 < n and content[i + 1] == "/")):
+            # Line comment: ends at newline OR at a closing tag.
+            while i < n and content[i] != "\n":
+                if content.startswith("?>", i):
+                    break
+                i += 1
+            continue
+        if c in "\"'":
+            j = _js_skip_string(content, i)
+            if j is None:
+                break  # unterminated string — rest is string data
+            i = j
+            continue
+        i += 1
+    return "".join(out)
 _PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
 # A statement-initial abort is preceded (ignoring whitespace) by one of
 # these — i.e. it begins a statement, so it is not a branch/modifier body.
@@ -424,10 +567,14 @@ _PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
 _PHP_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
 
-def _detect_php(content: str) -> Optional[ModuleLoadAbort]:
-    def _spaces(m: "re.Match[str]") -> str:
+def _detect_php(content: str) -> ModuleLoadAbort | None:
+    def _spaces(m: re.Match[str]) -> str:
         return re.sub(r"[^\n]", " ", m.group(0))
-    stripped = _PHP_BLOCK_COMMENT.sub(_spaces, content)
+    # HTML/text outside the PHP tags is output, not code — blank it
+    # before any matching so prose containing ``die`` / ``exit`` can
+    # never fabricate the whole-file abort gate.
+    stripped = _php_blank_outside_php(content)
+    stripped = _PHP_BLOCK_COMMENT.sub(_spaces, stripped)
     stripped = _PHP_LINE_COMMENT.sub(_spaces, stripped)
     # Blank the PHP open/close tags so the first statement after ``<?php``
     # is statement-initial and ``->`` / ``?>`` ``>`` chars never read as a
@@ -485,11 +632,19 @@ _RB_END = re.compile(r"^end\b")
 # same line — net zero nesting. Detected by a trailing ``end`` word so it
 # doesn't leave depth stuck at 1 (which would hide a top-level abort below).
 _RB_ONELINER = re.compile(r"\bend\s*$")
-_RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit\b|exit!|fail\s+\S|Kernel\.(abort|exit))")
-_RB_MODIFIER = re.compile(r"\b(if|unless|while|until)\b")
+# ``exit!`` must precede ``exit\b`` — leftmost-alternative semantics
+# would otherwise always take the ``exit\b`` prefix match, leaving the
+# ``exit!`` alternative dead.
+_RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit!|exit\b|fail\s+\S|Kernel\.(abort|exit))")
+# Modifier forms that make the abort conditional or CAUGHT on the same
+# line. ``rescue`` matters as much as the conditionals: an inline
+# ``raise "boom" rescue nil`` is caught immediately — execution
+# continues, the file loads, and flagging it fabricates the whole-file
+# dead gate on a live file.
+_RB_MODIFIER = re.compile(r"\b(if|unless|while|until|rescue)\b")
 
 
-def _detect_ruby(content: str) -> Optional[ModuleLoadAbort]:
+def _detect_ruby(content: str) -> ModuleLoadAbort | None:
     depth = 0
     for idx, raw in enumerate(content.splitlines()):
         # Strip trailing line comment (best-effort; a ``#`` inside a string

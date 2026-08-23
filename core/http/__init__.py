@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
 
 # Default size limits — caps protect parser code paths from decompression
 # bombs and pathological response shapes.
@@ -51,8 +54,10 @@ class HttpError(Exception):
     def __init__(
         self,
         message: str,
-        status: Optional[int] = None,
-        retry_after: Optional[int] = None,
+        status: int | None = None,
+        retry_after: int | None = None,
+        *,
+        circuit_break: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -60,6 +65,7 @@ class HttpError(Exception):
         # backend's retry loop reads this when honouring 429/503; None
         # means "no Retry-After advertised, use our backoff schedule".
         self.retry_after = retry_after
+        self.circuit_break = circuit_break
 
 
 class SizeLimitExceeded(HttpError):
@@ -87,9 +93,10 @@ class Response:
     HTTP spec says headers are case-insensitive, and forcing one
     casing keeps caller code simple.
 
-    ``url`` is the final URL after any redirects (or the request URL
-    if redirects were disabled / the backend couldn't determine the
-    final URL).
+    ``url`` is the URL the response was served from — normally the
+    request URL, since the urllib backend never follows redirects
+    (3xx responses are returned as-is with their ``Location``
+    header; see :class:`core.http.urllib_backend.UrllibClient`).
     """
 
     status: int
@@ -102,7 +109,8 @@ class Response:
         try:
             return json.loads(self.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise HttpError(f"Response is not valid JSON: {e}") from e
+            msg = f"Response is not valid JSON: {e}"
+            raise HttpError(msg) from e
 
     # ------------------------------------------------------------------
     # ``requests``-compat shim
@@ -146,7 +154,6 @@ class Response:
     def close(self) -> None:
         """No-op for the buffered backend; matches ``requests.Response``
         which closes the underlying connection."""
-        pass
 
 
 class NotModified(HttpError):
@@ -190,8 +197,14 @@ class HttpClient(Protocol):
         cap the effective attempt count at their own backoff
         schedule length, so values larger than the schedule are
         silently equivalent to "use the whole schedule".
-      - ``follow_redirects``: True (default) follows up to 10 redirects;
-        False surfaces 3xx as ``HttpError`` for caller inspection.
+      - ``follow_redirects``: accepted for interface compatibility;
+        the urllib backend never follows redirects regardless of the
+        value. 3xx responses surface to the caller (as a
+        ``Response`` from ``request()``; the JSON/bytes conveniences
+        fail on the non-body). Following a redirect transparently
+        would bypass caller-level address policy (e.g. the OCI
+        registry SSRF gate) — callers must re-validate ``Location``
+        themselves and issue a new request.
       - ``total_timeout``: wall-clock cap on the whole retry loop in
         seconds (default 600).
     """
@@ -201,14 +214,14 @@ class HttpClient(Protocol):
         method: str,
         url: str,
         *,
-        body: Optional[bytes] = None,
-        headers: Optional[Dict[str, str]] = None,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
         max_bytes: int = DEFAULT_MAX_BYTES,
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
-    ) -> "Response":
+    ) -> Response:
         """Low-level request — returns :class:`Response` with status, headers, body.
 
         Use for arbitrary HTTP methods (DELETE/PUT/PATCH/HEAD) and when
@@ -220,14 +233,14 @@ class HttpClient(Protocol):
     def post_json(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         timeout: int = DEFAULT_TIMEOUT,
         *,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """POST ``body`` as JSON, return decoded JSON response."""
         ...
 
@@ -236,12 +249,12 @@ class HttpClient(Protocol):
         url: str,
         timeout: int = DEFAULT_TIMEOUT,
         *,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
         max_bytes: int = DEFAULT_MAX_BYTES,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """GET ``url``, parse response as JSON.
 
         ``max_bytes`` caps the response size at the transport layer.
@@ -260,7 +273,7 @@ class HttpClient(Protocol):
         timeout: int = DEFAULT_TIMEOUT,
         max_bytes: int = DEFAULT_MAX_BYTES,
         *,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
@@ -274,7 +287,7 @@ class HttpClient(Protocol):
         *,
         timeout: int = DEFAULT_TIMEOUT,
         max_bytes: int = DEFAULT_MAX_BYTES,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = 0,
     ) -> Iterator[bytes]:
@@ -290,7 +303,7 @@ class HttpClient(Protocol):
 
 
 def default_client(
-    allowed_hosts: Optional[List[str]] = None,
+    allowed_hosts: list[str] | None = None,
 ) -> HttpClient:
     """Construct the right HttpClient backend for the caller.
 

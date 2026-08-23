@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 # core/smt_solver/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
@@ -64,6 +66,30 @@ class TestClassifySolverUnknown:
         m.reason_unknown.side_effect = AttributeError
         assert classify_solver_unknown(m) is RejectionKind.SOLVER_UNKNOWN
 
+    def test_reason_unknown_raises_runtime_error(self):
+        # Some Z3 builds wrap reason_unknown() failures in RuntimeError.
+        # Regression: the except clause was a runtime tuple-concatenation
+        # expression (behaviourally correct but statically opaque); it is
+        # now the named _REASON_UNKNOWN_RAISES module tuple and must keep
+        # catching every documented member.
+        m = MagicMock()
+        m.reason_unknown.side_effect = RuntimeError("boom")
+        assert classify_solver_unknown(m) is RejectionKind.SOLVER_UNKNOWN
+
+    def test_reason_unknown_raises_z3_exception(self):
+        z3 = pytest.importorskip("z3")
+        m = MagicMock()
+        m.reason_unknown.side_effect = z3.Z3Exception("no model available")
+        assert classify_solver_unknown(m) is RejectionKind.SOLVER_UNKNOWN
+
+    def test_reason_unknown_type_error_propagates(self):
+        # Programming-bug exceptions outside the documented set must NOT
+        # be silently classified as SOLVER_UNKNOWN.
+        m = MagicMock()
+        m.reason_unknown.side_effect = TypeError("wrong arity")
+        with pytest.raises(TypeError):
+            classify_solver_unknown(m)
+
 
 # ---------------------------------------------------------------------------
 # propagate
@@ -95,6 +121,14 @@ class TestPropagate:
         sub = Rejection("inner", RejectionKind.LEX_EMPTY)
         out = propagate("outer", sub)
         assert out is not sub
+
+    def test_empty_detail_annotates_without_leading_space(self):
+        # Regression pin for the empty-detail branch: when the
+        # sub-rejection carries no detail, the annotation becomes the
+        # whole detail (no leading space, no orphaned separator).
+        sub = Rejection("inner", RejectionKind.UNRECOGNIZED_OPERAND, "")
+        out = propagate("outer", sub)
+        assert out.detail == "(in: 'inner')"
 
 
 # ---------------------------------------------------------------------------

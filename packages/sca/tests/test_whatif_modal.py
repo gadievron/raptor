@@ -64,7 +64,7 @@ def test_add_with_advisories(tmp_path: Path) -> None:
         adds=["PyPI:django@4.0.0"], removes=[], from_file=None,
         findings_path=None, osv=osv,
     )
-    assert rc == 0
+    assert rc == 1
     assert "would introduce 2 advisories" in report
     assert "GHSA-1" in report
     assert "GHSA-2" in report

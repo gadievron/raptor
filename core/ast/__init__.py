@@ -42,4 +42,4 @@ from __future__ import annotations
 from core.ast.model import FunctionView, Return
 from core.ast.view import view
 
-__all__ = ["view", "FunctionView", "Return"]
+__all__ = ["FunctionView", "Return", "view"]

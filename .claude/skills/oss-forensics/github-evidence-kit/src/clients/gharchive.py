@@ -28,7 +28,7 @@ class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gc
     above to keep the example clear in operator-facing help text.)
     """
 
-    def __init__(self, project_id: str | None = None):
+    def __init__(self, project_id: str | None = None) -> None:
         self.project_id = project_id
         self._client: bigquery.Client | None = None
 
@@ -62,11 +62,12 @@ class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gc
         # operator-supplied env var doesn't OOM us.
         if creds_value.startswith("{"):
             if len(creds_value) > self._CREDS_INLINE_MAX:
-                raise ValueError(
+                msg = (
                     "GOOGLE_APPLICATION_CREDENTIALS inline JSON exceeds "
                     f"{self._CREDS_INLINE_MAX} bytes — service-account "
                     "keys are typically <4 KB; refuse pathological input"
                 )
+                raise ValueError(msg)
             info = json.loads(creds_value)
             credentials = service_account.Credentials.from_service_account_info(
                 info, scopes=scopes
@@ -84,28 +85,44 @@ class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gc
         from_date: str = "",
         to_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Query GH Archive for events using parameterized queries."""
+        """Query GH Archive for events using parameterized queries.
+
+        ``from_date`` accepts two granularities:
+
+        - 12-digit ``YYYYMMDDHHMM``: query the day table filtered to the
+          exact hour and minute (the original behaviour).
+        - 8-digit ``YYYYMMDD``: query the whole day table with no
+          hour/minute filter. This is the granularity the recover_*
+          collectors need — they match candidate rows against the full
+          timestamp themselves.
+        """
         client = self._get_client()
 
-        # Build table reference - use daily table
-        # from_date is YYYYMMDDHHMM format (12 digits), extract day part
+        # Build table reference - use daily table.
+        # Table names can't be parameterized, but the format is
+        # validated to digits below before interpolation.
+        if not from_date.isdigit() or len(from_date) not in (8, 12):
+            msg = (
+                f"Invalid date format: {from_date!r} — expected 12-digit "
+                "YYYYMMDDHHMM (exact minute) or 8-digit YYYYMMDD (whole day)"
+            )
+            raise ValueError(msg)
         day = from_date[:8]
-        # Table names can't be parameterized, but day is validated format
-        if not day.isdigit() or len(day) != 8:
-            raise ValueError(f"Invalid date format: {from_date}")
         table = f"`githubarchive.day.{day}`"
 
         # Build WHERE clauses with parameterized values
         clauses = []
         params = []
 
-        # Filter by hour and minute using created_at timestamp
-        hour = int(from_date[8:10])
-        minute = int(from_date[10:12])
-        clauses.append("EXTRACT(HOUR FROM created_at) = @hour")
-        clauses.append("EXTRACT(MINUTE FROM created_at) = @minute")
-        params.append(bigquery.ScalarQueryParameter("hour", "INT64", hour))
-        params.append(bigquery.ScalarQueryParameter("minute", "INT64", minute))
+        # Filter by hour and minute using created_at timestamp — only
+        # when the caller asked for exact-minute granularity.
+        if len(from_date) == 12:
+            hour = int(from_date[8:10])
+            minute = int(from_date[10:12])
+            clauses.append("EXTRACT(HOUR FROM created_at) = @hour")
+            clauses.append("EXTRACT(MINUTE FROM created_at) = @minute")
+            params.append(bigquery.ScalarQueryParameter("hour", "INT64", hour))
+            params.append(bigquery.ScalarQueryParameter("minute", "INT64", minute))
 
         if repo:
             clauses.append("repo.name = @repo")

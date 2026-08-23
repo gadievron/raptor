@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List, Tuple
 
-from . import RewriteEdit, RewriteResult, register
+from . import RewriteEdit, RewriteResult, register, rewrite_file_with
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ logger = logging.getLogger(__name__)
 #
 # The include attribute is matched with quotes that can be either
 # style (``"`` or ``'``); MSBuild allows both.
-def _build_attr_pattern(include_name: str) -> "re.Pattern":
+def _build_attr_pattern(include_name: str) -> re.Pattern:
     """Compile a per-package pattern that matches BOTH the
     ``<PackageVersion>`` and ``<GlobalPackageReference>`` shapes
     with the supplied Include value (case-insensitive — NuGet
@@ -78,7 +80,7 @@ def _build_attr_pattern(include_name: str) -> "re.Pattern":
     )
 
 
-def _build_child_pattern(include_name: str) -> "re.Pattern":
+def _build_child_pattern(include_name: str) -> re.Pattern:
     """Compile a per-package pattern matching the child-element
     Version shape: ``<PackageVersion Include="X"><Version>OLD</Version></PackageVersion>``."""
     inc = re.escape(include_name)
@@ -96,8 +98,8 @@ def _build_child_pattern(include_name: str) -> "re.Pattern":
 
 @register(filenames=["Directory.Packages.props"])
 def rewrite_directory_packages_props(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply ``<PackageVersion>`` / ``<GlobalPackageReference>``
     version edits to a Directory.Packages.props file.
 
@@ -107,40 +109,21 @@ def rewrite_directory_packages_props(
     ``value_mismatch`` if ``edit.old_value`` wasn't updated to
     the new value).
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        return [RewriteResult(edit=ed, applied=False,
-                              reason=f"error: read failed: {e}")
-                for ed in edits]
-
-    new_text = text
-    results: List[RewriteResult] = []
-    for edit in edits:
-        new_text, result = _apply_one(new_text, edit)
-        results.append(result)
-
-    if any(r.applied for r in results):
-        try:
-            _atomic_write(path, new_text)
-        except OSError as e:
-            return [RewriteResult(
-                edit=r.edit, applied=False,
-                reason=f"error: write failed: {e}",
-            ) for r in results]
-    return results
+    return rewrite_file_with(path, edits, _apply_one)
 
 
-def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
+def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
     """Try the attribute-shape rewrite first; fall back to the
     child-element shape. Operators don't mix shapes in practice
     (one file usually picks a convention) but we tolerate
     both."""
     pat = _build_attr_pattern(edit.locator)
-    match = pat.search(text)
+    matches = list(pat.finditer(text))
+    match = matches[-1] if matches else None
     if match is None:
         pat = _build_child_pattern(edit.locator)
-        match = pat.search(text)
+        matches = list(pat.finditer(text))
+        match = matches[-1] if matches else None
     if match is None:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",
@@ -164,12 +147,6 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
         edit=edit, applied=True, reason="",
     )
 
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Atomic write via tempfile + rename, matching the
-    repo-wide convention from ``packages/sca/_atomic``."""
-    from packages.sca._atomic import atomic_write_text
-    atomic_write_text(path, content)
 
 
 __all__ = ["rewrite_directory_packages_props"]

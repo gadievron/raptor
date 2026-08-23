@@ -3,14 +3,52 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
+import os
 import tarfile
 from typing import Dict
 
+import pytest
+
+from core.tar import TarOpenError
+
 from core.oci.blob import (
     DEFAULT_MAX_ENTRY_BYTES,
+    UnsupportedLayerMediaType,
     extract_files_from_layer,
 )
+from core.oci.client import OciRegistryClient, RegistryError
+from core.oci.image_ref import parse_image_ref
+
+
+class _StubResponse:
+    def __init__(self, status_code: int, body: bytes,
+                 headers: dict | None = None):
+        self.status_code = status_code
+        self.content = body
+        self.text = body.decode("utf-8", errors="replace")
+        self.headers = headers or {}
+
+    def iter_content(self, chunk_size: int = 65536):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
+
+    def close(self):
+        pass
+
+
+class _StubHttp:
+    def __init__(self, responses: dict):
+        self._responses = responses
+        self.calls: list[dict] = []
+
+    def request(self, method: str, url: str, **kwargs):
+        self.calls.append({"method": method, "url": url,
+                           "headers": kwargs.get("headers")})
+        if url not in self._responses:
+            return _StubResponse(404, b'{"errors": []}')
+        return self._responses[url]
 
 
 def _make_gzipped_tar(files: Dict[str, bytes]) -> bytes:
@@ -159,15 +197,18 @@ def test_empty_wanted_set_returns_empty():
     assert extract_files_from_layer(_stream(blob), set()) == {}
 
 
-def test_invalid_gzip_returns_empty():
-    """A blob that isn't actually gzipped tar (corruption,
-    unexpected media-type) must not crash; the caller treats
-    'no findings' as success."""
-    out = extract_files_from_layer(
-        iter([b"this is not a gzipped tar"]),
-        {"var/lib/dpkg/status"},
-    )
-    assert out == {}
+def test_invalid_gzip_refuses():
+    """A blob that isn't actually gzipped tar (corruption, unexpected
+    media-type) now REFUSES with TarOpenError instead of returning an
+    empty dict a caller would treat as "no findings" success. The
+    per-layer consumers (sca dockerfile_from / image_binary_extract)
+    guard each layer and skip it — corrupt input no longer masquerades
+    as a clean scan result at this seam."""
+    with pytest.raises(TarOpenError):
+        extract_files_from_layer(
+            iter([b"this is not a gzipped tar"]),
+            {"var/lib/dpkg/status"},
+        )
 
 
 def test_empty_layer():
@@ -216,3 +257,164 @@ def test_directories_skipped():
     )
     # Directory not extracted; file is.
     assert out == {"var/lib/dpkg/status": b"package data"}
+
+
+# ---------------------------------------------------------------------------
+# Digest verification — extracted content is never returned from an
+# unverified stream prefix
+# ---------------------------------------------------------------------------
+
+
+def _make_gzipped_tar_entries(entries) -> bytes:
+    """Like ``_make_gzipped_tar`` but takes (name, bytes) pairs so
+    duplicate entry names can be encoded (a dict can't hold them)."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        for name, content in entries:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+    return gzip.compress(raw.getvalue())
+
+
+class _SentinelUnverified(Exception):
+    """Raised by the stub stream when it is exhausted — stands in for
+    stream_blob's end-of-stream digest check."""
+
+
+def _verifying_stream(blob: bytes, *, chunk_size: int = 1024):
+    """Mimics ``OciRegistryClient.stream_blob``: yields chunks, then
+    performs a verification step that only runs when the caller
+    consumes the iterator to EOF."""
+    for i in range(0, len(blob), chunk_size):
+        yield blob[i:i + chunk_size]
+    raise _SentinelUnverified("digest mismatch")
+
+
+def test_early_exit_does_not_skip_source_verification():
+    """The wanted file appears early, followed by filler the walk
+    can early-exit past. The end-of-stream check (a digest mismatch
+    in production) must still fire — content from an unverified
+    stream prefix must never be returned."""
+    # Incompressible filler: compressible padding would collapse to a
+    # handful of chunks that the tar reader's own buffering consumes,
+    # masking the early-exit skip this test guards against.
+    blob = _make_gzipped_tar({
+        "var/lib/dpkg/status": b"Package: foo\n",
+        "filler/a": os.urandom(300_000),
+        "filler/b": os.urandom(300_000),
+    })
+    with pytest.raises(_SentinelUnverified):
+        extract_files_from_layer(
+            _verifying_stream(blob), {"var/lib/dpkg/status"},
+        )
+
+
+def test_stream_blob_digest_mismatch_refuses_extracted_content():
+    """End-to-end with the real client: a blob whose bytes do not
+    hash to the requested digest must raise instead of handing the
+    SBOM path unverified file content."""
+    blob = _make_gzipped_tar({
+        "var/lib/dpkg/status": b"Package: foo\n",
+        "filler/a": os.urandom(300_000),
+        "filler/b": os.urandom(300_000),
+    })
+    lying = "sha256:" + "c" * 64
+    ref = parse_image_ref("ghcr.io/acme/app:latest")
+    url = f"https://ghcr.io/v2/acme/app/blobs/{lying}"
+    client = OciRegistryClient(_StubHttp({url: _StubResponse(200, blob)}))
+    with pytest.raises(RegistryError, match="digest mismatch"):
+        extract_files_from_layer(
+            client.stream_blob(ref, lying), {"var/lib/dpkg/status"},
+        )
+
+
+def test_stream_blob_matching_digest_extracts_normally():
+    blob = _make_gzipped_tar({"var/lib/dpkg/status": b"Package: foo\n"})
+    good = "sha256:" + hashlib.sha256(blob).hexdigest()
+    ref = parse_image_ref("ghcr.io/acme/app:latest")
+    url = f"https://ghcr.io/v2/acme/app/blobs/{good}"
+    client = OciRegistryClient(_StubHttp({url: _StubResponse(200, blob)}))
+    out = extract_files_from_layer(
+        client.stream_blob(ref, good), {"var/lib/dpkg/status"},
+    )
+    assert out == {"var/lib/dpkg/status": b"Package: foo\n"}
+
+
+def test_duplicate_wanted_entry_refused():
+    """A layer carrying the same wanted path twice is hostile: the
+    early-exit walk kept the FIRST occurrence while overlay-fs
+    runtime semantics apply the LAST. Refuse instead of silently
+    scanning the copy the runtime never sees."""
+    blob = _make_gzipped_tar_entries([
+        ("var/lib/dpkg/status", b"Package: benign-decoy\n"),
+        ("var/lib/dpkg/status", b"Package: actually-installed\n"),
+    ])
+    with pytest.raises(ValueError, match="duplicate"):
+        extract_files_from_layer(_stream(blob), {"var/lib/dpkg/status"})
+
+
+# ---------------------------------------------------------------------------
+# Layer mediaType dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_plain_tar(files: Dict[str, bytes]) -> bytes:
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+    return raw.getvalue()
+
+
+@pytest.mark.parametrize("media_type", [
+    "application/vnd.oci.image.layer.v1.tar+gzip",
+    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+    "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip",
+])
+def test_gzip_media_types_extract(media_type):
+    blob = _make_gzipped_tar({"var/lib/dpkg/status": b"x"})
+    out = extract_files_from_layer(
+        _stream(blob), {"var/lib/dpkg/status"}, media_type=media_type,
+    )
+    assert out == {"var/lib/dpkg/status": b"x"}
+
+
+@pytest.mark.parametrize("media_type", [
+    "application/vnd.oci.image.layer.v1.tar",
+    "application/vnd.docker.image.rootfs.diff.tar",
+])
+def test_uncompressed_media_types_extract(media_type):
+    """A valid uncompressed layer must yield its files — pre-fix the
+    hardcoded gzip mode failed to open it and the caller saw an
+    empty (falsely clean) result."""
+    blob = _make_plain_tar({"var/lib/dpkg/status": b"x"})
+    out = extract_files_from_layer(
+        _stream(blob), {"var/lib/dpkg/status"}, media_type=media_type,
+    )
+    assert out == {"var/lib/dpkg/status": b"x"}
+
+
+@pytest.mark.parametrize("media_type", [
+    "application/vnd.oci.image.layer.v1.tar+zstd",
+    "application/vnd.oci.image.layer.v1.squashfs",
+    "application/octet-stream",
+])
+def test_unsupported_media_types_raise_loudly(media_type):
+    """zstd (valid per OCI spec, undecodable here) and unknown media
+    types must raise instead of silently dropping the layer."""
+    blob = _make_gzipped_tar({"var/lib/dpkg/status": b"x"})
+    with pytest.raises(UnsupportedLayerMediaType):
+        extract_files_from_layer(
+            _stream(blob), {"var/lib/dpkg/status"}, media_type=media_type,
+        )
+
+
+def test_empty_media_type_defaults_to_gzip():
+    blob = _make_gzipped_tar({"var/lib/dpkg/status": b"x"})
+    out = extract_files_from_layer(
+        _stream(blob), {"var/lib/dpkg/status"}, media_type="",
+    )
+    assert out == {"var/lib/dpkg/status": b"x"}

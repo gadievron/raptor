@@ -37,9 +37,11 @@ class PatchTuple:
 
     def __post_init__(self) -> None:
         if not self.repository_url:
-            raise ValueError("PatchTuple.repository_url cannot be empty")
+            msg = "PatchTuple.repository_url cannot be empty"
+            raise ValueError(msg)
         if not self.fix_commit:
-            raise ValueError("PatchTuple.fix_commit cannot be empty")
+            msg = "PatchTuple.fix_commit cannot be empty"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,11 +59,14 @@ class RepoRef:
 
     def __post_init__(self) -> None:
         if not self.repository_url:
-            raise ValueError("RepoRef.repository_url cannot be empty")
+            msg = "RepoRef.repository_url cannot be empty"
+            raise ValueError(msg)
         if not self.fix_commit:
-            raise ValueError("RepoRef.fix_commit cannot be empty")
+            msg = "RepoRef.fix_commit cannot be empty"
+            raise ValueError(msg)
         if self.canonical_score < 0:
-            raise ValueError("RepoRef.canonical_score must be ≥ 0")
+            msg = "RepoRef.canonical_score must be ≥ 0"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)

@@ -64,7 +64,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from core.json.jsonc import load_jsonc
 
@@ -121,18 +120,18 @@ def _strip_inline_comment(line: str) -> str:
     return line
 
 
-def _collapse_continuations(text: str) -> List[Tuple[int, str, bool]]:
-    """Join ``\\``-continued lines into single logical lines.
+def _collapse_continuations(text: str) -> list[tuple[int, str, bool]]:
+    r"""Join ``\``-continued lines into single logical lines.
 
     Returns ``(starting_line_no, joined, is_commented)`` triples.
     ``is_commented`` is True if every constituent line was a comment.
     """
-    out: List[Tuple[int, str, bool]] = []
+    out: list[tuple[int, str, bool]] = []
     raw = text.splitlines()
     i = 0
     while i < len(raw):
         start = i + 1            # 1-indexed line number
-        chunks: List[str] = []
+        chunks: list[str] = []
         all_commented = True
         while True:
             line = raw[i]
@@ -163,11 +162,11 @@ _GHA_EXPR_RE = re.compile(r"\$\{\{.*?\}\}")
 
 
 def _scan_shell_lines(
-    lines: List[Tuple[int, str, bool]],
+    lines: list[tuple[int, str, bool]],
     declared_in: Path,
     source_kind: str,
-    skip_ecosystems: Optional[set] = None,
-) -> List[Dependency]:
+    skip_ecosystems: set | None = None,
+) -> list[Dependency]:
     """Apply the manager patterns to each logical line; emit deps.
 
     Each subline is one install command — at most one manager should apply.
@@ -181,7 +180,7 @@ def _scan_shell_lines(
     aware) without duplicating those packages.
     """
     skip_ecosystems = skip_ecosystems or set()
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for line_no, body, commented in lines:
         cleaned = _strip_inline_comment(body)
         # Drop GHA template expressions before tokenising. A workflow line
@@ -191,9 +190,9 @@ def _scan_shell_lines(
         # target. Harmless on non-GHA sources (the syntax doesn't occur).
         cleaned = _GHA_EXPR_RE.sub(" ", cleaned)
         for sub in _split_compound(cleaned):
-            best: Optional[Tuple[_PkgManager, "re.Match[str]"]] = None
+            best: tuple[_PkgManager, re.Match[str]] | None = None
             for mgr in _MANAGERS:
-                if mgr.ecosystem in skip_ecosystems:
+                if mgr.ecosystem in skip_ecosystems and not commented:
                     continue
                 m = mgr.pattern.search(sub)
                 if not m:
@@ -237,10 +236,10 @@ def _scan_shell_lines(
     return deps
 
 
-def _split_compound(line: str) -> List[str]:
+def _split_compound(line: str) -> list[str]:
     """Split a shell line on ``&&`` / ``||`` / ``;`` outside quotes."""
-    out: List[str] = []
-    buf: List[str] = []
+    out: list[str] = []
+    buf: list[str] = []
     in_single = False
     in_double = False
     i = 0
@@ -277,17 +276,17 @@ def _split_compound(line: str) -> List[str]:
 def _make_dep(
     *,
     name: str,
-    version: Optional[str],
+    version: str | None,
     pin_style: PinStyle,
     ecosystem: str,
     purl_type: str,
-    purl_namespace: Optional[str],
+    purl_namespace: str | None,
     declared_in: Path,
     source_kind: str,
     commented: bool,
     line_no: int,
-    version_floor: Optional[str] = None,
-    version_ceiling: Optional[str] = None,
+    version_floor: str | None = None,
+    version_ceiling: str | None = None,
 ) -> Dependency:
     canon = _canonicalise_name(name, ecosystem)
     purl_base = (
@@ -333,7 +332,7 @@ def _canonicalise_name(name: str, ecosystem: str) -> str:
 # File-shape entry points
 # ---------------------------------------------------------------------------
 
-def parse_dockerfile(path: Path) -> List[Dependency]:
+def parse_dockerfile(path: Path) -> list[Dependency]:
     """Extract installs from a Dockerfile / Containerfile.
 
     Three-pass design:
@@ -360,7 +359,7 @@ def parse_dockerfile(path: Path) -> List[Dependency]:
     text = _safe_read(path)
     if text is None:
         return []
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     # ARG pins first: when a Dockerfile both pins ``ARG FOO_VERSION=1.0``
     # AND has ``RUN pip install foo==${FOO_VERSION}``, the RUN scanner
     # emits ``foo@${FOO_VERSION}`` (literal placeholder string) and
@@ -380,7 +379,7 @@ def parse_dockerfile(path: Path) -> List[Dependency]:
 
 def _extract_apt_via_core_dockerfile(
     text: str, path: Path,
-) -> List[Dependency]:
+) -> list[Dependency]:
     """Use ``core.dockerfile.apt`` to extract Debian deps from a
     Dockerfile.
 
@@ -404,15 +403,13 @@ def _extract_apt_via_core_dockerfile(
         return []
     from ._base_image_suite import stage_image_map
     stage_img = stage_image_map(instructions)
-    out: List[Dependency] = []
-    for ap in extract_apt_packages(instructions):
-        out.append(_apt_package_to_dep(ap, path,
-                                       base_image=stage_img.get(ap.stage)))
+    out: list[Dependency] = [_apt_package_to_dep(ap, path,
+                                       base_image=stage_img.get(ap.stage)) for ap in extract_apt_packages(instructions)]
     return out
 
 
 def _apt_package_to_dep(ap, declared_in: Path,
-                        base_image: Optional[str] = None) -> Dependency:
+                        base_image: str | None = None) -> Dependency:
     canon = _canonicalise_name(ap.name, "Debian")
     purl_base = f"pkg:deb/debian/{canon}"
     purl = f"{purl_base}@{ap.version}" if ap.version else purl_base
@@ -450,7 +447,7 @@ def _apt_package_to_dep(ap, declared_in: Path,
     )
 
 
-def parse_devcontainer_json(path: Path) -> List[Dependency]:
+def parse_devcontainer_json(path: Path) -> list[Dependency]:
     """Extract installs from devcontainer.json post*Command hooks.
 
     Shell content is grabbed from ``postCreateCommand``, ``onCreateCommand``,
@@ -472,7 +469,7 @@ def parse_devcontainer_json(path: Path) -> List[Dependency]:
         "updateContentCommand",
         "postAttachCommand",
     )
-    lines: List[Tuple[int, str, bool]] = []
+    lines: list[tuple[int, str, bool]] = []
     for key in cmd_keys:
         val = data.get(key)
         if val is None:
@@ -483,7 +480,7 @@ def parse_devcontainer_json(path: Path) -> List[Dependency]:
                              source_kind="devcontainer")
 
 
-def parse_shell_script(path: Path) -> List[Dependency]:
+def parse_shell_script(path: Path) -> list[Dependency]:
     """Extract installs from a ``.sh`` / ``.bash`` script."""
     text = _safe_read(path)
     if text is None:
@@ -493,7 +490,7 @@ def parse_shell_script(path: Path) -> List[Dependency]:
                              source_kind="shell_script")
 
 
-def parse_gha_workflow(path: Path) -> List[Dependency]:
+def parse_gha_workflow(path: Path) -> list[Dependency]:
     """Extract installs and ``uses:`` action references from a GHA
     workflow YAML.
 
@@ -546,7 +543,7 @@ _GHA_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 def _extract_gha_uses(
     text: str, *, declared_in: Path,
-) -> List[Dependency]:
+) -> list[Dependency]:
     """Pull ``uses: owner/repo@ref`` references out of a workflow.
 
     Each reference becomes one ``Dependency`` with ecosystem
@@ -559,7 +556,7 @@ def _extract_gha_uses(
         owner can re-publish, but it's the conventional pin shape)
       * else → UNKNOWN (branch / odd ref)
     """
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for line_no, raw in enumerate(text.splitlines(), start=1):
         m = _GHA_USES_RE.match(raw)
         if not m:
@@ -595,7 +592,7 @@ def _extract_gha_uses(
     return out
 
 
-def _classify_action_ref(ref: str) -> Tuple[PinStyle, Optional[str]]:
+def _classify_action_ref(ref: str) -> tuple[PinStyle, str | None]:
     """Classify a ``uses: <action>@<ref>`` reference.
 
     ``ref`` is the version-shaped suffix. Mapping:
@@ -623,7 +620,7 @@ def _classify_action_ref(ref: str) -> Tuple[PinStyle, Optional[str]]:
 _DOCKERFILE_RUN_RE = re.compile(r"^\s*RUN\s+", re.IGNORECASE)
 
 
-def _extract_dockerfile_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
+def _extract_dockerfile_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     """Yield ``(start_line, body, commented)`` for every RUN instruction.
 
     Live RUN instructions (and their backslash-continuations) come from
@@ -636,12 +633,9 @@ def _extract_dockerfile_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
     """
     from core.dockerfile import parse_dockerfile as _parse_dockerfile_core
 
-    out: List[Tuple[int, str, bool]] = []
 
     # Live RUN instructions — delegated.
-    for inst in _parse_dockerfile_core(text):
-        if inst.directive == "RUN" and inst.args:
-            out.append((inst.line, inst.args, False))
+    out: list[tuple[int, str, bool]] = [(inst.line, inst.args, False) for inst in _parse_dockerfile_core(text) if inst.directive == "RUN" and inst.args]
 
     # Commented RUN blocks — small inline pass. Rare but cheap to
     # preserve behaviour. Honours backslash continuation across
@@ -654,10 +648,10 @@ def _extract_dockerfile_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
 
 def _extract_commented_run_blocks(
     text: str,
-) -> List[Tuple[int, str, bool]]:
+) -> list[tuple[int, str, bool]]:
     """Scan for ``# RUN ...`` blocks. Returns the same shape as the
     live-RUN extractor with ``commented=True``."""
-    out: List[Tuple[int, str, bool]] = []
+    out: list[tuple[int, str, bool]] = []
     raw = text.splitlines()
     i = 0
     while i < len(raw):
@@ -692,14 +686,14 @@ _GHA_RUN_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*(\S.*?)?\s*$")
 _GHA_RUN_BLOCK_OPEN_RE = re.compile(r"^(\s*)(?:-\s+)?run:\s*[|>][+-]?\s*$")
 
 
-def _extract_gha_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
-    """Pull the body of every ``run:`` step out of a workflow.
+def _extract_gha_run_blocks(text: str) -> list[tuple[int, str, bool]]:
+    r"""Pull the body of every ``run:`` step out of a workflow.
 
     Supports both inline (``run: pip install foo``) and block-scalar form
-    (``run: |\\n  pip install foo``). Block bodies are dedented to their
+    (``run: |\n  pip install foo``). Block bodies are dedented to their
     first content line's indent.
     """
-    out: List[Tuple[int, str, bool]] = []
+    out: list[tuple[int, str, bool]] = []
     raw = text.splitlines()
     i = 0
     while i < len(raw):
@@ -707,10 +701,10 @@ def _extract_gha_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
         block_m = _GHA_RUN_BLOCK_OPEN_RE.match(line)
         if block_m:
             base_indent = len(block_m.group(1))
-            block_lines: List[str] = []
+            block_lines: list[str] = []
             start = i + 2
             i += 1
-            block_indent: Optional[int] = None
+            block_indent: int | None = None
             while i < len(raw):
                 nxt = raw[i]
                 if not nxt.strip():
@@ -743,7 +737,7 @@ def _extract_gha_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _safe_read(path: Path) -> Optional[str]:
+def _safe_read(path: Path) -> str | None:
     # Delegates to the shared size-bounded reader. Caps at 50 MB
     # (the package-wide default) — large enough for the biggest
     # legitimate Dockerfile / shell / GHA workflow, small enough
@@ -764,12 +758,15 @@ def _load_jsonc(text: str) -> dict:
     return load_jsonc(text)
 
 
-def _flatten_command(val) -> List[str]:
-    """devcontainer command fields can be string OR list-of-strings."""
+def _flatten_command(val) -> list[str]:
+    """devcontainer command fields can be string, list-of-strings, or
+    object (dict of named parallel commands)."""
     if isinstance(val, str):
         return [val]
     if isinstance(val, list):
         return [v for v in val if isinstance(v, str)]
+    if isinstance(val, dict):
+        return [v for v in val.values() if isinstance(v, str)]
     return []
 
 
@@ -783,17 +780,13 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
-    if path.suffix == ".dockerfile":
-        return True
-    return False
+    return path.suffix == ".dockerfile"
 
 
 def _is_devcontainer_json(path: Path) -> bool:
     if path.name == "devcontainer.json":
         return True
-    if path.name == ".devcontainer.json":
-        return True
-    return False
+    return path.name == ".devcontainer.json"
 
 
 def _is_shell_script(path: Path) -> bool:
@@ -807,9 +800,7 @@ def _is_gha_workflow(path: Path) -> bool:
     for j in range(len(parts) - 2):
         if parts[j] == ".github" and parts[j + 1] == "workflows":
             return True
-    if path.name in ("action.yml", "action.yaml"):
-        return True
-    return False
+    return path.name in ("action.yml", "action.yaml")
 
 
 register(predicate=_is_dockerfile)(parse_dockerfile)

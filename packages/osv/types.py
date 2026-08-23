@@ -18,8 +18,10 @@ dict directly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 @dataclass(frozen=True)

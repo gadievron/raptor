@@ -1,0 +1,4 @@
+{
+  "_comment": "Deliberate unguarded optional-dependency imports in test files. Target: keep this EMPTY \u2014 guard with importorskip / try-except ImportError / a sys.modules stub instead of baselining.",
+  "findings": []
+}

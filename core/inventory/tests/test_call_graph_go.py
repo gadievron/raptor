@@ -133,7 +133,7 @@ def test_resolver_matches_versioned_import_call():
     name ``github.com/foo/bar/v2.SomeFunc``. Without this
     heuristic, the call would resolve to nothing (``bar`` not in
     imports map → unresolved)."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_go(
         'package x\n'
@@ -153,7 +153,7 @@ def test_resolver_matches_versioned_import_call():
 def test_resolver_matches_hyphenated_import_call():
     """End-to-end: call to ``barutils.X()`` in a file importing
     ``github.com/foo/bar-utils`` resolves to ``bar-utils.X``."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_go(
         'package x\n'
@@ -367,7 +367,7 @@ def test_resolver_called_against_go_data():
     and returns CALLED for matching qualified names. Note: Go OSV
     symbols use the FULL module path (``net/http.HandlerFunc``)
     so the resolver matches against that."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_go(
         'package x\n'
@@ -387,7 +387,7 @@ def test_resolver_called_against_go_data():
 def test_resolver_uncertain_on_dot_import_with_tail_match():
     """File with dot import AND a bare-name call matching the
     target tail → UNCERTAIN."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_go(
         'package x\n'
@@ -408,7 +408,7 @@ def test_resolver_uncertain_on_dot_import_with_tail_match():
 
 
 def test_resolver_not_called_when_function_unused():
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_go(
         'package x\n'

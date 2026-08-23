@@ -41,7 +41,6 @@ import logging
 import os.path
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,7 @@ class BuildExcluded:
 
 def detect_build_excluded(
     language: str, content: str,
-) -> Optional[BuildExcluded]:
+) -> BuildExcluded | None:
     """Per-language dispatch. Returns the detected build exclusion, or
     ``None`` when none is detected (or the language has no detector wired).
     Best-effort: any parse failure returns ``None``."""
@@ -93,7 +92,7 @@ _GO_LEGACY_BUILD_LINE = re.compile(r"^//\s*\+build\s+(.+?)\s*$")
 _GO_PACKAGE = re.compile(r"^\s*package\s+\w+")
 
 
-def _detect_go(content: str) -> Optional[BuildExcluded]:
+def _detect_go(content: str) -> BuildExcluded | None:
     for i, raw in enumerate(content.split("\n"), 1):
         line = raw.strip()
         if _GO_PACKAGE.match(raw):
@@ -113,8 +112,8 @@ def _detect_go(content: str) -> Optional[BuildExcluded]:
 
 
 def tu_membership_excluded(
-    abs_path: str, tu_files: Optional[frozenset],
-) -> Optional[BuildExcluded]:
+    abs_path: str, tu_files: frozenset | None,
+) -> BuildExcluded | None:
     """C/C++ build-membership witness: a SOURCE translation unit (``.c`` /
     ``.cpp`` / …) absent from ``compile_commands.json`` is not compiled in this
     build, so every function in it is dead. Heuristic (the manifest may be
@@ -142,8 +141,8 @@ def tu_membership_excluded(
 
 
 def crate_module_excluded(
-    abs_path: str, crate_modules: Optional[frozenset],
-) -> Optional[BuildExcluded]:
+    abs_path: str, crate_modules: frozenset | None,
+) -> BuildExcluded | None:
     """Rust crate-module-membership witness: a ``.rs`` file not reachable via
     the ``mod`` tree from any crate root is not part of the crate — never
     compiled, so every function in it is dead. Heuristic / surface-only (the
@@ -170,7 +169,7 @@ def crate_module_excluded(
 
 __all__ = [
     "BuildExcluded",
+    "crate_module_excluded",
     "detect_build_excluded",
     "tu_membership_excluded",
-    "crate_module_excluded",
 ]

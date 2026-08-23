@@ -145,3 +145,32 @@ class TestApiKey:
         stub.add(json=_cve_payload())
         NvdClient(cache_enabled=False).get_payload("CVE-2024-9998")
         assert "apiKey" not in stub.calls[0]["headers"]
+
+
+class TestCveIdValidation:
+    """cve_id is validated + percent-encoded before joining the URL or
+    any cache key — advisory-derived values are not trusted."""
+
+    def test_malformed_id_returns_none_without_network(self, stub) -> None:
+        client = NvdClient(cache_enabled=False)
+        assert client.get_payload("not-a-cve") is None
+        assert client.get_payload("") is None
+        assert stub.calls == []
+
+    def test_query_smuggling_id_rejected(self, stub) -> None:
+        client = NvdClient(cache_enabled=False)
+        crafted = "CVE-2024-1234&resultsPerPage=2000"
+        assert client.get_payload(crafted) is None
+        assert stub.calls == []
+
+    def test_valid_id_is_percent_encoded_in_url(self, stub) -> None:
+        stub.add(json=_cve_payload())
+        client = NvdClient(cache_enabled=False)
+        assert client.get_payload("CVE-2024-1234") is not None
+        assert stub.calls[0]["url"].endswith("?cveId=CVE-2024-1234")
+
+    def test_surrounding_whitespace_is_tolerated(self, stub) -> None:
+        stub.add(json=_cve_payload())
+        client = NvdClient(cache_enabled=False)
+        assert client.get_payload("  CVE-2024-1234\n") is not None
+        assert stub.calls[0]["url"].endswith("?cveId=CVE-2024-1234")

@@ -115,7 +115,7 @@ def main() -> int:
     excluded_via_frontmatter: set[str] = set()
     for md in md_files:
         name = md.stem
-        fm = _parse_frontmatter(md.read_text())
+        fm = _parse_frontmatter(md.read_text(encoding="utf-8"))
         dispatch = fm.get("dispatch")
         if not dispatch:
             errs.append(
@@ -133,7 +133,7 @@ def main() -> int:
     # frontmatter-flagged set. Pull the names out of the documented
     # text by looking for the pattern "raptor-X" / "/X" in the
     # exclusion sentence.
-    commands_md = COMMANDS_INDEX.read_text()
+    commands_md = COMMANDS_INDEX.read_text(encoding="utf-8")
     excl_pattern = re.compile(
         r"internal/duplicate commands.*?(?=\.\s|\n\n)",
         re.IGNORECASE | re.DOTALL,
@@ -153,16 +153,10 @@ def main() -> int:
 
         missing_in_md = excluded_in_index - excluded_via_frontmatter
         missing_in_index = excluded_via_frontmatter - excluded_in_index
-        for n in sorted(missing_in_md):
-            errs.append(
-                f"/{n}: listed as excluded in commands.md but missing "
-                f"``exclude_from_listing: true`` frontmatter"
-            )
-        for n in sorted(missing_in_index):
-            errs.append(
-                f"/{n}: has ``exclude_from_listing: true`` frontmatter but "
-                f"not listed in commands.md's exclude sentence"
-            )
+        errs.extend(f"/{n}: listed as excluded in commands.md but missing "
+                f"``exclude_from_listing: true`` frontmatter" for n in sorted(missing_in_md))
+        errs.extend(f"/{n}: has ``exclude_from_listing: true`` frontmatter but "
+                f"not listed in commands.md's exclude sentence" for n in sorted(missing_in_index))
 
     if errs:
         print("Command-metadata lint failed:", file=sys.stderr)

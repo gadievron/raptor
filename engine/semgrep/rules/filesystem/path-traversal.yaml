@@ -1,19 +1,21 @@
 rules:
-  - id: raptor.files.path_traversal.java
-    message: Java file construction from potentially unvalidated input; canonicalise and validate inputs.
-    languages: [java, kotlin]
-    severity: HIGH
-    pattern: new File($USERINPUT)
-    metadata:
-      cwe: ["CWE-22"]
+  # NOTE: the former raptor.files.path_traversal.java rule (every
+  # non-literal `new File($X)` at HIGH, no taint requirement) was
+  # removed: raptor.java.path-traversal (java/java-security.yaml)
+  # covers new File / FileInputStream / Paths.get as taint sinks with
+  # real sources, so the untainted variant only added a finding for
+  # every dynamically-built path in the codebase.
 
   - id: raptor.files.path_traversal.python
     message: Python open() with concatenated user input; canonicalise and validate inputs.
     languages: [python]
     severity: HIGH
-    pattern-either:
-      - pattern: open($USERINPUT + "/" + $REST)
-      - pattern: open(os.path.join($USERINPUT, $REST))
+    patterns:
+      - pattern-either:
+          - pattern: open($USERINPUT + "/" + $REST)
+          - pattern: open(os.path.join($USERINPUT, $REST))
+      - pattern-not: open("..." + "/" + $REST)
+      - pattern-not: open(os.path.join("...", $REST))
     metadata:
       cwe: ["CWE-22"]
 
@@ -21,9 +23,12 @@ rules:
     message: JavaScript path construction from user input; validate or normalise paths.
     languages: [javascript, typescript]
     severity: HIGH
-    pattern-either:
-      - pattern: fs.openSync($USERINPUT + "/" + $REST, ...)
-      - pattern: fs.readFileSync(path.join($USERINPUT, $REST), ...)
+    patterns:
+      - pattern-either:
+          - pattern: fs.openSync($USERINPUT + "/" + $REST, ...)
+          - pattern: fs.readFileSync(path.join($USERINPUT, $REST), ...)
+      - pattern-not: fs.openSync("..." + "/" + $REST, ...)
+      - pattern-not: fs.readFileSync(path.join("...", $REST), ...)
     metadata:
       cwe: ["CWE-22"]
 
@@ -40,13 +45,17 @@ rules:
           - pattern: flask.request.form[$_]
           - pattern: input(...)
     pattern-sinks:
+      # os.path.join is deliberately not a sink here —
+      # raptor.python.path-join-traversal owns that shape with the
+      # correct focus on the joined component.
       - pattern-either:
-          - pattern: open($PATH)
+          - pattern: open($PATH, ...)
           - pattern: os.open($PATH, ...)
-          - pattern: os.path.join($PATH, ...)
           - pattern: Path($PATH)
+    # No abspath/resolve sanitizers: both NORMALISE the path — they
+    # resolve "../" so the escape takes effect, they do not confine
+    # it. basename genuinely confines (strips directory components).
     pattern-sanitizers:
-      - pattern: os.path.abspath(...)
-      - pattern: pathlib.Path(...).resolve()
+      - pattern: os.path.basename(...)
     metadata:
       cwe: ["CWE-22"]

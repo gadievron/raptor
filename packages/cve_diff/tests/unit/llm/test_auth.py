@@ -218,3 +218,38 @@ def test_auth_module_does_not_enumerate_provider_env_vars():
         f"(RaptorConfig.LLM_API_KEY_VARS) should be the only place "
         f"that lists them."
     )
+
+
+# ---------- default_model_id ----------
+
+
+def test_default_model_id_uses_shared_registry(monkeypatch):
+    from types import SimpleNamespace
+
+    from cve_diff.llm.auth import default_model_id
+
+    monkeypatch.setattr(
+        "core.llm.config._get_default_primary_model",
+        lambda prefer=None: SimpleNamespace(model_name="gemini-2.5-pro"),
+    )
+    assert default_model_id() == "gemini-2.5-pro"
+
+
+def test_default_model_id_falls_back_when_unconfigured(monkeypatch):
+    from cve_diff.llm.auth import FALLBACK_MODEL_ID, default_model_id
+
+    monkeypatch.setattr(
+        "core.llm.config._get_default_primary_model",
+        lambda prefer=None: None,
+    )
+    assert default_model_id() == FALLBACK_MODEL_ID
+
+
+def test_default_model_id_survives_registry_errors(monkeypatch):
+    from cve_diff.llm.auth import FALLBACK_MODEL_ID, default_model_id
+
+    def _boom(prefer=None):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr("core.llm.config._get_default_primary_model", _boom)
+    assert default_model_id() == FALLBACK_MODEL_ID

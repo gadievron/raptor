@@ -11,14 +11,26 @@ from core.binary.fingerprint import FINGERPRINT_SCHEMA_VERSION
 from packages.sca import fingerprint_cli
 
 
+def _is_elf(path: str = "/bin/ls") -> bool:
+    """True only when ``path`` is a real ELF binary. These tests
+    fingerprint ELF binaries; on macOS /bin/ls and /usr/bin/python3
+    exist but are Mach-O, so an existence check alone failed to skip.
+    Gate on the ELF magic instead."""
+    p = Path(path)
+    try:
+        return p.is_file() and p.read_bytes()[:4] == b"\x7fELF"
+    except OSError:
+        return False
+
+
 class TestCliBasics:
     def test_print_fingerprint_of_real_binary(
         self, tmp_path, capsys,
     ):
         """``fingerprint /bin/ls`` prints JSON to stdout when the
         host has a real ELF binary at that path."""
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         rc = fingerprint_cli.main([
             "/bin/ls", "--cache-root", str(tmp_path),
         ])
@@ -39,8 +51,8 @@ class TestCliBasics:
         # Stub fetch_image_binary to return a real file path
         real_bin = tmp_path / "fake.bin"
         # An ELF file so capability_fingerprint succeeds
-        if not Path("/bin/ls").is_file():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         real_bin.write_bytes(Path("/bin/ls").read_bytes())
 
         def fake_fetch(ref, *, client, **kwargs):
@@ -67,8 +79,8 @@ class TestCliBasics:
 
 class TestSaveBaseline:
     def test_save_writes_baseline(self, tmp_path, capsys):
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         cache_root = tmp_path / "cache"
         rc = fingerprint_cli.main([
             "/bin/ls",
@@ -86,8 +98,8 @@ class TestSaveBaseline:
         assert loaded.binary_format == "elf"
 
     def test_save_uses_target_as_default_ref(self, tmp_path):
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         cache_root = tmp_path / "cache"
         rc = fingerprint_cli.main([
             "/bin/ls", "--save", "--cache-root", str(cache_root),
@@ -102,8 +114,8 @@ class TestSaveBaseline:
 
 class TestCheckDrift:
     def test_check_no_baseline_exits_zero(self, tmp_path, capsys):
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         rc = fingerprint_cli.main([
             "/bin/ls", "--check",
             "--ref", "never-seen",
@@ -116,8 +128,8 @@ class TestCheckDrift:
     def test_check_baseline_matches_exits_zero(
         self, tmp_path, capsys,
     ):
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         cache_root = tmp_path / "cache"
         # Seed baseline
         fingerprint_cli.main([
@@ -135,8 +147,8 @@ class TestCheckDrift:
         """Mock the fingerprint primitive to return a different
         fingerprint than the baseline → drift detected → exit 1
         (CI gate semantic: build fails on drift)."""
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        if not _is_elf():
+            pytest.skip("/bin/ls is not an ELF binary on this host")
         cache_root = tmp_path / "cache"
         # Save real baseline of /bin/ls
         fingerprint_cli.main([
@@ -184,8 +196,8 @@ class TestOutFlag:
     def test_out_to_directory_exits_three(self, tmp_path, capsys):
         """``--out <dir>`` (instead of <file>) → exit 3 with a
         readable error, not a Python traceback."""
-        if not Path("/usr/bin/python3").is_file():
-            pytest.skip("/usr/bin/python3 not present")
+        if not _is_elf("/usr/bin/python3"):
+            pytest.skip("/usr/bin/python3 is not an ELF binary on this host")
         # Point --out at an existing directory
         rc = fingerprint_cli.main([
             "/usr/bin/python3",
@@ -199,8 +211,8 @@ class TestOutFlag:
         assert "Traceback" not in err
 
     def test_out_writes_file(self, tmp_path):
-        if not Path("/usr/bin/python3").is_file():
-            pytest.skip("/usr/bin/python3 not present")
+        if not _is_elf("/usr/bin/python3"):
+            pytest.skip("/usr/bin/python3 is not an ELF binary on this host")
         out = tmp_path / "fp.json"
         rc = fingerprint_cli.main([
             "/usr/bin/python3",

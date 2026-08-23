@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class BuildResult:
 
     source: str
     written: bool        # True iff the file changed
-    error: Optional[str] # populated on fetch failure (workflow logs)
+    error: str | None # populated on fetch failure (workflow logs)
     record_count: int
 
 
@@ -86,11 +86,11 @@ def _build_one_source(source: str, out_dir: Path, http: Any) -> BuildResult:
 
 def build_corpus(
     *,
-    out_dir: Optional[Path] = None,
-    http: Optional[Any] = None,
-    sources: Optional[List[str]] = None,
+    out_dir: Path | None = None,
+    http: Any | None = None,
+    sources: list[str] | None = None,
     jobs: int = 0,
-) -> List[BuildResult]:
+) -> list[BuildResult]:
     """Refresh the calibration corpus.
 
     ``sources`` filters which fetchers run. Default is all known
@@ -123,7 +123,7 @@ def build_corpus(
     if jobs <= 0:
         jobs = min(len(sources), 8) or 1
 
-    results: List[Optional[BuildResult]] = [None] * len(sources)
+    results: list[BuildResult | None] = [None] * len(sources)
     if jobs <= 1 or len(sources) <= 1:
         for i, source in enumerate(sources):
             results[i] = _build_one_source(source, out_dir, http)
@@ -151,7 +151,7 @@ def _build_kev(out_dir: Path, http: Any) -> BuildResult:
         "known_exploited_vulnerabilities.json"
     )
     data = http.get_json(KEV_URL)
-    signals: Dict[str, Dict[str, Any]] = {}
+    signals: dict[str, dict[str, Any]] = {}
     for entry in data.get("vulnerabilities", []):
         cve = entry.get("cveID")
         if not cve:
@@ -223,7 +223,7 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
-    cve_to_ids: Dict[str, List[int]] = {}
+    cve_to_ids: dict[str, list[int]] = {}
     rows_seen = 0
     for row in reader:
         rows_seen += 1
@@ -299,10 +299,9 @@ def _build_metasploit(out_dir: Path, http: Any) -> BuildResult:
     )
     data = http.get_json(MSF_URL)
     if not isinstance(data, dict):
-        raise RuntimeError(
-            f"unexpected MSF index shape: {type(data).__name__}"
-        )
-    cve_to_modules: Dict[str, List[str]] = {}
+        msg = f"unexpected MSF index shape: {type(data).__name__}"
+        raise RuntimeError(msg)
+    cve_to_modules: dict[str, list[str]] = {}
     for module_path, meta in data.items():
         if not isinstance(meta, dict):
             continue
@@ -374,7 +373,7 @@ def _build_github_poc(out_dir: Path, http: Any) -> BuildResult:
     raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
-    cve_to_urls: Dict[str, List[str]] = {}
+    cve_to_urls: dict[str, list[str]] = {}
     rows_seen = 0
     for row in reader:
         rows_seen += 1
@@ -385,7 +384,7 @@ def _build_github_poc(out_dir: Path, http: Any) -> BuildResult:
                  if c.strip().startswith("CVE-")]
         if not cves:
             continue
-        urls: List[str] = []
+        urls: list[str] = []
         for col in ("source_url", "application_url"):
             url = (row.get(col) or "").strip()
             if _is_github_poc_url(url):
@@ -439,7 +438,7 @@ def _is_github_poc_url(url: str) -> bool:
     return url.startswith(("https://github.com/", "http://github.com/"))
 
 
-def _msf_ref_to_cve(ref: Any) -> Optional[str]:
+def _msf_ref_to_cve(ref: Any) -> str | None:
     """MSF references arrive in two shapes:
 
       * String: ``"CVE-2021-44228"`` or ``"OSVDB-12345"``
@@ -451,12 +450,11 @@ def _msf_ref_to_cve(ref: Any) -> Optional[str]:
         if ref.startswith("CVE-"):
             return ref
         return None
-    if isinstance(ref, dict):
-        if ref.get("type") == "CVE":
-            cve_num = ref.get("ref") or ""
-            if cve_num and not cve_num.startswith("CVE-"):
-                cve_num = f"CVE-{cve_num}"
-            return cve_num or None
+    if isinstance(ref, dict) and ref.get("type") == "CVE":
+        cve_num = ref.get("ref") or ""
+        if cve_num and not cve_num.startswith("CVE-"):
+            cve_num = f"CVE-{cve_num}"
+        return cve_num or None
     return None
 
 
@@ -474,14 +472,14 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
     ``{cve_id: {epss, percentile, fetched_date}}``.
 
     EPSS is FIRST.org's free-for-any-use feed. We page through the
-    FIRST API for every CVE with EPSS ≥ 0.05, following the
+    FIRST API for every CVE with EPSS > 0.05, following the
     ``offset``/``total`` envelope to completeness — a single capped
     ``limit`` silently dropped the tail once the matching set grew
     past one page.
     """
-    signals: Dict[str, Dict[str, Any]] = {}
+    signals: dict[str, dict[str, Any]] = {}
     offset = 0
-    total: Optional[int] = None
+    total: int | None = None
     pages = 0
     while pages < _EPSS_MAX_PAGES:
         pages += 1
@@ -532,7 +530,7 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
             "fetched_at": _utcnow(),
             "provenance": (
                 "Exploit Prediction Scoring System — FIRST.org. "
-                "Filtered to CVEs with EPSS ≥ 0.05 to keep the "
+                "Filtered to CVEs with EPSS > 0.05 to keep the "
                 "corpus tractable."
             ),
         },
@@ -609,7 +607,7 @@ def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
                 if isinstance(cve, str) and cve.startswith("CVE-"):
                     cve_set.add(cve)
 
-    signals: Dict[str, Dict[str, Any]] = {}
+    signals: dict[str, dict[str, Any]] = {}
     queried = 0
     for cve in sorted(cve_set):
         try:
@@ -622,8 +620,8 @@ def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
         queried += 1
         if not isinstance(data, dict):
             continue
-        all_evidence_urls: List[str] = []
-        exploit_host_urls: List[str] = []
+        all_evidence_urls: list[str] = []
+        exploit_host_urls: list[str] = []
         for ref in (data.get("references") or []):
             if not isinstance(ref, dict):
                 continue
@@ -704,8 +702,7 @@ def _is_exploit_host_url(url: str) -> bool:
         host = urlparse(url).netloc.lower()
     except Exception:                                       # noqa: BLE001
         return False
-    if host.startswith("www."):
-        host = host[4:]
+    host = host.removeprefix("www.")
     return host in _OSV_EVIDENCE_EXPLOIT_HOSTS
 
 
@@ -752,10 +749,11 @@ class _CappedReader:
         chunk = self._inner.read(size)
         self._seen += len(chunk)
         if self._seen > self._cap:
-            raise RuntimeError(
+            msg = (
                 "vulnrichment tarball decompressed beyond "
                 f"{self._cap} bytes — possible decompression bomb"
             )
+            raise RuntimeError(msg)
         return chunk
 
 
@@ -801,7 +799,7 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     # Bound total decompression so a bomb hidden anywhere in the
     # tarball can't OOM the runner (see ``_CappedReader``).
     max_decompressed = max(_DECOMP_FLOOR, len(raw) * _DECOMP_RATIO)
-    signals: Dict[str, Dict[str, Any]] = {}
+    signals: dict[str, dict[str, Any]] = {}
     files_scanned = 0
     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
         capped = _CappedReader(gz, max_decompressed)
@@ -881,7 +879,7 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     )
 
 
-def _vulnrichment_extract_ssvc(record: Any) -> Optional[Dict[str, Any]]:
+def _vulnrichment_extract_ssvc(record: Any) -> dict[str, Any] | None:
     """Pluck SSVC fields out of a CVE-JSON-5 record's CISA-ADP
     container. Returns ``{"exploitation", "automatable",
     "technical_impact"}`` or ``None`` if the entry lacks an SSVC
@@ -950,7 +948,7 @@ def _utcnow() -> str:
 
 
 def _write_if_changed(
-    path: Path, data: Dict[str, Any], *, source: str,
+    path: Path, data: dict[str, Any], *, source: str,
     record_count: int,
 ) -> BuildResult:
     """Write ``data`` to ``path`` only when content differs.

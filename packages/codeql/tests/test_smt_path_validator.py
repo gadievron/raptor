@@ -1,4 +1,4 @@
-"""Tests for packages.codeql.smt_path_validator."""
+"""Tests for core.smt_solver.path_feasibility."""
 
 import sys
 from pathlib import Path
@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.smt_solver import RejectionKind, z3_available
-from packages.codeql.smt_path_validator import (
+from core.smt_solver.path_feasibility import (
     PathCondition,
     check_path_feasibility,
 )
@@ -29,7 +29,7 @@ class TestNoZ3:
     """Behaviour when Z3 is unavailable — must degrade gracefully."""
 
     def test_returns_none_feasible(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.feasible is None
         assert r.smt_available is False
@@ -39,12 +39,12 @@ class TestNoZ3:
             PathCondition("size > 0", step_index=0),
             PathCondition("offset < 1024", step_index=1),
         ]
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility(conditions)
         assert set(r.unknown) == {"size > 0", "offset < 1024"}
 
     def test_empty_conditions_still_returns_none(self):
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([])
         assert r.feasible is None
         assert r.smt_available is False
@@ -568,10 +568,16 @@ class TestParametricProfile:
             profile=BV_C_UINT32,
         )
         assert r.feasible is True
-        offset, length = r.model["offset"], r.model["length"]
-        # The wraparound is the whole point: (offset + length) mod 2^32 ≤ 64.
-        assert (offset + length) & 0xFFFFFFFF <= 64
-        assert offset > 0x10000 and length > 0x10000
+        m = r.model
+        assert m["sum"] <= 64, f"sum={m['sum']} violates sum<=buffer_size"
+        assert m["buffer_size"] == 64
+        assert m["offset"] > 0x10000, f"offset={m['offset']}"
+        assert m["length"] > 0x10000, f"length={m['length']}"
+        wrap = (m["offset"] + m["length"]) & 0xFFFFFFFF
+        assert m["sum"] == wrap, (
+            f"model inconsistency: sum={m['sum']} but "
+            f"(offset+length) mod 2^32 = {wrap}"
+        )
 
     @_requires_z3
     def test_uint32_profile_catches_mask_wraparound(self):
@@ -608,7 +614,7 @@ class TestStructuredRejection:
         """When Z3 is unavailable everything goes to unknown but we
         don't synthesise per-condition rejection reasons — there's no
         parser/solver to assign blame to."""
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+        with patch("core.smt_solver.path_feasibility._z3_available", return_value=False):
             r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
         assert r.unknown == ["size > 0"]
         assert r.unknown_reasons == []
@@ -1509,7 +1515,7 @@ class TestParensGrouping:
     def test_parens_exceeding_depth_limit_rejected(self):
         """Nesting beyond _MAX_PAREN_DEPTH (64) is rejected to prevent
         unbounded recursion from untrusted input."""
-        from packages.codeql.smt_path_validator import _MAX_PAREN_DEPTH
+        from core.smt_solver.path_feasibility import _MAX_PAREN_DEPTH
         inner = "x"
         for _ in range(_MAX_PAREN_DEPTH + 1):
             inner = f"({inner})"
@@ -1538,7 +1544,7 @@ class TestInputLimits:
     @_requires_z3
     def test_condition_length_within_cap_accepted(self):
         """A condition just under ``_MAX_CONDITION_CHARS`` parses normally."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         # Build a condition of length _MAX_CONDITION_CHARS that the parser
         # accepts: ``x + x + x + ... > 0``.  Each ``x + `` token is 4 chars.
         prefix = "x + " * ((_MAX_CONDITION_CHARS - len("x > 0")) // 4)
@@ -1554,7 +1560,7 @@ class TestInputLimits:
     def test_condition_length_over_cap_rejected(self):
         """A condition exceeding ``_MAX_CONDITION_CHARS`` is rejected with
         ``INPUT_TOO_LONG`` before any parser work runs."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         huge = "x" + ("=" * _MAX_CONDITION_CHARS) + "y"
         assert len(huge) > _MAX_CONDITION_CHARS
         r = check_path_feasibility([PathCondition(huge, step_index=0)])
@@ -1570,7 +1576,7 @@ class TestInputLimits:
     @_requires_z3
     def test_condition_count_within_cap_accepted(self):
         """A call with ``_MAX_CONDITIONS_PER_CALL`` items runs normally."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        from core.smt_solver.path_feasibility import _MAX_CONDITIONS_PER_CALL
         # Use distinct variable names per condition so they trivially
         # satisfy together — focus the test on the count check, not on
         # condition semantics.
@@ -1589,7 +1595,7 @@ class TestInputLimits:
         """A call with more than ``_MAX_CONDITIONS_PER_CALL`` items refuses
         the whole call with ``feasible=None`` and a single
         ``TOO_MANY_CONDITIONS`` rejection."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        from core.smt_solver.path_feasibility import _MAX_CONDITIONS_PER_CALL
         n = _MAX_CONDITIONS_PER_CALL + 1
         conds = [
             PathCondition(f"x{i} > 0", step_index=i) for i in range(n)
@@ -1624,7 +1630,7 @@ class TestInputLimits:
         whole input.  An adversarial input that's both very long AND has
         deep nesting must short-circuit on length so the balance scan
         never executes."""
-        from packages.codeql.smt_path_validator import (
+        from core.smt_solver.path_feasibility import (
             _MAX_CONDITION_CHARS, _MAX_PAREN_DEPTH,
         )
         # Build a string that's BOTH over the char cap AND has deeper
@@ -1646,7 +1652,7 @@ class TestInputLimits:
         """One oversize condition is rejected without poisoning the rest
         of the call — the other conditions still parse and contribute to
         the joint feasibility verdict."""
-        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        from core.smt_solver.path_feasibility import _MAX_CONDITION_CHARS
         huge = "y" + ("=" * _MAX_CONDITION_CHARS) + "0"
         r = check_path_feasibility([
             PathCondition("x > 0", step_index=0),
@@ -1779,3 +1785,281 @@ class TestPreferWitness:
         )
         assert r.feasible is True
         assert r.model.get("count") is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — weakest-precondition predicate extraction
+# ---------------------------------------------------------------------------
+class TestWeakestPrecondition:
+    """WP extraction: the minimal sat-preserving subset of path conjuncts.
+
+    The properties below use ``check_path_feasibility`` itself as the
+    oracle — ``PathCondition(text, negated=True)`` asserts ``¬text``, so
+    feasibility of ``W + [¬c]`` decides whether ``W`` implies ``c``.
+    """
+
+    @staticmethod
+    def _conds(texts):
+        return [PathCondition(t, step_index=i) for i, t in enumerate(texts)]
+
+    @_requires_z3
+    def test_feasible_path_carries_wp_fields(self):
+        r = check_path_feasibility(self._conds(["size > 5", "size < 100"]))
+        assert r.feasible is True
+        assert r.wp_predicate is not None
+        assert r.wp_complete is True
+        assert r.wp_ordering == "canonical-text-lexicographic"
+
+    @_requires_z3
+    def test_redundant_conjunct_dropped(self):
+        # ``size > 5`` implies ``size > 0`` — the weaker bound is redundant.
+        r = check_path_feasibility(self._conds(["size > 5", "size > 0"]))
+        assert r.feasible is True
+        assert r.wp_conjuncts == ["size > 5"]
+
+    @_requires_z3
+    def test_independent_conjuncts_all_kept(self):
+        r = check_path_feasibility(self._conds(["size > 5", "offset < 3"]))
+        assert r.feasible is True
+        assert set(r.wp_conjuncts) == {"size > 5", "offset < 3"}
+
+    @_requires_z3
+    def test_unsat_path_has_no_wp(self):
+        r = check_path_feasibility(self._conds(["size > 5", "size < 0"]))
+        assert r.feasible is False
+        assert r.wp_predicate is None
+        assert r.wp_conjuncts == []
+
+    def test_no_z3_has_no_wp(self):
+        with patch("core.smt_solver.path_feasibility._z3_available",
+                   return_value=False):
+            r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
+        assert r.wp_predicate is None
+        assert r.wp_conjuncts == []
+
+    @_requires_z3
+    def test_deterministic_across_runs(self):
+        conds = self._conds(["size > 5", "size > 0", "offset < 3"])
+        a = check_path_feasibility(conds)
+        b = check_path_feasibility(conds)
+        assert a.wp_conjuncts == b.wp_conjuncts
+        assert a.wp_predicate == b.wp_predicate
+
+    @_requires_z3
+    def test_wp_equivalent_to_full_path(self):
+        # Sat-preserving: ⋀W ⟹ ⋀C, i.e. for every original conjunct c,
+        # ``(⋀W ∧ ¬c)`` is unsat. With W ⊆ C this makes W ≡ C.
+        originals = ["size > 5", "size > 0", "size < 100", "offset < 3"]
+        r = check_path_feasibility(self._conds(originals))
+        assert r.feasible is True
+        W = r.wp_conjuncts
+        for c in originals:
+            probe = self._conds(W) + [
+                PathCondition(c, step_index=len(W), negated=True)]
+            assert check_path_feasibility(probe).feasible is False, (
+                f"W does not imply original conjunct {c!r}")
+
+    @_requires_z3
+    def test_wp_is_minimal(self):
+        # Minimality: for each c_i ∈ W, ``(⋀(W∖{c_i}) ∧ ¬c_i)`` is sat —
+        # dropping c_i would admit models violating it, so it is
+        # load-bearing and could not have been removed.
+        originals = ["size > 5", "size > 0", "size < 100", "offset < 3"]
+        r = check_path_feasibility(self._conds(originals))
+        W = r.wp_conjuncts
+        assert len(W) >= 1
+        for i, c_i in enumerate(W):
+            rest = [c for j, c in enumerate(W) if j != i]
+            probe = self._conds(rest) + [
+                PathCondition(c_i, step_index=len(rest), negated=True)]
+            assert check_path_feasibility(probe).feasible is True, (
+                f"kept conjunct {c_i!r} is implied by the rest — not minimal")
+
+    @_requires_z3
+    def test_cap_marks_incomplete(self):
+        from core.smt_solver.path_feasibility import WP_MAX_SOLVER_CALLS
+        # More independent conjuncts than the deletion-pass cap: the pass
+        # can't test them all, so it must report wp_complete=False.
+        n = WP_MAX_SOLVER_CALLS + 5
+        conds = [PathCondition(f"v{i} > {i}", step_index=i) for i in range(n)]
+        r = check_path_feasibility(conds)
+        assert r.feasible is True
+        assert r.wp_predicate is not None
+        assert r.wp_complete is False
+
+    @_requires_z3
+    def test_all_conjuncts_mutually_implied_returns_true(self):
+        """When every conjunct implies every other (all equivalent), the
+        deletion pass drops all but one.  If the input is crafted so that
+        even the last survivor is a tautology, ``_extract_wp`` returns
+        the ``"true"`` degenerate form."""
+        from core.smt_solver.path_feasibility import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        # Two tautologies: x == x and x >= 0 (unsigned — always true)
+        taut1 = x == x
+        taut2 = z3.UGE(x, z3.BitVecVal(0, 32))
+        wp, conj, complete = _extract_wp([("x == x", taut1), ("x >= 0", taut2)])
+        # Both are tautologies so each implies the other — all dropped.
+        assert wp == "true"
+        assert conj == []
+        assert complete is True
+
+    @_requires_z3
+    def test_solver_timeout_keeps_conjunct(self):
+        """When a redundancy check returns ``unknown`` (e.g. solver
+        timeout), the conjunct is conservatively kept."""
+        from core.smt_solver.path_feasibility import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        exprs = [
+            ("x > 5", z3.UGT(x, z3.BitVecVal(5, 32))),
+            ("x > 0", z3.UGT(x, z3.BitVecVal(0, 32))),
+        ]
+        # Patch solver.check to return unknown for the first call,
+        # forcing the conjunct to be kept even though it's redundant.
+        real_extract = _extract_wp
+        with patch("core.smt_solver.path_feasibility._new_solver") as mock_ns:
+            mock_solver = mock_ns.return_value
+            mock_solver.check.return_value = z3.unknown
+            mock_solver.__enter__ = lambda s: s
+            mock_solver.__exit__ = lambda s, *a: None
+            wp, conj, complete = real_extract(exprs)
+        # Both kept because every check returned unknown
+        assert len(conj) == 2
+        assert complete is True
+
+
+# ---------------------------------------------------------------------------
+# Call-summary axioms
+# ---------------------------------------------------------------------------
+
+@_requires_z3
+class TestCallSummaries:
+    """Recognised libc/POSIX calls get summary axioms on their
+    placeholder; unknown calls and vacuous profiles keep the free
+    variable untouched."""
+
+    def test_strlen_negative_refuted_at_signed_profile(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is False
+        assert r.summary_axioms == ["summary: strlen(s)"]
+
+    def test_strlen_axiom_skipped_at_unsigned_profile(self):
+        # result >= 0 is vacuous over unsigned bitvectors — asserting
+        # it would be junk, and the path must stay feasible.
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) < 1024", step_index=0)],
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_sizeof_zero_refuted_and_core_names_axiom(self):
+        r = check_path_feasibility(
+            [PathCondition("sizeof(x) == 0", step_index=0)],
+        )
+        assert r.feasible is False
+        assert "summary: sizeof(x)" in r.unsatisfied
+
+    def test_sizeof_axiom_applies_at_signed_profile_too(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("sizeof(x) == 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is False
+
+    def test_abs_models_int_min_corner(self):
+        # abs(INT_MIN) == INT_MIN in two's-complement practice, so a
+        # path requiring abs(v) to be INT_MIN must stay feasible...
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("abs(v) == 0x80000000", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        # ...while any other negative value is refuted.
+        r2 = check_path_feasibility(
+            [PathCondition("abs(v) == 0xFFFFFFFF", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r2.feasible is False
+
+    def test_min_ite_definition(self):
+        r = check_path_feasibility(
+            [PathCondition("min(a, b) > a", step_index=0)],
+        )
+        assert r.feasible is False
+        r2 = check_path_feasibility(
+            [PathCondition("max(a, b) >= a", step_index=0)],
+        )
+        assert r2.feasible is True
+
+    def test_min_with_unparseable_arg_stays_free(self):
+        # Nested call inside the args — no axiom, free variable as
+        # before, so even min(...) > a is satisfiable.
+        r = check_path_feasibility(
+            [PathCondition("min(strlen(x), b) > b", step_index=0)],
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_unknown_call_unchanged(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("mystery(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_case_sensitive_match(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("STRLEN(s) < 0", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == []
+
+    def test_axiom_recorded_once_per_deduped_call(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [
+                PathCondition("strlen(s) > 10", step_index=0),
+                PathCondition("strlen(s) < 100", step_index=1),
+            ],
+            profile=BV_C_INT32,
+        )
+        assert r.feasible is True
+        assert r.summary_axioms == ["summary: strlen(s)"]
+
+    def test_wp_drops_axiom_implied_conjuncts(self):
+        # Both conditions are implied by the min() ITE axiom, so the
+        # weakest precondition over the path conjuncts is empty
+        # ("true") — the axiom carries the constraint, and the result
+        # names it in summary_axioms.
+        r = check_path_feasibility(
+            [
+                PathCondition("min(a, b) <= a", step_index=0),
+                PathCondition("min(a, b) <= b", step_index=1),
+            ],
+        )
+        assert r.feasible is True
+        assert r.wp_conjuncts == []
+        assert r.wp_predicate == "true"
+        assert r.summary_axioms == ["summary: min(a, b)"]
+
+    def test_summary_reported_in_reasoning(self):
+        from core.smt_solver import BV_C_INT32
+        r = check_path_feasibility(
+            [PathCondition("strlen(s) > 10", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert "1 call summary applied" in r.reasoning

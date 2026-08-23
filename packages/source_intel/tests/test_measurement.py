@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -128,8 +129,7 @@ def test_finding_to_dataflow_path_basic_shape():
     assert dp.message == "m"
 
 
-def test_finding_to_dataflow_path_column_zero_normalised_to_one():
-    # The adapter coerces column 0 to 1 — DataflowStep requires column >= 1.
+def test_finding_to_dataflow_path_column_zero_preserved():
     src = Step(file_path="a.c", line=1, column=0, snippet="s")
     snk = Step(file_path="a.c", line=2, column=0, snippet="s")
     f = Finding(
@@ -137,8 +137,8 @@ def test_finding_to_dataflow_path_column_zero_normalised_to_one():
         message="m", source=src, sink=snk,
     )
     dp = M._finding_to_dataflow_path(f)
-    assert dp.source.column == 1
-    assert dp.sink.column == 1
+    assert dp.source.column == 0
+    assert dp.sink.column == 0
 
 
 def test_finding_to_dataflow_path_intermediate_steps_relabeled():
@@ -403,3 +403,69 @@ def test_aggregate_baseline_perfect_si_perfect():
     assert s["baseline_errors"] == 0
     assert s["si_errors"] == 0
     assert s["err_reduction"] == 0.0  # 0/0 short-circuit, not NaN
+
+
+# =====================================================================
+# main() --model → LLMClient(pinned_model=...) wiring
+# =====================================================================
+#
+# The flag was previously parsed but never read, so runs silently used
+# the client's default model regardless of what the operator asked for.
+
+class _RecordingLLMClient:
+    """Stands in for ``core.llm.client.LLMClient``; records ctor calls."""
+
+    calls: list[dict[str, Any]] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        type(self).calls.append({"args": args, "kwargs": kwargs})
+
+
+@pytest.fixture
+def harness(monkeypatch):
+    """Neutralise everything in ``main()`` except argument handling.
+
+    ``main()`` imports LLMClient locally (``from core.llm.client
+    import ...``), so the patch must land on the source module, not
+    on ``M``.
+    """
+    _RecordingLLMClient.calls = []
+    import core.llm.client as llm_client_mod
+    monkeypatch.setattr(llm_client_mod, "LLMClient", _RecordingLLMClient)
+
+    finding = SimpleNamespace(rule_id="cpp/unbounded-write")
+    label = SimpleNamespace(verdict="true_positive")
+    monkeypatch.setattr(
+        M, "_iter_memory_corruption_corpus",
+        lambda **kw: [(finding, label, "fake.json")],
+    )
+    monkeypatch.setattr(M, "make_evidence_collector", lambda llm: object())
+    monkeypatch.setattr(M, "SourceIntelCache", lambda: object())
+    monkeypatch.setattr(M, "make_source_intel_collector", lambda **kw: object())
+    monkeypatch.setattr(M, "make_cwe_dispatched_collector", lambda **kw: object())
+    monkeypatch.setattr(
+        M, "DataflowValidator", lambda llm, evidence_collector=None: object(),
+    )
+    monkeypatch.setattr(M, "_run_one", lambda **kw: ValidatorVerdict.EXPLOITABLE)
+    return _RecordingLLMClient
+
+
+def _run_main(monkeypatch, argv: list[str]) -> int:
+    monkeypatch.setattr("sys.argv", ["measurement"] + argv)
+    return M.main()
+
+
+def test_model_flag_pins_llm_client(harness, monkeypatch, capsys):
+    rc = _run_main(monkeypatch, ["--model", "some-model"])
+    assert rc == 0
+    assert len(harness.calls) == 1
+    assert harness.calls[0]["args"] == ()
+    assert harness.calls[0]["kwargs"] == {"pinned_model": "some-model"}
+
+
+def test_no_model_flag_uses_client_default(harness, monkeypatch, capsys):
+    rc = _run_main(monkeypatch, [])
+    assert rc == 0
+    assert len(harness.calls) == 1
+    assert harness.calls[0]["args"] == ()
+    assert harness.calls[0]["kwargs"] == {}

@@ -58,7 +58,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
 
@@ -66,8 +67,8 @@ logger = logging.getLogger(__name__)
 
 
 def build_maven_symbol_map(
-    osv_results: Optional[Iterable[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: Iterable[Any] | None,
+) -> dict[str, list[str]]:
     """Extract per-dep qualified-name targets from Maven OSV results.
 
     Returns ``{dep_key: [qualified_name, ...]}``. Each qualified
@@ -79,14 +80,14 @@ def build_maven_symbol_map(
     """
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
         dep_key = getattr(r, "dep_key", None)
         if not dep_key or not dep_key.startswith("Maven:"):
             continue
-        qualified: List[str] = []
+        qualified: list[str] = []
         for adv in r.advisories:
             qualified.extend(_extract_qualified(adv))
         if qualified:
@@ -94,7 +95,7 @@ def build_maven_symbol_map(
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_qualified(advisory: Any) -> List[str]:
+def _extract_qualified(advisory: Any) -> list[str]:
     """Pull ``<package>.<symbol>`` qualified names out of an Advisory.
 
     Reads ``ecosystem_specific.imports[].path`` and
@@ -103,7 +104,7 @@ def _extract_qualified(advisory: Any) -> List[str]:
     the Maven dep name is ``groupId:artifactId``, not a Java
     package, so we can't synthesise a qualified name from it.
     """
-    out: List[str] = []
+    out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
     ds = getattr(advisory, "database_specific", None) or {}
     for source in (es, ds):
@@ -116,19 +117,17 @@ def _extract_qualified(advisory: Any) -> List[str]:
             if not isinstance(path, str) or not path:
                 continue
             symbols = imp.get("symbols") or []
-            for s in symbols:
-                if isinstance(s, str) and s:
-                    out.append(f"{path}.{s}")
+            out.extend(f"{path}.{s}" for s in symbols if isinstance(s, str) and s)
     return out
 
 
 def refine_maven_verdicts(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
     *,
     target: Path,
-    maven_symbol_map: Dict[str, List[str]],
-    inventory: Optional[Dict[str, Any]] = None,
+    maven_symbol_map: dict[str, list[str]],
+    inventory: dict[str, Any] | None = None,
 ) -> None:
     """For Maven deps in ``maven_symbol_map`` whose current verdict
     is ``imported`` or ``not_evaluated``, run the function-level
@@ -139,7 +138,7 @@ def refine_maven_verdicts(
     works today AND continues to work if a module-level Maven
     scanner is added later.
     """
-    candidates: List[Dependency] = []
+    candidates: list[Dependency] = []
     for d in deps:
         if d.ecosystem != "Maven":
             continue
@@ -170,30 +169,30 @@ def refine_maven_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )
 
     for d in candidates:
         qualified_names = maven_symbol_map[d.key()]
-        results = []
+        paired = []
         for qualified in qualified_names:
             if not qualified or "." not in qualified:
                 continue
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((qualified, function_called(inventory, qualified)))
             except ValueError:
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_qns: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence_lines: list[str] = []
+            called_qns: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_qns.append(qn)
                     evidence_lines.extend(
@@ -218,7 +217,7 @@ def refine_maven_verdicts(
                     "high",
                     reason=(
                         f"Maven dep declared but the "
-                        f"{len(qualified_names)} OSV-listed "
+                        f"{len(paired)} OSV-listed "
                         f"affected symbol(s) are not called from "
                         f"non-test Java source"
                     ),

@@ -1,12 +1,17 @@
 rules:
   # V11.5.1: All security-sensitive random values must use a CSPRNG with >= 128 bits of entropy.
+  #
+  # Severity note: a non-CSPRNG call with no usage context is the same finding
+  # class in every language — the value may be fine for jitter or sampling and
+  # catastrophic for a token. All rules in this file are therefore MEDIUM;
+  # context-aware rules (password/token/key sinks) are where HIGH belongs.
 
   - id: raptor.crypto.prng.math-random.js
     message: >
       Math.random() is not cryptographically secure. Use crypto.getRandomValues()
       or crypto.randomBytes() for tokens, keys, and secrets.
     languages: [javascript, typescript]
-    severity: HIGH
+    severity: MEDIUM
     pattern: Math.random()
     metadata:
       cwe: ["CWE-338"]
@@ -22,8 +27,11 @@ rules:
       - pattern: random.random()
       - pattern: random.randint(...)
       - pattern: random.choice(...)
+      - pattern: random.choices(...)
       - pattern: random.randbytes(...)
       - pattern: random.randrange(...)
+      - pattern: random.getrandbits(...)
+      - pattern: random.uniform(...)
       - pattern: random.shuffle(...)
       - pattern: random.sample(...)
     metadata:
@@ -32,11 +40,15 @@ rules:
 
   - id: raptor.crypto.prng.java-random.java
     message: >
-      java.util.Random is not cryptographically secure. Use java.security.SecureRandom
-      for tokens, keys, and secrets.
+      java.util.Random is not cryptographically secure (and a fixed seed makes
+      the sequence fully predictable). Use java.security.SecureRandom for
+      tokens, keys, and secrets.
     languages: [java, kotlin]
-    severity: HIGH
-    pattern: new Random()
+    severity: MEDIUM
+    pattern-either:
+      - pattern: new Random()
+      - pattern: new Random($SEED)
+      - pattern: Math.random()
     metadata:
       cwe: ["CWE-338"]
       asvs: ["V11.5.1"]
@@ -46,12 +58,35 @@ rules:
       math/rand is not cryptographically secure. Use crypto/rand for tokens, keys,
       and security-sensitive values.
     languages: [go]
-    severity: HIGH
+    severity: MEDIUM
     pattern-either:
       - pattern: rand.Intn(...)
       - pattern: rand.Int63n(...)
+      - pattern: rand.Int31()
+      - pattern: rand.Int31n(...)
+      - pattern: rand.Uint32()
+      - pattern: rand.Uint64()
+      - pattern: rand.Perm(...)
       - pattern: rand.Float64()
+      # zero-arg form is unambiguous: crypto/rand.Int takes (io.Reader, *big.Int)
+      - pattern: rand.Int()
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  # rand.Read exists in BOTH math/rand and crypto/rand with the same shape, so
+  # this rule is anchored on the math/rand import; crypto/rand.Read stays clean.
+  - id: raptor.crypto.prng.math-rand-read.go
+    message: >
+      math/rand.Read fills the buffer from a non-cryptographic PRNG. Use
+      crypto/rand.Read for keys, nonces, tokens, and salts.
+    languages: [go]
+    severity: MEDIUM
+    patterns:
       - pattern: rand.Read(...)
+      - pattern-inside: |
+          import "math/rand"
+          ...
     metadata:
       cwe: ["CWE-338"]
       asvs: ["V11.5.1"]
@@ -61,7 +96,7 @@ rules:
       rand() is not cryptographically secure. Use getrandom() or read from
       /dev/urandom for security-sensitive values.
     languages: [c, cpp]
-    severity: HIGH
+    severity: MEDIUM
     pattern: rand()
     metadata:
       cwe: ["CWE-338"]
@@ -72,7 +107,7 @@ rules:
       Ruby's rand is not cryptographically secure. Use SecureRandom for tokens,
       keys, and security-sensitive values.
     languages: [ruby]
-    severity: HIGH
+    severity: MEDIUM
     pattern-either:
       - pattern: rand(...)
       - pattern: Random.rand(...)

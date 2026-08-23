@@ -37,11 +37,14 @@ import ast
 import json
 import logging
 import re
-from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +59,7 @@ _REF_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9._\-+]+)"
     r"/(?P<version>\[[^\]]+\]|[A-Za-z0-9._\-+]+)"
     r"(?:@(?P<userchannel>[A-Za-z0-9._\-+]+/[A-Za-z0-9._\-+]+))?"
-    r"(?:#[A-Fa-f0-9]+)?$"
+    r"(?:#[A-Fa-f0-9]+(?:%[0-9.]+)?)?$"
 )
 
 
@@ -75,15 +78,15 @@ _TXT_SECTION_TO_SCOPE = {
 
 
 @register(filenames=["conanfile.txt"])
-def parse_txt(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.conan: read failed for %s: %s", path, e)
+def parse_txt(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason
+        # (oversize, unreadable, symlink escape, non-regular file).
         return []
 
-    out: List[Dependency] = []
-    current_scope: Optional[str] = None
+    out: list[Dependency] = []
+    current_scope: str | None = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -117,11 +120,10 @@ _PY_ATTR_TO_SCOPE = {
 
 
 @register(filenames=["conanfile.py"])
-def parse_py(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.conan: read failed for %s: %s", path, e)
+def parse_py(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         tree = ast.parse(text)
@@ -131,7 +133,7 @@ def parse_py(path: Path) -> List[Dependency]:
         )
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for cls in ast.iter_child_nodes(tree):
         if not isinstance(cls, ast.ClassDef):
             continue
@@ -166,7 +168,13 @@ def _refs_from_value(node: ast.AST) -> Iterable[str]:
         return
     if isinstance(node, (ast.Tuple, ast.List)):
         for elt in node.elts:
-            yield from _refs_from_value(elt)
+            if (isinstance(elt, (ast.Tuple, ast.List))
+                    and elt.elts
+                    and isinstance(elt.elts[0], ast.Constant)
+                    and isinstance(elt.elts[0].value, str)):
+                yield elt.elts[0].value
+            else:
+                yield from _refs_from_value(elt)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +183,10 @@ def _refs_from_value(node: ast.AST) -> Iterable[str]:
 
 
 @register(filenames=["conan.lock"])
-def parse_lock(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.conan: read failed for %s: %s", path, e)
+def parse_lock(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         data = json.loads(text)
@@ -191,7 +198,7 @@ def parse_lock(path: Path) -> List[Dependency]:
     if not isinstance(data, dict):
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     # Conan 2 lockfile shape: top-level keys ``requires`` /
     # ``build_requires`` / ``python_requires``, each an array of
     # qualified-ref strings.
@@ -218,7 +225,7 @@ def parse_lock(path: Path) -> List[Dependency]:
 def _build_dep_from_ref(
     ref: str, scope: str, path: Path, *,
     is_lockfile: bool = False,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     name, version = _split_ref(ref)
     if name is None:
         return None
@@ -241,7 +248,8 @@ def _build_dep_from_ref(
         parser_confidence=Confidence(
             "high" if version else "medium",
             reason=(
-                "conan.lock pinned ref" if is_lockfile
+                "conan.lock pinned ref" if is_lockfile and version
+                else "conan.lock ref without version" if is_lockfile
                 else "conanfile structured ref"
                 if version else "conanfile ref without version"
             ),
@@ -249,7 +257,7 @@ def _build_dep_from_ref(
     )
 
 
-def _split_ref(ref: str) -> Tuple[Optional[str], Optional[str]]:
+def _split_ref(ref: str) -> tuple[str | None, str | None]:
     """Split a Conan reference into (name, version).
 
     Recognised shapes:
@@ -279,7 +287,7 @@ def _is_range(version: str) -> bool:
     return version.startswith("[") and version.endswith("]")
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:{_PURL_TYPE}/{name}"
     if version:
         return f"{base}@{version}"

@@ -1,4 +1,6 @@
 #!/usr/bin/python3 -I
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """RAPTOR seatbelt outer-watcher shim for the macOS sandbox-exec path.
 
 -I (isolated mode) is belt-and-braces: get_safe_env() strips PYTHON* env
@@ -59,11 +61,17 @@ path) and the `_spawn.py` exec-status pipe (the Linux mount-ns path).
 
 from __future__ import annotations
 
-import os
+import faulthandler
 import signal
 import sys
 
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, file=sys.stderr)
+
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -72,6 +80,7 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 # Fixed fd the in-sandbox /bin/sh trampoline writes the readiness byte to.
@@ -84,6 +93,169 @@ _STATUS_CHILD_FD = 3
 # the shim tears the sandbox process group down. Nobody meaningful reaps it
 # (the orchestrator is gone); distinct from target codes for log clarity.
 _DEATH_TEARDOWN_EXIT = 137
+
+# ─── post-exit descendant sweep ─────────────────────────────────────
+# The killpg-based teardown only reaches processes that stayed in the
+# sandbox process group; the allow-default seatbelt profile does not
+# deny setsid, so a fork+setsid descendant leaves the group and — with
+# no pid-namespace cascade on macOS — survived normal completion
+# outright. The sweep walks the process table (`ps -axo pid,ppid,pgid`;
+# macOS has no /proc) from THIS shim, collects descendants transitively
+# via the ppid chain (setsid changes pgid/session, not ppid) plus any
+# member of the sandbox process group, and SIGKILLs them on every exit
+# path.
+#
+# This is an inline copy of core/sandbox/_macos_spawn.py's sweep (keep
+# in sync): the shim runs `python -I` with no repo on sys.path and
+# cannot import it.
+#
+# Known blind spot, by construction: a descendant whose intermediate
+# ancestors already exited reparents to launchd (ppid 1) and a fresh
+# snapshot can no longer attribute it. The watcher loop therefore keeps
+# a periodic while-alive snapshot (every _SNAPSHOT_INTERVAL_S) so such
+# orphans stay attributable across the reparent; a descendant that
+# forked, setsid'd, AND was fully orphaned within one snapshot interval
+# escapes attribution — the interval narrows that window, it cannot
+# close it.
+
+_PS_CANDIDATES = ("/bin/ps", "/usr/bin/ps", "ps")
+_PS_ARGS = ["-axo", "pid=,ppid=,pgid="]
+_SWEEP_MAX_PASSES = 3
+_SNAPSHOT_INTERVAL_S = 0.5
+
+
+def _parse_ps_table(text):
+    """`ps -axo pid=,ppid=,pgid=` output → (pid, ppid, pgid) int
+    tuples. Unparseable lines are skipped — the sweep is best-effort."""
+    table = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            table.append((int(parts[0]), int(parts[1]), int(parts[2])))
+        except ValueError:
+            continue
+    return table
+
+
+def _collect_descendants(table, root_pid, extra_pgids=(), protect=()):
+    """Pure kill-list derivation: (pid, ppid, pgid) table in → pid set
+    out. Transitive ppid closure from root_pid, plus members of
+    extra_pgids (and their ppid-descendants). Never returns root_pid,
+    pids <= 1, anything in protect, or processes with no ancestry/group
+    link to the root. Each pid is visited at most once, so a
+    cyclic/garbage table cannot hang the walk."""
+    kids = {}
+    pgid_members = {}
+    for pid, ppid, pgid in table:
+        kids.setdefault(ppid, []).append(pid)
+        pgid_members.setdefault(pgid, []).append(pid)
+    out = set()
+    visited = {root_pid}
+    stack = [root_pid]
+    for pg in extra_pgids:
+        for pid in pgid_members.get(pg, ()):
+            if pid not in visited:
+                visited.add(pid)
+                out.add(pid)
+                stack.append(pid)
+    while stack:
+        cur = stack.pop()
+        for child in kids.get(cur, ()):
+            if child in visited:
+                continue
+            visited.add(child)
+            out.add(child)
+            stack.append(child)
+    banned = set(protect)
+    banned.add(root_pid)
+    return {p for p in out if p > 1 and p not in banned}
+
+
+def _ps_snapshot():
+    """(pid, ppid, pgid) table from ps, or None when unavailable."""
+    import subprocess
+    for ps in _PS_CANDIDATES:
+        try:
+            proc = subprocess.run(
+                [ps] + _PS_ARGS, capture_output=True, text=True,
+                timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode == 0:
+            return _parse_ps_table(proc.stdout)
+    return None
+
+
+def _kill_pid(pid):
+    """SIGKILL one pid, best-effort. Module-level for hermetic tests."""
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _sweep_orphans(child_pid, live_table, snapshot_fn=None,
+                   kill_fn=None, max_passes=_SWEEP_MAX_PASSES):
+    """SIGKILL every process still attributable to this shim's tree,
+    independent of process group. Best-effort, bounded to max_passes
+    snapshot+kill rounds (later rounds catch children forked while an
+    earlier round was killing).
+
+    ``live_table`` is the watcher loop's periodic while-alive snapshot:
+    descendants recorded there are still killed after reparenting to
+    launchd, provided they still exist AND still carry the pgid the
+    snapshot saw (cheap pid-reuse guard — a recycled pid lands in a
+    different process group). Returns the swept pid set."""
+    snapshot_fn = snapshot_fn or _ps_snapshot
+    kill_fn = kill_fn or _kill_pid
+    self_pid = os.getpid()
+    protect = {self_pid, os.getppid()}
+    # The sandbox process group itself first — normal completion never
+    # ran the death-pipe killpg, so group members with dead parents
+    # (in-group orphans) are reaped here. Best-effort; a same-pid
+    # recycled group leader within the reap-to-sweep window is a
+    # theoretical (sequential pid allocation) mis-kill we accept.
+    try:
+        os.killpg(child_pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    known = {}
+    if live_table:
+        live_pgids = {pid: pgid for pid, _ppid, pgid in live_table}
+        for pid in _collect_descendants(
+                live_table, self_pid,
+                extra_pgids=(child_pid,), protect=protect):
+            known[pid] = live_pgids.get(pid)
+    swept = set()
+    for _ in range(max_passes):
+        table = snapshot_fn()
+        if not table:
+            break
+        current_pgid = {pid: pgid for pid, _ppid, pgid in table}
+        targets = _collect_descendants(
+            table, self_pid, extra_pgids=(child_pid,), protect=protect)
+        for pid, seen_pgid in known.items():
+            if (pid not in targets and pid in current_pgid
+                    and current_pgid[pid] == seen_pgid):
+                targets.add(pid)
+        targets = {p for p in targets if p > 1 and p not in protect}
+        if not targets:
+            break
+        for pid in sorted(targets):
+            kill_fn(pid)
+        for pid in targets:
+            known.setdefault(pid, current_pgid.get(pid))
+        swept |= targets
+    if swept:
+        sys.stderr.write(
+            "raptor-seatbelt-shim: post-exit sweep SIGKILLed "
+            f"{len(swept)} orphaned sandbox descendant(s)\n"
+        )
+    return swept
+# ─── end post-exit descendant sweep ─────────────────────────────────
 
 
 def _resolve_death_fd():
@@ -184,7 +356,8 @@ def main() -> int:
         # already consumed (death fd closed above; status fd dup'd onto fd 3).
         # Popping here means sandbox-exec -> /bin/sh -> target inherit a clean
         # env with no _RAPTOR_* names.
-        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD"):
+        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
+                   "CLAUDECODE"):
             os.environ.pop(_m, None)
         try:
             os.execvp(argv[0], argv)
@@ -210,10 +383,20 @@ def main() -> int:
     except OSError:
         pass
 
+    # Latest while-alive process-table snapshot, refreshed by the reap
+    # loop below. Feeds the post-exit sweep so setsid descendants stay
+    # attributable across a reparent to launchd (see _sweep_orphans).
+    live_holder = {"table": None}
+
     def _teardown_and_exit():
-        # Orchestrator gone → SIGKILL the sandbox process group, then the
-        # process directly (covers the window before the child's setpgid),
-        # reap briefly, and exit.
+        # Orchestrator gone → snapshot the still-alive tree, SIGKILL the
+        # sandbox process group, then the process directly (covers the
+        # window before the child's setpgid), reap briefly, sweep the
+        # group-escapee descendants, and exit.
+        try:
+            fresh = _ps_snapshot()
+        except Exception:
+            fresh = None
         for killer in (lambda: os.killpg(child, signal.SIGKILL),
                        lambda: os.kill(child, signal.SIGKILL)):
             try:
@@ -224,22 +407,36 @@ def main() -> int:
             os.waitpid(child, 0)
         except (ChildProcessError, OSError):
             pass
+        try:
+            _sweep_orphans(child, fresh or live_holder["table"])
+        except Exception:
+            sys.stderr.write(
+                "raptor-seatbelt-shim: teardown descendant sweep failed\n")
         os._exit(_DEATH_TEARDOWN_EXIT)
 
-    if death_fd is None:
-        # No liveness pipe — plain blocking reap (still mirrors child status).
-        while True:
-            try:
-                _, status = os.waitpid(child, 0)
-                break
-            except InterruptedError:
-                continue
-            except ChildProcessError:
-                return 254
-    else:
+    # Unified reap loop (with or without the liveness pipe): 0.1s poll,
+    # WNOHANG reap, periodic while-alive snapshot. The pre-fix
+    # no-death-fd branch used a blocking waitpid, which could never
+    # keep a live snapshot; the poll costs one ps every
+    # _SNAPSHOT_INTERVAL_S and preserves the signal-forwarding
+    # behaviour (handlers interrupt the sleep/select just as they
+    # interrupted the blocking waitpid).
+    import time as _time
+    if death_fd is not None:
         import select as _select
-        status = None
-        while status is None:
+    status = None
+    last_snap = 0.0
+    while status is None:
+        now = _time.monotonic()
+        if now - last_snap >= _SNAPSHOT_INTERVAL_S:
+            last_snap = now
+            try:
+                table = _ps_snapshot()
+            except Exception:
+                table = None
+            if table:
+                live_holder["table"] = table
+        if death_fd is not None:
             try:
                 ready, _, _ = _select.select([death_fd], [], [], 0.1)
             except InterruptedError:
@@ -253,12 +450,31 @@ def main() -> int:
                     alive = b""         # fd error → fail safe to teardown
                 if not alive:
                     _teardown_and_exit()
+        else:
             try:
-                reaped, st = os.waitpid(child, os.WNOHANG)
-            except ChildProcessError:
-                return 254
-            if reaped == child:
-                status = st
+                _time.sleep(0.1)
+            except InterruptedError:
+                pass
+        try:
+            reaped, st = os.waitpid(child, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return 254
+        if reaped == child:
+            status = st
+
+    # Post-exit orphan sweep on the NORMAL-completion path: pre-fix,
+    # normal completion just reaped the direct child, so a fork+setsid
+    # descendant (allow-default seatbelt permits setsid) survived the
+    # run outright — outliving the sandbox, the orchestrator, and both
+    # killpg teardown groups. Best-effort; never changes the mirrored
+    # exit status.
+    try:
+        _sweep_orphans(child, live_holder["table"])
+    except Exception:
+        sys.stderr.write(
+            "raptor-seatbelt-shim: post-exit descendant sweep failed\n")
 
     if os.WIFEXITED(status):
         return os.WEXITSTATUS(status)

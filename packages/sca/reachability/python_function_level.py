@@ -2,7 +2,7 @@
 
 Sits on top of the module-level Python scan (``packages.sca
 .reachability.python``) and the cross-language resolver
-(``core.inventory.reachability``). For PyPI deps that already came
+(``core.analysis.reachability``). For PyPI deps that already came
 back ``imported`` from the module-level pass AND have at least one
 OSV advisory carrying ``affected_functions`` data, this module asks
 the function-level resolver: "is the affected function actually
@@ -10,14 +10,16 @@ called from this project's source?".
 
 Three downgrade outcomes:
 
-  * **All affected functions return CALLED** → upgrade verdict to
-    ``likely_called`` (matches the Go pattern).
+  * **Any affected function returns CALLED** → upgrade verdict to
+    ``likely_called`` (matches the Go pattern). A mix of
+    CALLED + NOT_CALLED still upgrades — the dep is exercising
+    vulnerable code even if not every listed function is hit.
   * **All affected functions return NOT_CALLED, none UNCERTAIN** →
     downgrade to ``not_function_reachable``. Same risk-multiplier
     weight as ``not_reachable``: we have positive evidence the
     vulnerable code path isn't exercised.
-  * **Anything UNCERTAIN OR mix of CALLED/NOT_CALLED** → leave the
-    verdict at ``imported``. Honest reporting beats false confidence.
+  * **Any UNCERTAIN (with no CALLED)** → leave the verdict at
+    ``imported``. Honest reporting beats false confidence.
 
 When OSV doesn't carry ``affected_functions`` for a dep's
 advisories, this tier doesn't fire — the existing module-level
@@ -65,16 +67,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import extract_function_names as _extract_function_names
 
 logger = logging.getLogger(__name__)
 
 
 def build_pypi_symbol_map(
-    osv_results: Optional[Iterable[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: Iterable[Any] | None,
+) -> dict[str, list[str]]:
     """Extract per-dep affected-function lists from OSV results.
 
     Returns ``{dep_key: [function_name, ...]}``. Empty when no
@@ -82,14 +86,14 @@ def build_pypi_symbol_map(
     """
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
         dep_key = getattr(r, "dep_key", None)
         if not dep_key or not dep_key.startswith("PyPI:"):
             continue
-        funcs: List[str] = []
+        funcs: list[str] = []
         for adv in r.advisories:
             funcs.extend(_extract_function_names(adv))
         if funcs:
@@ -98,46 +102,13 @@ def build_pypi_symbol_map(
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_function_names(advisory: Any) -> List[str]:
-    """Pull function names out of an Advisory object.
-
-    Tries every shape we've seen in real OSV PyPI records,
-    deduplicating across them.
-    """
-    out: List[str] = []
-    es = getattr(advisory, "ecosystem_specific", None) or {}
-    ds = getattr(advisory, "database_specific", None) or {}
-    # ``imports[].symbols`` shape (mirrors Go convention).
-    for source in (es, ds):
-        if not isinstance(source, dict):
-            continue
-        for imp in source.get("imports") or []:
-            if not isinstance(imp, dict):
-                continue
-            syms = imp.get("symbols") or []
-            for s in syms:
-                if isinstance(s, str):
-                    out.append(s)
-    # Flat-list variants.
-    for key in ("affected_symbols", "affected_functions"):
-        for source in (es, ds):
-            if not isinstance(source, dict):
-                continue
-            v = source.get(key)
-            if isinstance(v, list):
-                for s in v:
-                    if isinstance(s, str):
-                        out.append(s)
-    return out
-
-
 def refine_pypi_verdicts(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
     *,
     target: Path,
-    pypi_symbol_map: Dict[str, List[str]],
-    inventory: Optional[Dict[str, Any]] = None,
+    pypi_symbol_map: dict[str, list[str]],
+    inventory: dict[str, Any] | None = None,
 ) -> None:
     """For PyPI deps in ``pypi_symbol_map`` whose current verdict is
     ``imported``, run the function-level resolver and update ``out``
@@ -148,7 +119,7 @@ def refine_pypi_verdicts(
     skipped entirely when no PyPI dep needs the function-level
     pass — preserves the cost guarantee documented at module top.
     """
-    candidates: List[Dependency] = []
+    candidates: list[Dependency] = []
     for d in deps:
         if d.ecosystem != "PyPI":
             continue
@@ -177,32 +148,29 @@ def refine_pypi_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )
 
     for d in candidates:
         funcs = pypi_symbol_map[d.key()]
-        results = []
+        paired = []
         for fn in funcs:
             qualified = f"{d.name}.{fn}"
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((fn, function_called(inventory, qualified)))
             except ValueError:
-                # Bare name (no dots) — shouldn't happen since we
-                # always prepend dep_name, but keep the resolver
-                # contract intact by ignoring unrunnable queries.
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_fn_names: List[str] = []
-            for fn, r in zip(funcs, results):
+            evidence_lines: list[str] = []
+            called_fn_names: list[str] = []
+            for fn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_fn_names.append(fn)
                     evidence_lines.extend(
@@ -229,7 +197,7 @@ def refine_pypi_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"dep imported but the {len(funcs)} OSV-listed "
+                        f"dep imported but the {len(paired)} OSV-listed "
                         f"affected function(s) are not called from "
                         f"non-test project source"
                     ),

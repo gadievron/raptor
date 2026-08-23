@@ -37,10 +37,10 @@ write to ``~/.config/raptor/`` already controls the RAPTOR install.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import Optional
+
+from core.config.hosts_override import load_hosts_override
 
 logger = logging.getLogger(__name__)
 
@@ -65,32 +65,13 @@ _DEFAULT_GIT_HOSTS: tuple[str, ...] = (
 )
 
 
-def _load_override() -> Optional[list[str]]:
+def _load_override() -> list[str] | None:
     """Return the operator override list, or None when no override is
     configured. Tolerant: malformed JSON, non-UTF-8 bytes, or an
     unexpected schema all degrade to None — production failure mode
     is loud at the proxy (clone fails with "host not in
     proxy_hosts"), not silent at startup."""
-    if not _OVERRIDE_CONFIG_PATH.exists():
-        return None
-    try:
-        data = json.loads(
-            _OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"),
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    hosts = data.get("hosts")
-    if not isinstance(hosts, list):
-        return None
-    seen: set = set()
-    result: list = []
-    for h in hosts:
-        if isinstance(h, str) and h and h not in seen:
-            seen.add(h)
-            result.append(h)
-    return result or None
+    return load_hosts_override(_OVERRIDE_CONFIG_PATH)
 
 
 def proxy_hosts_for_git() -> list[str]:

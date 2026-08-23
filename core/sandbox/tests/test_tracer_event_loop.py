@@ -128,7 +128,7 @@ def fake_helpers():
 
 
 def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
-              budget=None, run_dir=Path("/tmp")):
+              budget=None, run_dir=Path("/tmp"), escalated_syscalls=None):
     """Convenience wrapper to call _handle_waitpid_event with the
     fake helpers from the fixture.
 
@@ -136,6 +136,12 @@ def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
     (total_records, dropped_by_category, etc.). Constructs a fresh
     budget per dispatch unless one is passed in for state-carrying
     multi-event sequences.
+
+    `escalated_syscalls` defaults to None (not a fresh set()) so
+    existing callers of this helper keep exercising the same
+    escalation-disabled path `_handle_waitpid_event` used before live
+    escalation existed — only tests that explicitly pass a set opt
+    into observing the new stderr-banner behaviour.
     """
     from core.sandbox import audit_budget
     if budget is None:
@@ -149,6 +155,7 @@ def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
         read_tracee_string=helpers["read_tracee_string"],
         get_event_msg=helpers["get_event_msg"],
         write_record=helpers["write_record"],
+        escalated_syscalls=escalated_syscalls,
     )
     return budget
 
@@ -176,7 +183,7 @@ class TestExitedTracees:
 
     def test_unknown_pid_in_status_is_silent_noop(
             self, arch_info, fake_helpers):
-        # M1 / N3 robustness: a wpid not in `traced` (could happen if
+        # Robustness: a wpid not in `traced` (could happen if
         # FORK_EVENT-add was missed) just gets silently discarded.
         # No exception, no resume call.
         traced = {1000}
@@ -229,11 +236,11 @@ class TestSeccompTraceEvent:
         """Budget cap drops further records but still resumes the
         tracee on every event. Uses a small AuditBudget for speed."""
         from core.sandbox import audit_budget
-        # openat → file-read-metadata category. Cap that category at
+        # openat → file-open category. Cap that category at
         # 2 with no refill so the third dispatch drops.
         budget = audit_budget.AuditBudget(
-            category_caps={"file-read-metadata": 2},
-            refill_rates={"file-read-metadata": 0.0},
+            category_caps={"file-open": 2},
+            refill_rates={"file-open": 0.0},
             sampling_rates={},
         )
         traced = {1000}
@@ -246,7 +253,7 @@ class TestSeccompTraceEvent:
         # 2 records persisted (cap), but ptrace_cont fired all 5 times.
         assert len(fake_helpers["calls"]["write_record"]) == 2
         assert len(fake_helpers["calls"]["ptrace_cont"]) == 5
-        assert budget.dropped_by_category["file-read-metadata"] == 3
+        assert budget.dropped_by_category["file-open"] == 3
 
     def test_read_regs_failure_skips_record_but_resumes(
             self, arch_info):
@@ -272,6 +279,181 @@ class TestSeccompTraceEvent:
         )
         assert budget.total_records == 0  # no record written
         assert calls == [(1000, 0)]  # but tracee resumed
+
+
+def _ptrace_syscall_nr(arch_info):
+    """Reverse-lookup the syscall number for 'ptrace' on the current
+    arch's syscall table — used to make fake_decode_syscall return an
+    escape-primitive syscall instead of the fixture's default openat."""
+    for nr, name in arch_info["syscall_table"].items():
+        if name == "ptrace":
+            return nr
+    raise AssertionError("ptrace not in syscall table for this arch")
+
+
+class TestLiveEscalation:
+    """Live stderr escalation banner for escape-primitive syscalls —
+    fires the moment tracer.py sees one denied, ahead of the run-end
+    sandbox-triage.json classification. See tracer.py's
+    _LIVE_ESCALATE_SYSCALLS / _announce_escape_primitive."""
+
+    def test_escape_primitive_escalates_once(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+
+        traced = {1000}
+        escalated: set = set()
+        budget = _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=escalated,
+        )
+        assert budget.total_records == 1  # record still written normally
+        assert len(writes) == 1
+        assert writes[0][0] == 2  # stderr fd
+        assert b"ptrace" in writes[0][1]
+        assert escalated == {"ptrace"}
+
+        # Second denial of the SAME syscall this run: no second banner.
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            budget=budget, escalated_syscalls=escalated,
+        )
+        assert len(writes) == 1, "dedup: one banner per syscall name per run"
+
+    def test_non_escape_primitive_syscall_does_not_escalate(
+            self, arch_info, fake_helpers, monkeypatch):
+        # Default fake_decode_syscall returns openat — not in
+        # _LIVE_ESCALATE_SYSCALLS.
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        assert writes == []
+
+    def test_escalation_disabled_by_env_var(
+            self, arch_info, fake_helpers, monkeypatch):
+        monkeypatch.setenv("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "1")
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        assert writes == []
+
+    def test_no_escalation_when_set_not_provided(
+            self, arch_info, fake_helpers, monkeypatch):
+        # escalated_syscalls defaults to None — callers that haven't
+        # opted in (e.g. every other test in this file, via _dispatch's
+        # own default) see no behaviour change at all.
+        writes = []
+        monkeypatch.setattr(tracer.os, "write",
+                            lambda fd, data: writes.append((fd, data)))
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+        )
+        assert writes == []
+
+    def test_escalation_never_raises_out_of_hot_path(
+            self, arch_info, fake_helpers, monkeypatch):
+        # os.write raising OSError (e.g. closed/redirected stderr)
+        # must not propagate — the tracer's event loop must keep
+        # running regardless of whether the banner could be printed.
+        def raising_write(fd, data):
+            raise OSError("stderr closed")
+        monkeypatch.setattr(tracer.os, "write", raising_write)
+        ptrace_nr = _ptrace_syscall_nr(arch_info)
+        fake_helpers["decode_syscall"] = (
+            lambda regs, ai: (ptrace_nr, [0, 0, 0, 0, 0, 0]))
+        traced = {1000}
+        budget = _dispatch(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            traced, 1000, arch_info, fake_helpers,
+            escalated_syscalls=set(),
+        )
+        # Record write + tracee resume still happened despite the
+        # failed banner.
+        assert budget.total_records == 1
+        assert fake_helpers["calls"]["ptrace_cont"] == [(1000, 0)]
+
+
+class TestBudgetMarkerNonce:
+    """Budget marker records carry the per-run nonce like sibling
+    data records and the end-of-run summary, so a nonce-validating
+    parser attributes them to the run."""
+
+    def _dispatch_over_cap(self, tmp_path, nonce):
+        """Drive two seccomp-trace events through a cap-1 budget so
+        the second emits a category-exhaust marker."""
+        from unittest import mock
+
+        from core.sandbox import audit_budget
+        arch_info = tracer._ARCH_INFO[tracer._ARCH]
+        markers = []
+
+        def fake_write_record_dict(run_dir, record, *, filename=None):
+            markers.append(dict(record))
+
+        openat_nr = 257 if tracer._ARCH == "x86_64" else 56
+        status = _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP)
+        budget = audit_budget.AuditBudget(
+            category_caps={"file-open": 1},
+            refill_rates={"file-open": 0.0},
+            sampling_rates={},
+        )
+        with mock.patch.object(
+                tracer, "_write_record_dict", fake_write_record_dict):
+            for _ in range(2):
+                tracer._handle_waitpid_event(
+                    1000, status, {1000}, 1000, arch_info,
+                    Path(tmp_path), budget,
+                    observe_nonce=nonce,
+                    ptrace_cont=lambda pid, sig=0: True,
+                    read_regs=lambda pid, ai: b"\x00" * ai["user_regs_size"],
+                    decode_syscall=lambda regs, ai: (
+                        openat_nr, [0, 0, 0, 0, 0, 0]),
+                    read_tracee_string=lambda pid, addr, max_bytes=4096: (
+                        "/etc/test"),
+                    get_event_msg=lambda pid: 0,
+                    write_record=lambda *a, **k: True,
+                )
+        return markers
+
+    def test_marker_carries_nonce(self, tmp_path):
+        markers = self._dispatch_over_cap(tmp_path, nonce="run-nonce-1")
+        assert markers, "cap-1 budget should have emitted a marker"
+        for marker in markers:
+            assert marker.get("nonce") == "run-nonce-1"
+
+    def test_no_nonce_leaves_marker_unstamped(self, tmp_path):
+        # Audit mode (no nonce): markers must not gain a None field.
+        markers = self._dispatch_over_cap(tmp_path, nonce=None)
+        assert markers
+        for marker in markers:
+            assert "nonce" not in marker
 
 
 class TestNewTraceeEvents:
@@ -422,3 +604,264 @@ class TestNonStoppedStatus:
         assert traced == {1000}
         assert budget.total_records == 0
         assert fake_helpers["calls"]["ptrace_cont"] == []
+
+
+class TestHostileArgEscalation:
+    """socket()/ioctl() live escalation keys on the DECODED argument
+    (tty-hijack ioctls, AF_PACKET/SOCK_RAW) — a plain AF_UNIX denial
+    must stay silent."""
+
+    def _dispatch_syscall(self, arch_info, fake_helpers, nr, args,
+                          escalated, monkeypatch, writes):
+        monkeypatch.setattr(
+            tracer, "_announce_escape_primitive",
+            lambda name, pid: writes.append(name))
+        helpers = dict(fake_helpers)
+        helpers["decode_syscall"] = lambda regs, ai: (nr, list(args))
+        traced = {1234}
+        _dispatch(1234, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+                  traced, 1234,
+                  arch_info, helpers, escalated_syscalls=escalated)
+
+    def _nr(self, arch_info, name):
+        return next(nr for nr, n in arch_info["syscall_table"].items()
+                    if n == name)
+
+    def test_tiocsti_ioctl_escalates_with_decoded_label(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "ioctl")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [0, 0x5412, 0, 0, 0, 0],
+                               escalated, monkeypatch, writes)
+        assert writes == ["ioctl(TIOCSTI)"]
+        assert "ioctl(TIOCSTI)" in escalated
+
+    def test_raw_socket_escalates_and_dedups_per_label(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "socket")
+        for _ in range(3):
+            self._dispatch_syscall(arch_info, fake_helpers, nr,
+                                   [2, 3, 0, 0, 0, 0],
+                                   escalated, monkeypatch, writes)
+        assert writes == ["socket(SOCK_RAW)"]
+
+    def test_af_unix_socket_denial_stays_silent(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "socket")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [1, 1, 0, 0, 0, 0],
+                               escalated, monkeypatch, writes)
+        assert writes == []
+
+    def test_benign_ioctl_stays_silent(
+            self, arch_info, fake_helpers, monkeypatch):
+        writes, escalated = [], set()
+        nr = self._nr(arch_info, "ioctl")
+        self._dispatch_syscall(arch_info, fake_helpers, nr,
+                               [0, 0x5413, 0, 0, 0, 0],  # TIOCGWINSZ
+                               escalated, monkeypatch, writes)
+        assert writes == []
+
+
+class TestSymlinkAwareSuppression:
+    """Filtered audit mode decides should_log from a path string read
+    out of tracee memory. A symlink under an allowlisted/writable
+    prefix that aliases a file OUTSIDE the allowlist
+    (``<writable>/x -> <secrets>``) must NOT have its record
+    suppressed: the kernel resolves the real target while the lexical
+    match would hide the access (and with it the
+    credential_path_touch signal)."""
+
+    def _alias_layout(self, tmp_path):
+        allowed = tmp_path / "writable"
+        allowed.mkdir()
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        (secrets / "id_rsa").write_text("KEY MATERIAL")
+        (allowed / "x").symlink_to(secrets)
+        return allowed, str(allowed / "x" / "id_rsa")
+
+    def test_symlink_alias_out_of_allowlist_not_suppressed(self, tmp_path):
+        allowed, alias = self._alias_layout(tmp_path)
+        allowlist = [str(allowed)]
+        # The lexical layer alone matches — that was the pre-fix
+        # suppression condition.
+        assert tracer._path_in_allowlist(alias, allowlist) is True
+        # The suppression decision must refuse it.
+        assert tracer._suppress_allowlisted_path(alias, allowlist) is False
+
+    def test_real_file_under_allowlist_suppressed(self, tmp_path):
+        allowed = tmp_path / "writable"
+        allowed.mkdir()
+        p = allowed / "scratch.txt"
+        p.write_text("ok")
+        assert tracer._suppress_allowlisted_path(
+            str(p), [str(allowed)]) is True
+
+    def test_symlink_within_allowlist_still_suppressed(self, tmp_path):
+        """A symlink whose REAL target is also allowlisted is the
+        benign case — keep dropping it, or filtered mode regresses to
+        verbose for every in-tree symlink."""
+        allowed = tmp_path / "writable"
+        allowed.mkdir()
+        (allowed / "real.txt").write_text("ok")
+        (allowed / "link.txt").symlink_to(allowed / "real.txt")
+        assert tracer._suppress_allowlisted_path(
+            str(allowed / "link.txt"), [str(allowed)]) is True
+
+    def test_nonexistent_path_under_allowlist_suppressed(self, tmp_path):
+        """O_CREAT of a not-yet-existing file under a writable prefix:
+        realpath is the identity, the drop decision stands."""
+        allowed = tmp_path / "writable"
+        allowed.mkdir()
+        assert tracer._suppress_allowlisted_path(
+            str(allowed / "new-file"), [str(allowed)]) is True
+
+    def _dispatch_openat(self, arch_info, fake_helpers, tmp_path,
+                         abs_path, audit_filter):
+        from core.sandbox import audit_budget
+        budget = audit_budget.AuditBudget()
+        nr_openat = 257 if tracer._ARCH == "x86_64" else 56
+        tracer._handle_waitpid_event(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            {1000}, 1000, arch_info,
+            tmp_path, budget,
+            audit_filter=audit_filter,
+            ptrace_cont=fake_helpers["ptrace_cont"],
+            read_regs=fake_helpers["read_regs"],
+            # openat(dirfd=AT_FDCWD-as-unsigned, path, O_RDONLY, ...)
+            decode_syscall=lambda regs, ai: (
+                nr_openat, [(1 << 64) - 100, 0xcafef00d, 0, 0, 0, 0]
+            ),
+            read_tracee_string=lambda pid, addr, max_bytes=4096: abs_path,
+            get_event_msg=fake_helpers["get_event_msg"],
+            write_record=fake_helpers["write_record"],
+            resolve_path=lambda pid, path, dirfd: abs_path,
+        )
+        return fake_helpers["calls"]["write_record"]
+
+    def test_event_loop_logs_symlink_aliased_read(
+            self, arch_info, fake_helpers, tmp_path):
+        """End-to-end through _handle_waitpid_event: the aliased open
+        must produce a record in filtered mode (pre-fix: dropped)."""
+        allowed, alias = self._alias_layout(tmp_path)
+        audit_filter = {
+            "verbose": False,
+            "read_allowlist": [str(allowed)],
+            "writable_paths": [str(allowed)],
+        }
+        records = self._dispatch_openat(
+            arch_info, fake_helpers, tmp_path, alias, audit_filter)
+        assert len(records) == 1
+        assert records[0]["path"] == alias
+
+    def test_event_loop_still_drops_genuine_allowlisted_read(
+            self, arch_info, fake_helpers, tmp_path):
+        allowed = tmp_path / "writable"
+        allowed.mkdir()
+        genuine = allowed / "notes.txt"
+        genuine.write_text("ok")
+        audit_filter = {
+            "verbose": False,
+            "read_allowlist": [str(allowed)],
+            "writable_paths": [str(allowed)],
+        }
+        records = self._dispatch_openat(
+            arch_info, fake_helpers, tmp_path, str(genuine), audit_filter)
+        assert records == []
+
+
+class TestRecordArgEnrichment:
+    def test_write_record_decodes_socket_and_ioctl(self, tmp_path):
+        import json as _json
+        tracer._write_record(tmp_path, "socket", 41,
+                             [17, 3, 768, 0, 0, 0], 4242)
+        tracer._write_record(tmp_path, "ioctl", 16,
+                             [0, 0x5412, 0, 0, 0, 0], 4242)
+        tracer._write_record(tmp_path, "ptrace", 101,
+                             [0, 0, 0, 0, 0, 0], 4242)
+        jsonl = tmp_path / ".audit" / ".sandbox-denials.jsonl"
+        records = [_json.loads(line)
+                   for line in jsonl.read_text().splitlines()]
+        by_name = {r["syscall"]: r for r in records}
+        assert by_name["socket"]["socket_family"] == "AF_PACKET"
+        assert by_name["socket"]["socket_type"] == "SOCK_RAW"
+        assert by_name["ioctl"]["ioctl_cmd"] == "TIOCSTI"
+        assert "ioctl_cmd" not in by_name["ptrace"]
+
+
+class TestOpenat2StructReadInjectable:
+    """The openat2 ``struct open_how`` deref goes through the injected
+    ``read_tracee_bytes`` helper — like every other ptrace side-effect
+    in the dispatch, tests can exercise the branch without a real
+    tracee."""
+
+    _OPENAT2_NR = 437  # same number on x86_64 and aarch64
+
+    def _dispatch_openat2(self, arch_info, fake_helpers, how_flags,
+                          audit_filter=None):
+        import struct as _struct
+
+        from core.sandbox import audit_budget
+
+        bytes_calls = []
+
+        def fake_read_tracee_bytes(pid, addr, n_bytes):
+            bytes_calls.append((pid, addr, n_bytes))
+            return _struct.pack("<Q", how_flags)
+
+        budget = audit_budget.AuditBudget()
+        tracer._handle_waitpid_event(
+            1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
+            {1000}, 1000, arch_info,
+            Path("/tmp"), budget,
+            audit_filter=audit_filter,
+            ptrace_cont=fake_helpers["ptrace_cont"],
+            read_regs=fake_helpers["read_regs"],
+            decode_syscall=lambda regs, ai: (
+                self._OPENAT2_NR, [0, 0xcafef00d, 0xfeed0000, 24, 0, 0]
+            ),
+            read_tracee_string=fake_helpers["read_tracee_string"],
+            read_tracee_bytes=fake_read_tracee_bytes,
+            get_event_msg=fake_helpers["get_event_msg"],
+            write_record=fake_helpers["write_record"],
+            resolve_path=lambda pid, path, dirfd: "/etc/test",
+        )
+        return bytes_calls, budget
+
+    def test_injected_helper_reads_open_how_struct(
+            self, arch_info, fake_helpers):
+        bytes_calls, _ = self._dispatch_openat2(
+            arch_info, fake_helpers, how_flags=0,  # O_RDONLY
+        )
+        # First 8 bytes of *args[2] = struct open_how.flags.
+        assert bytes_calls == [(1000, 0xfeed0000, 8)]
+        records = fake_helpers["calls"]["write_record"]
+        assert len(records) == 1
+        assert records[0]["name"] == "openat2"
+
+    def test_injected_flags_drive_write_intent_filtering(
+            self, arch_info, fake_helpers):
+        # Filtered mode with reads unrestricted: an O_RDONLY openat2
+        # (flags decoded through the injected helper) is dropped; an
+        # O_WRONLY one outside writable_paths is kept.
+        audit_filter = {
+            "verbose": False,
+            "read_allowlist": None,
+            "writable_paths": ["/nowhere"],
+        }
+        self._dispatch_openat2(
+            arch_info, fake_helpers, how_flags=0,  # O_RDONLY → dropped
+            audit_filter=audit_filter,
+        )
+        assert fake_helpers["calls"]["write_record"] == []
+        self._dispatch_openat2(
+            arch_info, fake_helpers, how_flags=1,  # O_WRONLY → kept
+            audit_filter=audit_filter,
+        )
+        records = fake_helpers["calls"]["write_record"]
+        assert len(records) == 1
+        assert records[0]["name"] == "openat2"

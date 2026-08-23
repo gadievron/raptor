@@ -30,12 +30,16 @@ class TestAnnotationsInCoverage(unittest.TestCase):
     def _make(self, run_dir: Path):
         (run_dir / "checklist.json").write_text(json.dumps(_CHECKLIST))
         ann = run_dir / "annotations"
+        # Interactive-TTY stamps: the shape a real operator add
+        # records (stamp-less human notes demote — the date fence).
         write_annotation(ann, Annotation(
             file="src/foo.py", function="alpha", body="clean",
-            metadata={"source": "human", "status": "clean"}))
+            metadata={"source": "human", "status": "clean",
+                      "provenance": "interactive-tty", "tty": "stdin"}))
         write_annotation(ann, Annotation(
             file="src/foo.py", function="beta", body="bug",
-            metadata={"source": "llm", "status": "finding"}))
+            metadata={"source": "human", "status": "finding",
+                      "provenance": "interactive-tty", "tty": "stdin"}))
         rec = build_from_annotations(ann)
         assert rec is not None
         write_record(run_dir, rec, tool_name="annotations")

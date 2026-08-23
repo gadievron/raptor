@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from ..models import (
     Confidence,
@@ -65,7 +65,7 @@ _MAJOR_RE = re.compile(r"^[A-Za-z\-]*v?(?P<major>\d+)(?:[.\-].*)?$")
 
 # Severity ladder — index by majors_behind (1-based). Index 0
 # unused; consumers always pass >=1.
-_SEVERITY_LADDER: Tuple[Severity, ...] = (
+_SEVERITY_LADDER: tuple[Severity, ...] = (
     "info",      # placeholder, never used (majors_behind never 0 here)
     "info",      # 1 behind: maintainers often pin to a known major
     "low",       # 2 behind
@@ -78,7 +78,7 @@ def scan_dependencies(
     deps: Iterable[Dependency],
     *,
     client,
-) -> List[SupplyChainFinding]:
+) -> list[SupplyChainFinding]:
     """Walk Dependencies and emit one SupplyChainFinding per action
     pinned multiple majors behind its latest release.
 
@@ -89,7 +89,7 @@ def scan_dependencies(
     if client is None:
         return []
 
-    out: List[SupplyChainFinding] = []
+    out: list[SupplyChainFinding] = []
     for dep in deps:
         if dep.ecosystem != "GitHub Actions":
             continue
@@ -122,7 +122,7 @@ def scan_dependencies(
 # ---------------------------------------------------------------------------
 
 
-def _extract_major(version: str) -> Optional[int]:
+def _extract_major(version: str) -> int | None:
     """Pull the major-version integer out of a tag-shape string.
 
     Returns None for SHAs, branch names, calver tags, or anything

@@ -1,0 +1,285 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python — taint: web framework sources → unsafe HTML output sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.xss.taint.python
+    message: >-
+      Untrusted data flows into an HTML response without escaping. Use
+      context-aware output encoding or a templating engine with auto-escaping.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Django
+          - pattern: request.GET[...]
+          - pattern: request.POST[...]
+          - pattern: request.GET.get(...)
+          - pattern: request.POST.get(...)
+          - pattern: request.data[...]
+          - pattern: request.query_params[...]
+          # Flask
+          - pattern: flask.request.args[...]
+          - pattern: flask.request.args.get(...)
+          - pattern: flask.request.form[...]
+          - pattern: flask.request.form.get(...)
+          - pattern: flask.request.json[...]
+          - pattern: flask.request.get_json(...)
+          # FastAPI / Starlette
+          - pattern: request.query_params[...]
+          - pattern: request.path_params[...]
+          # Generic
+          - pattern: input(...)
+          - pattern: os.environ[...]
+          - pattern: os.environ.get(...)
+          - pattern: sys.argv[...]
+    pattern-sinks:
+      - pattern-either:
+          # Django mark_safe — marks string as safe HTML, bypassing auto-escape
+          - pattern: mark_safe($X)
+          - pattern: django.utils.safestring.mark_safe($X)
+          # Jinja2 Markup — same effect as mark_safe
+          - pattern: Markup($X)
+          - pattern: markupsafe.Markup($X)
+          # Flask render_template_string — renders user input as a Jinja2 template
+          - pattern: render_template_string($X, ...)
+          - pattern: flask.render_template_string($X, ...)
+          # Raw HTML responses
+          - pattern: Response($X, ..., content_type="text/html", ...)
+          - pattern: HttpResponse($X, ..., content_type="text/html", ...)
+      # Django HttpResponse without an explicit content_type defaults
+      # to text/html — tainted body is XSS. Explicit non-HTML types
+      # (application/json, text/plain, ...) are excluded.
+      - patterns:
+          - pattern-either:
+              - pattern: HttpResponse($X, ...)
+              - pattern: django.http.HttpResponse($X, ...)
+          - pattern-not: HttpResponse(..., content_type=$CT, ...)
+          - pattern-not: django.http.HttpResponse(..., content_type=$CT, ...)
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      - pattern: html.escape(...)
+      - pattern: markupsafe.escape(...)
+      - pattern: bleach.clean(...)
+    metadata:
+      cwe: ["CWE-79"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "xss", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: net/http handler params → unsafe HTML output sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.xss.taint.go
+    message: >-
+      Untrusted data flows into an HTML response without escaping. Use
+      html/template (auto-escaping) instead of text/template, or call
+      template.HTMLEscapeString() before writing.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      - pattern-either:
+          # template type-casts — bypass html/template auto-escaping
+          - pattern: template.HTML($X)
+          - pattern: template.JS($X)
+          - pattern: template.CSS($X)
+          - pattern: template.HTMLAttr($X)
+    pattern-sanitizers:
+      - pattern: template.HTMLEscapeString(...)
+      - pattern: html.EscapeString(...)
+    metadata:
+      cwe: ["CWE-79"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "xss", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Java — taint: servlet/Spring params → unsafe HTML output sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.xss.taint.java
+    message: >-
+      Untrusted data flows into an HTML response without escaping. Use a
+      context-aware encoder such as OWASP Java Encoder or a templating engine
+      with auto-escaping.
+    languages: [java]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Servlet
+          - pattern: (HttpServletRequest $REQ).getParameter(...)
+          # Multi-value / map spellings of the same parameter data
+          # (measured FN class: getParameterMap cases missed by both
+          # engines; getParameterValues chains missed on the semgrep
+          # side).
+          - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+          - pattern: (HttpServletRequest $REQ).getParameterMap()
+          - pattern: (HttpServletRequest $REQ).getHeader(...)
+          - pattern: (HttpServletRequest $REQ).getPathInfo()
+          - pattern: (HttpServletRequest $REQ).getQueryString()
+          - pattern: (HttpServletRequest $REQ).getRequestURI()
+          # Header/parameter enumerations are request data; taint
+          # reaches values via nextElement(). Names are attacker-chosen.
+          - pattern: (HttpServletRequest $REQ).getHeaders(...)
+          - pattern: (HttpServletRequest $REQ).getHeaderNames()
+          - pattern: (HttpServletRequest $REQ).getParameterNames()
+          # Spring MVC
+          - pattern: (WebRequest $REQ).getParameter(...)
+          - pattern: (WebRequest $REQ).getHeader(...)
+    pattern-propagators:
+      # Collection round-trips (measured FN class: same-method
+      # map.put(k, tainted) -> get(k) -> sink). put/add taint the
+      # receiver; semgrep then propagates receiver taint through get.
+      # Key-insensitive by engine design — recall-side over-taint on a
+      # different key is adjudicated downstream (gate/validation), the
+      # honest asymmetry for a detector.
+      - pattern: $M.put($K, $V)
+        from: $V
+        to: $M
+      - pattern: $M.add($V)
+        from: $V
+        to: $M
+      # Array-initializer element flow: Object[] obj = {"a", bar}
+      # taints the array (the printf/format varargs vector and the
+      # exec args/env vector share this seam).
+      - pattern: $T[] $A = {..., $V, ...}
+        from: $V
+        to: $A
+    pattern-sinks:
+      - pattern-either:
+          # Servlet response writer
+          - pattern: (HttpServletResponse $RESP).getWriter().write($X)
+          - pattern: (HttpServletResponse $RESP).getWriter().write($X, ...)
+          - pattern: (HttpServletResponse $RESP).getWriter().println($X)
+          - pattern: (HttpServletResponse $RESP).getWriter().print($X)
+          - pattern: (HttpServletResponse $RESP).getOutputStream().write(...)
+          - pattern: (HttpServletResponse $RESP).getWriter().format(...)
+          - pattern: (HttpServletResponse $RESP).getWriter().printf(...)
+          - pattern: (PrintWriter $PW).format(...)
+          - pattern: (PrintWriter $PW).printf(...)
+          # FQN-declared PrintWriter locals are a distinct spelling to
+          # semgrep's syntactic type matcher (no import to normalise
+          # against) — same sink set.
+          - pattern: (java.io.PrintWriter $PW).format(...)
+          - pattern: (java.io.PrintWriter $PW).printf(...)
+          - pattern: (java.io.PrintWriter $PW).write($X)
+          - pattern: (java.io.PrintWriter $PW).println($X)
+          - pattern: (java.io.PrintWriter $PW).print($X)
+          # Servlet response output
+          - pattern: (PrintWriter $PW).write($X)
+          - pattern: (PrintWriter $PW).println($X)
+          - pattern: (PrintWriter $PW).print($X)
+    pattern-sanitizers:
+      # HTML-body context encoders only: the sinks above are response-body
+      # writes, so forHtml/forHtmlContent/escapeHtml4/htmlEscape/
+      # encodeForHTML neutralise them (forHtmlAttribute over-encodes — a
+      # safe superset). JavaScript/CSS/URL encoders are deliberately NOT
+      # listed: they do not neutralise HTML-body injection and would
+      # suppress real findings.
+      - pattern: StringEscapeUtils.escapeHtml4(...)
+      - pattern: HtmlUtils.htmlEscape(...)
+      - pattern: Encode.forHtml(...)
+      - pattern: Encode.forHtmlContent(...)
+      - pattern: Encode.forHtmlAttribute(...)
+      - pattern: org.owasp.encoder.Encode.forHtml(...)
+      # OWASP ESAPI, both the chained singleton and a typed Encoder ref.
+      # The fully-qualified chain is a distinct spelling to semgrep's
+      # syntactic matcher (no import to normalise against when the code
+      # writes org.owasp.esapi.ESAPI inline) — same accepted sanitizer.
+      - pattern: ESAPI.encoder().encodeForHTML(...)
+      - pattern: org.owasp.esapi.ESAPI.encoder().encodeForHTML(...)
+      - pattern: (Encoder $ENC).encodeForHTML(...)
+    metadata:
+      cwe: ["CWE-79"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "xss", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript — taint: Express/Koa params → unsafe HTML sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.injection.xss.taint.javascript
+    message: >-
+      Untrusted data flows into an HTML response or DOM sink without
+      sanitisation. Use a context-aware encoder or DOMPurify.
+    languages: [javascript, typescript]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          # Express — receiver-name anchored: bare $REQ.query/.params/
+          # .body/.headers sources match those field names on any local
+          # object, tainting fully hardcoded data (self-taint).
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.query[...]
+                  - pattern: $REQ.query.$PROP
+                  - pattern: $REQ.params[...]
+                  - pattern: $REQ.params.$PROP
+                  - pattern: $REQ.body[...]
+                  - pattern: $REQ.body.$PROP
+                  - pattern: $REQ.headers[...]
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: '(?i)^(req|request)$'
+          # Koa — receiver-name anchored (same self-taint shape as the
+          # Express block above).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.query[...]
+                  - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.params[...]
+                  - pattern: $CTX.params.$PROP
+                  - pattern: $CTX.request.body[...]
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context)$'
+          # Generic
+          - pattern: process.env[...]
+          - pattern: process.env.$PROP
+          - pattern: process.argv[...]
+    pattern-sinks:
+      - pattern-either:
+          # DOM sinks (client-side or SSR)
+          - pattern: $EL.innerHTML = $X
+          - pattern: document.write($X)
+          - pattern: document.writeln($X)
+          # jQuery
+          - pattern: $EL.html($X)
+          # React — explicit escape hatch
+          - pattern: "dangerouslySetInnerHTML = {__html: $X}"
+          # Express — res.send() of a string body defaults to
+          # text/html; res.write() streams the raw body. Both reflect
+          # tainted request data as markup.
+          - pattern: $RES.send($X)
+          - pattern: $RES.write($X)
+    pattern-sanitizers:
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: xss(...)
+      - pattern: sanitizeHtml(...)
+    metadata:
+      cwe: ["CWE-79"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "injection", "xss", "taint"]

@@ -14,29 +14,28 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Set
 
 _NEVER = ("-", "#####", "=====")
 _SOURCE_RE = re.compile(r"Source:(.*)")
 
 
-def parse_gcov(path) -> Dict[str, Set[int]]:
+def parse_gcov(path) -> dict[str, set[int]]:
     """Parse a ``.gcov`` file, or a directory of them."""
     p = Path(path)
     files = sorted(p.glob("*.gcov")) if p.is_dir() else [p]
-    out: Dict[str, Set[int]] = {}
+    out: dict[str, set[int]] = {}
     for gcov_file in files:
         _parse_one_gcov(gcov_file, out)
     return out
 
 
-def _parse_one_gcov(gcov_file: Path, out: Dict[str, Set[int]]) -> None:
+def _parse_one_gcov(gcov_file: Path, out: dict[str, set[int]]) -> None:
     try:
         text = gcov_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return
     src = None
-    lines: Set[int] = set()
+    lines: set[int] = set()
     for raw in text.splitlines():
         parts = raw.split(":", 2)              # count : lineno : source
         if len(parts) < 2:
@@ -69,13 +68,13 @@ def _parse_one_gcov(gcov_file: Path, out: Dict[str, Set[int]]) -> None:
         out.setdefault(src or gcov_file.stem, set()).update(lines)
 
 
-def parse_lcov(path) -> Dict[str, Set[int]]:
+def parse_lcov(path) -> dict[str, set[int]]:
     """Parse an lcov ``.info`` file (``SF:`` / ``DA:`` records)."""
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
-    out: Dict[str, Set[int]] = {}
+    out: dict[str, set[int]] = {}
     cur = None
     for raw in text.splitlines():
         line = raw.strip()

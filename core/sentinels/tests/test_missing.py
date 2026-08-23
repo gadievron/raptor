@@ -4,7 +4,8 @@ The reason this module exists at ``core/sentinels/`` (not under
 ``core/json/*``) is to survive ``sys.modules`` resets in
 ``core/json/tests/test_f046_lazy_reexports.py``. These tests pin
 that contract: singleton identity, ``bool(MISSING) is False``,
-and survival across a sub-package reload.
+survival across a sub-package reload, and a ``repr`` that names
+the sentinel's actual location.
 """
 
 from __future__ import annotations
@@ -29,6 +30,31 @@ def test_missing_is_falsy():
 
     assert not MISSING
     assert bool(MISSING) is False
+
+
+def test_repr_names_actual_location():
+    """repr must point at core.sentinels.MISSING, where the object lives."""
+    from core.sentinels import MISSING
+
+    assert repr(MISSING) == "<core.sentinels.MISSING>"
+
+
+def test_repr_has_no_stale_pre_split_label():
+    """The pre-split 'JsonCache._MISSING' label must not resurface.
+
+    The ``__repr__`` once returned ``'<JsonCache._MISSING>'`` — a
+    leftover label from the pre-split location in ``core.json.cache``
+    naming a symbol path that no longer exists."""
+    from core.sentinels import MISSING
+
+    assert "JsonCache" not in repr(MISSING)
+
+
+def test_repr_is_stable_across_instantiations():
+    """Every instantiation is the singleton, so every repr matches."""
+    from core.sentinels import MISSING, _MissingType
+
+    assert repr(_MissingType()) == repr(MISSING)
 
 
 def test_missing_survives_core_json_reload():

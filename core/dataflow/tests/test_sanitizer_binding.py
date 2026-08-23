@@ -33,7 +33,7 @@ from core.dataflow.sanitizer_catalog import (
     match_sanitizers_in_cfg,
     nodes_of,
 )
-from core.inventory.cfg_builder import (
+from core.analysis.cfg_builder import (
     CallGraphNode,
     PyCFGNode,
     build_cpp_callgraph,
@@ -298,7 +298,7 @@ def test_nodes_of_empty():
 
 
 def _stub_edge_index(binary_path, edges):
-    from core.inventory.binary_oracle_edges import (
+    from core.analysis.binary_oracle_edges import (
         BinaryCallEdge, BinaryEdgeIndex,
     )
     return BinaryEdgeIndex(
@@ -324,7 +324,7 @@ def test_callgraph_binding_has_empty_symbol_layer(tmp_path):
         ("process", "org.apache.commons.lang3.StringEscapeUtils.escapeHtml4"),
     ]
     with mock.patch(
-        "core.inventory.binary_oracle_edges.extract_direct_call_edges",
+        "core.analysis.binary_oracle_edges.extract_direct_call_edges",
         return_value=_stub_edge_index(binary, edges),
     ):
         graph = build_cpp_callgraph([binary], entry="main")

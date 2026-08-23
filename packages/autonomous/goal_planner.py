@@ -12,7 +12,7 @@ This module enables RAPTOR to work towards user-specified goals:
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.logging import get_logger
 
@@ -33,7 +33,7 @@ class Goal:
     """A high-level goal to achieve."""
     goal_type: GoalType
     description: str  # Human-readable description
-    target_value: Optional[str] = None  # Target value (e.g., "heap_overflow")
+    target_value: str | None = None  # Target value (e.g., "heap_overflow")
 
     # Progress tracking
     progress: float = 0.0  # 0.0 to 1.0
@@ -41,7 +41,7 @@ class Goal:
     start_time: float = field(default_factory=time.time)
 
     # Strategy adjustments for this goal
-    strategy_hints: Dict[str, Any] = field(default_factory=dict)
+    strategy_hints: dict[str, Any] = field(default_factory=dict)
 
 
 class GoalPlanner:
@@ -52,31 +52,32 @@ class GoalPlanner:
     fuzzing strategies and analysis priorities.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize goal planner."""
-        self.current_goal: Optional[Goal] = None
-        self.goal_history: List[Goal] = []
+        self.current_goal: Goal | None = None
+        self.goal_history: list[Goal] = []
         logger.info("Goal-directed planner initialized")
 
-    def set_goal(self, goal: Goal):
+    def set_goal(self, goal: Goal) -> None:
         """
         Set a new goal to work towards.
 
         Args:
             goal: Goal to achieve
         """
-        if self.current_goal and not self.current_goal.achieved:
-            logger.info(f"Replacing current goal: {self.current_goal.description}")
+        if self.current_goal:
+            if not self.current_goal.achieved:
+                logger.info("Replacing current goal: %s", self.current_goal.description)
             self.goal_history.append(self.current_goal)
 
         self.current_goal = goal
         logger.info("=" * 70)
         logger.info("NEW GOAL SET")
         logger.info("=" * 70)
-        logger.info(f"Goal: {goal.description}")
-        logger.info(f"Type: {goal.goal_type.value}")
+        logger.info("Goal: %s", goal.description)
+        logger.info("Type: %s", goal.goal_type.value)
         if goal.target_value:
-            logger.info(f"Target: {goal.target_value}")
+            logger.info("Target: %s", goal.target_value)
 
     def create_goal_from_user_input(self, user_goal: str) -> Goal:
         """
@@ -93,7 +94,7 @@ class GoalPlanner:
         # Detect goal type from user input
         if any(vuln in user_goal_lower for vuln in [
             "heap overflow", "stack overflow", "use-after-free",
-            "buffer overflow", "null pointer"
+            "buffer overflow", "null pointer", "uaf"
         ]):
             # Extract vulnerability type
             if "heap overflow" in user_goal_lower:
@@ -118,7 +119,7 @@ class GoalPlanner:
                 }
             )
 
-        elif any(code_area in user_goal_lower for code_area in [
+        if any(code_area in user_goal_lower for code_area in [
             "parser", "network", "authentication", "crypto"
         ]):
             # Target specific code area
@@ -143,7 +144,7 @@ class GoalPlanner:
                 }
             )
 
-        elif any(exploit in user_goal_lower for exploit in [
+        if any(exploit in user_goal_lower for exploit in [
             "rce", "code execution", "shell", "exploit"
         ]):
             return Goal(
@@ -156,7 +157,7 @@ class GoalPlanner:
                 }
             )
 
-        elif "coverage" in user_goal_lower or "explore" in user_goal_lower:
+        if "coverage" in user_goal_lower or "explore" in user_goal_lower:
             return Goal(
                 goal_type=GoalType.MAXIMIZE_COVERAGE,
                 description=user_goal,
@@ -166,17 +167,16 @@ class GoalPlanner:
                 }
             )
 
-        else:
-            # Default: find any crash
-            return Goal(
-                goal_type=GoalType.FIND_ANY_CRASH,
-                description=user_goal,
-                strategy_hints={
-                    "fast_mode": True,
-                }
-            )
+        # Default: find any crash
+        return Goal(
+            goal_type=GoalType.FIND_ANY_CRASH,
+            description=user_goal,
+            strategy_hints={
+                "fast_mode": True,
+            }
+        )
 
-    def adapt_fuzzing_strategy(self, base_strategy: Dict) -> Dict:
+    def adapt_fuzzing_strategy(self, base_strategy: dict) -> dict:
         """
         Adapt fuzzing strategy based on current goal.
 
@@ -195,7 +195,7 @@ class GoalPlanner:
         # Apply strategy hints
         if hints.get("focus_on_memory"):
             logger.info("Goal: Focusing on memory operations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-m", "none"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-m", "none"]
 
         if hints.get("enable_asan"):
             logger.info("Goal: Recommending ASAN for memory bugs")
@@ -203,21 +203,21 @@ class GoalPlanner:
 
         if hints.get("mutation_strategy") == "aggressive":
             logger.info("Goal: Using aggressive mutations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-L", "0"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-L", "0"]
 
         if hints.get("mutation_strategy") == "diverse":
             logger.info("Goal: Using diverse mutations")
-            adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-D"]
+            adapted["extra_flags"] = (adapted.get("extra_flags") or []) + ["-D"]
 
         if hints.get("parallel_instances"):
             from core.tuning import get_tuning
             ceiling = get_tuning().max_fuzz_parallel
             adapted["parallel"] = min(hints["parallel_instances"], ceiling)
-            logger.info(f"Goal: Using {adapted['parallel']} parallel instances")
+            logger.info("Goal: Using %s parallel instances", adapted['parallel'])
 
         return adapted
 
-    def prioritize_crashes_for_goal(self, crashes: List) -> List:
+    def prioritize_crashes_for_goal(self, crashes: list) -> list:
         """
         Prioritize crashes based on current goal.
 
@@ -245,14 +245,14 @@ class GoalPlanner:
                 crash_type = getattr(crash, 'crash_type', 'unknown')
                 if goal.target_value and goal.target_value in crash_type:
                     goal_bonus = 100.0  # Huge bonus for exact match
-                    logger.info(f"✨ Crash {crash.crash_id} matches goal: {goal.target_value}")
+                    logger.info("✨ Crash %s matches goal: %s", crash.crash_id, goal.target_value)
 
             elif goal.goal_type == GoalType.TARGET_CODE_AREA:
                 # Check if crash is in target code area
                 function_name = getattr(crash, 'function_name', '')
                 if goal.target_value and goal.target_value in function_name.lower():
                     goal_bonus = 50.0
-                    logger.info(f"✨ Crash {crash.crash_id} in target area: {goal.target_value}")
+                    logger.info("✨ Crash %s in target area: %s", crash.crash_id, goal.target_value)
 
             elif goal.goal_type == GoalType.ACHIEVE_EXPLOIT_TYPE:
                 # Prioritize highly exploitable crashes
@@ -267,7 +267,7 @@ class GoalPlanner:
 
         return [c for c, s in scored_crashes]
 
-    def update_goal_progress(self, fuzzing_state):
+    def update_goal_progress(self, fuzzing_state) -> None:
         """
         Update progress towards current goal.
 
@@ -283,7 +283,7 @@ class GoalPlanner:
             if fuzzing_state.total_crashes > 0:
                 goal.progress = 1.0
                 goal.achieved = True
-                logger.info(f"✓ GOAL ACHIEVED: {goal.description}")
+                logger.info("✓ GOAL ACHIEVED: %s", goal.description)
 
         elif goal.goal_type == GoalType.MAXIMIZE_COVERAGE:
             # Progress based on coverage growth rate
@@ -299,7 +299,7 @@ class GoalPlanner:
 
         # Log progress
         if goal.progress > 0:
-            logger.info(f"Goal progress: {goal.progress * 100:.1f}%")
+            logger.info("Goal progress: %.1f%%", goal.progress * 100)
 
     def should_continue_towards_goal(self, fuzzing_state) -> bool:
         """
@@ -318,7 +318,7 @@ class GoalPlanner:
 
         # If goal achieved, we can stop
         if goal.achieved:
-            logger.info(f"Goal achieved: {goal.description}")
+            logger.info("Goal achieved: %s", goal.description)
             return False
 
         # If goal is to find specific vulnerability, keep going until found
@@ -329,7 +329,7 @@ class GoalPlanner:
         # Default: continue
         return True
 
-    def get_summary(self) -> Dict:
+    def get_summary(self) -> dict:
         """Get summary of goals and progress."""
         return {
             "current_goal": {
@@ -339,5 +339,7 @@ class GoalPlanner:
                 "achieved": self.current_goal.achieved,
             } if self.current_goal else None,
             "total_goals_attempted": len(self.goal_history) + (1 if self.current_goal else 0),
-            "goals_achieved": sum(1 for g in self.goal_history if g.achieved),
+            "goals_achieved": sum(1 for g in self.goal_history if g.achieved) + (
+                1 if self.current_goal and self.current_goal.achieved else 0
+            ),
         }

@@ -26,23 +26,31 @@ Two modes:
 
 Exit codes:
   - the spawned command's exit code on success
-  - 64 (EX_USAGE) for arg-parse failures
+  - 2 for arg-parse failures (argparse's parser.error default)
+  - 64 (EX_USAGE) when the command to spawn cannot be found
   - 70 (EX_SOFTWARE) when observe-mode fails to engage (e.g. ptrace
     blocked) — operator can re-run on a host where it works.
+  - 124 when the command exceeded ``--timeout`` and was killed
+    (same convention as timeout(1)); any observe records captured
+    before the kill are still rendered.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _USAGE_EX = 64       # EX_USAGE — bad argv
 _SOFTWARE_EX = 70    # EX_SOFTWARE — observe didn't engage
+_TIMEOUT_EX = 124    # command exceeded --timeout (timeout(1) convention)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -91,6 +99,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--audit-budget", type=int, default=None, metavar="N",
+        dest="audit_budget",
+        help=(
+            "Override the global audit-record cap (default 10000) for "
+            "this run. Per-category and per-PID sub-caps scale "
+            "proportionally. Raise it when the budget-truncation "
+            "warning fires and the profile must capture every event."
+        ),
+    )
+    p.add_argument(
         "cmd", nargs=argparse.REMAINDER,
         help="Command to run under observe-mode (use ``--`` to separate).",
     )
@@ -115,7 +133,7 @@ def _resolve_run_dir(args: argparse.Namespace,
         # Lazy import so the help/parse path doesn't need shutil.
         import shutil
 
-        def _cleanup():
+        def _cleanup() -> None:
             shutil.rmtree(tmp, ignore_errors=True)
 
         stack.callback(_cleanup)
@@ -123,7 +141,7 @@ def _resolve_run_dir(args: argparse.Namespace,
 
 
 def _format_summary(profile, *, run_dir: Path, kept: bool,
-                    return_code: int) -> str:
+                    return_code: int | None) -> str:
     """Pretty multi-line summary for the default (non-JSON) mode.
 
     Counts + first-N path samples per category. Avoids dumping every
@@ -136,6 +154,16 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     parts.append(f"command exit code: {return_code}")
     if kept:
         parts.append(f"audit-run-dir kept at: {run_dir}")
+
+    # Surface authentication state before the content: an
+    # unauthenticated profile (degraded audit, no per-run nonce)
+    # must not be read as trusted ground truth.
+    if not getattr(profile, "nonce_trusted", True):
+        parts.append(
+            "\n⚠️  profile UNAUTHENTICATED — the run produced no "
+            "per-run nonce (audit degraded?), so records cannot be "
+            "verified as tracer-written. Treat as unverified signal."
+        )
 
     # Surface budget truncation FIRST — if the probe hit any cap,
     # the rest of the summary is incomplete and operators need to
@@ -154,13 +182,12 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
             "every event."
         )
 
-    def _section(label: str, items: list, total_label: str):
+    def _section(label: str, items: list, total_label: str) -> None:
         parts.append(f"\n{label} ({len(items)}):")
         if not items:
             parts.append(f"  (none — binary did no {total_label})")
             return
-        for p in items[:SAMPLE]:
-            parts.append(f"  {p}")
+        parts.extend(f"  {p}" for p in items[:SAMPLE])
         if len(items) > SAMPLE:
             parts.append(
                 f"  ... (+{len(items) - SAMPLE} more; "
@@ -176,8 +203,7 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     if not profile.connect_targets:
         parts.append("  (none — binary made no connect() calls)")
     else:
-        for t in profile.connect_targets:
-            parts.append(f"  {t.ip}:{t.port} ({t.family})")
+        parts.extend(f"  {t.ip}:{t.port} ({t.family})" for t in profile.connect_targets)
     return "\n".join(parts)
 
 
@@ -187,7 +213,7 @@ def _connect_target_to_dict(target) -> dict:
 
 
 def _profile_to_json(profile, *, run_dir: Path, kept: bool,
-                     return_code: int) -> str:
+                     return_code: int | None) -> str:
     """JSON output mode — full profile + meta. Stable schema for tooling."""
     payload = {
         "return_code": return_code,
@@ -200,11 +226,14 @@ def _profile_to_json(profile, *, run_dir: Path, kept: bool,
         ],
         "budget_truncated": bool(profile.budget_truncated),
         "dropped_by_category": dict(profile.dropped_by_category),
+        # False when the run produced no per-run nonce (degraded
+        # audit) — downstream consumers must demote such profiles.
+        "nonce_trusted": bool(getattr(profile, "nonce_trusted", True)),
     }
     return json.dumps(payload, indent=2)
 
 
-def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
+def _cli_main(argv: Sequence[str] | None = None) -> int:
     """Argparse → spawn → parse → render. Lives in this module so the
     libexec shim is a thin trust-marker + sys.exit wrapper.
 
@@ -223,14 +252,40 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("no command supplied — use ``-- <cmd> [args...]``")
         return _USAGE_EX  # parser.error exits, but for clarity
 
+    # Same bounds the main sandbox CLI applies (core/sandbox/cli.py).
+    # No "--audit-budget requires --audit" check here — observe mode
+    # forces audit mode, so the precondition holds by construction.
+    if args.audit_budget is not None:
+        if args.audit_budget <= 0:
+            parser.error(
+                f"--audit-budget must be a positive integer; got "
+                f"{args.audit_budget!r}"
+            )
+        _AUDIT_BUDGET_MAX = 10_000_000
+        if args.audit_budget > _AUDIT_BUDGET_MAX:
+            parser.error(
+                f"--audit-budget={args.audit_budget} exceeds the upper "
+                f"clamp ({_AUDIT_BUDGET_MAX}). At ~200 bytes per record "
+                f"that's ~2GB of JSONL — almost certainly a typo."
+            )
+
     # Lazy-import the sandbox layer — argparse setup + --help should
     # not require libseccomp / ctypes probing.
+    import contextlib
+
     from core.sandbox import (
-        run as sandbox_run,
         parse_observe_log,
     )
+    from core.sandbox import (
+        run as sandbox_run,
+    )
 
-    import contextlib
+    if args.audit_budget is not None:
+        # Same propagation path the main CLI's apply_cli_args uses:
+        # the tracer builds its AuditBudget from this state slot.
+        from core.sandbox import state as _sbx_state
+        _sbx_state._cli_sandbox_audit_budget = int(args.audit_budget)
+
     with contextlib.ExitStack() as stack:
         run_dir, kept = _resolve_run_dir(args, stack)
         target_dir = Path(args.target).resolve() if args.target else run_dir
@@ -242,6 +297,11 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
         # human-readable mode let the binary's output pass through —
         # operators reading the summary like seeing what the probe
         # actually produced.
+        timed_out = False
+        # Pre-bind: the TimeoutExpired path continues with no completed
+        # process, and the nonce-trust check reads getattr(result, ...).
+        result = None
+        return_code: int | None = None
         try:
             result = sandbox_run(
                 cmd,
@@ -252,41 +312,94 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
                 text=False,
                 timeout=args.timeout,
             )
+            return_code = result.returncode
         except FileNotFoundError as exc:
             sys.stderr.write(f"raptor-sandbox-observe: {exc}\n")
             return _USAGE_EX
+        except subprocess.TimeoutExpired:
+            # A first-class CLI flag must produce a diagnostic, not a
+            # Python traceback. Render whatever observe records landed
+            # before the kill — a partial profile is still useful.
+            timed_out = True
+            sys.stderr.write(
+                f"raptor-sandbox-observe: command did not finish "
+                f"within --timeout {args.timeout}s and was killed; "
+                f"rendering observe records captured before the "
+                f"kill.\n"
+            )
 
         # When the operator did not pass --out / --keep AND no observe
         # records landed, surface a clear error rather than silently
         # printing an empty profile. Most likely cause: ptrace blocked
         # (Yama scope 3, container cap-drop) so audit-mode degraded.
-        observe_log = run_dir / ".sandbox-observe.jsonl"
+        #
+        # Location trust follows the nonce: with a per-run nonce every
+        # record is authenticated, so the legacy run-root fallback is
+        # acceptable; WITHOUT one (degraded audit) the run-root file
+        # is indistinguishable from a forgery planted by the probed
+        # binary, so only the parent-owned .audit location counts —
+        # both for this existence check and for the parse below
+        # (current_run=True).
+        from .evidence import evidence_write_path as _evidence_write_path
+        from .evidence import resolve_read_path as _resolve_evidence_path
+        _sbx_info = getattr(result, "sandbox_info", None) or {}
+        _nonce = _sbx_info.get("observe_nonce")
+        if _nonce is None:
+            observe_log = _evidence_write_path(
+                run_dir, ".sandbox-observe.jsonl",
+            )
+        else:
+            observe_log = _resolve_evidence_path(
+                run_dir, ".sandbox-observe.jsonl",
+            )
         if not observe_log.exists():
+            if timed_out:
+                # The kill explains the missing log — don't pile the
+                # (misleading) degraded-audit diagnostic on top.
+                return _TIMEOUT_EX
+            _legacy = run_dir / ".sandbox-observe.jsonl"
+            _planted = (" A run-root observe log exists but is NOT "
+                        "trusted without a per-run nonce (the probed "
+                        "binary can write that location)."
+                        if _nonce is None and _legacy.exists() else "")
             sys.stderr.write(
-                "raptor-sandbox-observe: observe log not produced — "
-                "audit-mode likely degraded silently. Check that "
-                "libseccomp is installed and ptrace is permitted on "
-                "this host (Yama scope 0 or 1; not running with "
-                "--cap-drop=SYS_PTRACE).\n"
+                f"raptor-sandbox-observe: observe log not produced — "
+                f"audit-mode likely degraded silently. Check that "
+                f"libseccomp is installed and ptrace is permitted on "
+                f"this host (Yama scope 0 or 1; not running with "
+                f"--cap-drop=SYS_PTRACE).{_planted}\n"
             )
             return _SOFTWARE_EX
 
-        profile = parse_observe_log(run_dir)
+        # Spoof-resistant parse: pin records to the per-run nonce when
+        # the sandbox stamped one, and hand over sandbox_info so the
+        # parser can refuse nonce trust on runs where the nonce was
+        # not delivered through a protected channel. current_run=True:
+        # a nonce-less (degraded) parse refuses the target-writable
+        # legacy location and comes back nonce_trusted=False.
+        profile = parse_observe_log(
+            run_dir,
+            expected_nonce=_nonce,
+            sandbox_info=_sbx_info,
+            current_run=True,
+        )
 
         if args.json_output:
             sys.stdout.write(_profile_to_json(
                 profile, run_dir=run_dir, kept=kept,
-                return_code=result.returncode,
+                return_code=return_code,
             ) + "\n")
         else:
             sys.stdout.write(_format_summary(
                 profile, run_dir=run_dir, kept=kept,
-                return_code=result.returncode,
+                return_code=return_code,
             ) + "\n")
 
+        if timed_out:
+            return _TIMEOUT_EX
         # Forward the spawned command's exit code as our own — caller
         # composes naturally with shell pipelines that check $?.
-        return result.returncode
+        return return_code
 
 
 if __name__ == "__main__":

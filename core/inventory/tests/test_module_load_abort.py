@@ -7,8 +7,11 @@ fire — false positives silence real findings on loadable files).
 
 from __future__ import annotations
 
+import textwrap
+
 from core.inventory.module_load_abort import (
     ModuleLoadAbort,
+    _go_panic_is_unconditional,
     detect_module_load_abort,
 )
 
@@ -226,6 +229,150 @@ def test_go_no_init_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
+# Go — comments and strings must not fabricate an abort. A panic, init
+# header, or brace inside a comment or string literal must never
+# produce the whole-file abort gate (which would suppress every
+# finding in a loadable file).
+# ---------------------------------------------------------------------------
+
+
+def test_go_commented_panic_not_detected():
+    src = (
+        "package p\n"
+        "\n"
+        "func init() {\n"
+        '\t// panic("disabled")\n'
+        "}\n"
+        "\n"
+        "func Vulnerable(cmd string) { run(cmd) }\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_block_commented_panic_not_detected():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        '\t/* panic("disabled") */\n'
+        "\tregister()\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_panic_in_string_not_detected():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        '\ts := "panic(oops)"\n'
+        "\t_ = s\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_commented_init_header_not_detected():
+    # The whole init (header included) is commented out.
+    src = (
+        "package p\n"
+        '// func init() { panic("x") }\n'
+        "func Live() {}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_conditional_panic_with_brace_in_comment_not_detected():
+    # A '}' inside a comment before the panic used to drop the depth
+    # counter to zero, misreading a conditional panic as unconditional.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tif bad() {\n"
+        "\t\t// note: }\n"
+        '\t\tpanic("x")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_rune_quote_does_not_corrupt_depth():
+    # A '"' rune used to mispair the string skipper, swallowing the
+    # conditional's '{' and misreading the panic as unconditional.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tr := '\"'\n"
+        '\tt := "a"\n'
+        "\t_ = r\n"
+        "\t_ = t\n"
+        "\tif cond {\n"
+        '\t\tpanic("boom")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_real_panic_after_comment_still_detected():
+    # Sanitisation preserves newlines, so the reported line is exact.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\t// abort on load\n"
+        '\tpanic("must not load")\n'
+        "}\n"
+    )
+    abort = detect_module_load_abort("go", src)
+    assert isinstance(abort, ModuleLoadAbort)
+    assert abort.line == 4
+    assert abort.summary == "func init() { panic(...) }"
+
+
+def test_go_unconditional_panic_after_rune_still_detected():
+    # Sanitising rune interiors must not break real detection.
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\tr := '\"'\n"
+        "\t_ = r\n"
+        '\tpanic("x")\n'
+        "}\n"
+    )
+    abort = detect_module_load_abort("go", src)
+    assert abort is not None
+    assert abort.line == 5
+
+
+def test_go_raw_string_brace_still_conditional():
+    src = (
+        "package p\n"
+        "func init() {\n"
+        "\ts := `}`\n"
+        "\t_ = s\n"
+        "\tif cond {\n"
+        '\t\tpanic("a")\n'
+        "\t}\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_panic_walker_skips_comments_directly():
+    # Defense in depth: the depth walker itself (not just the sanitised
+    # entry point) must skip comments like its sibling brace matcher.
+    body = '\n\tif bad() {\n\t\t// note: }\n\t\tpanic("x")\n\t}\n'
+    offset = body.index("panic")
+    assert _go_panic_is_unconditional(body, offset) is False
+
+
+def test_go_panic_walker_top_level_still_true():
+    body = '\n\t// abort\n\tpanic("x")\n'
+    offset = body.index("panic")
+    assert _go_panic_is_unconditional(body, offset) is True
+
+
+# ---------------------------------------------------------------------------
 # Rust
 # ---------------------------------------------------------------------------
 
@@ -330,6 +477,23 @@ def test_ruby_bare_raise_does_not_fire():
     assert detect_module_load_abort("ruby", "raise\n") is None
 
 
+def test_ruby_exit_bang_detected():
+    abort = detect_module_load_abort("ruby", "exit!\n")
+    assert isinstance(abort, ModuleLoadAbort)
+    assert abort.line == 1
+    assert abort.summary == "exit!"
+
+
+def test_ruby_exit_bang_with_modifier_not_detected():
+    assert detect_module_load_abort("ruby", "exit! if broken\n") is None
+
+
+def test_ruby_plain_exit_still_detected():
+    abort = detect_module_load_abort("ruby", "exit\n")
+    assert abort is not None
+    assert abort.summary == "exit"
+
+
 # ---------------------------------------------------------------------------
 # Cross-cutting
 # ---------------------------------------------------------------------------
@@ -365,7 +529,7 @@ def test_clean_python_file_returns_none():
 def test_builder_records_abort_field(tmp_path):
     import tempfile
     from core.inventory.builder import build_inventory
-    from core.inventory.reachability import module_aborts_on_load
+    from core.analysis.reachability import module_aborts_on_load
 
     (tmp_path / "disabled.py").write_text(
         "raise ImportError('disabled')\n"
@@ -391,3 +555,162 @@ def test_builder_records_abort_field(tmp_path):
     assert abort["summary"] == "raise ImportError"
     assert module_aborts_on_load(inv, "ok.py") is None
     assert module_aborts_on_load(inv, "nonexistent.py") is None
+
+
+# ---------------------------------------------------------------------------
+# JS statement-boundary guard (throw after non-boundary chars)
+# ---------------------------------------------------------------------------
+
+def test_js_conditional_throw_not_detected():
+    code = "if (typeof window === 'undefined') throw new Error('no window')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None, (
+        f"Conditional throw falsely detected as module abort: {result}"
+    )
+
+
+def test_js_conditional_throw_multiline_not_detected():
+    code = textwrap.dedent("""\
+        const x = require('x');
+        if (!x.supported)
+            throw new Error('unsupported');
+        module.exports = x;
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_bare_throw_still_detected():
+    code = "throw new Error('module not supported')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "Error" in result.summary
+
+
+def test_js_throw_after_semicolon_detected():
+    code = "const ver = process.version;\nthrow new RangeError('bad version')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "RangeError" in result.summary
+
+
+def test_js_throw_after_block_detected():
+    code = textwrap.dedent("""\
+        if (false) {
+            console.log('skip');
+        }
+        throw new TypeError('always abort')
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert "TypeError" in result.summary
+
+
+def test_js_throw_inside_function_not_detected():
+    code = textwrap.dedent("""\
+        function validate(x) {
+            if (!x) throw new Error('invalid');
+        }
+        module.exports = validate;
+    """)
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_while_throw_not_detected():
+    code = "while (check()) throw new Error('loop abort')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+def test_js_for_throw_not_detected():
+    code = "for (let i = 0; i < 1; i++) throw new Error('for abort')"
+    result = detect_module_load_abort("javascript", code)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Lexer-divergence regressions (U09-F29): a live file must never read
+# as aborted — module_aborts is a hard-suppress whole-file witness.
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_inline_rescue_modifier_not_an_abort():
+    # `raise "boom" rescue nil` is caught on the same line; the file
+    # loads and every def below binds.
+    code = 'raise "boom" rescue nil\ndef live\n  1\nend\n'
+    assert detect_module_load_abort("ruby", code) is None
+
+
+def test_ruby_plain_raise_still_detected():
+    code = 'raise "boom"\ndef live\n  1\nend\n'
+    result = detect_module_load_abort("ruby", code)
+    assert result is not None
+    assert result.line == 1
+
+
+def test_php_prose_outside_tags_is_output_not_code():
+    # Text outside <?php ?> is echoed HTML; `die` in prose after a `;`
+    # boundary used to fabricate the whole-file abort gate.
+    code = (
+        "<html>x; die hard fan page</html>\n"
+        "<?php\n"
+        "function live() { return 1; }\n"
+    )
+    assert detect_module_load_abort("php", code) is None
+
+
+def test_php_abort_in_second_region_still_detected():
+    code = (
+        "<?php $x = 1; ?>\n"
+        "prose with exit words;\n"
+        "<?php\n"
+        "exit;\n"
+    )
+    result = detect_module_load_abort("php", code)
+    assert result is not None
+    assert result.line == 4
+    assert result.summary == "exit"
+
+
+def test_php_close_tag_inside_string_stays_in_php_mode():
+    # A `?>` inside a string does not leave PHP mode — the `die` that
+    # follows in real code must still be seen.
+    code = "<?php\n$s = 'not a close ?> tag';\ndie('nope');\n"
+    result = detect_module_load_abort("php", code)
+    assert result is not None
+    assert result.line == 3
+
+
+def test_js_regex_literal_brace_does_not_fake_module_scope():
+    # `/}}/ ` inside a function body used to decrement brace depth to
+    # zero, so the throw inside the never-called function read as a
+    # module-scope abort.
+    code = (
+        "function never() {\n"
+        "  var r = /}}/;\n"
+        '  throw new Error("x");\n'
+        "}\n"
+    )
+    assert detect_module_load_abort("javascript", code) is None
+
+
+def test_js_string_unbalanced_brace_does_not_fake_module_scope():
+    code = (
+        "function f() {\n"
+        '  const s = "}";\n'
+        '  throw new Error("x");\n'
+        "}\n"
+    )
+    assert detect_module_load_abort("javascript", code) is None
+
+
+def test_js_module_scope_throw_after_regex_still_detected():
+    code = (
+        "var r = /}{/;\n"
+        'throw new Error("nope");\n'
+        "function f() {}\n"
+    )
+    result = detect_module_load_abort("javascript", code)
+    assert result is not None
+    assert result.line == 2

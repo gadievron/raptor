@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
+from ._shared import format_evidence as _format_evidence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +36,7 @@ _TEST_DIR_NAMES = {"tests", "test", "Tests", "Test"}
 
 # C#: ``using Foo.Bar;`` / ``using Alias = Foo.Bar;``
 _CS_USING_RE = re.compile(
-    r"^\s*using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
+    r"^\s*(?:global\s+)?using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*;",
     re.MULTILINE,
 )
@@ -43,17 +47,17 @@ _FS_OPEN_RE = re.compile(
 )
 # VB: ``Imports Foo.Bar``
 _VB_IMPORTS_RE = re.compile(
-    r"^\s*Imports\s+([A-Za-z_][A-Za-z0-9_.]*)",
+    r"^\s*Imports\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_.]*)",
     re.MULTILINE,
 )
 
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{namespace: [(file, line, is_test), ...]}``."""
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for src in _walk_dotnet_sources(target, max_depth=max_depth):
         is_test = _is_test_file(src, target)
         try:
@@ -68,9 +72,9 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
 ) -> Reachability:
     """Match ``dep_name`` as a namespace prefix in the scan.
 
@@ -78,7 +82,7 @@ def resolve_dep(
     sub-namespace. Confidence is ``medium`` for matches because
     NuGet package id ↔ namespace correspondence isn't guaranteed.
     """
-    matches: List[Tuple[Path, int, bool]] = []
+    matches: list[tuple[Path, int, bool]] = []
     for ns, hits in scan.items():
         if ns == dep_name or ns.startswith(dep_name + "."):
             matches.extend(hits)
@@ -117,7 +121,7 @@ def resolve_dep(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _imports_in(suffix: str, text: str) -> Iterable[Tuple[str, int]]:
+def _imports_in(suffix: str, text: str) -> Iterable[tuple[str, int]]:
     if suffix == ".cs":
         regex = _CS_USING_RE
     elif suffix == ".fs":
@@ -147,24 +151,7 @@ def _walk_dotnet_sources(
 
 def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
-    if any(p in _TEST_DIR_NAMES for p in rel_parts):
+    if any(p.lower() in {"tests", "test"} for p in rel_parts):
         return True
-    if path.stem.lower().endswith(("tests", "test")):
-        return True
-    return False
+    return bool(path.stem.lower().endswith(("tests", "test")))
 
-
-def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
-    *,
-    target: Optional[Path],
-    cap: int = 5,
-) -> List[str]:
-    out: List[str] = []
-    for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
-        out.append(f"{rel}:{line}")
-    if len(hits) > cap:
-        out.append(f"... (+{len(hits) - cap} more)")
-    return out

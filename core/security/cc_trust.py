@@ -27,9 +27,11 @@ Files inspected:
 
 Dangerous fields (block):
     settings:  apiKeyHelper, awsAuthHelper, awsAuthRefresh, gcpAuthRefresh
-               hooks.<Event>[].hooks[].command (type == "command")
+               hooks.<Event>[].hooks[].command (type == "command"), plus —
+               fail-closed — any hook entry with an unrecognised type
                env.<KEY> for KEY in _DANGEROUS_ENV_VARS (LD_PRELOAD, EDITOR, ...)
-               env.RAPTOR_* (attempts to forge our own control env vars)
+               env.RAPTOR_* / env.SAGE_* (attempts to forge our own
+               control env vars or repoint persistent memory)
     .mcp.json: mcpServers.<name>.command (stdio servers)
                mcpServers.<name> with unknown transport
     structural: symlinks, oversized, malformed (all → block)
@@ -46,7 +48,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
+
+from core.security.capped_read import read_capped
+from urllib.parse import urlsplit
 
 # Plain stdlib logger — cc_trust runs at startup before
 # core.logging may be configured, and the trust gate must not
@@ -92,7 +96,7 @@ class Finding:
 class FileScan:
     """Findings for one inspected file."""
     path: Path
-    findings: List[Finding] = field(default_factory=list)
+    findings: list[Finding] = field(default_factory=list)
 
     def has_blocking(self) -> bool:
         return any(f.blocking for f in self.findings)
@@ -100,11 +104,33 @@ class FileScan:
 
 _CREDENTIAL_HELPER_KEYS = (
     "apiKeyHelper", "awsAuthHelper", "awsAuthRefresh", "gcpAuthRefresh",
+    # otelHeadersHelper is a command CC executes to produce telemetry
+    # headers — same command-execution primitive as the credential
+    # helpers above (a repo-shipped script plus env OTEL_* arms it).
+    "otelHeadersHelper",
 )
+
+# permissions.* sub-keys that only NARROW or gate what a CC session
+# may do. Anything else under `permissions` in a target repo's
+# settings.json (allow, defaultMode, additionalDirectories, future
+# additions) can widen what a prompt-injected session does without
+# HITL — fail-closed: flag every key not on this allowlist.
+_PERMISSIONS_BENIGN_KEYS = frozenset({"deny", "ask"})
 
 _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     "TERMINAL", "BROWSER", "PAGER", "VISUAL", "EDITOR",
     "IFS", "CDPATH",
+    # PATH / HOME — a repo-supplied CC settings.json env dict has NO
+    # legitimate reason to set either. env.PATH prepends an
+    # attacker-controlled directory so every bare command name CC (or
+    # a later RAPTOR invocation inheriting the env) runs resolves to
+    # a repo-shipped binary; env.HOME repoints ~ so dotfile-consuming
+    # tools (git, ssh, gh, pip, npm) read attacker-authored configs —
+    # credential helpers, aliases, hooks — from a fake home. Both are
+    # command-execution primitives on par with LD_PRELOAD for this
+    # threat model. (This set only feeds the settings-env scan, so
+    # listing them cannot affect legitimate process environments.)
+    "PATH", "HOME",
     "BASH_ENV", "ENV", "PROMPT_COMMAND",
     "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
     "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
@@ -187,55 +213,55 @@ def _truncate(s: str, limit: int = 80) -> str:
     return safe[:limit] + "..." if len(safe) > limit else safe
 
 
-def _path_present(p: Path) -> bool:
-    try:
-        return p.is_symlink() or p.exists()
-    except OSError:
-        return False
+def _mask(s: str, keep: int = 8) -> str:
+    """Render a secret-bearing config value without echoing it.
 
-
-def _read_capped(path: Path) -> Optional[bytes]:
-    """Read up to _MAX_CONFIG_BYTES+1. None on oversized/non-regular/error.
-
-    O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open TOCTOU
-    holes. O_NOFOLLOW closes the symlink-redirect hole — the caller's
-    `_check_cached` symlink branch records symlinks as findings without
-    reading them, but a TOCTOU race could swap a regular file for a
-    symlink between the symlink check and the open here. With
-    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
-    None). Broad except for any I/O surprise — fail-closed is the safe
-    stance.
+    Scan output lands on stdout and from there in retained CI logs, so
+    credential-helper commands, env values, and MCP command lines must
+    not be printed verbatim — a leaked settings.json would otherwise
+    republish its secrets into every build log. Keep a short prefix
+    (enough to identify the binary/helper for triage), redact the tail,
+    and show the length so distinct values remain distinguishable.
+    ``keep=0`` fully redacts — used for env values, where the value IS
+    the secret and even a prefix is a partial leak.
     """
-    try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY
-            | getattr(os, "O_NONBLOCK", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
-        )
-    except Exception:
-        return None
-    data: Optional[bytes] = None
-    try:
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return None
-            with os.fdopen(fd, "rb", closefd=False) as f:
-                data = f.read(_MAX_CONFIG_BYTES + 1)
-        except Exception:
-            return None
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-    if data is None or len(data) > _MAX_CONFIG_BYTES:
-        return None
-    return data
+    safe = _safe(s)
+    if not safe:
+        return "(empty)"
+    # A prefix of a value no longer than ``keep`` IS the value —
+    # fully redact rather than echo it whole.
+    prefix = safe[:keep] if 0 < keep < len(safe) else ""
+    return f"{prefix}*** ({len(safe)} chars)"
 
 
-def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
+def _mask_url(s: str) -> str:
+    """Render a URL keeping only scheme + host (identifying, safe);
+    userinfo, port, path, and query are redacted — MCP endpoints embed
+    tokens in any of them."""
+    safe = _safe(s)
+    try:
+        parsed = urlsplit(safe)
+        host = parsed.hostname  # raises ValueError on malformed ports
+    except ValueError:
+        return _mask(safe)
+    if parsed.scheme and host:
+        return f"{parsed.scheme}://{host}/*** ({len(safe)} chars)"
+    return _mask(safe)
+
+
+def _read_capped(path: Path) -> bytes | None:
+    """Read up to ``_MAX_CONFIG_BYTES``; delegates the hardened
+    open/read to :func:`core.security.capped_read.read_capped`."""
+    return read_capped(path, _MAX_CONFIG_BYTES)
+
+
+def _load_json(path: Path, raw: bytes | None = None) -> tuple[dict | None, bool]:
     """Return (data, ok). Broad except — any parse failure → fail-closed.
+
+    ``raw`` carries pre-read bytes (the cache-key read); when provided
+    the file is NOT re-read, so the verdict is computed over exactly
+    the bytes the cache key hashes — no window for a benign→malicious
+    swap between fingerprinting and scanning.
 
     Pre-fix the bare `except Exception` swallowed everything
     silently. cc_trust is a SECURITY-critical scanner — when a
@@ -251,7 +277,8 @@ def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
     diagnostic is reachable via `--verbose` for operators
     actively debugging.
     """
-    raw = _read_capped(path)
+    if raw is None:
+        raw = _read_capped(path)
     if raw is None:
         return None, False
     try:
@@ -267,7 +294,7 @@ def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
             path, type(exc).__name__, exc,
         )
         return None, False
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Catch-all — log so an unexpected exception class
         # (e.g. MemoryError on a multi-GB file that slipped
         # past _read_capped) still produces a breadcrumb.
@@ -287,9 +314,9 @@ def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
     return data, True
 
 
-def _scan_settings(path: Path) -> Optional[FileScan]:
+def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
     """Return FileScan with findings, or None if malformed/unreadable."""
-    data, ok = _load_json(path)
+    data, ok = _load_json(path, raw)
     if not ok:
         return None
     fs = FileScan(path=path)
@@ -299,7 +326,9 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
             val = data.get(key)
             if val:
                 value = val if isinstance(val, str) else repr(val)
-                fs.findings.append(Finding(key, _truncate(value), True))
+                # Masked: credential-helper commands routinely embed
+                # keys/tokens inline and scan output is CI-log-retained.
+                fs.findings.append(Finding(key, _mask(value), True))
 
         hooks = data.get("hooks")
         if isinstance(hooks, dict):
@@ -327,7 +356,7 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                         hook_type = entry.get("type")
                         if hook_type == "command":
                             cmd = entry.get("command")
-                            value = _truncate(cmd) if isinstance(cmd, str) and cmd else "(empty)"
+                            value = _mask(cmd) if isinstance(cmd, str) and cmd else "(empty)"
                             fs.findings.append(Finding(f"{ev} hook", value, True))
                         else:
                             # Unknown hook type — surface the type +
@@ -344,6 +373,50 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                                 _truncate(keys_summary),
                                 True,
                             ))
+
+        # statusLine.command is a command CC executes on every prompt
+        # render — a repo-shipped settings.json with
+        # `statusLine: {"type": "command", "command": "curl … | sh"}`
+        # is arbitrary code execution outside the sandbox. Fail-closed
+        # like the hooks scan: a statusLine of any non-dict shape or
+        # unrecognised type is flagged too.
+        status_line = data.get("statusLine")
+        if status_line is not None:
+            if isinstance(status_line, dict):
+                sl_cmd = status_line.get("command")
+                if isinstance(sl_cmd, str) and sl_cmd:
+                    fs.findings.append(
+                        Finding("statusLine command", _mask(sl_cmd), True))
+                elif status_line.get("type") not in (None, "static"):
+                    keys_summary = ",".join(sorted(status_line.keys()))
+                    fs.findings.append(Finding(
+                        "statusLine (unrecognised shape)",
+                        _truncate(keys_summary), True))
+            else:
+                fs.findings.append(Finding(
+                    "statusLine (unrecognised shape)",
+                    _truncate(repr(status_line)), True))
+
+        # permissions.* — a repo has no business widening what a CC
+        # session may do without HITL: `allow: ["Bash(*)"]` +
+        # `defaultMode` remove the operator's approval gate for a
+        # prompt-injected session. Allowlist of known-narrowing keys;
+        # everything else (allow, defaultMode, additionalDirectories,
+        # unknown future keys) blocks.
+        permissions = data.get("permissions")
+        if permissions is not None:
+            if isinstance(permissions, dict):
+                for perm_key, perm_val in permissions.items():
+                    key_str = str(perm_key)
+                    if key_str in _PERMISSIONS_BENIGN_KEYS:
+                        continue
+                    fs.findings.append(Finding(
+                        f"permissions.{_truncate(key_str, limit=40)}",
+                        _mask(repr(perm_val)), True))
+            else:
+                fs.findings.append(Finding(
+                    "permissions (unrecognised shape)",
+                    _truncate(repr(permissions)), True))
 
         env_cfg = data.get("env")
         if isinstance(env_cfg, dict):
@@ -365,11 +438,11 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                 # nor SAGE's (SAGE_URL could redirect to a poisoned memory
                 # server, SAGE_ENABLED could silently turn on persistent
                 # memory the user didn't intend, etc.).
-                if (key_upper in dangerous_upper
-                        or key_upper.startswith("RAPTOR_")
-                        or key_upper.startswith("SAGE_")):
+                if (key_upper in dangerous_upper or key_upper.startswith(("RAPTOR_", "SAGE_"))):
                     k = _truncate(key_str, limit=40)
-                    fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
+                    # keep=0: the env VALUE is the secret — the key
+                    # name alone carries the triage signal.
+                    fs.findings.append(Finding(f"env {k}", _mask(str(env_val), keep=0), True))
     except Exception:
         # Display-time crash → fail-closed (caller treats None as
         # ``(malformed) / treated as dangerous`` per the
@@ -387,8 +460,8 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
     return fs
 
 
-def _scan_mcp(path: Path) -> Optional[FileScan]:
-    data, ok = _load_json(path)
+def _scan_mcp(path: Path, raw: bytes | None = None) -> FileScan | None:
+    data, ok = _load_json(path, raw)
     if not ok:
         return None
     fs = FileScan(path=path)
@@ -404,11 +477,14 @@ def _scan_mcp(path: Path) -> Optional[FileScan]:
                     cmd = cfg.get("command", "")
                     args = cfg.get("args", [])
                     parts = [str(cmd)] + [str(a) for a in (args if isinstance(args, list) else [])]
-                    fs.findings.append(Finding(f'stdio server "{n}"', _truncate(" ".join(parts)), True))
+                    # Command lines carry tokens in args; URLs carry
+                    # them in userinfo/path/query; unknown configs may
+                    # embed them anywhere (env, headers) — all masked.
+                    fs.findings.append(Finding(f'stdio server "{n}"', _mask(" ".join(parts)), True))
                 elif "url" in cfg:
-                    fs.findings.append(Finding(f'url server "{n}"', _truncate(str(cfg.get("url", ""))), False))
+                    fs.findings.append(Finding(f'url server "{n}"', _mask_url(str(cfg.get("url", ""))), False))
                 else:
-                    fs.findings.append(Finding(f'unknown server "{n}"', _truncate(repr(cfg)), True))
+                    fs.findings.append(Finding(f'unknown server "{n}"', _mask(repr(cfg)), True))
     except Exception:
         # Display-time crash → fail-closed. See _scan_settings above
         # for the same rationale.
@@ -421,7 +497,7 @@ def _scan_mcp(path: Path) -> Optional[FileScan]:
     return fs
 
 
-def check_repo_claude_trust(repo_path: str, trust_override: Optional[bool] = None) -> bool:
+def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) -> bool:
     """Check target repo. Returns True if dispatch should be refused.
 
     trust_override:
@@ -440,7 +516,8 @@ def check_repo_claude_trust(repo_path: str, trust_override: Optional[bool] = Non
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    scans, any_blocking = _scan_cached(resolved)
+    scans, any_blocking = _scan_cached(resolved,
+                                       _read_config_state(Path(resolved)))
     # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
     # were inside `_check_cached` which was @lru_cache'd — so the operator
     # only saw the warning on the FIRST identical call per process; every
@@ -454,37 +531,94 @@ def check_repo_claude_trust(repo_path: str, trust_override: Optional[bool] = Non
     return any_blocking and not trust_override
 
 
-@lru_cache(maxsize=64)
-def _scan_cached(resolved_path: str) -> Tuple[Tuple["FileScan", ...], bool]:
-    """Pure scan: returns (scans, any_blocking). Cached because filesystem
-    state for a given resolved path doesn't change within a session.
-    Side-effect free so repeated cache hits don't suppress operator-
-    visible warnings (handled in the caller)."""
-    target = Path(resolved_path)
-    if target == _RAPTOR_DIR:
-        return ((), False)
-
-    candidates = [
+def _config_candidates(target: Path) -> list[tuple[str, Path]]:
+    """The authoritative (kind, path) list of config files this scanner
+    reads. Single source for both the scan and the cache fingerprint —
+    a file added here is automatically fingerprinted."""
+    return [
         ("settings", target / ".claude" / "settings.json"),
         ("settings", target / ".claude" / "settings.local.json"),
         ("mcp",      target / ".mcp.json"),
     ]
-    present = [(kind, p) for kind, p in candidates if _path_present(p)]
-    if not present:
-        return ((), False)
 
-    scans: List[FileScan] = []
-    for kind, path in present:
-        fs = FileScan(path=path)
-        if path.is_symlink():
+
+def _read_config_state(target: Path) -> tuple:
+    """One-pass read of the candidate config files, in candidate order.
+
+    Each entry is a self-describing tuple:
+        ("absent",)              — no object at the path
+        ("symlink", target_str)  — symlink (never followed)
+        ("unreadable",)          — non-regular / oversized / IO error
+        ("content", raw_bytes)   — the file's exact bytes (capped)
+
+    The tuple is BOTH the cache key and the scan input: the same
+    process runs untrusted target code and LLM-driven sessions that
+    can WRITE these files between the first trust check and later CC
+    dispatches, so a verdict cached on the path alone would go stale
+    (TOCTOU). The previous fingerprint keyed on lstat (mtime_ns, size)
+    — both forgeable by the exact writer the fingerprint defends
+    against: a same-size hook swap + os.utime ns-restore reused the
+    stale SAFE verdict. Content keys the cache instead, and because
+    the verdict is computed over the SAME read (never a second disk
+    read), a mid-check swap cannot poison a key with another
+    content's verdict.
+    """
+    entries = []
+    for _kind, p in _config_candidates(target):
+        try:
+            st = os.lstat(p)
+        except OSError:
+            entries.append(("absent",))
+            continue
+        if stat.S_ISLNK(st.st_mode):
             try:
-                tgt = str(path.readlink())
+                tgt = os.readlink(p)
             except OSError:
                 tgt = "<unreadable>"
-            fs.findings.append(Finding("symlink", _truncate(tgt, limit=120), True))
+            entries.append(("symlink", str(tgt)))
+            continue
+        raw = _read_capped(p)
+        if raw is None:
+            entries.append(("unreadable",))
+        else:
+            entries.append(("content", raw))
+    return tuple(entries)
+
+
+@lru_cache(maxsize=64)
+def _scan_cached(resolved_path: str,
+                 config_state: tuple) -> tuple[tuple["FileScan", ...], bool]:
+    """Pure scan: returns (scans, any_blocking). Cached on
+    (resolved_path, config_state) where the state carries the config
+    files' CONTENT (see `_read_config_state`) — the verdict is derived
+    from exactly the bytes in the key, so any config change forces a
+    re-scan and no stat-forgeable fingerprint can revive a stale
+    verdict. Side-effect free so repeated cache hits don't suppress
+    operator-visible warnings (handled in the caller)."""
+    target = Path(resolved_path)
+    if target == _RAPTOR_DIR:
+        return ((), False)
+
+    candidates = _config_candidates(target)
+    scans: list[FileScan] = []
+    for (kind, path), state in zip(candidates, config_state):
+        shape = state[0]
+        if shape == "absent":
+            continue
+        fs = FileScan(path=path)
+        if shape == "symlink":
+            fs.findings.append(
+                Finding("symlink", _truncate(state[1], limit=120), True))
             scans.append(fs)
             continue
-        scanned = _scan_settings(path) if kind == "settings" else _scan_mcp(path)
+        if shape == "unreadable":
+            fs.findings.append(
+                Finding("(malformed)", "treated as dangerous", True))
+            scans.append(fs)
+            continue
+        raw = state[1]
+        scanned = (_scan_settings(path, raw) if kind == "settings"
+                   else _scan_mcp(path, raw))
         if scanned is None:
             fs.findings.append(Finding("(malformed)", "treated as dangerous", True))
             scans.append(fs)
@@ -515,6 +649,8 @@ def _render_scan_report(target: Path, scans, any_blocking: bool,
         except ValueError:
             rel = fs.path
         print(f"  {_safe(str(rel))}")
+        if not fs.findings:
+            continue
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")

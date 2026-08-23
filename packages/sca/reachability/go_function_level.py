@@ -50,7 +50,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
 
@@ -58,8 +59,8 @@ logger = logging.getLogger(__name__)
 
 
 def build_go_symbol_map(
-    osv_results: Optional[Iterable[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: Iterable[Any] | None,
+) -> dict[str, list[str]]:
     """Extract per-dep qualified-name targets from Go OSV results.
 
     Returns ``{dep_key: [qualified_name, ...]}``. Each qualified
@@ -81,7 +82,7 @@ def build_go_symbol_map(
     """
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
@@ -92,7 +93,7 @@ def build_go_symbol_map(
         # rare ``affected_functions`` flat shape that doesn't
         # carry a separate path).
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
-        qualified: List[str] = []
+        qualified: list[str] = []
         for adv in r.advisories:
             qualified.extend(_extract_qualified(adv, dep_name))
         if qualified:
@@ -100,7 +101,7 @@ def build_go_symbol_map(
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
+def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
     """Pull ``<path>.<symbol>`` qualified names out of an Advisory.
 
     Go advisories canonically use ``ecosystem_specific.imports[]
@@ -113,7 +114,7 @@ def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
     emit ``"<dep_name>.<symbol>"`` — operator gets module-level
     matching for that case.
     """
-    out: List[str] = []
+    out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
     ds = getattr(advisory, "database_specific", None) or {}
     for source in (es, ds):
@@ -138,19 +139,17 @@ def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
                 continue
             v = source.get(key)
             if isinstance(v, list):
-                for s in v:
-                    if isinstance(s, str) and dep_name:
-                        out.append(f"{dep_name}.{s}")
+                out.extend(f"{dep_name}.{s}" for s in v if isinstance(s, str) and dep_name)
     return out
 
 
 def refine_go_verdicts(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
     *,
     target: Path,
-    go_symbol_map: Dict[str, List[str]],
-    inventory: Optional[Dict[str, Any]] = None,
+    go_symbol_map: dict[str, list[str]],
+    inventory: dict[str, Any] | None = None,
 ) -> None:
     """For Go deps in ``go_symbol_map`` whose current verdict is
     ``imported``, run the function-level resolver and update
@@ -164,7 +163,7 @@ def refine_go_verdicts(
     produced ``likely_called``, this tier doesn't fire (gated on
     ``imported`` only) so its verdict isn't overwritten.
     """
-    candidates: List[Dependency] = []
+    candidates: list[Dependency] = []
     for d in deps:
         if d.ecosystem != "Go":
             continue
@@ -193,30 +192,30 @@ def refine_go_verdicts(
             )
             return
 
-    from core.inventory.reachability import (
+    from core.analysis.reachability import (
         Verdict,
         function_called,
     )
 
     for d in candidates:
         qualified_names = go_symbol_map[d.key()]
-        results = []
+        paired = []
         for qualified in qualified_names:
             if not qualified or "." not in qualified:
                 continue
             try:
-                results.append(function_called(inventory, qualified))
+                paired.append((qualified, function_called(inventory, qualified)))
             except ValueError:
                 continue
 
-        if not results:
+        if not paired:
             continue
 
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence_lines: List[str] = []
-            called_qns: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence_lines: list[str] = []
+            called_qns: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called_qns.append(qn)
                     evidence_lines.extend(
@@ -241,7 +240,7 @@ def refine_go_verdicts(
                     "high",
                     reason=(
                         f"Go module imported but the "
-                        f"{len(qualified_names)} OSV-listed "
+                        f"{len(paired)} OSV-listed "
                         f"affected symbol(s) are not called from "
                         f"non-test Go source"
                     ),

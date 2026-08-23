@@ -13,7 +13,6 @@ Formats: ``coverage.py`` (the ``coverage json`` report), ``gcov`` (raw
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 from .coverage_py import parse_coverage_py
 from .gcov import parse_gcov, parse_lcov
@@ -26,7 +25,7 @@ _PARSERS = {
 }
 
 
-def detect_format(path) -> Optional[str]:
+def detect_format(path) -> str | None:
     """Best-effort format detection from a file or directory path. None when
     nothing recognisable is present."""
     p = Path(path)
@@ -48,7 +47,7 @@ def detect_format(path) -> Optional[str]:
     return None
 
 
-def parse(path, fmt: Optional[str] = None) -> Dict[str, Set[int]]:
+def parse(path, fmt: str | None = None) -> dict[str, set[int]]:
     """Parse ``path`` (auto-detecting the format if not given) into
     ``{source_path: set(executed_lines)}``. ``{}`` if unrecognised."""
     fmt = fmt or detect_format(path)
@@ -57,10 +56,10 @@ def parse(path, fmt: Optional[str] = None) -> Dict[str, Set[int]]:
     return _PARSERS[fmt][0](path)
 
 
-def default_tool(fmt: Optional[str]) -> Optional[str]:
+def default_tool(fmt: str | None) -> str | None:
     """The default store tool label for a format (runtime-category)."""
     return _PARSERS[fmt][1] if fmt in _PARSERS else None
 
 
-def available_formats() -> List[str]:
+def available_formats() -> list[str]:
     return sorted(_PARSERS)

@@ -1,6 +1,5 @@
 """Markdown renderer for ReportSpec."""
 
-from typing import List, Tuple
 
 from .spec import ReportSpec
 
@@ -15,7 +14,7 @@ def render_report(spec: ReportSpec, separator: str = "---") -> str:
     """
     lines = []
 
-    def _sep():
+    def _sep() -> None:
         if separator is not None:
             lines.append(separator)
             lines.append("")
@@ -42,8 +41,7 @@ def render_report(spec: ReportSpec, separator: str = "---") -> str:
         lines.append("")
 
     # Warnings
-    for warning in spec.warnings:
-        lines.append(f"⚠️ **{warning}**")
+    lines.extend(f"⚠️ **{warning}**" for warning in spec.warnings)
     if spec.warnings:
         lines.append("")
 
@@ -82,19 +80,17 @@ def render_report(spec: ReportSpec, separator: str = "---") -> str:
         lines.append("## Output Files")
         lines.append("")
         lines.append("```")
-        for fname in spec.output_files:
-            lines.append(f"  {fname}")
+        lines.extend(f"  {fname}" for fname in spec.output_files)
         lines.append("```")
         lines.append("")
 
     return "\n".join(lines)
 
 
-def _render_table(columns: List[str], rows: List[Tuple]) -> str:
+def _render_table(columns: list[str], rows: list[tuple]) -> str:
     """Render a markdown table."""
     lines = []
     lines.append("| " + " | ".join(columns) + " |")
     lines.append("|" + "|".join("---" for _ in columns) + "|")
-    for row in rows:
-        lines.append("| " + " | ".join(str(c) for c in row) + " |")
+    lines.extend("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
     return "\n".join(lines)

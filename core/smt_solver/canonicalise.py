@@ -1,4 +1,4 @@
-"""English-aliased pre-canonicalisation for SMT encoder parsers.
+r"""English-aliased pre-canonicalisation for SMT encoder parsers.
 
 LLM output frequently uses english operator phrases — "is greater than",
 "equals", "is at least" — instead of the canonical symbolic forms.
@@ -27,7 +27,7 @@ Design intent:
 - Order matters — longer, more-specific phrases are tried before
   shorter ones (``is greater than or equal to`` before ``is greater
   than``; ``does not exceed`` before ``exceeds``).
-- Word boundaries (``\\b``) keep rewrites from firing inside
+- Word boundaries (``\b``) keep rewrites from firing inside
   identifiers (``equalsValue`` must NOT become ``==Value``).
 - ``up to N`` is read as inclusive (``<= N``).  Some writers treat it
   as exclusive; the inclusive reading is the convention in maths/CS
@@ -41,7 +41,6 @@ Used by:
 from __future__ import annotations
 
 import re
-from typing import Tuple
 
 # (pattern, replacement) pairs.  Replacements include surrounding spaces
 # because the english phrases don't always sit next to whitespace; the
@@ -54,7 +53,7 @@ from typing import Tuple
 #   - ``is greater than or equal to`` before ``is greater than``
 #   - ``does not exceed`` before ``exceeds``
 #   - ``is non-null`` before ``is null``
-_REWRITES: Tuple[Tuple[re.Pattern[str], str], ...] = (
+_REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # Longer phrases first.
     (re.compile(r'\bis\s+greater\s+than\s+or\s+equal\s+to\b', re.IGNORECASE), ' >= '),
     (re.compile(r'\bis\s+less\s+than\s+or\s+equal\s+to\b',    re.IGNORECASE), ' <= '),
@@ -129,12 +128,12 @@ _WHITESPACE_RUN = re.compile(r'[ \t]+')
 
 
 def canonicalise(text: str) -> str:
-    """Rewrite common english operator aliases to canonical syntax.
+    r"""Rewrite common english operator aliases to canonical syntax.
 
     Idempotent: input that's already symbolic passes through unchanged
     (modulo whitespace collapse).
 
-    Pre-fix the trailing whitespace collapse used `r'\\s+'` which
+    Pre-fix the trailing whitespace collapse used `r'\s+'` which
     matches NEWLINES + tabs + spaces. Multi-line condition
     inputs — `_substitute_calls(_canonicalise(text), ...)` is
     called with whatever the caller hands it, including
@@ -143,11 +142,11 @@ def canonicalise(text: str) -> str:
     structural newlines collapsed into single spaces, merging
     independent conditions into one parser-confused glob:
 
-        cond1: ``a > 0\\nb > 0`` (two conditions)
+        cond1: ``a > 0\nb > 0`` (two conditions)
         post-canonicalise: ``a > 0 b > 0`` (parser sees one
         malformed condition with two operands).
 
-    Restrict the collapse to `[ \\t]+` (spaces + tabs only) so
+    Restrict the collapse to `[ \t]+` (spaces + tabs only) so
     newlines survive as logical separators. The downstream
     parsers tokenise per-line, so preserving the newline keeps
     the multi-condition structure intact. Internal multi-space

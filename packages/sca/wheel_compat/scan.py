@@ -22,8 +22,6 @@ silently no-ops.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Iterable, List, Optional
 
 from packages.sca.models import (
     Confidence, Dependency, HygieneFinding,
@@ -34,6 +32,11 @@ from packages.sca.platform_matrix import (
 from packages.sca.wheel_compat.compat import (
     check_compat, find_compatible_version, wheel_matrix_for_version,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +56,8 @@ def evaluate_platform_compat(
     *,
     target: Path,
     pypi_client,
-    platform_matrix: Optional[ProjectPlatformMatrix] = None,
-) -> List[HygieneFinding]:
+    platform_matrix: ProjectPlatformMatrix | None = None,
+) -> list[HygieneFinding]:
     """For each exact-pinned PyPI dep, cross-check against the
     project's platform matrix and emit a hygiene finding when
     a platform pair has no installable wheel.
@@ -77,7 +80,7 @@ def evaluate_platform_compat(
     if not platform_matrix:
         return []
 
-    findings: List[HygieneFinding] = []
+    findings: list[HygieneFinding] = []
     seen: set = set()       # dedup on (name, version)
 
     for dep in deps:
@@ -86,9 +89,8 @@ def evaluate_platform_compat(
         if not dep.version:
             continue
         # Exact pins only — ranges aren't single-version queries.
-        if hasattr(dep.pin_style, "value"):
-            if dep.pin_style.value != "exact":
-                continue
+        if hasattr(dep.pin_style, "value") and dep.pin_style.value != "exact":
+            continue
         key = (dep.name, dep.version)
         if key in seen:
             continue
@@ -107,10 +109,6 @@ def evaluate_platform_compat(
 
         if wm is None:
             continue
-        if not wm.wheel_tags and not wm.has_sdist:
-            # No data; treat as "no signal" rather than crash.
-            continue
-
         verdicts = check_compat(platform_matrix, wm)
         non_ok = [v for v in verdicts if v.verdict != "ok"]
         if not non_ok:
@@ -128,32 +126,31 @@ def evaluate_platform_compat(
 
         # One finding per (dep, problematic-pair) — operators see
         # which platform is the issue.
-        for v in non_ok:
-            findings.append(_make_finding(dep, v, rec))
+        findings.extend(_make_finding(dep, v, rec) for v in non_ok)
 
     return findings
 
 
 def _make_finding(
-    dep: Dependency, verdict, recommendation: Optional[str],
+    dep: Dependency, verdict, recommendation: str | None,
 ) -> HygieneFinding:
     sev = _FINDING_TIER.get(verdict.verdict, "low")
     rec_note = (
-        f" Recommended: pin {dep.name}=={recommendation} (last "
-        f"version with wheels compatible across the project "
-        f"platform matrix)."
+        f" Recommended: pin {dep.name}=={recommendation} (compatible "
+        f"version with wheels for the project platform matrix)."
         if recommendation else
-        " No earlier release on PyPI has wheels compatible across "
-        "the project platform matrix; consider upgrading the "
-        "base-image's libc, adding ``--platform=linux/amd64`` for "
-        "emulation, or installing build tools in the image so "
-        "sdist build works."
+        " No release on PyPI (within the search window) has wheels "
+        "compatible across the project platform matrix; consider "
+        "upgrading the base-image's libc, adding "
+        "``--platform=linux/amd64`` for emulation, or installing "
+        "build tools in the image so sdist build works."
     )
     detail = f"{verdict.reason}.{rec_note}"
+    pair_id = verdict.pair.as_str()
     return HygieneFinding(
         finding_id=(
             f"sca:hygiene:platform_compat:PyPI:{dep.name}:"
-            f"{dep.version}:{verdict.pair.arch}"
+            f"{dep.version}:{pair_id}"
         ),
         kind="platform_compat",
         dependency=dep,

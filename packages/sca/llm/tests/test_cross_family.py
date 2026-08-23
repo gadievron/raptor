@@ -72,6 +72,34 @@ def test_disagreement_caps_confidence_to_medium():
     assert result.model.confidence == "medium"
 
 
+def test_disagreement_escalating_checker_verdict_wins():
+    """Conservative merge is severity-ordered: a checker that rates the
+    finding MORE severe than the primary raises the merged verdict."""
+    primary = _stage_result("suspicious", "high")
+
+    with patch("packages.sca.llm._select_checker", return_value="checker/model"), \
+         patch("packages.sca.llm.run_stage", return_value=_stage_result("malicious")):
+        result = cross_family_check(
+            client=MagicMock(), primary_result=primary, **_checker_kwargs(),
+        )
+    assert result.model.verdict == "malicious"
+    assert result.model.confidence == "medium"
+
+
+def test_disagreement_downgrading_checker_keeps_primary_verdict():
+    """A checker that rates the finding LESS severe does not lower the
+    primary's verdict — only confidence takes the disagreement haircut."""
+    primary = _stage_result("malicious", "high")
+
+    with patch("packages.sca.llm._select_checker", return_value="checker/model"), \
+         patch("packages.sca.llm.run_stage", return_value=_stage_result("suspicious")):
+        result = cross_family_check(
+            client=MagicMock(), primary_result=primary, **_checker_kwargs(),
+        )
+    assert result.model.verdict == "malicious"
+    assert result.model.confidence == "medium"
+
+
 def test_no_checker_available_returns_primary():
     """When no cross-family model is available, primary result is returned as-is."""
     primary = _stage_result("suspicious")

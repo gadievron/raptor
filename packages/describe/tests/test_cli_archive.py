@@ -137,17 +137,28 @@ class TestArchiveHandling:
         doc = json.loads(out_buf.getvalue())
         assert doc["archive_label"] is None
 
-    def test_temp_dir_cleaned_up_after_archive_describe(self, tmp_path):
-        # After a successful archive-describe, no raptor-describe-*
-        # temp dirs should remain under the system tmp.
+    def test_temp_dir_cleaned_up_after_archive_describe(self, tmp_path, monkeypatch):
+        # Track the specific temp dir created by THIS call rather than
+        # globbing /tmp (which races with other xdist workers).
         import tempfile as _tmp
         src = tmp_path / "proj"
         _make_c_daemon_source(src)
         archive = tmp_path / "proj.tar.gz"
         _make_tarball(src, archive)
 
-        sys_tmp = Path(_tmp.gettempdir())
-        before = set(sys_tmp.glob("raptor-describe-*"))
+        created_tmps: list[Path] = []
+        _real_mkdtemp = _tmp.mkdtemp
+
+        def _tracking_mkdtemp(*args, **kwargs):
+            d = _real_mkdtemp(*args, **kwargs)
+            if "raptor-describe" in d:
+                created_tmps.append(Path(d))
+            return d
+
+        monkeypatch.setattr(
+            "packages.describe.cli.tempfile.mkdtemp",
+            _tracking_mkdtemp,
+        )
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -157,10 +168,9 @@ class TestArchiveHandling:
         )
         assert rc == 0, err_buf.getvalue()
 
-        after = set(sys_tmp.glob("raptor-describe-*"))
-        assert after == before, (
-            f"temp extract dirs leaked: {after - before}"
-        )
+        assert created_tmps, "expected describe_main to create a temp dir"
+        for d in created_tmps:
+            assert not d.exists(), f"temp extract dir leaked: {d}"
 
 
 class TestSymlinkDefences:
@@ -204,6 +214,13 @@ class TestArchiveCacheHit:
             active.unlink()
         active.symlink_to("_t.json")
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(
+            "core.project.project.PROJECTS_DIR", proj_dir,
+        )
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project",
+            lambda: (str(project_out), "_t", "/tmp"),
+        )
 
     def test_cache_hit_skips_extraction(
         self, tmp_path, monkeypatch,
@@ -243,11 +260,21 @@ class TestArchiveCacheHit:
         )
 
         # 4. Run describe. Expect cache hit → no tmp extract dir
-        #    created (verify with /tmp tally) + content reflects
-        #    the cached tree.
+        #    created. Track via monkeypatch (glob races with xdist).
         import tempfile as _tmp
-        sys_tmp = Path(_tmp.gettempdir())
-        before = set(sys_tmp.glob("raptor-describe-*"))
+        created_tmps: list[Path] = []
+        _real_mkdtemp = _tmp.mkdtemp
+
+        def _tracking_mkdtemp(*args, **kwargs):
+            d = _real_mkdtemp(*args, **kwargs)
+            if "raptor-describe" in d:
+                created_tmps.append(Path(d))
+            return d
+
+        monkeypatch.setattr(
+            "packages.describe.cli.tempfile.mkdtemp",
+            _tracking_mkdtemp,
+        )
 
         out_buf = io.StringIO()
         err_buf = io.StringIO()
@@ -257,10 +284,9 @@ class TestArchiveCacheHit:
         )
         assert rc == 0, err_buf.getvalue()
 
-        after = set(sys_tmp.glob("raptor-describe-*"))
-        assert after == before, (
+        assert not created_tmps, (
             "cache hit must NOT create a tmp extract dir; "
-            f"new tmp dirs: {after - before}"
+            f"created: {created_tmps}"
         )
         assert "Source: archive proj.tar.gz" in out_buf.getvalue()
         assert "c.userspace-daemon" in out_buf.getvalue()

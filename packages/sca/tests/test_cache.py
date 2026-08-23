@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from core.json import JsonCache, TTL_FOREVER
+from core.json import TTL_FOREVER, JsonCache
 
 
 def test_put_and_get_roundtrip(tmp_path: Path) -> None:
@@ -74,13 +74,15 @@ def test_subdirectory_keys(tmp_path: Path) -> None:
     assert cache.get("vulns/GHSA-xxx", ttl_seconds=60) == {"id": "GHSA-xxx"}
 
 
-def test_path_traversal_in_key_is_blocked(tmp_path: Path) -> None:
+def test_path_traversal_in_key_is_refused(tmp_path: Path) -> None:
+    # Degenerate segments are refused loudly rather than normalised:
+    # dropping them made distinct keys collide onto one file
+    # ("foo/.." used to alias "foo"), letting one entry shadow another.
     cache = JsonCache(root=tmp_path)
-    cache.put("../escape", "should-not-escape", ttl_seconds=60)
-    # Either the file lives inside the cache root, or the put silently
-    # discarded the segment; either way, no escape.
+    with pytest.raises(ValueError):
+        cache.put("../escape", "should-not-escape", ttl_seconds=60)
     assert not (tmp_path.parent / "escape.json").exists()
-    assert (tmp_path / "escape.json").exists()
+    assert not (tmp_path / "escape.json").exists()
 
 
 def test_empty_key_after_sanitisation_raises(tmp_path: Path) -> None:

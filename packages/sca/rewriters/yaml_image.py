@@ -21,10 +21,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 
 from . import RewriteEdit, RewriteResult, register
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +43,7 @@ def _is_compose_file(path: Path) -> bool:
         return True
     if name in ("compose.yml", "compose.yaml"):
         return True
-    if name.startswith("compose.") and name.endswith((".yml", ".yaml")):
-        return True
-    return False
+    return bool(name.startswith("compose.") and name.endswith((".yml", ".yaml")))
 
 
 def _is_gitlab_ci_file(path: Path) -> bool:
@@ -85,8 +87,8 @@ def _is_yaml_image_target(path: Path) -> bool:
 
 @register(predicate=_is_yaml_image_target)
 def rewrite_yaml_image(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply image-tag edits to YAML ``image:`` lines in place.
 
     Each edit's locator is ``"{registry}/{repository}"``; we
@@ -101,7 +103,7 @@ def rewrite_yaml_image(
                 for e2 in edits]
 
     new_text = text
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     for edit in edits:
         new_text, result = _apply_one_image(new_text, edit)
         results.append(result)
@@ -112,13 +114,14 @@ def rewrite_yaml_image(
         except OSError as e:
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 
 
 def _apply_one_image(
     text: str, edit: RewriteEdit,
-) -> "tuple[str, RewriteResult]":
+) -> tuple[str, RewriteResult]:
     """Apply one ``image: <ref>:<tag>`` edit.
 
     Locator forms accepted in the file:
@@ -180,27 +183,3 @@ def _apply_one_image(
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Atomic tempfile + rename (shared pattern with other
-    rewriters)."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise

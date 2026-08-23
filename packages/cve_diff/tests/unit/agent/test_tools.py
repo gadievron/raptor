@@ -7,12 +7,13 @@ Each tool must:
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
+from cve_diff.agent import tools as tools_mod
+from cve_diff.agent.tools import _MAX_BYTES, TOOLS, Tool
 
 from core.http import HttpError
-from cve_diff.agent import tools as tools_mod
-from cve_diff.agent.tools import TOOLS, Tool
 
 
 def test_catalog_unique_names() -> None:
@@ -32,6 +33,43 @@ def test_tool_schema_shape(tool: Tool) -> None:
 def test_err_wraps() -> None:
     out = json.loads(tools_mod._err("boom"))
     assert out == {"error": "boom"}
+
+
+# --- advertised vs enforced response-size caps ---
+# The description strings are the LLM's only view of the tool contract,
+# so any per-response KB figure they quote must match what the
+# implementation enforces (``_MAX_BYTES``).
+
+_KB_RE = re.compile(r"(\d+)\s*KB", re.IGNORECASE)
+
+
+def test_enforced_cap_is_32kb() -> None:
+    assert _MAX_BYTES == 32 * 1024
+
+
+def test_no_description_advertises_256kb() -> None:
+    offenders = [t.name for t in TOOLS if "256KB" in t.description]
+    assert offenders == []
+
+
+def test_kb_figures_in_descriptions_match_enforced_cap() -> None:
+    """Any per-response KB figure quoted in a tool description must be
+    the enforced ``_MAX_BYTES`` value."""
+    enforced_kb = _MAX_BYTES // 1024
+    mismatches: list[tuple[str, int]] = []
+    for tool in TOOLS:
+        for m in _KB_RE.finditer(tool.description):
+            if int(m.group(1)) != enforced_kb:
+                mismatches.append((tool.name, int(m.group(1))))
+    assert mismatches == []
+
+
+def test_capped_tools_advertise_the_cap() -> None:
+    """The three tools whose responses are gated by _MAX_BYTES keep
+    advertising the (now correct) figure rather than dropping it."""
+    by_name = {t.name: t for t in TOOLS}
+    for name in ("osv_raw", "cgit_fetch", "http_fetch"):
+        assert "32KB" in by_name[name].description, name
 
 
 # --- check_diff_shape (Track 3: shape-check before submit) ---
@@ -510,6 +548,28 @@ def test_http_fetch_caps_body_and_returns_url(monkeypatch) -> None:
     assert out["status"] == 200
     assert out["url"] == "https://example.com/page"
     assert len(out["body"]) <= tools_mod._MAX_BYTES
+
+
+@pytest.mark.parametrize("codepoint", list(range(0x20)) + [0x7F])
+def test_http_fetch_rejects_full_control_range(codepoint: int) -> None:
+    # RFC 3986 URLs are printable ASCII: every 0x00-0x1F byte plus
+    # 0x7F (DEL) must be rejected, not just the CRLF/NUL subset —
+    # any of them is a smuggling vector for whatever HTTP client
+    # sits underneath.
+    url = f"https://example.com/a{chr(codepoint)}b"
+    out = json.loads(tools_mod._http_fetch_impl(url))
+    assert "error" in out, f"control char {codepoint:#04x} accepted"
+
+
+def test_http_fetch_accepts_printable_ascii(monkeypatch) -> None:
+    # Boundary guard: 0x20 (space is legal-if-odd in practice; the
+    # guard is about CONTROL chars) and 0x7E must pass the control
+    # check and reach the client.
+    monkeypatch.setattr(
+        tools_mod, "_forge_client", lambda: _StubHttpClient(raw_bytes=b"ok"),
+    )
+    out = json.loads(tools_mod._http_fetch_impl("https://example.com/~page"))
+    assert out.get("status") == 200
 
 
 # --- oracle_check -----------------------------------------------------------

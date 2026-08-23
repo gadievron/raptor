@@ -1,4 +1,4 @@
-""":class:`Validator` adapter — wires source_intel into the corpus runner.
+r""":class:`Validator` adapter — wires source_intel into the corpus runner.
 
 Phase 2 substrate ships a minimal verdict policy: source_intel is
 fundamentally a SIDECAR (evidence, not verdict), so the Validator
@@ -19,7 +19,7 @@ UNCERTAIN bucket separately — it doesn't contribute to precision /
 recall, so Phase 2 lands without harming the V2 baseline.
 
 Wire via:
-    libexec/raptor-corpus-run --output source_intel.csv \\
+    libexec/raptor-corpus-run --output source_intel.csv \
         --validator packages.source_intel.adapter:SourceIntelValidator
     libexec/raptor-corpus-metrics source_intel.csv
 """
@@ -29,9 +29,8 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
-from core.dataflow.finding import Finding
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.analyze import (
     GRADE_DOMINATES,
@@ -46,9 +45,13 @@ from packages.source_intel.analyze import (
     KIND_RETURNS_NONNULL,
     KIND_WUR,
     SourceIntelResult,
+    _is_word_present,
     analyze,
 )
 from packages.source_intel.cache import SourceIntelCache
+
+if TYPE_CHECKING:
+    from core.dataflow.finding import Finding
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ logger = logging.getLogger(__name__)
 # the finding's rule_id is in the relevant set for the observed
 # attribute. This keeps the verdict policy scoped — WUR evidence on
 # a use-after-free finding does NOT support EXPLOITABLE.
-_KIND_RELEVANT_RULE_PREFIXES: Dict[str, Tuple[str, ...]] = {
+_KIND_RELEVANT_RULE_PREFIXES: dict[str, tuple[str, ...]] = {
     KIND_WUR: (
         "cpp/null-dereference",
         "cpp/uncontrolled-",        # uncontrolled-allocation-size, etc.
@@ -134,8 +137,8 @@ class SourceIntelValidator:
 
     def __init__(
         self,
-        repo_root: Optional[Path] = None,
-        cache: Optional[SourceIntelCache] = None,
+        repo_root: Path | None = None,
+        cache: SourceIntelCache | None = None,
     ) -> None:
         self._repo_root = repo_root or _DEFAULT_REPO_ROOT
         self._cache = cache or SourceIntelCache()
@@ -154,7 +157,7 @@ class SourceIntelValidator:
         if result is None:
             try:
                 result = analyze(target)
-            except Exception:  # noqa: BLE001 — never let analyze crash the runner
+            except Exception:
                 logger.exception("source_intel analyze failed for %s", target)
                 return ValidatorVerdict.UNCERTAIN
             self._cache.put(target, None, result)
@@ -165,7 +168,7 @@ class SourceIntelValidator:
     # Internal
     # -----------------------------------------------------------------
 
-    def _target_for_finding(self, finding: Finding) -> Optional[Path]:
+    def _target_for_finding(self, finding: Finding) -> Path | None:
         """Derive the target directory to scan from the finding's
         source file path.
 
@@ -184,7 +187,11 @@ class SourceIntelValidator:
         candidate = Path(file_path)
         if not candidate.is_absolute():
             candidate = (self._repo_root / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
 
+        if not candidate.is_relative_to(self._repo_root.resolve()):
+            return None
         if not candidate.exists():
             return None
 
@@ -280,7 +287,11 @@ class SourceIntelValidator:
         for ev in result.attributes:
             if not ev.function_name:
                 continue
-            if ev.function_name not in snippet:
+            # Word-boundary match, not substring: a plain `in` check
+            # let an annotated function named `free` fire EXPLOITABLE
+            # against a snippet mentioning `freelist`, `pfree`, or
+            # `free_slot` — a prefix/suffix collision, not evidence.
+            if not _is_word_present(snippet, ev.function_name):
                 continue
             if not _rule_id_is_relevant_for_kind(finding.rule_id, ev.kind):
                 continue
@@ -294,11 +305,10 @@ class SourceIntelValidator:
             # returning varying-but-meaningless values aren't
             # detectable structurally — that's Stage D LLM's job.
             # See README adversarial-tolerance section.
-            if ev.kind == KIND_WUR:
-                if not _wur_annotation_trustworthy(
-                    ev.location[0], ev.function_name,
-                ):
-                    continue
+            if ev.kind == KIND_WUR and not _wur_annotation_trustworthy(
+                ev.location[0], ev.function_name,
+            ):
+                continue
             return ValidatorVerdict.EXPLOITABLE
 
         return ValidatorVerdict.UNCERTAIN
@@ -318,7 +328,7 @@ def _rule_id_is_wur_relevant(rule_id: str) -> bool:
 # Rule prefixes for which unchecked-allocation evidence directly
 # supports the finding. Currently null-deref family — the typical
 # manifestation of an unchecked alloc-result is a NULL deref.
-_NULL_DEREF_RULE_PREFIXES: Tuple[str, ...] = (
+_NULL_DEREF_RULE_PREFIXES: tuple[str, ...] = (
     "cpp/null-dereference",
     "c/null-dereference",
 )
@@ -401,9 +411,7 @@ def _finding_in_dead_code(finding: Finding, repo_root: Path) -> bool:
     # vtable / callback naming conventions are highly likely to be
     # macro-registered handlers — defer to LLM Stage D rather than
     # claim dead-code.
-    if _looks_like_macro_registered_handler(finding_fn):
-        return False
-    return True
+    return not _looks_like_macro_registered_handler(finding_fn)
 
 
 # Naming-convention suffixes/infixes for functions that are commonly
@@ -411,7 +419,7 @@ def _finding_in_dead_code(finding: Finding, repo_root: Path) -> bool:
 # concatenation (so the literal name never appears in source).
 # Conservative — only suppresses dead-code claim, doesn't change
 # other axes.
-_MACRO_REGISTERED_SUFFIXES: Tuple[str, ...] = (
+_MACRO_REGISTERED_SUFFIXES: tuple[str, ...] = (
     "_ioctl_submit", "_ioctl", "_ioctl_",
     "_show", "_store",
     "_open", "_release", "_read", "_write",
@@ -441,16 +449,13 @@ def _looks_like_macro_registered_handler(fn_name: str) -> bool:
         if fn_name.endswith(suffix):
             return True
     # Also infixes — common shapes like `*_ioctl_*`.
-    for infix in ("_ioctl_", "_callback_", "_handler_"):
-        if infix in fn_name:
-            return True
-    return False
+    return any(infix in fn_name for infix in ("_ioctl_", "_callback_", "_handler_"))
 
 
 def _function_referenced_as_pointer(
     target: Path, function_name: str
 ) -> bool:
-    """Best-effort: scan ``target`` (file or dir) for non-call uses of
+    r"""Best-effort: scan ``target`` (file or dir) for non-call uses of
     ``function_name``. Returns True if the name appears in a context
     consistent with function-pointer use (vtable assignment, callback
     registration, address-of, array element).
@@ -458,9 +463,9 @@ def _function_referenced_as_pointer(
     Patterns:
       * ``.field = funcname[,;}]``       — struct vtable assignment
       * ``= funcname[,;}]``              — bare initializer
-      * ``& funcname\\b``                 — address-of
+      * ``& funcname\b``                 — address-of
       * ``( funcname [,)]``              — passed as argument
-      * ``\\bfuncname [,;]``              — array element / list
+      * ``\bfuncname [,;]``              — array element / list
 
     Conservative file traversal: limited to ``.c`` / ``.h`` / ``.cc``
     / ``.cpp`` / ``.hpp`` to bound cost on noisy targets.
@@ -483,7 +488,7 @@ def _function_referenced_as_pointer(
         files = [p for p in target.rglob("*") if p.suffix in EXTS]
     for path in files:
         try:
-            with open(path, "r", errors="replace") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
             continue
@@ -507,7 +512,7 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
     cross-TU-callable functions).
     """
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError:
         return False
@@ -588,7 +593,7 @@ _LOCAL_ASSIGN_RE = re.compile(
 )
 
 
-def _extract_local_var_from_snippet(snippet: Optional[str]) -> Optional[str]:
+def _extract_local_var_from_snippet(snippet: str | None) -> str | None:
     """Best-effort: from `p = kstrdup(s, 0);` return `p`."""
     if not snippet:
         return None
@@ -628,7 +633,7 @@ def _has_interprocedural_check(
     if not file_path or sink_line <= alloc_line + 1:
         return False
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -680,7 +685,7 @@ def _has_interprocedural_check(
 # CWE-78 / CWE-89 (injection) findings don't benefit from this signal
 # because the exploitation primitive doesn't depend on continued
 # execution of the C-language process state.
-_MEMORY_CORRUPTION_RULE_PREFIXES: Tuple[str, ...] = (
+_MEMORY_CORRUPTION_RULE_PREFIXES: tuple[str, ...] = (
     "cpp/null-dereference",
     "cpp/use-after-free",
     "cpp/double-free",
@@ -740,7 +745,7 @@ def _abort_dominates_finding(
     #     no proximity gate — abort runs on every path from
     #     function entry to its line, so anything in the same
     #     function after the abort line is dominated.
-    _PROXIMITY_BY_GRADE: Dict[str, Optional[int]] = {
+    _PROXIMITY_BY_GRADE: dict[str, int | None] = {
         GRADE_SAME_FUNCTION: 50,
         GRADE_SAME_PATH: 300,
         GRADE_DOMINATES: None,  # no proximity gate
@@ -795,7 +800,7 @@ _SAME_FUNCTION_LINE_PROXIMITY_DEFAULT = 50
 # to a namespace — an unprivileged userns admin can hold
 # CAP_SYS_ADMIN inside their own ns without root, so they DON'T
 # satisfy the "already root-equivalent" requirement.
-_PRIVILEGED_CAP_FUNCTIONS: FrozenSet[str] = frozenset({
+_PRIVILEGED_CAP_FUNCTIONS: frozenset[str] = frozenset({
     "capable",
 })
 
@@ -816,7 +821,7 @@ _PRIVILEGED_CAP_FUNCTIONS: FrozenSet[str] = frozenset({
 # leaked as NOT_EXPLOITABLE when it should have stayed UNCERTAIN.
 # CAP_NET_ADMIN grants network-stack admin only; doesn't let you
 # load kernel modules or write arbitrary kmem.
-_PRIVILEGED_CAP_CONSTANTS: FrozenSet[str] = frozenset({
+_PRIVILEGED_CAP_CONSTANTS: frozenset[str] = frozenset({
     "CAP_SYS_ADMIN",      # nearly all FS / mount / namespace control
     "CAP_SYS_MODULE",     # arbitrary kernel-module load → arbitrary code
     "CAP_SYS_RAWIO",      # arbitrary device-mem access via /dev/mem
@@ -868,7 +873,7 @@ def _privileged_capability_dominates(
     #   * DOMINATES (depth=1, no preceding return): no gate;
     #     additionally requires cap_line < sink_line (a cap below
     #     the bug can't dominate it).
-    proximity_by_grade: Dict[str, Optional[int]] = {
+    proximity_by_grade: dict[str, int | None] = {
         GRADE_SAME_FUNCTION: 50,
         GRADE_SAME_PATH: 300,
         GRADE_DOMINATES: None,
@@ -891,9 +896,8 @@ def _privileged_capability_dominates(
             if cap.enclosing_function != finding_fn:
                 continue
         # DOMINATES additionally requires cap_line < sink_line.
-        if cap.grade == GRADE_DOMINATES and sink_line:
-            if cap_line >= sink_line:
-                continue
+        if cap.grade == GRADE_DOMINATES and sink_line and cap_line >= sink_line:
+            continue
         # Final filter: the capability constant on this line must be
         # privileged. We read the source line and look for one of the
         # privileged constants.
@@ -914,7 +918,7 @@ def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     (function-name + memory-corruption rule_id + line proximity).
     """
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f, 1):
                 if i == line_no:
                     return any(c in line for c in _PRIVILEGED_CAP_CONSTANTS)
@@ -945,7 +949,7 @@ def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
 #   * FORTIFY=3 (gcc 12+, glibc 2.34+) extends coverage; we treat
 #     >=2 as "intercept" since the level-2 set is the stable union
 #     covered by all 2/3 implementations.
-_FORTIFIED_WRITE_CALLS: FrozenSet[str] = frozenset({
+_FORTIFIED_WRITE_CALLS: frozenset[str] = frozenset({
     "memcpy", "memmove", "memset", "mempcpy",
     "strcpy", "strncpy", "strcat", "strncat", "stpcpy", "stpncpy",
     "sprintf", "snprintf", "vsprintf", "vsnprintf",
@@ -1011,9 +1015,7 @@ def _fortify_source_blocks_finding(
     # unchecked. Without this guard the verdict policy over-suppresses
     # findings on malloc'd destinations, which is the common case in
     # most userspace.
-    if _fortified_dest_is_variable_size(finding):
-        return False
-    return True
+    return not _fortified_dest_is_variable_size(finding)
 
 
 _DYNAMIC_ALLOCATORS_PATTERN = re.compile(
@@ -1061,7 +1063,7 @@ def _fortified_dest_is_variable_size(finding: Finding) -> bool:
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
 
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -1075,10 +1077,7 @@ def _fortified_dest_is_variable_size(finding: Finding) -> bool:
     )
     start = max(0, sink_line - 200)
     end = min(sink_line, len(lines))
-    for i in range(start, end):
-        if assign_pat.search(lines[i]):
-            return True
-    return False
+    return any(assign_pat.search(lines[i]) for i in range(start, end))
 
 
 # =====================================================================
@@ -1091,7 +1090,7 @@ def _fortified_dest_is_variable_size(finding: Finding) -> bool:
 # size, unbounded-write) are correctly suppressed when a check on
 # the size variable runs between bug-site and use-site, with an
 # early-exit. NOT applicable to null-deref / UAF / double-free.
-_DOWNSTREAM_CHECK_RULE_PREFIXES: Tuple[str, ...] = (
+_DOWNSTREAM_CHECK_RULE_PREFIXES: tuple[str, ...] = (
     "cpp/uncontrolled-",       # uncontrolled-allocation-size etc.
     "cpp/unbounded-write",
     "c/uncontrolled-",
@@ -1138,7 +1137,7 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
 
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -1162,7 +1161,7 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
     var_in_if = re.compile(
         r"\bif\s*\(.*?" + var_rel_re.pattern,
     )
-    has_relational = re.compile(r"[<>](?!=)|[<>]=")
+    has_relational = re.compile(r"(?<![<>])[<>](?![<>=])|[<>]=")
     early_exit = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
 
     start = sink_line  # next line after sink (0-indexed; sink_line itself excluded)
@@ -1222,7 +1221,7 @@ _LINE_COMMENT_STRIP_RE = re.compile(r"//.*$", re.MULTILINE)
 # Hazard-kind → relevant CWE rule_id prefixes. Each kind only
 # strengthens findings whose CWE class matches the hazard's
 # threat-model fit.
-_HAZARD_KIND_RELEVANT_RULES: Dict[str, Tuple[str, ...]] = {
+_HAZARD_KIND_RELEVANT_RULES: dict[str, tuple[str, ...]] = {
     "deprecated_func": (
         "cpp/unbounded-write",
         "cpp/uncontrolled-",
@@ -1296,7 +1295,7 @@ _PRIV_BACK_WALK_MAX_DEPTH = 5
 def _privilege_back_walk_suppresses(
     finding: Finding,
     result: SourceIntelResult,
-    repo_root: Path,
+    _repo_root: Path,
     *,
     max_depth: int = _PRIV_BACK_WALK_DEFAULT_DEPTH,
 ) -> bool:
@@ -1403,7 +1402,7 @@ def _path_is_gated(
     result: SourceIntelResult,
     *,
     remaining_depth: int,
-    visited: FrozenSet[str],
+    visited: frozenset[str],
 ) -> bool:
     """Multi-hop helper: True iff every call path reaching ``fn_name``
     (within ``remaining_depth`` further hops) passes through a
@@ -1514,7 +1513,7 @@ def _wur_annotation_trustworthy(file_path: str, function_name: str) -> bool:
     body_lines = _function_body_via_inventory(file_path, function_name)
     if body_lines is None:
         try:
-            with open(file_path, "r", errors="replace") as f:
+            with Path(file_path).open(encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return True
@@ -1574,7 +1573,7 @@ def _is_literal_const(value: str) -> bool:
 
 def _function_body_via_inventory(
     file_path: str, function_name: str,
-) -> Optional[list]:
+) -> list | None:
     """Tree-sitter-backed body extraction via the cached inventory
     populated by :func:`packages.source_intel.analyze.analyze`.
 
@@ -1627,7 +1626,7 @@ def _function_body_via_inventory(
         if not isinstance(line_end, int) or line_end < line_start:
             continue
         try:
-            with open(file_path, "r", errors="replace") as f:
+            with Path(file_path).open(encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return None
@@ -1646,7 +1645,7 @@ _FN_DEF_OPEN_RE = re.compile(
 
 def _find_function_definition_open(
     lines: list, function_name: str,
-) -> Optional[int]:
+) -> int | None:
     """Find the line where ``function_name``'s definition opens
     (line containing `func_name(args) {` or where `{` is on the
     next line). Returns 0-indexed line index, or None if not found.
@@ -1675,13 +1674,13 @@ def _find_function_definition_open(
 
 def _extract_function_body(
     lines: list, fn_open_line: int,
-) -> Tuple[list, int]:
+) -> tuple[list, int]:
     """Given the line index of a function-definition opener (line
     containing `{`), extract the body lines (between `{` and
     matching `}`). Returns (body_lines_list, close_line_index).
     """
     depth = 0
-    body = []
+    body: list[str] = []
     seen_open = False
     for i in range(fn_open_line, len(lines)):
         line = lines[i]
@@ -1763,8 +1762,7 @@ def _double_free_supports_finding(
     or second kfree (CodeQL typically reports the second).
     """
     rid = finding.rule_id or ""
-    if not (rid.startswith("cpp/double-free")
-            or rid.startswith("c/double-free")):
+    if not (rid.startswith(("cpp/double-free", "c/double-free"))):
         return False
     if not result.double_frees:
         return False
@@ -1846,7 +1844,7 @@ def _stack_protector_suppresses_finding(
     if not Path(sink_path).is_absolute():
         sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
     try:
-        with open(sink_path_abs, "r", errors="replace") as f:
+        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False
@@ -1857,7 +1855,4 @@ def _stack_protector_suppresses_finding(
     fixed_array_re = re.compile(
         r"\b[A-Za-z_][A-Za-z_0-9]*\s+[A-Za-z_][A-Za-z_0-9]*\s*\[\s*\d+\s*\]"
     )
-    for i in range(start, end):
-        if fixed_array_re.search(lines[i]):
-            return True
-    return False
+    return any(fixed_array_re.search(lines[i]) for i in range(start, end))

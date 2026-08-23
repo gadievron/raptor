@@ -20,8 +20,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from core.inventory.call_graph import (
     FileCallGraph,
@@ -41,8 +42,11 @@ logger = logging.getLogger(__name__)
 _EXTRACTORS = {
     "python": extract_call_graph_python,
     "javascript": extract_call_graph_javascript,
-    "typescript": extract_call_graph_javascript,
-    "tsx": extract_call_graph_javascript,
+    # TS / TSX need their own grammars — the bare JS extractor default
+    # parses typed code into ERROR nodes and loses most call edges,
+    # corrupting caller attribution downstream.
+    "typescript": partial(extract_call_graph_javascript, language="typescript"),
+    "tsx": partial(extract_call_graph_javascript, language="tsx"),
     "java": extract_call_graph_java,
     "go": extract_call_graph_go,
     "rust": extract_call_graph_rust,
@@ -51,11 +55,11 @@ _EXTRACTORS = {
     "cpp": extract_call_graph_cpp,
 }
 
-_SANITIZER_KEYWORDS = frozenset({
-    "sanitiz", "sanitise", "escape", "encode", "validat",
-    "filter", "clean", "purify", "strip", "bleach", "quote",
-    "parameteriz", "prepared", "bind",
-})
+_SANITIZER_RE = re.compile(
+    r'(?:^|_)(?:sanitiz|sanitise|escape|encode|validat'
+    r'|filter|clean|purify|strip|bleach|quote'
+    r'|parameteriz|prepared|bind)',
+)
 
 _CONDITION_NODE_TYPES = frozenset({
     "if_statement", "elif_clause", "else_clause",
@@ -72,16 +76,16 @@ class StepVerification:
     step_index: int
     file: str
     line: int
-    function: Optional[str]
+    function: str | None
     exists: bool
-    call_link_to_next: Optional[bool] = None
+    call_link_to_next: bool | None = None
     has_indirection: bool = False
-    sanitizer_calls: List[str] = field(default_factory=list)
-    branch_guards: List[str] = field(default_factory=list)
+    sanitizer_calls: list[str] = field(default_factory=list)
+    branch_guards: list[str] = field(default_factory=list)
     detail: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "step_index": self.step_index,
             "file": self.file,
             "line": self.line,
@@ -107,9 +111,9 @@ class StructuralResult:
     """Validation result matching the IRIS output shape."""
     verdict: str
     reasoning: str
-    evidence: List[Dict[str, Any]] = field(default_factory=list)
-    sanitizers: List[str] = field(default_factory=list)
-    path_conditions: List[Dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    sanitizers: list[str] = field(default_factory=list)
+    path_conditions: list[dict[str, Any]] = field(default_factory=list)
     confidence: str = "low"
     method: str = "structural-treesitter"
 
@@ -121,7 +125,7 @@ class StructuralResult:
     def iterations(self) -> int:
         return 1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "verdict": self.verdict,
             "reasoning": self.reasoning,
@@ -133,7 +137,7 @@ class StructuralResult:
         }
 
 
-def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
+def _resolve_file(step: dict, repo_path: Path) -> Path | None:
     """Resolve a step's file path against the repo root.
 
     Rejects paths that escape ``repo_path`` (traversal defense — step
@@ -145,10 +149,11 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
     if ".." in raw:
         return None
     p = Path(raw)
+    repo_resolved = repo_path.resolve()
     if p.is_absolute():
         try:
             resolved = p.resolve()
-            if not str(resolved).startswith(str(repo_path.resolve())):
+            if not resolved.is_relative_to(repo_resolved):
                 return None
         except (OSError, ValueError):
             return None
@@ -156,14 +161,14 @@ def _resolve_file(step: Dict, repo_path: Path) -> Optional[Path]:
             return resolved
         return None
     candidate = (repo_path / p).resolve()
-    if not str(candidate).startswith(str(repo_path.resolve())):
+    if not candidate.is_relative_to(repo_resolved):
         return None
     if candidate.exists():
         return candidate
     return None
 
 
-def _read_file_content(path: Path) -> Optional[str]:
+def _read_file_content(path: Path) -> str | None:
     """Read file content, returning None on failure."""
     try:
         return path.read_text(encoding="utf-8", errors="replace")
@@ -171,14 +176,31 @@ def _read_file_content(path: Path) -> Optional[str]:
         return None
 
 
-def _extract_graph(content: str, language: str) -> Optional[FileCallGraph]:
-    """Extract call graph for the given language."""
+def _extract_graph(content: str, language: str) -> FileCallGraph | None:
+    """Extract call graph for the given language.
+
+    Returns ``None`` (no evidence) when the language is unsupported OR
+    its tree-sitter grammar isn't installed.  The extractors degrade to
+    an EMPTY — but truthy — graph on a missing grammar, which the link
+    check would otherwise misread as proof that the call chain is
+    broken and refute the finding with high confidence; an environment
+    gap must stay inconclusive, not become a suppression.
+    """
     extractor = _EXTRACTORS.get(language)
     if extractor is None:
         return None
+    if language != "python":
+        # Python's extractor uses the stdlib ast module; every other
+        # extractor needs the matching tree-sitter grammar.
+        try:
+            from core.inventory.extractors import _TS_AVAILABLE, _ts_language
+        except ImportError:
+            return None
+        if not _TS_AVAILABLE or _ts_language(language) is None:
+            return None
     try:
         return extractor(content)
-    except Exception:
+    except Exception:  # noqa: BLE001 — hostile source: any parse failure degrades to no-graph
         return None
 
 
@@ -187,7 +209,7 @@ def _find_enclosing_function(
     graph: FileCallGraph,
     content: str,
     language: str,
-) -> Optional[str]:
+) -> str | None:
     """Find the function name enclosing a given line number.
 
     Uses call sites' caller field as a hint, then falls back to
@@ -205,16 +227,16 @@ def _find_enclosing_function(
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
                 return f.name
     except Exception:
-        pass
+        logger.debug("function-at-line lookup failed", exc_info=True)
     return None
 
 
 def _check_call_link(
-    from_func: Optional[str],
-    to_func: Optional[str],
+    from_func: str | None,
+    to_func: str | None,
     graph: FileCallGraph,
     cross_file: bool = False,
-) -> Tuple[Optional[bool], bool]:
+) -> tuple[bool | None, bool]:
     """Check if from_func calls to_func via the call graph.
 
     Returns (link_found, has_indirection).
@@ -222,6 +244,14 @@ def _check_call_link(
     """
     if not to_func:
         return None, False
+
+    if not cross_file and from_func and from_func == to_func:
+        # Consecutive steps inside the SAME function (the normal shape
+        # of an intra-procedural taint path: source line → assignment
+        # → sink line) are linked by straight-line control flow, not
+        # by a call edge.  Requiring a self-call edge here refuted
+        # every intra-procedural path with high confidence.
+        return True, False
 
     to_name = to_func.split(".")[-1]
 
@@ -237,12 +267,13 @@ def _check_call_link(
             continue
         if call.chain[-1] == to_name:
             return True, False
-        if to_func in ".".join(call.chain):
+        to_parts = to_func.split(".")
+        if call.chain[-len(to_parts):] == to_parts:
             return True, False
 
     if cross_file:
         for alias, target in graph.imports.items():
-            if to_name == alias or to_name in target:
+            if to_name == alias or to_name in target.split("."):
                 return True, False
 
     has_indirection = bool(graph.indirection)
@@ -258,56 +289,51 @@ def _check_call_link(
 def _identify_sanitizer_calls(
     calls: list,
     label: str,
-) -> List[str]:
+) -> list[str]:
     """Identify sanitizer/validator calls from call sites and labels."""
     found = []
     for call in calls:
         if not call.chain:
             continue
         name = call.chain[-1].lower()
-        for kw in _SANITIZER_KEYWORDS:
-            if kw in name:
-                found.append(".".join(call.chain))
-                break
+        if _SANITIZER_RE.search(name):
+            found.append(".".join(call.chain))
 
-    if label:
-        label_lower = label.lower()
-        for kw in _SANITIZER_KEYWORDS:
-            if kw in label_lower:
-                found.append(f"label:{label}")
-                break
+    if label and _SANITIZER_RE.search(label.lower()):
+        found.append(f"label:{label}")
 
     return found
+
+
+_BRANCH_GUARD_RE = re.compile(
+    r'^\s*(?:if|elif|else\s+if|while|for)\s*[\(]?\s*(.+?)\s*[\)]?\s*[:{]?\s*$'
+)
 
 
 def _extract_branch_guards_from_content(
     content: str,
     line: int,
-    language: str,
-) -> List[str]:
+    _language: str,
+) -> list[str]:
     """Extract branch guard conditions enclosing the given line.
 
     Uses tree-sitter when available, falls back to regex for
     simple ``if (...)`` patterns.
     """
-    guards = []
+    guards: list[str] = []
     lines = content.splitlines()
     if line < 1 or line > len(lines):
         return guards
 
-    _if_re = re.compile(
-        r'^\s*(?:if|elif|else\s+if|while|for)\s*[\(]?\s*(.+?)\s*[\)]?\s*[:{]?\s*$'
-    )
     scan_start = max(0, line - 30)
-    indent_at_line = len(lines[line - 1]) - len(lines[line - 1].lstrip()) if line <= len(lines) else 0
+    indent_at_line = len(lines[line - 1]) - len(lines[line - 1].lstrip())
 
+    # range stops at scan_start >= 0, so every yielded index is valid.
     for i in range(line - 2, scan_start - 1, -1):
-        if i < 0:
-            break
         src_line = lines[i]
         indent = len(src_line) - len(src_line.lstrip())
         if indent < indent_at_line:
-            m = _if_re.match(src_line)
+            m = _BRANCH_GUARD_RE.match(src_line)
             if m:
                 cond = m.group(1).strip()
                 if cond and len(cond) < 200:
@@ -317,7 +343,7 @@ def _extract_branch_guards_from_content(
     return guards
 
 
-def _build_all_steps(dataflow_path: Dict) -> List[Dict]:
+def _build_all_steps(dataflow_path: dict) -> list[dict]:
     """Build the ordered step list from a dataflow_path dict."""
     source = dataflow_path.get("source")
     sink = dataflow_path.get("sink")
@@ -333,10 +359,10 @@ def _build_all_steps(dataflow_path: Dict) -> List[Dict]:
 
 
 def validate_structurally(
-    dataflow_path: Dict[str, Any],
+    dataflow_path: dict[str, Any],
     repo_path: Path,
     *,
-    language: Optional[str] = None,
+    language: str | None = None,
 ) -> StructuralResult:
     """Validate a claimed dataflow path using tree-sitter structural analysis.
 
@@ -357,10 +383,10 @@ def validate_structurally(
             confidence="low",
         )
 
-    verifications: List[StepVerification] = []
-    all_sanitizers: List[str] = []
-    all_conditions: List[Dict[str, Any]] = []
-    file_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[FileCallGraph]]] = {}
+    verifications: list[StepVerification] = []
+    all_sanitizers: list[str] = []
+    all_conditions: list[dict[str, Any]] = []
+    file_cache: dict[str, tuple[str | None, str | None, FileCallGraph | None]] = {}
 
     for i, step in enumerate(steps):
         file_path_str = step.get("file", "")
@@ -392,8 +418,11 @@ def validate_structurally(
             ))
             continue
 
-        line_count = content.count("\n") + 1
-        if line > line_count:
+        # Same line-count convention as the branch-guard extractor
+        # (splitlines) — count('\n')+1 accepted a phantom line one past
+        # the last real source line on trailing-newline files.
+        line_count = len(content.splitlines())
+        if line < 1 or line > line_count:
             verifications.append(StepVerification(
                 step_index=i, file=file_path_str, line=line,
                 function=None, exists=False,
@@ -414,17 +443,16 @@ def validate_structurally(
             sanitizer_calls = _identify_sanitizer_calls(calls_in_range, label)
             all_sanitizers.extend(sanitizer_calls)
 
-        guards: List[str] = []
+        guards: list[str] = []
         if lang and content:
             guards = _extract_branch_guards_from_content(content, line, lang)
-            for g in guards:
-                all_conditions.append({
+            all_conditions.extend({
                     "text": g,
                     "step_index": i,
                     "negated": False,
-                })
+                } for g in guards)
 
-        call_link: Optional[bool] = None
+        call_link: bool | None = None
         has_indirection = False
         if i < len(steps) - 1:
             next_step = steps[i + 1]
@@ -468,9 +496,9 @@ def validate_structurally(
 
 
 def _compute_verdict(
-    verifications: List[StepVerification],
-    sanitizers: List[str],
-    path_conditions: List[Dict[str, Any]],
+    verifications: list[StepVerification],
+    sanitizers: list[str],
+    path_conditions: list[dict[str, Any]],
 ) -> StructuralResult:
     """Derive a verdict from step verifications."""
     if not verifications:

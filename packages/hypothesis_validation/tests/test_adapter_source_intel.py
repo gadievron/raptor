@@ -7,12 +7,14 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 
 from packages.hypothesis_validation.adapters import SourceIntelAdapter
+from packages.hypothesis_validation.adapters.source_intel import _VALID_AXES
 from packages.source_intel.analyze import (
     AbortEvidence,
     AllocationEvidence,
@@ -43,6 +45,28 @@ def _alloc_result(*allocs) -> SourceIntelResult:
     return SourceIntelResult(target="src", allocations=tuple(allocs))
 
 
+def _adapter_with_fake_result() -> SourceIntelAdapter:
+    """An adapter whose _load_result yields one attrs observation."""
+    fake = SimpleNamespace(
+        is_skipped=False,
+        attributes=[
+            SimpleNamespace(
+                function_name="target_fn",
+                kind="nonnull",
+                location=("src/a.c", 12),
+                match_source="attribute",
+                conditional_on=None,
+            ),
+        ],
+        aborts=[],
+        allocations=[],
+    )
+    a = SourceIntelAdapter(cache=None, sandbox=False)
+    a.is_available = lambda: True
+    a._load_result = lambda target: fake
+    return a
+
+
 # ---- describe / availability ------------------------------------------
 
 
@@ -68,6 +92,16 @@ class TestSourceIntelAdapterMeta:
             ev = a.run('{"function":"x"}', tmp_path)
         assert not ev.success
         assert "spatch is not installed" in ev.error
+
+    def test_one_good_for_entry_per_axis(self):
+        # describe().good_for covers all queryable axes, including
+        # the variants axis.
+        cap = SourceIntelAdapter().describe()
+        assert len(cap.good_for) == len(_VALID_AXES)
+
+    def test_variants_axis_has_entry(self):
+        cap = SourceIntelAdapter().describe()
+        assert any("Variant" in entry for entry in cap.good_for)
 
 
 # ---- query validation -------------------------------------------------
@@ -289,6 +323,29 @@ class TestNoMatches:
         assert ev.success
         assert ev.matches == []
         assert "no source_intel observation" in ev.summary
+
+
+class TestSummaryPluralization:
+    """run()'s summary pluralizes "axis" as "axes" (never the
+    non-word "axises")."""
+
+    def test_single_axis_summary_says_axis(self, tmp_path):
+        a = _adapter_with_fake_result()
+        rule = json.dumps({"function": "target_fn", "axes": ["attrs"]})
+        ev = a.run(rule, target=tmp_path)
+        assert ev.success
+        assert "1 axis" in ev.summary
+        assert "axises" not in ev.summary
+
+    def test_multiple_axes_summary_says_axes(self, tmp_path):
+        a = _adapter_with_fake_result()
+        rule = json.dumps(
+            {"function": "target_fn", "axes": ["attrs", "aborts"]},
+        )
+        ev = a.run(rule, target=tmp_path)
+        assert ev.success
+        assert "2 axes" in ev.summary
+        assert "axises" not in ev.summary
 
 
 # ---- caching ----------------------------------------------------------

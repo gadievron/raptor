@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from core.security.prompt_envelope import UntrustedBlock
 
@@ -99,10 +99,12 @@ _SOURCE_INTEL_CWES = frozenset({
 # — the lock is held only around the dict reads/writes, never
 # during the filesystem-walking signature compute or the call to
 # ``_analyze`` (which can take minutes for a kernel-sized target).
-_SI_RESULT_CACHE: Dict[str, Tuple[str, Optional[Any]]] = {}
+_SI_RESULT_CACHE: dict[str, tuple[str, Any | None]] = {}
 _SI_LOCK = threading.RLock()
 
-def prepare_source_intel(repo_path: Path) -> None:
+def prepare_source_intel(
+    repo_path: Path, *, checklist: dict[str, Any] | None = None,
+) -> None:
     """Pre-seed the source_intel result cache for ``repo_path``.
 
     Called once per orchestrator run, before dispatch starts. Runs
@@ -132,22 +134,22 @@ def prepare_source_intel(repo_path: Path) -> None:
             repo_path,
         )
         return
-    from packages.source_intel.cache import compute_target_signature
-    sig = compute_target_signature(repo_path)
-    with _SI_LOCK:
-        cached = _SI_RESULT_CACHE.get(key)
-        if cached is not None and cached[0] == sig:
-            return  # already attempted on this exact tree state
     if _analyze is None:
         logger.debug(
             "prepare_source_intel: packages.source_intel not importable; "
             "skipping injection wiring",
         )
         with _SI_LOCK:
-            _SI_RESULT_CACHE[key] = (sig, None)
+            _SI_RESULT_CACHE[key] = ("", None)
         return
+    from packages.source_intel.cache import compute_target_signature
+    sig = compute_target_signature(repo_path)
+    with _SI_LOCK:
+        cached = _SI_RESULT_CACHE.get(key)
+        if cached is not None and cached[0] == sig:
+            return  # already attempted on this exact tree state
     try:
-        result = _analyze(repo_path)
+        result = _analyze(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "prepare_source_intel: analyze(%s) failed: %s; "
@@ -178,7 +180,7 @@ def prepare_source_intel(repo_path: Path) -> None:
         # a field. Counts default to 0 when the attribute is absent.
         def _count(attr: str) -> int:
             return len(getattr(result, attr, ()) or ())
-        logger.info(
+        logger.debug(
             "prepare_source_intel: %s ready — attributes=%d, aborts=%d, "
             "allocations=%d, capabilities=%d, lsm_hooks=%d, hazards=%d",
             repo_path,
@@ -189,8 +191,8 @@ def prepare_source_intel(repo_path: Path) -> None:
 
 
 def evidence_blocks_for_finding(
-    finding: Dict[str, Any],
-) -> Tuple[UntrustedBlock, ...]:
+    finding: dict[str, Any],
+) -> tuple[UntrustedBlock, ...]:
     """Build the source_intel ``UntrustedBlock`` tuple for one finding.
 
     Returns ``()`` when any of:
@@ -287,7 +289,7 @@ def evidence_blocks_for_finding(
     # log lines only on render-failure (debug level) — successful
     # injections rendered silently, making "did source_intel evidence
     # reach the LLM prompt?" unanswerable without code archaeology.
-    logger.info(
+    logger.debug(
         "source_intel evidence injected for finding rule_id=%s "
         "function=%s (%d render lines)",
         rule_id, finding_function or "<unknown>", len(lines),

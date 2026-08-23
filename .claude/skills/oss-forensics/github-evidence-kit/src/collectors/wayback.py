@@ -16,7 +16,7 @@ from ..helpers import generate_evidence_id
 class WaybackCollector:
     """Collects evidence from Wayback Machine."""
 
-    def __init__(self, client: WaybackClient | None = None):
+    def __init__(self, client: WaybackClient | None = None) -> None:
         self.client = client or WaybackClient()
 
     def collect_snapshots(

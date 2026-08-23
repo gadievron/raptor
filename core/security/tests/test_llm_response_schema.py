@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import pytest
 from pydantic import BaseModel
 
 from core.security.llm_response_schema import validate_response
@@ -113,3 +114,94 @@ def test_extra_fields_in_response_are_rejected_by_default():
 
     raw = '{"x": 1, "rogue": "extra"}'
     assert validate_response(raw, Strict) is None
+
+
+class TestStrictCloneNestedPropagation:
+    """extra="forbid" must propagate through EVERY nested BaseModel —
+    the top-level-only clone let `{"verdict":"safe","inner":{"note":
+    "n","exfil":"…"}}` validate cleanly (nested key silently dropped),
+    failing the module's "anything outside the schema is rejected"
+    promise at depth >= 1."""
+
+    def _models(self):
+        from typing import Annotated
+
+        from pydantic import BaseModel, Field
+
+        class Inner(BaseModel):
+            note: str
+
+        class Node(BaseModel):
+            val: int = 0
+            child: Optional["Node"] = None
+
+        class Outer(BaseModel):
+            verdict: str
+            inner: Inner
+            items: list[Inner] = []
+            mapped: dict[str, Inner] = {}
+            maybe: Optional[Inner] = None
+            ann: Annotated[Optional[Inner], Field(description="x")] = None
+            node: Optional[Node] = None
+
+        return Inner, Node, Outer
+
+    def test_nested_extra_key_rejected(self):
+        import json
+
+        from core.security.llm_response_schema import validate_response
+        _, _, Outer = self._models()
+        raw = json.dumps(
+            {"verdict": "safe", "inner": {"note": "n", "exfil": "leak"}})
+        assert validate_response(raw, Outer) is None
+
+    @pytest.mark.parametrize("payload", [
+        {"verdict": "s", "inner": {"note": "n"},
+         "items": [{"note": "a", "smuggle": 1}]},
+        {"verdict": "s", "inner": {"note": "n"},
+         "mapped": {"k": {"note": "a", "x": 1}}},
+        {"verdict": "s", "inner": {"note": "n"},
+         "maybe": {"note": "a", "y": 2}},
+        {"verdict": "s", "inner": {"note": "n"},
+         "ann": {"note": "a", "z": 3}},
+        {"verdict": "s", "inner": {"note": "n"},
+         "node": {"val": 1, "child": {"val": 2, "deep_extra": 9}}},
+    ])
+    def test_extra_keys_rejected_through_carriers(self, payload):
+        import json
+
+        from core.security.llm_response_schema import validate_response
+        _, _, Outer = self._models()
+        assert validate_response(json.dumps(payload), Outer) is None
+
+    def test_clean_nested_payload_validates_with_defaults(self):
+        import json
+
+        from core.security.llm_response_schema import validate_response
+        _, _, Outer = self._models()
+        raw = json.dumps({"verdict": "s", "inner": {"note": "n"},
+                          "node": {"val": 1, "child": {"val": 2}}})
+        res = validate_response(raw, Outer)
+        assert res is not None
+        assert res.node.child.val == 2
+        assert res.maybe is None and res.items == []
+
+    def test_fully_strict_schema_passes_through_unchanged(self):
+        from pydantic import BaseModel, ConfigDict
+
+        from core.security.llm_response_schema import _strict_clone
+
+        class SInner(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            a: int
+
+        class SOuter(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            i: SInner
+
+        assert _strict_clone(SOuter) is SOuter
+
+    def test_clone_cached_per_class(self):
+        from core.security.llm_response_schema import _strict_clone
+        _, _, Outer = self._models()
+        assert _strict_clone(Outer) is _strict_clone(Outer)

@@ -10,17 +10,24 @@
 // `edidstr`, then strsep-derefs `edidstr` without a NULL check.
 //
 // Covered (axis-3b v1):
-//   * `local = alloc_fn(...);` (plain assignment OR declaration-with-init —
-//     spatch matches both forms via the same cocci expression pattern)
+//   * `local = alloc_fn(...);` — plain assignment
+//   * `T local = alloc_fn(...);` — declaration-with-init, as an explicit
+//     disjunction arm. spatch's decl_init isomorphism does NOT bridge the
+//     two forms for a bare `lhs = alloc(...)` pattern (verified on
+//     spatch 1.3), so the decl-init shape must be spelled out.
 //
 // NOT covered (axis-3-expansion):
+//   * Struct fields (`struct_p->fld = alloc_fn(...);`) — the sibling
+//     unchecked_alloc.cocci owns that shape; `local` is an identifier
+//     metavariable here so the two rules never double-report.
 //   * Nested field: `struct_p->subfield.fld = alloc_fn(...);`
 //   * Aliasing chains: `local = alloc(); alias = local; deref(&alias);`
 //     — when! clauses block paths through null checks, but cocci can't
 //     follow the aliasing automatically. Coverage is best-effort.
 
 @unchecked_alloc_local@
-expression local;
+type T;
+identifier local;
 identifier alloc_fn = {
     kstrdup, kstrdup_const, kstrndup,
     kmalloc, kzalloc, kmalloc_array, kcalloc, krealloc,
@@ -40,7 +47,11 @@ identifier alloc_fn = {
 };
 position p;
 @@
+(
+T local = alloc_fn@p(...);
+|
 local = alloc_fn@p(...);
+)
 ... when != local == NULL
     when != local != NULL
     when != !local

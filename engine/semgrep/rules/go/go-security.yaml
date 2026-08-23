@@ -1,0 +1,251 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Go — pattern: defer Close inside loop body — resource exhaustion
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.defer-close-in-loop
+    message: >-
+      defer $X.Close() inside a loop body accumulates deferred calls until
+      the enclosing function returns, causing resource exhaustion. Close
+      explicitly or extract the loop body into a separate function.
+    languages: [go]
+    severity: MEDIUM
+    patterns:
+      - pattern: defer $X.Close()
+      - pattern-inside: |
+          for ... {
+            ...
+          }
+    metadata:
+      cwe: ["CWE-401"]
+      tags: ["security", "go", "resource-leak"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: web sources -> non-parameterised SQL query sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.sql-sprintf-query
+    message: >-
+      Untrusted data flows into a SQL query without parameterisation. Use
+      db.Query(sql, args...) with positional parameters instead of
+      fmt.Sprintf to build query strings.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches db.Query(...), which self-taints the
+          # Query sinks below (any hardcoded db.Query(fmt.Sprintf(..)))
+          # would flag itself with no attacker data involved).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      # Query/Exec are generic method names shared with non-SQL types,
+      # so they only qualify with an inline fmt.Sprintf whose format
+      # string opens with SQL text — the keyword guard is the FP
+      # control. This closes the gap where db.Query(fmt.Sprintf(...))
+      # fell between this rule (which excluded Query/Exec) and
+      # sql-taint.yaml (which requires + concatenation).
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Query(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.Exec(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryRow(fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.QueryRowContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+              - pattern: $DB.ExecContext($CTX2, fmt.Sprintf($FMT, ...), ...)
+          - metavariable-regex:
+              metavariable: $FMT
+              regex: '(?i)^"\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
+      # Single-argument calls to SQL-unique methods only.
+      # Bare-variable Query/Exec excluded — generic names shared with
+      # non-SQL types (concat spellings are caught by sql-taint.yaml's
+      # concat + SQL keyword rule; Sprintf spellings by the guard
+      # above). pattern-not excludes string-literal $Q to prevent FPs
+      # on hardcoded queries.
+      - patterns:
+          - pattern: $DB.QueryRow($Q)
+          - pattern-not: $DB.QueryRow("...")
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: $DB.QueryContext($CTX2, $Q)
+          - pattern-not: $DB.QueryContext($CTX2, "...")
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: $DB.QueryRowContext($CTX2, $Q)
+          - pattern-not: $DB.QueryRowContext($CTX2, "...")
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: $DB.ExecContext($CTX2, $Q)
+          - pattern-not: $DB.ExecContext($CTX2, "...")
+          - focus-metavariable: $Q
+    metadata:
+      cwe: ["CWE-89"]
+      owasp_top_10: ["A3:2021-Injection"]
+      tags: ["security", "go", "sqli", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — pattern: insecure TLS configuration
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.insecure-tls-skip-verify
+    message: >-
+      InsecureSkipVerify disables TLS certificate verification, allowing
+      man-in-the-middle attacks. Remove InsecureSkipVerify or set it to false.
+    languages: [go]
+    severity: CRITICAL
+    pattern: |
+      tls.Config{..., InsecureSkipVerify: true, ...}
+    metadata:
+      cwe: ["CWE-295"]
+      owasp_top_10: ["A7:2021-Identification and Authentication Failures"]
+      tags: ["security", "go", "tls"]
+
+  - id: raptor.go.insecure-tls-min-version
+    message: >-
+      TLS MinVersion allows negotiation of deprecated protocol versions
+      (SSLv3, TLS 1.0, TLS 1.1). Set MinVersion to tls.VersionTLS12 or
+      tls.VersionTLS13.
+    languages: [go]
+    severity: HIGH
+    # Real-world bad configs name the deprecated version constants;
+    # an explicit literal 0 is kept for completeness. Known residual
+    # (undetectable in a struct-literal pattern): OMITTING MinVersion
+    # yields the zero value with the same effect — absence of a field
+    # cannot be matched here (U12-F107).
+    pattern-either:
+      - pattern: |
+          tls.Config{..., MinVersion: tls.VersionSSL30, ...}
+      - pattern: |
+          tls.Config{..., MinVersion: tls.VersionTLS10, ...}
+      - pattern: |
+          tls.Config{..., MinVersion: tls.VersionTLS11, ...}
+      - pattern: |
+          tls.Config{..., MinVersion: 0, ...}
+    metadata:
+      cwe: ["CWE-295"]
+      tags: ["security", "go", "tls"]
+
+  # ---------------------------------------------------------------------------
+  # Go — taint: web sources -> filesystem path sinks
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.filepath-traversal
+    message: >-
+      Untrusted data flows into a filesystem path operation. Validate and
+      sanitise the path to prevent directory traversal — filepath.Join does
+      NOT prevent "../" traversal above the base directory.
+    languages: [go]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get(...)
+          - pattern: $REQ.FormValue(...)
+          - pattern: $REQ.PostFormValue(...)
+          - pattern: $REQ.Header.Get(...)
+          - pattern: $REQ.PathValue(...)
+          # gin / echo — receiver-name anchored: a bare $CTX.Query(...)
+          # source also matches the .Query()/.Param() methods of stores,
+          # DB handles, and routers, tainting fully hardcoded data
+          # (self-taint; same fix as raptor.injection.sql.taint.go).
+          - patterns:
+              - pattern-either:
+                  - pattern: $CTX.Query(...)
+                  - pattern: $CTX.Param(...)
+                  - pattern: $CTX.PostForm(...)
+                  - pattern: $CTX.QueryParam(...)
+                  - pattern: $CTX.FormValue(...)
+              - metavariable-regex:
+                  metavariable: $CTX
+                  regex: '(?i)^(c|ctx|context|ectx|gctx|cc)$'
+          # environment
+          - pattern: os.Getenv(...)
+          - pattern: os.Args[...]
+    pattern-sinks:
+      - patterns:
+          - pattern: os.Open($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: os.ReadFile($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: os.OpenFile($PATH, $FLAGS, $PERM)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: ioutil.ReadFile($PATH)
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: filepath.Join($BASE, $PATH)
+          - focus-metavariable: $PATH
+    # No filepath.Clean sanitizer: Clean("../..") returns "../.." and
+    # Clean("/srv/"+f) resolves the escape rather than preventing it —
+    # it normalises, it does not confine. filepath.Base does confine
+    # (strips every directory component, "../" included).
+    pattern-sanitizers:
+      - pattern: filepath.Base(...)
+    metadata:
+      cwe: ["CWE-22"]
+      owasp_top_10: ["A1:2021-Broken Access Control"]
+      tags: ["security", "go", "path-traversal", "taint"]
+
+  # ---------------------------------------------------------------------------
+  # Go — pattern: strconv result cast to a narrower int without a range check
+  # ---------------------------------------------------------------------------
+  - id: raptor.go.parsed-int-narrowing-cast
+    message: >-
+      A strconv.Atoi/ParseInt result is cast to a narrower integer type with
+      no range check between the parse and the cast. Values outside the
+      narrow type wrap silently (e.g. uid 4294967296 becomes 0, granting
+      root); negative parses wrap to huge unsigned values. Range-check the
+      parsed value against the destination type's bounds first.
+    languages: [go]
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: uint32($V)
+          - pattern: uint16($V)
+          - pattern: uint8($V)
+          - pattern: int32($V)
+          - pattern: int16($V)
+          - pattern: int8($V)
+      - pattern-inside: |
+          func $F(...) {
+            ...
+            $V, $ERR := strconv.Atoi(...)
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $V > $MAX { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $V < $MIN { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          func $F(...) {
+            ...
+            if $A <= $V && $V <= $B { ... }
+            ...
+          }
+    metadata:
+      cwe: ["CWE-190", "CWE-681"]
+      tags: ["security", "go", "integer", "truncation"]

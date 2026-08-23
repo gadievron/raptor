@@ -25,6 +25,8 @@ from unittest.mock import MagicMock
 from packages.sca.models import Confidence, Dependency, Manifest, PinStyle
 from packages.sca.resolvers import ResolverResult
 from packages.sca.transitive import (
+    _collapse_cargo_workspaces,
+    _is_cargo_workspace_root,
     expand_missing_transitives,
 )
 
@@ -466,11 +468,24 @@ def test_cross_ecosystem_parallel_runs_concurrently(tmp_path, monkeypatch):
 
     Defends the cross-ecosystem parallelism — without threads each
     ecosystem's batch would serialise behind the previous one."""
-    import time as _time
+    import threading
     from packages.sca.transitive import _run_cascades_parallel
 
+    # Structural concurrency check: both ecosystem batches must be
+    # in flight at the same moment to release the barrier. A
+    # serialised implementation leaves the first batch waiting alone
+    # until the barrier times out — no wall-clock assertion, so
+    # scheduler jitter under a loaded test runner can't flake this.
+    barrier = threading.Barrier(2)
+
     def fake_try(eco, work_items, cache=None):
-        _time.sleep(0.3)
+        try:
+            barrier.wait(timeout=10)
+        except threading.BrokenBarrierError:
+            raise AssertionError(
+                "cascade batches serialised: second ecosystem batch "
+                "never started while the first was still running"
+            ) from None
         return [(pd, host, [], None) for pd, host in work_items]
 
     monkeypatch.setattr(
@@ -481,14 +496,9 @@ def test_cross_ecosystem_parallel_runs_concurrently(tmp_path, monkeypatch):
         "PyPI": [(tmp_path / "a", tmp_path / "a/req.txt")],
         "npm":  [(tmp_path / "b", tmp_path / "b/pkg.json")],
     }
-    t0 = _time.time()
     out = _run_cascades_parallel(work)
-    elapsed = _time.time() - t0
     assert ("PyPI", tmp_path / "a") in out
     assert ("npm", tmp_path / "b") in out
-    # Sequential would be ~0.6s; parallel should be ~0.3s. Generous
-    # slack for CI noise but still detects serialisation.
-    assert elapsed < 0.55, f"expected parallel <0.55s, got {elapsed:.2f}s"
 
 
 def test_cross_ecosystem_one_crashes_others_proceed(tmp_path, monkeypatch):
@@ -619,3 +629,155 @@ def test_medium_confidence_typosquat_does_not_skip(tmp_path, monkeypatch):
     _, statuses = expand_missing_transitives(manifests, direct)
     # Medium confidence → cascade still runs (different status).
     assert statuses[0].method != "skipped_typosquat_refused"
+
+
+# ---------------------------------------------------------------------------
+# Cargo workspace collapse
+# ---------------------------------------------------------------------------
+
+
+def test_is_cargo_workspace_root(tmp_path):
+    root = tmp_path / "Cargo.toml"
+    root.write_text("[workspace]\nmembers = ['a']\n")
+    assert _is_cargo_workspace_root(root) is True
+
+    member = tmp_path / "a" / "Cargo.toml"
+    member.parent.mkdir()
+    member.write_text("[package]\nname = 'a'\n")
+    assert _is_cargo_workspace_root(member) is False
+
+
+def test_is_cargo_workspace_root_missing_file(tmp_path):
+    assert _is_cargo_workspace_root(tmp_path / "nonexistent") is False
+
+
+def test_collapse_cargo_workspaces_drops_members(tmp_path):
+    """Workspace members with a lockfile at the root get collapsed."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "Cargo.toml").write_text("[workspace]\nmembers = ['a', 'b']\n")
+    (root / "Cargo.lock").write_text("# lock\n")
+    a_dir = root / "a"
+    a_dir.mkdir()
+    (a_dir / "Cargo.toml").write_text("[package]\nname = 'a'\n")
+    b_dir = root / "b"
+    b_dir.mkdir()
+    (b_dir / "Cargo.toml").write_text("[package]\nname = 'b'\n")
+
+    m_a = _manifest("Cargo", a_dir / "Cargo.toml")
+    m_b = _manifest("Cargo", b_dir / "Cargo.toml")
+    lockfile_dirs = {
+        ("Cargo", root): _manifest("Cargo", root / "Cargo.lock", is_lockfile=True),
+    }
+    by_eco_dir = {
+        ("Cargo", a_dir): [m_a],
+        ("Cargo", b_dir): [m_b],
+    }
+    result = _collapse_cargo_workspaces(by_eco_dir, lockfile_dirs)
+    assert ("Cargo", a_dir) not in result
+    assert ("Cargo", b_dir) not in result
+
+
+def test_collapse_cargo_workspaces_keeps_non_cargo(tmp_path):
+    """Non-Cargo entries pass through untouched."""
+    pip_dir = tmp_path / "py"
+    pip_dir.mkdir()
+    m = _manifest("PyPI", pip_dir / "requirements.txt")
+    by_eco_dir = {("PyPI", pip_dir): [m]}
+    result = _collapse_cargo_workspaces(by_eco_dir, {})
+    assert ("PyPI", pip_dir) in result
+
+
+def test_collapse_cargo_workspaces_keeps_standalone(tmp_path):
+    """A standalone Cargo project (no workspace parent) stays."""
+    proj = tmp_path / "standalone"
+    proj.mkdir()
+    (proj / "Cargo.toml").write_text("[package]\nname = 'solo'\n")
+    m = _manifest("Cargo", proj / "Cargo.toml")
+    result = _collapse_cargo_workspaces({("Cargo", proj): [m]}, {})
+    assert ("Cargo", proj) in result
+
+
+def test_include_only_manifest_still_dispatches_cascade(tmp_path, monkeypatch):
+    """A top-level requirements.txt containing only `-r reqs/base.txt`
+    carries deps whose declared_in is the INCLUDED file — the zero-
+    direct-deps filter must not drop it from cascade dispatch."""
+    proj = tmp_path / "proj"
+    (proj / "reqs").mkdir(parents=True)
+    top = proj / "requirements.txt"
+    base = proj / "reqs" / "base.txt"
+    top.write_text("-r reqs/base.txt\n", encoding="utf-8")
+    base.write_text("a==1.0\n", encoding="utf-8")
+
+    # find_manifests discovers only the conventional top-level name;
+    # the included file surfaces through the parser's include walk,
+    # so its deps carry declared_in=base.
+    manifests = [_manifest("PyPI", top)]
+    direct = [_direct("PyPI", "a", "1.0", base)]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        proposed_lockfile=b"a==1.0\nb==2.0\n",
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+
+    assert [d.name for d in deps] == ["b"]
+    assert statuses and statuses[0].method == "cascade_resolver"
+
+
+def test_nested_include_chain_dispatches_cascade(tmp_path, monkeypatch):
+    """-r chains nest: top -> mid -> base. The fixpoint walk must reach
+    the top-level manifest through the intermediate include file."""
+    proj = tmp_path / "proj"
+    (proj / "reqs").mkdir(parents=True)
+    top = proj / "requirements.txt"
+    mid = proj / "reqs" / "mid.txt"
+    base = proj / "reqs" / "base.txt"
+    top.write_text("-r reqs/mid.txt\n", encoding="utf-8")
+    mid.write_text("-r base.txt\n", encoding="utf-8")
+    base.write_text("a==1.0\n", encoding="utf-8")
+
+    manifests = [_manifest("PyPI", top), _manifest("PyPI", mid)]
+    direct = [_direct("PyPI", "a", "1.0", base)]
+
+    fake_resolver = MagicMock()
+    fake_resolver.is_available.return_value = True
+    fake_resolver.dry_run.return_value = ResolverResult(
+        ecosystem="PyPI", success=True, available=True,
+        proposed_lockfile=b"a==1.0\nb==2.0\n",
+    )
+    monkeypatch.setattr(
+        "packages.sca.resolvers.get_resolver",
+        lambda eco, project_dir=None: fake_resolver,
+    )
+
+    deps, statuses = expand_missing_transitives(manifests, direct)
+
+    # Two dispatch groups (proj/ and proj/reqs/) each resolve — the
+    # point is that NEITHER include-only manifest was filtered out.
+    assert {d.name for d in deps} == {"b"}
+    assert len(statuses) == 2
+    assert all(s.method == "cascade_resolver" for s in statuses)
+
+
+def test_zero_dep_yaml_manifest_still_filtered(tmp_path):
+    """The include augmentation must not resurrect the noise the filter
+    exists for: a speculatively-routed YAML with zero parsed deps stays
+    out of cascade dispatch."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    rules = proj / "rules.yaml"
+    rules.write_text("just: config\n", encoding="utf-8")
+
+    manifests = [_manifest("Kubernetes", rules)]
+    deps, statuses = expand_missing_transitives(manifests, [])
+
+    assert deps == []
+    assert statuses == []

@@ -8,8 +8,10 @@ Cache key composition:
   rules_hash :  sha256 of the contents of every ``.cocci`` file under
                 the rules dir, sorted by name. Captures rule-corpus
                 version.
-  target_hash : sha256 of the target's source-file tree (file names +
-                content hashes), bounded for cost.
+  target_hash : sha256 of the target's source-file tree. Every file's
+                name + (mtime, size) participates; content hashes are
+                bounded to a deterministic (sorted-path) subset for
+                cost, so any edit still flips the key.
   schema_version : module-level constant, bumped when the result shape
                 changes meaningfully.
 
@@ -23,7 +25,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 from packages.source_intel.analyze import SCHEMA_VERSION, SourceIntelResult
 
@@ -38,13 +39,13 @@ class SourceIntelCache:
     to disk is deferred per ``project_source_intel_kickoff.md``.
     """
 
-    _entries: Dict[Tuple[str, str], SourceIntelResult] = field(default_factory=dict)
+    _entries: dict[tuple[str, str], SourceIntelResult] = field(default_factory=dict)
 
     def get(
         self,
         target: Path,
-        rules_dir: Optional[Path] = None,
-    ) -> Optional[SourceIntelResult]:
+        rules_dir: Path | None = None,
+    ) -> SourceIntelResult | None:
         """Lookup. Returns None on miss."""
         key = self._key_for(target, rules_dir)
         return self._entries.get(key)
@@ -52,7 +53,7 @@ class SourceIntelCache:
     def put(
         self,
         target: Path,
-        rules_dir: Optional[Path],
+        rules_dir: Path | None,
         result: SourceIntelResult,
     ) -> None:
         """Store result under (target, rules_hash)."""
@@ -70,8 +71,8 @@ class SourceIntelCache:
     @staticmethod
     def _key_for(
         target: Path,
-        rules_dir: Optional[Path],
-    ) -> Tuple[str, str]:
+        rules_dir: Path | None,
+    ) -> tuple[str, str]:
         target_hash = _hash_target_tree(Path(target))
         rules_hash = _hash_rules_dir(
             Path(rules_dir) if rules_dir else None
@@ -89,19 +90,39 @@ class SourceIntelCache:
 # =====================================================================
 
 
-_C_CPP_EXTS: Tuple[str, ...] = (
+_C_CPP_EXTS: tuple[str, ...] = (
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
 )
+
+# Content-hash budget for `_hash_target_tree`. Every matching file's
+# path + (mtime, size) always participates in the hash; only the first
+# `_CONTENT_HASH_CAP` files IN SORTED-PATH ORDER additionally get their
+# contents hashed. Pre-fix the cap was applied in rglob() enumeration
+# order BEFORE sorting — a nondeterministic subset, and edits to any
+# file past the cap never invalidated the cache.
+_CONTENT_HASH_CAP = 5000
+
+
+def _sorted_source_files(target: Path) -> list[Path]:
+    """Every C/C++ source file under ``target``, sorted by path."""
+    return sorted(
+        (
+            entry for entry in target.rglob("*")
+            if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS
+        ),
+        key=str,
+    )
 
 
 def compute_target_signature(target: Path) -> str:
     """Fast change-detection signature for a target dir or file.
 
     Used as a cache-staleness marker — *not* a security-relevant
-    fingerprint. Walks up to 5000 C/C++ files under ``target`` and
-    combines each file's (mtime_ns, size) into a single sha256.
-    Two invocations on an unchanged tree return the same signature;
-    any source edit, file add/remove, or build-marker change flips it.
+    fingerprint. Walks every C/C++ file under ``target`` and combines
+    each file's (mtime_ns, size) into a single sha256 — stat only, no
+    content reads, no file cap. Two invocations on an unchanged tree
+    return the same signature; any source edit, file add/remove, or
+    build-marker change flips it.
 
     Cheaper than ``_hash_target_tree`` (no content reads) so it's
     affordable to recompute on every cache lookup. Sub-second on
@@ -127,16 +148,10 @@ def compute_target_signature(target: Path) -> str:
         return h.hexdigest()
 
     h.update(b"DIR\x00")
-    files = []
-    for entry in target.rglob("*"):
-        if not entry.is_file():
-            continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
-            continue
-        files.append(entry)
-        if len(files) >= 5000:
-            break
-    for path in sorted(files, key=lambda p: str(p)):
+    # No file cap: the stat-only walk is cheap, and any cap would
+    # exclude some files from the signature — edits to them would
+    # never invalidate downstream caches.
+    for path in _sorted_source_files(target):
         try:
             st = path.stat()
         except OSError:
@@ -172,7 +187,11 @@ def _hash_target_tree(target: Path) -> str:
     targets, returns a constant sentinel hash so cache misses are
     deterministic.
 
-    Bounded: walks up to 5000 files (kernel-scale safety).
+    Bounded for cost, complete for change detection: every file's
+    path and (mtime_ns, size) participate; only the first
+    ``_CONTENT_HASH_CAP`` files in sorted-path order are additionally
+    content-hashed (kernel-scale safety). Any edit — including to
+    files past the cap — flips the hash via the stat line.
     """
     if not target.exists():
         return "missing"
@@ -186,19 +205,20 @@ def _hash_target_tree(target: Path) -> str:
         return h.hexdigest()
 
     h.update(b"DIR\x00")
-    files = []
-    for entry in target.rglob("*"):
-        if not entry.is_file():
-            continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
-            continue
-        files.append(entry)
-        if len(files) >= 5000:
-            break
-    for path in sorted(files, key=lambda p: str(p)):
+    for idx, path in enumerate(_sorted_source_files(target)):
         h.update(str(path.relative_to(target)).encode("utf-8"))
         h.update(b"\x00")
-        h.update(_file_hash(path).encode("utf-8"))
+        if idx < _CONTENT_HASH_CAP:
+            h.update(_file_hash(path).encode("utf-8"))
+        else:
+            # Past the content budget: the (mtime_ns, size) stat line
+            # still participates so an edit here flips the hash.
+            try:
+                st = path.stat()
+            except OSError:
+                h.update(b"stat-error")
+            else:
+                h.update(f"{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
         h.update(b"\x00")
 
     # Build markers meaningfully affect analyze()'s build_flags output;
@@ -219,8 +239,14 @@ def _hash_target_tree(target: Path) -> str:
     return h.hexdigest()
 
 
-def _hash_rules_dir(rules_dir: Optional[Path]) -> str:
-    """SHA-256 of every .cocci file under rules_dir, sorted by name.
+def _hash_rules_dir(rules_dir: Path | None) -> str:
+    """SHA-256 of every .cocci + pack .json file under rules_dir,
+    sorted by name.
+
+    API packs (``packs/*.json``, rendered into slotted rules at analyze
+    time) are part of the effective rule set, so they participate in
+    the key — a pack edit must invalidate cached results exactly like a
+    rule edit.
 
     Returns ``"default"`` when rules_dir is None — the caller will use
     the shipped rules directory, which is hashed via this function on
@@ -232,7 +258,10 @@ def _hash_rules_dir(rules_dir: Optional[Path]) -> str:
         return "missing-rules"
 
     h = hashlib.sha256()
-    files = sorted(rules_dir.rglob("*.cocci"), key=lambda p: str(p))
+    files = sorted(
+        [*rules_dir.rglob("*.cocci"), *rules_dir.rglob("*.json")],
+        key=str,
+    )
     for path in files:
         h.update(str(path.relative_to(rules_dir)).encode("utf-8"))
         h.update(b"\x00")

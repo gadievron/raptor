@@ -260,6 +260,16 @@ def test_find_compatible_version_skips_pre_releases() -> None:
     assert find_compatible_version(pypi, "preview", matrix) == "1.0.0"
 
 
+def test_find_compatible_version_accepts_post_releases() -> None:
+    """Post-releases (PEP 440) are stable and must not be filtered."""
+    from packages.sca.wheel_compat.compat import _is_stable_version
+
+    assert _is_stable_version("1.0.0.post1")
+    assert _is_stable_version("2.3.4.post99")
+    assert not _is_stable_version("1.0.0rc1")
+    assert not _is_stable_version("1.0.0.dev3")
+
+
 # ---------------------------------------------------------------------------
 # Per-version recommendation cache
 # ---------------------------------------------------------------------------

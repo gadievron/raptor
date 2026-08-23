@@ -18,7 +18,6 @@ Lookup contract:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -45,12 +44,12 @@ class KnownSafeCall:
     """
     library_call: str
     sink_class: str
-    languages: Tuple[str, ...]
+    languages: tuple[str, ...]
     input_arg_kind: str            # "transform" | "validate"
     soundness_note: str
 
 
-_TABLE: Tuple[KnownSafeCall, ...] = (
+_TABLE: tuple[KnownSafeCall, ...] = (
     # ------------------------------------------------------------------
     # pathtrav — path-traversal safe joiners / validators
     # ------------------------------------------------------------------
@@ -199,6 +198,25 @@ _TABLE: Tuple[KnownSafeCall, ...] = (
     ),
     # ------------------------------------------------------------------
     # Java — escaping + parameterised queries
+    #
+    # Naming: the Java CFG builder (b13 leg) emits callable names
+    # FQN-RESOLVED against the file's explicit imports, so entries key
+    # on fully-qualified names. The chained ESAPI singleton idiom
+    # carries an explicit call marker (``…ESAPI.encoder().encodeFor…``)
+    # — only that exact static-chain shape matches; instance calls on
+    # an untyped variable never resolve (no type inference → no
+    # suppression through them).
+    #
+    # Class-assignment honesty: java.net.URLEncoder.encode is
+    # DELIBERATELY absent — it is a URL/form encoder, not an HTML or
+    # path sanitizer; classing it as either would be semantically
+    # dishonest (the adversarial corpus pins it as the wrong-class
+    # case). cmdi has NO Java entries: ESAPI's encodeForOS requires a
+    # caller-chosen Codec argument, so safety is not a property of the
+    # call name alone. sqli has NO Java entries: PreparedStatement
+    # parameterisation is a structural pattern, not a call-shaped
+    # transform. xss seed list is 6 names (≤9 vocab-guardrail seed
+    # rule); growth must come from learned vocabulary / corpus cases.
     # ------------------------------------------------------------------
     KnownSafeCall(
         library_call="org.apache.commons.lang3.StringEscapeUtils.escapeHtml4",
@@ -211,6 +229,68 @@ _TABLE: Tuple[KnownSafeCall, ...] = (
             "less common — add separately if needed."
         ),
     ),
+    KnownSafeCall(
+        library_call="org.owasp.encoder.Encode.forHtml",
+        sink_class="xss",
+        languages=("java",),
+        input_arg_kind="transform",
+        soundness_note=(
+            "OWASP Java Encoder forHtml escapes for ALL HTML contexts "
+            "it documents as covered (element content and quoted "
+            "attributes): &, <, >, \", ' become entities. The project's "
+            "reference XSS encoder."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="org.owasp.encoder.Encode.forHtmlContent",
+        sink_class="xss",
+        languages=("java",),
+        input_arg_kind="transform",
+        soundness_note=(
+            "OWASP Java Encoder forHtmlContent escapes &, <, > for HTML "
+            "element-content context. Safe for text-node emission; the "
+            "catalog claim covers exactly that context."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="org.owasp.encoder.Encode.forHtmlAttribute",
+        sink_class="xss",
+        languages=("java",),
+        input_arg_kind="transform",
+        soundness_note=(
+            "OWASP Java Encoder forHtmlAttribute escapes &, <, \", ' "
+            "(and more) for quoted-attribute context."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="org.owasp.esapi.ESAPI.encoder().encodeForHTML",
+        sink_class="xss",
+        languages=("java",),
+        input_arg_kind="transform",
+        soundness_note=(
+            "ESAPI DefaultEncoder.encodeForHTML entity-encodes for HTML "
+            "body context (canonical OWASP Benchmark safe form). The "
+            "key's explicit ()-marker means only the static "
+            "ESAPI.encoder() chain matches — an instance call on an "
+            "untyped variable never resolves to this entry."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="org.springframework.web.util.HtmlUtils.htmlEscape",
+        sink_class="xss",
+        languages=("java",),
+        input_arg_kind="transform",
+        soundness_note=(
+            "Spring HtmlUtils.htmlEscape entity-encodes &, <, >, \", ' "
+            "per the HTML 4.0 character entity set. HTML-safe output."
+        ),
+    ),
+    # NB: org.apache.commons.io.FilenameUtils.getName is DELIBERATELY
+    # absent from pathtrav: getName("..") returns ".." (the text after
+    # the last separator of a separator-free input is the input), and
+    # joining that under a base directory escapes it by one level.
+    # A sound Java pathtrav transform needs dot-segment stripping;
+    # none of the common single-call APIs guarantee it.
     # NB: Java PreparedStatement.setString is a structurally different
     # pattern (a method call on a previously-allocated PreparedStatement
     # object that's then executed).  Not a single-call transform —
@@ -279,7 +359,7 @@ _TABLE: Tuple[KnownSafeCall, ...] = (
 )
 
 
-def find(library_call: str, sink_class: str, language: str) -> Optional[KnownSafeCall]:
+def find(library_call: str, sink_class: str, language: str) -> KnownSafeCall | None:
     """Look up a known-safe call entry.  Returns the matching entry or
     None.  Exact match on ``library_call`` and ``sink_class``; language
     must be in the entry's ``languages`` tuple."""
@@ -291,7 +371,7 @@ def find(library_call: str, sink_class: str, language: str) -> Optional[KnownSaf
     return None
 
 
-def all_entries() -> Tuple[KnownSafeCall, ...]:
+def all_entries() -> tuple[KnownSafeCall, ...]:
     """Diagnostic accessor — returns the full table for testing /
     audit-rendering."""
     return _TABLE

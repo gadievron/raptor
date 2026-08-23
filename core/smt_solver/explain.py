@@ -16,16 +16,19 @@ Usage::
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, TYPE_CHECKING
 
 from .availability import z3
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def track(
         solver: Any,
-        labeled: Sequence[Tuple[str, Any]],
-        rev: Optional[Dict[str, str]] = None,
-) -> Dict[str, str]:
+        labeled: Sequence[tuple[str, Any]],
+        rev: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Assert each labelled expression via ``assert_and_track``.
 
     Returns a mapping from the generated Z3 label identifier back to the
@@ -87,7 +90,7 @@ def track(
     return rev
 
 
-def core_names(solver: Any, rev: Dict[str, str]) -> List[str]:
+def core_names(solver: Any, rev: dict[str, str]) -> list[str]:
     """Return human-readable names of assertions in the unsat core.
 
     Call after ``solver.check()`` returns ``z3.unsat``. Labels added by
@@ -110,7 +113,7 @@ def core_names(solver: Any, rev: Dict[str, str]) -> List[str]:
     is responsible for verifying `solver.check() == z3.unsat` before
     expecting a populated list.
     """
-    names: List[str] = []
+    names: list[str] = []
     try:
         core = solver.unsat_core()
     except (z3.Z3Exception, AttributeError):

@@ -48,10 +48,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
+
+from core.oci.image_ref import split_image_ref as _split_image_ref
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from ..models import classify_pin_style as _classify_pin_style
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -59,18 +62,16 @@ logger = logging.getLogger(__name__)
 ECOSYSTEM = "OCI"
 _PURL_TYPE = "oci"
 
+
 # Compose v2 / v3 / current — top-level ``services:`` map.
 _SERVICES_KEY = "services"
 
 
 @register(predicate=lambda p: _is_compose_file(p))
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning(
-            "sca.parsers.compose: read failed for %s: %s", path, e,
-        )
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
@@ -123,7 +124,7 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(services, dict):
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for service_name, service in services.items():
         dep = _build_dep(
             service_name=service_name,
@@ -151,7 +152,7 @@ def _is_compose_file(path: Path) -> bool:
     name = path.name.lower()
     if name.startswith("docker-compose"):
         return True
-    if name == "compose.yml" or name == "compose.yaml":
+    if name in {"compose.yml", "compose.yaml"}:
         return True
     if name.startswith("compose.") and name.endswith((".yml", ".yaml")):
         # ``compose.dev.yml`` etc. — common operator pattern.
@@ -164,7 +165,7 @@ def _build_dep(
     service_name: Any,
     service: Any,
     declared_in: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(service_name, str) or not service_name:
         return None
     if not isinstance(service, dict):
@@ -174,6 +175,9 @@ def _build_dep(
         return None
     image = image.strip()
 
+    if image.startswith(("./", "../")):
+        return None
+
     name, version = _split_image_ref(image)
     if not name:
         return None
@@ -182,6 +186,8 @@ def _build_dep(
     if version:
         purl += f"@{version}"
 
+    pin_style = _classify_pin_style(version)
+
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=name,
@@ -189,39 +195,22 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=pin_style,
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high",
+            "high" if version and pin_style == PinStyle.EXACT else "medium",
             reason=(
                 f"docker-compose service {service_name!r} pinned to "
                 f"{image}"
+            ) if version and pin_style == PinStyle.EXACT else (
+                f"docker-compose service {service_name!r} references "
+                f"{image} with no tag (implicitly :latest)"
+            ) if not version else (
+                f"docker-compose service {service_name!r} references "
+                f"{image} (floating tag)"
             ),
         ),
         source_kind="compose",
         source_extra={"service": service_name, "image_ref": image},
     )
-
-
-def _split_image_ref(ref: str) -> tuple:
-    """Split an OCI image reference into (name, tag).
-
-    ``postgres:16`` → ``("postgres", "16")``
-    ``ghcr.io/x/y:1.2`` → ``("ghcr.io/x/y", "1.2")``
-    ``alpine`` (no tag) → ``("alpine", None)``
-    ``foo@sha256:abc...`` → ``("foo", "sha256:abc...")``  (digest pin)
-    """
-    # Digest pin first (``name@sha256:...``).
-    if "@" in ref:
-        name, _, digest = ref.rpartition("@")
-        return name, digest if digest else None
-    # Tag pin (last colon, but only AFTER the last slash so we
-    # don't confuse a registry port like ``localhost:5000``).
-    last_slash = ref.rfind("/")
-    rest = ref[last_slash + 1:] if last_slash >= 0 else ref
-    if ":" in rest:
-        prefix = ref[:last_slash + 1] if last_slash >= 0 else ""
-        rest_name, _, tag = rest.partition(":")
-        return prefix + rest_name, tag if tag else None
-    return ref, None

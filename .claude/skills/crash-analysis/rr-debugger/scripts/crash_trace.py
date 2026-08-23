@@ -9,7 +9,7 @@ import subprocess
 import argparse
 
 
-def extract_trace(trace_dir, steps=100, output_format="source", asan=False):
+def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: bool=False) -> None:
     """
     Extract execution trace from rr recording.
     
@@ -142,7 +142,7 @@ def extract_trace(trace_dir, steps=100, output_format="source", asan=False):
         sys.exit(1)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Extract execution trace before crash from rr recording"
     )

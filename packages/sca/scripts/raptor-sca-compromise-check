@@ -43,6 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from core.json import dumps_display
+
 # parents[3] climbs:
 #   [0] scripts/   (this script's directory)
 #   [1] sca/       (the package)
@@ -599,7 +601,7 @@ def _format_report(
     results: Sequence[FixtureResult], *, json_out: bool,
 ) -> str:
     if json_out:
-        return json.dumps(
+        return dumps_display(
             [
                 {
                     "name": r.name,

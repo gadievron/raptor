@@ -5,7 +5,7 @@ Uses test-only fake adapters and reviewers; no real LLM calls.
 
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 
@@ -14,16 +14,11 @@ from core.llm.multi_model import (
     run_multi_model,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures: minimal fake handles, adapters, reviewers, gates
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeModel:
-    """Satisfies ModelHandle protocol."""
-    model_name: str
+# FakeModel (ModelHandle stand-in) comes from core.testing.
+from core.testing import FakeModel
 
 
 class IdentityAdapter:
@@ -31,20 +26,20 @@ class IdentityAdapter:
     and dedupes by id (later models override earlier on conflict).
     Correlate returns count of contributing models per id."""
 
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         if not item.get("id"):
             raise ValueError(f"item missing id: {item}")
         return item["id"]
 
     def merge(self, per_model_results):
-        by_id: Dict[str, Dict] = {}
+        by_id: dict[str, dict] = {}
         for model_name, results in per_model_results.items():
             for r in results:
                 by_id[self.item_id(r)] = {**r, "from_model": model_name}
         return list(by_id.values())
 
     def correlate(self, merged_items, per_model_results):
-        per_id_count: Dict[str, int] = {}
+        per_id_count: dict[str, int] = {}
         for results in per_model_results.values():
             for r in results:
                 per_id_count[self.item_id(r)] = per_id_count.get(self.item_id(r), 0) + 1
@@ -414,6 +409,30 @@ class TestReviewers:
         assert by_id["high-1"].get("high_reviewed") is True
         assert "high_reviewed" not in by_id["low-1"]
         assert "high_reviewed" not in by_id["low-2"]
+
+    def test_reviewer_item_missing_id_is_dropped_not_fatal(self):
+        """A reviewer item whose id field is missing must be ignored,
+        not crash the run — adapters implement item_id as plain dict
+        access, and the docstring guarantees bad return shapes are
+        caught. The reviewer's valid items still apply."""
+        class MissingIdReviewer:
+            name = "missing_id"
+            cutoff_ratio = 1.0
+
+            def review(self, items):
+                return [
+                    {"severity": "oops-no-id"},          # item_id raises
+                    {"id": "x", "annotated_by": "ok"},   # still applies
+                ]
+
+        result = run_multi_model(
+            task=lambda m: [{"id": "x"}],
+            models=[FakeModel("m")],
+            adapter=IdentityAdapter(),
+            reviewers=[MissingIdReviewer()],
+        )
+        assert len(result.items) == 1
+        assert result.items[0]["annotated_by"] == "ok"
 
     def test_conditional_reviewer_no_applicable_items(self):
         # If no items match should_review, reviewer is a no-op
@@ -1047,3 +1066,40 @@ class TestEndToEnd:
         )
         assert result.items == [{"id": "single", "from_model": "only"}]
         assert result.failed_models == []
+
+
+class TestTimeoutUnblocksCaller:
+    def test_timeout_returns_without_joining_hung_worker(self):
+        """The timeout must actually unblock the caller — pre-fix the
+        failure was recorded but ThreadPoolExecutor.__exit__ then
+        re-joined the hung worker, blocking the caller for the very
+        hang the timeout had just recorded. The worker thread may
+        linger (documented); the caller returns now."""
+        import time
+
+        from core.llm.multi_model.dispatch import _dispatch_parallel
+
+        release = threading.Event()
+
+        def hung_task(model):
+            # Simulates a wedged provider call; released by the test
+            # teardown so the lingering worker doesn't stall pytest's
+            # interpreter-exit thread join.
+            release.wait(30)
+            return []
+
+        try:
+            start = time.monotonic()
+            per_model, failed = _dispatch_parallel(
+                hung_task, [FakeModel("wedged")], max_parallel=1,
+                timeout=0.5,
+            )
+            elapsed = time.monotonic() - start
+            assert elapsed < 10, (
+                f"caller stayed blocked {elapsed:.1f}s — executor "
+                "re-joined the hung worker"
+            )
+            assert failed == ["wedged"]
+            assert per_model == {"wedged": []}
+        finally:
+            release.set()

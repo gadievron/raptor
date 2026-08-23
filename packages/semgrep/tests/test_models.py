@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.semgrep.models import (
@@ -209,3 +211,107 @@ class TestParseJsonOutput:
     def test_non_dict_root(self):
         out = parse_json_output("[]")
         assert out["files_examined"] == []
+
+    def test_error_level_entries_rendered_into_errors(self):
+        # Real payload shape from `semgrep scan --config <invalid rule>`
+        # (rc=7): rule-schema entries carry long_msg/short_msg, the
+        # summary entry carries message.
+        text = json.dumps({
+            "errors": [
+                {"code": 4, "level": "error",
+                 "type": "InvalidRuleSchemaError",
+                 "long_msg": "'patterns-oops' is not valid",
+                 "short_msg": "Invalid rule schema"},
+                {"code": 7, "level": "error", "type": "SemgrepError",
+                 "message": "invalid configuration file found "
+                            "(1 configs were invalid)"},
+            ],
+        })
+        out = parse_json_output(text)
+        assert len(out["errors"]) == 2
+        assert "InvalidRuleSchemaError: 'patterns-oops' is not valid" \
+            in out["errors"][0]
+        assert "SemgrepError: invalid configuration file found" \
+            in out["errors"][1]
+
+    def test_warn_level_entries_stay_out_of_errors(self):
+        # Per-file parse warnings must not read as engine failure —
+        # they land in files_failed (when path-bearing) only.
+        text = json.dumps({
+            "errors": [
+                {"level": "warn", "type": "PartialParsing",
+                 "path": "broken.py", "message": "parse skip"},
+            ],
+        })
+        out = parse_json_output(text)
+        assert out["errors"] == []
+        assert out["files_failed"] == [
+            {"path": "broken.py", "reason": "parse skip"},
+        ]
+
+    def test_entry_without_level_defaults_to_error(self):
+        # Fail-closed default: an errors[] entry with no level field
+        # is treated as error-grade.
+        text = json.dumps({"errors": [{"message": "boom"}]})
+        out = parse_json_output(text)
+        assert out["errors"] == ["error: boom"]
+
+    def test_empty_input_has_errors_key(self):
+        assert parse_json_output("")["errors"] == []
+
+
+class TestOutputBudget:
+    """Tool output over the byte budget is refused before the parse."""
+
+    _SARIF = json.dumps({
+        "runs": [{
+            "results": [{
+                "ruleId": "r1",
+                "message": {"text": "m"},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": "a.py"},
+                        "region": {"startLine": 1},
+                    },
+                }],
+            }],
+        }],
+    })
+
+    def test_parse_sarif_under_budget_unchanged(self) -> None:
+        findings = parse_sarif(self._SARIF)
+        assert [f.rule_id for f in findings] == ["r1"]
+
+    def test_parse_sarif_over_budget_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from packages.semgrep import models
+
+        monkeypatch.setattr(
+            models, "_MAX_TOOL_OUTPUT_BYTES", len(self._SARIF) - 1,
+        )
+        assert parse_sarif(self._SARIF) == []
+
+    def test_parse_sarif_non_object_root_is_refused(self) -> None:
+        assert parse_sarif("[1, 2, 3]") == []
+
+    def test_parse_json_output_over_budget_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from packages.semgrep import models
+
+        payload = json.dumps({
+            "version": "1.99.0",
+            "paths": {"scanned": ["a.py"]},
+            "errors": [],
+        })
+        out = parse_json_output(payload)
+        assert out["files_examined"] == ["a.py"]
+        assert out["semgrep_version"] == "1.99.0"
+
+        monkeypatch.setattr(
+            models, "_MAX_TOOL_OUTPUT_BYTES", len(payload) - 1,
+        )
+        out = parse_json_output(payload)
+        assert out["files_examined"] == []
+        assert out["semgrep_version"] == ""

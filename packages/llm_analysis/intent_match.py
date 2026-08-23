@@ -15,8 +15,10 @@ informed by:
      errors mention the finding's file?
 
 When 3 or 4 heuristics fire → ``matches`` without LLM. When 0 fire
-→ ``off_target`` without LLM. When 1-2 fire → uncertain ambiguity;
-escalate to a 2-step LLM tiebreak (describe-then-judge).
+→ ``off_target`` without LLM. When every evaluated heuristic fired
+(≥ 2 evaluated, the strong-partial case) → ``matches`` at reduced
+confidence, also without LLM. Any other 1-2-fired mix → uncertain
+ambiguity; escalate to a 2-step LLM tiebreak (describe-then-judge).
 
 v1 is a **weak signal**, not authoritative. No ground-truth
 calibration exists. Downstream consumers should treat the verdict
@@ -40,7 +42,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +64,10 @@ class IntentMatchVerdict:
     verdict: str  # "matches" | "off_target" | "uncertain"
     confidence: float  # 0.0 – 1.0
     reasoning: str  # human-readable summary
-    signals: dict[str, Optional[bool]] = field(default_factory=dict)
+    signals: dict[str, bool | None] = field(default_factory=dict)
     used_llm: bool = False
     cost_usd: float = 0.0
-    llm_error: Optional[str] = None  # if LLM call failed/skipped
+    llm_error: str | None = None  # if LLM call failed/skipped
 
 
 # Verdict string constants — use these instead of bare strings so a
@@ -84,7 +89,7 @@ SIGNAL_COMPILE_ERROR_ANCHOR = "compile_error_anchor"
 # ---------------------------------------------------------------------------
 
 
-def _file_overlap(finding_file_path: Optional[str], exploit_code: str) -> bool:
+def _file_overlap(finding_file_path: str | None, exploit_code: str) -> bool:
     """Does the exploit text mention the finding's file path?
 
     Matches either the full path (substring) or the basename (word-
@@ -104,7 +109,7 @@ def _file_overlap(finding_file_path: Optional[str], exploit_code: str) -> bool:
 
 
 def _function_overlap(
-    function_name: Optional[str], exploit_code: str,
+    function_name: str | None, exploit_code: str,
 ) -> bool:
     """Does the exploit text mention the finding's function name?
 
@@ -118,8 +123,8 @@ def _function_overlap(
 
 
 def _compile_error_anchor(
-    finding_file_path: Optional[str],
-    exploit_compile_errors: Optional[list[str]],
+    finding_file_path: str | None,
+    exploit_compile_errors: list[str] | None,
 ) -> bool:
     """Do the compile errors mention the finding's file?
 
@@ -134,7 +139,9 @@ def _compile_error_anchor(
     if finding_file_path in joined:
         return True
     basename = Path(finding_file_path).name
-    return bool(basename and basename in joined)
+    if not basename:
+        return False
+    return bool(re.search(r"\b" + re.escape(basename) + r"\b", joined))
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +150,11 @@ def _compile_error_anchor(
 
 
 def _cwe_buffer_overflow_shape(exploit_code: str) -> bool:
-    """CWE-120/121/787: long-string payload generation.
+    r"""CWE-120/121/787: long-string payload generation.
 
     Looks for the common LLM patterns:
-    * Repeated-character payloads: ``"A" * 100``, ``b"\\x41" * 64``
-    * Long byte literals: ``b"\\xde\\xad\\xbe\\xef\\xca\\xfe..."``
+    * Repeated-character payloads: ``"A" * 100``, ``b"\x41" * 64``
+    * Long byte literals: ``b"\xde\xad\xbe\xef\xca\xfe..."``
     """
     if not exploit_code:
         return False
@@ -158,9 +165,7 @@ def _cwe_buffer_overflow_shape(exploit_code: str) -> bool:
     ):
         return True
     # Long byte literal (≥ 8 escape sequences in a row).
-    if re.search(r'[bB]["\'](?:\\x[0-9a-fA-F]{2}){8,}', exploit_code):
-        return True
-    return False
+    return bool(re.search(r'[bB]["\'](?:\\x[0-9a-fA-F]{2}){8,}', exploit_code))
 
 
 def _cwe_command_injection_shape(exploit_code: str) -> bool:
@@ -180,12 +185,7 @@ def _cwe_command_injection_shape(exploit_code: str) -> bool:
         # the pattern is already narrow enough.
         return True
     # `$()` subshell or backticks inside string literals.
-    if re.search(
-        r"""['"][^'"]*(?:\$\([^)]+\)|`[^`]+`)[^'"]*['"]""",
-        exploit_code,
-    ):
-        return True
-    return False
+    return bool(re.search(r"""['"][^'"]*(?:\$\([^)]+\)|`[^`]+`)[^'"]*['"]""", exploit_code))
 
 
 def _cwe_sql_injection_shape(exploit_code: str) -> bool:
@@ -285,7 +285,7 @@ _CWE_DETECTORS: dict[str, Callable[[str], bool]] = {
 }
 
 
-def _cwe_shape(cwe_id: Optional[str], exploit_code: str) -> Optional[bool]:
+def _cwe_shape(cwe_id: str | None, exploit_code: str) -> bool | None:
     """Per-CWE shape match. Returns None when no detector exists.
 
     The None return is semantically distinct from False — it lets
@@ -308,10 +308,12 @@ def _cwe_shape(cwe_id: Optional[str], exploit_code: str) -> Optional[bool]:
 # Out of 4 heuristics, how many must agree for which verdict.
 _THRESHOLD_MATCHES_NO_LLM = 3  # ≥ 3 → matches without LLM
 _THRESHOLD_OFF_TARGET_NO_LLM = 0  # 0 → off_target without LLM
-# Anything in (0, threshold_matches) → uncertain → LLM tiebreak.
+# Anything in (0, threshold_matches) → uncertain → LLM tiebreak —
+# except the strong-partial case (every evaluated heuristic fired,
+# ≥ 2 evaluated), which is matches at reduced confidence, no LLM.
 
 
-def _count_signals(signals: dict[str, Optional[bool]]) -> tuple[int, int]:
+def _count_signals(signals: dict[str, bool | None]) -> tuple[int, int]:
     """Returns (matched_count, evaluated_count) — abstain (None) is
     excluded from both. Lets the verdict logic adapt to how many
     heuristics had data to evaluate."""
@@ -321,8 +323,8 @@ def _count_signals(signals: dict[str, Optional[bool]]) -> tuple[int, int]:
 
 
 def _initial_verdict(
-    signals: dict[str, Optional[bool]],
-) -> tuple[Optional[str], float, str]:
+    signals: dict[str, bool | None],
+) -> tuple[str | None, float, str]:
     """Decide the verdict from heuristics alone.
 
     Returns ``(verdict, confidence, reasoning)``. A ``None`` verdict
@@ -340,8 +342,10 @@ def _initial_verdict(
 
     # Use absolute-count thresholds for the partial-evaluated case:
     # matched ≥ _THRESHOLD_MATCHES_NO_LLM → matches, == 0 →
-    # off_target, else → tiebreak. (Earlier draft computed a ratio
-    # but the count is what the constants compare against.)
+    # off_target, else → tiebreak — except the strong-partial branch
+    # below, where every evaluated heuristic fired. (Earlier draft
+    # computed a ratio but the count is what the constants compare
+    # against.)
     fired = [k for k, v in signals.items() if v is True]
     not_fired = [k for k, v in signals.items() if v is False]
 
@@ -442,10 +446,10 @@ def _build_describe_prompt(exploit_code: str) -> tuple[str, str]:
 
 def _build_judge_prompt(
     description: str,
-    finding_file_path: Optional[str],
-    finding_function_name: Optional[str],
-    finding_cwe: Optional[str],
-    finding_message: Optional[str],
+    finding_file_path: str | None,
+    finding_function_name: str | None,
+    finding_cwe: str | None,
+    finding_message: str | None,
 ) -> tuple[str, str]:
     """Build the judge prompt: given the description, decide match."""
     from core.security.prompt_envelope import (
@@ -516,12 +520,12 @@ def _parse_judge_response(content: str) -> tuple[str, str]:
 def _llm_tiebreak(
     llm_client: Any,
     exploit_code: str,
-    finding_file_path: Optional[str],
-    finding_function_name: Optional[str],
-    finding_cwe: Optional[str],
-    finding_message: Optional[str],
+    finding_file_path: str | None,
+    finding_function_name: str | None,
+    finding_cwe: str | None,
+    finding_message: str | None,
     log: logging.Logger,
-) -> tuple[str, float, str, float, Optional[str]]:
+) -> tuple[str, float, str, float, str | None]:
     """2-step LLM tiebreak: describe-then-judge.
 
     Returns ``(verdict, confidence, reasoning, cost_usd, error_msg)``.
@@ -574,7 +578,7 @@ def _llm_tiebreak(
             cost_usd, "describe: empty content",
         )
 
-    log.debug(f"intent_match describe step: {description[:200]}...")
+    log.debug("intent_match describe step: %s...", description[:200])
 
     # Step 2: judge whether description matches finding.
     judge_user, judge_sys = _build_judge_prompt(
@@ -615,10 +619,7 @@ def _llm_tiebreak(
     verdict, reason = _parse_judge_response(judge_content)
     # LLM confidence baseline: matches/off_target → 0.65, uncertain → 0.3.
     # Deliberately modest — no calibration to claim higher.
-    if verdict == VERDICT_UNCERTAIN:
-        confidence = 0.3
-    else:
-        confidence = 0.65
+    confidence = 0.3 if verdict == VERDICT_UNCERTAIN else 0.65
 
     reasoning = (
         f"LLM tiebreak: {verdict} ({reason}). "
@@ -634,13 +635,13 @@ def _llm_tiebreak(
 
 def intent_match(
     exploit_code: str,
-    finding_file_path: Optional[str] = None,
-    finding_function_name: Optional[str] = None,
-    finding_cwe: Optional[str] = None,
-    finding_message: Optional[str] = None,
-    exploit_compile_errors: Optional[list[str]] = None,
+    finding_file_path: str | None = None,
+    finding_function_name: str | None = None,
+    finding_cwe: str | None = None,
+    finding_message: str | None = None,
+    exploit_compile_errors: list[str] | None = None,
     llm_client: Any = None,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> IntentMatchVerdict:
     """Decide whether an exploit hit the intended bug.
 
@@ -667,7 +668,7 @@ def intent_match(
         )
 
     # Run all 4 heuristics. ``None`` from cwe_shape indicates abstain.
-    signals: dict[str, Optional[bool]] = {
+    signals: dict[str, bool | None] = {
         SIGNAL_FILE_OVERLAP: _file_overlap(
             finding_file_path, exploit_code,
         ),
@@ -684,8 +685,7 @@ def intent_match(
 
     if initial_verdict is not None:
         log.debug(
-            f"intent_match: heuristic-only verdict={initial_verdict} "
-            f"signals={signals}"
+            "intent_match: heuristic-only verdict=%s signals=%s", initial_verdict, signals
         )
         return IntentMatchVerdict(
             verdict=initial_verdict,
@@ -698,8 +698,7 @@ def intent_match(
     # Ambiguous → LLM tiebreak (if available).
     if llm_client is None:
         log.debug(
-            f"intent_match: heuristics ambiguous, no LLM available; "
-            f"signals={signals}"
+            "intent_match: heuristics ambiguous, no LLM available; signals=%s", signals
         )
         return IntentMatchVerdict(
             verdict=VERDICT_UNCERTAIN,
@@ -713,8 +712,7 @@ def intent_match(
         )
 
     log.debug(
-        f"intent_match: heuristics ambiguous ({reasoning}); "
-        f"escalating to LLM"
+        "intent_match: heuristics ambiguous (%s); escalating to LLM", reasoning
     )
     verdict, llm_confidence, llm_reasoning, cost_usd, llm_error = (
         _llm_tiebreak(

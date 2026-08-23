@@ -7,7 +7,6 @@ the terminal banner. No logic, no checks, no side effects.
 import random
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -28,7 +27,7 @@ def read_logo(version: str = "") -> str:
     path = _ASSETS / "raptor-offset"
     if not path.exists():
         return ""
-    text = path.read_text().rstrip()
+    text = path.read_text(encoding="utf-8").rstrip()
     if version:
         label = "v" + version.lstrip("v")
 
@@ -45,25 +44,24 @@ def read_random_quote() -> str:
     """Pick a random quote from the hackers-8ball file."""
     path = _ASSETS / "hackers-8ball"
     if path.exists():
-        lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         if lines:
-            # nosemgrep: crypto.prng.random-module.python
             # Decorative banner quote — non-cryptographic.
-            return random.choice(lines)
+            return random.choice(lines)  # nosemgrep: crypto.prng.random-module.python
     return '"Hack the planet!"'
 
 
 def format_banner(
     logo: str,
     quote: str,
-    tool_results: List[Tuple[str, bool]],
-    tool_warnings: List[str],
-    llm_lines: List[str],
-    llm_warnings: List[str],
-    env_parts: List[str],
-    env_warnings: List[str],
-    project_line: Optional[str] = None,
-    lang_line: Optional[str] = None,
+    tool_results: list[tuple[str, bool]],
+    tool_warnings: list[str],
+    llm_lines: list[str],
+    llm_warnings: list[str],
+    env_parts: list[str],
+    env_warnings: list[str],
+    project_line: str | None = None,
+    lang_line: str | None = None,
 ) -> str:
     """Format the startup banner from gathered data.
 
@@ -113,8 +111,7 @@ def format_banner(
     )
     if ordered:
         lines.append(f"  warn: {ordered[0]}")
-        for w in ordered[1:]:
-            lines.append(f"        {w}")
+        lines.extend(f"        {w}" for w in ordered[1:])
         lines.append("")
 
     # Active project

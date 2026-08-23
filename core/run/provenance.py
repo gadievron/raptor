@@ -15,10 +15,15 @@ the current HEAD.
 """
 
 import hashlib
+import logging
+import os
 import platform
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Repo root = parents[2] of this file:
 #   parents[0] = core/run   (this module's dir)
@@ -47,7 +52,7 @@ _VERSION_PROBES = {
 }
 
 
-def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
+def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> str | None:
     """Run ``git <args>`` in ``repo_dir``; return stripped stdout or None.
 
     Best-effort: returns None on non-zero exit, missing git, timeout, or a
@@ -67,8 +72,9 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
     try:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
-    except Exception:
-        env = None
+    except Exception:  # noqa: BLE001
+        logger.warning("get_safe_env unavailable; using inherited env")
+        env = os.environ.copy()
     if untrusted:
         from core.git.clone import safe_git_command
         cmd = safe_git_command("-C", str(repo_dir), *args)
@@ -83,14 +89,14 @@ def _git(repo_dir: Path, *args: str, untrusted: bool = False) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     if result.returncode != 0:
         return None
     return result.stdout.strip()
 
 
-def source_control_snapshot(repo_dir: Optional[Path] = None) -> Dict[str, Any]:
+def source_control_snapshot(repo_dir: Path | None = None) -> dict[str, Any]:
     """Snapshot RAPTOR's own source-control state. Sealed at run START.
 
     Describes the *framework* version that produced the run — not the scanned
@@ -128,7 +134,9 @@ def source_control_snapshot(repo_dir: Optional[Path] = None) -> Dict[str, Any]:
 
     diff_sha256 = None
     if dirty:
-        diff = _git(repo_dir, "diff", "HEAD")
+        # --no-ext-diff: the hash must be a function of the tree contents,
+        # not of whatever external diff driver the operator has configured.
+        diff = _git(repo_dir, "diff", "--no-ext-diff", "HEAD")
         if diff:
             diff_sha256 = hashlib.sha256(
                 diff.encode("utf-8", "replace")
@@ -145,7 +153,7 @@ def source_control_snapshot(repo_dir: Optional[Path] = None) -> Dict[str, Any]:
             "version": version}
 
 
-def tool_version(name: str) -> Optional[str]:
+def tool_version(name: str) -> str | None:
     """Best-effort version string for an analysis engine (``semgrep`` /
     ``codeql`` / ``coccinelle``).
 
@@ -159,8 +167,9 @@ def tool_version(name: str) -> Optional[str]:
     try:
         from core.config import RaptorConfig
         env = RaptorConfig.get_safe_env()
-    except Exception:
-        env = None
+    except Exception:  # noqa: BLE001
+        logger.warning("get_safe_env unavailable; using inherited env")
+        env = os.environ.copy()
     try:
         result = subprocess.run(
             probe,
@@ -170,7 +179,7 @@ def tool_version(name: str) -> Optional[str]:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         return None
     out = (result.stdout or result.stderr or "").strip()
     if not out:
@@ -178,7 +187,7 @@ def tool_version(name: str) -> Optional[str]:
     return out.splitlines()[0].strip() or None
 
 
-def target_snapshot(target_path: Optional[Any]) -> Optional[Dict[str, Any]]:
+def target_snapshot(target_path: Any | None) -> dict[str, Any] | None:
     """Snapshot the SCANNED TARGET's own VCS state. Sealed at run START.
 
     This is the other half of attribution: ``source_control_snapshot`` records
@@ -196,29 +205,49 @@ def target_snapshot(target_path: Optional[Any]) -> Optional[Dict[str, Any]]:
         return None
     p = Path(target_path)
     # untrusted=True: the target is attacker-controlled — a hostile .git/config
-    # could turn `git status` into RCE without the safe overrides.
+    # could turn a routine git probe into code execution without the safe
+    # overrides.
     sha = _git(p, "rev-parse", "HEAD", untrusted=True)
     if sha is None:
         return None
-    porcelain = _git(p, "status", "--porcelain", untrusted=True)
+    # Dirtiness via plumbing that never re-hashes worktree content. `git
+    # status` refreshes the index, and the refresh pushes stat-stale files
+    # through any clean filter the repo's own .git/config defines
+    # (filter.<name>.clean — an arbitrary command under a repo-chosen name,
+    # which the -c safety overrides cannot blanket-disable; see
+    # _SAFE_GIT_OVERRIDES in core.git.clone). diff-index WITHOUT a preceding
+    # refresh compares HEAD against the index's stat cache only, and
+    # ls-files is a pure directory walk — neither executes target-configured
+    # code. Trade-off: a stat-touched but content-identical file counts as
+    # dirty. That conservative bias is fine for a provenance flag (and it
+    # also skips the index refresh + lock write `status` performs, which
+    # matters on large targets).
+    tracked = _git(p, "diff-index", "--no-ext-diff", "HEAD", untrusted=True)
+    untracked = _git(
+        p, "ls-files", "--others", "--exclude-standard", untrusted=True,
+    )
+    if tracked is None and untracked is None:
+        dirty = None  # both probes failed — unknowable, never guessed
+    else:
+        dirty = bool(tracked) or bool(untracked)
     branch = _git(p, "rev-parse", "--abbrev-ref", "HEAD", untrusted=True)
     return {
         "vcs": "git",
         "commit": sha,
-        "dirty": bool(porcelain) if porcelain is not None else None,
+        "dirty": dirty,
         "branch": branch,
     }
 
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as fh:
+    with Path(path).open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
-def archive_snapshot(archive_path: Optional[Any]) -> Optional[Dict[str, Any]]:
+def archive_snapshot(archive_path: Any | None) -> dict[str, Any] | None:
     """Identity of the SCANNED ARCHIVE file — the "which distribution" half.
 
     Hashes the archive bytes; returns ``{archive_sha256, archive_name, format}``
@@ -240,8 +269,8 @@ def archive_snapshot(archive_path: Optional[Any]) -> Optional[Dict[str, Any]]:
 
 
 def archive_target_identity(
-    archive_path: Optional[Any],
-) -> Optional[Dict[str, Any]]:
+    archive_path: Any | None,
+) -> dict[str, Any] | None:
     """Compose the manifest ``target`` block for an archive target — the
     archive file's ACQUISITION identity ``{source, archive_sha256,
     archive_name, format}``. None if ``archive_path`` isn't a recognised
@@ -267,14 +296,14 @@ _ENGINE_OUTPUT_GLOBS = {
 }
 
 
-def detect_engines(out_dir: Any) -> Dict[str, Optional[str]]:
+def detect_engines(out_dir: Any) -> dict[str, str | None]:
     """Which static engines left output in ``out_dir``, with each version.
 
     Best-effort: version is None if the tool isn't installed. Shared by scan/
     codeql completion and the agentic scan phase so engine capture is uniform.
     """
     out_dir = Path(out_dir)
-    engines: Dict[str, Optional[str]] = {}
+    engines: dict[str, str | None] = {}
     for name, patterns in _ENGINE_OUTPUT_GLOBS.items():
         if any(any(out_dir.glob(p)) for p in patterns):
             engines[name] = tool_version(name)
@@ -293,7 +322,7 @@ def detect_engines(out_dir: Any) -> Dict[str, Optional[str]]:
 _DETERMINISTIC_COMMANDS = frozenset({"scan", "codeql"})
 
 
-def is_deterministically_reproducible(command: Optional[str]) -> bool:
+def is_deterministically_reproducible(command: str | None) -> bool:
     """Whether ``command``'s verdict path is deterministic (no LLM, no
     stochastic/runtime component) — i.e. re-running on the same inputs
     reproduces the same findings."""
@@ -301,8 +330,8 @@ def is_deterministically_reproducible(command: Optional[str]) -> bool:
 
 
 def standard_completion_provenance(
-    out_dir: Any, command: Optional[str],
-) -> Dict[str, Any]:
+    out_dir: Any, command: str | None,
+) -> dict[str, Any]:
     """The end-of-run provenance EVERY command contributes, derived only from
     facts the lifecycle can see for itself: which engines left output, and
     whether the command's verdict is deterministic.
@@ -322,7 +351,7 @@ def standard_completion_provenance(
     }
 
 
-def environment_snapshot() -> Dict[str, Any]:
+def environment_snapshot() -> dict[str, Any]:
     """Snapshot the runtime environment. Sealed at run START.
 
     Coarse but stable facts about the interpreter and OS the run executed
@@ -345,10 +374,10 @@ def environment_snapshot() -> Dict[str, Any]:
     }
 
 
-def build_start_manifest(repo_dir: Optional[Path] = None,
-                         target: Optional[Any] = None,
-                         target_identity: Optional[Dict[str, Any]] = None,
-                         ) -> Dict[str, Any]:
+def build_start_manifest(repo_dir: Path | None = None,
+                         target: Any | None = None,
+                         target_identity: dict[str, Any] | None = None,
+                         ) -> dict[str, Any]:
     """Assemble the manifest fragment sealed at run START.
 
     Carries a ``schema`` integer so the manifest can evolve independently of
@@ -362,7 +391,7 @@ def build_start_manifest(repo_dir: Optional[Path] = None,
     block from a target the run unpacked), else ``target_snapshot(target)`` for
     a git checkout, else ``{source: "directory"}`` for a plain directory.
     """
-    manifest: Dict[str, Any] = {
+    manifest: dict[str, Any] = {
         "schema": 1,
         "source_control": source_control_snapshot(repo_dir),
         "environment": environment_snapshot(),
@@ -388,7 +417,7 @@ def build_start_manifest(repo_dir: Optional[Path] = None,
 # legacy directories, or anything created before manifest capture existed.
 # cite/reporting key off this to degrade honestly ("provenance unavailable")
 # instead of reading today's state and pretending it produced the run.
-UNAVAILABLE_MANIFEST: Dict[str, Any] = {
+UNAVAILABLE_MANIFEST: dict[str, Any] = {
     "schema": 1,
     "provenance": "unavailable",
     "reason": "run predates manifest capture",
@@ -401,7 +430,7 @@ UNAVAILABLE_MANIFEST: Dict[str, Any] = {
 # they may show source paths and full SHAs. The publication/redaction view for
 # cite is a separate concern and must not reuse these verbatim.
 
-def format_sha_short(manifest: Optional[Dict[str, Any]]) -> str:
+def format_sha_short(manifest: dict[str, Any] | None) -> str:
     """Compact VCS tag for a one-line run listing: ``<sha7>`` with a trailing
     ``*`` when the tree was modified. Empty string when no source-control info
     is available (legacy / unavailable runs) — callers render nothing.
@@ -413,7 +442,7 @@ def format_sha_short(manifest: Optional[Dict[str, Any]]) -> str:
     return sha[:7] + ("*" if sc.get("dirty") else "")
 
 
-def format_manifest_block(manifest: Optional[Dict[str, Any]],
+def format_manifest_block(manifest: dict[str, Any] | None,
                           indent: str = "  ") -> str:
     """Multi-line human-readable provenance for reports / footers. Empty string
     when there is no manifest. Honest about unavailable provenance rather than
@@ -473,7 +502,7 @@ _PUBLIC_TOPLEVEL_FIELDS = (
 )
 
 
-def public_view(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def public_view(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Publish-safe projection of a run's ``.raptor-run.json`` for citation.
 
     The full record is for LOCAL use only — `/project status`, sweep,
@@ -491,7 +520,7 @@ def public_view(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     model snapshots — so it is forwarded under an explicit field allowlist.
     """
     md = run_metadata or {}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
 
     for key in _PUBLIC_TOPLEVEL_FIELDS:
         if key in md:
@@ -505,7 +534,7 @@ def public_view(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         out["manifest"] = {"provenance": "unavailable"}
         return out
 
-    pub: Dict[str, Any] = {}
+    pub: dict[str, Any] = {}
     sc = manifest.get("source_control") or {}
     if sc:
         pub["source_control"] = {
@@ -558,7 +587,7 @@ def public_view(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def format_repro_short(manifest: Optional[Dict[str, Any]]) -> str:
+def format_repro_short(manifest: dict[str, Any] | None) -> str:
     """Compact reproducibility tag for a run listing: ``repro`` (mechanical,
     deterministic) / ``llm`` (LLM-mediated verdict) / ``""`` when unknown."""
     if not manifest or "deterministically_reproducible" not in manifest:
@@ -567,8 +596,8 @@ def format_repro_short(manifest: Optional[Dict[str, Any]]) -> str:
 
 
 def aggregate_provenance(
-    metadatas: Iterable[Optional[Dict[str, Any]]],
-) -> Dict[str, Any]:
+    metadatas: Iterable[dict[str, Any] | None],
+) -> dict[str, Any]:
     """Roll up per-run ``.raptor-run.json`` manifests into a project summary.
 
     Counts runs by framework SHA, flags modified-tree runs, unions engine
@@ -576,7 +605,7 @@ def aggregate_provenance(
     splits reproducible vs LLM-mediated. Runs with no / unavailable manifest
     are counted as ``unavailable`` rather than guessed.
     """
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "runs": 0,
         "shas": {},          # base_sha -> run count
         "dirty_runs": 0,
@@ -585,15 +614,19 @@ def aggregate_provenance(
         "reproducible": {"yes": 0, "no": 0, "unknown": 0},
         "unavailable": 0,
     }
-    engines_acc: Dict[str, set] = {}
+    engines_acc: dict[str, set] = {}
     for md in metadatas:
         if not md:
             continue
         summary["runs"] += 1
-        m = md.get("manifest") or {}
+        m = md.get("manifest")
+        if not isinstance(m, dict):
+            m = {}
         if not m or m.get("provenance") == "unavailable":
-            if m.get("provenance") == "unavailable":
-                summary["unavailable"] += 1
+            # A run with no manifest at all is just as provenance-less
+            # as one carrying the explicit "unavailable" stamp — both
+            # count as unavailable rather than being guessed at.
+            summary["unavailable"] += 1
             summary["reproducible"]["unknown"] += 1
             continue
         sc = m.get("source_control") or {}
@@ -609,6 +642,9 @@ def aggregate_provenance(
         seen = {
             (mdl.get("resolved") or mdl.get("alias") or "?")
             for mdl in (m.get("models") or [])
+            # tolerate malformed/imported manifests, like engines above
+            # (run_models() filters non-dicts for the same reason)
+            if isinstance(mdl, dict)
         }
         for key in seen:
             summary["models"][key] = summary["models"].get(key, 0) + 1
@@ -619,7 +655,7 @@ def aggregate_provenance(
     return summary
 
 
-def format_provenance_rollup(summary: Dict[str, Any]) -> str:
+def format_provenance_rollup(summary: dict[str, Any]) -> str:
     """Human-readable project-level provenance rollup from aggregate_provenance."""
     runs = summary.get("runs", 0)
     if not runs:
@@ -674,7 +710,7 @@ def format_provenance_rollup(summary: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_manifest(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def run_manifest(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
     """The sealed manifest sub-dict of a loaded run metadata, or ``{}`` when
     absent or the 'unavailable' stamp (legacy/adopted runs). The base every
     field accessor below reads through."""
@@ -686,13 +722,13 @@ def run_manifest(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return m
 
 
-def run_engines(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+def run_engines(run_metadata: dict[str, Any] | None) -> dict[str, str | None]:
     """``{engine_name: version}`` that ran (version may be None), or ``{}``."""
     engines = run_manifest(run_metadata).get("engines")
     return dict(engines) if isinstance(engines, dict) else {}
 
 
-def run_models(run_metadata: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def run_models(run_metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The models that fired — each a dict with ``provider`` / ``alias`` /
     ``resolved`` (the snapshot, not the floating alias) / ``role`` / ``calls``.
     ``[]`` when none (e.g. a mechanical scan)."""
@@ -700,7 +736,7 @@ def run_models(run_metadata: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [m for m in models if isinstance(m, dict)] if isinstance(models, list) else []
 
 
-def run_target(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def run_target(run_metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """The target's ACQUISITION stamp — how the code was acquired: git
     ``{vcs, commit, branch, dirty}`` / archive ``{source, archive_sha256, …}`` /
     ``{source: "directory"}``. None when absent.
@@ -715,13 +751,13 @@ def run_target(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any
     return target if isinstance(target, dict) else None
 
 
-def run_framework_sha(run_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+def run_framework_sha(run_metadata: dict[str, Any] | None) -> str | None:
     """The RAPTOR framework ``base_sha`` that produced the run, or None."""
     sc = run_manifest(run_metadata).get("source_control")
     return sc.get("base_sha") if isinstance(sc, dict) else None
 
 
-def run_timestamp(run_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+def run_timestamp(run_metadata: dict[str, Any] | None) -> str | None:
     """The run's start timestamp (ISO 8601). Top-level on the metadata, not in
     the manifest — the accessor hides that."""
     if not run_metadata:
@@ -731,8 +767,8 @@ def run_timestamp(run_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def run_deterministically_reproducible(
-    run_metadata: Optional[Dict[str, Any]],
-) -> Optional[bool]:
+    run_metadata: dict[str, Any] | None,
+) -> bool | None:
     """Whether the run's verdict is a pure function of its inputs (mechanical),
     or None when the manifest predates the field — so a consumer can tell
     "not reproducible" apart from "unknown"."""
@@ -740,7 +776,7 @@ def run_deterministically_reproducible(
     return v if isinstance(v, bool) else None
 
 
-def run_who(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def run_who(run_metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """The operator's public-facing identity (``{name, handle?, url?}``) sealed
     at run start, or None when no identity was set — the WHO a citation
     credits. See core.run.identity."""
@@ -748,7 +784,7 @@ def run_who(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return who if isinstance(who, dict) else None
 
 
-def harness_model_entry(model: Optional[str]) -> Optional[Dict[str, Any]]:
+def harness_model_entry(model: str | None) -> dict[str, Any] | None:
     """A ``models[]`` entry for an agent-supplied ambient harness model — the
     only value only the harness (the Claude session) knows, since RAPTOR's
     Python can't read ``/model`` (no env var). The completion stubs build this

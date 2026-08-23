@@ -1,6 +1,7 @@
 ---
 name: function-trace-generator
 description: Generate function-level execution traces for debugging and analysis.
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 

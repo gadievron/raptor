@@ -6,12 +6,12 @@
 # requirements*.txt (or this Dockerfile) change.
 #
 # Base pinned to bookworm to match the devcontainer
-# (mcr.microsoft.com/devcontainers/python:1-3.12-bookworm, glibc 2.36)
+# (mcr.microsoft.com/devcontainers/python:3-3.14-bookworm, glibc 2.36)
 # so platform-sensitive wheels resolve identically — notably z3-solver
 # 4.15.4.0's manylinux_2_34 wheel (see the cap rationale in
 # requirements-dev.txt). PYTHON_VERSION here must track tests.yml's
-# env.PYTHON_VERSION (3.12).
-FROM python:3.12-slim-bookworm
+# env.PYTHON_VERSION (3.14).
+FROM python:3.14.7-slim-bookworm
 
 # OCI labels surface on the GHCR package page. `description` is the only
 # per-package text GHCR renders (it has no per-image README upload — the
@@ -23,12 +23,15 @@ LABEL org.opencontainers.image.source="https://github.com/gadievron/raptor" \
 
 # git is required by actions/checkout when this image is used as a
 # container-job base — the slim base ships none, and checkout fails
-# without it. ca-certificates is already present in the slim image.
-# Kept to the single tool checkout needs; tiers that require heavier
-# system tooling (sandbox namespaces, radare2/gcc) stay on the runner
-# rather than bloating this image.
+# without it. coccinelle provides /usr/bin/spatch for the source_intel
+# tier's real-spatch E2E tests. jq is required by the sage tier's
+# boot-payload capture roundtrip tests (libexec/raptor-sage-setup's
+# capture_boot_payload extracts the payload with jq; the tests skip
+# without it). ca-certificates is already present in the slim image.
+# Tiers that require heavier system tooling (sandbox namespaces,
+# radare2/gcc) stay on the runner rather than bloating this image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git coccinelle jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/raptor-ci
@@ -37,7 +40,8 @@ WORKDIR /opt/raptor-ci
 # source-only changes to the repo.
 COPY requirements.txt requirements-dev.txt ./
 
-RUN pip install --no-cache-dir -r requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt \
+    && sha256sum requirements.txt requirements-dev.txt > /etc/raptor-ci-deps.hash
 
 # Build-time smoke import: fail the IMAGE build (not downstream CI) if a
 # pinned dependency can't import on this base.

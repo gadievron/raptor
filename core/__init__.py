@@ -61,13 +61,14 @@ def __getattr__(name: str) -> Any:
     """
     spec = _LAZY_EXPORTS.get(name)
     if spec is None:
-        raise AttributeError(f"module 'core' has no attribute {name!r}")
+        msg = f"module 'core' has no attribute {name!r}"
+        raise AttributeError(msg)
     submod_name, attr_name = spec
     import importlib
-    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     # ``submod_name`` is from the module-level ``_LAZY_EXPORTS``
     # dict (constant in this file) — not attacker-controlled.
     # PEP 562 lazy re-export.
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     submod = importlib.import_module(submod_name)
     value = getattr(submod, attr_name)
     # Cache on this module so subsequent accesses bypass __getattr__.
@@ -82,12 +83,12 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "RaptorConfig",
-    "get_logger",
-    "deduplicate_findings",
-    "parse_sarif_findings",
-    "validate_sarif",
-    "generate_scan_metrics",
-    "sanitize_finding_for_display",
     "clone_repository",
+    "deduplicate_findings",
+    "generate_scan_metrics",
+    "get_logger",
+    "parse_sarif_findings",
+    "sanitize_finding_for_display",
     "sha256_tree",
+    "validate_sarif",
 ]

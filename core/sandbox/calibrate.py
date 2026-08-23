@@ -25,10 +25,12 @@ Threat model:
     permissive policy — by the time we observe its behaviour, the
     binary has already executed. Defense against malicious binary
     updates lives upstream (signed installers, package-hash
-    verification). The cache itself is mode-0600 with sha256 self-
-    integrity check; tampering by an attacker who can write
-    ``~/.cache/raptor/`` is bounded by the attacker's existing
-    same-UID access.
+    verification). The cache itself is mode-0600; on load the cached
+    ``binary_sha256`` is re-checked against the on-disk binary (a
+    staleness / corruption guard, not an integrity seal — the
+    observational fields carry no digest of their own). Tampering by
+    an attacker who can write ``~/.cache/raptor/`` is bounded by the
+    attacker's existing same-UID access.
 
 API:
     calibrate_binary(bin_path, probe_args, *, env_keys=()) → SandboxProfile
@@ -50,11 +52,13 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
 
+from core.atomic_fs import write_text_atomically
+from core.hash import sha256_file as _sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +136,12 @@ class SandboxProfile:
     binary_sha256: str
     env_signature: str
     captured_at: str
-    probe_args: List[str] = field(default_factory=list)
-    paths_read: List[str] = field(default_factory=list)
-    paths_written: List[str] = field(default_factory=list)
-    paths_stat: List[str] = field(default_factory=list)
-    proxy_hosts: List[str] = field(default_factory=list)
-    connect_targets: List[ConnectTarget] = field(default_factory=list)
+    probe_args: list[str] = field(default_factory=list)
+    paths_read: list[str] = field(default_factory=list)
+    paths_written: list[str] = field(default_factory=list)
+    paths_stat: list[str] = field(default_factory=list)
+    proxy_hosts: list[str] = field(default_factory=list)
+    connect_targets: list[ConnectTarget] = field(default_factory=list)
     cache_version: int = _CACHE_VERSION
 
     def to_json(self) -> str:
@@ -149,8 +153,14 @@ class SandboxProfile:
         return json.dumps(d, indent=2)
 
     @classmethod
-    def from_json(cls, raw: str) -> "SandboxProfile":
+    def from_json(cls, raw: str) -> SandboxProfile:
         d = json.loads(raw)
+        if not isinstance(d, dict):
+            msg = (
+                f"SandboxProfile JSON must be an object, "
+                f"got {type(d).__name__}"
+            )
+            raise TypeError(msg)
         connects = [
             ConnectTarget(**t) for t in d.get("connect_targets", [])
         ]
@@ -163,17 +173,6 @@ class SandboxProfile:
 # ---------------------------------------------------------------------------
 
 
-def _sha256_file(path: Path) -> str:
-    """sha256 of file content, streamed so large binaries don't
-    OOM. 64KiB blocks balance syscall overhead vs memory."""
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(65536)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _env_signature(env_keys: Iterable[str]) -> str:
@@ -219,6 +218,38 @@ def _now_iso() -> str:
     ).isoformat().replace("+00:00", "Z")
 
 
+def _probe_env(env_keys: Iterable[str]) -> dict | None:
+    """Child env for the calibration probe, honouring ``env_keys``.
+
+    The cache key discriminates on the ``env_keys`` values, so the
+    probe must actually SEE them — pre-fix the probe never received
+    an env and the sandbox spawned it under ``get_safe_env()``, which
+    strips exactly the discriminator variables (e.g.
+    ``CLAUDE_CODE_USE_BEDROCK`` / ``ANTHROPIC_BASE_URL``): every env
+    shape produced the identical measurement, and a Bedrock-configured
+    operator got a direct-endpoint profile cached under the Bedrock
+    fingerprint.
+
+    Returns ``get_safe_env()`` overlaid with exactly the declared
+    discriminator keys from the operator environment (set → copied
+    in; unset → removed, so a stale allowlisted value can't leak
+    through). ``None`` when no keys are declared — the sandbox then
+    applies its own safe-env default, unchanged.
+    """
+    keys = sorted(set(env_keys or ()))
+    if not keys:
+        return None
+    from core.config import RaptorConfig
+    env = RaptorConfig.get_safe_env()
+    for k in keys:
+        v = os.environ.get(k)
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = v
+    return env
+
+
 # ---------------------------------------------------------------------------
 # Probe spawn
 # ---------------------------------------------------------------------------
@@ -226,11 +257,11 @@ def _now_iso() -> str:
 
 def _spawn_probe(
     bin_path: Path,
-    probe_args: List[str],
+    probe_args: list[str],
     *,
     timeout: float,
-    extra_env: Optional[dict] = None,
-) -> Tuple["SandboxProfile", int]:
+    extra_env: dict | None = None,
+) -> tuple[SandboxProfile, int]:
     """Run the probe under sandbox(observe=True, audit-log proxy).
 
     Returns (partial_profile_with_observed_data, return_code). The
@@ -261,6 +292,15 @@ def _spawn_probe(
         # binary should ever actually reach. The placeholder isn't
         # an allowlist for the probe — audit_log_only sees through
         # it — but it satisfies the API contract.
+        # require_proxy_netns is deliberately NOT set here: the
+        # probe binary is operator-designated and trusted (codeql,
+        # claude, ...), and nothing from a scanned repo reaches this
+        # execution. Calibration is MEASUREMENT, not containment —
+        # audit_log_only already lets every CONNECT through by
+        # design, so the netns tier adds no enforcement here and
+        # requiring it would only make calibration fail on
+        # netns-less hosts (00015 requires the netns tier only for
+        # repo-influenced egress).
         result = sandbox_run(
             [str(bin_path)] + list(probe_args),
             target=str(scratch_path),
@@ -274,7 +314,10 @@ def _spawn_probe(
             timeout=timeout,
         )
         nonce = result.sandbox_info.get("observe_nonce")
-        observed = parse_observe_log(scratch_path, expected_nonce=nonce)
+        observed = parse_observe_log(
+            scratch_path, expected_nonce=nonce,
+            sandbox_info=result.sandbox_info,
+        )
 
         # Hostnames from the proxy event log (which records the
         # CONNECT target by name regardless of allow/deny). De-dup
@@ -286,11 +329,18 @@ def _spawn_probe(
             if isinstance(ev, dict) and ev.get("host")
         })
 
-        # Map observe ConnectTarget → our local dataclass.
-        connects = [
-            ConnectTarget(ip=t.ip, port=t.port, family=t.family)
-            for t in observed.connect_targets
-        ]
+        # Map observe ConnectTarget → our local dataclass. De-dup +
+        # sort like every other observational list so to_json's
+        # "identical JSON modulo timestamp" promise holds for repeat
+        # probes (frozen dataclass is hashable; sort by field tuple
+        # since order=True isn't set).
+        connects = sorted(
+            {
+                ConnectTarget(ip=t.ip, port=t.port, family=t.family)
+                for t in observed.connect_targets
+            },
+            key=lambda t: (t.family, t.ip, t.port),
+        )
 
         # Build the partial profile. Identity fields filled by
         # caller; we don't have them here.
@@ -353,9 +403,8 @@ def calibrate_binary(
     """
     bin_real = Path(bin_path).resolve()
     if not bin_real.exists():
-        raise FileNotFoundError(
-            f"calibrate_binary: {bin_path!r} does not exist"
-        )
+        msg = f"calibrate_binary: {bin_path!r} does not exist"
+        raise FileNotFoundError(msg)
 
     bin_sha = _sha256_file(bin_real)
     env_sig = _env_signature(env_keys)
@@ -363,6 +412,7 @@ def calibrate_binary(
 
     profile, rc = _spawn_probe(
         bin_real, list(probe_args), timeout=timeout,
+        extra_env=_probe_env(env_keys),
     )
     # Fill identity fields the spawn helper couldn't know.
     profile.binary_path = str(bin_real)
@@ -380,13 +430,14 @@ def calibrate_binary(
         # observe-mode degraded silently. Don't cache an empty
         # profile — that would mask real reach behind a stale
         # placeholder. Raise so the caller can react.
-        raise RuntimeError(
+        msg = (
             f"calibrate_binary: probe of {bin_real} produced no "
             f"records. Either the binary's probe args don't "
             f"exercise its startup paths, or observe-mode failed "
             f"to engage on this host (libseccomp/ptrace check). "
             f"Probe rc={rc}."
         )
+        raise RuntimeError(msg)
 
     _save_to_cache(fp, profile)
     return profile
@@ -416,25 +467,23 @@ def load_or_calibrate(
     """
     bin_real = Path(bin_path).resolve()
     if not bin_real.exists():
-        raise FileNotFoundError(
-            f"load_or_calibrate: {bin_path!r} does not exist"
-        )
+        msg = f"load_or_calibrate: {bin_path!r} does not exist"
+        raise FileNotFoundError(msg)
 
     if not force:
         bin_sha = _sha256_file(bin_real)
         env_sig = _env_signature(env_keys)
         fp = _fingerprint(bin_sha, env_sig)
         cached = _load_from_cache(fp)
-        if cached is not None:
-            # Re-verify the on-disk binary still matches. The
-            # fingerprint already includes the sha; this check
-            # catches the (rare) case where the cache file was
-            # truncated/corrupted to a sha that happens to look
-            # right but content drifted.
-            if (cached.binary_sha256 == bin_sha
-                    and cached.cache_version == _CACHE_VERSION):
-                return cached
-            # Cache stale: fall through and recalibrate.
+        # Re-verify the on-disk binary still matches. The fingerprint
+        # already includes the sha; this check catches the (rare)
+        # case where the cache file was truncated/corrupted to a sha
+        # that happens to look right but content drifted. Stale cache
+        # falls through and recalibrates.
+        if (cached is not None
+                and cached.binary_sha256 == bin_sha
+                and cached.cache_version == _CACHE_VERSION):
+            return cached
 
     return calibrate_binary(
         bin_real, probe_args=probe_args,
@@ -446,40 +495,30 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     """Persist a profile. mode 0600, dir mode 0700."""
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only — most restrictive POSIX mode.
-        os.chmod(_CACHE_DIR, 0o700)
+        os.chmod(_CACHE_DIR, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError as exc:
         logger.warning("calibrate: cache dir setup failed: %s", exc)
         return
     path = _cache_path_for(fingerprint)
-    # Atomic write: tempfile in the cache dir + rename. Avoids
-    # partial-content cache hits when the parent's process crashes
-    # mid-write.
+    # Atomic write: sandbox calibration cache. mode=0o600 to preserve
+    # the owner-only posture the previous mkstemp+chmod pattern installed
+    # (the shared primitive's default 0o644 would widen; the cache is
+    # owner-scoped, not shared). Primitive adds fsync-file + fsync-
+    # parent-dir durability the old direct-write lacked.
+    # 0o600 = owner-only file mode.
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions
     try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".calibrate-tmp-", suffix=".json",
-            dir=str(_CACHE_DIR),
+        write_text_atomically(
+            path, profile.to_json(),
+            mode=0o600, tmp_prefix=".calibrate-tmp-",
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(profile.to_json())
-            # nosemgrep: python.lang.security.audit.insecure-file-permissions
-            # 0o600 = owner-only file mode.
-            os.chmod(tmp_path, 0o600)
-            os.rename(tmp_path, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
     except OSError as exc:
         logger.warning("calibrate: cache write failed for %s: %s",
                        path, exc)
 
 
-def _load_from_cache(fingerprint: str) -> Optional[SandboxProfile]:
+def _load_from_cache(fingerprint: str) -> SandboxProfile | None:
     path = _cache_path_for(fingerprint)
     if not path.exists():
         return None

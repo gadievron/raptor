@@ -17,18 +17,30 @@ the newest stable, which is the only one Homebrew exposes.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import urllib.parse
 
-from core.json import JsonCache, MISSING
-from core.http import HttpClient
+from core.json import MISSING, JsonCache
 
 from ._negative_cache import log_fetch_failure
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.http import HttpClient
 
 logger = logging.getLogger(__name__)
 
 
 _CACHE_KEY_PREFIX = "brew-versions"
 _DEFAULT_TTL = 24 * 3600
+
+
+def _key_component(value: str) -> str:
+    """Percent-encode one cache-key component so the key identity is
+    injective — tap-qualified formula names contain ``/``, and a raw
+    name with ``..`` segments could otherwise alias another formula's
+    cache file after JsonCache path sanitisation. Old raw-name entries
+    re-fetch once."""
+    return urllib.parse.quote(value, safe="")
 
 
 class HomebrewClient:
@@ -39,7 +51,7 @@ class HomebrewClient:
     def __init__(
         self,
         http: HttpClient,
-        cache: Optional[JsonCache] = None,
+        cache: JsonCache | None = None,
         *,
         ttl_seconds: int = _DEFAULT_TTL,
         offline: bool = False,
@@ -49,8 +61,8 @@ class HomebrewClient:
         self._ttl = ttl_seconds
         self._offline = offline
 
-    def list_versions(self, name: str) -> List[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+    def list_versions(self, name: str) -> list[str]:
+        cache_key = f"{_CACHE_KEY_PREFIX}:{_key_component(name)}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -74,7 +86,7 @@ class HomebrewClient:
         return versions
 
 
-def _extract_versions(data: dict) -> List[str]:
+def _extract_versions(data: dict) -> list[str]:
     """Pull the stable version from the Homebrew response.
 
     Shape (abridged):
@@ -87,6 +99,8 @@ def _extract_versions(data: dict) -> List[str]:
     We only return the stable version; head/bottle aren't versioned
     pins an operator would want to harden to.
     """
+    if not isinstance(data, dict):
+        return []
     versions = data.get("versions")
     if not isinstance(versions, dict):
         return []

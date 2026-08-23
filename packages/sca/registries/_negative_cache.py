@@ -28,9 +28,12 @@ holds the sentinel" so the negative entry serves correctly.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.json import JsonCache, MISSING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +55,11 @@ def log_fetch_failure(
     real problem worth a WARNING. ``exc`` is inspected for a ``status``
     attribute (set by :class:`core.http.HttpError`); absent it, WARNING.
     """
-    status = getattr(exc, "status", None)
-    level = logging.DEBUG if status in _NOT_FOUND_STATUSES else logging.WARNING
+    if getattr(exc, "circuit_break", False):
+        level = logging.DEBUG
+    else:
+        status = getattr(exc, "status", None)
+        level = logging.DEBUG if status in _NOT_FOUND_STATUSES else logging.WARNING
     if item_name:
         log.log(level, "%s: fetch failed for %r: %s", log_prefix, item_name, exc)
     else:
@@ -61,7 +67,7 @@ def log_fetch_failure(
 
 
 def fetch_or_negative_cache(
-    cache: Optional[JsonCache],
+    cache: JsonCache | None,
     key: str,
     ttl_seconds: int,
     fetch: Callable[[], Any],
@@ -83,7 +89,11 @@ def fetch_or_negative_cache(
         Raised exceptions are caught and treated as negative.
       negative_value: value returned (and cached) on fetch failure.
         Defaults to ``None``; pass ``[]`` for version-list endpoints.
-      log_prefix / item_name: shape the WARNING log line on failure.
+      log_prefix: prefix for the log line on fetch failure; passed
+        through to :func:`log_fetch_failure`.
+      item_name: name of the item being fetched, included in the
+        failure log line when non-empty; passed through to
+        :func:`log_fetch_failure`.
     """
     if cache is not None:
         cached = cache.try_get(key, ttl_seconds=ttl_seconds)

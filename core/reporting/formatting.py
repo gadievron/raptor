@@ -1,12 +1,12 @@
 """Shared formatting utilities for report rendering."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 _SEMGREP_REGISTRY_CACHE_PREFIX = "engine.semgrep.rules.registry-cache."
 
 
-def display_rule_id(rule_id: Optional[str]) -> str:
+def display_rule_id(rule_id: str | None) -> str:
     """Operator-facing short form of a SARIF rule id.
 
     Semgrep rule ids in RAPTOR carry a long internal prefix
@@ -32,8 +32,7 @@ def display_rule_id(rule_id: Optional[str]) -> str:
     if not rule_id:
         return "unknown"
     short = rule_id
-    if short.startswith(_SEMGREP_REGISTRY_CACHE_PREFIX):
-        short = short[len(_SEMGREP_REGISTRY_CACHE_PREFIX):]
+    short = short.removeprefix(_SEMGREP_REGISTRY_CACHE_PREFIX)
     # Collapse trailing leaf-duplication: `...foo.foo` -> `...foo`.
     # Split on '.' so it only fires on the rule-id structure, not
     # if the trailing segment happens to repeat a substring within
@@ -44,7 +43,7 @@ def display_rule_id(rule_id: Optional[str]) -> str:
     return short
 
 
-def get_display_status(finding: Dict[str, Any]) -> str:
+def get_display_status(finding: dict[str, Any]) -> str:
     """Derive human-readable display status from a finding dict.
 
     Handles all field formats across pipelines:

@@ -22,7 +22,7 @@ checker is meaningfully independent.
 
 from __future__ import annotations
 
-from typing import Iterable, Literal, Optional
+from typing import Literal, TYPE_CHECKING
 
 
 Family = Literal[
@@ -69,10 +69,19 @@ _AGGREGATOR_PREFIXES: tuple[str, ...] = (
     "together/",
     "groq/",
     "openrouter/",
+    "orcarouter/",
     "fireworks/",
     "deepinfra/",
     "perplexity/",
     "replicate/",
+    # Route-prefixed Bedrock ids (``bedrock/anthropic.claude-…``) — the
+    # form the mode resolver and operator ``--model`` overrides use.
+    # Peeling it leaves the dotted Bedrock id, which the existing
+    # Bedrock-shape handling resolves (provider ``bedrock``, bare name
+    # stripped of the vendor segment). Without this peel, provider_of
+    # returned "" and every route-prefixed override raised — the audit
+    # fell back to the default model with only a warning.
+    "bedrock/",
 )
 
 
@@ -93,6 +102,9 @@ from core.llm.bedrock_prefixes import (  # noqa: E402
     BEDROCK_PROVIDER_SEGMENTS as _BEDROCK_PROVIDER_SEGMENTS,
     BEDROCK_REGIONAL_PREFIXES as _BEDROCK_REGIONAL_PREFIXES,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Local mapping segment → Family (Family is a Literal local to this
 # module, can't live in the shared constants module without a
@@ -181,6 +193,81 @@ def provider_of(model_id: str) -> str:
     return provider_for_family(family_of(model_id))
 
 
+def resolve_model_shorthand(
+    model_id: str, candidate_names: Iterable[str],
+) -> str | None:
+    """Resolve a bare tier-token shorthand to a configured model name.
+
+    An operator typing ``--model haiku`` gets back the full configured
+    name (``"claude-haiku-4-5-20251001"``) when exactly one configured
+    model has ``"haiku"`` as one of its hyphen-separated tokens.
+    Ambiguous input (two haiku variants configured) raises with the
+    candidate list so the operator can pick; missing input returns
+    ``None`` so the caller falls through to its usual failure path.
+
+    Match rule: shorthand equals one of the hyphen-separated tokens
+    of a configured model's :func:`bare_model_id` (case-insensitive).
+    ``"haiku"`` matches ``"claude-haiku-4-5-...`` but ``"pus"`` does
+    NOT match ``"claude-opus-4-7"`` — substring matches are too easy
+    to trigger accidentally on real names.
+
+    Only activated when the input:
+      * has NO ``/`` or ``.`` (provider-qualified / Bedrock IDs never
+        take this branch);
+      * is at least 3 characters (avoids ``"4"`` matching version
+        tokens);
+      * is not purely numeric (avoids ``"45"`` matching a version).
+
+    Callers dedupe ``candidate_names`` first when multiple entries
+    can refer to the same model (e.g. an alias + its dated snapshot);
+    this helper treats each name in the iterable as a distinct
+    candidate so it can raise a truthful ambiguity error.
+    """
+    # Guard: fail loud at the boundary rather than crashing deep inside
+    # ``"/" in <non-string>`` with a confusing TypeError. A misrouted
+    # ModelConfig arriving here always means the caller made a mistake.
+    # ``None`` is kept as a "missing input" sentinel per the docstring —
+    # the falsy short-circuit below returns None for that case.
+    if model_id is not None and not isinstance(model_id, str):
+        msg = (
+            f"resolve_model_shorthand: model_id must be str or None, got "
+            f"{type(model_id).__name__}"
+        )
+        raise TypeError(msg)
+    if not model_id or "/" in model_id or "." in model_id:
+        return None
+    if len(model_id) < 3 or model_id.isdigit():
+        return None
+    needle = model_id.lower()
+    matches: list[str] = []
+    for name in candidate_names:
+        if not name:
+            continue
+        bare = bare_model_id(name).lower()
+        tokens = bare.replace(".", "-").split("-")
+        if needle in tokens:
+            matches.append(name)
+    # Dedupe while preserving order — the caller may pass duplicate
+    # candidates when the same underlying model is referenced multiple
+    # times (primary + fallback + specialized).
+    seen: set[str] = set()
+    unique: list[str] = []
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            unique.append(m)
+    if len(unique) == 1:
+        return unique[0]
+    if len(unique) > 1:
+        listed = ", ".join(sorted(unique))
+        msg = (
+            f"ambiguous model shorthand {model_id!r}: matches "
+            f"{listed}. Pass the full model name to disambiguate."
+        )
+        raise ValueError(msg)
+    return None
+
+
 def unknown_model_message(model_id: str) -> str:
     """Operator-facing hint for a model id whose provider can't be resolved.
 
@@ -193,6 +280,28 @@ def unknown_model_message(model_id: str) -> str:
         f"'gemini-2.5-pro') or an explicit 'provider/model' form "
         f"(e.g. 'anthropic/claude-opus-4-8')."
     )
+
+
+def routing_model_id(model_id: str) -> str:
+    """Return the identifier to put on the wire: aggregator/route
+    prefixes peeled, provider segments KEPT.
+
+    Distinct from :func:`bare_model_id`: Bedrock model ids require the
+    vendor-dotted form (``anthropic.claude-…``) — handing the SDK a
+    fully-bared name 403s. Use bare_model_id for MATCHING against
+    configured entries, routing_model_id for the outgoing model name.
+    """
+    needle = model_id
+    for _ in range(4):
+        peeled = False
+        for prefix in _AGGREGATOR_PREFIXES:
+            if needle.lower().startswith(prefix):
+                needle = needle[len(prefix):]
+                peeled = True
+                break
+        if not peeled:
+            break
+    return needle
 
 
 def bare_model_id(model_id: str) -> str:
@@ -239,6 +348,12 @@ def bare_model_id(model_id: str) -> str:
                 break
         if not peeled:
             break
+        # An aggregator can front a Bedrock-shaped id
+        # (``bedrock/anthropic.claude-…``) — the regional/provider
+        # dot-peels above ran before this loop, so re-run them on the
+        # peeled remainder. Recursion mirrors family_of's peel-and-
+        # recurse and is bounded by the shrinking needle.
+        return bare_model_id(needle)
     if "/" in needle:
         head, rest = needle.split("/", 1)
         if head.lower() in {v for v in _FAMILY_TO_PROVIDER.values()}:
@@ -290,7 +405,7 @@ def family_of(model_id: str) -> Family:
         if needle.startswith(stem + "/"):
             return family
     for stem, family in _MODEL_STEMS:
-        if needle.startswith(stem + "-"):
+        if needle == stem or needle.startswith(stem + "-"):
             return family
     return "unknown"
 
@@ -312,7 +427,7 @@ def same_family(a: str, b: str) -> bool:
 def select_cross_family_checker(
     producer_model_id: str,
     candidates: Iterable[str],
-) -> Optional[str]:
+) -> str | None:
     """Pick the first candidate that is from a different family than the producer.
 
     Returns ``None`` if no suitable candidate exists. ``"unknown"`` family

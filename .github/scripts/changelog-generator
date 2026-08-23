@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""Preview the changelog that the release workflow would generate.
+
+Default mode groups features by capability arc (conventional-commit scope),
+ranks by impact (sustained effort + new source files + dampened code size),
+and shows the top N.  Data files are excluded from size measurement so
+corpus/calibration bulk doesn't drown real features.
+
+Usage:
+  changelog-preview [<tag>] [--top N] [--full] [--raw]
+
+Options:
+  <tag>       Hypothetical release tag (default: next patch from latest tag)
+  --top N     Number of highlighted arcs (default: 20)
+  --full      Show all arcs and all individual commits
+  --raw       Emit the flat release-workflow-compatible markdown (unranked)
+"""
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import subprocess
+import sys
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+
+TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(-[a-zA-Z0-9.]+)?$")
+CONV_RE = re.compile(r"^([a-zA-Z]+)(?:\(([^)]+)\))?:\s*(.*)")
+SRC_EXTENSIONS = frozenset((
+    ".py", ".sh", ".js", ".ts", ".rs", ".go", ".c", ".h",
+    ".cpp", ".hpp", ".rb",
+))
+
+# Characters that have structural meaning in markdown.  We only need to
+# defang the ones that could create links, images, or HTML when a commit
+# message is interpolated into a list item.
+_MD_ESCAPE = str.maketrans({
+    "<": "&lt;",
+    ">": "&gt;",
+    "[": "\\[",
+    "]": "\\]",
+    "`": "\\`",
+    "*": "\\*",
+    "_": "\\_",
+})
+
+
+def md_safe(text: str) -> str:
+    return text.translate(_MD_ESCAPE)
+
+TYPE_MAP = {
+    "feat": "feat",
+    "fix": "fix",
+    "sec": "sec",
+    "security": "sec",
+}
+
+
+def git(*args: str, check: bool = True) -> str:
+    r = subprocess.run(
+        ["git", *args],
+        capture_output=True, text=True, timeout=30,
+    )
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, ["git", *args], r.stdout, r.stderr)
+    return r.stdout
+
+
+def git_lines(*args: str) -> list[str]:
+    return [l for l in git(*args).splitlines() if l]
+
+
+def find_repo_root() -> Path:
+    out = git("rev-parse", "--show-toplevel").strip()
+    if not out:
+        print("error: not in a git repository", file=sys.stderr)
+        sys.exit(1)
+    return Path(out)
+
+
+def previous_tag(target: str | None) -> str | None:
+    """Find the semver tag immediately before *target* in version order.
+
+    Mirrors the old release workflow's awk logic: walk sorted tags and
+    return the last one seen before *target*.  Includes pre-release tags
+    so that v3.1.0-rc1 is found when generating notes for v3.1.0.
+
+    When *target* is None (auto-derive mode), returns the latest tag.
+    """
+    tags = [t for t in git_lines("tag", "--sort=version:refname") if TAG_RE.match(t)]
+    if not tags:
+        return None
+    if target is None:
+        return tags[-1]
+    prev = None
+    for t in tags:
+        if t == target:
+            return prev
+        prev = t
+    # target not found in tag list (not yet created) — return the latest
+    return tags[-1]
+
+
+def derive_next_tag(prev: str | None) -> str:
+    if not prev:
+        return "v0.1.0"
+    m = TAG_RE.match(prev)
+    return f"v{m.group(1)}.{m.group(2)}.{int(m.group(3)) + 1}"
+
+
+def github_repo(override: str | None = None) -> str:
+    if override:
+        return override
+    url = git("remote", "get-url", "origin", check=False).strip()
+    m = re.search(r"github\.com[:/](.+/.+?)(?:\.git)?$", url)
+    return m.group(1) if m else ""
+
+
+@dataclass
+class Commit:
+    hash: str
+    subject: str
+    commit_type: str
+    scope: str
+    display: str
+    src_lines: int = 0
+    new_files: int = 0
+
+
+def is_source_file(path: str) -> bool:
+    return Path(path).suffix in SRC_EXTENSIONS
+
+
+def parse_commits(log_range: str) -> list[Commit]:
+    raw = git("log", "--no-merges", "--pretty=format:%H%x00%s", log_range)
+    commits = []
+    for line in raw.splitlines():
+        if "\x00" not in line:
+            continue
+        sha, subject = line.split("\x00", 1)
+        m = CONV_RE.match(subject)
+        if not m:
+            continue
+        prefix = m.group(1).lower()
+        commit_type = TYPE_MAP.get(prefix)
+        if not commit_type:
+            continue
+        raw_scope = m.group(2) or ""
+        display = m.group(3)
+        scope = normalise_scope(raw_scope)
+        commits.append(Commit(
+            hash=sha, subject=subject, commit_type=commit_type,
+            scope=scope, display=display,
+        ))
+    return commits
+
+
+def normalise_scope(raw: str) -> str:
+    if not raw:
+        return "(unscoped)"
+    s = re.sub(r"^packages/", "", raw)
+    s = s.split("/")[0]
+    s = s.split(",")[0]
+    return s
+
+
+def measure_commit(c: Commit) -> None:
+    try:
+        numstat = git("diff", "--numstat", f"{c.hash}^..{c.hash}",
+                       check=False).splitlines()
+    except subprocess.TimeoutExpired:
+        return
+    total = 0
+    for line in numstat:
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        if not is_source_file(parts[2]):
+            continue
+        try:
+            total += int(parts[0]) + int(parts[1])
+        except ValueError:
+            pass
+    c.src_lines = total
+
+    try:
+        added = git("diff", "--diff-filter=A", "--name-only",
+                     f"{c.hash}^..{c.hash}", check=False).splitlines()
+    except subprocess.TimeoutExpired:
+        return
+    c.new_files = sum(1 for f in added if is_source_file(f))
+
+
+# ── Raw mode: replica of the release workflow ────────────────────────
+
+def raw_changelog(tag: str, prev_tag: str | None, repo: str) -> str:
+    range_arg = f"{prev_tag}..HEAD" if prev_tag else "HEAD"
+    subjects = git_lines("log", "--pretty=format:%s", range_arg)
+
+    buckets: dict[str, list[str]] = {
+        "feat": [], "fix": [], "sec": [], "docs": [], "other": [],
+    }
+    classified = {"feat", "fix", "security", "sec", "docs",
+                  "release", "chore", "ci", "test", "build", "style"}
+
+    for s in subjects:
+        m = CONV_RE.match(s)
+        if m:
+            prefix = m.group(1).lower()
+            display = m.group(3)
+            if prefix in ("feat",):
+                buckets["feat"].append(md_safe(display))
+            elif prefix in ("fix",):
+                buckets["fix"].append(md_safe(display))
+            elif prefix in ("security", "sec"):
+                buckets["sec"].append(md_safe(display))
+            elif prefix in ("docs",):
+                buckets["docs"].append(md_safe(display))
+            elif prefix not in classified:
+                buckets["other"].append(md_safe(s))
+        else:
+            buckets["other"].append(md_safe(s))
+
+    parts = [f"## What's changed in {tag}"]
+    if prev_tag:
+        parts[0] += f" (since {prev_tag})"
+    parts.append("")
+
+    section_map = [
+        ("feat", "New features"), ("sec", "Security"),
+        ("fix", "Bug fixes"), ("docs", "Docs"), ("other", "Other changes"),
+    ]
+    for key, heading in section_map:
+        if buckets[key]:
+            parts.append(f"### {heading}")
+            for entry in buckets[key]:
+                parts.append(f"- {entry}")
+            parts.append("")
+
+    if prev_tag and repo:
+        parts.append(f"**Full diff:** https://github.com/{repo}/compare/{prev_tag}...{tag}")
+
+    return "\n".join(parts)
+
+
+# ── Ranked mode ──────────────────────────────────────────────────────
+
+@dataclass
+class Arc:
+    scope: str
+    commits: int = 0
+    src_lines: int = 0
+    new_files: int = 0
+    headline: str = ""
+    headline_size: int = 0
+    score: float = 0.0
+
+
+def build_arcs(commits: list[Commit]) -> list[Arc]:
+    by_scope: dict[str, Arc] = {}
+    for c in commits:
+        arc = by_scope.setdefault(c.scope, Arc(scope=c.scope))
+        arc.commits += 1
+        arc.src_lines += c.src_lines
+        arc.new_files += c.new_files
+        if c.src_lines > arc.headline_size:
+            arc.headline_size = c.src_lines
+            arc.headline = c.display
+    for arc in by_scope.values():
+        arc.score = arc.new_files * 10 + arc.commits * 50 + math.sqrt(arc.src_lines)
+    ranked = sorted(by_scope.values(), key=lambda a: a.score, reverse=True)
+    return ranked
+
+
+def fmt_arc(arc: Arc) -> str:
+    h = md_safe(arc.headline)
+    s = md_safe(arc.scope)
+    if arc.scope == "(unscoped)":
+        return f"- **{h}** ({arc.commits} commits, {arc.src_lines:,} lines)"
+    if arc.commits == 1:
+        return f"- **{h}**"
+    return f"- **{s}**: {h} ({arc.commits} commits, {arc.src_lines:,} lines)"
+
+
+def ranked_changelog(
+    tag: str, prev_tag: str | None, repo: str,
+    commits: list[Commit], top_n: int, full: bool,
+) -> str:
+    by_type: dict[str, list[Commit]] = defaultdict(list)
+    for c in commits:
+        by_type[c.commit_type].append(c)
+
+    feat_count = len(by_type.get("feat", []))
+    fix_count = len(by_type.get("fix", []))
+    sec_count = len(by_type.get("sec", []))
+
+    lines = [
+        "═══════════════════════════════════════════════════════",
+        f" Changelog preview: {tag}",
+    ]
+    if prev_tag:
+        total = int(git("rev-list", "--count", f"{prev_tag}..HEAD").strip() or 0)
+        lines.append(f" Since: {prev_tag}  ({total} commits)")
+    else:
+        total = int(git("rev-list", "--count", "HEAD").strip() or 0)
+        lines.append(f" First release  ({total} commits)")
+    lines.append(f" Breakdown: {feat_count} feat, {fix_count} fix, {sec_count} sec")
+    if not full:
+        lines.append(f" Showing: top {top_n} (ranked by impact)")
+    lines.append("═══════════════════════════════════════════════════════")
+    lines.append("")
+
+    header = f"## What's changed in {tag}"
+    if prev_tag:
+        header += f" (since {prev_tag})"
+    lines.append(header)
+    lines.append("")
+
+    # Features: grouped by arc
+    feats = by_type.get("feat", [])
+    if feats:
+        arcs = build_arcs(feats)
+        shown = arcs if full else arcs[:top_n]
+        lines.append("### New features")
+        lines.append("")
+        for arc in shown:
+            lines.append(fmt_arc(arc))
+        if not full and len(arcs) > top_n:
+            lines.append(f"- *...and {len(arcs) - top_n} more*")
+        lines.append("")
+
+    # Security: individual, ranked by size
+    secs = by_type.get("sec", [])
+    if secs:
+        ranked = sorted(secs, key=lambda c: c.src_lines, reverse=True)
+        shown = ranked if full else ranked[:top_n]
+        lines.append("### Security")
+        lines.append("")
+        for c in shown:
+            lines.append(f"- {md_safe(c.display)}")
+        if not full and len(ranked) > top_n:
+            lines.append(f"- *...and {len(ranked) - top_n} more*")
+        lines.append("")
+
+    # Bug fixes: individual, ranked by size
+    fixes = by_type.get("fix", [])
+    if fixes:
+        ranked = sorted(fixes, key=lambda c: c.src_lines, reverse=True)
+        shown = ranked if full else ranked[:top_n]
+        lines.append("### Bug fixes")
+        lines.append("")
+        for c in shown:
+            lines.append(f"- {md_safe(c.display)}")
+        if not full and len(ranked) > top_n:
+            lines.append(f"- *...and {len(ranked) - top_n} more*")
+        lines.append("")
+
+    if prev_tag and repo:
+        lines.append(f"**Full diff:** https://github.com/{repo}/compare/{prev_tag}...{tag}")
+
+    return "\n".join(lines)
+
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("tag", nargs="?", default="")
+    parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--raw", action="store_true")
+    parser.add_argument("--repo", default=None,
+                        help="GitHub owner/repo (default: derived from git remote)")
+    args = parser.parse_args()
+
+    root = find_repo_root()
+    import os
+    os.chdir(root)
+
+    tag = args.tag or None
+    prev_tag = previous_tag(tag)
+    if tag is None:
+        tag = derive_next_tag(prev_tag)
+    if not TAG_RE.match(tag):
+        print(f"error: tag must match v<major>.<minor>.<patch>[-prerelease], got '{tag}'",
+              file=sys.stderr)
+        sys.exit(1)
+
+    repo = github_repo(args.repo)
+    log_range = f"{prev_tag}..HEAD" if prev_tag else "HEAD"
+
+    if args.raw:
+        print(raw_changelog(tag, prev_tag, repo))
+        return
+
+    commits = parse_commits(log_range)
+    print(f"Measuring {len(commits)} commits...", file=sys.stderr)
+    for c in commits:
+        measure_commit(c)
+    print("", file=sys.stderr)
+
+    print(ranked_changelog(tag, prev_tag, repo, commits, args.top, args.full))
+
+
+if __name__ == "__main__":
+    main()

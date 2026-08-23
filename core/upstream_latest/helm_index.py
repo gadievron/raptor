@@ -32,10 +32,9 @@ three registries uniformly."""
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.http import HttpClient, HttpError
-from core.json import JsonCache
 
 from ._version_filter import highest_stable
 from .github_releases import (
@@ -43,9 +42,18 @@ from .github_releases import (
     UpstreamLookupError,
 )
 
+if TYPE_CHECKING:
+    from core.json import JsonCache
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TTL_SECONDS = 24 * 3600
+
+# Byte cap on the fetched index.yaml. The repository host is declared
+# by the target's Chart.yaml, so the response size is bounded here
+# rather than left to the transport default. Large public chart repos
+# (e.g. Bitnami) sit in the low single-digit MBs.
+_MAX_INDEX_BYTES = 8 * 1024 * 1024
 
 
 def latest_chart_version(
@@ -53,7 +61,7 @@ def latest_chart_version(
     chart_name: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache] = None,
+    cache: JsonCache | None = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
 ) -> str:
     """Return the highest stable-semver version of ``chart_name``
@@ -75,16 +83,16 @@ def latest_chart_version(
     )
     entries = index.get("entries") if isinstance(index, dict) else None
     if not isinstance(entries, dict):
-        raise UpstreamLookupError(
-            f"Helm index at {repository} missing entries map"
-        )
+        msg = f"Helm index at {repository} missing entries map"
+        raise UpstreamLookupError(msg)
     versions = entries.get(chart_name)
     if not isinstance(versions, list):
-        raise UpstreamLookupError(
+        msg = (
             f"Helm index at {repository} has no entry for "
             f"chart {chart_name!r}"
         )
-    raw_versions: List[str] = []
+        raise UpstreamLookupError(msg)
+    raw_versions: list[str] = []
     for entry in versions:
         if not isinstance(entry, dict):
             continue
@@ -92,16 +100,18 @@ def latest_chart_version(
         if isinstance(v, str) and v.strip():
             raw_versions.append(v.strip())
     if not raw_versions:
-        raise UpstreamLookupError(
+        msg = (
             f"Helm index entry {chart_name!r} at {repository} "
             f"has no version field"
         )
+        raise UpstreamLookupError(msg)
     winner = highest_stable(raw_versions)
     if winner is None:
-        raise NoStableVersionsFound(
+        msg = (
             f"no stable-semver versions of {chart_name} in "
             f"{repository}"
         )
+        raise NoStableVersionsFound(msg)
     return winner
 
 
@@ -109,7 +119,7 @@ def _fetch_index_cached(
     repository: str,
     *,
     http: HttpClient,
-    cache: Optional[JsonCache],
+    cache: JsonCache | None,
     ttl_seconds: int,
 ) -> Any:
     """Fetch + cache the index.yaml as a parsed dict.
@@ -119,40 +129,55 @@ def _fetch_index_cached(
     one is a cache hit (no second HTTP call).
     """
     url = _normalize_index_url(repository)
-    cache_key = f"upstream_latest:helm:{url}"
+    # Percent-encode the URL into a single key segment: raw URLs carry
+    # "//" (an empty segment the cache layer refuses) and are sourced
+    # from the target's Chart.yaml, so the key must be injective.
+    from urllib.parse import quote as _quote
+    cache_key = f"upstream_latest:helm:{_quote(url, safe='')}"
     if cache is not None and ttl_seconds > 0:
         cached = cache.get(cache_key, ttl_seconds=ttl_seconds)
         if cached is not None:
             return cached
     try:
-        raw = http.get_bytes(url)
+        # Explicit byte cap: the URL host comes from the target's
+        # Chart.yaml, so the response size is not something to take on
+        # faith. Real index.yaml files are well under this.
+        raw = http.get_bytes(url, max_bytes=_MAX_INDEX_BYTES)
     except HttpError as exc:
-        raise UpstreamLookupError(
-            f"Helm index fetch failed for {url}: {exc}"
-        ) from exc
+        msg = f"Helm index fetch failed for {url}: {exc}"
+        raise UpstreamLookupError(msg) from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise UpstreamLookupError(
-            f"Helm index at {url} not UTF-8: {exc}"
-        ) from exc
+        msg = f"Helm index at {url} not UTF-8: {exc}"
+        raise UpstreamLookupError(msg) from exc
     try:
-        import yaml          # type: ignore[import-untyped]
+        import yaml  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise UpstreamLookupError(
-            "PyYAML not installed; cannot parse Helm index"
-        ) from exc
+        msg = "PyYAML not installed; cannot parse Helm index"
+        raise UpstreamLookupError(msg) from exc
     try:
-        # ``CSafeLoader`` is faster + immune to the same arbitrary-
-        # code-execution path that ``Loader`` exposes via Python
-        # tags. Fall back to ``SafeLoader`` when libyaml not
-        # built; both are safe.
-        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-        data = yaml.load(text, Loader=loader)   # noqa: S506
-    except yaml.YAMLError as exc:
-        raise UpstreamLookupError(
-            f"Helm index at {url} not parseable YAML: {exc}"
-        ) from exc
+        # Pure-Python SafeLoader subclass that refuses aliases: helm's
+        # own ``repo index`` never emits anchors, and alias expansion
+        # is the one way a small document can balloon in memory
+        # (SafeLoader still expands them). With aliases refused, the
+        # parsed size is proportional to the byte cap above, so no
+        # separate object-size cap is needed. Deliberately not
+        # CSafeLoader — the C composer offers no alias hook.
+        class _NoAliasLoader(yaml.SafeLoader):
+            def compose_node(self, parent, index):
+                if self.check_event(yaml.events.AliasEvent):
+                    msg = (
+                        "YAML aliases are not accepted in Helm "
+                        "index files"
+                    )
+                    raise yaml.YAMLError(msg)
+                return super().compose_node(parent, index)
+
+        data = yaml.load(text, Loader=_NoAliasLoader)
+    except (yaml.YAMLError, RecursionError, MemoryError) as exc:
+        msg = f"Helm index at {url} not parseable YAML: {exc}"
+        raise UpstreamLookupError(msg) from exc
     if cache is not None and ttl_seconds > 0:
         cache.put(cache_key, data, ttl_seconds=ttl_seconds)
     return data
@@ -178,20 +203,25 @@ def _normalize_index_url(repository: str) -> str:
 
     repository = repository.rstrip("/")
     parsed = urlparse(repository)
-    if parsed.scheme not in ("http", "https"):
-        raise UpstreamLookupError(
-            f"Helm index URL refused: non-http(s) scheme "
+    if parsed.scheme != "https":
+        # The docstring has always promised "refuses non-HTTPS
+        # schemes"; the code used to accept plain http anyway. Chart
+        # repositories are public HTTPS services — an http URL either
+        # a typo or a downgrade, both worth failing fast on.
+        msg = (
+            f"Helm index URL refused: non-https scheme "
             f"{parsed.scheme!r} in {repository!r}"
         )
+        raise UpstreamLookupError(msg)
     if parsed.username is not None or parsed.password is not None:
-        raise UpstreamLookupError(
+        msg = (
             f"Helm index URL refused: embedded userinfo in "
             f"{repository!r} (SSRF / credential leak)"
         )
+        raise UpstreamLookupError(msg)
     if not parsed.hostname:
-        raise UpstreamLookupError(
-            f"Helm index URL refused: no hostname in {repository!r}"
-        )
-    if repository.endswith(".yaml") or repository.endswith(".yml"):
+        msg = f"Helm index URL refused: no hostname in {repository!r}"
+        raise UpstreamLookupError(msg)
+    if repository.endswith((".yaml", ".yml")):
         return repository
     return f"{repository}/index.yaml"

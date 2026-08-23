@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 from packages.sca.findings import (
     build_vuln_findings,
@@ -13,17 +12,16 @@ from packages.sca.findings import (
     write_findings_json,
 )
 from packages.sca.models import (
-    AffectedRange,
     Advisory,
-    CVSSScore,
+    AffectedRange,
     Confidence,
+    CVSSScore,
     Dependency,
     HygieneFinding,
     PinStyle,
     Reachability,
 )
 from packages.sca.osv import OsvResult
-
 
 # ---------------------------------------------------------------------------
 # Fixture builders
@@ -49,10 +47,11 @@ def _dep(name: str = "lodash", version: str = "4.17.20",
 
 def _adv(
     osv_id: str = "GHSA-x",
-    aliases: List[str] | None = None,
-    fixed: List[str] | None = None,
+    aliases: list[str] | None = None,
+    fixed: list[str] | None = None,
     severity_score: float = 9.8,
     severity_label: str = "critical",
+    summary: str = "Test advisory",
 ) -> Advisory:
     cvss = CVSSScore(
         score=severity_score,
@@ -62,7 +61,7 @@ def _adv(
     return Advisory(
         osv_id=osv_id,
         aliases=aliases or ["CVE-2099-9999"],
-        summary="Test advisory",
+        summary=summary,
         details="Details.",
         affected=[AffectedRange(
             type="ECOSYSTEM",
@@ -76,7 +75,7 @@ def _adv(
 
 
 class FakeKev:
-    def __init__(self, hits: List[str] | None = None) -> None:
+    def __init__(self, hits: list[str] | None = None) -> None:
         self.hits = {h.upper() for h in (hits or [])}
 
     def contains(self, cve: str) -> bool:
@@ -155,6 +154,63 @@ def test_related_findings_cross_reference() -> None:
     assert f1.finding_id not in f1.related_findings
 
 
+def test_crafted_alias_advisory_cannot_defang_real_finding() -> None:
+    """Regression: a crafted GHSA record sharing the real CVE
+    alias (severity none, understated fix, benign summary) must not
+    shape the merged finding — severity, fix version, and summary all
+    come from the genuine record; the crafted one only rides along."""
+    d = _dep(name="pkg", version="1.2.0", ecosystem="PyPI")
+    real = _adv(
+        osv_id="PYSEC-2024-1", aliases=["CVE-2024-0001"],
+        fixed=["2.0.1"], severity_score=9.8, severity_label="critical",
+        summary="Genuine critical advisory",
+    )
+    crafted = _adv(
+        osv_id="GHSA-aaaa-bbbb-cccc", aliases=["CVE-2024-0001"],
+        fixed=["1.0.0"], severity_score=0.0, severity_label="none",
+        summary="Nothing to see here",
+    )
+    osv = [OsvResult(dep_key=d.key(), advisories=[real, crafted])]
+    findings = build_vuln_findings([d], osv)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "critical"
+    assert f.fixed_version == "2.0.1"
+    # The genuine record is the face of the finding.
+    assert "PYSEC-2024-1" in f.finding_id
+    assert f.advisories[0].osv_id == "PYSEC-2024-1"
+    assert f.advisories[0].summary == "Genuine critical advisory"
+    # The crafted record is kept for transparency, never dropped.
+    assert {a.osv_id for a in f.advisories} == {
+        "PYSEC-2024-1", "GHSA-aaaa-bbbb-cccc",
+    }
+
+
+def test_alias_merge_prefers_ghsa_on_severity_tie() -> None:
+    """Honest GHSA + PYSEC records for the same CVE at the same
+    severity: GHSA stays the representative (the pre-fix preference,
+    now applied only among equal-severity records)."""
+    d = _dep()
+    pysec = _adv(osv_id="PYSEC-2024-2", aliases=["CVE-2024-0002"])
+    ghsa = _adv(osv_id="GHSA-dddd-eeee-ffff", aliases=["CVE-2024-0002"])
+    osv = [OsvResult(dep_key=d.key(), advisories=[pysec, ghsa])]
+    findings = build_vuln_findings([d], osv)
+    assert len(findings) == 1
+    assert findings[0].advisories[0].osv_id == "GHSA-dddd-eeee-ffff"
+    assert len(findings[0].advisories) == 2
+
+
+def test_differing_cve_alias_sets_do_not_merge() -> None:
+    """Records whose CVE-alias sets differ emit separate findings —
+    over-reporting is the safe direction under a hostile feed."""
+    d = _dep()
+    one = _adv(osv_id="GHSA-1", aliases=["CVE-A"])
+    both = _adv(osv_id="GHSA-2", aliases=["CVE-A", "CVE-B"])
+    osv = [OsvResult(dep_key=d.key(), advisories=[one, both])]
+    findings = build_vuln_findings([d], osv)
+    assert len(findings) == 2
+
+
 def test_severity_falls_back_to_medium_without_cvss() -> None:
     d = _dep()
     adv = Advisory(
@@ -210,8 +266,8 @@ def test_write_findings_json_shape(tmp_path: Path) -> None:
     types = {row["vuln_type"] for row in data}
     assert "sca:vulnerable_dependency" in types
     assert "sca:hygiene:loose_pin" in types
-    vuln_row = [r for r in data
-                if r["vuln_type"] == "sca:vulnerable_dependency"][0]
+    vuln_row = next(r for r in data
+                    if r["vuln_type"] == "sca:vulnerable_dependency")
     assert vuln_row["sca"]["ecosystem"] == "npm"
     assert vuln_row["sca"]["name"] == "lodash"
     assert vuln_row["sca"]["fixed_version"] == "5.0.0"
@@ -223,6 +279,62 @@ def test_write_findings_json_empty_inputs(tmp_path: Path) -> None:
     n = write_findings_json(out)
     assert n == 0
     assert json.loads(out.read_text()) == []
+
+
+def test_severity_fallback_label_used_over_medium_degrade() -> None:
+    """A CVSS_V4-only advisory whose vector couldn't be scored carries
+    the database-provided label; the finding gates at that severity
+    instead of the blanket medium."""
+    d = _dep()
+    adv = _adv()
+    adv.severity = None
+    adv.severity_fallback = "critical"
+    findings = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[adv])],
+    )
+    assert findings[0].severity == "critical"
+    assert findings[0].cvss_score is None   # no fabricated numeric score
+
+    adv_no_label = _adv()
+    adv_no_label.severity = None
+    adv_no_label.severity_fallback = None
+    findings2 = build_vuln_findings(
+        [d], [OsvResult(dep_key=d.key(), advisories=[adv_no_label])],
+    )
+    assert findings2[0].severity == "medium"
+
+
+def test_write_findings_json_scan_health_row(tmp_path: Path) -> None:
+    """Scan-level degradation is recorded as an info-severity row so CI
+    consumers of findings.json can see incomplete advisory coverage."""
+    out = tmp_path / "findings.json"
+    n = write_findings_json(out, scan_health=[{
+        "kind": "osv_lookup_degraded",
+        "detail": "OSV lookups failed transiently for 3 query slot(s)",
+        "evidence": {"failed_lookups": 3, "total_deps": 10},
+    }])
+    assert n == 1
+    row = json.loads(out.read_text())[0]
+    assert row["vuln_type"] == "sca:scan_health:osv_lookup_degraded"
+    assert row["severity"] == "info"
+    assert row["suppressed"] is False
+    assert row["sca"]["kind"] == "osv_lookup_degraded"
+    assert row["sca"]["failed_lookups"] == 3
+    assert row["sca"]["total_deps"] == 10
+    assert "transiently" in row["description"]
+
+
+def test_scan_health_row_never_trips_thresholds(tmp_path: Path) -> None:
+    """The degradation marker must not fail existing severity gates —
+    it is informational; pipelines gate on it explicitly if desired."""
+    from packages.sca.thresholds import ThresholdConfig, evaluate
+    out = tmp_path / "findings.json"
+    write_findings_json(out, scan_health=[{
+        "kind": "osv_lookup_degraded", "detail": "d", "evidence": {},
+    }])
+    rows = json.loads(out.read_text())
+    passed, fails = evaluate(rows, ThresholdConfig(fail_on_severity="info"))
+    assert passed and fails == []
 
 
 def test_atomic_write_no_partial_file(tmp_path: Path) -> None:
@@ -249,8 +361,8 @@ def test_hygiene_finding_downgraded_to_info_when_commented() -> None:
     should produce hygiene findings at ``info`` severity (the
     operator doesn't want CI gated on commented hints).
     Mirrors the vuln-finding downgrade in _vuln_finding_to_row."""
-    from packages.sca.models import HygieneFinding
     from packages.sca.findings import _hygiene_finding_to_row
+    from packages.sca.models import HygieneFinding
     d = _dep()
     d.commented_out = True
     f = HygieneFinding(
@@ -265,8 +377,8 @@ def test_hygiene_finding_downgraded_to_info_when_commented() -> None:
 
 def test_hygiene_finding_retains_severity_when_uncommented() -> None:
     """Non-commented entries keep their original severity."""
-    from packages.sca.models import HygieneFinding
     from packages.sca.findings import _hygiene_finding_to_row
+    from packages.sca.models import HygieneFinding
     d = _dep()
     assert not d.commented_out
     f = HygieneFinding(
@@ -306,3 +418,23 @@ def test_vuln_row_includes_commented_out_in_sca_block() -> None:
     # ``build_vuln_findings`` time (not at row emission), so
     # this row-builder test passes through whatever severity
     # the VulnFinding already carries.
+
+
+# ---------------------------------------------------------------------------
+# Advisory CWE ids in findings.json (P40)
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryCweExport:
+    def test_cwe_ids_surfaced(self):
+        from packages.sca.findings import _advisory_summary
+
+        adv = _adv()
+        adv.cwe_ids = ["CWE-502", "CWE-400"]
+        out = _advisory_summary(adv)
+        assert out["cwe_ids"] == ["CWE-502", "CWE-400"]
+
+    def test_no_cwe_ids_key_when_absent(self):
+        from packages.sca.findings import _advisory_summary
+
+        out = _advisory_summary(_adv())
+        assert "cwe_ids" not in out

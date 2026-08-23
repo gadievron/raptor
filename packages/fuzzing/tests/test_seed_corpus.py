@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
+from packages.fuzzing.seed_corpus import (
+    SeedCorpusOptions,
+    prepare_builtin_seed_corpus,
+    prepare_seed_corpus,
+)
 
 
 def test_prepare_seed_corpus_groups_supported_inputs_and_writes_manifest(tmp_path):
@@ -171,3 +175,91 @@ def test_prepare_seed_corpus_ignores_output_directory_inside_source(tmp_path):
     assert not (out / "json" / "seed-0001.json").exists()
     assert (out / "yaml" / "seed-0001.yaml").is_file()
     assert (out / "notes.txt").read_text(encoding="utf-8") == "operator note\n"
+
+
+def test_prepare_builtin_seed_corpus_materialises_flat_manifest(tmp_path):
+    out = tmp_path / "builtin"
+
+    manifest = prepare_builtin_seed_corpus(out)
+
+    assert manifest["source"] == "raptor_builtin_seed_corpus"
+    assert manifest["profile"] == "default"
+    assert manifest["seed_count"] >= 10
+    assert (out / "manifest.json").is_file()
+    destinations = [seed["destination"] for seed in manifest["seeds"]]
+    assert "seed-0003-json-object" in destinations
+    assert "seed-0006-http-get" in destinations
+    assert "seed-0014-command-prefixes" in destinations
+    assert all("/" not in destination for destination in destinations)
+    assert (out / "seed-0003-json-object").read_text(encoding="utf-8").startswith("{")
+    assert manifest["seeds"][0]["sha256"]
+
+
+def test_manifest_paths_inside_repo_are_relative(tmp_path):
+    """A committed manifest (seeds/) must not embed the local checkout
+    path; only out-of-repo run dirs keep their absolute form."""
+    from packages.fuzzing.seed_corpus import _REPO_ROOT, _portable_path
+
+    assert _portable_path(_REPO_ROOT / "seeds") == "seeds"
+    assert _portable_path(
+        _REPO_ROOT / "packages" / "fuzzing" / "data" / "seed_corpus" / "manifest.json"
+    ) == "packages/fuzzing/data/seed_corpus/manifest.json"
+    outside = tmp_path / "run-out"
+    assert _portable_path(outside) == str(outside)
+
+
+def test_generated_manifests_route_paths_through_portable_form(tmp_path):
+    """The writers must actually USE the portable form — a helper that
+    works but isn't called would reintroduce the checkout-path leak."""
+    from packages.fuzzing.seed_corpus import _REPO_ROOT
+
+    manifest = prepare_builtin_seed_corpus(tmp_path / "builtin")
+    assert manifest["source_manifest"] == (
+        "packages/fuzzing/data/seed_corpus/manifest.json"
+    )
+    # Only out_dir may be absolute (it genuinely lives outside the
+    # checkout); no other value may embed the checkout location.
+    root = str(_REPO_ROOT)
+    leaks = [
+        (k, v) for k, v in manifest.items()
+        if k != "out_dir" and isinstance(v, str) and root in v
+    ]
+    assert leaks == []
+
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.json").write_text("{}")
+    copied = prepare_seed_corpus(
+        SeedCorpusOptions(source_dir=source, out_dir=tmp_path / "gen"))
+    import json as _json
+    assert root not in copied["source_dir"]
+    assert root not in _json.dumps(
+        {k: v for k, v in copied.items() if k != "out_dir"})
+
+
+def test_prepare_builtin_seed_corpus_resets_only_raptor_generated_files(tmp_path):
+    out = tmp_path / "builtin"
+    out.mkdir()
+    operator_note = out / "operator-note.txt"
+    operator_note.write_text("keep me\n", encoding="utf-8")
+
+    first = prepare_builtin_seed_corpus(out)
+    generated = out / first["seeds"][0]["destination"]
+    generated.write_text("stale\n", encoding="utf-8")
+    second = prepare_builtin_seed_corpus(out)
+
+    assert operator_note.read_text(encoding="utf-8") == "keep me\n"
+    assert generated.read_text(encoding="utf-8") != "stale\n"
+    assert first["seed_count"] == second["seed_count"]
+
+
+def test_prepare_builtin_seed_corpus_refuses_dangerous_outputs(tmp_path, monkeypatch):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_builtin_seed_corpus(fake_home)
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_builtin_seed_corpus(Path(fake_home.anchor))

@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
 # Languages whose extraction goes through the C-preprocessor-aware path.
 _C_FAMILY = frozenset({"c", "cpp"})
@@ -71,7 +70,7 @@ def _strip_pp_comments(rest: str) -> str:
     return re.sub(r"//.*$", "", r).strip()
 
 
-def _eval_int_literal(s: str) -> Optional[int]:
+def _eval_int_literal(s: str) -> int | None:
     """Parse a bare integer literal (decimal / 0x-hex, optional surrounding
     parens / L/U suffix). Returns ``None`` for anything non-trivial — we only
     evaluate values we can be certain about."""
@@ -85,7 +84,7 @@ def _eval_int_literal(s: str) -> Optional[int]:
         return None
 
 
-def _pp_cond(kind: str, rest: str, macros: Optional["object"] = None) -> str:
+def _pp_cond(kind: str, rest: str, macros: object | None = None) -> str:
     """Classify an #if/#ifdef/#ifndef/#elif controlling expression as
     'false' | 'true' | 'unknown'.
 
@@ -145,9 +144,138 @@ def _pp_cond(kind: str, rest: str, macros: Optional["object"] = None) -> str:
     return "unknown"
 
 
+# C++ raw-string opener: optional encoding prefix, then R"delim( —
+# the delimiter is at most 16 chars, none of space/parens/backslash.
+_PP_RAW_STRING_OPEN = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\v\f]{0,16})\(')
+
+
+def _skip_line_literal(line: str, start: int) -> int:
+    """Advance past a ``"…"`` / ``'…'`` literal opened at ``start``
+    within one physical line, honouring backslash escapes. Returns the
+    index just past the closing quote, or ``len(line)`` when the
+    literal doesn't close on this line (a real compiler diagnoses
+    that; treating the tail as literal text is the state-reset that
+    matches it)."""
+    quote = line[start]
+    i = start + 1
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == quote:
+            return i + 1
+        i += 1
+    return n
+
+
+def _is_digit_separator(line: str, i: int) -> bool:
+    """True when the ``'`` at ``i`` is a C++14 digit separator
+    (``1'000``, ``0xAB'CD``) rather than a character-literal opener:
+    the identifier/number token ending just before it starts with a
+    digit."""
+    j = i - 1
+    while j >= 0 and (line[j].isalnum() or line[j] == "_"):
+        j -= 1
+    return j + 1 < i and line[j + 1].isdigit()
+
+
+def _pp_directive_line_mask(content: str, language: str = "c") -> list[bool]:
+    r"""Per physical line: can a ``#`` directive starting on this line
+    be honoured by the compiler?
+
+    Comments are removed in translation phase 3, BEFORE phase-4
+    directive processing, so a directive-shaped line inside a
+    ``/* */`` block comment is comment text — honouring it lets a
+    hostile repo blank live code out of the parse view (``/*\n#if 0\n*/``
+    around a live function: the function compiles but never reaches
+    the inventory). The same holds for a line spliced onto the
+    previous one by a trailing backslash (including a spliced ``//``
+    comment) and — in C++ — for lines inside a raw string.
+
+    The scan tracks block comments, string/char literals (with the
+    digit-separator carve-out), line splices, and raw strings for
+    ``language == "cpp"`` ONLY: C has no raw strings (``R"(…`` is an
+    identifier followed by a plain string there), and hallucinating a
+    never-closing raw string inside a real ``#if 0`` arm would mask
+    the arm's real ``#endif`` and over-blank the live code after it.
+    Divergence doctrine: outside that raw-string case, hallucinating
+    an opener the compiler doesn't see only masks directives
+    (under-blank — dead code stays visible, the cheap failure); the
+    scanner must never MISS an opener the compiler sees, which is
+    what the literal/raw-string tracking is for."""
+    lines = content.split("\n")
+    mask = [True] * len(lines)
+    raw_strings = language == "cpp"
+    in_comment = False
+    raw_delim: str | None = None
+    continued = False          # previous physical line ended with '\'
+    in_line_comment = False    # …and that line was inside a // comment
+    for idx, line in enumerate(lines):
+        if in_line_comment:
+            # Spliced continuation of a // comment: the whole line is
+            # comment text.
+            mask[idx] = False
+            in_line_comment = line.endswith("\\")
+            continue
+        mask[idx] = not in_comment and raw_delim is None and not continued
+        continued = line.endswith("\\")
+        i = 0
+        n = len(line)
+        while i < n:
+            if in_comment:
+                e = line.find("*/", i)
+                if e == -1:
+                    i = n
+                    continue
+                in_comment = False
+                i = e + 2
+                continue
+            if raw_delim is not None:
+                needle = ")" + raw_delim + '"'
+                e = line.find(needle, i)
+                if e == -1:
+                    i = n
+                    continue
+                raw_delim = None
+                i = e + len(needle)
+                continue
+            c = line[i]
+            if c == "/" and i + 1 < n and line[i + 1] == "/":
+                in_line_comment = continued
+                break
+            if c == "/" and i + 1 < n and line[i + 1] == "*":
+                in_comment = True
+                i += 2
+                continue
+            if raw_strings and c in "uULR":
+                # Raw-string opener only at a token boundary
+                # (``xR"(…)"`` is an identifier then a plain string).
+                at_boundary = i == 0 or not (
+                    line[i - 1].isalnum() or line[i - 1] == "_")
+                if at_boundary:
+                    m = _PP_RAW_STRING_OPEN.match(line, i)
+                    if m:
+                        raw_delim = m.group(1)
+                        i = m.end()
+                        continue
+                i += 1
+                continue
+            if c == "'" and _is_digit_separator(line, i):
+                i += 1
+                continue
+            if c in "\"'":
+                i = _skip_line_literal(line, i)
+                continue
+            i += 1
+    return mask
+
+
 def detect_preprocessor_dead_ranges(
-    content: str, macros: Optional["object"] = None,
-) -> List[Tuple[int, int]]:
+    content: str, macros: object | None = None,
+    *, language: str = "c",
+) -> list[tuple[int, int]]:
     """Inclusive 1-indexed line ranges of statically-dead preprocessor arms.
 
     Without ``macros``: literal-only — ``#if 0`` / ``#elif 0`` and the
@@ -160,13 +288,20 @@ def detect_preprocessor_dead_ranges(
     over-fire: symbols absent from the config stay 'unknown' (untouched).
     Config-DEPENDENT, so the resulting view is heuristic, not sound.
 
+    Directive recognition is comment/splice-aware — and raw-string
+    aware when ``language == "cpp"`` (see
+    :func:`_pp_directive_line_mask`) — a ``#if 0`` inside a ``/* */``
+    comment is comment text to the compiler and must not blank the
+    live code that follows.
+
     Nesting-aware: anything inside a dead arm is dead.
     """
     lines = content.split("\n")
+    directive_ok = _pp_directive_line_mask(content, language)
     stack: list[dict] = []
     dead: set[int] = set()
     for i, line in enumerate(lines, 1):
-        m = _PP_DIRECTIVE.match(line)
+        m = _PP_DIRECTIVE.match(line) if directive_ok[i - 1] else None
         if not m:
             if stack and stack[-1]["effective_dead"]:
                 dead.add(i)
@@ -195,8 +330,8 @@ def detect_preprocessor_dead_ranges(
             f["effective_dead"] = f["parent_dead"] or f["arm_dead"]
         elif kind == "endif" and stack:
             stack.pop()
-    ranges: List[Tuple[int, int]] = []
-    run: Optional[list] = None
+    ranges: list[tuple[int, int]] = []
+    run: list | None = None
     for ln in sorted(dead):
         if run and ln == run[1] + 1:
             run[1] = ln
@@ -226,7 +361,7 @@ def _strip_c_literals_comments(s: str) -> str:
     so call-shaped text inside them isn't mistaken for a routed call. Walks
     char-by-char; `//` ends the logical line. Returns the body with those
     spans removed."""
-    out: List[str] = []
+    out: list[str] = []
     i, n = 0, len(s)
     while i < n:
         c = s[i]
@@ -236,7 +371,7 @@ def _strip_c_literals_comments(s: str) -> str:
             continue
         if c == "/" and i + 1 < n and s[i + 1] == "/":
             break
-        if c == '"' or c == "'":
+        if c in {'"', "'"}:
             q = c
             i += 1
             while i < n:
@@ -282,14 +417,14 @@ def detect_macro_call_targets(content: str) -> set:
     return targets
 
 
-def _blank_ranges(content: str, ranges: List[Tuple[int, int]]) -> str:
+def _blank_ranges(content: str, ranges: list[tuple[int, int]]) -> str:
     """Replace the body of each dead range with same-length spaces, keeping
     newlines so byte/line offsets — and therefore the identity line_map —
     are preserved. The on-disk file is untouched."""
     if not ranges:
         return content
     lines = content.split("\n")
-    dead = set()
+    dead: set[int] = set()
     for lo, hi in ranges:
         dead.update(range(lo, hi + 1))
     out = []
@@ -309,7 +444,7 @@ class LineMap:
     mapping (parsed-line → source-line) from ``cpp``'s ``#line`` markers.
     """
     # Sorted tuple of (parse_line, source_line) breakpoints. Empty = identity.
-    entries: Tuple[Tuple[int, int], ...] = ()
+    entries: tuple[tuple[int, int], ...] = ()
 
     def to_source(self, parse_line: int) -> int:
         if not self.entries:
@@ -334,16 +469,16 @@ class TranslationView:
     line_map: LineMap = IDENTITY_LINE_MAP
     fidelity: int = 0
     masking_flags: frozenset = field(default_factory=frozenset)
-    config: Optional[object] = None     # BuildConfig placeholder (layer 3)
+    config: object | None = None     # BuildConfig placeholder (layer 3)
 
 
 def preprocess_view(
-    path: str,
+    _path: str,
     language: str,
     content: str,
     *,
     allow_unreachable: bool = False,
-    config: Optional[object] = None,
+    config: object | None = None,
 ) -> TranslationView:
     """Return the parser's view of ``content``.
 
@@ -379,8 +514,8 @@ def preprocess_view(
     # (fidelity 2); without one, literal-only `#if 0` (fidelity 1). Either
     # way line_map stays identity — blanking replaces dead-arm characters
     # with spaces and never moves a line.
-    macros = config if config else None
-    dead = detect_preprocessor_dead_ranges(content, macros)
+    macros = config or None
+    dead = detect_preprocessor_dead_ranges(content, macros, language=language)
     parse_text = _blank_ranges(content, dead)
     return TranslationView(parse_text=parse_text, line_map=IDENTITY_LINE_MAP,
                            fidelity=2 if macros else 1,
@@ -388,11 +523,11 @@ def preprocess_view(
 
 
 __all__ = [
-    "LineMap",
     "IDENTITY_LINE_MAP",
-    "TranslationView",
-    "preprocess_view",
-    "detect_preprocessor_dead_ranges",
-    "detect_macro_call_targets",
     "_C_FAMILY",
+    "LineMap",
+    "TranslationView",
+    "detect_macro_call_targets",
+    "detect_preprocessor_dead_ranges",
+    "preprocess_view",
 ]

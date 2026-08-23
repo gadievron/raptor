@@ -9,7 +9,6 @@ this module computes the numeric score.
 
 import math
 import re
-from typing import Optional
 
 # Metric value weights from CVSS v3.1 specification tables.
 
@@ -111,13 +110,17 @@ def parse_vector(vector: str) -> dict:
     influence the numeric output.
     """
     if not validate_vector(vector):
-        raise ValueError(f"Invalid CVSS v3.1 vector: {vector}")
+        msg = f"Invalid CVSS v3.1 vector: {vector}"
+        raise ValueError(msg)
 
     parts = vector.split("/")[1:]  # Skip "CVSS:3.1" prefix
     metrics = {}
     for part in parts:
-        key, value = part.split(":")
-        metrics[key] = value
+        kv = part.split(":", 1)
+        if len(kv) != 2:
+            msg = f"Invalid CVSS metric component: {part!r}"
+            raise ValueError(msg)
+        metrics[kv[0]] = kv[1]
     return metrics
 
 
@@ -168,7 +171,7 @@ def compute_base_score(vector: str) -> tuple[float, str]:
     return score, label
 
 
-def compute_score_safe(vector: Optional[str]) -> tuple[Optional[float], Optional[str]]:
+def compute_score_safe(vector: str | None) -> tuple[float | None, str | None]:
     """Compute CVSS score, returning (None, None) for missing or invalid vectors."""
     if not vector:
         return None, None
@@ -178,7 +181,7 @@ def compute_score_safe(vector: Optional[str]) -> tuple[Optional[float], Optional
         return None, None
 
 
-def score_for_label(label: Optional[str]) -> Optional[float]:
+def score_for_label(label: str | None) -> float | None:
     """Return a representative CVSS numeric for a severity label.
 
     Inverse-ish of the ``_SEVERITY`` threshold table at the top of
@@ -209,7 +212,7 @@ def score_for_label(label: Optional[str]) -> Optional[float]:
     # ``info`` is operator-convenience: not part of CVSS proper but
     # used by SCA for commented-out deps and hand-tagged low-risk
     # findings. Map to a sub-Low value.
-    inverse.setdefault("info", 1.0)
+    inverse.setdefault("info", 0.0)
     return inverse.get(norm)
 
 

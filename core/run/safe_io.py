@@ -36,7 +36,6 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import Union
 
 from core.logging import get_logger
 
@@ -47,7 +46,7 @@ class UnsafeRunDirError(PermissionError):
     """Raised when an output dir cannot be created or used safely."""
 
 
-def safe_run_mkdir(path: Union[Path, str]) -> None:
+def safe_run_mkdir(path: Path | str) -> None:
     """Create *path* if absent, or accept it if already present and safe.
 
     Behaviour:
@@ -77,24 +76,27 @@ def safe_run_mkdir(path: Union[Path, str]) -> None:
     st = os.lstat(path)
 
     if not stat.S_ISDIR(st.st_mode):
-        raise UnsafeRunDirError(
+        msg = (
             f"refusing non-directory output path: {path} "
             f"(may be a symlink or regular file)"
         )
+        raise UnsafeRunDirError(msg)
 
     euid = os.geteuid()
     if st.st_uid != euid:
-        raise UnsafeRunDirError(
+        msg = (
             f"output dir not owned by current user "
             f"(uid {st.st_uid} ≠ {euid}): {path}"
         )
+        raise UnsafeRunDirError(msg)
 
     if st.st_mode & 0o002:
-        raise UnsafeRunDirError(
+        msg = (
             f"output dir is world-writable "
             f"(mode {oct(st.st_mode & 0o777)}): {path} "
             f"— chmod o-w to use, or move the dir"
         )
+        raise UnsafeRunDirError(msg)
 
     if st.st_mode & 0o020:
         logger.warning(

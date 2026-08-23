@@ -28,12 +28,11 @@ hijacking, consistent with every other spawn point in the sandbox.
 import os
 import shlex
 import tempfile
-from typing import Optional
 
 from .probes import _resolve_sandbox_binary
 
 
-def _build_mount_script(target: Optional[str], output: Optional[str]) -> Optional[str]:
+def _build_mount_script(target: str | None, output: str | None) -> str | None:
     """Build a shell script that sets up the mount namespace.
 
     Returns the path to the script, or None if no mount isolation requested.
@@ -90,9 +89,8 @@ def _build_mount_script(target: Optional[str], output: Optional[str]) -> Optiona
             os.write(fd, ("\n".join(lines) + "\n").encode())
         finally:
             os.close(fd)
-        # nosemgrep: python.lang.security.audit.insecure-file-permissions
         # 0o700 = owner-only (executable bind-mount helper script).
-        os.chmod(path, 0o700)
+        os.chmod(path, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions
     except OSError:
         try:
             os.unlink(path)

@@ -6,7 +6,6 @@ Manages fuzzing corpus (seed inputs).
 """
 
 from pathlib import Path
-from typing import List
 
 from core.logging import get_logger
 
@@ -16,12 +15,12 @@ logger = get_logger()
 class CorpusManager:
     """Manages fuzzing corpus."""
 
-    def __init__(self, corpus_dir: Path):
+    def __init__(self, corpus_dir: Path) -> None:
         self.corpus_dir = Path(corpus_dir)
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
 
     def add_seed(self, data: bytes, name: str) -> Path:
-        """Add a seed input to corpus.
+        r"""Add a seed input to corpus.
 
         `name` MUST be a single bare filename. Pre-fix
         `self.corpus_dir / name` interpolated whatever the
@@ -38,7 +37,7 @@ class CorpusManager:
         analyser process can write.
 
         Reject:
-          * Names containing `/` or `\\`.
+          * Names containing `/` or `\`.
           * `..` segments.
           * NUL bytes.
           * Empty / whitespace-only names.
@@ -56,20 +55,21 @@ class CorpusManager:
             or name in {".", ".."}
             or name.startswith("..")
         ):
-            raise ValueError(
+            msg = (
                 f"corpus seed name must be a single bare filename "
                 f"(got {name!r})"
             )
+            raise ValueError(msg)
         seed_file = self.corpus_dir / name
         seed_file.write_bytes(data)
-        logger.debug(f"Added seed: {name} ({len(data)} bytes)")
+        logger.debug("Added seed: %s (%d bytes)", name, len(data))
         return seed_file
 
-    def add_seeds(self, seeds: List[bytes]) -> int:
+    def add_seeds(self, seeds: list[bytes]) -> int:
         """Add multiple seeds to corpus."""
         for idx, seed in enumerate(seeds):
             self.add_seed(seed, f"seed{idx}")
-        logger.info(f"Added {len(seeds)} seeds to corpus")
+        logger.info("Added %d seeds to corpus", len(seeds))
         return len(seeds)
 
     # Per-file read cap for create_from_directory. Real fuzzing
@@ -83,7 +83,8 @@ class CorpusManager:
         import os
         source = Path(source_dir)
         if not source.exists():
-            raise FileNotFoundError(f"Source directory not found: {source_dir}")
+            msg = f"Source directory not found: {source_dir}"
+            raise FileNotFoundError(msg)
 
         # `os.walk(followlinks=False)` instead of `Path.rglob` —
         # `rglob` follows symlinks under Python <3.13. Two failure
@@ -112,23 +113,22 @@ class CorpusManager:
                     continue
                 if st.st_size > self._MAX_SEED_BYTES:
                     logger.warning(
-                        f"corpus_manager: skipping {fpath} "
-                        f"({st.st_size} bytes > {self._MAX_SEED_BYTES} cap)"
+                        "corpus_manager: skipping %s (%s bytes > %s cap)", fpath, st.st_size, self._MAX_SEED_BYTES
                     )
                     continue
                 dest = self.corpus_dir / fpath.relative_to(source)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 # Bounded read — file may have grown between stat and read.
-                with open(fpath, "rb") as fh:
+                with Path(fpath).open("rb") as fh:
                     dest.write_bytes(fh.read(self._MAX_SEED_BYTES + 1)[:self._MAX_SEED_BYTES])
                 count += 1
 
-        logger.info(f"Copied {count} files to corpus from {source_dir}")
+        logger.info("Copied %s files to corpus from %s", count, source_dir)
         return count
 
-    def list_seeds(self) -> List[Path]:
-        """List all seeds in corpus."""
-        return list(self.corpus_dir.rglob("*"))
+    def list_seeds(self) -> list[Path]:
+        """List all seed files in corpus."""
+        return [p for p in self.corpus_dir.rglob("*") if p.is_file()]
 
     def get_stats(self) -> dict:
         """Get corpus statistics."""

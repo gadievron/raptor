@@ -8,11 +8,13 @@ A single source of truth for the budget mechanics keeps the two
 backends from drifting and means a future tweak (new category, new
 sampling rate, new CLI knob) lands in one place.
 
-Four mechanisms compose:
+Five mechanisms compose:
 
-  1. Global cap (`global_cap`). Hard ceiling on total records per
-     run. Once hit, EVERY record is evaluated through sampling
-     (defaulting to drop for un-sampled categories).
+  1. Global cap (`global_cap`). Hard ceiling on records COUNTED
+     toward the global budget per run. Once hit, EVERY record is
+     evaluated through sampling (defaulting to drop for un-sampled
+     categories); the sampled trickle rides above this cap but is
+     itself hard-bounded (see mechanism 5).
 
   2. Per-category sub-cap (`category_caps`). Stops one chatty
      category (file-read-metadata, process-info-*) from squeezing
@@ -32,7 +34,15 @@ Four mechanisms compose:
   5. Post-cap sampling (`sampling_rates`). Once a category's burst
      cap is hit, instead of going completely dark the budget can
      emit 1-in-N records. Operators see "is this still happening?"
-     at a fraction of the volume.
+     at a fraction of the volume. The trickle rides ABOVE the global
+     cap by design (sampled keeps don't count toward it), so it is
+     bounded separately: cumulative sampled keeps across all
+     categories may not exceed `global_cap` (a second hard ceiling).
+     Total records a run can emit is therefore at most
+     `2 * global_cap` (+ a handful of control-plane markers) — after
+     that an over-cap flood produces no keeps at all, no matter its
+     volume. Without this second ceiling, JSONL output would stay
+     proportional (1/N) to attacker volume forever.
 
 Decision return shape:
     (action: str, marker: dict | None)
@@ -44,6 +54,11 @@ Decision return shape:
            the record or drops it). None when no marker is needed.
            Markers fire ONCE per category-cap-exhaust and ONCE per
            pid-cap-exhaust so operators see the suppression in-line.
+           One carve-out: when a PID's tracking entry is LRU-evicted
+           from the bounded per-PID dict and that PID is seen again,
+           its marker-emitted memory is deliberately dropped with it,
+           so the same PID can re-emit its cap-exceeded marker
+           (duplicate markers beat unbounded memory).
 
 Thread-safety: each backend's writer is single-threaded (Linux
 tracer is a separate process, macOS LogStreamer has one daemon
@@ -59,8 +74,34 @@ CLI:
 
 from __future__ import annotations
 
+import os
 import time
-from typing import Callable, Dict, Optional, Tuple
+from collections.abc import Callable
+
+# Shared opt-out for the live stderr escalation banner both backends
+# (tracer.py's per-syscall-event hook, seatbelt_audit.py's
+# per-log-line hook) print the moment a HIGH-severity denial pattern
+# is seen live, ahead of the run-end sandbox-triage.json classification.
+# Kept here (rather than duplicated in each backend) because the env
+# var name itself must not drift between the two — a spelling mismatch
+# would silently disable escalation on only one platform.
+#
+# Escalation is print-only (no enforcement change, no auto-kill), so
+# it defaults to on; set to 1/true/yes/on to disable for scripted/CI/
+# batch sandboxed jobs that don't want the extra stderr noise.
+#
+# Truthy-set parsing (mirrors core.config.env_flag's _ENV_FLAG_TRUTHY;
+# inlined rather than imported so this module stays a leaf for the
+# tracer subprocess): a bare bool(value) would treat
+# RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED=0 as "disabled" — an operator
+# writing =0 to mean "not disabled" would silently turn a security
+# notification off.
+_LIVE_ESCALATION_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def live_escalation_disabled() -> bool:
+    value = os.environ.get("RAPTOR_SANDBOX_LIVE_ESCALATION_DISABLED", "")
+    return value.strip().lower() in _LIVE_ESCALATION_TRUTHY
 
 
 # ---------------------------------------------------------------------
@@ -96,6 +137,7 @@ DEFAULT_GLOBAL_CAP = 10000
 # Per-category burst caps. Coarse buckets — see _default_categorise()
 # for the action → category mapping.
 DEFAULT_CATEGORY_CAPS = {
+    "file-open":          500,
     "file-read-metadata": 500,
     "file-read-data":    2000,
     "file-write":        3000,
@@ -123,6 +165,7 @@ DEFAULT_PID_CAP = 5000
 # global_cap / 600 (tuned so a 1-hour run doesn't drain the bucket
 # at a steady rate of ≤ refill).
 DEFAULT_REFILL_RATES = {
+    "file-open":           10,
     "file-read-metadata":  10,
     "file-read-data":      50,
     "file-write":          50,
@@ -161,7 +204,7 @@ def _default_categorise(action: str) -> str:
     write → file-write, etc.). Unrecognised actions return their
     own name (sharing only the global cap, no category sub-cap).
     """
-    if action.startswith("file-write") or action.startswith("file-mknod"):
+    if action.startswith(("file-write", "file-mknod")):
         return "file-write"
     if action == "file-read-metadata":
         return "file-read-metadata"
@@ -190,7 +233,9 @@ def _default_categorise(action: str) -> str:
     if action in ("write", "writev", "pwrite64", "pwritev",
                   "creat", "mknod", "mknodat", "truncate"):
         return "file-write"
-    if action in ("openat", "open", "stat", "fstat", "lstat",
+    if action in ("openat", "open"):
+        return "file-open"
+    if action in ("stat", "fstat", "lstat",
                   "newfstatat", "statx", "access", "faccessat"):
         return "file-read-metadata"
     if action in ("read", "readv", "pread64", "preadv"):
@@ -229,14 +274,14 @@ class AuditBudget:
 
     def __init__(self,
                  *,
-                 global_cap: Optional[int] = None,
-                 category_caps: Optional[Dict[str, int]] = None,
-                 pid_cap: Optional[int] = None,
-                 refill_rates: Optional[Dict[str, float]] = None,
-                 sampling_rates: Optional[Dict[str, int]] = None,
-                 categorise: Optional[Callable[[str], str]] = None,
-                 clock: Optional[Callable[[], float]] = None,
-                 ):
+                 global_cap: int | None = None,
+                 category_caps: dict[str, int] | None = None,
+                 pid_cap: int | None = None,
+                 refill_rates: dict[str, float] | None = None,
+                 sampling_rates: dict[str, int] | None = None,
+                 categorise: Callable[[str], str] | None = None,
+                 clock: Callable[[], float] | None = None,
+                 ) -> None:
         # Defaults — copy so external dicts can't be mutated through
         # ours and vice versa.
         self.global_cap = (DEFAULT_GLOBAL_CAP
@@ -296,20 +341,29 @@ class AuditBudget:
         # since Python 3.7 so we get LRU semantics on `_pid_counts`
         # for free (move_to_end on access).
         self._record_count = 0
-        self._category_counts: Dict[str, int] = {}
-        self._pid_counts: Dict[int, int] = {}
-        self._dropped: Dict[str, int] = {}
+        self._category_counts: dict[str, int] = {}
+        self._pid_counts: dict[int, int] = {}
+        self._dropped: dict[str, int] = {}
         self._cat_marker_emitted: set = set()
         self._pid_marker_emitted: set = set()
         # Token bucket: per-category (current_tokens, last_refill_ts).
         # Initialised lazily on first event in each category so the
         # bucket starts at full capacity.
-        self._buckets: Dict[str, Tuple[float, float]] = {}
+        self._buckets: dict[str, tuple[float, float]] = {}
         # Sampling counter: per-category modular counter so 1-in-N
         # is deterministic (caller knows exactly which Nth event
         # leaked through). Starts at 0; sampled records emitted on
         # _sampling_counter % N == 0.
-        self._sampling_counters: Dict[str, int] = {}
+        self._sampling_counters: dict[str, int] = {}
+        # Cumulative sampled keeps across all categories — the
+        # second hard ceiling. Sampled keeps deliberately don't bump
+        # _record_count (the global cap was promised for counted
+        # records), so without their own bound the 1-in-N trickle
+        # would keep JSONL output proportional to attacker volume
+        # forever. Bounded at global_cap: once spent, over-cap events
+        # produce NO keeps at all.
+        self._sampled_keeps = 0
+        self._sampled_keeps_marker_emitted = False
         # PID dict cap. A fork-bomb-style target spawning millions
         # of distinct short-lived PIDs would otherwise grow
         # _pid_counts unbounded (~120 bytes/entry; 1M PIDs ≈ 120MB
@@ -349,45 +403,31 @@ class AuditBudget:
         """All records that were KEPT (returned downstream),
         including per-category sampled keeps.
 
-        Equals `total_records + sum(per-category sampled-keep count)`.
-        Use this when you want the "what did the audit log actually
-        get" count, vs `total_records` which is "what counted toward
-        the global budget".
+        Equals `total_records + sampled_keeps`. Use this when you
+        want the "what did the audit log actually get" count, vs
+        `total_records` which is "what counted toward the global
+        budget". Exact: sampled keeps are counted at the keep site
+        (`_sampled_keeps`), which is also how the second hard
+        ceiling — cumulative sampled keeps <= global_cap — is
+        enforced.
         """
-        # Sampled keeps land in `_sampling_counters` only on the keep
-        # path (every Nth event in over-cap categories). The counter
-        # holds the count of OVER-CAP events seen per category, of
-        # which 1-in-N were kept. Approximate the kept count via
-        # `count // sample_n` per category — exact when sample_n
-        # divides evenly, off by at most 1 per category in the
-        # general case.
-        sampled_keeps = 0
-        for cat, count in getattr(self, "_sampling_counters", {}).items():
-            cat_cfg = (
-                getattr(self, "_per_category_sampling", {}).get(cat)
-                if hasattr(self, "_per_category_sampling")
-                else None
-            )
-            sample_n = cat_cfg if isinstance(cat_cfg, int) and cat_cfg > 0 else 0
-            if sample_n > 0:
-                sampled_keeps += count // sample_n
-        return self._record_count + sampled_keeps
+        return self._record_count + self._sampled_keeps
 
     @property
-    def category_counts(self) -> Dict[str, int]:
+    def category_counts(self) -> dict[str, int]:
         return dict(self._category_counts)
 
     @property
-    def dropped_by_category(self) -> Dict[str, int]:
+    def dropped_by_category(self) -> dict[str, int]:
         return dict(self._dropped)
 
     @property
-    def pid_counts(self) -> Dict[int, int]:
+    def pid_counts(self) -> dict[int, int]:
         return dict(self._pid_counts)
 
     # ----- core decision -------------------------------------------
 
-    def evaluate(self, action: str, pid: int) -> Tuple[str, Optional[dict]]:
+    def evaluate(self, action: str, pid: int) -> tuple[str, dict | None]:
         """Decide whether to keep or drop a record.
 
         Returns ``(KEEP, marker)`` or ``(DROP, marker)``. The marker
@@ -463,11 +503,16 @@ class AuditBudget:
                     # Sampled record IS kept — doesn't refill the
                     # bucket (already over cap) and doesn't bump
                     # the global counter (we promised the global
-                    # cap).
-                    return KEEP, marker
-                # Not the sampled one — drop, but the marker (if
-                # any was just generated) still flushes so
-                # operators see the state-change event in-line.
+                    # cap) — PROVIDED the sampled-keep budget (the
+                    # second hard ceiling) isn't spent yet.
+                    if self._sampled_keeps < self.global_cap:
+                        self._sampled_keeps += 1
+                        return KEEP, marker
+                    marker = self._sampled_budget_marker(marker)
+                # Not the sampled one (or the sampled-keep budget is
+                # spent) — drop, but the marker (if any was just
+                # generated) still flushes so operators see the
+                # state-change event in-line.
                 return DROP, marker
             # No sampling configured: emit the "no sampling" marker
             # on the first drop.
@@ -489,6 +534,25 @@ class AuditBudget:
         # (e.g., if an operator-side process raises the global cap
         # mid-run, or sampling kicks in for this category later).
         if self._record_count >= self.global_cap:
+            # Post-cap sampling applies here too — the module
+            # contract is that once the global cap is hit, EVERY
+            # record is evaluated through sampling (un-sampled
+            # categories default to drop). A sampled keep does not
+            # bump the global counter: the cap was promised; the
+            # 1-in-N trickle rides above it by design, exactly as
+            # on the category-cap path — and is bounded by the same
+            # sampled-keep ceiling.
+            sample_n = self.sampling_rates.get(cat, 0)
+            if sample_n > 0:
+                self._sampling_counters[cat] = (
+                    self._sampling_counters.get(cat, 0) + 1
+                )
+                if self._sampling_counters[cat] % sample_n == 0:
+                    if self._sampled_keeps < self.global_cap:
+                        self._sampled_keeps += 1
+                        self._global_cap_notified = True
+                        return KEEP, marker
+                    marker = self._sampled_budget_marker(marker)
             self._dropped[cat] = self._dropped.get(cat, 0) + 1
             # Refund the token we just consumed in _take_token —
             # this drop is global-cap, not category-cap. Without
@@ -547,6 +611,24 @@ class AuditBudget:
         self._buckets[cat] = (tokens - 1.0, now)
         return True
 
+    def _sampled_budget_marker(self, marker: dict | None) -> dict | None:
+        """One-shot marker announcing the sampled-keep ceiling is
+        spent — from here on, over-cap floods produce NO keeps at
+        all. Never overwrites a marker the caller already generated
+        for this event (per-event marker slots are single-occupancy;
+        the exhaust announcement retries on the next refused keep)."""
+        if self._sampled_keeps_marker_emitted or marker is not None:
+            return marker
+        self._sampled_keeps_marker_emitted = True
+        return self._make_marker(
+            "sampling_budget_exceeded",
+            cap=self.global_cap,
+            note=(f"Cumulative post-cap sampled keeps reached the "
+                  f"sampling ceiling ({self.global_cap}); the 1-in-N "
+                  f"trickle stops here and further over-cap records "
+                  f"are dropped entirely."),
+        )
+
     def _make_marker(self, marker_type: str, **fields) -> dict:
         """Construct a marker record. Caller writes the dict as a
         JSONL line. Marker shape mirrors the audit_summary record
@@ -574,6 +656,24 @@ class AuditBudget:
             return True
         return False
 
+    def global_cap_marker(self) -> dict:
+        """In-band JSONL marker announcing the global-cap exhaust.
+
+        Companion to :meth:`pop_global_cap_notice` for backends that
+        surface the notice into the record stream rather than stderr —
+        the macOS LogStreamer appends this marker the first time the
+        notice fires, mirroring the per-category and per-PID markers,
+        so global-cap suppression is never markerless there (the Linux
+        tracer keeps its stderr line instead)."""
+        return self._make_marker(
+            "global_budget_exceeded",
+            cap=self.global_cap,
+            note=(f"Global audit-record cap ({self.global_cap}) "
+                  f"reached; further records dropped (per-category "
+                  f"sampling still applies). Pass a larger "
+                  f"--audit-budget to raise."),
+        )
+
     def summary_record(self) -> dict:
         """End-of-run summary. Caller appends this once when the
         audit session closes (LogStreamer.stop / tracer exit)."""
@@ -583,6 +683,7 @@ class AuditBudget:
             "type": "audit_summary",
             "audit": True,
             "total_records": self._record_count,
+            "sampled_keeps": self._sampled_keeps,
             "dropped_by_category": dict(self._dropped),
             "category_counts": dict(self._category_counts),
             "pid_counts": dict(self._pid_counts),
@@ -606,4 +707,4 @@ def from_cli_state() -> AuditBudget:
     """
     from . import state
     cli_cap = getattr(state, "_cli_sandbox_audit_budget", None)
-    return AuditBudget(global_cap=cli_cap if cli_cap else None)
+    return AuditBudget(global_cap=cli_cap or None)

@@ -17,7 +17,8 @@ include them with ``--include-suppressed``.
 
 Exit codes:
     0  — B introduces no new findings (resolutions are fine)
-    1  — B introduces new findings above ``--severity`` threshold
+    1  — B introduces new findings above ``--fail-on-severity`` threshold,
+         or any new KEV-listed finding (regardless of severity/threshold)
     2  — invalid arguments
 """
 
@@ -30,11 +31,53 @@ import sys
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, TYPE_CHECKING
+
+from core.json import dumps_display
+from core.security.log_sanitisation import escape_nonprintable
 
 from .findings import severity_rank
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+
 logger = logging.getLogger(__name__)
+
+# Length cap for interpolated markdown table cells. Finding labels
+# (eco:name@version + advisory id) and suppression reasons come from
+# findings.json, which downstream carries registry / manifest /
+# suppression-file content — long enough for legitimate values,
+# short enough that an adversarial multi-kilobyte string can't
+# balloon the PR comment past GitHub's cap.
+_MD_CELL_LIMIT = 200
+
+
+def _md_cell(value: Any, *, limit: int = _MD_CELL_LIMIT) -> str:
+    """Neutralise an untrusted value for a markdown table cell.
+
+    Finding labels and suppression reasons flow from findings.json
+    (package names, advisory ids, operator suppression files) into
+    tables that ``render_pr_comment`` wraps in ``<details>`` blocks.
+    Unescaped ``|`` splits the row; raw ``</details>`` + a forged
+    header closes the real section and injects content that renders
+    as if raptor-sca produced it. Escape the markdown/HTML
+    structural characters, collapse newlines (row terminators), defang
+    non-printables, and length-cap so every consumer of these tables
+    (baseline-delta.md, pr-comment.md, stdout) gets inert text.
+    """
+    text = str(value)
+    text = text.replace("\r", " ").replace("\n", " ")
+    text = (
+        text.replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace("`", "\\`")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+    )
+    text = escape_nonprintable(text)
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +100,7 @@ def main(argv: Sequence[str]) -> int:
     )
 
     if args.json:
-        out_text = json.dumps(_delta_to_dict(delta), indent=2)
+        out_text = dumps_display(_delta_to_dict(delta), indent=2)
     elif args.pr_comment:
         out_text = render_pr_comment(delta, repo_label=args.repo_label)
     else:
@@ -77,6 +120,7 @@ def main(argv: Sequence[str]) -> int:
     triggering = [
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= threshold
+        or (r.get("sca") or {}).get("in_kev")
     ]
     return 1 if triggering else 0
 
@@ -87,10 +131,10 @@ def main(argv: Sequence[str]) -> int:
 
 @dataclass
 class DeltaResult:
-    new: List[Dict[str, Any]]
-    resolved: List[Dict[str, Any]]
-    suppression_added: List[Dict[str, Any]]
-    suppression_lifted: List[Dict[str, Any]]
+    new: list[dict[str, Any]]
+    resolved: list[dict[str, Any]]
+    suppression_added: list[dict[str, Any]]
+    suppression_lifted: list[dict[str, Any]]
     # Findings present in both A and B with no suppression-state
     # change. Used to surface the operator's persistent backlog
     # — currently silently dropped, which made the delta report
@@ -100,12 +144,12 @@ class DeltaResult:
     # breakdown but NOT the full list (defeats the point of
     # ``--baseline`` quiet-mode). Operators wanting the list pass
     # ``--show-persistent`` or read the JSON output.
-    persistent: List[Dict[str, Any]] = field(default_factory=list)
+    persistent: list[dict[str, Any]] = field(default_factory=list)
 
 
 def compute_delta(
-    rows_a: Iterable[Dict[str, Any]],
-    rows_b: Iterable[Dict[str, Any]],
+    rows_a: Iterable[dict[str, Any]],
+    rows_b: Iterable[dict[str, Any]],
     *,
     include_suppressed: bool = False,
 ) -> DeltaResult:
@@ -128,11 +172,11 @@ def compute_delta(
     a_full = _index_by_canonical_key(list(rows_a))
     b_full = _index_by_canonical_key(list(rows_b))
 
-    new: List[Dict[str, Any]] = []
-    resolved: List[Dict[str, Any]] = []
-    suppression_added: List[Dict[str, Any]] = []
-    suppression_lifted: List[Dict[str, Any]] = []
-    persistent: List[Dict[str, Any]] = []
+    new: list[dict[str, Any]] = []
+    resolved: list[dict[str, Any]] = []
+    suppression_added: list[dict[str, Any]] = []
+    suppression_lifted: list[dict[str, Any]] = []
+    persistent: list[dict[str, Any]] = []
 
     for key, row in b_full.items():
         if key in a_full:
@@ -217,7 +261,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _load_rows(path_str: str) -> Optional[List[Dict[str, Any]]]:
+def _load_rows(path_str: str) -> list[dict[str, Any]] | None:
     path = Path(path_str).resolve()
     if not path.exists():
         print(f"raptor-sca diff: file not found: {path}", file=sys.stderr)
@@ -233,7 +277,7 @@ def _load_rows(path_str: str) -> Optional[List[Dict[str, Any]]]:
     return data
 
 
-def _canonical_key(row: Dict[str, Any]) -> Optional[Tuple[str, ...]]:
+def _canonical_key(row: dict[str, Any]) -> tuple[str, ...] | None:
     """Identity for cross-run comparison.
 
     Vulnerable_dependency: ``(eco, name, primary_cve_or_osvid)`` — the
@@ -279,25 +323,27 @@ def _canonical_key(row: Dict[str, Any]) -> Optional[Tuple[str, ...]]:
 
 
 def _index_by_canonical_key(
-    rows: Iterable[Dict[str, Any]],
-) -> Dict[Tuple[str, ...], Dict[str, Any]]:
+    rows: Iterable[dict[str, Any]],
+) -> dict[tuple[str, ...], dict[str, Any]]:
     """Return ``{canonical_key: row}`` for every row that has a key.
 
     Suppression state is *part of the row*, not a filter — callers
     decide whether to skip suppressed rows when consuming the index.
     """
-    out: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+    out: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         key = _canonical_key(row)
         if key is None:
             continue
-        out.setdefault(key, row)
+        existing = out.get(key)
+        if existing is None or (existing.get("suppressed") and not row.get("suppressed")):
+            out[key] = row
     return out
 
 
-def _sorted(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sorted(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda r: (
@@ -309,7 +355,7 @@ def _sorted(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     )
 
 
-def _delta_to_dict(d: DeltaResult) -> Dict[str, Any]:
+def _delta_to_dict(d: DeltaResult) -> dict[str, Any]:
     return {
         "new": d.new,
         "resolved": d.resolved,
@@ -327,10 +373,10 @@ def _delta_to_dict(d: DeltaResult) -> Dict[str, Any]:
     }
 
 
-def _severity_breakdown(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+def _severity_breakdown(rows: list[dict[str, Any]]) -> dict[str, int]:
     """Counts by severity. Lets the JSON consumer drive a stacked
     bar chart over time without re-walking the full row list."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for r in rows:
         sev = (r.get("severity") or "info").lower()
         counts[sev] = counts.get(sev, 0) + 1
@@ -346,7 +392,11 @@ def _render_markdown(
     show_persistent: bool = False,
 ) -> str:
     buf = StringIO()
-    buf.write(f"# raptor-sca diff — `{a_path}` → `{b_path}`\n\n")
+    # Paths are operator-supplied argv, but they land in a shared
+    # report — same cell treatment keeps the header inert.
+    buf.write(
+        f"# raptor-sca diff — `{_md_cell(a_path)}` → `{_md_cell(b_path)}`\n\n"
+    )
     buf.write(f"- New: **{len(d.new)}**\n")
     buf.write(f"- Resolved: **{len(d.resolved)}**\n")
     if d.persistent:
@@ -400,7 +450,7 @@ def _render_markdown(
 
 def render_pr_comment(
     delta: DeltaResult, *,
-    repo_label: Optional[str] = None,
+    repo_label: str | None = None,
     truncate_table_at: int = 20,
 ) -> str:
     """Render a delta as a GitHub-flavoured PR comment.
@@ -428,7 +478,10 @@ def render_pr_comment(
     artefacts.
     """
     buf = StringIO()
-    label = repo_label or "raptor-sca"
+    # ``--repo-label`` is operator-supplied but flows into a PR
+    # comment other reviewers read — neutralise like any other
+    # interpolated field.
+    label = _md_cell(repo_label or "raptor-sca")
     new_count = len(delta.new)
     resolved_count = len(delta.resolved)
     kev_new = sum(1 for r in delta.new
@@ -535,7 +588,7 @@ def render_pr_comment(
 
 def _table(
     buf: StringIO,
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     *,
     show_suppression: bool = False,
 ) -> None:
@@ -547,20 +600,28 @@ def _table(
     buf.write("| " + " | ".join(cols) + " |\n")
     buf.write("|" + "|".join(["---"] * len(cols)) + "|\n")
     for r in rows:
-        sev = (r.get("severity") or "info").title()
+        # Every interpolated field is untrusted (findings.json content)
+        # — route through ``_md_cell`` so a crafted package name,
+        # advisory id, or suppression reason can't break the table or
+        # forge markup inside the surrounding <details> block.
+        sev = _md_cell((r.get("severity") or "info").title())
         sca = r.get("sca") or {}
         eco = sca.get("ecosystem") or ""
         name = sca.get("name") or ""
         version = sca.get("version") or ""
         adv = sca.get("advisory") or {}
         adv_id = (adv.get("id") if isinstance(adv, dict) else "") or ""
-        finding_label = f"{eco}:{name}@{version} {adv_id}".strip()
+        finding_label = _md_cell(f"{eco}:{name}@{version} {adv_id}".strip())
         if show_suppression:
-            reason = r.get("suppression_reason") or "—"
+            reason = _md_cell(r.get("suppression_reason") or "—")
             buf.write(f"| {sev} | {finding_label} | {reason} |\n")
         else:
             kev = "yes" if sca.get("in_kev") else ""
-            epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
+            try:
+                epss = (f"{float(sca['epss']):.2f}"
+                        if sca.get("epss") is not None else "")
+            except (TypeError, ValueError):
+                epss = ""
             buf.write(f"| {sev} | {finding_label} | {kev} | {epss} |\n")
     buf.write("\n")
 

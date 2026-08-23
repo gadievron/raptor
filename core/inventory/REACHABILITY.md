@@ -1,6 +1,6 @@
 # Function-level reachability
 
-`core/inventory/reachability.py` answers: **is qualified function `X.Y.Z` actually called from this project?**
+`core/analysis/reachability.py` answers: **is qualified function `X.Y.Z` actually called from this project?**
 
 It runs against the inventory artefact built by `core.inventory.build_inventory` and returns one of three verdicts: `CALLED`, `NOT_CALLED`, or `UNCERTAIN`.
 
@@ -19,7 +19,7 @@ If you need transitively-reachable analysis (call-graph closure), method-resolut
 
 ```python
 from core.inventory.builder import build_inventory
-from core.inventory.reachability import function_called, Verdict
+from core.analysis.reachability import function_called, Verdict
 
 inventory = build_inventory("/path/to/project", "/tmp/inventory-out")
 result = function_called(inventory, "requests.utils.extract_zipped_paths")

@@ -7,11 +7,15 @@ with branches shown as splits and sink nodes styled distinctly.
 
 from __future__ import annotations
 
-from core.json import load_json
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+from core.json import load_json
+
+from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize_id as _sid
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _step_label(step: dict[str, Any]) -> str:
@@ -118,7 +122,9 @@ def generate(data: dict[str, Any]) -> str:
 
 
     if not steps:
-        return f"flowchart TD\n    EMPTY[\"No steps in {trace_id}\"]"
+        # trace_id comes raw from the trace JSON; sanitize before it lands
+        # inside the quoted Mermaid label.
+        return f"flowchart TD\n    EMPTY[\"No steps in {_sanitize(trace_id)}\"]"
 
     lines = ["flowchart TD"]
     lines.append(f'    TITLE["{name}"]')
@@ -161,8 +167,7 @@ def generate(data: dict[str, Any]) -> str:
 
     # Main chain edges
     lines.append("")
-    for i in range(len(node_ids) - 1):
-        lines.append(f"    {node_ids[i]} --> {node_ids[i+1]}")
+    lines.extend(f"    {node_ids[i]} --> {node_ids[i+1]}" for i in range(len(node_ids) - 1))
 
     # Branch annotations as separate note nodes
     if branches:
@@ -262,5 +267,6 @@ def generate(data: dict[str, Any]) -> str:
 def generate_from_file(path: Path) -> str:
     data = load_json(path)
     if data is None:
-        raise ValueError(f"Failed to load {path}")
+        msg = f"Failed to load {path}"
+        raise ValueError(msg)
     return generate(data)

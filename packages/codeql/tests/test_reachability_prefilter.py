@@ -8,7 +8,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-from core.inventory.reach_witness import (
+from core.analysis.reach_witness import (
     STRUCTURALLY_SUPPRESSIBLE_KINDS,
     verdict_from_classification,
 )

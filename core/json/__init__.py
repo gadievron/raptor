@@ -30,12 +30,23 @@ from typing import Any
 # with __all__ below.
 _LAZY_EXPORTS = {
     "CacheEnvelope":          ("core.json.cache", "CacheEnvelope"),
+    # Canonical home is core.json.utils (core.json.bounded re-exports
+    # it) — resolving here avoids importing the bounded module for
+    # consumers that only catch the error.
+    "JsonBudgetExceededError": ("core.json.utils", "JsonBudgetExceededError"),
     "JsonCache":              ("core.json.cache", "JsonCache"),
     # MISSING lives outside core.json.* so test_f046's sys.modules
     # reset doesn't replace the singleton — see core/sentinels/.
     "MISSING":                ("core.sentinels", "MISSING"),
     "TTL_FOREVER":            ("core.json.cache", "TTL_FOREVER"),
+    "append_jsonl":           ("core.json.jsonl", "append_jsonl"),
+    "dumps_canonical":        ("core.json.utils", "dumps_canonical"),
+    "dumps_display":          ("core.json.utils", "dumps_display"),
     "load_json":              ("core.json.utils", "load_json"),
+    "load_json_bounded":      ("core.json.bounded", "load_json_bounded"),
+    "load_jsonl":             ("core.json.jsonl", "load_jsonl"),
+    "loads":                  ("core.json.utils", "loads"),
+    "loads_bounded":          ("core.json.bounded", "loads_bounded"),
     "save_json":              ("core.json.utils", "save_json"),
     "load_json_with_comments": ("core.json.utils", "load_json_with_comments"),
 }
@@ -49,15 +60,14 @@ def __getattr__(name: str) -> Any:
     """
     spec = _LAZY_EXPORTS.get(name)
     if spec is None:
-        raise AttributeError(
-            f"module 'core.json' has no attribute {name!r}"
-        )
+        msg = f"module 'core.json' has no attribute {name!r}"
+        raise AttributeError(msg)
     submod_name, attr_name = spec
     import importlib
-    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     # ``submod_name`` is from the module-level ``_LAZY_EXPORTS``
     # dict (constant in this file) — not attacker-controlled.
     # PEP 562 lazy re-export.
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
     submod = importlib.import_module(submod_name)
     value = getattr(submod, attr_name)
     # Cache on this module so subsequent accesses bypass __getattr__.
@@ -71,11 +81,19 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "CacheEnvelope",
-    "JsonCache",
     "MISSING",
     "TTL_FOREVER",
+    "CacheEnvelope",
+    "JsonBudgetExceededError",
+    "JsonCache",
+    "append_jsonl",
+    "dumps_canonical",
+    "dumps_display",
     "load_json",
-    "save_json",
+    "load_json_bounded",
     "load_json_with_comments",
+    "load_jsonl",
+    "loads",
+    "loads_bounded",
+    "save_json",
 ]

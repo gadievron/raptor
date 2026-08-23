@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from packages.autonomous.corpus_generator import CorpusGenerator
 
@@ -48,6 +49,72 @@ class TestCorpusGenerator(unittest.TestCase):
 
             self.assertIn("FMT", analysis["commands_detected"])
             self.assertIn("FMT", generator.detected_commands)
+
+
+class _FakeStrings:
+    """Stand-in for the sandboxed ``strings`` invocation."""
+
+    def __init__(self, stdout: str):
+        self.returncode = 0
+        self.stdout = stdout
+        self.stderr = ""
+
+
+# Strings chosen so dict-literal insertion order (STACK, HEAP, UAF,
+# JSON, ...) differs from sorted order (HEAP, JSON, STACK, UAF).
+_BINARY_STDOUT = "\n".join(
+    ["vuln_stack", "heap: input", "[uaf] handler", "parse_json here"]
+)
+
+
+class TestCommandsDetectedOrdering(unittest.TestCase):
+    """``analysis["commands_detected"]`` is emitted in sorted order on
+    BOTH the binary-only path and the source-context path, so the report
+    field's ordering does not depend on whether ``source_dir`` is set."""
+
+    @staticmethod
+    def _make_generator(root: Path, source_dir: Path | None = None) -> CorpusGenerator:
+        binary = root / "target"
+        binary.write_bytes(b"dummy")
+        return CorpusGenerator(binary, source_dir=source_dir)
+
+    def test_commands_detected_sorted_without_source_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            gen = self._make_generator(root)
+            with patch(
+                "packages.autonomous.corpus_generator._run_trusted",
+                return_value=_FakeStrings(_BINARY_STDOUT),
+            ):
+                analysis = gen.analyze_binary()
+
+            commands = analysis["commands_detected"]
+            self.assertEqual(commands, sorted(commands))
+            self.assertEqual({"HEAP", "JSON", "STACK", "UAF"}, set(commands))
+
+    def test_commands_detected_ordering_independent_of_source_dir(self):
+        """Binary-only vs source-context path must agree on ordering."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            # Source contributes nothing new — set of commands is identical
+            # either way, so any ordering difference is purely path-dependent.
+            (source_dir / "README.md").write_text("no grammar here\n", encoding="utf-8")
+
+            with patch(
+                "packages.autonomous.corpus_generator._run_trusted",
+                return_value=_FakeStrings(_BINARY_STDOUT),
+            ):
+                without_source = self._make_generator(root).analyze_binary()
+                with_source = self._make_generator(
+                    root, source_dir=source_dir
+                ).analyze_binary()
+
+            self.assertEqual(
+                without_source["commands_detected"],
+                with_source["commands_detected"],
+            )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Oracle cross-check CLI.
+r"""Oracle cross-check CLI.
 
 Reads a `cve-diff bench` ``summary.json`` and, for each CVE:
 - If PASS: parse the matching ``<cve_id>.osv.json`` in the same
@@ -14,8 +14,8 @@ Writes:
   examples per verdict
 
 Usage:
-    .venv/bin/python -m cve_diff.oracle.cross_check \\
-        --summary /tmp/bench200/summary.json \\
+    .venv/bin/python -m cve_diff.oracle.cross_check \
+        --summary /tmp/bench200/summary.json \
         --output-dir /tmp/bench200/oracle/
 """
 
@@ -77,12 +77,21 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
         m = _GH_COMMIT_URL.search(url)
         if m:
             slug = m.group(1)
-            if slug.endswith(".git"):
-                slug = slug[:-4]
+            slug = slug.removesuffix(".git")
             return slug, m.group(2)
     # Fallback: the repo field + the first fixed event.
-    for aff in data.get("affected") or []:
-        for rng in aff.get("ranges") or []:
+    affected = data.get("affected") or []
+    if not isinstance(affected, list):
+        return "", ""
+    for aff in affected:
+        if not isinstance(aff, dict):
+            continue
+        ranges = aff.get("ranges") or []
+        if not isinstance(ranges, list):
+            continue
+        for rng in ranges:
+            if not isinstance(rng, dict):
+                continue
             repo = rng.get("repo") or ""
             # Cap the slug capture at GitHub's own per-segment limit
             # (39 chars for owner per docs, 100 chars for repo). Pre-fix
@@ -100,9 +109,13 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
             slug = ""
             if m:
                 slug = m.group(1)
-                if slug.endswith(".git"):
-                    slug = slug[:-4]
-            for ev in rng.get("events") or []:
+                slug = slug.removesuffix(".git")
+            events = rng.get("events") or []
+            if not isinstance(events, list):
+                continue
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
                 sha = ev.get("fixed") or ""
                 if slug and sha:
                     return slug, sha
@@ -152,7 +165,12 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"cross-check: cannot read {summary_path}: {exc}",
+              file=sys.stderr)
+        sys.exit(1)
     results = summary.get("results") or []
     if args.limit > 0:
         results = results[: args.limit]
@@ -272,13 +290,10 @@ def _render_markdown(summary_name: str, results: list[dict],
             examples = by_v[verdict]
             lines.append(f"### {verdict.value} ({len(examples)})")
             # Show up to 5 examples.
-            for ex in examples[:5]:
-                lines.append(
-                    f"- **{ex.cve_id}** (src={ex.source}): "
+            lines.extend(f"- **{ex.cve_id}** (src={ex.source}): "
                     f"picked=`{ex.picked_slug}@{ex.picked_sha[:12] if ex.picked_sha else ''}`, "
                     f"expected={list(ex.expected_slugs)[:3]} / {[s[:12] for s in ex.expected_shas[:3]]}"
-                    + (f". {ex.notes}" if ex.notes else "")
-                )
+                    + (f". {ex.notes}" if ex.notes else "") for ex in examples[:5])
             if len(examples) > 5:
                 lines.append(f"- … and {len(examples) - 5} more")
     return "\n".join(lines) + "\n"

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from packages.sca.models import PinStyle
-from packages.sca.parsers.package_json import parse
+from packages.sca.parsers.package_json import extract_project_license, parse
 
 
 def _write(tmp_path: Path, data: dict) -> Path:
@@ -122,3 +122,48 @@ def test_non_string_spec_is_skipped(tmp_path: Path) -> None:
     deps = parse(p)
     assert len(deps) == 1
     assert deps[0].name == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Project license — describes the project itself, never its deps
+# ---------------------------------------------------------------------------
+
+
+def test_extract_project_license_spdx_string(tmp_path: Path) -> None:
+    p = _write(tmp_path, {"name": "x", "license": "MIT"})
+    assert extract_project_license(p) == "MIT"
+
+
+def test_extract_project_license_legacy_object(tmp_path: Path) -> None:
+    p = _write(tmp_path, {"license": {"type": "ISC", "url": "https://x"}})
+    assert extract_project_license(p) == "ISC"
+
+
+def test_extract_project_license_deprecated_array(tmp_path: Path) -> None:
+    p = _write(tmp_path, {"licenses": [{"type": "MIT"}, {"type": "ISC"}]})
+    assert extract_project_license(p) == "MIT OR ISC"
+
+
+def test_extract_project_license_absent(tmp_path: Path) -> None:
+    p = _write(tmp_path, {"dependencies": {"lodash": "^4.17.21"}})
+    assert extract_project_license(p) is None
+
+
+def test_extract_project_license_malformed_json(tmp_path: Path) -> None:
+    p = tmp_path / "package.json"
+    p.write_text("{ not json", encoding="utf-8")
+    assert extract_project_license(p) is None
+
+
+def test_dep_rows_never_carry_the_project_license(tmp_path: Path) -> None:
+    # Manifest-level license describes the project itself, not its
+    # deps — a dep's declared_license only ever comes from data that
+    # describes that dep (registry enrichment), or stays None.
+    p = _write(tmp_path, {
+        "license": "MIT",
+        "dependencies": {"lodash": "^4.17.21"},
+        "devDependencies": {"jest": "~29.0.0"},
+    })
+    deps = parse(p)
+    assert deps
+    assert all(d.declared_license is None for d in deps)

@@ -100,6 +100,36 @@ def test_no_license_means_no_license_block() -> None:
     assert "licenses" not in comp
 
 
+def test_project_license_lands_on_metadata_component() -> None:
+    """The scanned project's own license belongs on metadata.component
+    (the thing the BOM describes), never on any dep's components[]
+    entry."""
+    bom = build_bom(deps=[_dep(license=None)], target_name="my-app",
+                    project_license="Apache-2.0")
+    comp = bom["metadata"]["component"]
+    assert comp["licenses"] == [{"license": {"id": "Apache-2.0"}}]
+    assert "licenses" not in bom["components"][0]
+
+
+def test_project_license_spdx_expression_on_metadata_component() -> None:
+    bom = build_bom(deps=[], target_name="my-app",
+                    project_license="MIT OR Apache-2.0")
+    comp = bom["metadata"]["component"]
+    assert comp["licenses"] == [{"expression": "MIT OR Apache-2.0"}]
+
+
+def test_no_project_license_no_metadata_licenses() -> None:
+    bom = build_bom(deps=[_dep()], target_name="my-app")
+    assert "licenses" not in bom["metadata"]["component"]
+
+
+def test_project_license_without_target_name_is_dropped() -> None:
+    """metadata.component needs a name; a license with no component to
+    attach to is omitted rather than emitted somewhere wrong."""
+    bom = build_bom(deps=[_dep(license=None)], project_license="MIT")
+    assert "component" not in bom["metadata"]
+
+
 def test_dedup_by_purl_merges_metadata() -> None:
     """A dep that shows up in both manifest and lockfile collapses to
     one component, with the union of populated metadata."""

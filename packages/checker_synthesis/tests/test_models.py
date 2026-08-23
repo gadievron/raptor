@@ -33,7 +33,7 @@ class TestSeedBug:
             file="x", function="f", line_start=1, line_end=2,
             cwe="CWE-78", reasoning="r",
         )
-        with pytest.raises(Exception):
+        with pytest.raises((AttributeError, TypeError)):
             s.file = "y"
 
 

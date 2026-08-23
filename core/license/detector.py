@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 # SPDX identifiers we recognise as OSI-approved open-source. Covers
 # the licenses that account for ~95%+ of real-world OSS targets.
@@ -162,9 +161,9 @@ class TargetLicense:
       ``LICENSE-APACHE``) where we pick one but flag the others.
     """
 
-    spdx_id: Optional[str]
+    spdx_id: str | None
     classification: str
-    source_file: Optional[str]
+    source_file: str | None
     confidence: str
     additional_files: tuple = ()
 
@@ -180,7 +179,7 @@ class TargetLicense:
         }
 
 
-def _find_license_files(target_dir: Path) -> List[Path]:
+def _find_license_files(target_dir: Path) -> list[Path]:
     """Return license-named files at the top level of ``target_dir``,
     case-insensitive. Glob first to keep IO bounded; then de-dupe.
 
@@ -319,8 +318,8 @@ def _classify_text(text: str) -> tuple:
     # project's primary license is stated at the top of the
     # file; bundled-lib notices follow it.
     lowered = text.lower()
-    earliest_pos: Optional[int] = None
-    earliest_spdx: Optional[str] = None
+    earliest_pos: int | None = None
+    earliest_spdx: str | None = None
     # Non-GPL fingerprints.
     for spdx, marker in _TEXT_FINGERPRINTS:
         pos = lowered.find(marker)
@@ -389,10 +388,7 @@ def _classify_gpl_version(
     # line 2 or 3).
     window = text[family_pos: family_pos + 500]
     m = _GPL_VERSION_RE.search(window)
-    if m:
-        version = m.group(1)
-    else:
-        version = default_version
+    version = m.group(1) if m else default_version
     # SPDX normalises bare-integer versions to N.0 (the
     # canonical id is "GPL-3.0", "AGPL-3.0", "LGPL-2.0" —
     # never "GPL-3"). "LGPL-2.1" keeps its minor because it's
@@ -551,11 +547,11 @@ _INDIRECTION_PATTERNS = [
 ]
 
 
-def _extract_indirection_paths(text: str) -> List[str]:
+def _extract_indirection_paths(text: str) -> list[str]:
     """Return referenced paths from a LICENSE body, capped at
     ``_INDIRECTION_PATH_LIMIT`` so a malicious file with hundreds
     of "see X" lines can't make the follow allocate forever."""
-    found: List[str] = []
+    found: list[str] = []
     seen: set = set()
     for pat in _INDIRECTION_PATTERNS:
         for m in pat.finditer(text):
@@ -586,11 +582,17 @@ def _read_license_full(path: Path, byte_cap: int) -> str:
     except OSError:
         return ""
     try:
-        with os.fdopen(fd, "rb") as f:
-            buf = f.read(byte_cap)
+        fobj = os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        return ""
+    try:
+        buf = fobj.read(byte_cap)
         return buf.decode("utf-8", errors="replace")
     except OSError:
         return ""
+    finally:
+        fobj.close()
 
 
 def _follow_license_indirection(
@@ -618,7 +620,7 @@ def _follow_license_indirection(
     # (file_path, depth, is_root) — is_root flags the original
     # source_file we're trying to improve, so we don't re-
     # classify it (caller already did that and got unknown).
-    queue: List[tuple] = [(source_file, 0, True)]
+    queue: list[tuple] = [(source_file, 0, True)]
     visited: set = set()
     visited.add(source_file.resolve())
 

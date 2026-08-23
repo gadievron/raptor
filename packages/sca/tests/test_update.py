@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
 
 import pytest
 
 from packages.sca import update
-
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -24,7 +22,7 @@ def _vuln_row(
     manifest: Path,
     advisory_id: str = "GHSA-x",
     pin_style: str = "exact",
-    aliases: List[str] | None = None,
+    aliases: list[str] | None = None,
 ) -> dict:
     return {
         "id": f"sca:vuln:{ecosystem}:{name}:{version}:{advisory_id}",
@@ -102,6 +100,7 @@ def test_pom_xml_rewrite_bumps_version(tmp_path: Path) -> None:
     out = tmp_path / "out"
     rc = update.main([
         "--findings", str(findings), "--out", str(out), "--allow-major",
+        "--offline",
     ])
     assert rc == 0
     # Find the proposed file by walking the tree (path layout depends on cwd).
@@ -133,7 +132,8 @@ def test_pom_xml_with_property_reference_skipped(tmp_path: Path) -> None:
         manifest=pom,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out), "--allow-major"])
+    update.main(["--findings", str(findings), "--out", str(out), "--allow-major",
+                  "--offline"])
     changes = json.loads((out / "changes.json").read_text())
     assert changes[0]["skipped_reason"] is not None
     assert "property reference" in changes[0]["skipped_reason"]
@@ -155,8 +155,8 @@ def test_package_json_caret_preserved(tmp_path: Path) -> None:
         manifest=pkg, pin_style="caret",
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     obj = json.loads(proposed.read_text())
     assert obj["dependencies"]["lodash"] == "^4.17.21"
 
@@ -173,8 +173,8 @@ def test_package_json_exact_pin_replaced(tmp_path: Path) -> None:
         manifest=pkg,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["lodash"] == "4.17.21"
 
 
@@ -189,7 +189,7 @@ def test_package_json_git_url_skipped(tmp_path: Path) -> None:
         manifest=pkg,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
     changes = json.loads((out / "changes.json").read_text())
     assert changes[0]["skipped_reason"] is not None
 
@@ -207,8 +207,8 @@ def test_requirements_txt_rewrite(tmp_path: Path) -> None:
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
     body = proposed.read_text()
     assert "django==4.2.10" in body
     # Untouched line preserved.
@@ -227,9 +227,57 @@ def test_requirements_txt_pep503_normalisation(tmp_path: Path) -> None:
         manifest=req,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("requirements.txt"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
     assert "==1.0.1" in proposed.read_text()
+
+
+def test_requirements_txt_prose_comment_not_mangled(tmp_path: Path) -> None:
+    """A comment that mentions a package name as prose (not a pin)
+    must not be rewritten — regression for the '# pytest pinned
+    exactly: ...' mangling bug."""
+    req = tmp_path / "requirements-dev.txt"
+    req.write_text(
+        "# pytest pinned exactly: the root pytest.ini uses importlib\n"
+        "pytest==9.0.3\n",
+        encoding="utf-8",
+    )
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="pytest",
+        version="9.0.3", fixed_version="9.1.1",
+        manifest=req,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements-dev.txt")))
+    body = proposed.read_text()
+    assert "pytest==9.1.1" in body
+    assert "# pytest pinned exactly:" in body
+
+
+def test_requirements_txt_bare_commented_dep_gets_pinned(tmp_path: Path) -> None:
+    """A bare ``# pytest`` (no version, no trailing prose) is a
+    commented-out dep — the rewriter should pin it so uncommenting
+    yields the safe version."""
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "# pytest is an optional dep\n"
+        "# pytest\n"
+        "pytest==9.0.3\n",
+        encoding="utf-8",
+    )
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="pytest",
+        version="9.0.3", fixed_version="9.1.1",
+        manifest=req,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("requirements.txt")))
+    body = proposed.read_text()
+    assert "pytest==9.1.1" in body
+    assert "# pytest is an optional dep" in body
+    assert "# pytest==9.1.1" in body
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +299,8 @@ dependencies = [
         manifest=py,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
     body = proposed.read_text()
     assert '"django==4.2.10"' in body
     assert '"requests~=2.31.0"' in body
@@ -271,11 +319,96 @@ django = "^4.2.7"
         manifest=py,
     )])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("pyproject.toml"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
     body = proposed.read_text()
     assert 'django = "^4.2.10"' in body
     assert 'python = "^3.10"' in body
+
+
+def test_pyproject_toml_pep621_preserves_range_bounds(tmp_path: Path) -> None:
+    """PEP 621 entries keep the declared corridor around the new pin —
+    same behaviour as the requirements.txt rewriter."""
+    py = tmp_path / "pyproject.toml"
+    py.write_text("""\
+[project]
+dependencies = [
+  "requests>=2.0,<3.0",
+]
+""", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=py,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("pyproject.toml")))
+    assert '"requests>=2.0,==2.31.0,<3.0"' in proposed.read_text()
+
+
+def test_pyproject_toml_pep621_declines_out_of_corridor_target(
+    tmp_path: Path,
+) -> None:
+    """A fix target above the operator's declared ceiling is declined
+    (never emit an unsatisfiable spec)."""
+    py = tmp_path / "pyproject.toml"
+    py.write_text("""\
+[project]
+dependencies = [
+  "requests>=2.0,<2.25",
+]
+""", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=py,
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    assert not list((out / "proposed").rglob("pyproject.toml"))
+    changes = json.loads((out / "changes.json").read_text())
+    assert "not safely bumpable" in changes[0]["skipped_reason"]
+
+
+def test_requirements_txt_declines_out_of_corridor_target(
+    tmp_path: Path,
+) -> None:
+    """``requests>=2.0,<2.25`` must not become
+    ``requests>=2.0,==2.31.0,<2.25`` — decline with a reason instead."""
+    req = tmp_path / "requirements.txt"
+    req.write_text("requests>=2.0,<2.25\n", encoding="utf-8")
+    findings = _findings_file(tmp_path, [_vuln_row(
+        ecosystem="PyPI", name="requests",
+        version="2.20.0", fixed_version="2.31.0",
+        manifest=req, pin_style="range",
+    )])
+    out = tmp_path / "out"
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    assert not list((out / "proposed").rglob("requirements.txt"))
+    changes = json.loads((out / "changes.json").read_text())
+    assert "not safely bumpable" in changes[0]["skipped_reason"]
+
+
+def test_pypi_pin_preserving_bounds_corridor_conflicts() -> None:
+    from packages.sca.update import _pypi_pin_preserving_bounds
+
+    # Target above the ceiling → decline.
+    assert _pypi_pin_preserving_bounds(">=2.0,<2.25", "2.31.0") is None
+    assert _pypi_pin_preserving_bounds("<=2.25", "2.31.0") is None
+    # Target below the floor → decline.
+    assert _pypi_pin_preserving_bounds(">=2.0", "1.9") is None
+    assert _pypi_pin_preserving_bounds(">2.0", "2.0") is None
+    # In-corridor target keeps both bounds.
+    assert (_pypi_pin_preserving_bounds(">=2.0,<3.0", "2.31.0")
+            == ">=2.0,==2.31.0,<3.0")
+    # floor_raise: ceiling still guards; old floor is replaced.
+    assert _pypi_pin_preserving_bounds(
+        ">=2.0,<2.25", "2.31.0", floor_raise=True) is None
+    assert (_pypi_pin_preserving_bounds(
+        ">=2.0,<3.0", "2.31.0", floor_raise=True) == ">=2.31.0,<3.0")
+    # Uncomparable bound → decline rather than guess.
+    assert _pypi_pin_preserving_bounds("<not-a-version", "2.31.0") is None
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +433,7 @@ def test_fix_filter_restricts_to_listed_advisories(tmp_path: Path) -> None:
         "--findings", str(findings),
         "--out", str(out),
         "--fix", "GHSA-keep",
+        "--offline",
     ])
     changes = json.loads((out / "changes.json").read_text())
     names = {c["name"] for c in changes}
@@ -321,8 +455,8 @@ def test_minimal_picks_max_fix_across_findings(tmp_path: Path) -> None:
                   advisory_id="GHSA-2"),
     ])
     out = tmp_path / "out"
-    update.main(["--findings", str(findings), "--out", str(out)])
-    proposed = list((out / "proposed").rglob("package.json"))[0]
+    update.main(["--findings", str(findings), "--out", str(out), "--offline"])
+    proposed = next(iter((out / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "1.10.0"
 
 
@@ -337,6 +471,7 @@ def test_allow_major_gates_cross_major_upgrade(tmp_path: Path) -> None:
     out_no_major = tmp_path / "out_no_major"
     rc = update.main([
         "--findings", str(findings), "--out", str(out_no_major),
+        "--offline",
     ])
     # No proposed file because the only fix crosses a major boundary
     # and --allow-major wasn't supplied.
@@ -346,9 +481,9 @@ def test_allow_major_gates_cross_major_upgrade(tmp_path: Path) -> None:
     out_allow = tmp_path / "out_allow"
     update.main([
         "--findings", str(findings), "--out", str(out_allow),
-        "--allow-major",
+        "--allow-major", "--offline",
     ])
-    proposed = list((out_allow / "proposed").rglob("package.json"))[0]
+    proposed = next(iter((out_allow / "proposed").rglob("package.json")))
     assert json.loads(proposed.read_text())["dependencies"]["x"] == "2.0.0"
 
 
@@ -365,7 +500,7 @@ def test_pin_only_skips_loose_pins(tmp_path: Path) -> None:
     ])
     out = tmp_path / "out"
     update.main(["--findings", str(findings), "--out", str(out),
-                 "--pin-only"])
+                 "--pin-only", "--offline"])
     changes = {c["name"]: c for c in json.loads(
         (out / "changes.json").read_text(),
     )}
@@ -556,7 +691,7 @@ def _make_proposed(tmp_path: Path, eco_to_files: dict) -> Path:
 
 def _make_change(
     *, ecosystem: str, name: str = "pkg", manifest: Path,
-) -> "update.UpgradeChange":
+) -> update.UpgradeChange:
     return update.UpgradeChange(
         ecosystem=ecosystem, name=name,
         old_version="1.0.0", new_version="1.0.1",
@@ -773,3 +908,95 @@ def test_cascade_empty_applied_no_op(
     update._run_cascade_validation([], out)
     cascade = json.loads((out / "cascade.json").read_text())
     assert cascade == []
+
+
+# ---------------------------------------------------------------------------
+# pom.xml rewriter — robustness against pathological / oversized input
+# ---------------------------------------------------------------------------
+
+def _pom_plan(installed: str = "2.14.1",
+              target: str = "2.17.1") -> update._PlanEntry:
+    return update._PlanEntry(
+        ecosystem="Maven",
+        name="org.apache.logging.log4j:log4j-core",
+        installed=installed,
+        target=target,
+        manifest=Path("pom.xml"),
+        advisory_ids=["GHSA-x"],
+    )
+
+
+def test_pom_pathological_openers_completes_quickly() -> None:
+    """~1 MB of ``<dependency>`` openers with no closers. The old
+    tempered-dot DOTALL regex backtracked quadratically on this
+    shape (minutes of CPU); the find-based block scan must bail
+    out in linear time."""
+    import time
+
+    openers = "<dependency>" * 83_000        # ≈996 KB, under the size cap
+    start = time.monotonic()
+    text, applied, _reason = update._rewrite_pom_xml(openers, _pom_plan())
+    elapsed = time.monotonic() - start
+    assert applied is False
+    assert text == openers
+    assert elapsed < 10.0, f"pom scan took {elapsed:.1f}s on malformed input"
+
+
+def test_pom_over_size_cap_skipped_with_reason() -> None:
+    """Manifests past the size cap are skipped, never scanned."""
+    filler = "<dependency><groupId>g</groupId></dependency>"
+    big = filler * (update._POM_MAX_CHARS // len(filler) + 2)
+    assert len(big) > update._POM_MAX_CHARS
+    text, applied, reason = update._rewrite_pom_xml(big, _pom_plan())
+    assert applied is False
+    assert text == big
+    assert reason is not None and "exceeds" in reason
+
+
+def test_pom_block_scan_targets_matching_block_only() -> None:
+    """The linear scan must keep the old semantics: only the block
+    whose groupId+artifactId match is rewritten; same-version
+    entries in other block kinds stay untouched."""
+    pom = """\
+<project>
+  <build><plugins>
+    <plugin>
+      <groupId>other.group</groupId>
+      <artifactId>some-plugin</artifactId>
+      <version>2.14.1</version>
+    </plugin>
+  </plugins></build>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.14.1</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+    text, applied, _reason = update._rewrite_pom_xml(pom, _pom_plan())
+    assert applied is True
+    assert "<artifactId>log4j-core</artifactId>" in text
+    assert text.count("<version>2.17.1</version>") == 1
+    assert "<artifactId>some-plugin</artifactId>" in text
+    # The plugin block keeps its old version.
+    plugin_block = text.split("<plugin>")[1].split("</plugin>")[0]
+    assert "<version>2.14.1</version>" in plugin_block
+
+
+def test_pom_target_written_verbatim() -> None:
+    """The replacement is a callable, not a template — backslash
+    sequences in the target version must land verbatim rather than
+    being reinterpreted as regex group references."""
+    pom = """\
+<project><dependencies><dependency>
+  <groupId>org.apache.logging.log4j</groupId>
+  <artifactId>log4j-core</artifactId>
+  <version>2.14.1</version>
+</dependency></dependencies></project>
+"""
+    plan = _pom_plan(target=r"2.17.1\g<1>")
+    text, applied, _reason = update._rewrite_pom_xml(pom, plan)
+    assert applied is True
+    assert r"<version>2.17.1\g<1></version>" in text

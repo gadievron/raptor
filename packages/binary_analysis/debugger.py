@@ -28,7 +28,6 @@ from core.sandbox import run as _sandbox_run
 # is permitted so gdb can trace its target. Landlock is engaged with
 # target=output=<tempdir holding the gdb script + binary>.
 from pathlib import Path
-from typing import List, Optional
 
 from packages.binary_analysis._validators import (
     validate_byte_count,
@@ -42,12 +41,13 @@ logger = get_logger()
 class GDBDebugger:
     """Wrapper around GDB for automated debugging."""
 
-    def __init__(self, binary_path: Path):
+    def __init__(self, binary_path: Path) -> None:
         self.binary = Path(binary_path)
         if not self.binary.exists():
-            raise FileNotFoundError(f"Binary not found: {binary_path}")
+            msg = f"Binary not found: {binary_path}"
+            raise FileNotFoundError(msg)
 
-    def run_commands(self, commands: List[str], input_file: Optional[Path] = None, timeout: int = 30) -> str:
+    def run_commands(self, commands: list[str], input_file: Path | None = None, timeout: int = 30) -> str:
         """
         Run GDB with a list of commands.
 
@@ -110,7 +110,7 @@ class GDBDebugger:
             # the chmod failure isn't fatal.
             pass
         try:
-            script_file.write_text(gdb_script)
+            script_file.write_text(gdb_script, encoding="utf-8")
         except BaseException:
             script_file.unlink(missing_ok=True)
             raise
@@ -131,7 +131,7 @@ class GDBDebugger:
         # blocks, namespace net/pid isolation, and Landlock active.
         try:
             if input_file:
-                with open(input_file, "rb") as f:
+                with Path(input_file).open("rb") as f:
                     result = _sandbox_run(
                         cmd, profile="debug",
                         target=binary_dir, output=script_dir,
@@ -183,16 +183,16 @@ class GDBDebugger:
         return self.run_commands(commands, input_file=input_file)
 
     def examine_memory(self, input_file: Path, address: str, num_bytes: int = 64) -> str:
-        """Examine memory at address.
+        r"""Examine memory at address.
 
         Args:
             input_file: Crash input file fed to the binary via stdin.
             address: Hex address, 0x<1-16 hex digits>. See _validators for
                      the full threat model (GDB scripts are newline-delimited,
-                     so \\n here injects a second command).
+                     so \n here injects a second command).
             num_bytes: Byte count, 1..4096. Embedded verbatim into the GDB
                      script; validated to block str-disguised-as-int inputs
-                     like "64\\nshell id".
+                     like "64\nshell id".
 
         Raises:
             ValueError: If address or num_bytes fails validation.

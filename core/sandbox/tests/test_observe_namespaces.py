@@ -29,7 +29,6 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-
 pytestmark = [
     pytest.mark.skipif(
         sys.platform != "linux",
@@ -38,7 +37,10 @@ pytestmark = [
             "ptrace tracer) — see core/sandbox/_macos_spawn.py for the macOS path"
         ),
     ),
-    # Real ptrace + real subprocess + real namespace isolation. 20s test.
+    # Real ptrace + real subprocess + real namespace isolation.
+    # (Runs in under a second since the tracer's event-driven wait
+    # loop landed; the battery-visible latency regression pin lives
+    # in test_tracer_wait_loop.py.)
     pytest.mark.integration,
 ]
 
@@ -47,8 +49,8 @@ def _prereqs_met() -> tuple[bool, str]:
     """Return (ok, reason) for skipping a whole test if observe-mode
     can't engage on this host."""
     from core.sandbox.probes import check_net_available
-    from core.sandbox.seccomp import check_seccomp_available
     from core.sandbox.ptrace_probe import check_ptrace_available
+    from core.sandbox.seccomp import check_seccomp_available
     if not check_net_available():
         return False, "user namespaces unavailable"
     if not check_seccomp_available():
@@ -89,9 +91,11 @@ class TestObserveUnderLandlockOnly(unittest.TestCase):
 
     def test_observe_engages_via_landlock_only_when_mount_ns_unavailable(self):
         from unittest.mock import patch
+
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (
-            OBSERVE_FILENAME, parse_observe_log,
+            OBSERVE_FILENAME,
+            parse_observe_log,
         )
 
         with TemporaryDirectory() as d:
@@ -131,7 +135,8 @@ class TestObserveUnderLandlockOnly(unittest.TestCase):
             self.assertEqual(len(nonce), 32, "nonce is 128-bit hex")
 
             # Contract 3: observe log produced and parseable.
-            observe_log = run_dir / OBSERVE_FILENAME
+            from core.sandbox.evidence import resolve_read_path
+            observe_log = resolve_read_path(run_dir, OBSERVE_FILENAME)
             self.assertTrue(
                 observe_log.exists(),
                 f"observe log missing at {observe_log}",
@@ -286,9 +291,11 @@ class TestObserveMultiProcess(unittest.TestCase):
             # parse_observe_log produces a deduped path-level view
             # — which would HIDE the multi-PID property even when
             # it's working.
-            from core.sandbox.observe_profile import OBSERVE_FILENAME
             import json
-            jsonl = run_dir / OBSERVE_FILENAME
+
+            from core.sandbox.evidence import resolve_read_path
+            from core.sandbox.observe_profile import OBSERVE_FILENAME
+            jsonl = resolve_read_path(run_dir, OBSERVE_FILENAME)
             pids = set()
             for line in jsonl.read_text().splitlines():
                 try:

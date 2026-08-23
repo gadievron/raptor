@@ -7,12 +7,16 @@ is intentionally NOT parsed (schema-coupled); run ``coverage json`` first.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Dict, Set
+
+from core.json import load_json
+
+# coverage.json reports scale with the instrumented tree — the
+# coverage-store budget class.
+_MAX_REPORT_BYTES = 256 * 1024 * 1024
 
 
-def parse_coverage_py(path) -> Dict[str, Set[int]]:
+def parse_coverage_py(path) -> dict[str, set[int]]:
     """Return ``{source_path: set(executed_line_numbers)}`` from a coverage.json
     report (or a directory containing one). Tolerant: bad/missing pieces are
     skipped, never raised."""
@@ -21,14 +25,11 @@ def parse_coverage_py(path) -> Dict[str, Set[int]]:
         cand = p / "coverage.json"
         if cand.exists():
             p = cand
-    try:
-        data = json.loads(Path(p).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    data = load_json(p, max_bytes=_MAX_REPORT_BYTES)
     files = data.get("files") if isinstance(data, dict) else None
     if not isinstance(files, dict):
         return {}
-    out: Dict[str, Set[int]] = {}
+    out: dict[str, set[int]] = {}
     for src, info in files.items():
         if not isinstance(src, str) or not isinstance(info, dict):
             continue

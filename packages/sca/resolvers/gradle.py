@@ -29,10 +29,12 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from pathlib import Path
-from typing import List, Optional
 
 from . import ResolverResult, _check_tool, _run
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,12 @@ class GradleResolver:
                 success=False, available=True,
                 error=f"gradle dependencies timed out after {timeout}s",
             )
+        except PermissionError:
+            return ResolverResult(
+                ecosystem=self.ecosystem,
+                success=False, available=True,
+                error="gradle/gradlew not executable",
+            )
 
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
@@ -125,7 +133,7 @@ class GradleResolver:
         # into dependency locking; otherwise the dep-tree output is
         # the closest lockfile-equivalent artefact we have.
         lockfile = _read_if_exists(project_dir / "gradle.lockfile")
-        if lockfile is None:
+        if not lockfile:
             lockfile = proc.stdout.encode("utf-8") if proc.stdout else None
         return ResolverResult(
             ecosystem=self.ecosystem,
@@ -139,14 +147,14 @@ def _has_wrapper(project_dir: Path) -> bool:
     return (project_dir / "gradlew").exists()
 
 
-def _resolve_gradle_cmd(project_dir: Path) -> List[str]:
+def _resolve_gradle_cmd(project_dir: Path) -> list[str]:
     """Prefer ``./gradlew`` (project-pinned version) over a system gradle."""
     if _has_wrapper(project_dir):
         return ["./gradlew"]
     return ["gradle"]
 
 
-def _read_if_exists(p: Path) -> Optional[bytes]:
+def _read_if_exists(p: Path) -> bytes | None:
     try:
         return p.read_bytes()
     except OSError:

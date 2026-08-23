@@ -22,9 +22,11 @@ build steps. Same security rationale as the /describe scope
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
 
-from packages.describe.target_shape import TargetShape
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from packages.describe.target_shape import TargetShape
 
 
 @dataclass(frozen=True)
@@ -36,14 +38,14 @@ class Recommendation:
     reason: str    # one-line WHY, derived from signals
 
 
-def recommend_next(shape: TargetShape) -> List[Recommendation]:
+def recommend_next(shape: TargetShape) -> list[Recommendation]:
     """Pick RAPTOR commands likely to add value for THIS target.
 
     Order is significant — high-signal picks first (per-target
     specifics), broad always-applicable picks last. Operator
     reads top-down.
     """
-    out: List[Recommendation] = []
+    out: list[Recommendation] = []
 
     # /sca — dep counts present. The strongest signal for "you
     # have a dep tree worth scanning".

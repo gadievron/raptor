@@ -32,8 +32,6 @@ pipeline:
   recommended:
     - scan
     - agentic
-  estimated_cost_usd: [10, 30]
-  estimated_time_min: [15, 45]
 
 budget_defaults:
   typical_findings_count: 15

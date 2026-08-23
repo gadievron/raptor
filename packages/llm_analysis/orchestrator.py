@@ -13,17 +13,20 @@ Dispatch routing:
 If external LLM fails entirely, falls back to CC dispatch automatically.
 """
 
+import contextlib
 import copy
 import logging
-import shutil
+import os
+import sys
 import threading
 import time
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
+from core.reporting.formatting import format_elapsed as _format_elapsed
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
 from packages.llm_analysis.finding_adapter import FindingAdapter
-from core.reporting.formatting import format_elapsed as _format_elapsed
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +44,13 @@ class CostTracker:
     cutoff signals.
     """
 
-    def __init__(self, max_cost: float = 0.0):
+    def __init__(self, max_cost: float = 0.0) -> None:
         self._lock = threading.RLock()  # Reentrant — get_summary calls _budget_ratio
         self._total_cost = 0.0
         self._total_tokens = 0
         self._thinking_tokens = 0
         self._max_cost = max_cost  # 0 = no limit
-        self._per_model: Dict[str, float] = {}
+        self._per_model: dict[str, float] = {}
 
     def add_cost(self, model_name: str, cost: float, tokens: int = 0,
                  thinking_tokens: int = 0) -> None:
@@ -62,6 +65,20 @@ class CostTracker:
     def total_cost(self) -> float:
         with self._lock:
             return self._total_cost
+
+    @property
+    def fraction_used(self) -> float:
+        """Current spend as a fraction of the budget (0.0 when no
+        budget is set).
+
+        This is the surface duck-typed consumers probe —
+        ``dataflow_validation._fraction_used`` gates skip-on-budget
+        behaviour on it. Pre-fix CostTracker exposed only the private
+        ``_max_cost`` and ``_budget_ratio``, so the probe found
+        nothing, always computed 0.0, and the dataflow-validation
+        budget gate never tripped.
+        """
+        return self._budget_ratio()
 
     def _budget_ratio(self) -> float:
         """Current spend as fraction of budget. 0 if no budget set."""
@@ -130,8 +147,9 @@ class CostTracker:
         with self._lock:
             projected = self._total_cost + estimate
         if projected > self._max_cost * cutoff_ratio:
-            logger.info(f"Skipping {phase_name} — estimated ${estimate:.2f} "
-                        f"would push total to ${projected:.2f} (budget: ${self._max_cost:.2f})")
+            logger.info("Skipping %s — estimated $%.2f "
+                        "would push total to $%.2f (budget: $%.2f)",
+                        phase_name, estimate, projected, self._max_cost)
             return True
         return False
 
@@ -158,7 +176,7 @@ class CostTracker:
         consensus_calls = n_findings * n_consensus_models
         return (analysis_calls + consensus_calls) * avg_cost
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         with self._lock:
             summary = {
                 "total_cost": round(self._total_cost, 4),
@@ -182,8 +200,8 @@ def _finalize_results_for_emit(results: list) -> None:
     * ``repo_path`` is an absolute filesystem path on the operator's
       machine (``/home/alice/projects/my-target``,
       ``/tmp/raptor/foo``); stamping it onto each finding earlier in
-      the pipeline (line ~303) is necessary for SAGE enrichment
-      scoping, but leaking it into the persisted report exposes
+      the pipeline (line ~303) is necessary for prompt builders,
+      but leaking it into the persisted report exposes
       operator filesystem layout downstream (username, project
       naming, runner tmp-dir hierarchy). Strip AFTER all internal
       consumers have used it (judge, consensus, aggregation) and
@@ -227,12 +245,12 @@ def _finalize_results_for_emit(results: list) -> None:
 
 def build_llm_config_from_flags(
     *,
-    models: Optional[List[str]] = None,
-    consensus: Optional[str] = None,
-    judge: Optional[str] = None,
-    aggregate: Optional[str] = None,
+    models: list[str] | None = None,
+    consensus: str | None = None,
+    judge: str | None = None,
+    aggregate: str | None = None,
     auto_detect: bool = True,
-) -> Optional[Any]:
+) -> Any | None:
     """Build an LLMConfig from CLI flags, shared by /agentic and /analyze.
 
     Args:
@@ -249,9 +267,17 @@ def build_llm_config_from_flags(
 
     Returns LLMConfig or None if no model could be resolved.
     """
-    from core.llm.config import LLMConfig, _model_config_from_entry, _get_configured_models
+    from core.llm.config import (
+        LLMConfig,
+        _get_configured_models,
+        _model_config_from_entry,
+    )
     from core.llm.model_data import PROVIDER_ENV_KEYS
-    from core.security.llm_family import provider_of, bare_model_id
+    from core.security.llm_family import (
+        bare_model_id,
+        provider_of,
+        resolve_model_shorthand,
+    )
 
     models = models or []
     llm_config = None
@@ -268,9 +294,38 @@ def build_llm_config_from_flags(
         # field would produce ``anthropic/anthropic/claude-haiku-4-5``
         # when downstream re-prepends the provider — the SDK ships
         # that to Anthropic which 404s as an unknown model.
+        #
+        # Shorthand pass first: bare tier tokens (``haiku`` / ``opus`` /
+        # ``sonnet``) that don't parse as a real model id resolve to a
+        # unique configured entry when possible, then re-enter the
+        # provider-lookup path with the full name. Ambiguous shorthand
+        # raises inside resolve_model_shorthand with the candidate
+        # list. Missing shorthand returns None → falls through to the
+        # existing loud-failure path unchanged.
+        if provider_of(name) == "":
+            # Pass only the canonical ``model`` field per configured
+            # entry. The ``_configured_model`` alias is deliberately
+            # excluded — including both would raise a false ambiguity
+            # error when they're just two names for the same entry
+            # (e.g. ``claude-haiku-4-5`` alias + ``claude-haiku-4-5-
+            # 20251001`` canonical, both with token "haiku"). Operators
+            # who want to select an entry by an alias-specific token
+            # can pass the alias directly — the exact-match path below
+            # handles that.
+            configured_names = [
+                cfg_entry.get("model") or ""
+                for cfg_entry in _get_configured_models()
+            ]
+            resolved = resolve_model_shorthand(name, configured_names)
+            if resolved is not None and resolved != name:
+                # Substitute the resolved full name and continue. The
+                # dated-snapshot lookup below still runs on the
+                # resolved name, so an aggregator-hosted or Bedrock-
+                # shaped configured model resolves correctly.
+                name = resolved
         provider = provider_of(name)
         bare = bare_model_id(name)
-        entry: Dict[str, Any] = {"model": bare, "provider": provider, "role": role}
+        entry: dict[str, Any] = {"model": bare, "provider": provider, "role": role}
         for cfg_entry in _get_configured_models():
             # Match against either the resolved model name or the
             # operator's original alias. The Anthropic resolver
@@ -285,7 +340,7 @@ def build_llm_config_from_flags(
                 continue
             cfg_name = cfg_entry.get("model")
             cfg_alias = cfg_entry.get("_configured_model")
-            if (cfg_name == bare or cfg_alias == bare) and cfg_entry.get("api_key"):
+            if (bare in (cfg_name, cfg_alias)) and cfg_entry.get("api_key"):
                 entry["api_key"] = cfg_entry["api_key"]
                 break
         mc = _model_config_from_entry(entry)
@@ -295,11 +350,11 @@ def build_llm_config_from_flags(
                 # name — fail loudly with the recognizable-id hint rather
                 # than the unhelpful "Set ??? env var" path below.
                 from core.security.llm_family import unknown_model_message
-                print(f"\n  Error: {unknown_model_message(name)}")
+                print(f"\n  ✗ {unknown_model_message(name)}", file=sys.stderr)
                 return None
             env_key = PROVIDER_ENV_KEYS.get(provider, "???")
-            print(f"\n  Error: no API key for --model {name}")
-            print(f"  Set {env_key} or add the key to models.json")
+            print(f"\n  ✗ No API key for --model {name}", file=sys.stderr)
+            print(f"  Set {env_key} or add the key to models.json", file=sys.stderr)
             return None
         return mc
 
@@ -317,6 +372,12 @@ def build_llm_config_from_flags(
             # fast-tier models are still auto-seeded by __post_init__ from the
             # primary's OWN provider, so they stay same-provider (cheap).
             llm_config = LLMConfig(primary_model=primary_mc, fallback_models=[])
+            # Pin the operator's --model process-wide so any sub-consumer
+            # deep in the run that constructs ``LLMConfig()`` no-arg
+            # honours the operator's choice instead of silently falling
+            # through to a models.json-configured "thinking model".
+            from core.llm.config import set_operator_primary_override
+            set_operator_primary_override(primary_mc)
             for extra in models[1:]:
                 mc = _resolve_model(extra, "analysis")
                 if mc:
@@ -324,7 +385,7 @@ def build_llm_config_from_flags(
     elif auto_detect:
         try:
             llm_config = LLMConfig()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any config error means "no models"
             # Pre-fix this swallowed silently, leaving ``llm_config``
             # at its prior value (potentially None) and the next
             # code path crashed deeper without a breadcrumb. Log
@@ -358,8 +419,8 @@ def build_llm_config_from_flags(
     ]
     has_role_flags = any(m for _, m in role_flags)
     if has_role_flags and not llm_config:
-        print("\n  Warning: --consensus/--judge/--aggregate require a primary analysis model")
-        print("  Use --model MODEL, configure models.json, or set an API key env var")
+        print("\n  ⚠️  --consensus/--judge/--aggregate require a primary analysis model", file=sys.stderr)
+        print("  Use --model MODEL, configure models.json, or set an API key env var", file=sys.stderr)
     if llm_config and has_role_flags:
         # Explicit operator role-flag overrides any auto-loaded model
         # for the same role. Without this strip, models.json /
@@ -381,15 +442,102 @@ def build_llm_config_from_flags(
     return llm_config
 
 
+def _attach_calibrated_aggregation(
+    results_by_id: dict[str, Any],
+) -> dict[str, Any]:
+    """Run Dawid–Skene calibrated aggregation over the multi-model panel
+    and attach the additive ``calibrated_aggregation`` field to each
+    finding in ``results_by_id`` (Phase 3 of the calibrated-aggregation
+    arc).
+
+    Returns the run summary dict surfaced in
+    ``orchestrated_report.json`` under
+    ``orchestration.calibrated_aggregation``. Purely additive — it never
+    alters ``is_exploitable`` or any existing field, and never raises:
+    on any failure it returns ``{"failed": True, "error": ...}`` and
+    logs a warning, so a broken D–S can't abort the orchestrator. The
+    vote-based consensus pipeline (consensus.py) is unchanged; the
+    posterior-weighted scorecard update is a deferred, measurement-gated
+    follow-up.
+
+    The conversion is atomic (review #4 on PR #793): all verdicts are
+    serialised up front, so if ``verdict_to_json`` raises on one finding
+    no finding is left half-written — the whole step fails cleanly.
+    """
+    calibrated_summary: dict[str, Any] = {"failed": False}
+    try:
+        from core.llm.multi_model.calibrated_aggregation import (
+            calibrate_results,
+            verdict_to_json,
+        )
+        verdicts = calibrate_results(results_by_id)
+        n_ds = sum(
+            1 for v in verdicts.values()
+            if v.aggregation_method == "dawid_skene"
+        )
+        # Break the vote-fallback count down by reason rather than
+        # reporting a bare total — an operator seeing "5 fell back"
+        # can't tell single-model panels (expected) from
+        # non-convergence (worth investigating).
+        fallback_by_reason = Counter(
+            v.aggregation_fallback_reason or "unspecified"
+            for v in verdicts.values()
+            if v.aggregation_method != "dawid_skene"
+        )
+        n_vote = sum(fallback_by_reason.values())
+        # Convert ALL verdicts up front before mutating any finding. If
+        # verdict_to_json raises on finding N, the comprehension aborts
+        # before a single assignment, so no finding is left carrying the
+        # field while its siblings don't. The second loop only does dict
+        # assignment, which cannot raise.
+        serialized = {
+            fid: verdict_to_json(verdict)
+            for fid, verdict in verdicts.items()
+        }
+        for fid, payload in serialized.items():
+            primary = results_by_id.get(fid)
+            if primary is not None:
+                primary["calibrated_aggregation"] = payload
+        breakdown = ", ".join(
+            f"{n}× {reason}"
+            for reason, n in sorted(fallback_by_reason.items())
+        ) or "none"
+        calibrated_summary.update({
+            "dawid_skene": n_ds,
+            "vote_fallback": n_vote,
+            "fallback_by_reason": dict(fallback_by_reason),
+            "total": len(verdicts),
+        })
+        logger.debug(
+            "Calibrated aggregation: %d D–S, %d vote-fallback "
+            "[%s] (%d total)",
+            n_ds, n_vote, breakdown, len(verdicts),
+        )
+    except Exception as exc:
+        # The feature is additive — if it fails for any reason we drop it
+        # rather than abort the orchestrator. Record the failure in the
+        # run summary (not just the log) so it is observable to operators
+        # reading orchestrated_report.json.
+        calibrated_summary = {
+            "failed": True,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        logger.warning(
+            "Calibrated aggregation failed; skipping: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
+    return calibrated_summary
+
+
 def orchestrate(
     prep_report_path: Path,
     repo_path: Path,
     out_dir: Path,
-    max_parallel: int = 3,
+    max_parallel: int = 0,
     max_findings: int = 0,
     no_exploits: bool = False,
     no_patches: bool = False,
-    llm_config: Optional[Any] = None,
+    llm_config: Any | None = None,
     block_cc_dispatch: bool = False,
     accept_weakened_defenses: bool = False,
     dataflow_validation_enabled: bool = True,
@@ -397,7 +545,9 @@ def orchestrate(
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
     allow_unreachable: bool = False,
-) -> Optional[Dict[str, Any]]:
+    checklist: dict[str, Any] | None = None,
+    rank_findings: bool = False,
+) -> dict[str, Any] | None:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
     Called from raptor_agentic.py Phase 4. Dispatches findings for parallel
@@ -415,13 +565,47 @@ def orchestrate(
         prep_report_path: Path to autonomous_analysis_report.json from Phase 3.
         repo_path: Target repository path.
         out_dir: Output directory for orchestration results.
-        max_parallel: Maximum concurrent agents.
+        max_parallel: Maximum concurrent agents (0 = auto from model RPM).
+        max_findings: Cap on findings dispatched — when > 0 and the
+            report carries more, only the first max_findings are
+            analysed. 0 (default) = no cap.
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
+        block_cc_dispatch: If True and dispatch falls to the CC path
+            (no external LLM), abort and return None instead of
+            spawning claude -p sub-agents. Set when the target repo
+            contains credential helpers in .claude/settings.json.
         accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
             the model fails the envelope probe. If False (default), abort
             orchestration with a clear error instead of silently weakening.
+        dataflow_validation_enabled: If True (default), run the
+            dataflow validation pass after analysis, reconcile its
+            downgrades after consensus/judge, and record its metrics in
+            the merged report. If False, all three steps are skipped.
+        deep_validate: Passed through to the validation pass —
+            force-enable Tier 2/3 LLM-backed predicate generation
+            (operator's --deep-validate).
+        deep_validate_disabled: Passed through to the validation pass —
+            hard opt-out from Tier 2/3 (--no-deep-validate); takes
+            precedence over deep_validate.
+        deep_validate_budget: Budget threshold for the validation pass:
+            fraction of the total budget above which validation is
+            skipped. Default 0.60.
+        allow_unreachable: Operator's --allow-unreachable; threaded
+            into AnalysisTask so the Stage C reachability text in the
+            analysis prompt switches from "engagement required" to
+            "informational only".
+        checklist: Optional checklist dict; passed to the source_intel
+            and flow-context pre-seed steps for per-finding prompt
+            context. None ⇒ pre-seeding runs without checklist context.
+        rank_findings: If True, reorder findings most-promising-first
+            (listwise LLM ranking) before the max_findings cap and the
+            budgeted analysis loop, so caps cut the least promising
+            tail. The stage itself only reorders — but note that when
+            a cap then truncates, ordering decides what the cap cuts,
+            which is why the ranking prompt envelope treats finding
+            text as untrusted (see core/llm/ranking.py).
 
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
@@ -430,13 +614,13 @@ def orchestrate(
     from core.json import load_json
     try:
         report = load_json(prep_report_path, strict=True)
-    except Exception as e:
-        logger.error(f"Failed to read Phase 3 report: {e}")
-        print(f"\n  Failed to read analysis report: {e}")
+    except Exception as e:  # noqa: BLE001 — logged; any parse failure aborts Phase 4
+        logger.error("Failed to read Phase 3 report: %s", e)
+        print(f"\n  ✗ Failed to read analysis report: {e}", file=sys.stderr)
         return None
     if report is None:
-        logger.error(f"Phase 3 report not found: {prep_report_path}")
-        print(f"\n  Phase 3 report not found: {prep_report_path}")
+        logger.error("Phase 3 report not found: %s", prep_report_path)
+        print(f"\n  ✗ Phase 3 report not found: {prep_report_path}", file=sys.stderr)
         return None
 
     if report.get("mode") != "prep_only":
@@ -461,9 +645,7 @@ def orchestrate(
     from core.security import prompt_telemetry as _pt
     _pt.defense_telemetry.reset()
 
-    # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
-    # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
-    # the enrichment a no-op for every finding on the dispatch path.
+    # Stamp repo_path so downstream prompt builders can resolve file paths.
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
 
@@ -476,17 +658,43 @@ def orchestrate(
         from packages.llm_analysis.source_intel_inject import (
             prepare_source_intel,
         )
-        prepare_source_intel(repo_path)
+        prepare_source_intel(repo_path, checklist=checklist)
     except Exception as e:  # noqa: BLE001
         logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
+    # Pre-seed flow traces (via the understand bridge's three-tier
+    # discovery, anchored at this run's out_dir) + the checklist for
+    # per-finding flow-trace / caller-call-site prompt context.
+    try:
+        from packages.llm_analysis.flow_context_inject import (
+            prepare_flow_context,
+        )
+        prepare_flow_context(
+            repo_path, checklist=checklist, run_dir=out_dir,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("flow-context pre-seed failed (%s); continuing", e)
+
+    # Optional rank-then-spend: reorder BEFORE the cap below so a
+    # max_findings / max_cost truncation drops the least promising
+    # tail rather than an arbitrary suffix of scan order.
+    rank_cost = 0.0
+    rank_model = ""
+    if rank_findings:
+        from packages.llm_analysis.rank_stage import (
+            rank_findings_for_analysis,
+        )
+        findings, rank_cost, rank_model = rank_findings_for_analysis(
+            findings, llm_config,
+        )
+
     if max_findings > 0 and len(findings) > max_findings:
-        logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
+        logger.info("Capping at %d findings (of %d)", max_findings, len(findings))
         findings = findings[:max_findings]
 
     # Resolve model roles
     from core.llm.config import resolve_model_roles
-    role_resolution = {"analysis_model": None, "code_model": None,
+    role_resolution: dict[str, Any] = {"analysis_model": None, "code_model": None,
                        "consensus_models": [], "judge_models": [],
                        "aggregate_models": [], "fallback_models": [],
                        "analysis_models": []}
@@ -499,6 +707,8 @@ def orchestrate(
     # Cost tracking
     max_cost = getattr(llm_config, 'max_cost_per_scan', 0) if llm_config else 0
     cost_tracker = CostTracker(max_cost=max_cost or 0)
+    if rank_cost:
+        cost_tracker.add_cost(rank_model or "ranking", rank_cost)
 
     # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
@@ -507,6 +717,14 @@ def orchestrate(
     analysis_model = role_resolution.get("analysis_model")
     analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
+
+    if max_parallel <= 0:
+        from core.llm.concurrency import derive_max_workers
+        max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
+        logger.info(
+            "auto workers: model=%s → max_parallel=%d",
+            analysis_model_name or "(cc)", max_parallel,
+        )
     analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)
     if n_analysis > 1:
@@ -526,17 +744,38 @@ def orchestrate(
     extra_str = f" ({', '.join(extras)})" if extras else ""
     print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
 
-    # --- Build dispatch callable ---
-    from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
-    from packages.llm_analysis.tasks import (
-        AnalysisTask, ExploitTask, PatchTask,
-        AggregationTask, ConsensusTask, JudgeTask, GroupAnalysisTask,
-        RetryTask, CrossFamilyCheckTask,
+    # Best-effort ETA line — estimate_from_scorecard returns None on
+    # every internal failure (missing/corrupt scorecard, too little
+    # history) and format_estimate maps None to "", so no suppression
+    # is needed: anything raising here is a wiring bug that should
+    # surface, not stall silently.
+    from core.run.estimator import estimate_from_scorecard, format_estimate
+    _sc_est = estimate_from_scorecard(
+        analysis_model_name or "", n, max_parallel=max_parallel,
     )
+    _sc_line = format_estimate(_sc_est)
+    if _sc_line:
+        print(f"  {_sc_line}")
+
+    # --- Build dispatch callable ---
     from core.security.prompt_defense_profiles import (
-        CONSERVATIVE, PASSTHROUGH, get_profile_for,
+        CONSERVATIVE,
+        PASSTHROUGH,
+        get_profile_for,
     )
     from core.security.prompt_telemetry import defense_telemetry
+    from packages.llm_analysis.dispatch import DispatchResult, dispatch_task
+    from packages.llm_analysis.tasks import (
+        AggregationTask,
+        AnalysisTask,
+        ConsensusTask,
+        CrossFamilyCheckTask,
+        ExploitTask,
+        GroupAnalysisTask,
+        JudgeTask,
+        PatchTask,
+        RetryTask,
+    )
 
     dispatch_mode = "none"
     dispatch_fn = None
@@ -551,6 +790,12 @@ def orchestrate(
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
         client = LLMClient(llm_config)
+        if rank_cost:
+            # Pre-charge the rank spend against this client's budget:
+            # the LLMClient budget gate is instance-local, and without
+            # this the operator's --max-cost would bound the ranking
+            # client and the analysis client independently.
+            client.total_cost += rank_cost
 
         # Multi-model duplicate guard: when a primary model fails and
         # the client silently falls back, the fallback target may
@@ -577,7 +822,9 @@ def orchestrate(
                 result = response.result
                 quality = 1.0
                 if isinstance(result, dict) and "error" not in result:
-                    from core.llm.response_validation import validate_structured_response
+                    from core.llm.response_validation import (
+                        validate_structured_response,
+                    )
                     validated = validate_structured_response(result, schema)
                     result = validated.data
                     quality = validated.quality
@@ -587,39 +834,42 @@ def orchestrate(
                     duration=response.duration, quality=quality,
                     resolved_model=response.resolved_model,
                 )
-            else:
-                response = client.generate(
-                    prompt=prompt, system_prompt=system_prompt,
-                    model_config=model, temperature=temperature,
-                    exclude_fallback_to=other_active,
-                )
-                return DispatchResult(
-                    result={"content": response.content}, cost=response.cost,
-                    tokens=response.tokens_used, model=response.model,
-                    duration=response.duration,
-                    resolved_model=response.resolved_model,
-                )
+            response = client.generate(
+                prompt=prompt, system_prompt=system_prompt,
+                model_config=model, temperature=temperature,
+                exclude_fallback_to=other_active,
+            )
+            return DispatchResult(
+                result={"content": response.content}, cost=response.cost,
+                tokens=response.tokens_used, model=response.model,
+                duration=response.duration,
+                resolved_model=response.resolved_model,
+            )
 
         dispatch_mode = "external_llm"
     else:
         # CC: dispatch via claude -p subprocess
         if block_cc_dispatch:
-            print("\n  CC dispatch blocked — target repo contains credential helpers in .claude/settings.json")
-            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch")
+            print("\n  ✗ CC dispatch blocked — target repo contains credential helpers in .claude/settings.json", file=sys.stderr)
+            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch", file=sys.stderr)
             return None
 
-        claude_bin = shutil.which("claude")
+        from core.llm.cc_adapter import resolve_claude_cli
+        claude_bin = resolve_claude_cli()
         if not claude_bin:
-            print("\n  claude not found on PATH — cannot dispatch sub-agents")
-            print("  Install Claude Code: npm install -g @anthropic-ai/claude-code")
+            print("\n  ✗ claude not found on PATH — cannot dispatch sub-agents", file=sys.stderr)
+            print("  Install Claude Code: npm install -g @anthropic-ai/claude-code", file=sys.stderr)
             return None
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-            # CC's invoke_cc_simple has no separate system_prompt slot — everything
-            # goes via stdin. Prepend the system prompt so the bundle migration's
-            # role-separated build_prompt (user-only) doesn't lose its instructions.
-            full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
-            return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
+            # Route the system prompt through CC's dedicated
+            # system-prompt channel (CCDispatchConfig.system_prompt).
+            # Pre-fix it was folded into the user prompt via stdin,
+            # regressing the documented trust separation — operator
+            # instructions and finding-derived content arrived on the
+            # SAME channel from the model's perspective.
+            return invoke_cc_simple(prompt, schema, repo_path, claude_bin,
+                                    out_dir, system_prompt=system_prompt)
 
         dispatch_mode = "cc_dispatch"
 
@@ -715,17 +965,18 @@ def orchestrate(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             )
             if not accept_weakened_defenses:
-                print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
-                print("  The model cannot honour the defense envelope — aborting.")
-                print("  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
+                print(f"\n  ✗ Envelope probe failed for {model_label}: {_fail_summary}", file=sys.stderr)
+                print("  The model cannot honour the defence envelope — aborting.", file=sys.stderr)
+                print("  To proceed with weakened defences, re-run with --accept-weakened-defenses", file=sys.stderr)
                 return None
             from core.security.rule_of_two import (
-                NonInteractiveError, require_interactive_for_weakened_defenses,
+                NonInteractiveError,
+                require_interactive_for_weakened_defenses,
             )
             try:
                 require_interactive_for_weakened_defenses()
             except NonInteractiveError as e:
-                print(f"\n  {e}")
+                print(f"\n  ✗ {e}", file=sys.stderr)
                 return None
             profile = PASSTHROUGH
             # Record the override against EACH failing model with
@@ -739,14 +990,14 @@ def orchestrate(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
                     _fmname, _ferr,
                 )
-            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
-            print("  Running with reduced defences (--accept-weakened-defenses)")
-            print(f"  Reason: {_fail_summary}")
+            print(f"\n  ⚠️  Defence warning: envelope probe failed for {model_label}", file=sys.stderr)
+            print("  Running with reduced defences (--accept-weakened-defenses)", file=sys.stderr)
+            print(f"  Reason: {_fail_summary}", file=sys.stderr)
             print("  Model-independent floor still applies (autofetch redaction,"
-                  " control-char sanitisation, role separation)\n")
+                  " control-char sanitisation, role separation)\n", file=sys.stderr)
 
     # --- Per-finding analysis ---
-    results_by_id = {}
+    results_by_id: dict[str, Any] = {}
     # Fast-tier scorecard prefilter — only wires up on the external-LLM
     # path because the cheap call uses ``client.generate_structured``
     # which the CC-prep / CC-fallback paths don't drive. Returns a
@@ -754,11 +1005,14 @@ def orchestrate(
     # call is skipped; bumps ``client.short_circuits`` so /agentic
     # surfaces the savings count.
     prefilter_fn = None
+    pending_fp_claims: dict[str, dict] = {}
     if dispatch_mode == "external_llm":
         from packages.llm_analysis.prefilter import prefilter_for_finding
 
         def prefilter_fn(item):
-            return prefilter_for_finding(client, item)
+            return prefilter_for_finding(
+                client, item, pending_claims=pending_fp_claims,
+            )
 
     analysis_results = dispatch_task(
         AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
@@ -767,18 +1021,36 @@ def orchestrate(
         prefilter_fn=prefilter_fn,
     )
 
+    # Adjudicate the fall-through cheap "clear_fp" claims against the
+    # full verdicts so agentic:<rule_id> cells accumulate trust and
+    # should_short_circuit can ever leave learning mode.
+    if pending_fp_claims:
+        try:
+            from packages.llm_analysis.prefilter import (
+                record_prefilter_outcomes,
+            )
+            record_prefilter_outcomes(
+                client, pending_fp_claims, analysis_results,
+            )
+        except Exception:
+            logger.debug("prefilter outcome recording failed",
+                         exc_info=True)
+
     # Fallback: if external LLM failed entirely, try CC
     if (dispatch_mode == "external_llm"
             and analysis_results
             and all("error" in r for r in analysis_results)):
-        claude_bin = shutil.which("claude")
+        from core.llm.cc_adapter import resolve_claude_cli
+        claude_bin = resolve_claude_cli()
         if claude_bin:
-            print("\n  All external LLM calls failed — falling back to Claude Code")
+            print("\n  ⚠️  All external LLM calls failed — falling back to Claude Code", file=sys.stderr)
             dispatch_mode = "cc_fallback"
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-                full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
-                return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
+                # Same dedicated system-prompt channel as the primary
+                # CC dispatch path above — never fold into user content.
+                return invoke_cc_simple(prompt, schema, repo_path, claude_bin,
+                                        out_dir, system_prompt=system_prompt)
 
             # Carry the per-model intersected profile into the
             # CC-fallback AnalysisTask. Pre-fix `AnalysisTask()`
@@ -799,7 +1071,7 @@ def orchestrate(
     # Index results for downstream tasks
     # Multi-model: multiple results per finding — pick best as primary,
     # attach all per-model analyses for correlation.
-    _multi_results: Dict[str, List[Dict]] = {}
+    _multi_results: dict[str, list[dict]] = {}
     for r in analysis_results:
         fid = r.get("finding_id")
         if fid:
@@ -825,6 +1097,13 @@ def orchestrate(
                 primary[key] = source.get(key)
         results_by_id[fid] = primary
 
+    # Calibrated aggregation (Dawid–Skene) — Phase 3. Attaches the
+    # additive per-finding ``calibrated_aggregation`` field and returns
+    # the run summary surfaced in orchestrated_report.json. Extracted to
+    # a helper so the success and failure paths are unit-testable without
+    # booting the full orchestrate() machinery (review #5 on PR #793).
+    calibrated_summary = _attach_calibrated_aggregation(results_by_id)
+
     # Multi-model collapse detection. The exclude_fallback_to guard above
     # prevents most cases where a primary's failure routes silently into
     # another active analysis model. The corner case it doesn't catch:
@@ -836,11 +1115,7 @@ def orchestrate(
         collapsed = _detect_multi_model_collapse(results_by_id, n_analysis_models)
         if collapsed:
             logger.warning(
-                f"Multi-model collapse: {len(collapsed)}/"
-                f"{len(results_by_id)} finding(s) had fewer than "
-                f"{n_analysis_models} distinct contributors. Likely caused "
-                f"by silent fallback during model failure. First few: "
-                f"{collapsed[:3]}"
+                "Multi-model collapse: %s/%s finding(s) had fewer than %s distinct contributors. Likely caused by silent fallback during model failure. First few: %s", len(collapsed), len(results_by_id), n_analysis_models, collapsed[:3]
             )
 
     # --- IRIS-style dataflow validation (opt-in via --validate-dataflow) ---
@@ -855,7 +1130,7 @@ def orchestrate(
     #
     # For correlated-error reasons, the helper prefers a different model
     # family from the analysis model (cross-family) when one is available.
-    validation_metrics: Optional[Dict[str, Any]] = None
+    validation_metrics: dict[str, Any] | None = None
     if dataflow_validation_enabled:
         from packages.llm_analysis.dataflow_validation import run_validation_pass
         validation_metrics = run_validation_pass(
@@ -897,7 +1172,7 @@ def orchestrate(
     # AnalysisTask (above)  → Stages A-D: is this real? how exploitable?
     # DataflowValidation    → IRIS: refute hallucinated dataflow claims
     # CrossFamilyCheckTask  → Re-check suspicious responses via different family
-    # RetryTask             → Stage F: self-consistency check + retry
+    # RetryTask             → Stage F: self-contradiction check + retry
     # ConsensusTask         → Second model votes (if configured)
     # ExploitTask/PatchTask → Generate code (only for final-verdict exploitable)
     # GroupAnalysisTask     → Cross-finding patterns
@@ -947,7 +1222,14 @@ def orchestrate(
                 results_by_id, cost_tracker, max_parallel,
             )
 
-    # Stage F: self-consistency check + retry contradictions and low confidence
+    # Snapshot verdicts before Stage F so the self-contradiction
+    # producer can detect flips (RetryTask overwrites in place).
+    verdicts_pre_retry: dict[str, bool] = {}
+    for fid, r in results_by_id.items():
+        if isinstance(r, dict) and "error" not in r:
+            verdicts_pre_retry[fid] = bool(r.get("is_exploitable", False))
+
+    # Stage F: self-contradiction check + retry contradictions and low confidence
     dispatch_task(
         RetryTask(results_by_id=results_by_id, profile=profile), findings,
         dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
@@ -967,7 +1249,8 @@ def orchestrate(
     # judge — capturing the post-consensus value, which defeated
     # the snapshot's purpose. Take it here, before BOTH stages,
     # so judge can compare against the actual primary verdict.
-    primary_verdicts_pre_consensus: Dict[str, bool] = {}
+    sc = getattr(client, "scorecard", None) if client is not None else None
+    primary_verdicts_pre_consensus: dict[str, bool] = {}
     for fid, r in results_by_id.items():
         if isinstance(r, dict) and "error" not in r:
             primary_verdicts_pre_consensus[fid] = bool(
@@ -1030,7 +1313,7 @@ def orchestrate(
         # overridden one. Falls back to the post-consensus state
         # for findings that didn't exist pre-consensus (shouldn't
         # happen in normal flow, but defensive).
-        primary_verdicts_before_judge: Dict[str, bool] = dict(
+        primary_verdicts_before_judge: dict[str, bool] = dict(
             primary_verdicts_pre_consensus
         )
         for fid, r in results_by_id.items():
@@ -1050,21 +1333,19 @@ def orchestrate(
         # keeps primary's verdict in that mode — no panel-majority
         # signal to attribute). Agreed findings skipped (no useful
         # per-model signal).
-        if client is not None:
-            sc = getattr(client, "scorecard", None)
-            if sc is not None:
-                from core.llm.scorecard.judge import record_judge_outcomes
-                try:
-                    record_judge_outcomes(
-                        sc,
-                        results_by_id=results_by_id,
-                        primary_verdicts_before_judge=primary_verdicts_before_judge,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # WARNING (not DEBUG): family-wide convention.
-                    # See core/llm/scorecard/consensus.py for the
-                    # rationale on operator-visible producer failures.
-                    logger.warning("judge producer failed: %s", e)
+        if sc is not None:
+            from core.llm.scorecard.judge import record_judge_outcomes
+            try:
+                record_judge_outcomes(
+                    sc,
+                    results_by_id=results_by_id,
+                    primary_verdicts_before_judge=primary_verdicts_before_judge,
+                )
+            except Exception as e:                  # noqa: BLE001
+                # WARNING (not DEBUG): family-wide convention.
+                # See core/llm/scorecard/consensus.py for the
+                # rationale on operator-visible producer failures.
+                logger.warning("judge producer failed: %s", e)
 
     # Multi-model correlation (pure Python, no LLM)
     correlation = None
@@ -1102,50 +1383,110 @@ def orchestrate(
         # Per-cell auto-policy unaffected — this populates its own
         # event slot, distinct from the cheap-tier prefilter
         # counters that drive the gate.
-        if client is not None:
-            sc = getattr(client, "scorecard", None)
-            if sc is not None:
-                # Pass ``_multi_results`` directly so the producer can
-                # attribute each minority model's reasoning to the
-                # right model. Decoupled from results_by_id to avoid
-                # mutating records that get serialised into
-                # orchestrated_report.json.
-                from core.llm.scorecard.consensus import (
-                    record_consensus_outcomes,
+        if sc is not None:
+            # Pass ``_multi_results`` directly so the producer can
+            # attribute each minority model's reasoning to the
+            # right model. Decoupled from results_by_id to avoid
+            # mutating records that get serialised into
+            # orchestrated_report.json.
+            from core.llm.scorecard.consensus import (
+                record_consensus_outcomes,
+            )
+            try:
+                record_consensus_outcomes(
+                    sc,
+                    correlation=correlation,
+                    results_by_id=results_by_id,
+                    per_finding_results=_multi_results,
                 )
-                try:
-                    record_consensus_outcomes(
-                        sc,
-                        correlation=correlation,
-                        results_by_id=results_by_id,
-                        per_finding_results=_multi_results,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # Never let scorecard wiring abort orchestration —
-                    # but log at WARNING so operators see regressions
-                    # without needing DEBUG enabled.
-                    logger.warning(
-                        "consensus producer failed: %s", e,
-                    )
-                # Sister producer covering the agreed-verdict case
-                # the consensus producer skips: panel agreed on
-                # is_exploitable but reasoning text diverged. See
-                # core.llm.scorecard.reasoning_divergence.
-                from core.llm.scorecard.reasoning_divergence import (
-                    record_reasoning_divergence,
+            except Exception as e:                  # noqa: BLE001
+                # Never let scorecard wiring abort orchestration —
+                # but log at WARNING so operators see regressions
+                # without needing DEBUG enabled.
+                logger.warning(
+                    "consensus producer failed: %s", e,
                 )
-                try:
-                    record_reasoning_divergence(
-                        sc,
-                        correlation=correlation,
-                        results_by_id=results_by_id,
-                        per_finding_results=_multi_results,
-                    )
-                except Exception as e:                  # noqa: BLE001
-                    # WARNING (not DEBUG): see consensus producer above.
-                    logger.warning(
-                        "reasoning_divergence producer failed: %s", e,
-                    )
+            # Sister producer covering the agreed-verdict case
+            # the consensus producer skips: panel agreed on
+            # is_exploitable but reasoning text diverged. See
+            # core.llm.scorecard.reasoning_divergence.
+            from core.llm.scorecard.reasoning_divergence import (
+                record_reasoning_divergence,
+            )
+            try:
+                record_reasoning_divergence(
+                    sc,
+                    correlation=correlation,
+                    results_by_id=results_by_id,
+                    per_finding_results=_multi_results,
+                )
+            except Exception as e:                  # noqa: BLE001
+                # WARNING (not DEBUG): see consensus producer above.
+                logger.warning(
+                    "reasoning_divergence producer failed: %s", e,
+                )
+
+    # Cross-run stability: compare this run's verdicts against the most
+    # recent prior agentic run on the same target.
+    n_stability = 0
+    if sc is not None and out_dir is not None:
+        try:
+            from core.llm.scorecard.stability import (
+                record_cross_run_stability,
+            )
+            n_stability = record_cross_run_stability(
+                sc, out_dir=out_dir, results_by_id=results_by_id,
+            )
+            if n_stability:
+                logger.info(
+                    "cross-run stability: %d events recorded", n_stability,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("cross-run stability producer failed: %s", e)
+
+    # Cross-family check outcomes.
+    if sc is not None:
+        try:
+            from core.llm.scorecard.cross_family import (
+                record_cross_family_outcomes,
+            )
+            n_cf = record_cross_family_outcomes(
+                sc, results_by_id=results_by_id,
+            )
+            if n_cf:
+                logger.info("cross-family scorecard: %d events", n_cf)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("cross-family producer failed: %s", e)
+
+    # Self-consistency outcomes (Stage F retries).
+    if sc is not None:
+        try:
+            from core.llm.scorecard.self_consistency import (
+                record_self_consistency_outcomes,
+            )
+            n_sc = record_self_consistency_outcomes(
+                sc,
+                results_by_id=results_by_id,
+                verdicts_pre_retry=verdicts_pre_retry,
+            )
+            if n_sc:
+                logger.info("self-consistency scorecard: %d events", n_sc)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("self-consistency producer failed: %s", e)
+
+    # Dataflow validation outcomes.
+    if sc is not None:
+        try:
+            from core.llm.scorecard.dataflow_validation import (
+                record_dataflow_validation_outcomes,
+            )
+            n_dv = record_dataflow_validation_outcomes(
+                sc, results_by_id=results_by_id,
+            )
+            if n_dv:
+                logger.info("dataflow-validation scorecard: %d events", n_dv)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("dataflow-validation producer failed: %s", e)
 
     # Final LLM aggregation over independent analysis outputs. This is distinct
     # from consensus/judge: it produces a downstream artifact instead of
@@ -1182,11 +1523,23 @@ def orchestrate(
             results_by_id, cost_tracker, max_parallel,
         )
 
+    # checkers_dir lets the patch gate replay synthesized checkers
+    # saved by checker synthesis into the run dir (best-effort —
+    # absent dir just degrades detector resolution). Shared with the
+    # merge step's inline-patch gate below.
+    _checkers_dir = (out_dir / "checkers") if out_dir is not None else None
+    # Finding ids whose patch was gated by PatchTask.finalize — the
+    # merge step trusts those records' stored gate annotations and
+    # gates everything else (inline CC-schema patches).
+    _pre_gated_ids: set[str] = set()
     if not no_patches:
+        _patch_task = PatchTask(profile=profile, checkers_dir=_checkers_dir)
         dispatch_task(
-            PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
+            _patch_task,
+            findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
+        _pre_gated_ids = _patch_task.gated_ids
 
     elapsed = time.monotonic() - start_time
 
@@ -1241,7 +1594,9 @@ def orchestrate(
     # --- Merge and write ---
     per_finding_results = list(results_by_id.values())
     merged = _merge_results(report, per_finding_results,
-                            no_exploits=no_exploits, no_patches=no_patches)
+                            no_exploits=no_exploits, no_patches=no_patches,
+                            checkers_dir=_checkers_dir,
+                            pre_gated_ids=_pre_gated_ids)
     merged["cross_finding_groups"] = groups
     if dataflow_validation_enabled:
         merged["dataflow_validation"] = {
@@ -1296,6 +1651,7 @@ def orchestrate(
         "judge_disputes": judge_disputes,
         "aggregate_models": [m.model_name for m in aggregate_models],
         "aggregated": aggregation is not None,
+        "calibrated_aggregation": calibrated_summary,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
@@ -1324,6 +1680,7 @@ def orchestrate(
         "fired_models": (
             client.get_fired_models() if client is not None else []
         ),
+        "stability_events": n_stability,
     }
 
     if defense_telemetry.has_warnings:
@@ -1342,7 +1699,7 @@ def orchestrate(
         save_json(out_dir / "aggregation.json", aggregation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
-    logger.info(f"Orchestrated report saved to {out_path}")
+    logger.info("Orchestrated report saved to %s", out_path)
 
     # Summary
     orch = merged["orchestration"]
@@ -1397,6 +1754,30 @@ def orchestrate(
         print(f"  {', '.join(cf_parts)}")
     if groups:
         print(f"  Cross-finding groups: {len(groups)}")
+    if n_stability:
+        # Best-effort summary line. Broad by design: the persisted
+        # scorecard (out/llm_scorecard.json) is external mutable state
+        # — an old-schema or hand-edited file legitimately surfaces as
+        # KeyError/TypeError/AttributeError from get_stats()/the
+        # events[] access, and shape drift must never fail the
+        # merged-report write that follows.
+        with contextlib.suppress(Exception):
+            from core.llm.scorecard.scorecard import EventType
+            _stats = sc.get_stats() if sc else []
+            _s_correct = sum(
+                s.events[EventType.CROSS_RUN_STABILITY].correct
+                for s in _stats
+                if EventType.CROSS_RUN_STABILITY in s.events
+            )
+            _s_incorrect = sum(
+                s.events[EventType.CROSS_RUN_STABILITY].incorrect
+                for s in _stats
+                if EventType.CROSS_RUN_STABILITY in s.events
+            )
+            st_parts = [f"{_s_correct} consistent"]
+            if _s_incorrect:
+                st_parts.append(f"{_s_incorrect} flipped")
+            print(f"  Stability: {', '.join(st_parts)} vs prior run")
     print(f"  Report: {out_path}")
 
     return merged
@@ -1404,9 +1785,9 @@ def orchestrate(
 
 def _attach_reasoning_divergence(
     *,
-    results_by_id: Dict[str, Dict],
-    multi_results: Optional[Dict[str, List[Dict]]],
-    confidence_signals: Dict[str, str],
+    results_by_id: dict[str, dict],
+    multi_results: dict[str, list[dict]] | None,
+    confidence_signals: dict[str, str],
 ) -> None:
     """Attach per-finding ``reasoning_divergence`` metric onto the
     primary result records.
@@ -1437,7 +1818,7 @@ def _attach_reasoning_divergence(
         if signal not in ("high", "high-negative"):
             continue
         records = multi_results.get(fid) or []
-        reasonings: Dict[str, str] = {}
+        reasonings: dict[str, str] = {}
         for r in records:
             name = str(r.get("analysed_by") or r.get("model") or "")
             text = r.get("reasoning") or ""
@@ -1467,8 +1848,8 @@ def _intersect_profiles(profiles: list) -> Any:
     common to all probed models, rather than the primary's
     defences applied uniformly to every dispatcher.
     """
-    from core.security.prompt_envelope import ModelDefenseProfile
     from core.security.prompt_defense_profiles import CONSERVATIVE
+    from core.security.prompt_envelope import ModelDefenseProfile
     if not profiles:
         return CONSERVATIVE
     if len(profiles) == 1:
@@ -1490,8 +1871,8 @@ def _intersect_profiles(profiles: list) -> Any:
 
 def _resolve_cross_family_checker(
     analysis_model: Any,
-    role_resolution: Dict[str, Any],
-) -> Optional[Any]:
+    role_resolution: dict[str, Any],
+) -> Any | None:
     """Pick a cross-family checker model from resolved roles or env auto-detect.
 
     Returns a ModelConfig from a different training lineage than the
@@ -1523,15 +1904,14 @@ def _resolve_cross_family_checker(
     )
     for m in candidates:
         if not same_family(primary_name, m.model_name):
-            logger.info("Cross-family checker: %s (from resolved roles)", m.model_name)
+            logger.debug("Cross-family checker: %s (from resolved roles)", m.model_name)
             return m
 
     return _auto_detect_cross_family_checker(primary_family)
 
 
-def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
+def _auto_detect_cross_family_checker(primary_family: str) -> Any | None:
     """Auto-detect a cheap cross-family model from environment API keys."""
-    import os
     from core.llm.config import ModelConfig
     from core.llm.model_data import PROVIDER_ENV_KEYS
 
@@ -1550,13 +1930,17 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
                 "Cross-family checker: %s (auto-detected from %s)",
                 model_name, env_key,
             )
-            return ModelConfig(provider=provider, model_name=model_name)
+            return ModelConfig(
+                provider=provider,
+                model_name=model_name,
+                api_key=os.environ.get(env_key),
+            )
     return None
 
 
 def _drop_hallucinated_finding_ids(
-    aggregation: Dict[str, Any],
-    results_by_id: Dict[str, Dict],
+    aggregation: dict[str, Any],
+    results_by_id: dict[str, dict],
 ) -> None:
     """Remove items whose finding_id doesn't match a real finding.
 
@@ -1575,16 +1959,15 @@ def _drop_hallucinated_finding_ids(
         dropped = len(items) - len(kept)
         if dropped:
             logger.info(
-                f"Aggregate: dropped {dropped} item{'s' if dropped != 1 else ''} "
-                f"with unknown finding_id from {key}"
+                "Aggregate: dropped %s item%s with unknown finding_id from %s", dropped, ('s' if dropped != 1 else ''), key
             )
         aggregation[key] = kept
 
 
 def _build_aggregation_payload(
-    results_by_id: Dict[str, Dict],
-    correlation: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    results_by_id: dict[str, dict],
+    correlation: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Build a compact, bounded payload for the aggregate model."""
     findings = []
     models_seen: set[str] = set()
@@ -1638,8 +2021,8 @@ def _build_aggregation_payload(
 
 
 def _per_model_failure_summary(
-    analysis_results: List[Dict],
-) -> Dict[str, Dict[str, Any]]:
+    analysis_results: list[dict],
+) -> dict[str, dict[str, Any]]:
     """Aggregate per-model failures from a flat analysis_results list.
 
     /agentic dispatches analysis as (model × finding) work items. When
@@ -1652,7 +2035,7 @@ def _per_model_failure_summary(
     when no errors. ``first_error`` truncated to 200 chars to avoid
     bloating the JSON report.
     """
-    by_model: Dict[str, Dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
     for r in analysis_results:
         if not isinstance(r, dict) or "error" not in r:
             continue
@@ -1665,9 +2048,9 @@ def _per_model_failure_summary(
 
 
 def _detect_multi_model_collapse(
-    results_by_id: Dict[str, Dict],
+    results_by_id: dict[str, dict],
     n_analysis_models: int,
-) -> List[Tuple[str, List[str]]]:
+) -> list[tuple[str, list[str]]]:
     """Identify findings whose multi_model_analyses has fewer DISTINCT
     contributors than the requested model count.
 
@@ -1678,7 +2061,7 @@ def _detect_multi_model_collapse(
     Helps operators spot silent-fallback failures where multiple primary
     models converged on the same external fallback model.
     """
-    collapsed: List[Tuple[str, List[str]]] = []
+    collapsed: list[tuple[str, list[str]]] = []
     for fid, item in results_by_id.items():
         analyses = item.get("multi_model_analyses")
         if not isinstance(analyses, list) or not analyses:
@@ -1693,22 +2076,98 @@ def _detect_multi_model_collapse(
     return collapsed
 
 
-def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:
-    """Delegate to validation.check_self_consistency."""
-    from packages.llm_analysis.validation import check_self_consistency
-    check_self_consistency(results_by_id)
+def _check_self_contradiction(results_by_id: dict[str, dict]) -> None:
+    """Delegate to validation.check_self_contradiction."""
+    from packages.llm_analysis.validation import check_self_contradiction
+    check_self_contradiction(results_by_id)
+
+
+def _gate_inline_patch(
+    finding: dict[str, Any],
+    checkers_dir: Path | None,
+) -> dict[str, Any] | None:
+    """Gate a ``patch_code`` that arrived inline on an analysis record.
+
+    The claude -p dispatch schema (cc_dispatch.build_schema) lets the
+    analysis response carry ``patch_code`` directly; PatchTask then
+    skips those findings, so without this call the inline patches would
+    reach reports without gate annotations. Mirrors
+    ``PatchTask._gate_patch``: best-effort, annotate-only — a gate
+    crash degrades to a warning and the patch is kept; missing repo /
+    file / span context degrades to the gate's own honest ``skipped``
+    annotations rather than a guessed anchor.
+
+    Returns ``GateResult.to_dict()`` or None when the gate itself
+    failed. Does not mutate ``finding``.
+    """
+    try:
+        from packages.llm_analysis.patch_gate import run_patch_gate
+
+        content = str(finding.get("patch_code") or "")
+        repo_path = finding.get("repo_path") or ""
+        file_path = finding.get("file_path") or ""
+        try:
+            start_line = int(finding.get("start_line") or 0)
+        except (TypeError, ValueError):
+            start_line = 0
+        try:
+            end_line = int(finding.get("end_line") or start_line)
+        except (TypeError, ValueError):
+            end_line = start_line
+        if not repo_path:
+            # No repo anchor at all — only the format check is
+            # meaningful; run_patch_gate handles the empty file_path
+            # case the same way.
+            file_path = ""
+            repo_path = "."
+        gate = run_patch_gate(
+            content,
+            repo_path=Path(repo_path),
+            file_path=file_path,
+            start_line=start_line,
+            end_line=end_line,
+            rule_id=finding.get("rule_id") or "",
+            tool=finding.get("tool") or "",
+            checkers_dir=Path(checkers_dir) if checkers_dir else None,
+        )
+        logger.info(
+            "   · Patch gate (inline, %s): format=%s scope=%s "
+            "detector=%s control=%s",
+            finding.get("finding_id"),
+            gate.format, gate.scope, gate.detector, gate.control,
+        )
+        return gate.to_dict()
+    except Exception as e:  # noqa: BLE001 — gate is annotate-only
+        logger.warning(
+            "   · Patch gate skipped for inline patch %s: %s",
+            finding.get("finding_id"), e,
+        )
+        return None
 
 
 def _merge_results(
-    prep_report: Dict[str, Any],
-    cc_results: List[Dict[str, Any]],
+    prep_report: dict[str, Any],
+    cc_results: list[dict[str, Any]],
     no_exploits: bool = False,
     no_patches: bool = False,
-) -> Dict[str, Any]:
+    *,
+    checkers_dir: Path | None = None,
+    pre_gated_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """Merge CC sub-agent results back into the prep report.
 
     Matches by finding_id. CC results update analysis fields while
     preserving all prep data (code, dataflow, feasibility).
+
+    ``patch_code`` / ``patch_gate`` are excluded from the generic key
+    copy and handled explicitly: every patch that survives the merge
+    must carry gate annotations from :func:`run_patch_gate`. Records
+    whose finding_id is in ``pre_gated_ids`` were gated by
+    ``PatchTask.finalize`` (side-channel set from the task instance,
+    never the LLM-derived result dict) and keep their stored gate;
+    anything else — the inline CC-schema ``patch_code`` route — is
+    gated here, and any result-supplied ``patch_gate`` dict is dropped
+    first so a response cannot fabricate its own gate annotations.
     """
     # Deep-copy the entire prep_report. Pre-fix `dict(prep_report)`
     # was a SHALLOW copy, leaving every nested dict (and the
@@ -1746,10 +2205,9 @@ def _merge_results(
     for finding in results:
         fid = finding.get("finding_id")
         cc = cc_by_id.get(fid)
-        if not cc or "error" in cc:
-            # No CC result or failed — keep prep data, mark as unanalysed
-            finding["cc_error"] = cc.get("error") if cc else "not dispatched"
-            if cc and cc.get("cc_debug_file"):
+        if cc is None or "error" in cc:
+            finding["cc_error"] = cc.get("error") if cc is not None else "not dispatched"
+            if cc is not None and cc.get("cc_debug_file"):
                 finding["cc_debug_file"] = cc["cc_debug_file"]
             continue
 
@@ -1762,11 +2220,26 @@ def _merge_results(
         for k, v in cc.items():
             if k.startswith("_") or k == "finding_id":
                 continue
+            if k in ("patch_code", "patch_gate"):
+                # Handled explicitly below so every surviving patch is
+                # gated and a result-supplied gate dict never lands on
+                # the report record unvetted.
+                continue
             if k not in finding:
                 finding[k] = v
 
-        # Ensure standard fields are set
-        finding["exploitable"] = cc.get("is_exploitable", False)
+        # Ensure standard fields are set.
+        # Invariant: a finding that isn't a true positive cannot be
+        # exploitable. The LLM sometimes contradicts itself (e.g.
+        # is_true_positive=False but is_exploitable=True); enforce
+        # the logical floor here so downstream consumers never see
+        # an impossible verdict combination.
+        _is_tp = cc.get("is_true_positive", True)
+        _is_exp = cc.get("is_exploitable", False)
+        if not _is_tp and _is_exp:
+            _is_exp = False
+        finding["exploitable"] = _is_exp
+        finding["is_exploitable"] = _is_exp
         finding["exploitability_score"] = cc.get("exploitability_score", 0)
 
         if finding["exploitable"]:
@@ -1780,13 +2253,50 @@ def _merge_results(
             finding["has_exploit"] = False
 
         if finding["exploitable"] and not no_patches and cc.get("patch_code"):
+            if "patch_code" not in finding:
+                finding["patch_code"] = cc["patch_code"]
             finding["has_patch"] = True
             patches_generated += 1
+            if fid in (pre_gated_ids or ()):
+                # PatchTask.finalize already gated this patch; the
+                # stored annotations are its GateResult.to_dict().
+                gate = cc.get("patch_gate")
+                if isinstance(gate, dict) and "patch_gate" not in finding:
+                    finding["patch_gate"] = gate
+            else:
+                # Inline CC-schema patch (produced mid-analysis) —
+                # PatchTask skipped it, so gate it here. Same
+                # annotate-only posture: a gate crash keeps the patch
+                # and simply leaves it without annotations.
+                finding.pop("patch_gate", None)
+                gate = _gate_inline_patch(finding, checkers_dir)
+                if gate is not None:
+                    finding["patch_gate"] = gate
         else:
             finding.pop("patch_code", None)
+            # Gate annotations describe the dropped patch — drop them
+            # with it so no orphaned gate line reaches the report.
+            finding.pop("patch_gate", None)
             finding["has_patch"] = False
 
+    # Evidence tiering for the merged report — same labeling/ordering
+    # the in-process agent applies, derived from the merged finding
+    # dicts (receipts may sit top-level here rather than under
+    # ``analysis``). Findings the cc dispatch never analysed stay
+    # untiered and keep their relative order at the end.
+    from packages.llm_analysis.verification_tier import (
+        derive_verification_tier,
+        sort_results_by_tier,
+        tier_counts,
+    )
+    for finding in results:
+        fid = finding.get("finding_id")
+        if fid in cc_by_id and "error" not in (cc_by_id.get(fid) or {}):
+            finding["verification_tier"] = derive_verification_tier(finding)
+    results = sort_results_by_tier(results)
+
     merged["results"] = results
+    merged["verification_tiers"] = tier_counts(results)
     merged["analyzed"] = analysed
     merged["exploitable"] = exploitable
     merged["exploits_generated"] = exploits_generated
@@ -1795,7 +2305,7 @@ def _merge_results(
     return merged
 
 
-def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _structural_grouping(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group related findings by structural similarity. Pure Python, no LLM.
 
     Direct grouping only — no transitive closure. A finding can appear in
@@ -1808,7 +2318,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     groups = []
     group_counter = 0
 
-    def _add_group(criterion: str, value: str, finding_ids: List[str]):
+    def _add_group(criterion: str, value: str, finding_ids: list[str]) -> None:
         nonlocal group_counter
         if len(finding_ids) >= 2:
             group_counter += 1
@@ -1827,7 +2337,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             findings_by_id[fid] = r
 
     # Group by same file path
-    by_file: Dict[str, List[str]] = {}
+    by_file: dict[str, list[str]] = {}
     for fid, r in findings_by_id.items():
         fp = r.get("file_path", "")
         if fp:
@@ -1836,7 +2346,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         _add_group("file_path", fp, fids)
 
     # Group by same rule ID (skip rules that match >50% of findings — too generic)
-    by_rule: Dict[str, List[str]] = {}
+    by_rule: dict[str, list[str]] = {}
     for fid, r in findings_by_id.items():
         rule = r.get("rule_id", "")
         if rule:
@@ -1846,7 +2356,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for rule, fids in by_rule.items():
         _add_group("rule_id", rule, fids)
 
-    def _loc_key(d: Dict[str, Any]) -> Optional[str]:
+    def _loc_key(d: dict[str, Any]) -> str | None:
         """Build a `file:line` key from a dataflow node dict, or
         return None if both fields are missing.
 
@@ -1867,7 +2377,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return f"{fp or '?'}:{ln if ln not in (None, '') else '?'}"
 
     # Group by shared sanitiser location
-    by_sanitiser: Dict[str, List[str]] = {}
+    by_sanitiser: dict[str, list[str]] = {}
     for fid, r in findings_by_id.items():
         dataflow = r.get("dataflow") or {}
         for san in dataflow.get("sanitizers_found", []):
@@ -1884,7 +2394,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         _add_group("sanitiser", loc, fids)
 
     # Group by same dataflow source
-    by_source: Dict[str, List[str]] = {}
+    by_source: dict[str, list[str]] = {}
     for fid, r in findings_by_id.items():
         dataflow = r.get("dataflow") or {}
         source = dataflow.get("source", {})
@@ -1898,7 +2408,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     # Group by shared dataflow references (any file:line in common)
     # Inverted index: ref -> set of finding_ids. O(N*R) instead of O(N²).
-    ref_to_fids: Dict[str, set] = {}
+    ref_to_fids: dict[str, set] = {}
     for fid, r in findings_by_id.items():
         dataflow = r.get("dataflow") or {}
         source = dataflow.get("source", {})
@@ -1934,7 +2444,7 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # decoded names (via anon_var_map) DO count as named because
     # the witness then describes a real attacker-visible quantity
     # (e.g. strlen(argv[1])=32).
-    by_witness: Dict[Tuple, List[str]] = {}
+    by_witness: dict[tuple, list[str]] = {}
     for fid, r in findings_by_id.items():
         witness = r.get("smt_witness") or {}
         model = witness.get("model") or {}

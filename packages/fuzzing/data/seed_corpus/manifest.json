@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "description": "Small community-maintained seed corpus used as RAPTOR's default fuzzing corpus.",
+  "profiles": {
+    "default": "Balanced generic parser and input-shape seeds."
+  },
+  "seeds": [
+    {
+      "name": "seed-0001-text-small",
+      "path": "default/text-small.txt",
+      "kind": "text",
+      "profiles": ["default"],
+      "description": "Small printable input."
+    },
+    {
+      "name": "seed-0002-text-long-line",
+      "path": "default/text-long-line.txt",
+      "kind": "text",
+      "profiles": ["default"],
+      "description": "Long single-line ASCII input."
+    },
+    {
+      "name": "seed-0003-json-object",
+      "path": "default/json-object.json",
+      "kind": "json",
+      "profiles": ["default"],
+      "description": "Nested JSON object with string, integer and boolean values."
+    },
+    {
+      "name": "seed-0004-json-array",
+      "path": "default/json-array.json",
+      "kind": "json",
+      "profiles": ["default"],
+      "description": "JSON array with integer boundary values."
+    },
+    {
+      "name": "seed-0005-xml-basic",
+      "path": "default/xml-basic.xml",
+      "kind": "xml",
+      "profiles": ["default"],
+      "description": "Small XML document with attributes and text."
+    },
+    {
+      "name": "seed-0006-http-get",
+      "path": "default/http-get.txt",
+      "kind": "http",
+      "profiles": ["default"],
+      "description": "HTTP GET request shape."
+    },
+    {
+      "name": "seed-0007-http-post",
+      "path": "default/http-post.txt",
+      "kind": "http",
+      "profiles": ["default"],
+      "description": "HTTP POST request with form body."
+    },
+    {
+      "name": "seed-0008-csv-basic",
+      "path": "default/csv-basic.csv",
+      "kind": "csv",
+      "profiles": ["default"],
+      "description": "CSV header and two rows."
+    },
+    {
+      "name": "seed-0009-ini-basic",
+      "path": "default/ini-basic.ini",
+      "kind": "ini",
+      "profiles": ["default"],
+      "description": "INI-style key/value config."
+    },
+    {
+      "name": "seed-0010-urlencoded",
+      "path": "default/urlencoded.txt",
+      "kind": "form",
+      "profiles": ["default"],
+      "description": "URL-encoded parameter body."
+    },
+    {
+      "name": "seed-0011-paths",
+      "path": "default/paths.txt",
+      "kind": "path",
+      "profiles": ["default"],
+      "description": "Path traversal and absolute path tokens."
+    },
+    {
+      "name": "seed-0012-integers",
+      "path": "default/integers.txt",
+      "kind": "numeric",
+      "profiles": ["default"],
+      "description": "Integer edge values."
+    },
+    {
+      "name": "seed-0013-format-string",
+      "path": "default/format-string.txt",
+      "kind": "format-string",
+      "profiles": ["default"],
+      "description": "Format string probes."
+    },
+    {
+      "name": "seed-0014-command-prefixes",
+      "path": "default/command-prefixes.txt",
+      "kind": "command",
+      "profiles": ["default"],
+      "description": "Command-prefixed shapes for harnesses expecting labels."
+    }
+  ]
+}

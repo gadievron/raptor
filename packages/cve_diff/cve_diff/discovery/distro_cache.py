@@ -70,7 +70,7 @@ class DistroFetcher:
     cache_dir: Path = field(default_factory=lambda: DEFAULT_CACHE_DIR)
     # OrderedDict for LRU semantics. Pre-fix this was a plain dict
     # with monotonic growth.
-    _mem: "OrderedDict[tuple[str, str], dict[str, Any]]" = field(
+    _mem: OrderedDict[tuple[str, str], dict[str, Any]] = field(
         default_factory=OrderedDict
     )
     _disk: JsonCache | None = field(default=None, repr=False)
@@ -133,9 +133,8 @@ class DistroFetcher:
             "error" not in result
             or (err.startswith("http ") and not err.startswith("http 5"))
         )
-        if cacheable:
-            if self.cache_enabled and self._disk is not None:
-                self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
+        if cacheable and self.cache_enabled and self._disk is not None:
+            self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
         self._mem_put(key, result)
         return result
 
@@ -209,7 +208,7 @@ def _fetch_debian(cve_id: str) -> dict[str, Any]:
     body = resp.body.decode("utf-8", errors="replace")[:_MAX_BYTES]
     refs: list[str] = []
     for href in _HREF_RE.findall(body):
-        if (href.startswith("http://") or href.startswith("https://")) and href not in refs:
+        if (href.startswith(("http://", "https://"))) and href not in refs:
             refs.append(href)
     status = "fixed" if "fixed" in body.lower() else None
     return {"status": status, "fix_version": None, "references": refs[:50]}
@@ -227,7 +226,7 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"error": f"non-dict response: {type(data).__name__}"}
     cves = data.get("cves") or []
-    match = next((c for c in cves if (c.get("id") or "").upper() == cve_id.upper()), None)
+    match = next((c for c in cves if isinstance(c, dict) and (c.get("id") or "").upper() == cve_id.upper()), None)
     if match is None:
         return {"error": "http 404"}
     refs = [r for r in (match.get("references") or [])

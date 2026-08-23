@@ -5,8 +5,10 @@ import pytest
 from core.inventory.extractors import (
     FunctionInfo, FunctionMetadata,
     PythonExtractor, JavaExtractor, CExtractor, GoExtractor,
-    JavaScriptExtractor, extract_functions, _TS_AVAILABLE, _get_ts_languages,
+    JavaScriptExtractor, LuaExtractor, TreeSitterExtractor,
+    extract_functions, extract_items, _TS_AVAILABLE, _get_ts_languages,
 )
+from core.testing.treesitter import requires_ts
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +166,22 @@ class TestJavaRegexExtractor:
         funcs = JavaExtractor().extract("T.java", code)
         assert funcs[0].metadata.parameters == [("k", "String"), ("v", "int")]
 
+    def test_braces_inside_string_literal_ignored(self):
+        code = (
+            "public class T {\n"
+            '    public void log() {\n'
+            '        System.out.println("value={" + x + "}");\n'
+            '    }\n'
+            '    public void other() {\n'
+            '    }\n'
+            '}\n'
+        )
+        funcs = JavaExtractor().extract("T.java", code)
+        names = [f.name for f in funcs]
+        assert "log" in names
+        assert "other" in names
+        assert funcs[1].metadata.class_name == "T"
+
 
 class TestCRegexExtractor:
 
@@ -207,6 +225,23 @@ class TestCRegexExtractor:
         funcs = CExtractor().extract("t.c", code)
         assert funcs[0].metadata.visibility is None
 
+    def test_knr_with_macro(self):
+        code = (
+            "int ZEXPORT inflate(strm, flush)\n"
+            "z_streamp strm;\n"
+            "int flush;\n"
+            "{\n"
+            "    int x = 0;\n"
+            "    return x;\n"
+            "}\n"
+        )
+        funcs = CExtractor().extract("inflate.c", code)
+        names = [f.name for f in funcs]
+        assert "inflate" in names
+        fn = next(f for f in funcs if f.name == "inflate")
+        assert fn.line_end is not None
+        assert fn.line_end > fn.line_start
+
 
 class TestGoRegexExtractor:
 
@@ -242,6 +277,34 @@ class TestJSRegexExtractor:
         code = "function internal() {\n}\n"
         funcs = JavaScriptExtractor().extract("t.js", code)
         assert funcs[0].metadata.visibility is None
+
+    def test_block_comment_with_braces(self):
+        code = "function f() {\n  /* { } */\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 4
+
+    def test_multiline_block_comment_with_braces(self):
+        code = "function f() {\n  /*\n  {\n  */\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 6
+
+    def test_regex_literal_with_braces(self):
+        code = "function f() {\n  var r = /{[^}]+}/g;\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 4
+
+    def test_commented_out_function_skipped(self):
+        code = "// function fake(ev) {\nfunction real() {\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "real"
+
+    def test_block_comment_opener_skipped(self):
+        code = "/* function fake() { */\nfunction real() {\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        names = [f.name for f in funcs]
+        assert "fake" not in names
+        assert "real" in names
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +342,7 @@ class TestTreeSitter:
         funcs = extract_functions("t.py", "python", code)
         assert any("app.route" in (a or "") for a in funcs[0].metadata.attributes)
 
+    @requires_ts("java")
     def test_java_annotations(self):
         code = "public class T {\n    @GetMapping\n    public void get() {\n    }\n}"
         funcs = extract_functions("T.java", "java", code)
@@ -300,6 +364,30 @@ class TestTreeSitter:
         if not funcs[0].metadata.parameters:
             pytest.skip("tree-sitter-c build does not expose parameter nodes")
         assert len(funcs[0].metadata.parameters) > 0
+
+    def test_c_knr_macro_repair(self):
+        code = (
+            "int ZEXPORT inflate(strm, flush)\n"
+            "z_streamp strm;\n"
+            "int flush;\n"
+            "{\n"
+            "    int x = 0;\n"
+            "    return x;\n"
+            "}\n"
+            "\n"
+            "int ZEXPORT inflateEnd(strm)\n"
+            "z_streamp strm;\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        items = extract_items("inflate.c", "c", code)
+        funcs = [i for i in items if i.kind == "function"]
+        names = {f.name: f for f in funcs}
+        assert "inflate" in names, f"inflate not found; got {[f.name for f in funcs]}"
+        assert names["inflate"].line_end > names["inflate"].line_start
+        assert "inflateEnd" in names, f"inflateEnd not found; got {[f.name for f in funcs]}"
+        assert names["inflateEnd"].line_end > names["inflateEnd"].line_start
 
     def test_go_exported(self):
         code = "func Public() {\n}\nfunc private() {\n}\n"
@@ -465,19 +553,23 @@ class TestTopLevelItems:
         assert not any(i.kind == "top_level" for i in items)
 
 
+@requires_ts("c")
 class TestCGlobalDeclarators:
     """C/C++ globals through declarator wrappers (array/pointer)."""
 
     def test_c_array_and_pointer_globals_captured(self):
+        # Name capture through declarator wrappers; these inert shapes
+        # now classify as ``declaration`` (still in the checklist).
         from core.inventory.extractors import (
-            _TS_AVAILABLE, extract_items, KIND_GLOBAL,
+            _TS_AVAILABLE, extract_items, KIND_DECLARATION, KIND_GLOBAL,
         )
         if not _TS_AVAILABLE:
             pytest.skip("tree-sitter required for C global extraction")
         content = ("char g_buf[8];\nchar *p;\nint x = 0;\n"
                    "int f(void) { return 0; }\n")
         items = extract_items("t.c", "c", content)
-        names = {i.name for i in items if i.kind == KIND_GLOBAL}
+        names = {i.name for i in items
+                 if i.kind in (KIND_GLOBAL, KIND_DECLARATION)}
         assert {"g_buf", "p", "x"} <= names      # array, pointer, scalar
         assert "f" not in names                  # function not a global
 
@@ -485,13 +577,467 @@ class TestCGlobalDeclarators:
         # Regression: `int (*h)(int) = foo;` must be the variable `h`, NOT the
         # initializer `foo` (the declared name is nested in the FP declarator).
         from core.inventory.extractors import (
-            _TS_AVAILABLE, extract_items, KIND_GLOBAL,
+            _TS_AVAILABLE, extract_items, KIND_DECLARATION, KIND_GLOBAL,
         )
         if not _TS_AVAILABLE:
             pytest.skip("tree-sitter required for C global extraction")
         content = "int (*h)(int) = foo;\nint x = 0;\n"
         names = {i.name for i in extract_items("t.c", "c", content)
-                 if i.kind == KIND_GLOBAL}
+                 if i.kind in (KIND_GLOBAL, KIND_DECLARATION)}
         assert "h" in names              # the function-pointer variable
         assert "foo" not in names        # NOT the initializer value
         assert "x" in names              # plain scalar still works
+
+
+# ---------------------------------------------------------------------------
+# Extraction-artifact kinds: declaration / constant_macro / hoisted locals
+# ---------------------------------------------------------------------------
+
+@requires_ts("c")
+class TestCDeclarationKind:
+    """File-scope pure/extern/inert-initializer C declarations classify
+    as ``declaration`` — kept in the checklist for coverage bookkeeping,
+    excluded from review by default. Anything whose initializer may run
+    code stays a reviewable ``global``."""
+
+    @staticmethod
+    def _kinds(content, language="c"):
+        from core.inventory.extractors import extract_items
+        return {i.name: i.kind
+                for i in extract_items("t." + ("c" if language == "c" else "cc"),
+                                       language, content)}
+
+    def test_pure_declaration_without_initializer(self):
+        kinds = self._kinds("int tty_flag;\nOptions options;\n")
+        assert kinds.get("tty_flag") == "declaration"
+        assert kinds.get("options") == "declaration"
+
+    def test_extern_declaration(self):
+        kinds = self._kinds("extern char *progname_var;\n")
+        assert kinds.get("progname_var") == "declaration"
+
+    def test_inert_constant_initializer(self):
+        kinds = self._kinds('int tty_flag = 0;\nchar *config = NULL;\n')
+        assert kinds.get("tty_flag") == "declaration"
+        assert kinds.get("config") == "declaration"
+
+    def test_const_function_pointer_table(self):
+        content = (
+            "const struct key_impl_funcs key_funcs = {\n"
+            "\t/* .size = */ NULL,\n"
+            "\t/* .alloc = */ key_alloc,\n"
+            "\t/* .cleanup = */ key_cleanup,\n"
+            "};\n"
+        )
+        kinds = self._kinds(content)
+        assert kinds.get("key_funcs") == "declaration"
+
+    def test_initializer_with_call_stays_global(self):
+        kinds = self._kinds("int counter = init_counter();\n")
+        assert kinds.get("counter") == "global"
+
+    def test_initializer_with_expression_stays_global(self):
+        # Unknown/expression shapes stay reviewable (conservative).
+        kinds = self._kinds("int limit = 60 * 60;\n")
+        assert kinds.get("limit") == "global"
+
+    def test_cpp_no_initializer_stays_global(self):
+        # C++: `Foo bar;` can run a constructor at start-up — only
+        # extern-without-initializer is reclassified there.
+        from core.testing.treesitter import ts_parser_available
+        if not ts_parser_available("cpp"):
+            pytest.skip("tree-sitter cpp grammar required")
+        kinds = self._kinds("Options options;\nextern Options other;\n",
+                            language="cpp")
+        assert kinds.get("options") == "global"
+        assert kinds.get("other") == "declaration"
+
+
+@requires_ts("c")
+class TestFragmentedParseLocals:
+    """Error recovery on an unparseable C file can hoist FUNCTION-BODY
+    locals to root scope. Those must never become checklist items —
+    each local of an affected function used to surface as a separate
+    'global' consuming full review effort."""
+
+    def test_hoisted_locals_are_not_items(self):
+        from core.inventory.extractors import extract_items
+        content = (
+            "int file_scope = 0;\n"
+            "}\n"                             # stray closer: fragmented parse
+            "\tstatic int hoisted_local;\n"   # body-indented, hoisted to root
+            "\tchar *another_local;\n"
+            "int file_scope_after;\n"
+        )
+        items = extract_items("t.c", "c", content)
+        names = {i.name for i in items}
+        assert "hoisted_local" not in names
+        assert "another_local" not in names
+        # Column-0 file-scope declarations survive the guard.
+        assert "file_scope" in names
+        assert "file_scope_after" in names
+
+    def test_pristine_parse_keeps_indented_declarations(self):
+        # The guard only fires on fragmented parses; an error-free file
+        # keeps whatever the grammar put at root, indented or not.
+        from core.inventory.extractors import extract_items
+        content = "  int indented_but_valid = 0;\n"
+        names = {i.name for i in extract_items("t.c", "c", content)}
+        assert "indented_but_valid" in names
+
+
+class TestConstantMacroKind:
+    """Object-like macros with a single literal/identifier body classify
+    as ``constant_macro``; function-like macros and anything with logic
+    stay reviewable ``macro``. Regex path — no tree-sitter needed."""
+
+    @staticmethod
+    def _kinds(content):
+        from core.inventory.extractors import _extract_macros_regex
+        return {m.name: m.kind for m in _extract_macros_regex(content)}
+
+    def test_number_body(self):
+        kinds = self._kinds("#define MKTEMP_NAME\t0\n#define MAX_SZ 0x1000\n")
+        assert kinds["MKTEMP_NAME"] == "constant_macro"
+        assert kinds["MAX_SZ"] == "constant_macro"
+
+    def test_string_body(self):
+        kinds = self._kinds('#define _PATH_PIDDIR\t\t"/var/run"\n')
+        assert kinds["_PATH_PIDDIR"] == "constant_macro"
+
+    def test_identifier_and_subscript_body(self):
+        kinds = self._kinds("#define\tatime\ttv[0]\n#define ALIAS other_name\n")
+        assert kinds["atime"] == "constant_macro"
+        assert kinds["ALIAS"] == "constant_macro"
+
+    def test_string_paste_body(self):
+        kinds = self._kinds('#define _PATH_HOSTFILE\tSSHDIR "/ssh_known_hosts"\n')
+        assert kinds["_PATH_HOSTFILE"] == "constant_macro"
+
+    def test_parenthesised_literal_body(self):
+        kinds = self._kinds("#define BUFSZ (2048)\n")
+        assert kinds["BUFSZ"] == "constant_macro"
+
+    def test_function_like_macro_stays_macro(self):
+        # An unsafe function-like macro is a real bug multiplier.
+        kinds = self._kinds(
+            "#define\tSCREWUP(str)\t{ why = str; goto screwup; }\n")
+        assert kinds["SCREWUP"] == "macro"
+
+    def test_include_guard_stays_macro(self):
+        kinds = self._kinds("#define CONFIG_H\n")
+        assert kinds["CONFIG_H"] == "macro"
+
+    def test_expression_body_stays_macro(self):
+        kinds = self._kinds("#define LIMIT (8 * 1024)\n#define NEG (u_int)-1\n")
+        assert kinds["LIMIT"] == "macro"
+        assert kinds["NEG"] == "macro"
+
+    def test_multiline_body_stays_macro(self):
+        kinds = self._kinds("#define BIG \\\n\t42\n")
+        assert kinds["BIG"] == "macro"
+
+    def test_body_comment_is_ignored(self):
+        kinds = self._kinds("#define TIMEOUT 30 /* seconds */\n")
+        assert kinds["TIMEOUT"] == "constant_macro"
+
+
+# ---------------------------------------------------------------------------
+# LuaExtractor tests
+# ---------------------------------------------------------------------------
+
+class TestLuaExtractor:
+    ext = LuaExtractor()
+
+    def test_global_function(self):
+        code = "function greet(name)\n  print(name)\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "greet"
+        assert funcs[0].line_start == 1
+        assert funcs[0].line_end == 3
+        assert funcs[0].metadata.visibility == "public"
+
+    def test_local_function(self):
+        code = "local function helper(x)\n  return x + 1\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "helper"
+        assert funcs[0].metadata.visibility == "private"
+
+    def test_module_dot_syntax(self):
+        code = "function M.init(cfg)\n  M.cfg = cfg\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "M.init"
+
+    def test_method_colon_syntax(self):
+        code = "function Widget:render()\n  return self.html\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "Widget.render"
+
+    def test_assigned_anonymous(self):
+        code = "M.handler = function(req)\n  return 200\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "M.handler"
+
+    def test_local_assigned_anonymous(self):
+        code = "local parse = function(s)\n  return tonumber(s)\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "parse"
+        assert funcs[0].metadata.visibility == "private"
+
+    def test_line_end_nested_blocks(self):
+        code = (
+            "function outer()\n"
+            "  if true then\n"
+            "    for i=1,10 do\n"
+            "      print(i)\n"
+            "    end\n"
+            "  end\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].line_end == 7
+
+    def test_multiple_functions(self):
+        code = (
+            "function a()\n  return 1\nend\n\n"
+            "function b()\n  return 2\nend\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        names = [f.name for f in funcs]
+        assert names == ["a", "b"]
+        assert funcs[0].line_end == 3
+        assert funcs[1].line_end == 7
+
+    def test_comment_not_counted(self):
+        code = (
+            "function f()\n"
+            "  -- if this were parsed it would add depth\n"
+            "  return 1\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert funcs[0].line_end == 4
+
+    def test_repeat_until_not_confused(self):
+        code = (
+            "function poll()\n"
+            "  repeat\n"
+            "    x = read()\n"
+            "  until x ~= nil\n"
+            "  return x\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert funcs[0].line_end == 6
+
+    def test_commented_out_function_skipped(self):
+        code = "-- function fake()\nfunction real()\n  return 1\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "real"
+
+    def test_keyword_in_string_not_counted(self):
+        code = (
+            'function call(name)\n'
+            '  return {\n'
+            '    ["function"] = name,\n'
+            '    ["type"] = "call"\n'
+            '  }\n'
+            'end\n'
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].line_end == 6
+
+    def test_extract_functions_lua(self):
+        code = "function dispatch(req)\n  route(req)\nend\n"
+        funcs = extract_functions("controller.lua", "lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "dispatch"
+
+
+# ---------------------------------------------------------------------------
+# Scala (tree-sitter). Regression guard for the regex-fallback gap: .scala had
+# no loader branch, so it silently degraded to regex — fewer functions and no
+# line_end, which disables every span-based consumer.
+# ---------------------------------------------------------------------------
+
+_SCALA_SRC = '''package kafka.server
+
+import scala.collection.Map
+
+object ConfigHelper {
+  def normalize(name: String): String = {
+    name.trim.toLowerCase
+  }
+}
+
+class ConfigAdminManager(nodeId: Int) {
+
+  def preprocess(request: AlterConfigsRequest): Map[String, String] = {
+    val out = Map.empty[String, String]
+    out
+  }
+
+  private def validateBrokerConfigChange(props: Properties): Unit = {
+    if (props.isEmpty) {
+      throw new InvalidRequestException("empty")
+    }
+  }
+}
+
+trait Reconfigurable {
+  def reconfigure(configs: Map[String, _]): Unit
+}
+'''
+
+
+def _has_tree_sitter_scala() -> bool:
+    try:
+        import tree_sitter_scala  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(
+    not _has_tree_sitter_scala(),
+    reason="tree_sitter_scala grammar not installed",
+)
+class TestScalaExtraction:
+    def _extract(self):
+        return extract_functions("ConfigAdminManager.scala", "scala", _SCALA_SRC)
+
+    def test_finds_defs_in_class_object_and_trait(self):
+        names = {f.name for f in self._extract()}
+        assert {"normalize", "preprocess", "validateBrokerConfigChange"} <= names
+
+    def test_every_function_has_a_line_span(self):
+        """The whole point: the regex fallback returned line_end=None, which
+        silently disables source-slicing consumers."""
+        fns = self._extract()
+        assert fns
+        for f in fns:
+            assert f.line_start, f.name
+            assert f.line_end, f.name
+            assert f.line_end >= f.line_start, f.name
+
+    def test_span_covers_the_body(self):
+        fn = next(f for f in self._extract() if f.name == "validateBrokerConfigChange")
+        body = "\n".join(_SCALA_SRC.splitlines()[fn.line_start - 1:fn.line_end])
+        assert "InvalidRequestException" in body
+
+    def test_scala_uses_function_definition_not_java_node_names(self):
+        """Scala `def` is function_definition; reusing Java's
+        method_declaration extracts zero from a cleanly-parsed file."""
+        assert TreeSitterExtractor._FUNC_TYPES["scala"] == ("function_definition",)
+        assert "method_declaration" not in TreeSitterExtractor._FUNC_TYPES["scala"]
+
+    def test_abstract_trait_def_is_excluded(self):
+        """An abstract `def` with no body is `function_declaration`, not
+        `function_definition` — no code to review. Same rule as Rust's
+        `function_signature_item`. The regex fallback wrongly includes it."""
+        assert "reconfigure" not in {f.name for f in self._extract()}
+
+    def test_regex_fallback_has_no_line_end(self):
+        """Pins the defect this branch fixes. Deliberately does NOT compare
+        counts: on a tiny fixture the regex can over-match (it picks up the
+        abstract def), while on real files tree-sitter finds substantially
+        more. The invariant that always holds, and the one span-based
+        consumers depend on, is that the fallback yields no line_end."""
+        import core.inventory.extractors as _E
+        saved = _E._TS_AVAILABLE
+        _E._TS_AVAILABLE = False
+        try:
+            rx = extract_functions("ConfigAdminManager.scala", "scala", _SCALA_SRC)
+        finally:
+            _E._TS_AVAILABLE = saved
+        assert rx, "fallback should still find something"
+        assert not any(f.line_end for f in rx)
+        assert all(f.line_end for f in self._extract())
+
+
+class TestTsProbeMatchesLoader:
+    def test_probe_list_covers_every_loader_branch(self):
+        """The banner list drifted behind the loader — cpp/typescript/rust/
+        csharp/ruby/php had working branches but were never probed, so the
+        doctor under-reported what the inventory could parse."""
+        from core.inventory.extractors import _TS_PROBE_LANGUAGES
+        for lang in TreeSitterExtractor._FUNC_TYPES:
+            assert lang in _TS_PROBE_LANGUAGES, (
+                f"{lang} has node types but is not probed for the banner"
+            )
+
+
+# ---------------------------------------------------------------------------
+# CExtractor._fill_line_ends — linear post-pass (U09-F1)
+# ---------------------------------------------------------------------------
+
+
+class TestCFillLineEndsLinear:
+    def test_matches_per_function_reference_scanner(self):
+        from core.inventory.extractors import CExtractor, FunctionInfo
+        src = (
+            "int f(void)\n"
+            "{\n"
+            "  if (x) { /* } */ y(\"}\"); }\n"
+            "}\n"
+            "static int g(int a) {\n"
+            "  return a; // }\n"
+            "}\n"
+            "int h(void)\n"
+            "{\n"
+            "  char c = '}';\n"
+            "}\n"
+        )
+        lines = src.split("\n")
+        starts = [1, 5, 8]
+        ref = {
+            s: CExtractor._find_end_brace(lines, s - 1) for s in starts
+        }
+        funcs = [FunctionInfo(name=f"fn{s}", line_start=s) for s in starts]
+        CExtractor._fill_line_ends(lines, funcs)
+        assert {f.line_start: f.line_end for f in funcs} == ref
+        assert ref == {1: 4, 5: 7, 8: 11}
+
+    def test_never_closing_openers_fill_is_linear(self):
+        # A file of N one-line functions each opening a brace that
+        # never closes made every function re-scan to EOF: O(N²) — an
+        # effective hang at the 8 MiB per-file cap. The linear fill
+        # must finish the whole batch in well under a second.
+        import time
+        from core.inventory.extractors import CExtractor, FunctionInfo
+        n = 50_000
+        lines = [f"int f{k}()" + "{" for k in range(n)]
+        funcs = [
+            FunctionInfo(name=f"f{k}", line_start=k + 1) for k in range(n)
+        ]
+        start = time.perf_counter()
+        CExtractor._fill_line_ends(lines, funcs)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 5.0, f"fill took {elapsed:.1f}s on {n} lines"
+        assert all(f.line_end is None for f in funcs)
+
+    def test_unbalanced_head_still_resolves_later_functions(self):
+        from core.inventory.extractors import CExtractor, FunctionInfo
+        lines = [
+            "int broken()",   # 1 — never opens
+            "int ok(void)",   # 2
+            "{",              # 3
+            "  return 1;",    # 4
+            "}",              # 5
+        ]
+        funcs = [
+            FunctionInfo(name="broken", line_start=1),
+            FunctionInfo(name="ok", line_start=2),
+        ]
+        CExtractor._fill_line_ends(lines, funcs)
+        by_name = {f.name: f.line_end for f in funcs}
+        assert by_name == {"broken": 5, "ok": 5}

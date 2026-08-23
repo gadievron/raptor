@@ -1,0 +1,37 @@
+{
+  "api": "openssl",
+  "description": "OpenSSL libcrypto call surface. Prefix families cover the modern EVP_* primitive verbs (Encrypt/Decrypt/Cipher/Digest init-update-final chains, including the DigestSign/DigestVerify one-shot surface), the EVP_PKEY_* operation verbs (which also pick up their *_init companions), HMAC, the legacy per-algorithm primitives (AES_/DES_/RC4/MD5/SHA*/BF_), and the RAND_* entropy surface. Context-management calls (EVP_CIPHER_CTX_new, EVP_MD_CTX_free, ...) are deliberately NOT covered: the inventory enumerates primitive use, not object lifecycle.",
+  "kinds": {
+    "primitive_call": {
+      "prefixes": [
+        "EVP_Encrypt",
+        "EVP_Decrypt",
+        "EVP_Cipher",
+        "EVP_Digest",
+        "EVP_PKEY_encrypt",
+        "EVP_PKEY_decrypt",
+        "EVP_PKEY_sign",
+        "EVP_PKEY_verify",
+        "EVP_PKEY_derive",
+        "HMAC",
+        "AES_",
+        "DES_",
+        "RC4",
+        "MD5",
+        "SHA1",
+        "SHA224",
+        "SHA256",
+        "SHA384",
+        "SHA512",
+        "BF_"
+      ],
+      "names": []
+    },
+    "rng_source": {
+      "prefixes": [
+        "RAND_"
+      ],
+      "names": []
+    }
+  }
+}

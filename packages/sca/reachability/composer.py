@@ -1,19 +1,19 @@
-"""Module-level reachability for Composer (PHP) deps.
+r"""Module-level reachability for Composer (PHP) deps.
 
 Walks ``*.php`` files outside test trees, extracts ``use
-<Namespace>\\<Class>;`` statements, and matches against the dep's
+<Namespace>\<Class>;`` statements, and matches against the dep's
 PSR-4 namespace.
 
 Heuristic: PHP package names are ``vendor/pkg`` (e.g.,
 ``symfony/console``), and PSR-4 namespaces typically PascalCase the
-parts (``Symfony\\Component\\Console``). Without parsing the
+parts (``Symfony\Component\Console``). Without parsing the
 package's own composer.json autoload section, we use two probes:
 
-  1. **Vendor prefix**: a ``use Vendor\\Anything`` statement (case-
+  1. **Vendor prefix**: a ``use Vendor\Anything`` statement (case-
      insensitive on the vendor) is evidence the package's vendor is
      used somewhere — coarse but useful when we don't know the
      package's exact namespace.
-  2. **Pkg-name segment**: ``use Vendor\\PkgName\\...`` where
+  2. **Pkg-name segment**: ``use Vendor\PkgName\...`` where
      ``PkgName`` matches the dep's pkg part (with kebab→Pascal
      conversion) is stronger evidence.
 
@@ -26,17 +26,21 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
+from ._shared import format_evidence as _format_evidence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 _DEFAULT_MAX_DEPTH = 12
 
-_TEST_DIR_NAMES = {"tests", "test", "Tests", "spec"}
+_TEST_DIR_NAMES = {"tests", "test", "Tests", "Test", "spec"}
 
 # ``use Vendor\Class;`` / ``use function Vendor\fn;`` / ``use const ...``
 _PHP_USE_RE = re.compile(
@@ -48,14 +52,14 @@ _PHP_USE_RE = re.compile(
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
-    """Return ``{namespace: [(file, line, is_test), ...]}``.
+) -> dict[str, list[tuple[Path, int, bool]]]:
+    r"""Return ``{namespace: [(file, line, is_test), ...]}``.
 
-    ``namespace`` is the full ``Vendor\\Class\\...`` chain from the
+    ``namespace`` is the full ``Vendor\Class\...`` chain from the
     ``use`` statement.
     """
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for php_file in _walk_php_sources(target, max_depth=max_depth):
         is_test = _is_test_file(php_file, target)
         try:
@@ -71,13 +75,13 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
 ) -> Reachability:
-    """Match a Composer ``vendor/pkg`` dep against namespaces in the scan.
+    r"""Match a Composer ``vendor/pkg`` dep against namespaces in the scan.
 
-    Vendor prefix match (``Vendor\\...``) yields ``imported`` with
+    Vendor prefix match (``Vendor\...``) yields ``imported`` with
     medium confidence; refining via pkg-name match boosts confidence.
     """
     if "/" not in dep_name:
@@ -93,8 +97,8 @@ def resolve_dep(
     vendor_pascal = _to_pascal(vendor)
     pkg_pascal = _to_pascal(pkg)
 
-    pkg_matches: List[Tuple[Path, int, bool]] = []
-    vendor_only_matches: List[Tuple[Path, int, bool]] = []
+    pkg_matches: list[tuple[Path, int, bool]] = []
+    vendor_only_matches: list[tuple[Path, int, bool]] = []
     for ns, hits in scan.items():
         head = ns.split("\\", 1)[0]
         if head.lower() != vendor_pascal.lower():
@@ -155,7 +159,7 @@ def resolve_dep(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _imports_in(text: str) -> Iterable[Tuple[str, int]]:
+def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     for m in _PHP_USE_RE.finditer(text):
         yield m.group(1), text.count("\n", 0, m.start()) + 1
 
@@ -184,22 +188,5 @@ def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
     if any(p in _TEST_DIR_NAMES for p in rel_parts):
         return True
-    if path.stem.endswith(("Test", "Tests")) or path.stem.startswith("Test"):
-        return True
-    return False
+    return bool(path.stem.endswith(("Test", "Tests")))
 
-
-def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
-    *,
-    target: Optional[Path],
-    cap: int = 5,
-) -> List[str]:
-    out: List[str] = []
-    for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
-        out.append(f"{rel}:{line}")
-    if len(hits) > cap:
-        out.append(f"... (+{len(hits) - cap} more)")
-    return out

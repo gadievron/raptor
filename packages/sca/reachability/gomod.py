@@ -1,8 +1,11 @@
 """Module-level reachability for Go module deps.
 
-Walks ``*.go`` files outside ``*_test.go`` and ``vendor/`` trees,
-extracts ``import "<module-path>"`` statements (single + parenthesised
-block forms), and matches each module path against the dep's name.
+Walks ``*.go`` files outside ``vendor/`` trees — ``*_test.go`` files
+included, each hit tagged ``is_test`` — extracts ``import
+"<module-path>"`` statements (single + parenthesised block forms), and
+matches each module path against the dep's name. ``resolve_dep``
+discounts test-only hits: a module imported only from ``*_test.go``
+files resolves ``not_reachable``.
 
 Match semantics: a dep ``github.com/foo/bar`` is "imported" when any
 import path is exactly that, OR is a sub-package of it
@@ -13,10 +16,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
+from ._shared import format_evidence as _format_evidence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +48,10 @@ _BLOCK_LINE_RE = re.compile(
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{import_path: [(file, line, is_test), ...]}``."""
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for go_file in _walk_go_sources(target, max_depth=max_depth):
         is_test = _is_test_file(go_file)
         try:
@@ -59,10 +66,10 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
-    advisory_symbols: Optional[List[str]] = None,
+    target: Path | None = None,
+    advisory_symbols: list[str] | None = None,
 ) -> Reachability:
     """Look up ``dep_name`` (a Go module path) in the scan.
 
@@ -71,7 +78,7 @@ def resolve_dep(
     function/type names appear in the importing Go files. A match
     upgrades the verdict from ``imported`` to ``likely_called``.
     """
-    matches: List[Tuple[Path, int, bool]] = []
+    matches: list[tuple[Path, int, bool]] = []
     prefix = dep_name.rstrip("/") + "/"
     for path, hits in scan.items():
         if path == dep_name or path.startswith(prefix):
@@ -125,16 +132,16 @@ def resolve_dep(
 
 
 def _grep_symbols(
-    hits: List[Tuple[Path, int, bool]],
-    symbols: List[str],
-) -> List[str]:
+    hits: list[tuple[Path, int, bool]],
+    symbols: list[str],
+) -> list[str]:
     """Check whether any advisory-listed symbols appear in the source files.
 
     Returns the subset of ``symbols`` that were found (identifier-boundary
     match, not substring).
     """
     files_checked: set = set()
-    file_contents: Dict[Path, str] = {}
+    file_contents: dict[Path, str] = {}
     for f, _, _ in hits:
         if f in files_checked:
             continue
@@ -147,7 +154,7 @@ def _grep_symbols(
     if not file_contents:
         return []
 
-    found: List[str] = []
+    found: list[str] = []
     combined = "\n".join(file_contents.values())
     for sym in symbols:
         pat = re.compile(r"\b" + re.escape(sym) + r"\b")
@@ -160,13 +167,13 @@ def _grep_symbols(
 # Internals
 # ---------------------------------------------------------------------------
 
-def _imports_in(text: str) -> Iterable[Tuple[str, int]]:
+def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     # Single-line.
     for m in _IMPORT_SINGLE_RE.finditer(text):
         yield m.group(1), text.count("\n", 0, m.start()) + 1
     # Block form.
     for block in _IMPORT_BLOCK_RE.finditer(text):
-        block_start = block.start()
+        block_start = block.start(1)
         body = block.group(1)
         for line_m in _BLOCK_LINE_RE.finditer(body):
             line_no = (text.count("\n", 0, block_start)
@@ -184,18 +191,3 @@ def _walk_go_sources(
 def _is_test_file(path: Path) -> bool:
     return path.name.endswith("_test.go")
 
-
-def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
-    *,
-    target: Optional[Path],
-    cap: int = 5,
-) -> List[str]:
-    out: List[str] = []
-    for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
-        out.append(f"{rel}:{line}")
-    if len(hits) > cap:
-        out.append(f"... (+{len(hits) - cap} more)")
-    return out

@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from core.http import HttpClient
 
@@ -78,7 +77,7 @@ def resolve_gha_action_image(
     ref: str,
     *,
     http: HttpClient,
-) -> Optional[GhaActionImage]:
+) -> GhaActionImage | None:
     """Fetch ``action.yml`` from ``<repo>@<ref>`` and return the
     OCI image ref when the action uses Docker-container shape.
 
@@ -98,7 +97,7 @@ def resolve_gha_action_image(
 
 def _fetch_action_yml(
     repo: str, ref: str, *, http: HttpClient,
-) -> Optional[str]:
+) -> str | None:
     """GET ``raw.githubusercontent.com/<repo>/<ref>/action.yml``,
     fall back to ``action.yaml``. Returns the decoded UTF-8 text,
     or None on any failure.
@@ -133,7 +132,7 @@ def _fetch_action_yml(
     return None
 
 
-def _parse_docker_action_image(text: str) -> Optional[str]:
+def _parse_docker_action_image(text: str) -> str | None:
     """Parse an ``action.yml`` body and return the OCI image ref
     when this is a Docker-container action with a pre-built image.
 
@@ -184,7 +183,7 @@ def _parse_docker_action_image(text: str) -> Optional[str]:
     lowered = image.lower()
     if lowered == "dockerfile" or lowered.endswith(".dockerfile"):
         return None
-    if image.startswith("./") or image.startswith("../"):
+    if image.startswith(("./", "../")):
         return None
     # Bare ``Dockerfile`` with a directory prefix (e.g.
     # ``app/Dockerfile``) also signals build-time.
@@ -196,6 +195,8 @@ def _parse_docker_action_image(text: str) -> Optional[str]:
     # ``docker://`` URI form — strip the prefix.
     if image.lower().startswith("docker://"):
         image = image[len("docker://"):]
+        if not image:
+            return None
 
     return image
 

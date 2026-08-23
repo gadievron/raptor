@@ -28,11 +28,10 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
 
 
 def describe_main(
-    target_arg: Optional[str],
+    target_arg: str | None,
     json_output: bool,
     stderr=sys.stderr,
     stdout=sys.stdout,
@@ -64,8 +63,8 @@ def describe_main(
     # Branch on directory vs file. Archive (file + recognised
     # format) — cache hit reuses an existing extraction; cache
     # miss extracts into a tmp dir we own and clean up.
-    tmp_extract_root: Optional[Path] = None
-    archive_label: Optional[str] = None
+    tmp_extract_root: Path | None = None
+    archive_label: str | None = None
     try:
         if raw_path.is_dir():
             target_path = raw_path
@@ -95,7 +94,7 @@ def describe_main(
 
 def _resolve_archive(
     raw_path: Path, stderr,
-) -> Optional[Tuple[Path, Optional[Path], str]]:
+) -> tuple[Path, Path | None, str] | None:
     """Turn an archive ``raw_path`` into a describable directory.
 
     Returns ``(target_path, tmp_extract_root, archive_label)``:
@@ -168,7 +167,7 @@ def _resolve_archive(
 
 def _find_cached_extraction(
     archive_path: Path, safe_cache_name_fn,
-) -> Optional[Path]:
+) -> Path | None:
     """Return the cached extraction dir for ``archive_path``
     under the active project's ``_sources/<name>-<sha>/``, or
     None on no active project / no cache hit / snapshot

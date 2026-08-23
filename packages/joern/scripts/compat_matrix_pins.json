@@ -1,0 +1,3 @@
+{
+  "_comment": "sha256 pins for joern release assets, keyed '<tag>/<asset-filename>'. Populate by running compat_matrix.py --update-pins after verifying a download out-of-band; verify pinned tags with --require-pinned. Unpinned assets download with a loud warning that prints the computed digest."
+}

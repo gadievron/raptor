@@ -39,10 +39,13 @@ LLM consumes it alongside the dataflow path, no early return.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, Callable, Optional, Set
+from typing import Any, TYPE_CHECKING
 
 from core.security.prompt_envelope import UntrustedBlock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +97,9 @@ DEFAULT_MAX_EVIDENCE_LINES = 12
 
 def make_source_intel_collector(
     *,
-    cache: Optional[Any] = None,
-    repo_path_resolver: Optional[Callable[[Any, Path], Path]] = None,
-    binary_verdict_resolver: Optional[Callable[[Any, Path], Optional[str]]] = None,
+    cache: Any | None = None,
+    repo_path_resolver: Callable[[Any, Path], Path] | None = None,
+    binary_verdict_resolver: Callable[[Any, Path], str | None] | None = None,
     style: str = "stage_d",
     max_lines: int = DEFAULT_MAX_EVIDENCE_LINES,
 ):
@@ -145,7 +148,7 @@ def make_source_intel_collector(
     _analyze_mod = importlib.import_module("packages.source_intel.analyze")
     from packages.source_intel.render import derive_evidence_strings
 
-    def _collector(dataflow, repo_path: Path) -> Optional[UntrustedBlock]:
+    def _collector(dataflow, repo_path: Path) -> UntrustedBlock | None:
         try:
             scan_target = (
                 repo_path_resolver(dataflow, repo_path)
@@ -213,7 +216,7 @@ def make_cwe_dispatched_collector(
     *,
     sanitizer_collector,
     source_intel_collector,
-    source_intel_rule_prefixes: Optional[Set[str]] = None,
+    source_intel_rule_prefixes: set[str] | None = None,
 ):
     """Compose two collectors with rule_id-prefix dispatch.
 
@@ -272,7 +275,7 @@ def _safe_extract_flags(target: Path):
         return None
 
 
-def _safe_enclosing_function(file_path: str, line: int) -> Optional[str]:
+def _safe_enclosing_function(file_path: str, line: int) -> str | None:
     """Best-effort wrapper around analyze._enclosing_function.
 
     Returns ``None`` on any error; the renderer's
@@ -287,7 +290,7 @@ def _safe_enclosing_function(file_path: str, line: int) -> Optional[str]:
 
 
 def _safe_privilege_back_walk(
-    sink_fn: Optional[str],
+    sink_fn: str | None,
     scan_target: Path,
     result,
 ):
@@ -323,10 +326,10 @@ def _safe_privilege_back_walk(
 
 
 def _safe_binary_verdict(
-    resolver: Optional[Callable],
+    resolver: Callable | None,
     dataflow,
     scan_target: Path,
-) -> Optional[str]:
+) -> str | None:
     """Best-effort wrapper around an operator-supplied binary
     verdict resolver.
 

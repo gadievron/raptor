@@ -180,13 +180,72 @@ class TestTargetSnapshot(unittest.TestCase):
             seen.append(cmd)
             return real_run(cmd, *a, **k)
 
-        with TemporaryDirectory() as d:
-            with mock.patch.object(prov.subprocess, "run", side_effect=spy):
-                prov.target_snapshot(Path(d))
+        with TemporaryDirectory() as d, \
+                mock.patch.object(prov.subprocess, "run", side_effect=spy):
+            prov.target_snapshot(Path(d))
         joined = " ".join(" ".join(map(str, c)) for c in seen)
         self.assertTrue(seen, "no git invocation captured")
         self.assertIn("core.fsmonitor=", joined)
         self.assertIn("core.hooksPath=/dev/null", joined)
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_target_dirty_on_tracked_modification(self):
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "a.txt").write_text("changed\n")
+            self.assertTrue(target_snapshot(repo)["dirty"])
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_target_dirty_on_untracked_file(self):
+        # diff-index alone misses untracked files; the ls-files probe must
+        # keep the "dirty includes untracked" semantics `status` had.
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            (repo / "new.txt").write_text("x\n")
+            self.assertTrue(target_snapshot(repo)["dirty"])
+
+    @unittest.skipUnless(_GIT, "git not available")
+    def test_target_probe_never_rehashes_through_clean_filter(self):
+        # ROBUSTNESS: the dirtiness probe must not push worktree content
+        # through repo-configured clean filters (arbitrary commands under
+        # repo-chosen names — not coverable by the -c safety overrides).
+        # Arm a filter that drops a sentinel file when invoked, in exactly
+        # the state where `git status`'s index refresh would run it (a
+        # modified tracked file). The probe must report dirty WITHOUT
+        # tripping the filter.
+        import shlex
+        with TemporaryDirectory() as d:
+            repo = Path(d)
+            _init_repo(repo)
+            sentinel = repo / "filter-ran"
+            (repo / ".gitattributes").write_text("a.txt filter=probe\n")
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "filter.probe.clean",
+                 f"touch {shlex.quote(str(sentinel))}; cat"],
+                capture_output=True, check=True,
+            )
+            (repo / "a.txt").write_text("changed\n")
+
+            snap = target_snapshot(repo)
+
+            self.assertTrue(snap["dirty"])
+            self.assertFalse(
+                sentinel.exists(),
+                "provenance probe executed a repo-configured filter driver",
+            )
+            # Control — prove the trap was armed: a bare `git status` (the
+            # call shape the probe deliberately avoids) does refresh the
+            # index and run the filter on this git version.
+            subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain"],
+                capture_output=True, check=True,
+            )
+            if not sentinel.exists():
+                self.skipTest(
+                    "this git version does not route the status refresh "
+                    "through clean filters; trap unverifiable here")
 
     def test_source_control_uses_bare_git(self):
         # RAPTOR's own checkout is trusted — no per-invocation overrides needed
@@ -200,9 +259,9 @@ class TestTargetSnapshot(unittest.TestCase):
             seen.append(cmd)
             return real_run(cmd, *a, **k)
 
-        with TemporaryDirectory() as d:
-            with mock.patch.object(prov.subprocess, "run", side_effect=spy):
-                prov.source_control_snapshot(Path(d))
+        with TemporaryDirectory() as d, \
+                mock.patch.object(prov.subprocess, "run", side_effect=spy):
+            prov.source_control_snapshot(Path(d))
         joined = " ".join(" ".join(map(str, c)) for c in seen)
         self.assertNotIn("core.fsmonitor=", joined)
 
@@ -272,11 +331,34 @@ class TestToolVersion(unittest.TestCase):
     def test_unknown_tool_returns_none(self):
         self.assertIsNone(tool_version("not-a-real-engine"))
 
-    @unittest.skipUnless(shutil.which("semgrep"), "semgrep not installed")
     def test_semgrep_returns_version_string(self):
-        v = tool_version("semgrep")
-        self.assertIsInstance(v, str)
-        self.assertTrue(v)
+        # Hermetic: the live `semgrep --version` probe is a slow CLI
+        # that legitimately exceeds the 5s probe budget under a
+        # loaded `-n auto` battery — and tool_version returns None on
+        # timeout BY DESIGN (provenance is best-effort). Canned
+        # subprocess output pins the parse path deterministically.
+        import core.run.provenance as prov
+        fake = subprocess.CompletedProcess(
+            args=["semgrep", "--version"], returncode=0,
+            stdout="1.99.0\nextra probe noise\n", stderr="",
+        )
+        with mock.patch.object(
+            prov.subprocess, "run", return_value=fake,
+        ):
+            v = tool_version("semgrep")
+        self.assertEqual(v, "1.99.0")
+
+    def test_probe_timeout_returns_none(self):
+        # The timeout path must degrade to None, never raise — run
+        # finalisation depends on it.
+        import core.run.provenance as prov
+        with mock.patch.object(
+            prov.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["semgrep", "--version"], timeout=5.0,
+            ),
+        ):
+            self.assertIsNone(tool_version("semgrep"))
 
     def test_absent_tool_returns_none(self):
         # 'coccinelle' probes `spatch`; if it isn't installed the probe must
@@ -478,6 +560,21 @@ class TestAggregateProvenance(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(aggregate_provenance([])["runs"], 0)
 
+    def test_no_manifest_counts_as_unavailable(self):
+        # A run with no manifest at all (legacy / adopted) is counted
+        # as unavailable — same as the explicit "unavailable" stamp,
+        # never guessed. Both land in reproducible.unknown too.
+        metas = [
+            {"some_other_field": True},          # manifest key absent
+            {"manifest": {}},                    # empty manifest
+            {"manifest": "not-a-dict"},          # malformed manifest
+            {"manifest": {"provenance": "unavailable"}},
+        ]
+        s = aggregate_provenance(metas)
+        self.assertEqual(s["runs"], 4)
+        self.assertEqual(s["unavailable"], 4)
+        self.assertEqual(s["reproducible"]["unknown"], 4)
+
     def test_tolerates_non_dict_engines(self):
         # Malformed/imported manifest with engines as a list must not crash.
         s = aggregate_provenance([{"manifest": {
@@ -487,6 +584,17 @@ class TestAggregateProvenance(unittest.TestCase):
         }}])
         self.assertEqual(s["runs"], 1)
         self.assertEqual(s["engines"], {})
+
+    def test_tolerates_non_dict_models_entries(self):
+        # Hand-edited/imported manifest with bare-string model entries
+        # must not crash the rollup (run_models() filters the same way).
+        s = aggregate_provenance([{"manifest": {
+            "models": ["gpt-x", {"resolved": "gemini-2.5-pro"}],
+            "source_control": {"base_sha": "x", "dirty": False},
+            "deterministically_reproducible": False,
+        }}])
+        self.assertEqual(s["runs"], 1)
+        self.assertEqual(s["models"], {"gemini-2.5-pro": 1})
 
 
 class TestFormatProvenanceRollup(unittest.TestCase):
@@ -586,6 +694,7 @@ class TestUniformCompletionEnrichment(unittest.TestCase):
         # A run carrying the 'unavailable' stamp (predates manifest capture) is
         # left untouched — no engines/reproducibility grafted on.
         import json
+
         from core.run import complete_run, load_run_metadata, start_run
         from core.run.metadata import RUN_METADATA_FILE
         with TemporaryDirectory() as d:
@@ -699,7 +808,7 @@ class TestWhoAndHarnessModel(unittest.TestCase):
             # adversarial: manifest is publish-bound, so no injection/spoof
             "claude\x00evil",             # null byte
             "claude\x1b[31mRED",          # ANSI terminal-injection escape
-            "claude‮RTL",                 # unicode RTL-override spoof
+            "claude\u202eRTL",              # unicode RTL-override spoof
             "café-model",                 # non-ASCII (model ids are ASCII)
         ):
             self.assertIsNone(harness_model_entry(bad), f"should omit: {bad!r}")

@@ -19,10 +19,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Reachability
+from ._shared import format_evidence as _format_evidence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +39,22 @@ _TEST_DIR_NAMES = {"tests", "examples", "benches", "fuzz"}
 # ``use foo::...`` or ``use foo;`` or ``use foo as bar`` — captures the
 # top-level crate identifier.
 _USE_RE = re.compile(
-    r"^\s*(?:pub\s+)?use\s+([A-Za-z_][A-Za-z0-9_]*)",
+    r"^[ \t]*(?:pub\s+)?use\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
 # Legacy ``extern crate foo;`` form.
 _EXTERN_RE = re.compile(
-    r"^\s*extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)",
+    r"^[ \t]*(?:pub\s+)?extern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
 
 
 def scan_imports(
     target: Path, *, max_depth: int = _DEFAULT_MAX_DEPTH,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{normalised_crate: [(file, line, is_test), ...]}``."""
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     for rs_file in _walk_rust_sources(target, max_depth=max_depth):
         is_test = _is_test_file(rs_file, target)
         try:
@@ -66,9 +70,9 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
 ) -> Reachability:
     """Look up ``dep_name`` in the scan; return a Reachability verdict."""
     key = _normalise(dep_name)
@@ -78,7 +82,7 @@ def resolve_dep(
             verdict="not_reachable",
             confidence=Confidence(
                 "medium",
-                reason=f"no `use {key}` / `extern crate {key}` found",
+                reason=f"no `use {dep_name}` / `extern crate {dep_name}` found",
             ),
             evidence=[],
         )
@@ -111,7 +115,7 @@ def _normalise(name: str) -> str:
     return re.sub(r"[-_]+", "-", name).lower()
 
 
-def _imports_in(text: str) -> Iterable[Tuple[str, int]]:
+def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     for m in _USE_RE.finditer(text):
         yield m.group(1), text.count("\n", 0, m.start()) + 1
     for m in _EXTERN_RE.finditer(text):
@@ -141,22 +145,5 @@ def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
     if rel_parts and rel_parts[0] in _TEST_DIR_NAMES:
         return True
-    if path.name.endswith("_test.rs"):
-        return True
-    return False
+    return bool(path.name.endswith("_test.rs"))
 
-
-def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
-    *,
-    target: Optional[Path],
-    cap: int = 5,
-) -> List[str]:
-    out: List[str] = []
-    for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
-        out.append(f"{rel}:{line}")
-    if len(hits) > cap:
-        out.append(f"... (+{len(hits) - cap} more)")
-    return out

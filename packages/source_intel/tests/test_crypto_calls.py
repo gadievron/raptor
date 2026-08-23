@@ -71,8 +71,10 @@ def test_parser_rejects_unknown_kind():
 
 
 def test_parser_rejects_unknown_api():
-    # MbedTLS is deferred — until/unless the cocci adds a `mbedtls` rule,
-    # the parser must reject it so a typo doesn't silently leak through.
+    # MbedTLS is deferred — until/unless a `mbedtls.json` API pack ships
+    # (engine/coccinelle/source_intel/crypto/packs/), the parser must
+    # reject the tag so a typo doesn't silently leak through. When that
+    # pack lands, this test flips to asserting acceptance.
     assert _parse_match_to_crypto_call(_Match(
         "crypto:primitive_call:mbedtls:mbedtls_aes_setkey_enc",
     )) == []

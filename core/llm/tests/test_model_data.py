@@ -12,11 +12,14 @@ import pytest
 from core.llm.model_data import (
     ANTHROPIC_CACHE_READ_MULTIPLIER,
     ANTHROPIC_CACHE_WRITE_MULTIPLIER,
+    ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER,
+    ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER,
     MODEL_COSTS,
     MODEL_LIMITS,
     context_window_for,
     max_output_for,
     price_for,
+    rpm_for,
 )
 
 
@@ -78,11 +81,15 @@ def test_price_for_unknown_honours_explicit_default() -> None:
 # --- Anthropic cache multipliers ---------------------------------------
 
 def test_anthropic_cache_multipliers_match_anthropic_docs() -> None:
-    """Cache writes are 1.25x input rate; cache reads are 0.1x.
-    Documented at https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+    """5-min cache writes are 1.25x input; 1-hour writes are 2x;
+    cache reads/refreshes are 0.1x.
+    Ref: platform.claude.com/docs/en/about-claude/pricing#prompt-caching
     """
-    assert ANTHROPIC_CACHE_WRITE_MULTIPLIER == 1.25
+    assert ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER == 1.25
+    assert ANTHROPIC_CACHE_WRITE_1H_MULTIPLIER == 2.0
     assert ANTHROPIC_CACHE_READ_MULTIPLIER == 0.1
+    # Backward-compat alias defaults to 5-minute tier
+    assert ANTHROPIC_CACHE_WRITE_MULTIPLIER == ANTHROPIC_CACHE_WRITE_5M_MULTIPLIER
 
 
 # --- table consistency --------------------------------------------------
@@ -172,3 +179,68 @@ def test_price_for_unknown_bedrock_model_returns_default():
     assert price_for(
         "us.anthropic.claude-opus-9-9", default=(-1.0, -1.0),
     ) == (-1.0, -1.0)
+
+
+# --- rpm_for ---------------------------------------------------------------
+
+def test_rpm_for_returns_table_value() -> None:
+    """rpm_for() returns the exact rpm from MODEL_LIMITS for every model."""
+    for model, limits in MODEL_LIMITS.items():
+        assert rpm_for(model) == limits["rpm"], (
+            f"rpm_for({model!r}) returned {rpm_for(model)}, "
+            f"expected {limits['rpm']}")
+
+
+def test_rpm_for_unknown_returns_default() -> None:
+    assert rpm_for("does-not-exist") == 0
+
+
+def test_rpm_for_honours_explicit_default() -> None:
+    assert rpm_for("does-not-exist", default=42) == 42
+
+
+def test_rpm_for_handles_bedrock_prefix() -> None:
+    anthropic = next(m for m in MODEL_LIMITS if m.startswith("claude-"))
+    bare = rpm_for(anthropic)
+    assert bare > 0
+    assert rpm_for(f"us.anthropic.{anthropic}") == bare
+    assert rpm_for(f"global.anthropic.{anthropic}") == bare
+
+
+def test_rpm_for_handles_dated_alias() -> None:
+    anthropic = next(m for m in MODEL_LIMITS if m.startswith("claude-"))
+    bare = rpm_for(anthropic)
+    assert rpm_for(f"{anthropic}-20250515") == bare
+
+
+def test_every_model_has_rpm() -> None:
+    """Every entry in MODEL_LIMITS must carry an ``rpm`` key so the
+    parallel executor can derive a safe concurrency cap."""
+    missing = [m for m, v in MODEL_LIMITS.items() if "rpm" not in v]
+    assert not missing, f"MODEL_LIMITS entries missing rpm: {missing}"
+
+
+class TestCanonicalResolvers:
+    def test_limits_resolve_bedrock_forms(self):
+        from core.llm.model_data import MODEL_LIMITS, resolve_model_limits
+        bare = next(iter(MODEL_LIMITS))
+        for form in (bare, f"anthropic.{bare}", f"us.anthropic.{bare}"):
+            got = resolve_model_limits(form)
+            assert got == MODEL_LIMITS[bare], form
+
+    def test_costs_resolve_bedrock_forms_with_multiplier(self):
+        from core.llm.model_data import (
+            MODEL_COSTS,
+            _bedrock_cost_multiplier,
+            resolve_model_costs,
+        )
+        bare = next(iter(MODEL_COSTS))
+        for form in (f"anthropic.{bare}", f"us.anthropic.{bare}"):
+            got = resolve_model_costs(form)
+            mult = _bedrock_cost_multiplier(form)
+            assert got == {k: v * mult for k, v in MODEL_COSTS[bare].items()}, form
+
+    def test_unknown_model_resolves_none(self):
+        from core.llm.model_data import resolve_model_costs, resolve_model_limits
+        assert resolve_model_limits("no-such-model-xyz") is None
+        assert resolve_model_costs("no-such-model-xyz") is None

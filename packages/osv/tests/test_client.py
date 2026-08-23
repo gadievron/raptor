@@ -13,7 +13,6 @@ from core.json import JsonCache
 from packages.osv import OsvClient
 from packages.osv.client import OSV_BASE_URL
 
-
 # --- helpers ------------------------------------------------------------
 
 class _FakeHttp:
@@ -167,19 +166,22 @@ def test_query_batch_empty_input_returns_empty() -> None:
     assert http.post_calls == []
 
 
-def test_query_batch_returns_empty_on_http_error() -> None:
-    """Soft-fail: every slot returns empty rather than raising."""
+def test_query_batch_returns_none_slots_on_http_error() -> None:
+    """Soft-fail: every slot returns the ``None`` error sentinel rather
+    than raising — and rather than an empty list, which would be
+    indistinguishable from OSV's authoritative "no advisories"."""
     http = _FakeHttp()
     http.post_responses[f"{OSV_BASE_URL}/querybatch"] = HttpError(
         "boom", status=500,
     )
     client = OsvClient(http=http)  # type: ignore[arg-type]
     queries = [{"package": {"name": "foo", "ecosystem": "npm"}, "version": "1.0"}] * 3
-    assert client.query_batch(queries) == [[], [], []]
+    assert client.query_batch(queries) == [None, None, None]
 
 
-def test_query_batch_returns_empty_on_malformed_shape() -> None:
-    """Slot count mismatch → all-empty (rather than misalignment errors)."""
+def test_query_batch_returns_none_slots_on_malformed_shape() -> None:
+    """Slot count mismatch → all error sentinels (rather than
+    misalignment errors or fake authoritative empties)."""
     http = _FakeHttp()
     http.post_responses[f"{OSV_BASE_URL}/querybatch"] = {
         "results": [{"vulns": [{"id": "X"}]}],   # 1 slot but caller sent 2 queries
@@ -189,7 +191,7 @@ def test_query_batch_returns_empty_on_malformed_shape() -> None:
         {"package": {"name": "a", "ecosystem": "npm"}, "version": "1"},
         {"package": {"name": "b", "ecosystem": "npm"}, "version": "1"},
     ]
-    assert client.query_batch(queries) == [[], []]
+    assert client.query_batch(queries) == [None, None]
 
 
 def test_query_batch_skips_non_string_ids() -> None:
@@ -208,10 +210,11 @@ def test_query_batch_skips_non_string_ids() -> None:
     assert client.query_batch(queries) == [["GHSA-aaa", "GHSA-bbb"]]
 
 
-def test_query_batch_offline_returns_empty_per_slot() -> None:
-    """Offline mode skips the network entirely; every slot returns empty."""
+def test_query_batch_offline_returns_none_per_slot() -> None:
+    """Offline mode skips the network entirely; every slot carries the
+    "lookup did not happen" sentinel, not an authoritative empty."""
     http = _FakeHttp()
     client = OsvClient(http=http, offline=True)  # type: ignore[arg-type]
     queries = [{"package": {"name": "x", "ecosystem": "npm"}, "version": "1"}] * 2
-    assert client.query_batch(queries) == [[], []]
+    assert client.query_batch(queries) == [None, None]
     assert http.post_calls == []

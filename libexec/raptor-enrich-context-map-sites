@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Enrich a context-map.json with mechanically-detected ownership/privilege sites.
 
 Usage: raptor-enrich-context-map-sites <understand_dir>
@@ -19,7 +21,8 @@ import sys
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -28,11 +31,12 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from core.json import load_json, save_json
+import core.startup.process_init  # noqa: E402,F401
+from core.json import load_json, save_json  # noqa: E402
 
 
 def main() -> int:
@@ -82,6 +86,17 @@ def main() -> int:
         )
         return 0
 
+    # checklist.json is a mutable run artefact — corroborate against
+    # the target_path sealed into .raptor-run.json at run start.
+    from core.run.metadata import corroborate_target_path
+    mismatch = corroborate_target_path(understand_dir, target_path)
+    if mismatch:
+        print(
+            f"raptor-enrich-context-map-sites: {mismatch}; refusing "
+            "recovered target", file=sys.stderr,
+        )
+        return 1
+
     try:
         from packages.code_understanding.context_map_sites import (
             enrich_context_map_with_sites,
@@ -95,9 +110,18 @@ def main() -> int:
         return 0
 
     # analyze() is skip-silent: spatch-missing / non-C / rules-missing all
-    # return an empty result rather than raising.
+    # return an empty result rather than raising. Progress goes to
+    # stderr (stdout stays reserved for the result line): one line per
+    # cocci rule as it starts plus a 30s idle heartbeat — a large C
+    # target used to sit >300s with zero output here.
     try:
-        si = analyze(Path(target_path))
+        from packages.source_intel.progress import RuleProgressPrinter
+        print(
+            f"raptor-enrich-context-map-sites: running source_intel "
+            f"(cocci) on {target_path} ...", file=sys.stderr, flush=True,
+        )
+        with RuleProgressPrinter(sys.stderr, label="cocci") as prog:
+            si = analyze(Path(target_path), progress=prog.on_rule)
     except Exception as e:  # noqa: BLE001 — never abort the run on this
         print(
             f"raptor-enrich-context-map-sites: source_intel analysis "
@@ -122,7 +146,8 @@ def main() -> int:
         suffix = f" ({reason})" if reason else ""
         print(
             "raptor-enrich-context-map-sites: no ownership/privilege sites "
-            f"detected{suffix}"
+            f"detected{suffix}",
+            file=sys.stderr,
         )
     return 0
 

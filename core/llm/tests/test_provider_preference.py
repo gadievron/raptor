@@ -12,7 +12,6 @@ contract.
 
 from __future__ import annotations
 
-
 import pytest
 
 from core.llm.config import (
@@ -20,7 +19,6 @@ from core.llm.config import (
     ModelConfig,
     _get_default_primary_model,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test fixtures — strip env so each test sees a clean slate
@@ -30,9 +28,27 @@ from core.llm.config import (
 @pytest.fixture
 def clean_env(monkeypatch):
     """Strip every LLM-related env var so each test starts from an
-    empty environment. Tests opt in to specific keys via setenv."""
+    empty environment. Tests opt in to specific keys via setenv.
+
+    Beyond the four classic provider keys, strip the Bedrock-era
+    family: ``_build_bedrock_config`` returns a config from
+    ``AWS_BEARER_TOKEN_BEDROCK`` alone (and ``bedrock`` sits in
+    ``_DEFAULT_PROVIDER_ORDER``), so an ambient bearer token on a
+    Bedrock-configured host flipped the nothing-available and
+    claudecode-fallthrough assertions. Same scrub family as the
+    dispatcher conftest (core/llm/dispatcher/tests/conftest.py),
+    plus the dispatcher-route socket and the claudecode model pin.
+    """
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-                "MISTRAL_API_KEY"):
+                "MISTRAL_API_KEY",
+                # Bedrock family (dispatcher-conftest precedent)
+                "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
+                "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",
+                "AWS_ENDPOINT_URL_BEDROCK", "CLAUDE_CODE_USE_BEDROCK",
+                # Dispatcher route + claudecode model resolution pins
+                "RAPTOR_LLM_SOCKET", "RAPTOR_CC_MODEL",
+                "RAPTOR_CC_PIN_MODEL"):
         monkeypatch.delenv(var, raising=False)
     yield monkeypatch
 
@@ -60,7 +76,7 @@ def no_ollama(monkeypatch):
     """Pretend Ollama isn't running."""
     monkeypatch.setattr(
         "core.llm.config._get_available_ollama_models",
-        lambda: [],
+        list,
     )
 
 

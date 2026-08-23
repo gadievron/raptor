@@ -18,7 +18,10 @@ from core.orchestration.agentic_passes import (
     run_understand_prepass,
     run_validate_postpass,
 )
-from core.orchestration.understand_bridge import find_understand_output, load_understand_context
+from core.orchestration.understand_bridge import (
+    find_understand_output,
+    load_understand_context,
+)
 
 # Assume interactive — these tests exercise pass mechanics, not Rule of Two.
 _interactive_patch = None
@@ -121,9 +124,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.agentic_passes.subprocess.run",
+                 patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                 patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -152,7 +155,7 @@ class PrepassIntegrationTests(unittest.TestCase):
             # from a sibling validate-style dir.
             sibling_validate = understand_dir.parent / "validate-sibling"
             sibling_validate.mkdir()
-            found, stale = find_understand_output(
+            found, _stale = find_understand_output(
                 sibling_validate, target_path=str(target),
             )
             self.assertEqual(
@@ -192,9 +195,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.agentic_passes.subprocess.run",
+                 patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                 patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -256,9 +259,9 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
             with env_patch, \
-                 patch("core.orchestration.agentic_passes.subprocess.run",
+                 patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                 patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -314,9 +317,9 @@ class PostpassIntegrationTests(unittest.TestCase):
                 claude_writes={"context-map.json": ctx_map_payload},
             )
             with env_patch, \
-                 patch("core.orchestration.agentic_passes.subprocess.run",
+                 patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp1), \
-                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                 patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp1):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -334,9 +337,9 @@ class PostpassIntegrationTests(unittest.TestCase):
                 claude_writes={"validation-report.md": "# Validation\n"},
             )
             with env_patch, \
-                 patch("core.orchestration.agentic_passes.subprocess.run",
+                 patch("core.orchestration.skill_dispatch.subprocess.run",
                        side_effect=sub_disp2), \
-                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                 patch("core.orchestration.skill_dispatch.run_untrusted_networked",
                        side_effect=sbx_disp2):
                 postpass = run_validate_postpass(
                     target=target, agentic_out_dir=agentic_out,

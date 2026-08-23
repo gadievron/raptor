@@ -6,24 +6,61 @@ produced it, when, and whether it succeeded. Tools use start_run/complete_run/fa
 
 import contextlib
 import json
+import logging
 import os
 import re
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.json import load_json, save_json
+
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:                                    # pragma: no cover
+    _HAS_FCNTL = False
 
 logger = logging.getLogger(__name__)
 
 RUN_METADATA_FILE = ".raptor-run.json"
+
+
+class RunOwnershipError(ValueError):
+    """A lifecycle finaliser declared a command that does not match the
+    run's recorded owner.
+
+    Raised when ``complete_run`` / ``fail_run`` / ``cancel_run`` /
+    ``interrupt_run`` is called with ``expected_command`` and the run
+    directory's ``.raptor-run.json`` records a DIFFERENT command. Only
+    the flow that started a run owns its terminal transition — a
+    sub-step that writes into another command's run directory (the
+    observed case: the in-session ``/understand --map`` mapping phase
+    running with ``--out`` pointed at an ``/audit``-owned dir) must not
+    finalise it. Pre-fix, that mapping step stamped the audit run
+    ``completed`` minutes in, so the later SIGTERM drain hit the
+    double-finalisation refusal and ``raptor-audit resume`` refused a
+    run that was in fact interrupted mid-flight.
+
+    PID-based enforcement is deliberately NOT used here: the offending
+    finaliser runs in the SAME session (same ``session_pid``) as the
+    legitimate one, and ``tool_pid`` is a fresh shell per stub
+    invocation even for the legitimate flow — the discriminator that
+    actually separates owner from trespasser is the command name.
+    """
+
 
 # Status enum
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
+# Interrupted: the run was stopped by an external supervisor (SIGTERM
+# grace drain, harness background-shell cap) with its artifacts intact.
+# Terminal for the double-finalisation guard, but explicitly resumable
+# via resume_run() — and deliberately NOT reaped by
+# core.run.tmp_reaper.reap_stale_runs (failed/cancelled only).
+STATUS_INTERRUPTED = "interrupted"
 
 # `_cleanup_abandoned` freshness threshold. A sibling run in
 # status=running that was created within this many seconds is treated
@@ -48,6 +85,8 @@ _PREFIX_MAP = {
     # Validation (legacy: exploitability-validation)
     "validate": "validate",
     "exploitability-validation": "validate",
+    # Dynamic instrumentation
+    "frida": "frida",
     # Other commands
     "understand": "understand",
     "code-understanding": "understand",
@@ -58,22 +97,31 @@ _PREFIX_MAP = {
 }
 
 
-def _find_claude_ancestor() -> Optional[int]:
+def _find_claude_ancestor() -> int | None:
     """Walk the process tree to find the nearest 'claude' ancestor PID.
 
     Returns the PID of the claude process, or None if not found.
     Works from any depth: Bash tool calls, hooks, Python subprocesses.
+    Uses /proc on Linux, ps(1) on macOS.
     """
+    import sys
     pid = os.getpid()
     for _ in range(20):
         try:
             pid = os.getppid() if pid == os.getpid() else _read_ppid(pid)
-        except (OSError, ValueError):
+        except (OSError, ValueError, IndexError):
             return None
         if pid <= 1:
             return None
         try:
-            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            if sys.platform == "linux":
+                comm = Path(f"/proc/{pid}/comm").read_text(
+                    encoding="utf-8"
+                ).strip()
+            else:
+                comm = _read_comm_ps(pid)
+                if comm is None:
+                    return None
         except OSError:
             return None
         if comm == "claude":
@@ -81,45 +129,60 @@ def _find_claude_ancestor() -> Optional[int]:
     return None
 
 
-def _read_ppid(pid: int) -> int:
-    """Read PPID from /proc/<pid>/stat (Linux-only).
+def _read_comm_ps(pid: int) -> str | None:
+    """Read process name via ps(1) — portable fallback for non-Linux."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "comm=", "-p", str(pid)],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        return out.strip().rsplit("/", 1)[-1]
+    except (subprocess.SubprocessError, OSError):
+        return None
 
-    Race-aware error wrapping. Pre-fix `read_text()` raised
-    `FileNotFoundError` if the target process exited between the
-    caller's check (`os.kill(pid, 0)`) and the read; the unhandled
-    exception bubbled out of the ancestor walk in `_get_session_pid`
-    and aborted whatever lifecycle code was probing the parent
-    chain. The walk is best-effort — if a PID disappears mid-walk,
-    raise `ProcessLookupError` (the same exception class
-    `os.kill(pid, 0)` raises) so callers handle "ancestor died" via
+
+def _read_ppid(pid: int) -> int:
+    """Read PPID — /proc on Linux, ps(1) elsewhere.
+
+    Race-aware error wrapping. If a PID disappears mid-walk,
+    raises ProcessLookupError so callers handle "ancestor died" via
     one well-known exception type.
     """
+    import sys
+    if sys.platform != "linux":
+        return _read_ppid_ps(pid)
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise ProcessLookupError(
-            f"_read_ppid: /proc/{pid}/stat vanished — process exited"
-        ) from exc
+        msg = f"_read_ppid: /proc/{pid}/stat vanished — process exited"
+        raise ProcessLookupError(msg) from exc
     except PermissionError:
-        # /proc is normally world-readable for `stat`, but a kernel
-        # built with hidepid=2 / a pid namespace boundary can hide
-        # the file. Treat as "unknown" via PermissionError pass-through.
         raise
     except OSError as exc:
-        # Other I/O failure (rare — /proc unmounted, ENFILE). Map
-        # to ProcessLookupError so the walker has one error class
-        # to handle for "we can't determine the parent".
-        raise ProcessLookupError(
-            f"_read_ppid: /proc/{pid}/stat unreadable: {exc}"
-        ) from exc
+        msg = f"_read_ppid: /proc/{pid}/stat unreadable: {exc}"
+        raise ProcessLookupError(msg) from exc
     # Format: pid (comm) state ppid ...
-    # comm can contain spaces/parens, so find the last ')' first
     close_paren = stat.rfind(")")
     fields = stat[close_paren + 2:].split()
-    return int(fields[1])  # ppid is field index 1 after state
+    return int(fields[1])
 
 
-def _get_session_pid() -> Optional[int]:
+def _read_ppid_ps(pid: int) -> int:
+    """Read PPID via ps(1) — portable fallback."""
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        return int(out.strip())
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        msg = f"_read_ppid_ps: ps failed for pid {pid}: {exc}"
+        raise ProcessLookupError(msg) from exc
+
+
+def _get_session_pid() -> int | None:
     """Get the PID of the Claude Code session process.
 
     Walks the ancestor tree to find the 'claude' process rather than
@@ -175,14 +238,256 @@ def _pid_alive(pid: int) -> bool:
         # Non-Linux or `/proc` not mounted — best-effort accept.
         return True
     try:
-        comm = proc_comm.read_text(errors="replace").strip().lower()
+        comm = proc_comm.read_text(encoding="utf-8", errors="replace").strip().lower()
     except OSError:
         return True
     return "claude" in comm
 
 
-def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
-              target: str = None, target_identity: Dict[str, Any] = None) -> Path:
+def _tool_pid_alive(pid: Any) -> bool:
+    """Liveness check for a run's recorded ``tool_pid`` (the worker
+    process that called ``start_run`` — a Bash-tool shell, a Python
+    orchestrator, etc.).
+
+    Unlike :func:`_pid_alive` there is NO ``comm == claude`` cross-check:
+    the tool process is deliberately NOT a claude binary. Plain
+    ``kill(pid, 0)`` accepts a residual PID-reuse risk, but the failure
+    direction is safe — a reused PID keeps a genuinely abandoned run in
+    ``running`` state until its owning session dies (the dead-session
+    branch then sweeps it), whereas a false "dead" would fail a live run.
+
+    Missing / malformed pids return False so legacy metadata (written
+    before ``tool_pid`` was recorded) falls back to the old behaviour.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive but owned by another user
+    return True
+
+
+@contextlib.contextmanager
+def _metadata_lock(meta_path: Path):
+    """Cross-process exclusive lock guarding a ``.raptor-run.json``
+    read-modify-write window.
+
+    Same idiom as ``core.coverage.store.coverage_store_lock``: flock a
+    sibling ``.lock`` file (not the JSON itself, which ``save_json``
+    atomically replaces), hold it across the whole load → mutate → save
+    window, degrade to a no-op without fcntl (non-POSIX). Without it,
+    concurrent ``_update_status`` writers (a run's own completion racing
+    a sweep's ``fail_run``, or parallel workers updating ``extra``)
+    last-writer-wins and one update is silently dropped.
+
+    The ``.lock`` file is deliberately left behind (one zero-byte
+    sibling per run dir): unlinking after unlock races — another
+    process may already hold an fd to the old inode while a third
+    creates a fresh file at the path, splitting lockers across two
+    inodes and silently breaking mutual exclusion.
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    path = Path(meta_path)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    try:
+        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        # Lock file uncreatable (read-only dir mid-teardown, ENOSPC) —
+        # proceed unserialised rather than failing the lifecycle.
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _contention_project_dir(output_dir: Path) -> Path | None:
+    """The directory run-start contention keys on, or ``None``.
+
+    Only managed project output dirs contend — standalone timestamped
+    runs under ``out/`` never did and still don't. Lazy import: the
+    check resolves through the project registry.
+    """
+    parent = Path(output_dir).parent
+    try:
+        from core.project.project import is_project_output_dir
+        if is_project_output_dir(parent):
+            return parent
+    except Exception:  # noqa: BLE001 — contention is a QoL gate, never
+        pass           # a reason a run can't start
+    return None
+
+
+def _gate_session_alive(pid: int) -> bool:
+    """Liveness probe for the run-start contention gate ONLY.
+
+    :func:`_pid_alive` treats an unsignallable pid (EPERM) as alive —
+    conservative and correct for cleanup (skip rather than sweep), but
+    a DoS primitive for the GATE: planted sibling metadata with
+    ``session_pid=1`` reads as a live session forever, refusing every
+    start (and queueing ``--wait`` indefinitely). Here EPERM falls
+    through to the ``/proc/<pid>/comm`` cross-check, which is world-
+    readable on Linux — another operator's real claude session still
+    counts as live (contention preserved cross-user), while init or a
+    root daemon does not. Without a readable comm (non-Linux), only a
+    signallable pid is accepted: unverifiable never blocks a start.
+    """
+    if pid <= 0:
+        return False
+    signallable = True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        signallable = False
+    proc_comm = Path(f"/proc/{pid}/comm")
+    try:
+        comm = proc_comm.read_text(
+            encoding="utf-8", errors="replace").strip().lower()
+    except OSError:
+        return signallable
+    return "claude" in comm
+
+
+def _live_conflicting_run(project_dir: Path, self_dir: Path,
+                          self_session_pid: int | None) -> dict | None:
+    """Find a sibling run that makes a new start contention.
+
+    A sibling contends when its metadata says ``status=running`` AND
+    its recorded ``session_pid`` is a live claude session belonging to
+    a DIFFERENT session than ours. Everything else is explicitly not
+    contention:
+
+    * dead recorded pid — a crashed run; detectable, must never block
+      forever (this is why run-in-progress lives in metadata rather
+      than a flock: the stub start/complete flow spans processes, so
+      no single process could hold a lock for the run's duration);
+    * same session — parallel runs from one session stay legal (the
+      `_cleanup_abandoned` freshness doctrine already supports them);
+    * no recorded pid (legacy metadata) — unverifiable; never block on
+      what can't be checked.
+    """
+    self_name = Path(self_dir).name
+    try:
+        children = list(Path(project_dir).iterdir())
+    except OSError:
+        return None
+    for d in children:
+        try:
+            if (not d.is_dir() or d.name.startswith((".", "_"))
+                    or d.name == self_name):
+                continue
+            meta_path = d / RUN_METADATA_FILE
+            if not meta_path.exists():
+                continue
+            meta = load_json(meta_path)
+        except OSError:
+            continue
+        if not isinstance(meta, dict) or meta.get("status") != STATUS_RUNNING:
+            continue
+        owner = meta.get("session_pid")
+        if not isinstance(owner, int) or isinstance(owner, bool):
+            continue
+        if self_session_pid is not None and owner == self_session_pid:
+            continue
+        if not _gate_session_alive(owner):
+            continue
+        # Sibling metadata is FILE CONTENT another workspace user can
+        # plant — terminal-sanitise every field that reaches the
+        # contention message (pid is already validated as an int).
+        from core.security.log_sanitisation import sanitise_for_terminal
+        return {
+            "pid": owner,
+            "operation": sanitise_for_terminal(
+                str(meta.get("command") or "run"), max_len=64),
+            "since": sanitise_for_terminal(
+                str(meta.get("timestamp") or "unknown"), max_len=64),
+            "run_dir": sanitise_for_terminal(d.name, max_len=128),
+        }
+    return None
+
+
+@contextlib.contextmanager
+def _project_run_gate(project_dir: Path, output_dir: Path, command: str,
+                      session_pid: int | None, wait: bool = False):
+    """Run-start contention gate for managed project dirs.
+
+    Holds the project op lock (``.op.lock``) across the whole
+    [contention check → metadata write] window so two simultaneous
+    starts can't both pass the check; the flock guards only that
+    read-modify-write, NOT the run itself. Run-in-progress is the run
+    metadata (``status=running`` + live ``session_pid``) — see
+    ``_live_conflicting_run`` for why.
+
+    On contention: raises ``ProjectRunContention`` IMMEDIATELY (no
+    grace — a live run holds the project for minutes-to-hours, so a
+    silent retry window would just add latency to the refusal) with
+    the holder named. ``wait=True`` queues instead: poll until the
+    live run finishes or dies.
+    """
+    import time as _time
+
+    from core.project.oplock import ProjectRunContention, project_op_lock
+
+    # Re-entrant stamp: raptor.py's lifecycle wrapper start_run()s the
+    # run dir, then the child (raptor_agentic.py) start_run()s the SAME
+    # dir to enrich metadata. The second call is not a new run start —
+    # gating it against siblings could kill a run whose parent already
+    # passed the gate.
+    with contextlib.suppress(OSError):
+        own = load_json(Path(output_dir) / RUN_METADATA_FILE)
+        if isinstance(own, dict) and own.get("status") == STATUS_RUNNING:
+            yield
+            return
+
+    waiting_printed = False
+    while True:
+        with contextlib.ExitStack() as stack:
+            # Blocking flock: op-lock holders (mutations, other starts'
+            # RMW windows) are short-lived, unlike the run itself.
+            stack.enter_context(project_op_lock(
+                project_dir, f"run-start:{command}", wait=True))
+            holder = _live_conflicting_run(project_dir, output_dir,
+                                           session_pid)
+            if holder is None:
+                yield
+                return
+            if not wait:
+                msg = (
+                    f"a run is already in progress on this project: "
+                    f"{holder['operation']} (session pid {holder['pid']}, "
+                    f"since {holder['since']}, run {holder['run_dir']}) — "
+                    f"let it finish or pass --wait to queue"
+                )
+                raise ProjectRunContention(
+                    msg,
+                    holder,
+                )
+        if not waiting_printed:
+            import sys as _sys
+            print(f"  waiting for in-progress {holder['operation']} run "
+                  f"(session pid {holder['pid']}) to finish...",
+                  file=_sys.stderr)
+            waiting_printed = True
+        _time.sleep(2.0)
+
+
+def start_run(output_dir: Path, command: str,
+              extra: dict[str, Any] | None = None,
+              target: str | None = None,
+              target_identity: dict[str, Any] | None = None,
+              wait_for_project: bool = False) -> Path:
     """Write initial .raptor-run.json with status=running.
 
     Call this at the start of a command. Returns the output_dir (for chaining).
@@ -192,9 +497,16 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
     Records the session PID so sweep can check if the session is still alive.
     Also marks any abandoned runs from the same session and command type as
     failed (handles the Esc-then-retry scenario).
+
+    In a managed project dir, a live run owned by ANOTHER session is
+    contention: raises ``core.project.oplock.ProjectRunContention``
+    immediately (``wait_for_project=True`` queues instead). Crashed
+    runs (status=running, dead recorded pid) never block.
     """
+    from core.run.safe_io import safe_run_mkdir
+
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
 
     session_pid = _get_session_pid()
 
@@ -202,58 +514,97 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
     if session_pid is not None:
         _cleanup_abandoned(output_dir.parent, command, session_pid)
 
-    # Seal the provenance manifest NOW, before any analysis runs. The
-    # source-control snapshot in particular must be taken here — the tree
-    # can change mid-run or after, and the only honest record of what
-    # produced this run is the state at its start. complete_run merges in
-    # end-of-run facts (models that fired, engine versions).
-    from core.run.provenance import build_start_manifest
+    # Sweep temp artifacts orphaned by earlier hard-killed runs — their
+    # atexit/exit-path cleanups never fire on SIGKILL/OOM/SIGTERM —
+    # aged-out per-process audit logs (opt-in via
+    # RAPTOR_LOG_REAP_MAX_AGE_D; audit data is never deleted by
+    # default), and aged-out failed/cancelled sibling run dirs
+    # (completed runs are results and are never age-reaped).
+    from core.run.tmp_reaper import (
+        reap_stale_logs,
+        reap_stale_runs,
+        reap_stale_tmp,
+    )
 
-    metadata = {
-        "version": 2,
-        "command": command,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": STATUS_RUNNING,
-        "manifest": build_start_manifest(target=target, target_identity=target_identity),
-        "extra": extra or {},
-    }
-    if session_pid is not None:
-        metadata["session_pid"] = session_pid
-        metadata["tool_pid"] = os.getppid()
-    if target:
-        metadata["target_path"] = str(target)
-    # Order: persist metadata FIRST, then mark as active.
-    #
-    # Pre-fix `set_active_run_dir(output_dir)` ran BEFORE `save_json`.
-    # If `save_json` crashed (disk full, EIO, permission flip), the
-    # "active run dir" pointer was already set to a directory with
-    # no metadata file. Subsequent sandbox-summary writes (and any
-    # other consumer that resolves "the active run") would target
-    # a directory the rest of the system can't recognise as a real
-    # run — `is_run_directory()` returns False, recovery / sweep
-    # logic doesn't see it.
-    #
-    # Persist first; mark active only on success. The original
-    # justification (sandbox calls inside `_setup_checklist_symlink`
-    # need the active dir set) still holds for those — they run
-    # AFTER the active-dir set, which now happens AFTER the
-    # metadata write, so the timing window for that case is
-    # unchanged.
-    #
-    # Lazy import to avoid circular core.sandbox load on metadata import.
-    from core.sandbox.summary import set_active_run_dir
-    save_json(output_dir / RUN_METADATA_FILE, metadata)
+    reap_stale_tmp()
+    reap_stale_logs()
+    reap_stale_runs(output_dir.parent)
+
+    with contextlib.ExitStack() as _gate:
+        # Contention gate BEFORE the run dir is created, so a refused
+        # start leaves nothing behind (the raptor.py wrapper pre-creates
+        # the dir on its own path and rmdir()s it on refusal).
+        project_dir = _contention_project_dir(output_dir)
+        if project_dir is not None:
+            _gate.enter_context(_project_run_gate(
+                project_dir, output_dir, command, session_pid,
+                wait=wait_for_project))
+        safe_run_mkdir(output_dir)
+
+        # Seal the provenance manifest NOW, before any analysis runs. The
+        # source-control snapshot in particular must be taken here — the tree
+        # can change mid-run or after, and the only honest record of what
+        # produced this run is the state at its start. complete_run merges in
+        # end-of-run facts (models that fired, engine versions).
+        from core.run.provenance import build_start_manifest
+
+        metadata = {
+            "version": 2,
+            "command": command,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": STATUS_RUNNING,
+            "manifest": build_start_manifest(target=target, target_identity=target_identity),
+            "extra": extra or {},
+        }
+        if session_pid is not None:
+            metadata["session_pid"] = session_pid
+            metadata["tool_pid"] = os.getppid()
+        if target:
+            metadata["target_path"] = str(target)
+        # Order: persist metadata FIRST, then mark as active.
+        #
+        # Pre-fix `set_active_run_dir(output_dir)` ran BEFORE `save_json`.
+        # If `save_json` crashed (disk full, EIO, permission flip), the
+        # "active run dir" pointer was already set to a directory with
+        # no metadata file. Subsequent sandbox-summary writes (and any
+        # other consumer that resolves "the active run") would target
+        # a directory the rest of the system can't recognise as a real
+        # run — `is_run_directory()` returns False, recovery / sweep
+        # logic doesn't see it.
+        #
+        # Persist first; mark active only on success. The original
+        # justification (sandbox calls inside `_setup_checklist_symlink`
+        # need the active dir set) still holds for those — they run
+        # AFTER the active-dir set, which now happens AFTER the
+        # metadata write, so the timing window for that case is
+        # unchanged.
+        #
+        # Lazy import to avoid circular core.sandbox load on metadata import.
+        from core.sandbox.summary import set_active_run_dir
+        save_json(output_dir / RUN_METADATA_FILE, metadata)
     set_active_run_dir(output_dir)
     _setup_checklist_symlink(output_dir)
     return output_dir
 
 
 def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> None:
-    """Mark abandoned runs from the same session and command type as failed.
+    """Mark abandoned sibling runs as failed.
 
-    An abandoned run is one that has status=running, same session_pid (same
-    Claude Code session), and same command type. This happens when the user
-    presses Esc and retries the same command.
+    Two abandonment shapes, both status=running and past the freshness
+    gate:
+
+    - Same session_pid AND same command type AND the run's recorded
+      worker (``tool_pid``) is dead — the Esc-then-retry case (user
+      cancelled and reissued the same command in one session). The
+      worker-liveness gate keeps long-lived parallel runs of the same
+      command in the same session from being false-failed.
+    - Owning session DEAD — the recorded session_pid no longer maps to
+      a live claude process (session SIGKILL'd, machine rebooted, or
+      PID recycled by something else). No live owner means no lifecycle
+      hook will ever finalize the run: without this branch such runs
+      sat in status=running forever, regardless of command type. The
+      current session's own runs are excluded (its in-flight runs of
+      OTHER command types are healthy).
 
     Recent siblings (created within ``_ABANDON_FRESHNESS_S`` seconds)
     are LEFT ALONE even on the (session_pid, command) match. Pre-fix
@@ -289,14 +640,38 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         except OSError:
             # Per-child stat may fail even after iterdir succeeded.
             continue
-        if not meta:
+        if not isinstance(meta, dict) or not meta:
+            # Corrupt or non-object metadata (torn write, hostile or
+            # malformed run dir): not sweepable — never crash the sweep.
             continue
-        if (meta.get("status") == STATUS_RUNNING
-                and meta.get("command") == command
-                and meta.get("session_pid") == session_pid):
+        if meta.get("status") != STATUS_RUNNING:
+            continue
+        run_session = meta.get("session_pid")
+        # Same-session retry additionally requires the run's own worker
+        # (``tool_pid``, recorded at start_run) to be DEAD. The freshness
+        # gate alone is not enough: a legitimate parallel run of the same
+        # command in the same session that has been going for more than
+        # _ABANDON_FRESHNESS_S seconds would otherwise be failed here,
+        # and the terminal-status guard in _update_status would then
+        # refuse its real completion — misfiling a live run's results.
+        # An Esc-cancelled run's tool process IS dead, so the case this
+        # branch exists for still cleans up. Runs predating tool_pid
+        # recording have no pid and keep the old (freshness-only) gate.
+        same_session_retry = (
+            meta.get("command") == command
+            and run_session == session_pid
+            and not _tool_pid_alive(meta.get("tool_pid"))
+        )
+        session_dead = (
+            isinstance(run_session, int)
+            and run_session != session_pid
+            and not _pid_alive(run_session)
+        )
+        if same_session_retry or session_dead:
             # Freshness gate — skip recent siblings (probable
-            # concurrent in-flight run of the same command type from
-            # the same session, NOT an Esc-then-retry).
+            # concurrent in-flight run, NOT an abandon; for the
+            # dead-session branch it also absorbs the window where
+            # a just-spawned run's owning session is still booting).
             ts_str = meta.get("timestamp")
             if isinstance(ts_str, str):
                 try:
@@ -310,8 +685,12 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
                     # Malformed timestamp — fall through to fail_run
                     # (the run is questionable either way).
                     pass
-            fail_run(d, "abandoned — replaced by new run in same session",
-                     record_timing=False)
+            reason = (
+                "abandoned — replaced by new run in same session"
+                if same_session_retry
+                else "abandoned — owning session terminated"
+            )
+            fail_run(d, reason, record_timing=False)
 
 
 def _setup_checklist_symlink(run_dir: Path) -> None:
@@ -332,9 +711,10 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
         if name:
             from core.json import load_json as _load
             data = _load(PROJECTS_DIR / f"{name}.json")
-            if data:
-                candidate = Path(data.get("output_dir", ""))
-                if candidate.is_dir():
+            if isinstance(data, dict):
+                candidate_str = data.get("output_dir") or ""
+                candidate = Path(candidate_str) if candidate_str else None
+                if candidate and candidate.is_dir():
                     project_dir = candidate
     except (FileNotFoundError, ImportError, json.JSONDecodeError, KeyError, PermissionError) as exc:
         # Narrowed from bare Exception. Pre-fix a corrupt project
@@ -477,11 +857,14 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
     the lifecycle. The active-run state is always cleared in finally.
     """
     # Lazy import to keep core.sandbox out of metadata import time.
-    from core.sandbox.summary import (
-        summarize_and_write, set_active_run_dir, get_active_run_dir,
-        SUMMARY_FILE,
-    )
     import logging
+
+    from core.sandbox.summary import (
+        SUMMARY_FILE,
+        get_active_run_dir,
+        set_active_run_dir,
+        summarize_and_write,
+    )
     log = logging.getLogger(__name__)
     try:
         result = summarize_and_write(output_dir)
@@ -494,7 +877,7 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
                 result.get("total_denials", 0),
                 output_dir / SUMMARY_FILE,
             )
-    except Exception:  # noqa: BLE001 — never fail lifecycle on summary error
+    except Exception:
         # Debug-only log so a developer can find swallowed exceptions
         # when investigating "why is my summary missing?". INFO would be
         # too noisy if the failure is recurrent.
@@ -523,18 +906,99 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             set_active_run_dir(None)
 
 
-# Sandbox summary is finalized BEFORE the status update in every terminal-
-# state transition. If the process crashes between the two:
-#  - finalize-then-status-update path: status stays "running", summary on
-#    disk. A later cleanup-of-stale-runs marks the status appropriately;
-#    summary is already there. No data lost.
-#  - status-update-then-finalize path (the alternative): status flips to
-#    "completed" but no summary; reader assumes "no denials" because no
-#    file. Misleading.
-# Finalizing first preserves the data; status update is just the signal.
+def _finalize_sandbox_triage(output_dir: Path) -> str | None:
+    """Best-effort: classify this run's sandbox telemetry
+    (sandbox-summary.json / proxy-events.jsonl) into a clean / notable /
+    suspicious verdict and write sandbox-triage.json. Returns the
+    verdict string (or None: no telemetry / triage failed) so the
+    terminal-state transitions can surface it in .raptor-run.json.
 
-def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
-                 manifest: Dict[str, Any] = None) -> None:
+    Must run AFTER _finalize_sandbox_summary — triage reads
+    sandbox-summary.json, which that call just wrote. Rules-based, no LLM
+    call, no network: cheap enough to run unconditionally on every
+    terminal-state transition rather than requiring an operator to invoke
+    ``raptor-sandbox-triage`` by hand. See core/sandbox/triage.py's module
+    docstring for the signal taxonomy and known limitations.
+
+    Broad except, mirrors _finalize_sandbox_summary: lifecycle hooks must
+    never raise out of complete_run / fail_run / cancel_run on account of
+    a triage failure.
+    """
+    from core.sandbox.triage import triage_run, TRIAGE_FILE
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        # Current lifecycle runs fail closed on provenance: the run dir is
+        # target-writable until this point, so unstamped artefacts must not
+        # be allowed to drive a verdict. Manual/post-hoc triage keeps legacy
+        # support for genuinely old runs.
+        result = triage_run(output_dir, allow_legacy=False)
+        # Discoverability: only log when there's something to see — a
+        # clean run (the common case) shouldn't add chatter. Mirrors the
+        # "if result is not None" gate in _finalize_sandbox_summary.
+        if result is not None and result["verdict"] != "clean":
+            log.warning(
+                "sandbox triage: verdict=%s (%d signal(s)) → %s",
+                result["verdict"], len(result["signals"]),
+                output_dir / TRIAGE_FILE,
+            )
+        return None if result is None else result["verdict"]
+    except Exception:  # noqa: BLE001 — never fail lifecycle on triage error
+        log.debug(
+            "_finalize_sandbox_triage: triage_run failed",
+            exc_info=True,
+        )
+        return None
+
+
+# Sandbox summary + triage are finalized BEFORE the status update in every
+# terminal-state transition. If the process crashes between them:
+#  - finalize-then-status-update path: status stays "running", summary/triage
+#    on disk. A later cleanup-of-stale-runs marks the status appropriately;
+#    the artifacts are already there. No data lost.
+#  - status-update-then-finalize path (the alternative): status flips to
+#    "completed" but no summary/triage; reader assumes "no denials" because
+#    no file. Misleading.
+# Finalizing first preserves the data; status update is just the signal.
+# Triage runs strictly after summary within each finalize call — it reads
+# sandbox-summary.json, which the summary finalize step just wrote.
+
+def ensure_run_command(output_dir: Path,
+                       expected_command: str | None) -> None:
+    """Refuse a terminal transition on a run another command owns.
+
+    ``expected_command`` is the command the FINALISER believes it is
+    finishing. ``None`` (caller made no claim) checks nothing — the
+    legacy surface stays valid. When a claim is made and the run's
+    recorded ``command`` differs, raises :class:`RunOwnershipError`
+    BEFORE any finalisation side effect (sandbox summary/triage
+    flush, journal merge, status flip) touches the foreign run.
+
+    Missing or malformed metadata is not an ownership violation —
+    those cases keep their existing handling in ``_update_status``
+    (FileNotFoundError / ValueError there).
+    """
+    if expected_command is None:
+        return
+    metadata = load_json(Path(output_dir) / RUN_METADATA_FILE)
+    if not isinstance(metadata, dict):
+        return
+    owner = metadata.get("command")
+    if owner and owner != expected_command:
+        msg = (
+            f"run {output_dir} is owned by command {owner!r} — refusing "
+            f"the terminal transition claimed by {expected_command!r}. "
+            f"Only the flow that started a run may finalise it; a "
+            f"sub-step writing into another command's run directory "
+            f"(e.g. /understand --map with --out pointed at an /audit "
+            f"dir) must leave the owner's lifecycle alone."
+        )
+        raise RunOwnershipError(msg)
+
+
+def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
+                 manifest: dict[str, Any] | None = None,
+                 expected_command: str | None = None) -> None:
     """Update .raptor-run.json to status=completed.
 
     ``manifest`` merges end-of-run provenance into the manifest sealed at
@@ -546,9 +1010,29 @@ def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
     the command) — is filled automatically for EVERY completion path, so a
     caller only needs to pass the facts unique to it (the models that fired).
     Callers still win on conflict: an explicitly-passed key is never clobbered.
+
+    ``expected_command`` (optional) asserts ownership: see
+    :func:`ensure_run_command`. Checked before the sandbox summary /
+    triage finalisers so a refused completion leaves no side effects
+    in the foreign run directory.
     """
+    ensure_run_command(output_dir, expected_command)
     _finalize_sandbox_summary(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        # Surface the verdict in .raptor-run.json so cross-run views
+        # (/project status, /review) can flag non-clean runs without
+        # opening every sandbox-triage.json. Callers win on conflict,
+        # matching the extra-merge contract above.
+        extra = dict(extra or {})
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
+    # Merge this run's review journal into the project-level index BEFORE
+    # the coverage snapshot — ``import_journal`` reads the index, not
+    # per-run journal files. Living here (the completion chokepoint)
+    # covers every ``complete_run`` caller, including the Python
+    # pipelines that never go through the libexec lifecycle shim.
+    _merge_run_journal(output_dir)
     # Materialise the LLM read-coverage record from the plugin's .reads-manifest
     # FIRST, so the snapshot below imports it alongside the scanner records.
     _convert_reads_manifest(output_dir)
@@ -576,9 +1060,95 @@ def _stamp_findings_provenance(output_dir: Path) -> None:
     try:
         from core.run.findings import stamp_findings_in_run
         stamp_findings_in_run(Path(output_dir))
-    except Exception:  # noqa: BLE001 — never fail lifecycle on a stamping error
+    except Exception:
         logging.getLogger(__name__).debug(
             "_stamp_findings_provenance failed for %s", output_dir, exc_info=True
+        )
+
+
+def _journal_project_dir(out_dir: Path) -> Path | None:
+    """Project-level directory a run's journal should merge into.
+
+    ``.active`` is a symlink to the project's ``<name>.json`` FILE
+    (``ProjectManager.set_active``), so the project directory is the
+    JSON's ``output_dir`` field. Only returns the active project's dir
+    when *out_dir* actually lives under it — a standalone run
+    completed while some project is active must not pollute that
+    project's index. Falls back to the run's parent when it carries
+    the project store markers (matches ``_snapshot_run_coverage``'s
+    ``proj = run_dir.parent``, which is where the coverage snapshot
+    reads the index back from).
+    """
+    try:
+        out_res = Path(out_dir).resolve()
+    except OSError:
+        return None
+    try:
+        from core.startup import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if name:
+            data = load_json(PROJECTS_DIR / f"{name}.json")
+            if isinstance(data, dict) and data.get("output_dir"):
+                candidate = Path(data["output_dir"])
+                if candidate.is_dir():
+                    proj_res = candidate.resolve()
+                    if proj_res in out_res.parents:
+                        return proj_res
+    except Exception:  # noqa: BLE001 — fall through to the marker probe
+        pass
+    parent = out_res.parent
+    if (parent / "checklist.json").exists() or (
+        parent / "coverage.json"
+    ).exists():
+        return parent
+    return None
+
+
+def project_run_projections(output_dir: Path) -> None:
+    """Re-run the project-facing completion projections for one run.
+
+    The journal-index merge, reads-manifest conversion, and coverage
+    snapshot normally fire exactly once, at ``complete_run`` — a run
+    ADOPTED into a project after the fact (retro-created project,
+    ``raptor project add``/``adopt``) already had its completion and
+    missed them, so its verdicts stay invisible to cross-run reuse,
+    ``/review``, and ``/project coverage``. Same best-effort semantics
+    as the completion chokepoint: each step no-ops or logs at debug,
+    never raises. Idempotent — the index merge is latest-ts keyed and
+    the coverage import is interval-union.
+    """
+    _merge_run_journal(output_dir)
+    _convert_reads_manifest(output_dir)
+    _snapshot_run_coverage(output_dir)
+
+
+def _merge_run_journal(output_dir: Path) -> None:
+    """Best-effort: merge this run's review journals (run root + one-
+    level tool subdirs, see ``merge_run_into_index``) into the
+    project-level index so sibling runs, resume, and the coverage-
+    store import see its verdicts.
+
+    Lives at the completion chokepoint so EVERY ``complete_run`` /
+    ``interrupt_run`` caller gets it — including the Python pipelines
+    that never go through the libexec lifecycle shim. No-op for a
+    standalone run (no project dir resolves — see
+    :func:`_journal_project_dir`). Never raises — lifecycle hooks
+    must not fail on a merge error.
+    """
+    try:
+        run_dir = Path(output_dir)
+        proj = _journal_project_dir(run_dir)
+        if proj is None:
+            return
+        from core.coverage.journal import merge_run_into_index
+        merged = merge_run_into_index(proj, run_dir)
+        if merged:
+            logger.info(
+                "journal: %d entries merged into project index", merged,
+            )
+    except Exception:
+        logger.debug(
+            "_merge_run_journal failed for %s", output_dir, exc_info=True
         )
 
 
@@ -601,7 +1171,7 @@ def _convert_reads_manifest(output_dir: Path) -> None:
         record = build_from_manifest(Path(output_dir), "read")
         if record:
             write_record(Path(output_dir), record, tool_name="read")
-    except Exception:  # noqa: BLE001 — never fail lifecycle on a coverage write
+    except Exception:
         logging.getLogger(__name__).debug(
             "_convert_reads_manifest failed for %s", output_dir, exc_info=True
         )
@@ -628,11 +1198,14 @@ def _snapshot_run_coverage(output_dir: Path) -> None:
         checklist_path = proj / "checklist.json"
         if not checklist_path.exists():
             return                       # standalone run — no durable project store
-        from core.json import load_json
-        from core.coverage.store import CoverageStore, coverage_store_lock
         from core.coverage.importer import (
-            _inventory_paths, import_run_dir, import_run_findings,
+            _inventory_paths,
+            import_journal,
+            import_run_dir,
+            import_run_findings,
         )
+        from core.coverage.store import CoverageStore, coverage_store_lock
+        from core.json import load_json
 
         checklist = load_json(checklist_path)
         if not checklist:
@@ -643,30 +1216,266 @@ def _snapshot_run_coverage(output_dir: Path) -> None:
             store.set_content_id(checklist)
             import_run_dir(store, run_dir, checklist)
             import_run_findings(store, run_dir, _inventory_paths(checklist))
+            # Import LLM review existence from the project-level
+            # journal index. Replaces the pre-migration
+            # ``import_checked_by(store, checklist)`` path — the
+            # journal is now authoritative for LLM review state and
+            # the coverage store projects it into (file, line, tool)
+            # intervals so ``store.who_checked_function`` keeps
+            # returning ``audit`` / ``agentic`` labels unchanged.
+            import_journal(store, proj, checklist)
             store.save()
-    except Exception:  # noqa: BLE001 — never fail lifecycle on a snapshot error
+            _append_coverage_progress(proj, run_dir, store, checklist)
+    except Exception:
         log.debug("_snapshot_run_coverage failed for %s", output_dir, exc_info=True)
 
 
-def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,
-             record_timing: bool = True) -> None:
-    """Update .raptor-run.json to status=failed."""
+def _append_coverage_progress(proj: Path, run_dir: Path, store,
+                              checklist: dict[str, Any]) -> None:
+    """Append one line to the project's ``coverage-progress.jsonl``.
+
+    The accumulation promise ("each run reviews only remaining gaps")
+    was never measured — no artifact recorded whether the reviewed
+    count actually moves run over run. One JSON line per completed
+    run, computed from the just-saved store, gives the cross-run
+    trend for free. Called under ``coverage_store_lock``, so the
+    append cannot interleave with a parallel completion. Best-effort.
+    """
+    import logging
+    try:
+        from core.coverage.store_summary import store_view
+        view = store_view(store, checklist)
+        row = {
+            "run": run_dir.name,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "items": view.get("total_functions", 0),
+            "examined": view.get("functions_covered", 0),
+            "llm_reviewable": view.get("llm_reviewable", 0),
+            "llm_reviewed": view.get("functions_reviewed", 0),
+        }
+        with Path(proj / "coverage-progress.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "coverage progress append failed for %s", run_dir, exc_info=True,
+        )
+
+
+def fail_run(output_dir: Path, error: str | None = None,
+             extra: dict[str, Any] | None = None,
+             record_timing: bool = True,
+             expected_command: str | None = None) -> None:
+    """Update .raptor-run.json to status=failed.
+
+    ``expected_command`` (optional) asserts ownership — see
+    :func:`ensure_run_command`. Sweep/cleanup callers that legitimately
+    fail runs they did not start (dead-session abandons, lifecycle
+    hooks) simply make no claim.
+    """
+    ensure_run_command(output_dir, expected_command)
     extra = extra or {}
     if error:
         extra["error"] = error
     _finalize_sandbox_summary(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
+    # The LLM's reads happened regardless of how the run ended — convert
+    # the manifest so the read coverage survives. Pre-fix only
+    # complete_run converted, so every failed/cancelled/interrupted
+    # run's reads were silently lost (the raw manifest lingers but no
+    # importer reads raw manifests). The manifest is left in place, and
+    # a later resume→complete re-converts it with any new reads —
+    # write_record overwrites, so this is idempotent, never additive.
+    _convert_reads_manifest(output_dir)
 
 
-def cancel_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
-    """Update .raptor-run.json to status=cancelled."""
+def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None,
+               expected_command: str | None = None) -> None:
+    """Update .raptor-run.json to status=cancelled.
+
+    ``expected_command`` (optional) asserts ownership — see
+    :func:`ensure_run_command`.
+    """
+    ensure_run_command(output_dir, expected_command)
     _finalize_sandbox_summary(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra = dict(extra or {})
+        extra.setdefault("sandbox_triage", _triage_verdict)
     _update_status(output_dir, STATUS_CANCELLED, extra)
+    _convert_reads_manifest(output_dir)  # see fail_run
+
+
+def interrupt_run(output_dir: Path, reason: str | None = None,
+                  extra: dict[str, Any] | None = None,
+                  expected_command: str | None = None) -> None:
+    """Update .raptor-run.json to status=interrupted.
+
+    For runs stopped by an external supervisor (SIGTERM drain, harness
+    shell cap) whose artifacts are intact and which a later
+    :func:`resume_run` may re-enter. Unlike ``fail_run`` the run is
+    not an error: journal/ledger state on disk is coherent up to the
+    interruption point.
+
+    ``expected_command`` (optional) asserts ownership — see
+    :func:`ensure_run_command`.
+    """
+    ensure_run_command(output_dir, expected_command)
+    extra = dict(extra or {})
+    if reason:
+        extra["interrupt_reason"] = reason
+    _finalize_sandbox_summary(output_dir)
+    _triage_verdict = _finalize_sandbox_triage(output_dir)
+    if _triage_verdict is not None:
+        extra.setdefault("sandbox_triage", _triage_verdict)
+    _update_status(output_dir, STATUS_INTERRUPTED, extra)
+    _convert_reads_manifest(output_dir)  # see fail_run
+    # An interrupted run's journal verdicts are real reviews — merge them
+    # into the project index so sibling runs (and the eventual resume)
+    # see them.
+    _merge_run_journal(output_dir)
+
+
+#: Statuses :func:`resume_run` accepts as re-enterable. ``completed``
+#: is deliberately absent — a completed run's results are final; new
+#: work belongs in a new run (cross-run verdict reuse imports the
+#: prior verdicts there at $0).
+RESUMABLE_STATUSES = frozenset({
+    STATUS_INTERRUPTED, STATUS_FAILED, STATUS_CANCELLED, STATUS_RUNNING,
+})
+
+
+def resume_run(output_dir: Path, note: str | None = None) -> int:
+    """Re-enter an interrupted/failed run AS THE SAME RUN.
+
+    Flips status back to ``running`` (the one sanctioned
+    terminal→running transition — ``_update_status`` refuses it for
+    everyone else), records a segment row in ``extra.resumes`` and
+    refreshes ``session_pid``/``tool_pid`` so the abandon sweeps track
+    the resuming session, not the dead one.
+
+    A ``running`` status is also accepted — a SIGKILLed run never got
+    a terminal transition and sits in ``running`` until a sweep finds
+    it; resuming it is exactly the recovery this function exists for.
+
+    Returns the new segment number (2 for the first resume).
+    Raises FileNotFoundError when there is no run metadata, and
+    ValueError when the status is not resumable (notably
+    ``completed``).
+    """
+    path = Path(output_dir) / RUN_METADATA_FILE
+    with _metadata_lock(path):
+        metadata = load_json(path)
+        if metadata is None:
+            msg = f"No {RUN_METADATA_FILE} in {output_dir} — not a run directory"
+            raise FileNotFoundError(msg)
+        if not isinstance(metadata, dict):
+            # ValueError (not TypeError): malformed on-disk data — the
+            # same convention _update_status uses for this exact case.
+            msg = (
+                f"Malformed {RUN_METADATA_FILE} in {output_dir} — "
+                "expected JSON object"
+            )
+            raise ValueError(msg)  # noqa: TRY004
+        current = metadata.get("status")
+        if current not in RESUMABLE_STATUSES:
+            msg = (
+                f"run status {current!r} is not resumable "
+                f"(resumable: {', '.join(sorted(RESUMABLE_STATUSES))})"
+            )
+            raise ValueError(msg)
+        extra = metadata.get("extra") or {}
+        resumes = extra.get("resumes")
+        if not isinstance(resumes, list):
+            resumes = []
+        segment = len(resumes) + 2
+        row: dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "prior_status": current,
+            "segment": segment,
+        }
+        if note:
+            row["note"] = note
+        resumes.append(row)
+        extra["resumes"] = resumes
+        metadata["extra"] = extra
+        metadata["status"] = STATUS_RUNNING
+        # The prior segment's end_timestamp/duration describe segment 1
+        # only; drop them so the eventual terminal transition records
+        # the full multi-segment envelope from the original start.
+        metadata.pop("end_timestamp", None)
+        metadata.pop("duration_seconds", None)
+        session_pid = _get_session_pid()
+        if session_pid is not None:
+            metadata["session_pid"] = session_pid
+            metadata["tool_pid"] = os.getppid()
+        save_json(path, metadata)
+    # Re-mark as the active run so sandbox summaries and coverage
+    # tracking attach to the resumed segment.
+    from core.sandbox.summary import set_active_run_dir
+    set_active_run_dir(Path(output_dir))
+    return segment
+
+
+def reopen_run(output_dir: Path, note: str | None = None) -> None:
+    """Flip a spuriously ``completed`` run back to ``interrupted``.
+
+    The one sanctioned completed→interrupted transition, for
+    contradiction recovery: a step that did not own the run stamped it
+    completed (e.g. a mapping-phase ``raptor-run-lifecycle complete``
+    on an /audit dir), leaving the real workflow's completion refused
+    by the terminal-status guard and resume refusing the "completed"
+    run. Callers (``raptor-audit resume --reopen``) are responsible
+    for verifying the contradiction — this helper only requires that
+    the current status IS ``completed`` and records the reopen with a
+    timestamped note so the status history stays auditable.
+
+    Raises FileNotFoundError when there is no metadata file and
+    ValueError when the current status is not ``completed``.
+    """
+    path = Path(output_dir) / RUN_METADATA_FILE
+    with _metadata_lock(path):
+        metadata = load_json(path)
+        if metadata is None:
+            msg = f"No {RUN_METADATA_FILE} in {output_dir}"
+            raise FileNotFoundError(msg)
+        if not isinstance(metadata, dict):
+            msg = (
+                f"Malformed {RUN_METADATA_FILE} in {output_dir} — "
+                "expected JSON object"
+            )
+            raise ValueError(msg)  # noqa: TRY004 — malformed on-disk data
+        current = metadata.get("status")
+        if current != STATUS_COMPLETED:
+            msg = f"reopen_run: expected status 'completed', got {current!r}"
+            raise ValueError(msg)
+        extra = metadata.get("extra") or {}
+        reopens = extra.get("reopens")
+        if not isinstance(reopens, list):
+            reopens = []
+        row: dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "prior_status": current,
+        }
+        if note:
+            row["note"] = note
+        reopens.append(row)
+        extra["reopens"] = reopens
+        metadata["extra"] = extra
+        metadata["status"] = STATUS_INTERRUPTED
+        save_json(path, metadata)
+    logger.warning(
+        "reopen_run: %s flipped completed → interrupted (%s)",
+        output_dir, note or "no note",
+    )
 
 
 @contextlib.contextmanager
-def tracked_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
-                target: str = None):
+def tracked_run(output_dir: Path, command: str,
+                extra: dict[str, Any] | None = None,
+                target: str | None = None):
     """Context manager for run lifecycle. Writes metadata automatically.
 
     Usage:
@@ -693,9 +1502,43 @@ def tracked_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
         raise
 
 
-def load_run_metadata(run_dir: Path) -> Optional[Dict[str, Any]]:
+def load_run_metadata(run_dir: Path) -> dict[str, Any] | None:
     """Load .raptor-run.json from a run directory. Returns None if missing."""
     return load_json(run_dir / RUN_METADATA_FILE)
+
+
+def corroborate_target_path(run_dir: Path, candidate) -> str | None:
+    """Check a recovered target path against the run's sealed metadata.
+
+    Tools that lose the operator-supplied ``--target`` recover it from
+    run artefacts (e.g. checklist.json's ``target_path``) — but those
+    artefacts are written into the run dir by analysis stages and can
+    drift or be tampered with. The ``target_path`` sealed into
+    ``.raptor-run.json`` at :func:`start_run` is the authoritative
+    record of what this run was pointed at.
+
+    Returns ``None`` when the candidate is consistent with the sealed
+    path, or when there is nothing to corroborate against (no metadata
+    file, no ``target_path`` field — older runs). Returns a
+    human-readable mismatch description otherwise; callers should
+    refuse the recovered path and tell the operator to pass the target
+    explicitly.
+    """
+    if not candidate:
+        return None
+    meta = load_run_metadata(Path(run_dir))
+    sealed = (meta or {}).get("target_path")
+    if not sealed or not isinstance(sealed, str):
+        return None
+    try:
+        if Path(sealed).resolve() == Path(candidate).resolve():
+            return None
+    except OSError:
+        return None
+    return (
+        f"recovered target path {candidate!s} does not match the "
+        f"target_path sealed in {RUN_METADATA_FILE} ({sealed})"
+    )
 
 
 def is_run_directory(path: Path, *, strict: bool = True) -> bool:
@@ -735,10 +1578,7 @@ def is_run_directory(path: Path, *, strict: bool = True) -> bool:
 
     typical_files = {"findings.json", "checklist.json", "scan_metrics.json",
                      "orchestrated_report.json", "validation-report.md"}
-    if any((path / f).exists() for f in typical_files):
-        return True
-
-    return False
+    return any((path / f).exists() for f in typical_files)
 
 
 def infer_command_type(run_dir: Path) -> str:
@@ -797,12 +1637,15 @@ def generate_run_metadata(run_dir: Path) -> None:
     save_json(run_dir / RUN_METADATA_FILE, metadata)
 
 
-_TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED})
+_TERMINAL_STATUSES = frozenset({
+    STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED, STATUS_INTERRUPTED,
+})
 
 
-def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
+def _update_status(output_dir: Path, status: str,
+                   extra: dict[str, Any] | None = None,
                    record_timing: bool = True,
-                   manifest: Dict[str, Any] = None) -> None:
+                   manifest: dict[str, Any] | None = None) -> None:
     """Update the status field in .raptor-run.json.
 
     When record_timing is True (default), also records end_timestamp and
@@ -823,52 +1666,63 @@ def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
     rather than hidden.
 
     Raises FileNotFoundError if metadata file doesn't exist (call start_run first).
+
+    The whole read-modify-write runs under :func:`_metadata_lock` so
+    concurrent writers (parallel workers, a sweep racing a completion)
+    serialise instead of last-writer-wins dropping each other's updates.
     """
     path = Path(output_dir) / RUN_METADATA_FILE
-    metadata = load_json(path)
-    if metadata is None:
-        raise FileNotFoundError(f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first")
-    current = metadata.get("status")
-    if current in _TERMINAL_STATUSES and current != status:
-        logger.warning(
-            "Refusing to overwrite terminal status %r → %r in %s "
-            "(probable double-finalisation; investigate caller)",
-            current, status, output_dir,
-        )
-        return
-    metadata["status"] = status
+    with _metadata_lock(path):
+        metadata = load_json(path)
+        if metadata is None:
+            msg = f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first"
+            raise FileNotFoundError(msg)
+        if not isinstance(metadata, dict):
+            # ValueError (not TypeError): malformed on-disk data, and the
+            # exception type callers already handle.
+            msg = f"Malformed {RUN_METADATA_FILE} in {output_dir} — expected JSON object"
+            raise ValueError(msg)  # noqa: TRY004
+        current = metadata.get("status")
+        if current in _TERMINAL_STATUSES and current != status:
+            logger.warning(
+                "Refusing to overwrite terminal status %r → %r in %s "
+                "(probable double-finalisation; investigate caller)",
+                current, status, output_dir,
+            )
+            return
+        metadata["status"] = status
 
-    if record_timing:
-        now = datetime.now(timezone.utc)
-        metadata["end_timestamp"] = now.isoformat()
-        start_ts = metadata.get("timestamp")
-        if start_ts:
-            try:
-                start_dt = datetime.fromisoformat(start_ts)
-                metadata["duration_seconds"] = round((now - start_dt).total_seconds(), 1)
-            except (ValueError, TypeError):
-                pass
+        if record_timing:
+            now = datetime.now(timezone.utc)
+            metadata["end_timestamp"] = now.isoformat()
+            start_ts = metadata.get("timestamp")
+            if start_ts:
+                try:
+                    start_dt = datetime.fromisoformat(start_ts)
+                    metadata["duration_seconds"] = round((now - start_dt).total_seconds(), 1)
+                except (ValueError, TypeError):
+                    pass
 
-    if extra:
-        existing_extra = metadata.get("extra", {})
-        existing_extra.update(extra)
-        metadata["extra"] = existing_extra
+        if extra:
+            existing_extra = metadata.get("extra") or {}
+            existing_extra.update(extra)
+            metadata["extra"] = existing_extra
 
-    if manifest:
-        # Merge caller-supplied end-of-run provenance into the start-sealed
-        # manifest. Shallow top-level merge: source_control / environment
-        # (sealed at start) stay put; models land here.
-        existing_manifest = metadata.get("manifest", {})
-        existing_manifest.update(manifest)
-        metadata["manifest"] = existing_manifest
+        if manifest:
+            # Merge caller-supplied end-of-run provenance into the start-sealed
+            # manifest. Shallow top-level merge: source_control / environment
+            # (sealed at start) stay put; models land here.
+            existing_manifest = metadata.get("manifest") or {}
+            existing_manifest.update(manifest)
+            metadata["manifest"] = existing_manifest
 
-    if status == STATUS_COMPLETED:
-        _apply_standard_provenance(metadata, Path(output_dir))
+        if status == STATUS_COMPLETED:
+            _apply_standard_provenance(metadata, Path(output_dir))
 
-    save_json(path, metadata)
+        save_json(path, metadata)
 
 
-def _apply_standard_provenance(metadata: Dict[str, Any], output_dir: Path) -> None:
+def _apply_standard_provenance(metadata: dict[str, Any], output_dir: Path) -> None:
     """Fill the manifest with the standard end-of-run provenance the lifecycle
     derives itself — engine versions + ``deterministically_reproducible`` — so
     EVERY completion path enriches uniformly without per-command wiring.
@@ -888,7 +1742,7 @@ def _apply_standard_provenance(metadata: Dict[str, Any], output_dir: Path) -> No
         existing.setdefault(key, value)
 
 
-def parse_timestamp_from_name(name: str) -> Optional[str]:
+def parse_timestamp_from_name(name: str) -> str | None:
     """Try to extract an ISO timestamp from a directory name.
 
     Matches patterns like:

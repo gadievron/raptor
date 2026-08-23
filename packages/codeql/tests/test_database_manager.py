@@ -5,11 +5,11 @@ import stat
 import subprocess as sp
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from packages.codeql.build_detector import BuildSystem
+from core.build.build_detector import BuildSystem
 from packages.codeql.database_manager import DatabaseManager
 
 
@@ -80,7 +80,7 @@ def _run_create(db_manager, tmp_path, command, language="javascript"):
         return r
 
     db_path = tmp_path / "db"
-    with patch('subprocess.run', side_effect=fake_run), \
+    with patch('core.sandbox.run', side_effect=fake_run), \
          patch.object(db_manager, '_count_database_files', return_value=0), \
          patch.object(db_manager, 'save_metadata'), \
          patch.object(db_manager, 'get_cached_database', return_value=None), \
@@ -143,13 +143,14 @@ class TestBuildScript:
             return r
 
         db_path = tmp_path / "db"
-        with patch('subprocess.run', side_effect=fake_run), \
+        with patch('core.sandbox.run', side_effect=fake_run), \
              patch.object(db_manager, '_count_database_files', return_value=0), \
              patch.object(db_manager, 'save_metadata'), \
              patch.object(db_manager, 'get_cached_database', return_value=None), \
              patch.object(db_manager, 'compute_repo_hash', return_value='abc'), \
              patch.object(db_manager, 'get_database_dir', return_value=db_path):
-            db_manager.create_database(tmp_path, "javascript", bs)
+            db_manager.create_database(tmp_path, "javascript", bs,
+                                       traced_build=True)
 
         assert not list(tmp_path.glob(".raptor_codeql_build_*"))
 
@@ -158,11 +159,12 @@ class TestBuildScript:
                          env_vars={}, confidence=1.0, detected_files=[])
 
         db_path = tmp_path / "db"
-        with patch('subprocess.run', side_effect=sp.TimeoutExpired("cmd", 60)), \
+        with patch('core.sandbox.run', side_effect=sp.TimeoutExpired("cmd", 60)), \
              patch.object(db_manager, 'get_cached_database', return_value=None), \
              patch.object(db_manager, 'compute_repo_hash', return_value='abc'), \
              patch.object(db_manager, 'get_database_dir', return_value=db_path):
-            db_manager.create_database(tmp_path, "javascript", bs)
+            db_manager.create_database(tmp_path, "javascript", bs,
+                                       traced_build=True)
 
         assert not list(tmp_path.glob(".raptor_codeql_build_*"))
 
@@ -180,7 +182,7 @@ class TestBuildScript:
             return r
 
         db_path = tmp_path / "db"
-        with patch('subprocess.run', side_effect=fake_run), \
+        with patch('core.sandbox.run', side_effect=fake_run), \
              patch.object(db_manager, '_count_database_files', return_value=0), \
              patch.object(db_manager, 'save_metadata'), \
              patch.object(db_manager, 'get_cached_database', return_value=None), \
@@ -195,6 +197,43 @@ class TestBuildScript:
 # ---------------------------------------------------------------------------
 # Concurrent-write safety: build-in-staging + atomic-promote
 # ---------------------------------------------------------------------------
+
+
+class TestBuildEnvFilter:
+    """A build system that declares env_vars reaches the blocklist
+    filter — the branch every empty-env fixture skips. Pre-fix the
+    frozenset + list concat raised TypeError there, crashing every
+    traced ``database create`` whose build system carried env_vars
+    (maven/gradle/ant/npm/go all do)."""
+
+    def test_env_vars_declared_does_not_crash_create(self, db_manager,
+                                                     tmp_path):
+        def fake_run(cmd, **kwargs):
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0\n"
+            r.stderr = "Finalizing database.\n"
+            return r
+
+        bs = BuildSystem(type="npm", command="npm run build",
+                         working_dir=tmp_path,
+                         env_vars={"LD_PRELOAD": "/tmp/evil.so",
+                                   "NODE_OPTIONS": "--max-old-space-size=1"},
+                         confidence=1.0, detected_files=[])
+        with patch('core.sandbox.run', side_effect=fake_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=0), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'get_cached_database',
+                          return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=tmp_path / "db"):
+            result = db_manager.create_database(tmp_path, "javascript", bs,
+                                                traced_build=True)
+        assert result is not None
+        assert not any("TypeError" in e for e in (result.errors or []))
 
 
 class TestStagingPromote:
@@ -409,7 +448,12 @@ class TestStagingPromote:
 
         assert result.success is False
         assert not canonical.exists(), "failed build must not promote"
-        assert not list(canonical.parent.glob(".staging-*")), "staging cleanup"
+        # Failure preserves ONE inspectable dir under a GC-reaped
+        # name; live (per-pid) staging dirs must all be gone.
+        leftovers = list(canonical.parent.glob(".staging-*"))
+        assert leftovers == [canonical.parent / ".staging-failed-python"], (
+            f"staging cleanup: {leftovers}"
+        )
 
 
 class TestStaleMarkerGC:
@@ -550,3 +594,186 @@ class TestEvictStaleCanonicalGracePeriod:
             "orphaned canonical past grace period should be evicted"
         assert len(list(canonical.parent.glob("*.stale.*"))) == 1, \
             "exactly one stale marker should be created from eviction"
+
+
+class TestAutoCleanupWiring:
+    """CODEQL_DB_AUTO_CLEANUP was dead config: nothing ever invoked
+    cleanup_old_databases outside the manual --cleanup CLI flag, so the
+    default db_root accumulated stale databases the read side (7-day
+    staleness gate in get_cached_database) would never serve again."""
+
+    @pytest.fixture
+    def _fresh_flag(self):
+        """Reset the once-per-process guard around each test."""
+        old = DatabaseManager._auto_cleanup_done
+        DatabaseManager._auto_cleanup_done = False
+        yield
+        DatabaseManager._auto_cleanup_done = old
+
+    def _mgr(self, tmp_path, monkeypatch, *, auto, db_root=None):
+        from core.config import RaptorConfig
+        monkeypatch.setattr(RaptorConfig, "CODEQL_DB_DIR", tmp_path / "dbs")
+        monkeypatch.setattr(RaptorConfig, "CODEQL_DB_AUTO_CLEANUP", auto)
+        monkeypatch.setattr(RaptorConfig, "CODEQL_DB_CACHE_DAYS", 7)
+        with patch.object(DatabaseManager, "_detect_codeql_cli",
+                          return_value="/usr/bin/codeql"), \
+             patch.object(DatabaseManager, "cleanup_old_databases",
+                          return_value=[]) as cleanup:
+            DatabaseManager(db_root=db_root)
+        return cleanup
+
+    def test_default_root_triggers_cleanup(self, tmp_path, monkeypatch,
+                                           _fresh_flag):
+        cleanup = self._mgr(tmp_path, monkeypatch, auto=True)
+        cleanup.assert_called_once_with(days=7)
+
+    def test_flag_off_skips_cleanup(self, tmp_path, monkeypatch,
+                                    _fresh_flag):
+        cleanup = self._mgr(tmp_path, monkeypatch, auto=False)
+        cleanup.assert_not_called()
+
+    def test_custom_db_root_skips_cleanup(self, tmp_path, monkeypatch,
+                                          _fresh_flag):
+        custom = tmp_path / "custom"
+        cleanup = self._mgr(tmp_path, monkeypatch, auto=True, db_root=custom)
+        cleanup.assert_not_called()
+
+    def test_runs_once_per_process(self, tmp_path, monkeypatch, _fresh_flag):
+        first = self._mgr(tmp_path, monkeypatch, auto=True)
+        second = self._mgr(tmp_path, monkeypatch, auto=True)
+        first.assert_called_once()
+        second.assert_not_called()
+
+    def test_cleanup_failure_does_not_break_init(self, tmp_path, monkeypatch,
+                                                 _fresh_flag):
+        from core.config import RaptorConfig
+        monkeypatch.setattr(RaptorConfig, "CODEQL_DB_DIR", tmp_path / "dbs")
+        monkeypatch.setattr(RaptorConfig, "CODEQL_DB_AUTO_CLEANUP", True)
+        with patch.object(DatabaseManager, "_detect_codeql_cli",
+                          return_value="/usr/bin/codeql"), \
+             patch.object(DatabaseManager, "cleanup_old_databases",
+                          side_effect=OSError("disk went away")):
+            mgr = DatabaseManager()
+        assert mgr.codeql_cli == "/usr/bin/codeql"
+
+
+class TestDetectCodeqlCli:
+    """CODEQL_CLI env validation in ``_detect_codeql_cli``."""
+
+    def _detect(self, db_manager, monkeypatch, env_value, which=None):
+        if env_value is None:
+            monkeypatch.delenv("CODEQL_CLI", raising=False)
+        else:
+            monkeypatch.setenv("CODEQL_CLI", env_value)
+        with patch("packages.codeql.database_manager.shutil.which",
+                   return_value=which):
+            return db_manager._detect_codeql_cli()
+
+    def test_executable_file_accepted(self, db_manager, tmp_path, monkeypatch):
+        cli = tmp_path / "codeql"
+        cli.write_text("#!/bin/sh\n")
+        cli.chmod(0o755)
+        assert self._detect(db_manager, monkeypatch, str(cli)) == str(cli)
+
+    def test_directory_rejected_with_warning(
+        self, db_manager, tmp_path, monkeypatch, caplog,
+    ):
+        """A directory carries the x bit, so the pre-fix X_OK-only
+        check accepted CODEQL_CLI=/some/dir and later exploded at
+        subprocess.run."""
+        import logging
+        with caplog.at_level(logging.WARNING):
+            got = self._detect(db_manager, monkeypatch, str(tmp_path),
+                               which="/opt/codeql/codeql")
+        assert got == "/opt/codeql/codeql"
+        assert any("CODEQL_CLI" in r.getMessage()
+                   and "not an executable file" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_non_executable_file_rejected_with_warning(
+        self, db_manager, tmp_path, monkeypatch, caplog,
+    ):
+        import logging
+        plain = tmp_path / "notes.txt"
+        plain.write_text("not a binary")
+        plain.chmod(0o644)
+        with caplog.at_level(logging.WARNING):
+            got = self._detect(db_manager, monkeypatch, str(plain), which=None)
+        assert got is None
+        assert any("CODEQL_CLI" in r.getMessage() for r in caplog.records)
+
+    def test_unset_env_uses_path_lookup_silently(
+        self, db_manager, monkeypatch, caplog,
+    ):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            got = self._detect(db_manager, monkeypatch, None,
+                               which="/usr/local/bin/codeql")
+        assert got == "/usr/local/bin/codeql"
+        assert not [r for r in caplog.records
+                    if "CODEQL_CLI" in r.getMessage()]
+
+
+class TestRepoHashDirtyTree:
+    """compute_repo_hash must invalidate on uncommitted edits — HEAD
+    alone kept serving the stale database for the whole cache TTL."""
+
+    @staticmethod
+    def _git(repo, *args):
+        sp.run(
+            ["git", "-c", "user.email=t@example.invalid",
+             "-c", "user.name=t", *args],
+            cwd=repo, check=True, capture_output=True,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null",
+                 "GIT_CONFIG_SYSTEM": "/dev/null"},
+        )
+
+    def _git_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "a.py").write_text("x = 1\n")
+        self._git(repo, "init", "-q")
+        self._git(repo, "add", ".")
+        self._git(repo, "commit", "-q", "-m", "init")
+        return repo
+
+    def test_clean_tree_hash_is_stable(self, db_manager, tmp_path):
+        repo = self._git_repo(tmp_path)
+        h1 = db_manager.compute_repo_hash(repo)
+        h2 = db_manager.compute_repo_hash(repo)
+        assert h1 == h2
+
+    def test_uncommitted_edit_changes_hash(self, db_manager, tmp_path):
+        repo = self._git_repo(tmp_path)
+        clean = db_manager.compute_repo_hash(repo)
+        (repo / "a.py").write_text("x = 2\n")
+        dirty = db_manager.compute_repo_hash(repo)
+        assert clean != dirty
+
+    def test_edit_to_already_dirty_file_changes_hash(
+        self, db_manager, tmp_path,
+    ):
+        repo = self._git_repo(tmp_path)
+        (repo / "a.py").write_text("x = 2\n")
+        first = db_manager.compute_repo_hash(repo)
+        time.sleep(0.02)  # ensure mtime_ns moves
+        (repo / "a.py").write_text("x = 3\n")
+        second = db_manager.compute_repo_hash(repo)
+        assert first != second
+
+    def test_untracked_file_changes_hash(self, db_manager, tmp_path):
+        repo = self._git_repo(tmp_path)
+        clean = db_manager.compute_repo_hash(repo)
+        (repo / "new.py").write_text("y = 1\n")
+        assert db_manager.compute_repo_hash(repo) != clean
+
+    def test_non_git_fallback_detects_size_preserving_edit(
+        self, db_manager, tmp_path,
+    ):
+        repo = tmp_path / "plain"
+        repo.mkdir()
+        (repo / "a.py").write_text("x = 1\n")
+        h1 = db_manager.compute_repo_hash(repo)
+        (repo / "a.py").write_text("x = 2\n")  # same size, new content
+        h2 = db_manager.compute_repo_hash(repo)
+        assert h1 != h2

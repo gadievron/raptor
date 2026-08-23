@@ -22,7 +22,9 @@ pytestmark = _pytest.mark.skipif(
     reason="Linux-only sandbox internals — the probe is gated on Linux paths",
 )
 
-from core.sandbox import probes
+# pytestmark must be declared before Linux-only imports so pytest
+# can collect + skip cleanly on non-Linux hosts.
+from core.sandbox import probes  # noqa: E402
 
 
 def _no_apparmor_sysctl(*a, **kw):
@@ -52,7 +54,8 @@ class TestMountUnavailableReason:
         operator-guidance names the uidmap package."""
         from pathlib import Path
         monkeypatch.setattr(Path, "read_text", _no_apparmor_sysctl)
-        monkeypatch.setattr(probes.shutil, "which", lambda _: None)
+        monkeypatch.setattr(probes, "_find_sandbox_binary",
+                            lambda _: None)
         condition, fix = probes.mount_unavailable_reason()
         assert "uidmap" in condition.lower()
         assert ("apt install uidmap" in fix
@@ -72,7 +75,7 @@ class TestMountUnavailableReason:
             raise FileNotFoundError
 
         monkeypatch.setattr(Path, "read_text", _read_text)
-        monkeypatch.setattr(probes.shutil, "which",
+        monkeypatch.setattr(probes, "_find_sandbox_binary",
                             lambda b: f"/usr/bin/{b}")
         condition, fix = probes.mount_unavailable_reason()
         assert "selinux" in condition.lower()
@@ -89,7 +92,7 @@ class TestMountUnavailableReason:
         as plausible causes."""
         from pathlib import Path
         monkeypatch.setattr(Path, "read_text", _no_apparmor_sysctl)
-        monkeypatch.setattr(probes.shutil, "which",
+        monkeypatch.setattr(probes, "_find_sandbox_binary",
                             lambda b: f"/usr/bin/{b}")
         condition, fix = probes.mount_unavailable_reason()
         text = (condition + " " + fix).lower()
@@ -160,7 +163,7 @@ class TestLandlockOnlyWarningRouting:
             raise FileNotFoundError
 
         monkeypatch.setattr(Path, "read_text", _read_text)
-        monkeypatch.setattr(probes.shutil, "which",
+        monkeypatch.setattr(probes, "_find_sandbox_binary",
                             lambda b: f"/usr/bin/{b}")
         condition, _ = probes.mount_unavailable_reason()
         warning = (

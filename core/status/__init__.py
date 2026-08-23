@@ -21,7 +21,6 @@ transform so producers of new status values aren't blocked on a
 table update.
 """
 
-from typing import Optional
 
 
 # Alias map: any legacy/mixed-case variant → canonical snake_case.
@@ -60,7 +59,7 @@ _STATUS_ALIASES = {
 }
 
 
-def normalize_status(value: Optional[str]) -> Optional[str]:
+def normalize_status(value: str | None) -> str | None:
     """Normalize any status/verdict string to canonical snake_case.
 
     Handles ALL_CAPS, Title Case, and snake_case inputs.
@@ -83,7 +82,7 @@ def normalize_status(value: Optional[str]) -> Optional[str]:
 
 def normalize_findings(data: dict) -> None:
     """Normalize all status/verdict fields in a findings dict in-place."""
-    for finding in data.get("findings", []):
+    for finding in data.get("findings") or []:
         if not isinstance(finding, dict):
             continue
         if finding.get("status"):
@@ -103,4 +102,4 @@ def normalize_findings(data: dict) -> None:
                 feasibility["status"] = normalize_status(feasibility["status"])
 
 
-__all__ = ["normalize_status", "normalize_findings"]
+__all__ = ["normalize_findings", "normalize_status"]

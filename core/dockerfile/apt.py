@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 from .parser import Instruction
 
@@ -66,15 +65,15 @@ class AptPackage:
     """
 
     name: str
-    version: Optional[str]
-    arch: Optional[str]
-    stage: Optional[str]
+    version: str | None
+    arch: str | None
+    stage: str | None
     line: int
 
 
 def extract_apt_packages(
-    instructions: List[Instruction],
-) -> List[AptPackage]:
+    instructions: list[Instruction],
+) -> list[AptPackage]:
     """Walk a parsed Dockerfile's instructions, return apt packages.
 
     Returns the deduplicated list of packages declared across every
@@ -83,7 +82,7 @@ def extract_apt_packages(
 
     Empty when no RUN instructions install via apt.
     """
-    out: List[AptPackage] = []
+    out: list[AptPackage] = []
     for inst in instructions:
         if inst.directive != "RUN":
             continue
@@ -91,12 +90,12 @@ def extract_apt_packages(
     return out
 
 
-def _extract_from_run(inst: Instruction) -> List[AptPackage]:
+def _extract_from_run(inst: Instruction) -> list[AptPackage]:
     if inst.args.lstrip().startswith("<<"):
         # Heredoc body — out of scope.
         return []
     flat = _flatten_run(inst.raw)
-    out: List[AptPackage] = []
+    out: list[AptPackage] = []
     for tokens in _split_commands(flat):
         out.extend(_packages_from_command(tokens, inst.line, inst.stage_name))
     return out
@@ -119,7 +118,7 @@ def _flatten_run(raw: str) -> str:
         # Drop the leading ``RUN`` directive on the first line.
         head = physical[0].split(None, 1)
         physical[0] = head[1] if len(head) > 1 else ""
-    chunks: List[str] = []
+    chunks: list[str] = []
     for ln in physical:
         s = ln.strip()
         if not s:
@@ -138,7 +137,7 @@ def _flatten_run(raw: str) -> str:
     return " ".join(chunks)
 
 
-def _inline_comment_start(s: str) -> Optional[int]:
+def _inline_comment_start(s: str) -> int | None:
     """Return the index where an inline shell comment starts in ``s``.
 
     Shell semantics: ``#`` starts a comment only at the beginning of
@@ -155,7 +154,7 @@ def _inline_comment_start(s: str) -> Optional[int]:
     return None
 
 
-def _split_commands(args: str) -> List[List[str]]:
+def _split_commands(args: str) -> list[list[str]]:
     """Split a shell command line into per-command token lists.
 
     Tokenisation goes through ``shlex.split`` (POSIX mode) so quoted
@@ -184,8 +183,8 @@ def _split_commands(args: str) -> List[List[str]]:
         tokens = shlex.split(padded, comments=False, posix=True)
     except ValueError:
         tokens = padded.split()
-    out: List[List[str]] = []
-    current: List[str] = []
+    out: list[list[str]] = []
+    current: list[str] = []
     for tok in tokens:
         if tok in ("&&", "||", ";", "|"):
             if current:
@@ -199,10 +198,10 @@ def _split_commands(args: str) -> List[List[str]]:
 
 
 def _packages_from_command(
-    tokens: List[str],
+    tokens: list[str],
     line: int,
-    stage: Optional[str],
-) -> List[AptPackage]:
+    stage: str | None,
+) -> list[AptPackage]:
     """For one shell command's token list, extract apt-installed
     packages. Returns empty unless the command is
     ``[(sudo|env=val) ...] (apt-get|apt) [flags] install [flags] pkg ...``.
@@ -244,7 +243,7 @@ def _packages_from_command(
     if i >= len(tokens) or tokens[i] != "install":
         return []
     i += 1
-    out: List[AptPackage] = []
+    out: list[AptPackage] = []
     while i < len(tokens):
         tok = tokens[i]
         i += 1
@@ -272,11 +271,11 @@ _SHELL_C_FLAGS = frozenset({"-c", "-lc", "-Lc", "-cl"})
 
 
 def _recurse_shell_c(
-    tokens: List[str],
+    tokens: list[str],
     start: int,
     line: int,
-    stage: Optional[str],
-) -> List[AptPackage]:
+    stage: str | None,
+) -> list[AptPackage]:
     """For a ``bash``/``sh`` invocation starting at ``start``, find
     ``-c <body>`` and recursively extract from the body string.
 
@@ -291,7 +290,7 @@ def _recurse_shell_c(
             if j >= len(tokens):
                 return []
             body = tokens[j]
-            out: List[AptPackage] = []
+            out: list[AptPackage] = []
             for sub in _split_commands(body):
                 out.extend(_packages_from_command(sub, line, stage))
             return out
@@ -337,7 +336,7 @@ def _is_env_prefix(tok: str) -> bool:
     leading tokens, never inside the install argument list, so the
     syntactic ambiguity is resolved by position.
     """
-    if "=" not in tok or tok.startswith("-") or tok.startswith("="):
+    if "=" not in tok or tok.startswith(("-", "=")):
         return False
     name = tok.split("=", 1)[0]
     if not name or name[0].isdigit():
@@ -348,7 +347,7 @@ def _is_env_prefix(tok: str) -> bool:
 
 def _parse_pkg(
     token: str,
-) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+) -> tuple[str, str | None, str | None] | None:
     """Parse ``pkg``, ``pkg=ver``, ``pkg:arch``, or ``pkg:arch=ver``.
 
     Returns ``(name, version | None, arch | None)`` or ``None`` for
@@ -357,13 +356,13 @@ def _parse_pkg(
     or shell-substitution / quote-fragment tokens (``$(...``, ```...``,
     ``"..."``).
     """
-    if not token or token.startswith("=") or token.startswith(":"):
+    if not token or token.startswith(("=", ":")):
         return None
     # File paths to local .deb files: real apt syntax, but the file
     # name is the install target — not a package name an OSV
     # advisory would match against. Skip; consumers can scan the
     # file separately if they care.
-    if token.startswith("/") or token.startswith("./") or token.startswith("../"):
+    if token.startswith(("/", "./", "../")):
         return None
     # Shell command substitution / variable expansion produces
     # token fragments that aren't packages (``$(cat`` or ``)`` from
@@ -379,8 +378,8 @@ def _parse_pkg(
     # ``_split_commands`` — by the time we see the token here it
     # is already unquoted.
     name = token
-    version: Optional[str] = None
-    arch: Optional[str] = None
+    version: str | None = None
+    arch: str | None = None
     if "=" in name:
         name, version = name.split("=", 1)
         if not version:
@@ -404,9 +403,7 @@ def _is_clean_var_substitution(token: str) -> bool:
     if "`" in token or "$(" in token:
         return False
     # Count braces. ``${A}`` is fine; ``${A`` or ``A}`` is not.
-    if token.count("{") != token.count("}"):
-        return False
-    return True
+    return token.count("{") == token.count("}")
 
 
 __all__ = [

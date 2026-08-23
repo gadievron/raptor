@@ -3,13 +3,16 @@ Verification Service - Verify evidence against original sources.
 """
 from __future__ import annotations
 
-from typing import Callable, Sequence
 
 from ..clients.gharchive import GHArchiveClient
 from ..clients.github import GitHubClient
 from ..schema.common import EvidenceSource, VerificationResult
 from ..schema.events import Event
 from ..schema.observations import Observation
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 
 class ConsistencyVerifier:
@@ -19,7 +22,7 @@ class ConsistencyVerifier:
         self,
         github_client: GitHubClient | None = None,
         gharchive_client: GHArchiveClient | None = None,
-    ):
+    ) -> None:
         self.github_client = github_client or GitHubClient()
         self.gharchive_client = gharchive_client or GHArchiveClient()
 
@@ -27,10 +30,9 @@ class ConsistencyVerifier:
         """Verify evidence against its source."""
         if isinstance(evidence, Event):
             return self._verify_event(evidence)
-        elif isinstance(evidence, Observation):
+        if isinstance(evidence, Observation):
             return self._verify_observation(evidence)
-        else:
-            return VerificationResult(is_valid=False, errors=["Unknown evidence type"])
+        return VerificationResult(is_valid=False, errors=["Unknown evidence type"])
 
     def verify_all(self, evidence_list: Sequence[Event | Observation]) -> VerificationResult:
         """Verify a list of evidence items. Aggregates all errors."""
@@ -66,7 +68,7 @@ class ConsistencyVerifier:
             EvidenceSource.GHARCHIVE: self._verify_gharchive_observation,
             EvidenceSource.WAYBACK: self._verify_url_accessible,
             EvidenceSource.SECURITY_VENDOR: self._verify_security_vendor,
-            EvidenceSource.GIT: lambda o: VerificationResult(is_valid=True, errors=["Local git verification not supported"]),
+            EvidenceSource.GIT: lambda _o: VerificationResult(is_valid=True, errors=["Local git verification not supported"]),
         }
 
         verifier = verifiers.get(source)
@@ -98,7 +100,24 @@ class ConsistencyVerifier:
             return verifier(observation)
         except Exception as e:
             if getattr(observation, "is_deleted", False):
-                return VerificationResult(is_valid=True, errors=[])  # Expected - item is marked as deleted
+                # Fail CLOSED. ``is_deleted`` is a freely settable schema
+                # field, so "the fetch failed and the record says it's
+                # deleted" must never self-verify — a fabricated deleted
+                # issue attributed to a repo that 404s would otherwise
+                # pass verification with attacker-chosen title/body.
+                # Genuinely recovered deleted content comes from the
+                # GH Archive collector with source=GHARCHIVE and a
+                # bigquery_table, and is verified independently by
+                # _verify_gharchive_observation.
+                return VerificationResult(
+                    is_valid=False,
+                    errors=[
+                        "unverifiable: source fetch failed for deleted-marked "
+                        f"observation ({e}); deletion claims must be verified "
+                        "via GH Archive recovery (source=gharchive with a "
+                        "bigquery_table), not by fetch failure"
+                    ],
+                )
             return VerificationResult(is_valid=False, errors=[f"Verification failed: {e}"])
 
     def _get_repo_info(self, obs: Observation) -> tuple[str, str] | None:
@@ -328,4 +347,14 @@ class ConsistencyVerifier:
         if not self._has_gharchive_credentials():
             return VerificationResult(is_valid=True, errors=["GH Archive verification skipped - no credentials"])
 
-        return VerificationResult(is_valid=True, errors=[])
+        try:
+            rows = self.gharchive_client.query_events(
+                repo=obs.repository.full_name if obs.repository else None,
+                actor=obs.original_who.login if obs.original_who else None,
+                from_date=obs.observed_when.strftime("%Y%m%d%H%M") if obs.observed_when else None,
+            )
+            if not rows:
+                return VerificationResult(is_valid=False, errors=["No matching observation found in GH Archive"])
+            return VerificationResult(is_valid=True, errors=[])
+        except Exception as e:
+            return VerificationResult(is_valid=False, errors=[f"GH Archive observation verification error: {e}"])

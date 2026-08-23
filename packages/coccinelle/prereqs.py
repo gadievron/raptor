@@ -17,19 +17,18 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from .runner import is_available as spatch_available
 from .runner import run_rules as spatch_run_rules
 
-
 # Re-exported for callers that want to skip prereqs on pure-Python /
 # pure-JS targets without re-implementing the heuristic. Same set as
 # the /scan cocci leg's ``_repo_has_c_cpp_source``.
-_C_CPP_EXTS: Tuple[str, ...] = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")
+_C_CPP_EXTS: tuple[str, ...] = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")
 
 
-def _shipped_prereqs_rules_dir() -> Optional[Path]:
+def _shipped_prereqs_rules_dir() -> Path | None:
     """Resolve the in-tree shipped prereqs rules dir, or None if
     missing (minimal install / packaging strip)."""
     here = Path(__file__).resolve()
@@ -66,9 +65,9 @@ class PrereqFacts:
     cocci only sees the syntactic form.
     """
 
-    defs: Dict[str, Set[Tuple[str, int]]] = field(default_factory=dict)
-    calls: Dict[str, Set[Tuple[str, int]]] = field(default_factory=dict)
-    skipped_reason: Optional[str] = None
+    defs: dict[str, set[tuple[str, int]]] = field(default_factory=dict)
+    calls: dict[str, set[tuple[str, int]]] = field(default_factory=dict)
+    skipped_reason: str | None = None
 
     @property
     def is_skipped(self) -> bool:
@@ -80,13 +79,13 @@ class PrereqFacts:
     def function_has_callers(self, name: str) -> bool:
         return name in self.calls and len(self.calls[name]) > 0
 
-    def callers_of(self, name: str) -> List[Tuple[str, int]]:
+    def callers_of(self, name: str) -> list[tuple[str, int]]:
         return sorted(self.calls.get(name, set()))
 
 
 def gather_prereqs(
     target: Path,
-    rules_dir: Optional[Path] = None,
+    rules_dir: Path | None = None,
     timeout_per_rule: int = 300,
 ) -> PrereqFacts:
     """Run shipped prereq rules against ``target`` and build facts.
@@ -102,7 +101,7 @@ def gather_prereqs(
     if not _has_c_cpp_source(target):
         return PrereqFacts(skipped_reason="no_c_cpp_source")
 
-    effective_rules_dir = rules_dir if rules_dir else _shipped_prereqs_rules_dir()
+    effective_rules_dir = rules_dir or _shipped_prereqs_rules_dir()
     if effective_rules_dir is None:
         return PrereqFacts(skipped_reason="rules_dir_missing")
 
@@ -111,6 +110,9 @@ def gather_prereqs(
         rules_dir=effective_rules_dir,
         timeout_per_rule=timeout_per_rule,
         no_includes=True,  # operator targets are untrusted
+        # In-repo shipped prereqs rules (code trust) — their
+        # @script:python reporting blocks are trusted.
+        allow_scripting=True,
     )
 
     facts = PrereqFacts()
@@ -130,17 +132,18 @@ def gather_prereqs(
 
 
 def evaluate_finding(
-    finding: Dict[str, Any],
+    finding: dict[str, Any],
     facts: PrereqFacts,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Per-finding mechanical evaluation against the prereq facts.
 
     Returns a dict suitable for ``finding["cocci_prereqs"]``.
 
     Output shape:
       {
-        "applicable": bool,    # False when prereqs were skipped
-                               # OR finding's file isn't C/C++.
+        "applicable": bool,    # False when prereqs were skipped,
+                               # the finding carries no function
+                               # name, OR its file isn't C/C++.
         "checks": {
           "function_exists": bool | null,
           "function_has_callers": bool | null,
@@ -156,7 +159,7 @@ def evaluate_finding(
     in attack-tree disposition. Status of the finding is NEVER
     overwritten here — these are facts, not verdicts.
     """
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "applicable": False,
         "checks": {
             "function_exists": None,

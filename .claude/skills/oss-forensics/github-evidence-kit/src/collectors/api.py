@@ -33,7 +33,7 @@ from ..helpers import (
 class GitHubAPICollector:
     """Collects evidence from GitHub API."""
 
-    def __init__(self, client: GitHubClient | None = None):
+    def __init__(self, client: GitHubClient | None = None) -> None:
         self.client = client or GitHubClient()
 
     def collect_commit(self, owner: str, repo: str, sha: str) -> CommitObservation:
@@ -111,7 +111,7 @@ class GitHubAPICollector:
         return IssueObservation(
             evidence_id=generate_evidence_id("issue", f"{owner}/{repo}", str(number)),
             original_when=parse_datetime_strict(data.get("created_at")),
-            original_who=make_actor(data.get("user", {}).get("login", "unknown")),
+            original_who=make_actor((data.get("user") or {}).get("login", "unknown")),
             original_what=f"{'PR' if is_pr else 'Issue'} #{number} created",
             observed_when=now,
             observed_by=EvidenceSource.GITHUB,

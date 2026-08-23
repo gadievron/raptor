@@ -4,9 +4,14 @@ Spawned by the sandbox parent when audit mode is engaged. Attaches via
 PTRACE_SEIZE to the sandboxed child, listens for SECCOMP_RET_TRACE
 events (set up by core/sandbox/seccomp.py's audit_mode filter), reads
 the offending syscall via PTRACE_GETREGSET, and writes a structured
-JSONL denial record directly to the run's
-`<run_dir>/.sandbox-denials.jsonl` file (POSIX O_APPEND atomicity —
-same trick `core.sandbox.summary.record_denial` uses).
+JSONL denial record to the run's evidence directory —
+`<run_dir>/.audit/.sandbox-denials.jsonl` (POSIX O_APPEND atomicity —
+same trick `core.sandbox.summary.record_denial` uses). When the spawn
+parent passed an inherited evidence fd (``evidence_fd`` in the audit
+config), every append goes through that held fd instead of a per-
+record open — the fd shares the parent's open file description, so a
+rename/unlink of the path cannot redirect the tracer's appends (see
+core/sandbox/evidence.py).
 
 Why a separate process rather than a thread inside RAPTOR:
 - ptrace + multi-threaded parents fight for signal delivery: SIGCHLD
@@ -68,6 +73,26 @@ anti-anti-debug story is a separate engineering effort (PID-ns
 isolation, syscall timing normalization, /proc lying, etc.) — not
 a tweak to this tracer.
 
+**Audit-record fidelity is best-effort (argument-read TOCTOU,
+accepted residual).** At a SECCOMP_RET_TRACE stop this tracer reads
+pathname / open_how / sockaddr buffers from the tracee's memory to
+build the record and to decide KEEP vs suppress, then resumes the
+stopped thread; the kernel re-reads those buffers when it executes
+the syscall. A sibling thread in the tracee can rewrite the buffer
+in that window, so an audit RECORD can misdescribe — or the
+allowlist filter can drop the record for — what actually executed.
+ENFORCEMENT is unaffected: every deny is either a kernel-evaluated
+argument rule (SCMP_ACT_ERRNO on register-visible arguments) or an
+execute-on-behalf supervisor working on a pidfd_getfd dup
+(_unix_scope.py), neither of which trusts a userspace re-read.
+Only the observability tier races. This is within the documented
+audit contract (an operator-workflow observation tier, not malware
+analysis — see the anti-debug section above); closing it would need
+a ptrace syscall-entry re-validation rewrite that is not
+proportionate to the tier. The end-of-run audit_summary record is
+stamped ``record_fidelity="best_effort"`` so downstream readers see
+the caveat in-band.
+
 Invocation:
     python -m core.sandbox.tracer <child_pid> <run_dir> [<sync_fd> [<config_path>]]
 
@@ -78,8 +103,13 @@ unblock the child" handshake. When omitted, no handshake is performed.
 
 The config_path is an optional path to a JSON file containing audit-
 mode filter configuration (writable_paths, read_allowlist,
-allowed_tcp_ports, verbose flag). When omitted, the tracer runs in
-unfiltered (verbose) mode — every traced syscall produces a record.
+allowed_tcp_ports, verbose flag, evidence_fd). When omitted, the
+tracer runs in unfiltered (verbose) mode — every traced syscall
+produces a record. Production spawn paths pass an anonymous-fd path
+(``/proc/self/fd/N`` — resolved by THIS process against its inherited
+fd; see core/sandbox/evidence.py) so the nonce-carrying config never
+exists at a filesystem path the target can name; the fd is closed
+immediately after parsing.
 
 Required when omitted: nothing (testing path).
 Required when present: pid + run_dir + sync_fd + config_path
@@ -90,23 +120,31 @@ TestTracerArgvContract structural test.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.util
 import json
 import logging
 import os
-import time
 import platform
 import signal
 import struct
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
-from . import audit_budget
+from . import audit_budget, escalation_signatures
+from .evidence import AUDIT_SUBDIR, parse_fd_path
 
 logger = logging.getLogger(__name__)
+
+# Held evidence fd inherited from the spawn parent (see
+# core/sandbox/evidence.py). When set, _write_record /
+# _write_record_dict append through it instead of opening the JSONL
+# path per record. Module-level because the tracer is a dedicated
+# single-purpose process; set once at trace() startup.
+_evidence_out_fd: int | None = None
 
 # ----- ptrace request constants (see <sys/ptrace.h>) -----
 _PTRACE_CONT = 7
@@ -146,6 +184,13 @@ _NEW_TRACEE_EVENTS = frozenset((
     _PTRACE_EVENT_FORK, _PTRACE_EVENT_VFORK, _PTRACE_EVENT_CLONE,
 ))
 
+# Watchdog cadence for the tracer wait loop. This bounds how quickly
+# the tracer notices its parent died (and exits); it does NOT bound
+# event latency — with SIGCHLD blocked, ``_idle_wait_for_sigchld``
+# wakes the instant a tracee changes state, so a pending ptrace stop
+# is serviced immediately rather than on the next tick.
+_IDLE_TICK_S = 0.2
+
 # Per-record cap moved to core.sandbox.audit_budget.AuditBudget so
 # the macOS seatbelt LogStreamer and Linux ptrace tracer share one
 # budget mechanism. See audit_budget.DEFAULT_GLOBAL_CAP for the
@@ -165,6 +210,42 @@ _DENIALS_FILENAME = ".sandbox-denials.jsonl"
 # Kept separate from the denials file so the denial-summary aggregator
 # doesn't misinterpret observe records as enforcement events.
 _OBSERVE_FILENAME = ".sandbox-observe.jsonl"
+
+# Live-escalation: syscalls that, if denied, indicate a sandbox-escape
+# ATTEMPT rather than ordinary "tool needed something the profile didn't
+# allow" noise. Shared with triage.py's post-hoc
+# `escape_primitive_denied` signal via the leaf
+# core.sandbox.escalation_signatures module (no json/summary/proxy
+# import chain on this hot path), so live banner and post-hoc signal
+# fire on the same set by construction.
+#
+# Only reachable when audit mode is engaged (this whole module is a
+# `--audit`-only subprocess — see module docstring). In plain
+# enforcement mode the kernel ERRNOs these syscalls in-kernel with no
+# tracer attached at all, so there is no live per-syscall signal to
+# escalate; the operator only learns "some seccomp denial happened,
+# identity unknown" post-hoc via observe.py's exit-code heuristic (see
+# triage.py's `seccomp_denied_unattributed`, LOW severity). That's an
+# existing, unrelated limitation — not something this change addresses.
+_LIVE_ESCALATE_SYSCALLS = escalation_signatures.ESCAPE_PRIMITIVE_SYSCALLS
+
+
+def _announce_escape_primitive(name: str, pid: int) -> None:
+    """Best-effort immediate stderr banner for a live escape-primitive
+    syscall denial. Never raises — mirrors the existing global-cap
+    stderr notice's use of raw `os.write(2, ...)` a few lines below,
+    which survives even if stdio has been redirected/closed oddly in
+    the sandboxed child's environment.
+    """
+    try:
+        os.write(2, (
+            f"RAPTOR sandbox ALERT: escape-primitive syscall "
+            f"'{name}' denied (pid={pid}). This is consistent with a "
+            f"sandbox-escape ATTEMPT, not ordinary tool denial noise. "
+            f"See sandbox-triage.json at run end for full context.\n"
+        ).encode("ascii", errors="replace"))
+    except OSError:
+        pass
 
 
 def _resolve_output_filename(observe_mode: bool) -> str:
@@ -223,6 +304,33 @@ _X86_64_SYSCALL_NAMES = {
     2: "open",
     257: "openat",
     437: "openat2",          # Linux 5.6+, used by glibc/io_uring
+    # Filesystem-mutation syscalls (audit-mode trace set) — mutations
+    # that need no open() (unlink/rename/metadata ops) and were
+    # previously invisible to the audit JSONL. Numbers from
+    # arch/x86/entry/syscalls/syscall_64.tbl.
+    87: "unlink",
+    263: "unlinkat",
+    82: "rename",
+    264: "renameat",
+    316: "renameat2",
+    86: "link",
+    265: "linkat",
+    88: "symlink",
+    266: "symlinkat",
+    83: "mkdir",
+    258: "mkdirat",
+    133: "mknod",
+    259: "mknodat",
+    76: "truncate",
+    90: "chmod",
+    268: "fchmodat",
+    92: "chown",
+    260: "fchownat",
+    94: "lchown",
+    188: "setxattr",
+    189: "lsetxattr",
+    197: "removexattr",
+    198: "lremovexattr",
     # Stat-family syscalls (observe-mode only — claude-style binaries
     # probe candidate config locations via stat without ever opening,
     # so observation needs these to surface "binary looked at X").
@@ -264,6 +372,25 @@ _AARCH64_SYSCALL_NAMES = {
     # File-path syscalls (b3)
     56: "openat",
     437: "openat2",          # Linux 5.6+, same number on x86_64+aarch64
+    # Filesystem-mutation syscalls (audit-mode trace set). aarch64 is
+    # an at-only ABI: the legacy non-at names (unlink, rename, link,
+    # symlink, mkdir, mknod, chmod, chown, lchown) do not exist, so
+    # only the *at variants (plus truncate and the xattr family)
+    # appear here. Numbers from include/uapi/asm-generic/unistd.h.
+    35: "unlinkat",
+    38: "renameat",
+    276: "renameat2",
+    37: "linkat",
+    36: "symlinkat",
+    34: "mkdirat",
+    33: "mknodat",
+    45: "truncate",
+    53: "fchmodat",
+    54: "fchownat",
+    5: "setxattr",
+    6: "lsetxattr",
+    14: "removexattr",
+    15: "lremovexattr",
     # Stat-family syscalls (observe-mode only). aarch64 doesn't have
     # the legacy `stat`/`lstat` syscalls — userspace uses newfstatat
     # exclusively. faccessat2 was added in 5.8 and shares its number
@@ -328,7 +455,7 @@ def _is_supported_arch() -> bool:
     return _ARCH in _ARCH_INFO
 
 
-def _arch_info() -> Optional[dict]:
+def _arch_info() -> dict | None:
     """Return the active arch's info dict, or None if unsupported."""
     return _ARCH_INFO.get(_ARCH)
 
@@ -343,6 +470,28 @@ def _arch_info() -> Optional[dict]:
 # path syscalls are "write" (paths the child tried to open/write).
 _NAME_TO_TYPE = {
     "open": "write", "openat": "write", "openat2": "write",
+    # Stat-family (observe-mode only): path syscalls, same "write"
+    # bucket as open/openat (which are stamped "write" even for
+    # read-only opens — the type means "file-path syscall" here).
+    # Without these entries they fell into the "seccomp" fallback
+    # that is reserved for blocklist hits, mislabeling the by_type
+    # rollup. "write" keeps the canonical type set closed (see
+    # summary._suggested_fix and the cross-module drift test).
+    "stat": "write", "lstat": "write", "newfstatat": "write",
+    "access": "write", "faccessat": "write", "faccessat2": "write",
+    # Filesystem-mutation syscalls (audit trace set): file-path
+    # syscalls with unconditional write intent — same "write" bucket.
+    "unlink": "write", "unlinkat": "write",
+    "rename": "write", "renameat": "write", "renameat2": "write",
+    "link": "write", "linkat": "write",
+    "symlink": "write", "symlinkat": "write",
+    "mkdir": "write", "mkdirat": "write",
+    "mknod": "write", "mknodat": "write",
+    "truncate": "write",
+    "chmod": "write", "fchmodat": "write",
+    "chown": "write", "fchownat": "write", "lchown": "write",
+    "setxattr": "write", "lsetxattr": "write",
+    "removexattr": "write", "lremovexattr": "write",
     "connect": "network",
     "socket": "seccomp",   # AF_UNIX/PACKET/NETLINK family check still seccomp-style
     "ioctl": "seccomp",
@@ -380,7 +529,7 @@ _LIBC_UNAVAILABLE = object()
 _libc: object = None
 
 
-def _get_libc() -> Optional[ctypes.CDLL]:
+def _get_libc() -> ctypes.CDLL | None:
     """Resolve libc via find_library, lazy and cached.
 
     Caches BOTH success (the CDLL handle) AND failure (the
@@ -456,13 +605,13 @@ def _ptrace_seize(pid: int) -> bool:
                      ctypes.c_void_p(options))
     err = ctypes.get_errno()
     if rc != 0:
-        logger.error(f"tracer: PTRACE_SEIZE({pid}) failed errno={err}")
+        logger.error("tracer: PTRACE_SEIZE(%d) failed errno=%d", pid, err)
         return False
     return True
 
 
 def _read_tracee_string(pid: int, addr: int,
-                        max_bytes: int = 4096) -> Optional[str]:
+                        max_bytes: int = 4096) -> str | None:
     """Read a NUL-terminated string from the tracee's address space.
 
     Used to dereference path pointers in syscall args (open's arg0,
@@ -534,7 +683,7 @@ def _read_tracee_string(pid: int, addr: int,
         return repr(raw)
 
 
-def _read_tracee_bytes(pid: int, addr: int, n_bytes: int) -> Optional[bytes]:
+def _read_tracee_bytes(pid: int, addr: int, n_bytes: int) -> bytes | None:
     """Read exactly ``n_bytes`` from the tracee's address space.
 
     Used for fixed-size struct reads where _read_tracee_string's
@@ -575,7 +724,43 @@ def _read_tracee_bytes(pid: int, addr: int, n_bytes: int) -> Optional[bytes]:
     return bytes(buf[:n])
 
 
-def _path_arg_index(syscall_name: str) -> Optional[int]:
+# Filesystem-mutation syscalls traced under audit mode:
+# name → (path_arg_index, dirfd_arg_index | None).
+#
+# The path argument chosen per syscall is the MUTATED namespace
+# entry, with its governing dirfd (None = resolve against the
+# tracee's cwd, open(2)-style):
+# - unlink(path) / unlinkat(dirfd, path, flags): the removed entry.
+# - rename family: the OLD path (the object being renamed); the
+#   destination is recoverable from the raw `args` on the record.
+# - link(old, new) / linkat(olddirfd, old, newdirfd, new, flags):
+#   the NEW path — the created directory entry is the mutation (the
+#   old path is only read).
+# - symlink(target, linkpath) / symlinkat(target, newdirfd,
+#   linkpath): the linkpath — `target` is an arbitrary string, not
+#   necessarily a real path.
+# - mkdir/mknod/truncate/chmod/chown/lchown + at-variants and the
+#   xattr family: the single path argument.
+#
+# All entries carry unconditional write intent (there is no
+# read-only unlink), so the audit filter checks them against
+# writable_paths only.
+_MUTATION_PATH_ARGS: dict[str, tuple[int, int | None]] = {
+    "unlink": (0, None), "unlinkat": (1, 0),
+    "rename": (0, None), "renameat": (1, 0), "renameat2": (1, 0),
+    "link": (1, None), "linkat": (3, 2),
+    "symlink": (1, None), "symlinkat": (2, 1),
+    "mkdir": (0, None), "mkdirat": (1, 0),
+    "mknod": (0, None), "mknodat": (1, 0),
+    "truncate": (0, None),
+    "chmod": (0, None), "fchmodat": (1, 0),
+    "chown": (0, None), "fchownat": (1, 0), "lchown": (0, None),
+    "setxattr": (0, None), "lsetxattr": (0, None),
+    "removexattr": (0, None), "lremovexattr": (0, None),
+}
+
+
+def _path_arg_index(syscall_name: str) -> int | None:
     """Return the index of the path argument for a given syscall, or
     None if the syscall has no path argument worth dereferencing.
 
@@ -607,6 +792,11 @@ def _path_arg_index(syscall_name: str) -> Optional[int]:
         return 0
     if syscall_name in ("newfstatat", "faccessat", "faccessat2"):
         return 1
+    # Filesystem-mutation syscalls: per-syscall (path, dirfd) arg
+    # positions live in _MUTATION_PATH_ARGS above.
+    mut = _MUTATION_PATH_ARGS.get(syscall_name)
+    if mut is not None:
+        return mut[0]
     return None
 
 
@@ -699,10 +889,8 @@ def _is_write_intent(flags: int) -> bool:
     """
     if flags & (_O_WRONLY | _O_RDWR):
         return True
-    if flags & (_O_CREAT | _O_TRUNC | _O_APPEND):
-        # CREAT/TRUNC/APPEND imply write even with O_RDONLY=0.
-        return True
-    return False
+    # CREAT/TRUNC/APPEND imply write even with O_RDONLY=0.
+    return bool(flags & (_O_CREAT | _O_TRUNC | _O_APPEND))
 
 
 def _path_in_allowlist(path: str, allowlist: list) -> bool:
@@ -727,8 +915,53 @@ def _path_in_allowlist(path: str, allowlist: list) -> bool:
     return False
 
 
+def _suppress_allowlisted_path(abs_path: str, allowlist: list) -> bool:
+    """Decide whether a would-be-allowed open record may be DROPPED in
+    filtered audit mode.
+
+    The lexical allowlist match alone is not sufficient to suppress:
+    ``abs_path`` is the string read from the tracee's memory, only
+    lexically normalised. A symlink under an allowlisted/writable
+    prefix can alias a file OUTSIDE the allowlist
+    (``<writable>/x -> ~/.ssh``): the kernel resolves the real target
+    while the lexical match hides the access — no race needed, and the
+    suppressed record is exactly the credential_path_touch signal
+    triage exists to surface. Only suppress when BOTH the lexical path
+    AND its fully symlink-resolved form fall inside the allowlist; any
+    resolution failure keeps the record. Over-reporting an allowed
+    read is acceptable, a silently suppressed credential read is not.
+
+    Resolution view: ``os.path.realpath`` runs in the TRACER's mount
+    view. That matches the tracee's for RAPTOR's layouts — audit mode
+    either runs without pivot_root, or the mount-ns backend binds
+    target/output at their ORIGINAL absolute paths — the same
+    assumption ``_resolve_tracee_path`` documents above. A layout that
+    moves paths inside the sandbox would make resolution fail toward
+    keeping the record (the alias simply won't match), never toward
+    suppressing it.
+
+    Accepted residual (TOCTOU): a sibling tracee thread can rewrite
+    the path buffer between our process_vm_readv and PTRACE_CONT, so
+    the kernel may consume a different path than the one this decision
+    (and the record) saw. Audit mode is log-and-allow; pinning the
+    argument the kernel consumes needs a different mechanism
+    (seccomp user-notify with argument capture), which this tracer
+    deliberately does not attempt. The symlink alias above — reachable
+    without any race — is what this helper closes.
+    """
+    if not _path_in_allowlist(abs_path, allowlist):
+        return False
+    try:
+        real = os.path.realpath(abs_path)
+    except OSError:
+        return False
+    if real != abs_path and not _path_in_allowlist(real, allowlist):
+        return False
+    return True
+
+
 def _decode_sockaddr(pid: int, addr: int,
-                    addrlen: int) -> Optional[tuple]:
+                    addrlen: int) -> tuple | None:
     """Decode a sockaddr struct from the tracee's address space.
 
     Returns (family_name, port, ip_str) for AF_INET / AF_INET6, or
@@ -803,7 +1036,7 @@ def _decode_sockaddr(pid: int, addr: int,
     return None
 
 
-def _ptrace_get_event_msg(pid: int) -> Optional[int]:
+def _ptrace_get_event_msg(pid: int) -> int | None:
     """PTRACE_GETEVENTMSG — fetch the event-specific data from the
     most recent ptrace event on `pid`.
 
@@ -818,12 +1051,12 @@ def _ptrace_get_event_msg(pid: int) -> Optional[int]:
     ctypes.set_errno(0)
     rc = libc.ptrace(_PTRACE_GETEVENTMSG, pid, None, ctypes.byref(msg))
     if rc != 0:
-        logger.debug(f"tracer: PTRACE_GETEVENTMSG({pid}) failed")
+        logger.debug("tracer: PTRACE_GETEVENTMSG(%d) failed", pid)
         return None
     return msg.value
 
 
-def _read_regs(pid: int, arch_info: dict) -> Optional[bytes]:
+def _read_regs(pid: int, arch_info: dict) -> bytes | None:
     """Read the target's user_regs_struct via PTRACE_GETREGSET.
 
     Returns the raw bytes (caller decodes via _decode_syscall + arch_info)
@@ -849,7 +1082,7 @@ def _read_regs(pid: int, arch_info: dict) -> Optional[bytes]:
                      ctypes.byref(iov))
     err = ctypes.get_errno()
     if rc != 0:
-        logger.debug(f"tracer: PTRACE_GETREGSET({pid}) failed errno={err}")
+        logger.debug("tracer: PTRACE_GETREGSET(%d) failed errno=%d", pid, err)
         return None
     # The kernel updates iov.iov_len to the actual bytes written. If
     # smaller than expected, decoding via fixed offsets would read
@@ -858,8 +1091,7 @@ def _read_regs(pid: int, arch_info: dict) -> Optional[bytes]:
     # the partial read.
     if iov.iov_len < size:
         logger.debug(
-            f"tracer: PTRACE_GETREGSET({pid}) returned partial regset "
-            f"({iov.iov_len} of {size} bytes); refusing decode"
+            "tracer: PTRACE_GETREGSET(%s) returned partial regset (%s of %s bytes); refusing decode", pid, iov.iov_len, size
         )
         return None
     return bytes(buf)
@@ -899,8 +1131,8 @@ def _ptrace_cont(pid: int, signal_num: int = 0) -> bool:
                      ctypes.c_void_p(signal_num))
     if rc != 0:
         err = ctypes.get_errno()
-        logger.debug(f"tracer: PTRACE_CONT({pid}, sig={signal_num}) "
-                     f"failed errno={err}")
+        logger.debug("tracer: PTRACE_CONT(%d, sig=%d) "
+                     "failed errno=%d", pid, signal_num, err)
         return False
     return True
 
@@ -938,13 +1170,46 @@ def _ptrace_detach(pid: int) -> bool:
 
 # ----- JSONL record writer -----
 
+def _append_jsonl_line(run_dir: Path, filename: str, line: str) -> bool:
+    """Append one line to the evidence JSONL. Returns True on success.
+
+    Preferred path: the held evidence fd inherited from the spawn
+    parent (`_evidence_out_fd`) — appends through it are immune to
+    path-level swaps of the JSONL. Fallback (standalone / testing
+    invocations without a parent-minted fd): open
+    ``<run_dir>/.audit/<filename>`` per record with the same
+    O_NOFOLLOW + O_APPEND discipline as summary.record_denial.
+    """
+    if _evidence_out_fd is not None:
+        try:
+            os.write(_evidence_out_fd, line.encode("utf-8"))
+            return True
+        except OSError as e:
+            logger.debug("tracer: evidence-fd write failed: %s", e)
+            return False
+    try:
+        jsonl_path = run_dir / AUDIT_SUBDIR / filename
+        jsonl_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(
+            str(jsonl_path),
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(line)
+        return True
+    except OSError as e:
+        logger.debug("tracer: evidence append failed: %s", e)
+        return False
+
+
 def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
                   args: list, target_pid: int,
-                  path: Optional[str] = None,
+                  path: str | None = None,
                   *,
                   filename: str = _DENIALS_FILENAME,
                   mode_field: str = "audit",
-                  nonce: Optional[str] = None) -> bool:
+                  nonce: str | None = None) -> bool:
     """Append one denial record to the run's JSONL file.
 
     Returns True on successful write, False otherwise. Open/write/close
@@ -1040,6 +1305,12 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
     }
     if path is not None:
         record["path"] = path
+    # socket()/ioctl() argument decode: seccomp filters these on
+    # specific families / cmd numbers, and consumers (triage's
+    # hostile-argument signal, operators reading the JSONL) need the
+    # decoded identity, not a raw uint64. No-op for other syscalls.
+    record.update(
+        escalation_signatures.decode_syscall_args(syscall_name, args))
     # Per-run provenance nonce — added when the parent provides one
     # (observe mode). The parser drops records whose nonce doesn't
     # match the per-run value passed to parse_observe_log, defeating
@@ -1056,25 +1327,10 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
         record["note"] = note
     try:
         line = json.dumps(record, ensure_ascii=True) + "\n"
-        # NOTE: deliberately a different name from the `path` parameter
-        # (which is the syscall's path arg). Earlier versions of this
-        # function shadowed `path` with the file path and worked by
-        # accident — would confuse a reader and break if record-build
-        # ever moved below this line.
-        jsonl_path = run_dir / filename
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW + O_APPEND match summary.record_denial exactly.
-        fd = os.open(
-            str(jsonl_path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(line)
-        return True
-    except OSError as e:
-        logger.debug(f"tracer: write_record failed: {e}")
+    except (TypeError, ValueError) as e:
+        logger.debug("tracer: write_record encode failed: %s", e)
         return False
+    return _append_jsonl_line(run_dir, filename, line)
 
 
 def _write_record_dict(run_dir: Path, record: dict,
@@ -1091,24 +1347,15 @@ def _write_record_dict(run_dir: Path, record: dict,
     """
     try:
         line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
-        jsonl_path = run_dir / filename
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(
-            str(jsonl_path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(line)
-        return True
-    except OSError as e:
-        logger.debug(f"tracer: write_record_dict failed: {e}")
+    except (TypeError, ValueError) as e:
+        logger.debug("tracer: write_record_dict encode failed: %s", e)
         return False
+    return _append_jsonl_line(run_dir, filename, line)
 
 
 # ----- Event loop -----
 
-def _signal_ready(sync_fd: Optional[int]) -> None:
+def _signal_ready(sync_fd: int | None) -> None:
     """Signal the parent that we're attached and ready to trace.
 
     The parent writes a "go" byte on the OTHER end of this pipe to
@@ -1126,7 +1373,7 @@ def _signal_ready(sync_fd: Optional[int]) -> None:
         try:
             os.write(sync_fd, b"\x01")
         except OSError as e:
-            logger.debug(f"tracer: sync write failed: {e}")
+            logger.debug("tracer: sync write failed: %s", e)
     finally:
         try:
             os.close(sync_fd)
@@ -1134,9 +1381,54 @@ def _signal_ready(sync_fd: Optional[int]) -> None:
             pass
 
 
+def _idle_wait_for_sigchld(tick_s: float) -> None:
+    """Wait up to ``tick_s`` for a child state change; return early
+    the instant one arrives.
+
+    Caller contract: SIGCHLD must be BLOCKED (``pthread_sigmask``)
+    before the preceding ``waitpid(WNOHANG)`` drain. A tracee state
+    change raised between that drain and this call leaves SIGCHLD
+    pending, so ``sigtimedwait`` returns immediately — no lost-wakeup
+    race, no missed ptrace stop.
+
+    Why this exists (the Landlock-only observe "hang"): the wait loop
+    used a plain ``time.sleep(0.05)`` when no event was ready. A
+    tracee stopped by SCMP_ACT_TRACE stays FROZEN until the tracer
+    wakes and PTRACE_CONTs it, so every traced syscall cost up to one
+    full tick — ~20 syscalls/sec. The Landlock-only spawn path wraps
+    commands in the Python pid1-shim whose interpreter startup alone
+    is ~200 traced syscalls: 10+ seconds of wall clock for
+    ``/usr/bin/true``, blowing every caller timeout and presenting as
+    "drain never sees pipe EOF". sigtimedwait keeps the bounded-tick
+    watchdog behaviour while making event wakeups immediate.
+
+    One pending SIGCHLD may coalesce many child state changes —
+    that's fine, the caller re-drains with ``waitpid(WNOHANG)`` until
+    it returns "no event" after every wakeup.
+
+    A tick expiry or EINTR is not an error: the caller re-checks its
+    watchdog and re-drains. Falls back to a plain sleep if
+    sigtimedwait is unavailable (non-Linux — testing paths only; the
+    tracer itself is Linux-only).
+    """
+    sigtimedwait = getattr(signal, "sigtimedwait", None)
+    if sigtimedwait is None:
+        time.sleep(tick_s)
+        return
+    try:
+        sigtimedwait({signal.SIGCHLD}, tick_s)
+    except InterruptedError:
+        pass
+    except (OSError, ValueError):
+        # Defensive: a broken sigtimedwait must degrade to the old
+        # fixed-tick poll, never crash the tracer (EXITKILL would
+        # take the whole traced tree down with it).
+        time.sleep(tick_s)
+
+
 def trace(target_pid: int, run_dir: Path,
-          sync_fd: Optional[int] = None,
-          audit_filter: Optional[dict] = None) -> int:
+          sync_fd: int | None = None,
+          audit_filter: dict | None = None) -> int:
     """Main tracer loop. Returns process exit code.
 
     1. PTRACE_SEIZE the target with TRACESECCOMP + TRACEEXIT +
@@ -1180,8 +1472,7 @@ def trace(target_pid: int, run_dir: Path,
     arch_info = _arch_info()
     if arch_info is None:
         logger.error(
-            f"tracer: unsupported arch {_ARCH} "
-            f"(supported: {sorted(_ARCH_INFO)})"
+            "tracer: unsupported arch %s (supported: %s)", _ARCH, sorted(_ARCH_INFO)
         )
         return 2
 
@@ -1210,6 +1501,25 @@ def trace(target_pid: int, run_dir: Path,
     _observe_nonce = (
         audit_filter.get("observe_nonce") if audit_filter else None
     )
+    # Held evidence fd inherited from the spawn parent (F11). All
+    # appends route through it so a path-level swap of the JSONL
+    # cannot redirect tracer output. Validated with fstat before use
+    # — a stale/wrong number degrades to the per-record open fallback
+    # rather than silently writing into an unrelated fd.
+    global _evidence_out_fd
+    _ev_fd = (
+        audit_filter.get("evidence_fd")
+        if isinstance(audit_filter, dict) else None
+    )
+    if isinstance(_ev_fd, int) and _ev_fd >= 0:
+        try:
+            os.fstat(_ev_fd)
+            _evidence_out_fd = _ev_fd
+        except OSError:
+            logger.warning(
+                "tracer: evidence_fd %d not inherited/valid; falling "
+                "back to per-record path appends", _ev_fd,
+            )
     # Audit budget — shared with macOS seatbelt LogStreamer via
     # core.sandbox.audit_budget. Token-bucket + per-category +
     # per-PID sub-caps + 1-in-N post-cap sampling; markers and
@@ -1226,6 +1536,12 @@ def trace(target_pid: int, run_dir: Path,
     )
     budget = _audit_budget_mod.AuditBudget(global_cap=_budget_override)
 
+    # Live-escalation dedup: syscall names already announced to stderr
+    # this run, so a target retrying the same denied syscall doesn't
+    # spam the operator's terminal. One banner per distinct
+    # escape-primitive syscall per run.
+    _escalated_syscalls: set = set()
+
     # Set of currently-traced PIDs. Starts with the original target;
     # grows when fork/vfork/clone events fire (kernel auto-attaches
     # the new child); shrinks when each tracee exits. Loop terminates
@@ -1235,64 +1551,85 @@ def trace(target_pid: int, run_dir: Path,
     # Parent-death watchdog. The tracer subprocess has a parent
     # (cve-diff / sandbox spawn / etc.); if that parent dies abnormally,
     # the tracer should exit rather than continue running orphaned. We
-    # poll `os.getppid()` between WNOHANG-waitpids; if it ever returns 1
-    # (re-parented to init / pid namespace init), bail. WNOHANG + sleep
-    # is mandatory for the watchdog to fire — a blocking `waitpid(-1, 0)`
-    # could sit forever waiting for a tracee event that may never come
-    # (uninterruptible-sleep tracee).
+    # check `os.getppid()` on an _IDLE_TICK_S wall-clock cadence; if it
+    # ever changes / returns 1 (re-parented to init / pid-ns init),
+    # bail. A bare blocking `waitpid(-1, 0)` could sit forever waiting
+    # for a tracee event that may never come (uninterruptible-sleep
+    # tracee), so idle waits are tick-bounded — but event-driven:
+    # SIGCHLD is blocked and _idle_wait_for_sigchld wakes immediately
+    # on a tracee state change, so a pending SCMP_ACT_TRACE stop never
+    # waits for the tick (a sleep-per-event here froze the target to
+    # ~20 syscalls/sec and presented as the Landlock-only observe
+    # hang; see _idle_wait_for_sigchld).
     initial_ppid = os.getppid()
+    next_ppid_check = time.monotonic() + _IDLE_TICK_S
+    old_mask = signal.pthread_sigmask(
+        signal.SIG_BLOCK, {signal.SIGCHLD},
+    )
+    try:
+        while traced:
+            # Watchdog on a wall-clock schedule, not only on idle
+            # ticks: a tracee event storm (busy multi-process build)
+            # would otherwise starve the parent-liveness check for
+            # its whole duration.
+            now = time.monotonic()
+            if now >= next_ppid_check:
+                next_ppid_check = now + _IDLE_TICK_S
+                current_ppid = os.getppid()
+                if current_ppid != initial_ppid or current_ppid == 1:
+                    logger.warning(
+                        "tracer: parent died (ppid was %s, now %s); exiting", initial_ppid, current_ppid
+                    )
+                    return 0
 
-    while traced:
-        try:
-            # waitpid(-1) catches events from ANY tracee — required for
-            # multi-process / multi-thread audit. ptrace re-parents
-            # tracees to the tracer for waitpid purposes, so this works
-            # even though target_pid wasn't biologically forked by us.
-            #
-            # Assumption: this tracer process has NO biological children
-            # of its own. That's true today (the tracer is invoked as
-            # a Python -m subprocess that doesn't fork). If a future
-            # change adds bio children to the tracer, waitpid(-1) would
-            # also pick up their events and this loop would treat them
-            # as tracees (`traced.discard(wpid)` would be silent no-op
-            # for the unrelated bio child, but the SIGSTOP-based add
-            # in the dispatch below would mistakenly add them to the
-            # traced set). Adjust the wait pattern (e.g. switch to
-            # waitid with P_PID per known tracee) if that day comes.
-            wpid, status = os.waitpid(-1, os.WNOHANG)
-        except InterruptedError:
-            continue
-        except ChildProcessError:
-            # All tracees gone — clean exit.
-            return 0
-        except OSError as e:
-            logger.error(f"tracer: waitpid failed: {e}")
-            return 4
-
-        if wpid == 0:
-            # No event ready. Check parent liveness, then sleep briefly
-            # so the loop doesn't busy-spin. Sleep is short enough that
-            # event latency stays tight (records still appear within
-            # ~50ms of the syscall) but long enough to keep CPU usage
-            # near zero when the workload is idle.
-            current_ppid = os.getppid()
-            if current_ppid != initial_ppid or current_ppid == 1:
-                logger.warning(
-                    f"tracer: parent died (ppid was {initial_ppid}, "
-                    f"now {current_ppid}); exiting"
-                )
+            try:
+                # waitpid(-1) catches events from ANY tracee — required for
+                # multi-process / multi-thread audit. ptrace re-parents
+                # tracees to the tracer for waitpid purposes, so this works
+                # even though target_pid wasn't biologically forked by us.
+                #
+                # Assumption: this tracer process has NO biological children
+                # of its own. That's true today (the tracer is invoked as
+                # a Python -m subprocess that doesn't fork). If a future
+                # change adds bio children to the tracer, waitpid(-1) would
+                # also pick up their events and this loop would treat them
+                # as tracees (`traced.discard(wpid)` would be silent no-op
+                # for the unrelated bio child, but the SIGSTOP-based add
+                # in the dispatch below would mistakenly add them to the
+                # traced set). Adjust the wait pattern (e.g. switch to
+                # waitid with P_PID per known tracee) if that day comes.
+                wpid, status = os.waitpid(-1, os.WNOHANG)
+            except InterruptedError:
+                continue
+            except ChildProcessError:
+                # All tracees gone — clean exit.
                 return 0
-            time.sleep(0.05)
-            continue
+            except OSError as e:
+                logger.error("tracer: waitpid failed: %s", e)
+                return 4
 
-        _handle_waitpid_event(
-            wpid, status, traced, target_pid, arch_info,
-            run_dir, budget,
-            audit_filter=audit_filter,
-            output_filename=_filename,
-            mode_field=_mode_field,
-            observe_nonce=_observe_nonce,
-        )
+            if wpid == 0:
+                # No event ready. Wait for the next SIGCHLD (returns
+                # immediately if one is already pending), bounded by
+                # the watchdog tick.
+                _idle_wait_for_sigchld(_IDLE_TICK_S)
+                continue
+
+            _handle_waitpid_event(
+                wpid, status, traced, target_pid, arch_info,
+                run_dir, budget,
+                audit_filter=audit_filter,
+                output_filename=_filename,
+                mode_field=_mode_field,
+                observe_nonce=_observe_nonce,
+                escalated_syscalls=_escalated_syscalls,
+            )
+    finally:
+        # Restore the caller's signal mask — trace() is also invoked
+        # in-process by tests; leaking a blocked SIGCHLD out of this
+        # frame would be a side effect they didn't sign up for. The
+        # production tracer process exits right after anyway.
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
     # End-of-run summary record so the sandbox-summary aggregator
     # has total/dropped counts even when the run didn't hit any cap.
@@ -1301,6 +1638,13 @@ def trace(target_pid: int, run_dir: Path,
     # wrote a fake summary into the JSONL claiming budget_truncated=True).
     try:
         _summary = budget.summary_record()
+        # Record-fidelity caveat, stamped in-band: tracee argument
+        # buffers are read from userspace memory at the TRACE stop
+        # and can be rewritten by sibling threads before the kernel
+        # consumes them (accepted residual — module docstring).
+        # Downstream readers of the summary see the contract without
+        # having to know tracer internals.
+        _summary["record_fidelity"] = "best_effort"
         if _observe_nonce is not None:
             _summary["nonce"] = _observe_nonce
         _write_record_dict(run_dir, _summary, filename=_filename)
@@ -1316,12 +1660,13 @@ def _handle_waitpid_event(
     wpid: int, status: int,
     traced: set, target_pid: int,
     arch_info: dict, run_dir: Path,
-    budget: "audit_budget.AuditBudget",
+    budget: audit_budget.AuditBudget,
     *,
-    audit_filter: Optional[dict] = None,
+    audit_filter: dict | None = None,
     output_filename: str = _DENIALS_FILENAME,
     mode_field: str = "audit",
-    observe_nonce: Optional[str] = None,
+    observe_nonce: str | None = None,
+    escalated_syscalls: set | None = None,
     # Injection points so tests can substitute synthetic helpers
     # without forking real children. Defaults are the production
     # implementations; tests pass mocks.
@@ -1329,6 +1674,7 @@ def _handle_waitpid_event(
     read_regs=None,
     decode_syscall=None,
     read_tracee_string=None,
+    read_tracee_bytes=None,
     get_event_msg=None,
     write_record=None,
     resolve_path=None,
@@ -1358,6 +1704,8 @@ def _handle_waitpid_event(
         decode_syscall = _decode_syscall
     if read_tracee_string is None:
         read_tracee_string = _read_tracee_string
+    if read_tracee_bytes is None:
+        read_tracee_bytes = _read_tracee_bytes
     if get_event_msg is None:
         get_event_msg = _ptrace_get_event_msg
     if write_record is None:
@@ -1399,6 +1747,15 @@ def _handle_waitpid_event(
             # The filter logic below short-circuits to drop legitimate
             # events when audit_filter is configured for filtered
             # mode (i.e., the `audit` profile).
+            #
+            # TOCTOU residual (accepted — see the module docstring's
+            # record-fidelity section): the string/struct reads below
+            # and the KEEP/suppress decision they feed race sibling
+            # threads in the tracee, which can rewrite the buffer
+            # before the kernel consumes it. Records are best-effort;
+            # enforcement is NOT decided here (kernel-argument ERRNO
+            # rules + the execute-on-behalf connect supervisor are
+            # TOCTOU-free by construction).
             should_log = True
             path = None
             path_idx = _path_arg_index(name)
@@ -1414,9 +1771,9 @@ def _handle_waitpid_event(
             # connect_targets. Hoisting the data extraction out;
             # filtering (allowlist / allowed_ports) stays gated on
             # filter-mode below.
-            abs_path: Optional[str] = None
+            abs_path: str | None = None
             write_intent: bool = False
-            sock: Optional[tuple] = None
+            sock: tuple | None = None
             if name in ("openat", "open", "openat2") and path is not None:
                 # Resolve path argument to an absolute string the
                 # parser can match against context-map records.
@@ -1443,7 +1800,7 @@ def _handle_waitpid_event(
                     # write_intent=True so we don't silently miss
                     # writes — over-reporting reads is acceptable,
                     # missing writes is not.
-                    how_bytes = _read_tracee_bytes(wpid, args[2], 8)
+                    how_bytes = read_tracee_bytes(wpid, args[2], 8)
                     if how_bytes is not None and len(how_bytes) == 8:
                         import struct as _struct
                         flags = _struct.unpack("<Q", how_bytes)[0]
@@ -1455,6 +1812,22 @@ def _handle_waitpid_event(
                 write_intent = _is_write_intent(flags)
                 # Use the absolute path on the record — relative
                 # paths are ambiguous to a parser / operator.
+                path = abs_path
+            elif name in _MUTATION_PATH_ARGS and path is not None:
+                # Filesystem-mutation syscalls: resolve the mutated
+                # path against its governing dirfd (per-syscall arg
+                # positions in _MUTATION_PATH_ARGS). All mutations
+                # carry write intent — there is no read-only unlink —
+                # so the filter below checks writable_paths.
+                _p_idx, dirfd_idx = _MUTATION_PATH_ARGS[name]
+                dirfd = (args[dirfd_idx] if dirfd_idx is not None
+                         else _AT_FDCWD)
+                # Signed dirfd — same AT_FDCWD wrap handling as the
+                # open-family branch above.
+                if dirfd > 0x7fffffffffffffff:
+                    dirfd = dirfd - (1 << 64)
+                abs_path = resolve_path(wpid, path, dirfd)
+                write_intent = True
                 path = abs_path
             elif name == "connect":
                 # Decode sockaddr at args[1], length at args[2]. The
@@ -1481,7 +1854,16 @@ def _handle_waitpid_event(
                 # ALLOWED under enforcement. The signal then becomes
                 # "what would have been blocked" — the operator's
                 # actual question.
-                if name in ("openat", "open", "openat2") and abs_path is not None:
+                # Mutation syscalls flow through the same allowlist
+                # check with write_intent=True: a mutation inside
+                # writable_paths would have been allowed under
+                # enforcement, so filtered mode drops it; a mutation
+                # OUTSIDE writable_paths is kept — this includes the
+                # metadata ops (chmod/chown/xattr) Landlock's ABI gap
+                # leaves unenforced, which is exactly the signal the
+                # operator needs the audit tier to surface.
+                if (name in ("openat", "open", "openat2")
+                        or name in _MUTATION_PATH_ARGS) and abs_path is not None:
                     # When read_allowlist is None, Landlock is in
                     # restrict_reads=False mode (allows all reads).
                     # Reads can never be would-blocked, so we drop
@@ -1500,7 +1882,11 @@ def _handle_waitpid_event(
                             if write_intent
                             else audit_filter.get("read_allowlist") or []
                         )
-                        if _path_in_allowlist(abs_path, allowlist):
+                        # Symlink-aware: a lexical match alone must
+                        # not drop the record — see
+                        # _suppress_allowlisted_path.
+                        if _suppress_allowlisted_path(abs_path,
+                                                      allowlist):
                             should_log = False
                 elif name == "connect" and sock is not None:
                     family, port, ip = sock
@@ -1508,14 +1894,55 @@ def _handle_waitpid_event(
                         "allowed_tcp_ports", [])
                     if port in allowed_ports:
                         should_log = False
-                # For seccomp blocklist syscalls (ptrace, bpf, etc.)
-                # we don't filter — they're rare and ALWAYS
+                # For seccomp blocklist syscalls that still reach the
+                # tracer we don't filter — they're rare and ALWAYS
                 # would-be-blocked under enforcement, so the audit
-                # signal is exactly what the operator wants.
+                # signal is exactly what the operator wants. Note the
+                # escape-primitive subset (ptrace, process_vm_*,
+                # keyring, bpf, userfaultfd, io_uring_* — see
+                # seccomp._AUDIT_HARD_DENY_SYSCALLS), the blocked tty
+                # ioctls, AND the socket()-argument rules (blocked
+                # families, SOCK_RAW, the proxy-mode UDP block) never
+                # arrive here: those keep SCMP_ACT_ERRNO even in
+                # audit mode, so the child sees EPERM instead of the
+                # tracer seeing an event. This resume-unconditionally
+                # path therefore only ever grants observe-class
+                # syscalls (open/connect/stat trace extras), never a
+                # boundary rule.
 
             if should_log:
+                # socket()/ioctl() are blocked on specific argument
+                # values; only the hostile subset (tty-hijack ioctls,
+                # AF_PACKET / SOCK_RAW) escalates — a plain AF_UNIX
+                # denial is ordinary tool noise. The decoded label
+                # (e.g. "ioctl(TIOCSTI)") doubles as the dedup key so
+                # each primitive announces once per run. (Since the
+                # socket/ioctl argument rules moved to hard-deny under
+                # audit mode, these events no longer reach the tracer
+                # from our own filter; the branch is kept for
+                # robustness against filters built by older versions
+                # of this module within the same run layout.)
+                _esc_name = (
+                    escalation_signatures.hostile_arg_label(name, args)
+                    if name in ("socket", "ioctl")
+                    else (name if name in _LIVE_ESCALATE_SYSCALLS
+                          else None)
+                )
+                if (_esc_name is not None
+                        and escalated_syscalls is not None
+                        and _esc_name not in escalated_syscalls
+                        and not audit_budget.live_escalation_disabled()):
+                    escalated_syscalls.add(_esc_name)
+                    _announce_escape_primitive(_esc_name, wpid)
+
                 decision, marker = budget.evaluate(name, wpid)
                 if marker is not None:
+                    # Stamp the per-run nonce like the data records
+                    # and end-of-run summary — a nonce-validating
+                    # parser must be able to attribute the in-band
+                    # markers to this run rather than drop them.
+                    if observe_nonce is not None:
+                        marker["nonce"] = observe_nonce
                     _write_record_dict(run_dir, marker,
                                        filename=output_filename)
                 if decision == audit_budget.KEEP:
@@ -1587,7 +2014,7 @@ def _handle_waitpid_event(
     return
 
 
-def _cli_main(argv: Optional[list] = None) -> int:
+def _cli_main(argv: list | None = None) -> int:
     """CLI entry point:
     ``python -m core.sandbox.tracer <pid> <run_dir> [<sync_fd> [<config_path>]]``
 
@@ -1603,7 +2030,13 @@ def _cli_main(argv: Optional[list] = None) -> int:
         "writable_paths": [str, ...],   # write-intent allowlist
         "read_allowlist": [str, ...],   # read-intent allowlist
         "allowed_tcp_ports": [int, ...],
+        "audit_budget": int | None,     # parent's --audit-budget override
+        "observe_mode": bool,           # flips output filename + mode stamp
+        "observe_nonce": str | None,    # per-run provenance secret
+        "evidence_fd": int,             # inherited evidence-file fd (F11)
     }
+    The dict is passed unmerged to trace(), which reads the last four
+    keys directly (see the writer in _spawn.py for per-key rationale).
 
     Exit codes:
       0  clean (target exited)
@@ -1658,7 +2091,7 @@ def _cli_main(argv: Optional[list] = None) -> int:
     audit_filter = None
     if config_path is not None:
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 audit_filter = json.load(f)
         except OSError as e:
             sys.stderr.write(
@@ -1670,9 +2103,54 @@ def _cli_main(argv: Optional[list] = None) -> int:
                 f"error: invalid JSON in audit config {config_path}: {e}\n"
             )
             return 1
+        # Parsed — release the config's backing store immediately.
+        #
+        # Anonymous-fd shape (/proc/self/fd/N, /dev/fd/N): close the
+        # inherited fd NOW, before signalling ready and before the
+        # target is unblocked, so the /proc/<tracer-pid>/fd/N
+        # reflection of the (nonce-carrying) config disappears before
+        # any untrusted code runs. Belt-and-braces with the
+        # PR_SET_DUMPABLE=0 above.
+        _cfg_fd = parse_fd_path(config_path)
+        if _cfg_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(_cfg_fd)
+        # Legacy tempfile shape — remove it HERE rather than relying
+        # only on the spawn parent's cleanup paths: a SIGKILL'd parent
+        # never reaches its finally blocks and the config strands in
+        # the temp dir. Best-effort, and only for the parent-minted
+        # mkstemp shape — an operator passing their own config file
+        # keeps it.
+        elif os.path.basename(config_path).startswith("raptor-audit-cfg-"):
+            with contextlib.suppress(OSError):
+                os.unlink(config_path)
 
     return trace(pid, run_dir, sync_fd, audit_filter)
 
 
+def _set_non_dumpable() -> None:
+    """PR_SET_DUMPABLE=0 for THIS process, best-effort.
+
+    Blocks same-UID processes (the sandboxed target on namespace-less
+    backends) from traversing /proc/<tracer-pid>/fd and reaching the
+    inherited config fd (which briefly holds the observe nonce) or
+    the held evidence fd — /proc fd traversal requires
+    ptrace_may_access, which fails on a non-dumpable target.
+
+    Called ONLY from the ``python -m core.sandbox.tracer`` process
+    entry: the flag is process-global, and callers that drive
+    _cli_main in-process (tests) must not have their own process made
+    non-dumpable (it breaks newuidmap-based user-ns setup, among
+    other things).
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    libc = _get_libc()
+    if libc is not None and hasattr(libc, "prctl"):
+        with contextlib.suppress(OSError, ctypes.ArgumentError):
+            libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE = 4
+
+
 if __name__ == "__main__":
+    _set_non_dumpable()
     raise SystemExit(_cli_main())

@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 logger = logging.getLogger("raptor.security")
 
@@ -50,6 +51,11 @@ logger = logging.getLogger("raptor.security")
 # vendor-specific names that tooling sometimes sets without `CI`
 # (notably Jenkins, TeamCity, Bamboo, Azure Pipelines).
 _CI_ENV_VARS: tuple[str, ...] = (
+    # RAPTOR's own verdict marker: get_safe_env() sets RAPTOR_CI=1 in
+    # child envs whenever the PARENT judged itself in CI, so the gate
+    # keeps working in children whose scrubbed env lost the vendor
+    # markers. Listed first — it is authoritative when present.
+    "RAPTOR_CI",
     "CI",
     "CONTINUOUS_INTEGRATION",
     "GITHUB_ACTIONS",
@@ -67,6 +73,20 @@ _CI_ENV_VARS: tuple[str, ...] = (
     "CIRRUS_CI",
     "WOODPECKER",
 )
+
+
+# Public aliases for consumers outside this module (core.config's
+# env scrubbing keeps the markers allowlisted and re-stamps the
+# parent's verdict; keeping one source of truth here prevents the
+# lists drifting apart).
+def is_ci() -> bool:
+    """Public wrapper — see _is_ci."""
+    return _is_ci()
+
+
+def ci_env_vars() -> tuple[str, ...]:
+    """The CI marker names, for env-allowlist composition."""
+    return _CI_ENV_VARS
 
 
 def _is_ci() -> bool:
@@ -115,12 +135,13 @@ def require_interactive_for_weakened_defenses() -> None:
     There is no override — this is a hard gate.
     """
     if not is_interactive():
-        raise NonInteractiveError(
+        msg = (
             "--accept-weakened-defenses is not allowed in non-interactive mode. "
             "CI/CD pipelines must use a model that passes the defense envelope "
             "probe. Configure a supported model (Claude, GPT, Gemini) or remove "
             "the flag."
         )
+        raise NonInteractiveError(msg)
 
 
 def _proc_tty_and_ppid(pid: int):
@@ -131,7 +152,7 @@ def _proc_tty_and_ppid(pid: int):
     so the numeric fields after it parse regardless of the process name.
     """
     try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+        with Path(f"/proc/{pid}/stat").open(encoding="utf-8", errors="replace") as fh:
             data = fh.read()
         rp = data.rindex(")")
         fields = data[rp + 2:].split()
@@ -142,8 +163,83 @@ def _proc_tty_and_ppid(pid: int):
         return None
 
 
+# Staleness bound on the controlling-terminal probe. A TTY ancestor
+# alone would treat a nohup'd or tmux-detached session as
+# human-attended INDEFINITELY — the terminal exists but nobody has
+# touched it for days. Where the tty device is cheaply statable we
+# additionally require recent activity: the device's atime is bumped
+# by keystrokes (reads), so "atime within the threshold" ≈ "a human
+# typed recently". The default is deliberately generous (24 h — also
+# relatime's fallback refresh window) so a long think-pause never
+# locks an operator out. Override via the env knob; a value <= 0
+# disables the recency requirement (pure presence check, the pre-fix
+# behaviour).
+_TTY_MAX_AGE_ENV = "RAPTOR_HITL_TTY_MAX_AGE_S"
+_TTY_MAX_AGE_DEFAULT_S = 86400.0
+
+
+def _tty_max_age_s() -> float:
+    raw = os.environ.get(_TTY_MAX_AGE_ENV)
+    if not raw:
+        return _TTY_MAX_AGE_DEFAULT_S
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a number; using default %ss",
+            _TTY_MAX_AGE_ENV, raw, _TTY_MAX_AGE_DEFAULT_S,
+        )
+        return _TTY_MAX_AGE_DEFAULT_S
+
+
+def _tty_recently_active(pid: int, tty_nr: int, *,
+                         _readlink=os.readlink,
+                         _stat=os.stat,
+                         _now=None) -> bool:
+    """Best-effort: was ``pid``'s controlling terminal used recently?
+
+    Resolves the process's std fds via ``/proc/<pid>/fd`` and stats
+    the one whose device number matches ``tty_nr`` (i.e. the actual
+    controlling terminal, not just any /dev file); its atime is the
+    last keystroke. LOUD LIMITATION: this is only *cheaply knowable*
+    for same-uid ancestors — a root-owned ancestor (sshd) or a gone
+    tty makes the fds unreadable, and we then fall back to counting
+    the terminal's mere presence as attended (the pre-fix behaviour)
+    rather than failing the whole probe. The recency layer therefore
+    tightens the common nohup/detached-tmux case without ever
+    breaking a legitimate interactive session.
+    """
+    max_age = _tty_max_age_s()
+    if max_age <= 0:
+        return True
+    import time
+    newest = None
+    for fd in (0, 1, 2):
+        try:
+            path = _readlink(f"/proc/{pid}/fd/{fd}")
+        except OSError:
+            continue
+        if not path.startswith("/dev/"):
+            continue
+        try:
+            st = _stat(path)
+        except OSError:
+            continue
+        if tty_nr and st.st_rdev != tty_nr:
+            continue  # some other /dev file, not the controlling tty
+        newest = st.st_atime if newest is None else max(newest,
+                                                        st.st_atime)
+    if newest is None:
+        # Activity not cheaply knowable — see the docstring. Presence
+        # of the controlling terminal counts, as before.
+        return True
+    now = _now() if _now is not None else time.time()
+    return (now - newest) <= max_age
+
+
 def _has_terminal_ancestor() -> bool:
-    """True if this process or any ancestor holds a controlling terminal (Linux).
+    """True if this process or an ancestor holds a RECENTLY ACTIVE
+    controlling terminal (Linux).
 
     Claude Code runs its tool subprocesses with the controlling terminal
     detached — ``stdin.isatty()`` is False and ``/dev/tty`` is ENXIO — so a
@@ -151,6 +247,16 @@ def _has_terminal_ancestor() -> bool:
     process itself keeps its controlling terminal, so walking the parent chain
     finds it. A headless run (cron, systemd, CI, SDK daemon) has no
     controlling terminal anywhere in the chain and returns False.
+
+    Recency: a bare presence check treated nohup'd / tmux-detached
+    sessions as human-attended forever. Each terminal-holding ancestor
+    is now additionally checked for recent tty activity (atime of the
+    controlling device, threshold ``RAPTOR_HITL_TTY_MAX_AGE_S``,
+    default 24 h); a stale terminal does not count, but the walk
+    continues — an outer, recently-used terminal still satisfies the
+    probe. Where activity is not cheaply knowable (root-owned
+    ancestor, vanished device), presence alone counts — best-effort
+    tightening, never a lock-out. See _tty_recently_active.
 
     Linux-only (reads ``/proc``); other platforms rely on the caller's
     stdin-TTY fallback. Bounded hop count + visited-set guard against a
@@ -166,7 +272,7 @@ def _has_terminal_ancestor() -> bool:
         if res is None:
             break
         tty_nr, ppid = res
-        if tty_nr != 0:
+        if tty_nr != 0 and _tty_recently_active(pid, tty_nr):
             return True
         if ppid == pid:
             break
@@ -179,7 +285,11 @@ def _session_has_human_terminal() -> bool:
 
     True only when a controlling terminal is present AND no CI env var is set
     (a CI runner that allocated a pseudo-TTY must not count as human-attended,
-    matching is_interactive()'s hardening). Fail-closed: any error → False.
+    matching is_interactive()'s hardening). On Linux the terminal must also
+    show recent activity where cheaply knowable — a nohup'd / detached-tmux
+    terminal that nobody has touched within RAPTOR_HITL_TTY_MAX_AGE_S
+    (default 24 h) no longer counts; see _tty_recently_active for the
+    best-effort limits. Fail-closed: any error → False.
     """
     if _is_ci():
         return False
@@ -239,6 +349,66 @@ def _sandbox_will_contain() -> bool:
         return False
 
 
+# Agents whose Rule-of-Two score is 3 (untrusted input + sensitive
+# access + external state) with no severable leg — the job itself spans
+# all three axes, so containment cannot bring the score under the
+# threshold the way it does for the understand/validate sub-agent
+# (which has no external-state leg to begin with). Dispatching one of
+# these headlessly is therefore never allowed: a human-attended session
+# is the only satisfying condition, and the sandbox does NOT substitute.
+#
+# There is currently no in-repo programmatic dispatcher for these
+# agents (they are .claude/agents definitions launched via the Task
+# tool from an interactive session, where Claude Code's permission
+# prompt is the HITL). This registry + require_human_for_agent_dispatch
+# exist so that any FUTURE headless dispatcher must route through the
+# gate — an inventory test walks libexec/, core/, and packages/ and
+# fails on any reference to these agent names outside the files
+# allowlisted as non-dispatch (see
+# core/security/tests/test_hitl_dispatch_inventory.py).
+HITL_REQUIRED_AGENTS: frozenset[str] = frozenset({
+    "offsec-specialist",
+})
+
+
+def require_human_for_agent_dispatch(agent_name: str) -> None:
+    """Refuse headless dispatch of a HITL-required agent (Rule of Two).
+
+    Agents in :data:`HITL_REQUIRED_AGENTS` carry all three Rule-of-Two
+    legs by construction (A=untrusted input, B=sensitive access,
+    C=external state), so unlike the understand/validate agentic pass
+    there is no "effective sandbox" escape hatch: filesystem
+    containment severs at most the write/exec leg, leaving untrusted
+    input + external reach — still over the threshold. The ONLY
+    allowed condition is a human-attended session, where the operator
+    (and Claude Code's permission prompt) is the loop.
+
+    No-op for agents not in the registry — callers may gate every
+    dispatch unconditionally and let the registry decide.
+
+    Args:
+        agent_name: the .claude/agents definition name being dispatched.
+
+    Raises:
+        NonInteractiveError: HITL-required agent + no human terminal
+            anywhere in the session's process ancestry.
+    """
+    if agent_name not in HITL_REQUIRED_AGENTS:
+        return
+    if _session_has_human_terminal():
+        return
+    msg = (
+        f"Agent '{agent_name}' spans all three Rule-of-Two legs "
+        f"(untrusted input + sensitive access + external state) and "
+        f"requires a human-attended session — this run is non-interactive "
+        f"(CI/cron/SDK), and a sandbox does not substitute because the "
+        f"agent's job inherently keeps at least two legs even when "
+        f"contained (Rule of Two: needs-HITL). Dispatch '{agent_name}' "
+        f"from an interactive session."
+    )
+    raise NonInteractiveError(msg)
+
+
 def require_human_or_sandbox_for_agentic_pass(pass_name: str) -> None:
     """Gate the understand/validate agentic pass (Rule of Two).
 
@@ -269,7 +439,7 @@ def require_human_or_sandbox_for_agentic_pass(pass_name: str) -> None:
     """
     if _sandbox_will_contain() or _session_has_human_terminal():
         return
-    raise NonInteractiveError(
+    msg = (
         f"--{pass_name} dispatches an autonomous agent with Write and Bash "
         f"over untrusted target code, which requires either a human-attended "
         f"session or an effective sandbox — this run has neither: it is "
@@ -278,3 +448,4 @@ def require_human_or_sandbox_for_agentic_pass(pass_name: str) -> None:
         f"sandbox enabled, or from an interactive session, to use "
         f"--{pass_name}."
     )
+    raise NonInteractiveError(msg)

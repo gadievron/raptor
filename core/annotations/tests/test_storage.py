@@ -14,7 +14,6 @@ Covers:
 
 from __future__ import annotations
 
-
 import pytest
 
 from core.annotations import (
@@ -26,7 +25,6 @@ from core.annotations import (
     remove_annotation,
     write_annotation,
 )
-
 
 # ---------------------------------------------------------------------------
 # Path resolution + validation
@@ -276,20 +274,19 @@ class TestFormatting:
         assert len(all_) == 1
         assert "subhead" in got.body
 
-    def test_body_with_double_hash_in_code_block(self, tmp_path):
-        """Markdown ``## name`` inside a fenced code block would
-        false-positive as a new section. Acceptable limitation —
-        the format expects ``## name`` only at section starts. We
-        document the limitation by pinning the current behaviour:
-        no crash, may split the section."""
+    def test_body_with_double_hash_in_code_block_rejected(self, tmp_path):
+        """Markdown ``## name`` at line start — even inside a fenced
+        code block — would be re-parsed as a new section on read.
+        Historically this "may split the section" behaviour was pinned
+        as an acceptable limitation; it is now rejected at write time
+        because the same shape is the section-forgery primitive (a
+        crafted body fabricates a human-graded section). Operators
+        keep ``###`` and indentation for structured prose."""
         body = "```\n## not_really_a_section\n```\nreal content"
         ann = Annotation(file="x.py", function="f", body=body)
-        write_annotation(tmp_path, ann)
-        # Round-trip: we read whatever the regex sees. Pin that
-        # the original section's name + first line at minimum
-        # are recoverable.
-        all_ = read_file_annotations(tmp_path, "x.py")
-        assert any(a.function == "f" for a in all_)
+        with pytest.raises(ValueError, match="section heading"):
+            write_annotation(tmp_path, ann)
+        assert read_file_annotations(tmp_path, "x.py") == []
 
 
 # ---------------------------------------------------------------------------
@@ -432,3 +429,72 @@ class TestAtomicWrite:
         # No .annotation-*.tmp files left in the directory.
         leftovers = list(tmp_path.glob("**/.annotation-*.tmp"))
         assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
+# Resolve()-based containment + lock-file symlink defence
+# ---------------------------------------------------------------------------
+
+
+class TestPathContainment:
+    def test_symlinked_subdir_escaping_base_rejected(self, tmp_path):
+        """A symlinked intermediate directory INSIDE the tree passes
+        the lexical checks but must not redirect writes outside it."""
+        base = tmp_path / "annotations"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (base / "sub").symlink_to(outside)
+
+        with pytest.raises(ValueError, match="escapes base dir"):
+            annotation_path(base, "sub/foo.py")
+
+    def test_symlinked_subdir_inside_base_accepted(self, tmp_path):
+        """A symlink that stays under the base dir is fine."""
+        base = tmp_path / "annotations"
+        (base / "real").mkdir(parents=True)
+        (base / "alias").symlink_to(base / "real")
+
+        p = annotation_path(base, "alias/foo.py")
+        assert p == base / "alias" / "foo.py.md"
+
+    def test_write_annotation_refused_through_escaping_symlink(self, tmp_path):
+        base = tmp_path / "annotations"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (base / "sub").symlink_to(outside)
+
+        ann = Annotation(file="sub/foo.py", function="f", body="note")
+        with pytest.raises(ValueError, match="escapes base dir"):
+            write_annotation(base, ann)
+        assert list(outside.iterdir()) == []
+
+    def test_nonexistent_parents_still_resolve(self, tmp_path):
+        """Deep paths whose parents don't exist yet must keep working —
+        the resolve() check is lexical for missing components."""
+        base = tmp_path / "annotations"
+        ann = Annotation(file="a/b/c/foo.py", function="f", body="note")
+        path = write_annotation(base, ann)
+        assert path == base / "a" / "b" / "c" / "foo.py.md"
+        assert path.is_file()
+
+
+class TestLockSymlinkDefence:
+    def test_lock_path_symlink_refused(self, tmp_path):
+        """A symlink squatted at the predictable ``.md.lock`` sibling
+        must fail loudly (ELOOP via O_NOFOLLOW), not be followed."""
+        import sys
+        if sys.platform == "win32":  # pragma: no cover
+            pytest.skip("fcntl locking is POSIX-only")
+
+        base = tmp_path / "annotations"
+        base.mkdir()
+        victim = tmp_path / "victim"
+        victim.write_text("untouched")
+        (base / "foo.py.md.lock").symlink_to(victim)
+
+        ann = Annotation(file="foo.py", function="f", body="note")
+        with pytest.raises(OSError):
+            write_annotation(base, ann)
+        assert victim.read_text() == "untouched"

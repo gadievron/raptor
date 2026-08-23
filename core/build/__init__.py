@@ -6,3 +6,7 @@ filesystem/OS probing that the sandbox's caller composes into the
 build subprocess's env. Keeping it here keeps `core/sandbox/` narrow
 to the sandbox itself.
 """
+
+from .build_detector import BuildDetector, BuildSystem
+
+__all__ = ["BuildDetector", "BuildSystem"]

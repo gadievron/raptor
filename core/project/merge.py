@@ -9,13 +9,17 @@ import hashlib as _hashlib
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from core.json import save_json
 from core.logging import get_logger
 from core.project.findings_utils import count_vulns as _count_vulns
 from core.project.findings_utils import dedup_key as _dedup_key
-from core.project.findings_utils import load_findings_from_dir as _load_findings_from_dir
+from core.project.findings_utils import (
+    load_findings_from_dir as _load_findings_from_dir,
+)
+from core.project.findings_utils import run_is_imported as _run_is_imported
+from core.run.findings import is_canonical_ref_shape as _is_canonical_ref_shape
 from core.sarif.parser import merge_sarif
 
 logger = get_logger()
@@ -24,6 +28,7 @@ logger = get_logger()
 KNOWN_FILES = {
     "findings.json",
     ".raptor-run.json",
+    ".raptor-imported.json",
     "checklist.json",
     "validation-report.md",
     "agentic-report.md",
@@ -44,10 +49,7 @@ def _is_known_file(name: str) -> bool:
     """Check if a filename is in the known set or matches known extensions."""
     if name in KNOWN_FILES:
         return True
-    for ext in KNOWN_EXTENSIONS:
-        if name.endswith(ext):
-            return True
-    return False
+    return any(name.endswith(ext) for ext in KNOWN_EXTENSIONS)
 
 
 def _extract_date_from_dir(run_dir: Path) -> str:
@@ -118,12 +120,27 @@ def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
             # Pathological: 1000 collisions on the same stem+date
             # almost certainly indicates a bug in caller. Fail loud
             # rather than spinning.
-            raise RuntimeError(
-                f"_uniquify: 1000 collisions on {base!r} — refusing to spin"
-            )
+            msg = f"_uniquify: 1000 collisions on {base!r} — refusing to spin"
+            raise RuntimeError(msg)
 
 
-def _finding_key(finding: Dict[str, Any]) -> tuple:
+def _resolves_inside(item: Path, run_root: Path) -> bool:
+    """Check that ``item`` resolves to a path inside ``run_root``.
+
+    Direct symlink children are already skipped by the caller; this
+    guards the remaining case where a link in an intermediate path
+    component makes a plain-looking entry resolve outside the run
+    directory being merged. Unresolvable entries (dangling target,
+    permission error mid-path) are treated as outside.
+    """
+    try:
+        resolved = item.resolve(strict=True)
+    except OSError:
+        return False
+    return resolved.is_relative_to(run_root)
+
+
+def _finding_key(finding: dict[str, Any]) -> tuple:
     """Dedup key for a finding: (file, function, line, vuln_type).
 
     Aligns with `count_vulns` (which groups by `(file, function, vuln_type)`)
@@ -175,26 +192,45 @@ _STATUS_RANK = {
 }
 
 
-def _status_rank(finding: Dict[str, Any]) -> int:
+def _status_rank(finding: dict[str, Any]) -> int:
     """Return a rank for how far a finding has progressed through validation."""
     status = finding.get("final_status") or finding.get("status") or ""
     return _STATUS_RANK.get(status, 0)
 
 
-def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
+def merge_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
     """Merge findings from multiple runs. Deduplicate by (file, function, line).
 
     When the same finding appears in multiple runs, prefer the version with the
     most progressed status (e.g. "confirmed" beats "not_disproven"). Among equal
     statuses, the latest run wins.
 
+    **Origin preference:** runs restored by ``/project import`` carry a
+    persisted marker (:func:`core.project.findings_utils.run_is_imported`)
+    because their archives are unsigned — every status they carry is an
+    attacker-selectable claim. A locally-produced representation of a
+    finding therefore ALWAYS beats an imported one, regardless of how
+    "progressed" the imported status looks; the status race only breaks
+    ties within the same origin class.
+
     **Provenance preservation:** the winning representation's
-    ``provenance_refs`` becomes the UNION (deduped by ``run_id``, insertion-
-    order preserved) of every losing source's ``provenance_refs``. So a
-    finding seen in runs A → B → D where B "won" the status race still
-    surfaces the A and D refs on the merged record — the cross-run trail
-    survives the deduplication. Pre-stamping findings (no ``provenance_refs``
-    field) merge cleanly; they just don't contribute to the union.
+    ``provenance_refs`` becomes the UNION (insertion-order preserved) of
+    every losing source's ``provenance_refs``. So a finding seen in runs
+    A → B → D where B "won" the status race still surfaces the A and D
+    refs on the merged record — the cross-run trail survives the
+    deduplication. Pre-stamping findings (no ``provenance_refs`` field)
+    merge cleanly; they just don't contribute to the union.
+
+    **Stamp-aware dedup:** refs that verify as the canonical stamp shape
+    (:func:`core.run.findings.is_canonical_ref_shape`) dedup on their
+    full tuple; everything else keeps the historical first-wins-per-
+    ``run_id`` fold. Pre-fix the whole union deduped by ``run_id``
+    FIRST-WINS, so a forged ref that merely claimed a run's id — which
+    the stamping path deliberately leaves in place, appending the
+    canonical stamp AFTER it (see ``core/run/findings.py``) — displaced
+    the genuine stamp and the merged view silently dropped the run's
+    canonical back-link. Now the canonical stamp always survives the
+    merge; forged refs are retained as extras but can never displace it.
 
     Args:
         run_dirs: Ordered list of run directories (later entries override earlier).
@@ -202,34 +238,55 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     Returns:
         Deduplicated list of findings.
     """
-    merged: Dict[tuple, Dict[str, Any]] = {}
+    merged: dict[tuple, dict[str, Any]] = {}
+    # Winning candidate's (origin, status) rank per key — local origin
+    # outranks imported before status is even consulted.
+    rank_by_key: dict[tuple, tuple[int, int]] = {}
     # Parallel structure tracking the provenance union per key. Kept in
-    # insertion order via a dict-of-dicts indexed by run_id so re-additions
-    # of the same run (e.g. a /project clean + rerun on the same dir) don't
-    # multiply the refs.
-    refs_by_key: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+    # insertion order via a dict-of-dicts indexed by a per-ref dedup key
+    # so re-additions of the same run (e.g. a /project clean + rerun on
+    # the same dir) don't multiply the refs.
+    refs_by_key: dict[tuple, dict[tuple, dict[str, Any]]] = {}
 
     for run_dir in run_dirs:
         findings = _load_findings_from_dir(Path(run_dir))
+        origin_rank = 0 if _run_is_imported(Path(run_dir)) else 1
         for finding in findings:
             key = _finding_key(finding)
             # Accumulate this finding's refs (if any) into the union for the
             # key — independent of who wins the status race.
             ref_acc = refs_by_key.setdefault(key, {})
             for r in finding.get("provenance_refs", []) or ():
-                if isinstance(r, dict):
-                    run_id = r.get("run_id")
-                    if isinstance(run_id, str) and run_id not in ref_acc:
-                        ref_acc[run_id] = r
-            existing = merged.get(key)
-            if existing is None or _status_rank(finding) >= _status_rank(existing):
+                if not isinstance(r, dict):
+                    continue
+                run_id = r.get("run_id")
+                if not isinstance(run_id, str):
+                    continue
+                # Stamp-aware dedup: a ref that verifies as the
+                # canonical stamp shape dedups on its full tuple, so
+                # a forged ref that merely CLAIMS a run_id (the shape
+                # the stamping path leaves in place, appending the
+                # canonical stamp after it) can never displace the
+                # run's genuine back-link. Non-canonical refs keep
+                # the historical first-wins-per-run_id fold so junk
+                # refs don't multiply across sources.
+                if _is_canonical_ref_shape(r):
+                    acc_key = ("stamp", run_id,
+                               r["manifest_path"], r.get("ts"))
+                else:
+                    acc_key = ("ref", run_id)
+                if acc_key not in ref_acc:
+                    ref_acc[acc_key] = r
+            candidate_rank = (origin_rank, _status_rank(finding))
+            if key not in merged or candidate_rank >= rank_by_key[key]:
                 merged[key] = finding
+                rank_by_key[key] = candidate_rank
 
     # Inject the union back onto each winning representation. If the key has
     # no refs at all (all sources were pre-stamping), leave the field absent
     # rather than synthesising an empty list — preserves the "no provenance
     # available" signal.
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for key, winner in merged.items():
         union = list(refs_by_key.get(key, {}).values())
         if union:
@@ -240,9 +297,15 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     return out
 
 
-def verify_merge(merged_findings: List, source_findings_count: int,
+def verify_merge(merged_findings: list, source_findings_count: int,
                  unique_count: int) -> bool:
-    """Verify merged count >= expected deduplicated count.
+    """Sanity-check the merged findings count from both directions.
+
+    Every unique key must survive the merge (``>= unique_count``) and
+    dedup can only ever reduce, never invent, findings
+    (``<= source_findings_count``). Pre-fix the source count was an
+    unused parameter, so the docstring's promise to verify against the
+    total across all source runs was never exercised.
 
     Args:
         merged_findings: The merged findings list.
@@ -252,10 +315,10 @@ def verify_merge(merged_findings: List, source_findings_count: int,
     Returns:
         True if the merge looks valid.
     """
-    return len(merged_findings) >= unique_count
+    return unique_count <= len(merged_findings) <= source_findings_count
 
 
-def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
+def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     """Merge findings and artefacts from multiple run directories.
 
     Args:
@@ -270,10 +333,12 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
 
     # Safety: don't merge into an existing run directory
     if output_dir.exists() and any((output_dir / f).exists() for f in ("findings.json", ".raptor-run.json")):
-        raise ValueError(f"Output directory {output_dir} already contains data. Use an empty directory.")
+        msg = f"Output directory {output_dir} already contains data. Use an empty directory."
+        raise ValueError(msg)
 
     if output_dir.resolve() in {d.resolve() for d in run_dirs}:
-        raise ValueError("output_dir cannot be one of the source run directories")
+        msg = "output_dir cannot be one of the source run directories"
+        raise ValueError(msg)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -291,8 +356,7 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
 
     if not verify_merge(merged, total_findings, unique_count):
         logger.warning(
-            f"Merge verification warning: {len(merged)} merged findings "
-            f"< {unique_count} unique IDs"
+            "Merge verification warning: %s merged findings < %s unique IDs", len(merged), unique_count
         )
 
     if merged:
@@ -302,12 +366,10 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
     # Top-level *.sarif are the code-scan outputs; SCA writes its SARIF
     # to the sca/ subdir (<run>/sca/findings.sarif), so include that too
     # or merged.sarif would silently omit dependency findings.
-    sarif_paths: List[str] = []
+    sarif_paths: list[str] = []
     for run_dir in run_dirs:
-        for sarif_file in run_dir.glob("*.sarif"):
-            sarif_paths.append(str(sarif_file))
-        for sarif_file in (run_dir / "sca").glob("*.sarif"):
-            sarif_paths.append(str(sarif_file))
+        sarif_paths.extend(str(sarif_file) for sarif_file in run_dir.glob("*.sarif"))
+        sarif_paths.extend(str(sarif_file) for sarif_file in (run_dir / "sca").glob("*.sarif"))
 
     sarif_files_merged = len(sarif_paths)
     if sarif_paths:
@@ -315,14 +377,35 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
         save_json(output_dir / "merged.sarif", merged_sarif)
 
     # --- Copy unknown artefacts ---
+    # Run directories are agent-writable, so symlinks are skipped
+    # rather than dereferenced — matching the export policy
+    # (core/project/export.py) so merge cannot pull content from
+    # outside the run directory into the merged output.
     artefacts_preserved = 0
     for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
+        run_root = run_dir.resolve()
         for item in run_dir.iterdir():
+            if item.is_symlink():
+                logger.debug("Skipping symlink in merge: %s", item)
+                continue
             if item.is_dir():
                 continue
             if _is_known_file(item.name):
+                continue
+            if item.name.startswith("raptor-rootfs-") and \
+                    item.name.endswith(".tar"):
+                # Orphaned image-export staging tar (multi-GB; a crash
+                # mid-export leaves it, the exporter's finally removes
+                # it on every normal path) — never merge-duplicate it.
+                logger.debug("Skipping rootfs staging tar in merge: %s",
+                             item)
+                continue
+            if not _resolves_inside(item, run_root):
+                logger.debug(
+                    "Skipping artefact resolving outside run dir: %s", item
+                )
                 continue
 
             dest = output_dir / item.name
@@ -348,10 +431,26 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
     for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
+        run_root = run_dir.resolve()
         for item in run_dir.iterdir():
+            if item.is_symlink():
+                logger.debug("Skipping symlink in merge: %s", item)
+                continue
             if not item.is_dir():
                 continue
             if item.name.startswith("."):
+                continue
+            if item.name == "afl-rootfs":
+                # An operator-kept env-build rootfs (--keep-env-rootfs)
+                # is a multi-GB exported image tree — campaign
+                # substrate, not an analysis artefact.
+                logger.debug("Skipping kept env rootfs in merge: %s",
+                             item)
+                continue
+            if not _resolves_inside(item, run_root):
+                logger.debug(
+                    "Skipping artefact resolving outside run dir: %s", item
+                )
                 continue
             dest = output_dir / item.name
             if dest.exists():
@@ -364,7 +463,14 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
                 # entirely.
                 date_tag = _extract_date_from_dir(run_dir)
                 dest = _uniquify(output_dir, item.name, date_tag, "")
-            shutil.copytree(str(item), str(dest))
+            # symlinks=True preserves symlinks inside the tree as
+            # symlinks instead of dereferencing them into regular-file
+            # copies of out-of-run content; ignore_dangling_symlinks
+            # keeps a broken link from aborting the whole merge.
+            shutil.copytree(
+                str(item), str(dest),
+                symlinks=True, ignore_dangling_symlinks=True,
+            )
             artefacts_preserved += 1
 
     vuln_count = _count_vulns(merged)
@@ -378,13 +484,15 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
         "artefacts_preserved": artefacts_preserved,
     }
 
+    # Documented convention (_finding_key docstring): "N findings (M
+    # vulns)". Pre-fix the override relabelled the LOGICAL-vuln count
+    # as "findings", contradicting the actual merged count.
     findings_label = f"{len(merged)} findings"
     if vuln_count != len(merged):
-        findings_label = f"{vuln_count} findings"
+        findings_label = f"{len(merged)} findings ({vuln_count} vulns)"
 
     logger.info(
-        f"Merged {len(run_dirs)} runs: {findings_label}, "
-        f"{sarif_files_merged} SARIF files, {artefacts_preserved} artefacts"
+        "Merged %s runs: %s, %s SARIF files, %s artefacts", len(run_dirs), findings_label, sarif_files_merged, artefacts_preserved
     )
 
     return stats

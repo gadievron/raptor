@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:39:53Z",
+    "fetched_at": "2026-08-01T08:23:23Z",
     "git_ref": "4.2.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django",
@@ -12,13 +12,14 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-32274"
+          "CVE-2026-32274",
+          "PYSEC-2026-2121"
         ],
         "fixed_versions": [
           "26.3.1"
         ],
         "id": "GHSA-3936-cmfr-pm3m",
-        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "modified": "2026-07-13T07:26:40.139783+00:00",
         "published": "2026-03-12T18:33:10+00:00",
         "references": [
           "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
@@ -34,7 +35,7 @@
       "dep_name": "black",
       "dep_version": "23.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00023,
+      "epss": 0.00598,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -45,7 +46,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-3936-cmfr-pm3m",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 4.914704909073764,
+      "raptor_risk_estimate": 4.950809623417888,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -60,10 +61,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39941736899999997,
+        "epss_multiplier": 0.402351594,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.914704909073764,
+        "final": 4.950809623417888,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -104,7 +105,7 @@
       "dep_name": "black",
       "dep_version": "23.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00081,
+      "epss": 0.00971,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -115,7 +116,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 18.81909990589183,
+      "raptor_risk_estimate": 19.032928498222788,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -130,10 +131,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399713343,
+        "epss_multiplier": 0.404255013,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 18.81909990589183,
+        "final": 19.032928498222788,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -142,6 +143,73 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-31900",
+          "GHSA-v53h-f6m7-xcgm"
+        ],
+        "fixed_versions": [
+          "26.3.0"
+        ],
+        "id": "PYSEC-2026-2120",
+        "modified": "2026-07-13T07:15:15.712525+00:00",
+        "published": "2026-03-11T20:16:15.960000+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-v53h-f6m7-xcgm",
+          "https://github.com/psf/black/commit/0a2560b981364dde4c8cf8ce9d164c40669a8611"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": ""
+      },
+      "cvss_score": 9.8,
+      "dep_name": "black",
+      "dep_version": "23.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.0046,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.3.0:PYSEC-2026-2120",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.3.0",
+      "raptor_risk_estimate": 12.108254005339486,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40164738,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.108254005339486,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -172,7 +240,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.0012,
+      "epss": 0.01454,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -183,7 +251,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 27.61987666548209,
+      "raptor_risk_estimate": 28.09002868492044,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -192,7 +260,6 @@
         },
         "evidence": [
           "setup.py:6",
-          "setup.py:4",
           "setup.py:4"
         ],
         "verdict": "imported"
@@ -202,10 +269,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39991235999999997,
+        "epss_multiplier": 0.406719762,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.61987666548209,
+        "final": 28.09002868492044,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -221,13 +288,14 @@
       "advisory": {
         "aliases": [
           "BIT-setuptools-2024-6345",
-          "CVE-2024-6345"
+          "CVE-2024-6345",
+          "PYSEC-2026-1918"
         ],
         "fixed_versions": [
           "70.0.0"
         ],
         "id": "GHSA-cx63-2mw6-8hw5",
-        "modified": "2026-02-04T03:54:02.259111+00:00",
+        "modified": "2026-07-07T17:57:13.326243+00:00",
         "published": "2024-07-15T03:30:57+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2024-6345",
@@ -247,7 +315,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.07521,
+      "epss": 0.01939,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -258,7 +326,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-cx63-2mw6-8hw5",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 25.02583553558943,
+      "raptor_risk_estimate": 23.397111073159593,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -267,7 +335,6 @@
         },
         "evidence": [
           "setup.py:6",
-          "setup.py:4",
           "setup.py:4"
         ],
         "verdict": "imported"
@@ -277,10 +344,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.437679663,
+        "epss_multiplier": 0.409194717,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 25.02583553558943,
+        "final": 23.397111073159593,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -289,6 +356,81 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-setuptools-2026-59890",
+          "CVE-2026-59890",
+          "PYSEC-2026-3447"
+        ],
+        "fixed_versions": [
+          "83.0.0"
+        ],
+        "id": "GHSA-h35f-9h28-mq5c",
+        "modified": "2026-07-23T09:29:39.408842+00:00",
+        "published": "2026-07-21T19:09:21+00:00",
+        "references": [
+          "https://github.com/pypa/setuptools/security/advisories/GHSA-h35f-9h28-mq5c",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-59890",
+          "https://github.com/pypa/setuptools/commit/dd9f436a36486b4cb8a4c70a2321548b0be09b8f",
+          "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2026-3447.yaml",
+          "https://github.com/pypa/setuptools"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
+        },
+        "summary": "setuptools: MANIFEST.in exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/HFS+"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "setuptools",
+      "dep_version": "40.8.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00405,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-h35f-9h28-mq5c",
+      "in_kev": false,
+      "purl": "pkg:pypi/setuptools@40.8.0",
+      "raptor_risk_estimate": 20.826687781556092,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "setup.py:6",
+          "setup.py:4"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.401366715,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.826687781556092,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -323,7 +465,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.00513,
+      "epss": 0.02617,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -334,7 +476,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-r9hx-vwmv-q579",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 13.602406863656247,
+      "raptor_risk_estimate": 13.965777460406247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -343,7 +485,6 @@
         },
         "evidence": [
           "setup.py:6",
-          "setup.py:4",
           "setup.py:4"
         ],
         "verdict": "imported"
@@ -353,10 +494,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401917839,
+        "epss_multiplier": 0.412654551,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.602406863656247,
+        "final": 13.965777460406247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

@@ -44,10 +44,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Set, Tuple
+from typing import Any
+from collections.abc import Iterable
 
-from ..models import Confidence, Dependency, PinStyle
-from . import register
+from core.oci.image_ref import split_image_ref as _split_image_ref
+
+from ..models import Confidence, Dependency
+from ..models import classify_pin_style as _classify_pin_style
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +64,7 @@ _PURL_TYPE = "oci"
 # YAML keyword list). Filtering them out prevents emitting "deps"
 # for ``image:`` / ``services:`` / ``variables:`` / etc. as if they
 # were jobs with sub-image fields.
-_RESERVED_KEYS: Set[str] = {
+_RESERVED_KEYS: set[str] = {
     "image", "services", "variables", "stages", "default",
     "include", "before_script", "after_script", "workflow",
     "cache", "artifacts", "pages", "trigger",
@@ -68,13 +72,10 @@ _RESERVED_KEYS: Set[str] = {
 
 
 @register(filenames=[".gitlab-ci.yml", ".gitlab-ci.yaml"])
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning(
-            "sca.parsers.gitlab_ci: read failed for %s: %s", path, e,
-        )
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
@@ -96,15 +97,18 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(data, dict):
         return []
 
-    refs: List[Tuple[str, str]] = []
+    refs: list[tuple[str, str]] = []
     # ``(image_ref, source_context)`` — context goes into
     # source_extra so operators see "from top-level image" vs
     # "from job test:image".
 
-    for ref in _extract_image(data, label="top-level"):
-        refs.append(ref)
-    for ref in _extract_services(data, label="top-level services"):
-        refs.append(ref)
+    refs.extend(_extract_image(data, label="top-level"))
+    refs.extend(_extract_services(data, label="top-level services"))
+
+    default_block = data.get("default")
+    if isinstance(default_block, dict):
+        refs.extend(_extract_image(default_block, label="default"))
+        refs.extend(_extract_services(default_block, label="default services"))
 
     # Per-job sweep: skip reserved keys. A "job" is any other
     # top-level mapping whose value is itself a dict.
@@ -121,18 +125,16 @@ def parse(path: Path) -> List[Dependency]:
             pass
         if not isinstance(job, dict):
             continue
-        for ref in _extract_image(job, label=f"job {job_name}"):
-            refs.append(ref)
-        for ref in _extract_services(
+        refs.extend(_extract_image(job, label=f"job {job_name}"))
+        refs.extend(_extract_services(
             job, label=f"job {job_name} services",
-        ):
-            refs.append(ref)
+        ))
 
     # Dedup by (image_ref, source_context) so the same ref used in
     # multiple places emits one row per usage location — preserves
     # provenance.
-    seen: Set[Tuple[str, str]] = set()
-    out: List[Dependency] = []
+    seen: set[tuple[str, str]] = set()
+    out: list[Dependency] = []
     for image_ref, ctx in refs:
         key = (image_ref, ctx)
         if key in seen:
@@ -148,7 +150,7 @@ def parse(path: Path) -> List[Dependency]:
 
 def _extract_image(
     block: Any, *, label: str,
-) -> Iterable[Tuple[str, str]]:
+) -> Iterable[tuple[str, str]]:
     """Pull an ``image:`` field from a job or top-level block."""
     if not isinstance(block, dict):
         return
@@ -164,7 +166,7 @@ def _extract_image(
 
 def _extract_services(
     block: Any, *, label: str,
-) -> Iterable[Tuple[str, str]]:
+) -> Iterable[tuple[str, str]]:
     """Pull each entry from a ``services:`` array."""
     if not isinstance(block, dict):
         return
@@ -185,7 +187,7 @@ def _build_dep(
     image_ref: str,
     context: str,
     declared_in: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     name, version = _split_image_ref(image_ref)
     if not name:
         return None
@@ -201,7 +203,7 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=_classify_pin_style(version),
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
@@ -211,20 +213,3 @@ def _build_dep(
         source_kind="gitlab_ci",
         source_extra={"context": context, "image_ref": image_ref},
     )
-
-
-def _split_image_ref(ref: str) -> tuple:
-    """Same logic as ``compose._split_image_ref``. Duplicated rather
-    than imported to keep parsers loosely coupled — a future
-    cross-source refactor can lift this into ``core.oci.image_ref``
-    if value materialises."""
-    if "@" in ref:
-        name, _, digest = ref.rpartition("@")
-        return name, digest if digest else None
-    last_slash = ref.rfind("/")
-    rest = ref[last_slash + 1:] if last_slash >= 0 else ref
-    if ":" in rest:
-        prefix = ref[:last_slash + 1] if last_slash >= 0 else ""
-        rest_name, _, tag = rest.partition(":")
-        return prefix + rest_name, tag if tag else None
-    return ref, None

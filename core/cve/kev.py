@@ -20,10 +20,12 @@ KEV-listed flag on any CVE-tagged finding.
 from __future__ import annotations
 
 import logging
-from typing import Set
 
-from core.json import JsonCache
 from core.http import HttpClient, HttpError
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.json import JsonCache
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class KevClient:
         self._offline = offline
         self._ttl = ttl_seconds
         self._loaded = False
-        self._cve_set: Set[str] = set()
+        self._cve_set: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -95,7 +97,7 @@ class KevClient:
         self._loaded = True
 
 
-def _extract_cves(record: object) -> Set[str]:
+def _extract_cves(record: object) -> set[str]:
     """Pull the CVE-id set from a KEV catalog payload.
 
     Schema (relevant slice): ``{"vulnerabilities": [{"cveID": "CVE-..."},
@@ -107,7 +109,7 @@ def _extract_cves(record: object) -> Set[str]:
     vulns = record.get("vulnerabilities")
     if not isinstance(vulns, list):
         return set()
-    out: Set[str] = set()
+    out: set[str] = set()
     for entry in vulns:
         if not isinstance(entry, dict):
             continue
@@ -117,4 +119,4 @@ def _extract_cves(record: object) -> Set[str]:
     return out
 
 
-__all__ = ["KevClient", "KEV_URL"]
+__all__ = ["KEV_URL", "KevClient"]

@@ -39,8 +39,10 @@ Project-wide pins (``resolutions``, ``overrides``):
 - ``overrides`` (npm 7+) — same mechanism, npm's name for it.
 
 Both fields are read and emitted as Dependency rows with
-``source_kind="override"``, ``direct=True``, and a high parser
-confidence — operators care about these because they're explicit
+``source_kind="override"`` and ``direct=True``; parser confidence
+follows the spec shape like any other row (high for a structured
+version, medium for git/path/wildcard specs, low for unrecognised
+ones). Operators care about these because they're explicit
 security pins. CVE matching against the pinned version means
 operators see whether their pin actually clears the advisory.
 
@@ -63,11 +65,10 @@ import json as _json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
 from ..versions import semver
-from . import register
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -85,31 +86,15 @@ _DEP_BUCKETS = (
 # ">=1.0.0 <2.0.0" or "1.0.0 - 2.0.0". Used after ruling out caret/tilde.
 _RANGE_CHARS = set("<>=|") | {" - "}
 _HEX_SHA = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+_BARE_VERSION = re.compile(r"^v?\d+(?:\.\d+){0,2}(?:[-+].+)?$")
 
 
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.package_json: read failed for %s: %s", path, e)
+def parse(path: Path) -> list[Dependency]:
+    data = _load(path)
+    if data is None:
         return []
 
-    try:
-        data = _json.loads(text)
-    except _json.JSONDecodeError as e:
-        logger.warning(
-            "sca.parsers.package_json: JSON parse failed for %s: %s", path, e
-        )
-        return []
-    if not isinstance(data, dict):
-        logger.warning(
-            "sca.parsers.package_json: top-level not an object in %s", path
-        )
-        return []
-
-    project_license = _extract_license(data)
-
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for key, scope in _DEP_BUCKETS:
         block = data.get(key)
         if not isinstance(block, dict):
@@ -117,12 +102,6 @@ def parse(path: Path) -> List[Dependency]:
         for name, raw_spec in block.items():
             d = _build_dep(name, raw_spec, scope, path)
             if d is not None:
-                # Manifest-level license describes the project itself,
-                # not its deps. We attach it as ``declared_license`` only
-                # on rows that *are* the project (no manifests do that
-                # by default; keep slot for SBOM use anyway).
-                if project_license:
-                    d.declared_license = project_license
                 deps.append(d)
 
     # bundleDependencies / bundledDependencies — array of names already
@@ -200,10 +179,47 @@ def parse(path: Path) -> List[Dependency]:
     return deps
 
 
+def extract_project_license(path: Path) -> str | None:
+    """License the manifest declares for the PROJECT ITSELF.
+
+    A manifest-level license describes the project, not its deps —
+    it feeds the SBOM metadata/root component, never ``Dependency.
+    declared_license`` (dep licenses come from registry enrichment,
+    or stay None for the policy's ``on_unknown`` path).
+    """
+    data = _load(path)
+    if data is None:
+        return None
+    return _extract_license(data)
+
+
+def _load(path: Path) -> dict[str, object] | None:
+    """Read + JSON-parse a package.json; None on any failure."""
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason
+        # (oversize, unreadable, symlink escape, non-regular file).
+        return None
+
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError as e:
+        logger.warning(
+            "sca.parsers.package_json: JSON parse failed for %s: %s", path, e
+        )
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            "sca.parsers.package_json: top-level not an object in %s", path
+        )
+        return None
+    return data
+
+
 def _flatten_overrides(
-    block: Dict[str, object],
-    parent_chain: Tuple[str, ...] = (),
-) -> List[Tuple[str, str]]:
+    block: dict[str, object],
+    parent_chain: tuple[str, ...] = (),
+) -> list[tuple[str, str]]:
     """Walk an ``overrides`` / ``resolutions`` block and yield
     ``(package_name, version_spec)`` pairs.
 
@@ -219,7 +235,7 @@ def _flatten_overrides(
     Scoped packages (``@scope/pkg@npm:^1.0``) keep the leading
     ``@``.
     """
-    out: List[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     for raw_name, value in block.items():
         if not isinstance(raw_name, str):
             continue
@@ -290,7 +306,7 @@ def _strip_descriptor(spec_key: str) -> str:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _extract_license(data: Dict[str, object]) -> Optional[str]:
+def _extract_license(data: dict[str, object]) -> str | None:
     """Read the ``license`` / ``licenses`` field from a package.json.
 
     Handles all three shapes seen in real-world manifests:
@@ -327,7 +343,7 @@ def _build_dep(
     raw_spec: object,
     scope: str,
     path: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(name, str) or not name:
         return None
     if not isinstance(raw_spec, str):
@@ -396,7 +412,7 @@ def _build_dep(
     )
 
 
-def _classify(spec: str) -> Tuple[PinStyle, Optional[str], Optional[str]]:
+def _classify(spec: str) -> tuple[PinStyle, str | None, str | None]:
     """Return (pin_style, version_for_record, npm_alias_target_or_None).
 
     For an alias like ``"npm:lodash@^4.17.0"``, the alias target is
@@ -433,18 +449,13 @@ def _classify(spec: str) -> Tuple[PinStyle, Optional[str], Optional[str]]:
     # Git references (git+https://, git+ssh://, git://, github:owner/repo,
     # bitbucket:..., gitlab:..., gist:...).
     if (
-        spec.startswith(("git+", "git:", "git@"))
-        or spec.startswith(("github:", "bitbucket:", "gitlab:", "gist:"))
-        or "://" in spec and spec.split("://", 1)[0].endswith("git")
+        spec.startswith(("git+", "git:", "git@", "github:", "bitbucket:", "gitlab:", "gist:")) or ("://" in spec and spec.split("://", 1)[0].endswith("git"))
     ):
         # Try to extract a #ref or #semver: spec for the version field.
-        version: Optional[str] = None
+        version: str | None = None
         if "#" in spec:
             tag = spec.split("#", 1)[1]
-            if tag.startswith("semver:"):
-                version = tag[len("semver:"):]
-            else:
-                version = tag
+            version = tag[len("semver:"):] if tag.startswith("semver:") else tag
         return PinStyle.GIT, version, None
 
     # Local paths.
@@ -472,10 +483,13 @@ def _classify(spec: str) -> Tuple[PinStyle, Optional[str], Optional[str]]:
     if _HEX_SHA.match(spec):
         return PinStyle.GIT, spec, None
 
-    return PinStyle.EXACT, spec, None
+    if _BARE_VERSION.match(spec):
+        return PinStyle.EXACT, spec, None
+
+    return PinStyle.UNKNOWN, spec, None
 
 
-def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
+def _confidence(pin_style: PinStyle, version: str | None) -> Confidence:
     if pin_style is PinStyle.UNKNOWN:
         return Confidence("low", reason="package.json spec unrecognised")
     if pin_style in (PinStyle.GIT, PinStyle.PATH):
@@ -488,7 +502,7 @@ def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
     return Confidence("high", reason="package.json structured field")
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     """Build an npm purl. Scoped packages keep the leading ``@``."""
     base = f"pkg:npm/{name}"
     if version:

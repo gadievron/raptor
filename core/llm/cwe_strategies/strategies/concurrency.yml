@@ -7,42 +7,25 @@ description: |
   assumptions.
 
 signals:
-  paths:
-    - kernel/locking/
-    - mm/
-    - fs/
-    - kernel/rcu/
-    - kernel/sched/
-    - kernel/futex/
-  includes:
-    - linux/mutex.h
-    - linux/spinlock.h
-    - linux/rwsem.h
-    - linux/rcupdate.h
-    - linux/refcount.h
+  # Kernel signal bulk (kernel/locking/ paths, linux/mutex.h includes,
+  # the spin_lock/rcu_*/refcount_* callees) lives in the linux_kernel
+  # profile pack (profiles/linux_kernel.yml). Universal POSIX
+  # synchronisation calls stay here; learned lock vocabulary arrives
+  # via the picker's DomainVocabulary supplements.
   function_keywords:
     - lock
     - unlock
     - acquire
     - release
-    - rcu
     - refcount
   function_calls:
-    - mutex_lock
-    - mutex_unlock
-    - spin_lock
-    - spin_unlock
-    - read_lock
-    - write_lock
-    - rcu_read_lock
-    - rcu_read_unlock
-    - rcu_dereference
-    - synchronize_rcu
-    - refcount_inc
-    - refcount_dec
-    - refcount_dec_and_test
-    - atomic_inc
-    - atomic_dec
+    - pthread_mutex_lock
+    - pthread_mutex_unlock
+    - pthread_rwlock_rdlock
+    - pthread_rwlock_wrlock
+    - pthread_cond_wait
+    - sem_wait
+    - sem_post
   cwes:
     - CWE-362   # race condition / TOCTOU
     - CWE-364   # signal handler race

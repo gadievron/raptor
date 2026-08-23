@@ -15,7 +15,7 @@ retired in favour of the unified ``LLMProvider`` API — there's now
 no duplicate Anthropic SDK wiring across two class hierarchies.
 """
 
-from .loop import ToolUseLoop
+from .loop import InFireMutatorContext, SubmissionState, ToolUseLoop
 from .types import (
     CacheControl,
     ContextOverflow,
@@ -44,10 +44,12 @@ __all__ = [
     "ContextOverflow",
     "ContextPolicy",
     "CostBudgetExceeded",
+    "InFireMutatorContext",
     "LoopEvent",
     "LoopTerminated",
     "Message",
     "StopReason",
+    "SubmissionState",
     "TextBlock",
     "ToolCall",
     "ToolCallBlocked",

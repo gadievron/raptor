@@ -25,9 +25,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Iterable, List
 
 from ..models import Confidence, Dependency, PinStyle
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ _TAG_LIKE_RE = re.compile(
 # untagged-commit shape.
 _GO_PSEUDO_RE = re.compile(
     r"^v\d+\.\d+\.\d+"
-    r"(?:-(?:pre\.)?0\.|-)"
+    r"(?:-(?:[\w]+\.)?0\.|-)"
     r"\d{14}-[0-9a-f]{12}$"
 )
 
@@ -67,9 +70,9 @@ class GitDriftFinding:
     ref_kind: str          # "tag" / "branch_or_other"
 
 
-def scan_deps(deps: Iterable[Dependency]) -> List[GitDriftFinding]:
+def scan_deps(deps: Iterable[Dependency]) -> list[GitDriftFinding]:
     """Walk deps; flag any git-pinned entry whose ref isn't a SHA."""
-    out: List[GitDriftFinding] = []
+    out: list[GitDriftFinding] = []
     for dep in deps:
         if dep.pin_style is not PinStyle.GIT:
             continue

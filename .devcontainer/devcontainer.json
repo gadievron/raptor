@@ -2,7 +2,19 @@
   "name": "RAPTOR Security Research Framework",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "..",
+    // Proxy passthrough for mandatory-egress-proxy hosts. These are
+    // Docker's predefined build args — no ARG declarations needed in
+    // the Dockerfile; every RUN step (apt, pip, curl, npm) honours
+    // them. Empty values (unproxied hosts) are treated as unset.
+    "args": {
+      "http_proxy": "${localEnv:http_proxy}",
+      "https_proxy": "${localEnv:https_proxy}",
+      "no_proxy": "${localEnv:no_proxy}",
+      "HTTP_PROXY": "${localEnv:HTTP_PROXY}",
+      "HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
+      "NO_PROXY": "${localEnv:NO_PROXY}"
+    }
   },
   "runArgs": ["--privileged"],
   "features": {
@@ -29,7 +41,16 @@
   "containerEnv": {
     "GIT_TERMINAL_PROMPT": "0",
     "PYTHONUNBUFFERED": "1",
-    "PYTHONDONTWRITEBYTECODE": "1"
+    "PYTHONDONTWRITEBYTECODE": "1",
+    // Runtime proxy passthrough (postCreateCommand pip installs,
+    // in-container scans). Loopback appended to NO_PROXY so
+    // in-container sidecars (SAGE, Ollama) are never proxied.
+    "http_proxy": "${localEnv:http_proxy}",
+    "https_proxy": "${localEnv:https_proxy}",
+    "HTTP_PROXY": "${localEnv:HTTP_PROXY}",
+    "HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
+    "no_proxy": "${localEnv:no_proxy},localhost,127.0.0.1,::1",
+    "NO_PROXY": "${localEnv:NO_PROXY},localhost,127.0.0.1,::1"
   },
   "mounts": [
     "source=${localWorkspaceFolder}/.env,target=/workspaces/raptor/.env,type=bind,consistency=cached",

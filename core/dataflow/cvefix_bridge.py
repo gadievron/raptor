@@ -23,7 +23,6 @@ is injectable so the orchestration is unit-testable with no LLM and no CodeQL.
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import sqlite3
@@ -31,9 +30,9 @@ import subprocess
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
 
 from core.config import RaptorConfig
+from core.json import load_json
 from core.dataflow import cvefix_walk
 from core.dataflow.barrier_synth import (
     BarrierProposal,
@@ -45,6 +44,16 @@ from core.dataflow.barrier_synth import (
     run_synthesis_loop,
 )
 from core.dataflow.cvefix_loader import CveFixPair
+from core.git import safe_git_readonly_command
+from core.paths import strip_file_uri
+from typing import TYPE_CHECKING
+
+# CodeQL SARIF over corpus code — the SARIF budget class shared with
+# core.sarif.parser.load_sarif.
+_MAX_SARIF_BYTES = 100 * 1024 * 1024
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # Tier 0 (SMT) is the free first-pass backend. Imported defensively so a
 # missing substrate / packaging glitch can't break the existing Tier 2
@@ -166,17 +175,40 @@ _BACKEND_CODEQL = "codeql"
 _BACKEND_NONE = ""
 
 
-def _default_search_path() -> Optional[str]:
+def _default_search_path() -> str | None:
     return str(_SEARCH_PATH) if _SEARCH_PATH.exists() else None
 
 
 def _norm_uri(uri: str) -> str:
-    """Strip a file: scheme + leading slash so `repo_root / uri` stays in-repo."""
-    if uri.startswith("file://"):
-        uri = uri[len("file://"):]
-    elif uri.startswith("file:"):
-        uri = uri[len("file:"):]
-    return uri.lstrip("/")
+    """Strip a file: scheme + leading slash.  This is textual
+    normalisation only — it does NOT remove ``..`` segments, so in-repo
+    containment must be enforced at the join site via
+    :func:`_resolve_in_repo` before reading any file at the path."""
+    stripped = strip_file_uri(uri)
+    if stripped == uri and uri.startswith("file:"):
+        # Scheme without authority (``file:/abs/path``) — SARIF emits
+        # this too; core.paths deliberately handles only ``file://``.
+        stripped = uri[len("file:"):]
+    return stripped.lstrip("/")
+
+
+def _resolve_in_repo(repo_root: Path, uri: str) -> Path | None:
+    """``repo_root / _norm_uri(uri)``, resolved, but only when the result
+    stays inside the repo clone.
+
+    The SARIF artifact URI comes from running CodeQL over a freshly
+    fetched (untrusted) repository, so a traversal-shaped uri
+    (``../../etc/passwd``) or an in-repo symlink pointing outside the
+    clone must not let the bridge read host files into an LLM prompt.
+    Returns None when the resolved path escapes ``repo_root``."""
+    try:
+        root = repo_root.resolve()
+        candidate = (repo_root / _norm_uri(uri)).resolve()
+    except OSError:
+        return None
+    if not candidate.is_relative_to(root):
+        return None
+    return candidate
 
 
 def _git_diff(repo: Path, parent: str, fix: str, uri: str,
@@ -185,7 +217,12 @@ def _git_diff(repo: Path, parent: str, fix: str, uri: str,
     capped; empty string on any failure."""
     try:
         r = subprocess.run(
-            ["git", "-C", str(repo), "diff", f"{parent}..{fix}", "--", uri],
+            safe_git_readonly_command(
+                # --no-ext-diff: the overrides pin diff.external= which
+                # fails loudly on any diff that forgot to disable
+                # external drivers — commit..commit diffs never need one.
+                "-C", str(repo), "diff", "--no-ext-diff",
+                f"{parent}..{fix}", "--", uri),
             capture_output=True, text=True, timeout=timeout, check=False,
             env=RaptorConfig.get_safe_env())
     except (subprocess.TimeoutExpired, OSError):
@@ -201,7 +238,9 @@ def _git_touched_files(repo: Path, parent: str, fix: str,
     Returns ``[]`` on failure (caller falls back to sink-file-only context)."""
     try:
         r = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--name-only", f"{parent}..{fix}"],
+            safe_git_readonly_command(
+                "-C", str(repo), "diff", "--no-ext-diff", "--name-only",
+                f"{parent}..{fix}"),
             capture_output=True, text=True, timeout=timeout, check=False,
             env=RaptorConfig.get_safe_env())
     except (subprocess.TimeoutExpired, OSError):
@@ -280,14 +319,15 @@ def _format_path(result: dict) -> str:
     cfs = result.get("codeFlows", [])
     if not cfs:
         return ""
-    steps = cfs[0].get("threadFlows", [{}])[0].get("locations", [])
+    tflows = cfs[0].get("threadFlows") or []
+    steps = tflows[0].get("locations", []) if tflows else []
     rows = []
     for loc in steps:
-        node = loc.get("location", {})
-        phys = node.get("physicalLocation", {})
-        uri = phys.get("artifactLocation", {}).get("uri", "?")
-        line = phys.get("region", {}).get("startLine", "?")
-        msg = node.get("message", {}).get("text", "")
+        node = loc.get("location") or {}
+        phys = node.get("physicalLocation") or {}
+        uri = (phys.get("artifactLocation") or {}).get("uri", "?")
+        line = (phys.get("region") or {}).get("startLine", "?")
+        msg = (node.get("message") or {}).get("text", "")
         rows.append(f"  {Path(uri).name}:{line}  {msg}")
     if not rows:
         return ""
@@ -303,7 +343,7 @@ def _run_query(db: Path, query_spec: str, out_sarif: Path, codeql_bin: str, time
 
 def _extract_proposal(
     sarif_path: Path, repo_root: Path, pair: CveFixPair,
-) -> Optional[Tuple[BarrierProposal, str, int]]:
+) -> tuple[BarrierProposal, str, int] | None:
     """First flagged finding -> (BarrierProposal, target_uri, target_line). Reads
     the post-fix source at the SARIF location (CodeQL SARIF omits snippet text)
     and the fix diff. ``target_uri``/``target_line`` scope the suppress check to
@@ -311,9 +351,8 @@ def _extract_proposal(
     sink_class = _CWE_SINK.get(pair.cwe)
     if sink_class is None:
         return None
-    try:
-        data = json.loads(Path(sarif_path).read_text())
-    except (OSError, ValueError):
+    data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
+    if not isinstance(data, dict):
         return None
     for run in data.get("runs", []):
         for res in run.get("results", []):
@@ -323,10 +362,10 @@ def _extract_proposal(
                 line = phys.get("region", {}).get("startLine")
                 if not raw_uri or not line:
                     continue
-                src = repo_root / _norm_uri(raw_uri)
-                if not src.is_file():
+                src = _resolve_in_repo(repo_root, raw_uri)
+                if src is None or not src.is_file():
                     continue
-                lines = src.read_text(errors="replace").splitlines()
+                lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
                 snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)
@@ -343,15 +382,17 @@ def _extract_proposal(
                 other_diffs = _git_diff_other_files(
                     repo_root, pair.parent_hash, pair.fix_hash, raw_uri)
                 path = _format_path(res)
-                context = body
+                context_parts = [body]
                 if diff:
-                    context += "\n\n# fix diff (the change that added the sanitizer):\n" + diff
+                    context_parts.append("\n\n# fix diff (the change that added the sanitizer):\n" + diff)
                 if other_diffs:
-                    context += ("\n\n# other fix-touched files (the validator "
-                                "may live in a helper or middleware):\n"
-                                + other_diffs)
+                    context_parts.append(
+                        "\n\n# other fix-touched files (the validator "
+                        "may live in a helper or middleware):\n"
+                        + other_diffs)
                 if path:
-                    context += "\n\n" + path
+                    context_parts.append("\n\n" + path)
+                context = "".join(context_parts)
                 proposal = BarrierProposal(
                     sink_class=sink_class,
                     finding_id=f"{pair.cve_id}:{pair.cwe}:{Path(raw_uri).name}:{line}",
@@ -364,7 +405,7 @@ def _extract_proposal(
 
 def synthesize_one(
     pair: CveFixPair, *, work_dir: Path, proposer, status: str = "ok",
-    codeql_bin: str = DEFAULT_CODEQL_BIN, search_path: Optional[str] = None,
+    codeql_bin: str = DEFAULT_CODEQL_BIN, search_path: str | None = None,
     # Higher than the walker's 240s/180s defaults: the synth bridge does
     # ONE pair end-to-end so a single project's pathological extraction
     # blocks no other work — better to be patient and get a verdict than
@@ -377,12 +418,12 @@ def synthesize_one(
     fetch_timeout: int = 150, build_timeout: int = 600, analyze_timeout: int = 450,
     max_attempts: int = 3, max_refine_attempts: int = 0,
     tier1b_complete=None,
-) -> Tuple[str, Optional[str], str, Optional[str], str]:
+) -> tuple[str, str | None, str, str | None, str]:
     """Rebuild DBs, extract the finding, synthesize a barrier.
 
     Returns ``(status, finding_id, backend, barrier_query, detail)``.
 
-    Two backends, tried in cost order:
+    Three tiers, tried in cost order:
 
       Tier 0 — SMT (free).  Mechanical extractor pulls a charset/regex
         validator from the fix diff; CodeQL's own codeFlow gives free
@@ -391,9 +432,17 @@ def synthesize_one(
         before-DB build.  When SOUND, ``backend="smt"`` and ``barrier_query``
         holds a structured spec like ``smt:charset:[A-Za-z0-9_.+-]+@uri:line``.
 
+      Tier 1B — cheap-LLM-assisted extraction, mechanically adjudicated.
+        Runs when Tier 0 didn't produce SOUND and the caller supplied a
+        ``tier1b_complete`` completer (otherwise skipped).  When SOUND,
+        ``backend`` reflects the proof mechanism: ``"smt"`` for the
+        Z3-charset path, ``"library"`` for a curated known-safe-call
+        table match.
+
       Tier 2 — CodeQL barrier-guard (LLM-written, CodeQL-adjudicated).
-        Fall-through when Tier 0 declines / can't apply.  When SOUND,
-        ``backend="codeql"`` and ``barrier_query`` holds the compiled QL.
+        Fall-through when the earlier tiers decline / can't apply.  When
+        SOUND, ``backend="codeql"`` and ``barrier_query`` holds the
+        compiled QL.
 
     ``barrier_query`` is also kept for not_sound at Tier 2 (the proposal
     that compiled+ran but missed — diagnostic material for the few-shot).
@@ -447,7 +496,7 @@ def synthesize_one(
                             sink_uri=_norm_uri(target_uri),
                             sink_line=target_line, sink_class=sink_class,
                             language=lang)
-                    except Exception:                        # pragma: no cover
+                    except Exception:  # noqa: BLE001 — pragma: no cover — tier falls through
                         t0 = None
                     if t0 is not None and t0.status == Tier0Status.SOUND:
                         return ("sound", proposal.finding_id, _BACKEND_SMT,
@@ -471,7 +520,7 @@ def synthesize_one(
                             sink_uri=_norm_uri(target_uri),
                             sink_line=target_line, sink_class=sink_class,
                             language=lang, complete=tier1b_complete)
-                    except Exception:                        # pragma: no cover
+                    except Exception:  # noqa: BLE001 — pragma: no cover — tier falls through
                         t1 = None
                     if t1 is not None and t1.status == Tier0Status.SOUND:
                         # Backend = the proof mechanism that produced the
@@ -513,7 +562,7 @@ def synthesize_one(
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
 
 
-def _aggregate(syn: sqlite3.Connection) -> Tuple[CorpusSynthReport, dict]:
+def _aggregate(syn: sqlite3.Connection) -> tuple[CorpusSynthReport, dict]:
     sound = not_sound = no_barrier = 0
     per: list = []
     errors: Counter = Counter()
@@ -538,12 +587,12 @@ def synthesize_from_results(
     synth_db: Path = Path("/data/corpus/synth-results.db"),
     work_dir: Path = Path("/data/corpus/clones/bridge"),
     proposer=None,
-    model: Optional[str] = None,
-    tier1b_model: Optional[str] = None,
+    model: str | None = None,
+    tier1b_model: str | None = None,
     codeql_bin: str = DEFAULT_CODEQL_BIN,
-    search_path: Optional[str] = None,
-    languages: Optional[Sequence[str]] = None,
-    limit: Optional[int] = None,
+    search_path: str | None = None,
+    languages: Sequence[str] | None = None,
+    limit: int | None = None,
     max_attempts: int = 3,
     max_refine_attempts: int = 0,
     newest_first: bool = False,
@@ -568,50 +617,54 @@ def synthesize_from_results(
     if search_path is None:
         search_path = _default_search_path()
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
-    sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
-           "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
-    params: tuple = ()
-    if languages:
-        sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
-        params = tuple(languages)
-    sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
-    rows = con.execute(sql, params).fetchall()
-    con.close()
+    try:
+        sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
+               "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
+        params: tuple = ()
+        if languages:
+            sql += f" AND repo_language IN ({','.join('?' * len(languages))})"
+            params = tuple(languages)
+        sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
+        rows = con.execute(sql, params).fetchall()
+    finally:
+        con.close()
 
     syn = sqlite3.connect(str(synth_db))
-    syn.execute(_SCHEMA)
-    done = {(r[0], r[1]) for r in syn.execute("SELECT fix_hash, cwe FROM synth_results")}
-    todo = [r for r in rows if (r[0], r[2]) not in done]
-    log(f"bridge: {len(rows)} FP-candidates, {len(done)} already done, {len(todo)} to do")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for fix_hash, cve_id, cwe, lang, repo_url, parent_hash, row_status in todo:
-        if limit is not None and n >= limit:
-            break
-        n += 1
-        pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
-        try:
-            status, fid, backend, barrier_q, detail = synthesize_one(
-                pair, work_dir=work_dir / "item", proposer=proposer, status=row_status,
-                codeql_bin=codeql_bin, search_path=search_path,
-                max_attempts=max_attempts,
-                max_refine_attempts=max_refine_attempts,
-                tier1b_complete=tier1b_completer)
-        except Exception as exc:  # one bad candidate must not abort the whole run
-            status, fid, backend, barrier_q, detail = (
-                "error", None, _BACKEND_NONE, None,
-                f"{type(exc).__name__}: {exc}"[:400])
-            log(f"  [{n}/{len(todo)}] {cve_id} {cwe}: ERROR {type(exc).__name__}: {exc}")
-        syn.execute("INSERT OR REPLACE INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (fix_hash, cwe, cve_id, lang, fid, status, backend, barrier_q,
-                     detail, time.time()))
-        syn.commit()
-        if status not in ("error",):
-            suffix = f"  [{detail}]" if detail else ""
-            tag = f"({backend})" if backend else ""
-            log(f"  [{n}/{len(todo)}] {cve_id} {cwe} {lang}: {status}{tag}{suffix}")
-    report, errors = _aggregate(syn)
-    syn.close()
+    try:
+        syn.execute(_SCHEMA)
+        done = {(r[0], r[1]) for r in syn.execute("SELECT fix_hash, cwe FROM synth_results")}
+        todo = [r for r in rows if (r[0], r[2]) not in done]
+        log(f"bridge: {len(rows)} FP-candidates, {len(done)} already done, {len(todo)} to do")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for n, (fix_hash, cve_id, cwe, lang, repo_url, parent_hash,
+                row_status) in enumerate(todo, start=1):
+            if limit is not None and n > limit:
+                break
+            pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
+            try:
+                status, fid, backend, barrier_q, detail = synthesize_one(
+                    pair, work_dir=work_dir / "item", proposer=proposer, status=row_status,
+                    codeql_bin=codeql_bin, search_path=search_path,
+                    max_attempts=max_attempts,
+                    max_refine_attempts=max_refine_attempts,
+                    tier1b_complete=tier1b_completer)
+            except Exception as exc:  # noqa: BLE001 — one bad candidate must not abort the run
+                status, fid, backend, barrier_q, detail = (
+                    "error", None, _BACKEND_NONE, None,
+                    f"{type(exc).__name__}: {exc}"[:400])
+                log(f"  [{n}/{len(todo)}] {cve_id} {cwe}: ERROR {type(exc).__name__}: {exc}")
+            syn.execute("INSERT OR REPLACE INTO synth_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (fix_hash, cwe, cve_id, lang, fid, status, backend, barrier_q,
+                         detail, time.time()))
+            syn.commit()
+            if status not in ("error",):
+                suffix = f"  [{detail}]" if detail else ""
+                tag = f"({backend})" if backend else ""
+                log(f"  [{n}/{len(todo)}] {cve_id} {cwe} {lang}: {status}{tag}{suffix}")
+        report, errors = _aggregate(syn)
+    finally:
+        syn.close()
     if errors:
         log(f"pipeline errors (excluded from rate): {errors}")
     return report
@@ -619,6 +672,7 @@ def synthesize_from_results(
 
 def main(argv=None) -> None:
     import argparse
+
 
     ap = argparse.ArgumentParser(description="Synthesize barriers over walker FP-candidates.")
     ap.add_argument("--results", type=Path, default=Path("/data/corpus/walk-results.db"))

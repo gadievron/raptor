@@ -23,9 +23,10 @@ to api.nuget.org + nuget.org, $HOME hidden, FS confined.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Optional
 
 from . import ResolverResult, _check_tool, _run
 
@@ -80,44 +81,52 @@ class NugetResolver:
                 error=("no .csproj / .fsproj / .sln in project"),
             )
 
-        try:
-            proc = _run(
-                ["dotnet", "restore",
-                 "--use-lock-file", "--force-evaluate",
-                 "--no-cache", "--nologo"],
-                cwd=project_dir,
-                timeout=timeout,
-                proxy_hosts=self.proxy_hosts,
-            )
-        except subprocess.TimeoutExpired:
-            return ResolverResult(
-                ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=f"dotnet restore timed out after {timeout}s",
-            )
+        # Copy project files into a writable tempdir — the sandbox
+        # only allows writes to the output dir and /tmp, not cwd.
+        with tempfile.TemporaryDirectory(prefix="raptor-sca-nuget-") as tmp:
+            tmp_path = Path(tmp)
+            for pattern in ("*.csproj", "*.fsproj", "*.sln"):
+                for src in project_dir.glob(pattern):
+                    shutil.copy2(src, tmp_path / src.name)
+            lock_src = project_dir / "packages.lock.json"
+            if lock_src.exists():
+                shutil.copy2(lock_src, tmp_path / lock_src.name)
 
-        raw = (proc.stdout + "\n" + proc.stderr).strip()
-        if proc.returncode != 0:
+            try:
+                proc = _run(
+                    ["dotnet", "restore",
+                     "--use-lock-file", "--force-evaluate",
+                     "--no-cache", "--nologo"],
+                    cwd=tmp_path,
+                    timeout=timeout,
+                    proxy_hosts=self.proxy_hosts,
+                )
+            except subprocess.TimeoutExpired:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=f"dotnet restore timed out after {timeout}s",
+                )
+
+            raw = (proc.stdout + "\n" + proc.stderr).strip()
+            if proc.returncode != 0:
+                return ResolverResult(
+                    ecosystem=self.ecosystem,
+                    success=False, available=True,
+                    error=(proc.stderr.strip()
+                           or "dotnet restore exited non-zero"),
+                    raw_output=raw,
+                )
+            lockfile = _read_if_exists(tmp_path / "packages.lock.json")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=False, available=True,
-                error=(proc.stderr.strip()
-                       or "dotnet restore exited non-zero"),
+                success=True, available=True,
+                proposed_lockfile=lockfile,
                 raw_output=raw,
             )
-        # ``packages.lock.json`` is opt-in; when it exists at the
-        # project root, it's the canonical lockfile. Otherwise the
-        # success exit-code is the only signal we have.
-        lockfile = _read_if_exists(project_dir / "packages.lock.json")
-        return ResolverResult(
-            ecosystem=self.ecosystem,
-            success=True, available=True,
-            proposed_lockfile=lockfile,
-            raw_output=raw,
-        )
 
 
-def _read_if_exists(p: Path) -> Optional[bytes]:
+def _read_if_exists(p: Path) -> bytes | None:
     try:
         return p.read_bytes()
     except OSError:

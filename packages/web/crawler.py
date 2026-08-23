@@ -10,15 +10,12 @@ LLM-powered web crawler that:
 """
 
 import re
-from typing import Dict, List, Set, Optional
 from urllib.parse import urlparse, urljoin, parse_qs
 
-import sys
-from pathlib import Path
-
-# Add paths for cross-package imports
-# packages/web/crawler.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# No sys.path mutation here: this module is only ever imported (no
+# __main__ entry point), and the path-safety rule (CLAUDE.md) forbids
+# positional-walk inserts — callers already run with the repo root on
+# sys.path via the launcher's RAPTOR_DIR.
 
 from core.logging import get_logger
 from core.security.redaction import is_secret_field_name, redact_url_secrets_only
@@ -38,21 +35,27 @@ _BS4_MAX_BYTES = 16 * 1024 * 1024
 class WebCrawler:
     """Intelligent web crawler with LLM-guided discovery."""
 
-    def __init__(self, client: WebClient, max_depth: int = 3, max_pages: int = 100):
+    def __init__(self, client: WebClient, max_depth: int = 3, max_pages: int = 100) -> None:
         self.client = client
         self.max_depth = max_depth
         self.max_pages = max_pages
 
         # Discovered resources
-        self.visited_urls: Set[str] = set()
-        self.discovered_urls: Set[str] = set()
-        self.discovered_forms: List[Dict] = []
-        self.discovered_apis: List[Dict] = []
-        self.discovered_parameters: Set[str] = set()
-        self._log_page_ids: Dict[str, str] = {}
+        self.visited_urls: set[str] = set()
+        self.discovered_urls: set[str] = set()
+        self.discovered_forms: list[dict] = []
+        self.discovered_apis: list[dict] = []
+        self.discovered_parameters: set[str] = set()
+        # param name -> set of (unredacted) URLs whose query string
+        # carried it. Lets the scanner fuzz a parameter only where it
+        # was actually discovered instead of the full URL x parameter
+        # cross-product. Form input names are NOT recorded here — the
+        # scanner's form loop fuzzes those against their form action.
+        self.parameter_urls: dict[str, set[str]] = {}
+        self._log_page_ids: dict[str, str] = {}
 
         logger.info(
-            f"Web crawler initialized (max_depth={max_depth}, max_pages={max_pages})"
+            "Web crawler initialized (max_depth=%s, max_pages=%s)", max_depth, max_pages
         )
 
     def _redact_url_for_artifact(self, url: object) -> str:
@@ -84,7 +87,7 @@ class WebCrawler:
             self._log_page_ids[raw_url] = page_id
         return f"{self._target_log_label()} page_id={page_id}"
 
-    def _redacted_url_list(self, urls: Set[str]) -> List[str]:
+    def _redacted_url_list(self, urls: set[str]) -> list[str]:
         """Return a deterministic, redacted URL list for persisted crawl artifacts."""
         return [self._redact_url_for_artifact(url) for url in sorted(urls)]
 
@@ -95,6 +98,8 @@ class WebCrawler:
         if not isinstance(metadata, dict):
             return False
         input_type = str(metadata.get("type", "")).strip().lower()
+        if input_type == "password":
+            return True
         normalized_name = str(name).strip().lower()
         return (
             input_type == "hidden" and normalized_name in _SENSITIVE_HIDDEN_INPUT_NAMES
@@ -124,7 +129,7 @@ class WebCrawler:
                 redacted_inputs[name] = metadata
         return redacted_inputs
 
-    def _redacted_form(self, form: Dict) -> Dict:
+    def _redacted_form(self, form: dict) -> dict:
         """Redact sensitive fields from a discovered form artifact."""
         redacted = dict(form)
         for field in ("action", "page_url"):
@@ -134,21 +139,21 @@ class WebCrawler:
             redacted["inputs"] = self._redacted_form_inputs(redacted["inputs"])
         return redacted
 
-    def _redacted_api(self, api: Dict) -> Dict:
+    def _redacted_api(self, api: dict) -> dict:
         """Redact URL-bearing fields from a discovered API artifact."""
         redacted = dict(api)
         if "url" in redacted:
             redacted["url"] = self._redact_url_for_artifact(redacted["url"])
         return redacted
 
-    def crawl(self, start_url: str) -> Dict:
+    def crawl(self, start_url: str) -> dict:
         """
         Crawl website starting from URL.
 
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {self._crawl_log_label(start_url)}")
+        logger.info("Starting crawl from %s", self._crawl_log_label(start_url))
 
         self.discovered_urls.add(start_url)
 
@@ -174,10 +179,10 @@ class WebCrawler:
         # acts as a single-page-fetch helper; the BFS loop
         # below drives multiple passes.
         from collections import deque
-        queue: "deque[tuple[str, int]]" = deque([(start_url, 0)])
+        queue: deque[tuple[str, int]] = deque([(start_url, 0)])
         while queue:
             if len(self.visited_urls) >= self.max_pages:
-                logger.info(f"Max pages limit reached ({self.max_pages})")
+                logger.info("Max pages limit reached (%d)", self.max_pages)
                 break
             url, depth = queue.popleft()
             self._crawl_recursive(url, depth, _queue=queue)
@@ -197,10 +202,11 @@ class WebCrawler:
         does the per-page work but doesn't expand further.
         """
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {self._crawl_log_label(url)}")
+            logger.debug("Max depth reached for %s", self._crawl_log_label(url))
             return
 
         if len(self.visited_urls) >= self.max_pages:
+            logger.info("Max pages limit reached (%d)", self.max_pages)
             return
 
         if url in self.visited_urls:
@@ -208,8 +214,7 @@ class WebCrawler:
 
         self.visited_urls.add(url)
         logger.info(
-            f"Crawling: {self._crawl_log_label(url)} "
-            f"(depth={depth}, pages={len(self.visited_urls)})"
+            "Crawling: %s (depth=%s, pages=%s)", self._crawl_log_label(url), depth, len(self.visited_urls)
         )
 
         try:
@@ -242,8 +247,7 @@ class WebCrawler:
 
             if response.status_code != 200:
                 logger.debug(
-                    f"Non-200 response for {self._crawl_log_label(url)}: "
-                    f"{response.status_code}"
+                    "Non-200 response for %s: %s", self._crawl_log_label(url), response.status_code
                 )
                 return
 
@@ -255,11 +259,11 @@ class WebCrawler:
             elif "text/html" in content_type:
                 self._process_html_response(url, response, depth, _queue=_queue)
             else:
-                logger.debug(f"Skipping non-HTML/JSON content: {content_type}")
+                logger.debug("Skipping non-HTML/JSON content: %s", content_type)
 
         except Exception as e:
             logger.warning(
-                f"Error crawling {self._crawl_log_label(url)}: {type(e).__name__}"
+                "Error crawling %s: %s", self._crawl_log_label(url), type(e).__name__
             )
 
     def _process_html_response(self, url: str, response, depth: int, _queue=None) -> None:
@@ -328,6 +332,10 @@ class WebCrawler:
                     if parsed.query:
                         params = parse_qs(parsed.query)
                         self.discovered_parameters.update(params.keys())
+                        for param_name in params:
+                            self.parameter_urls.setdefault(
+                                param_name, set(),
+                            ).add(absolute_url)
 
                     # Enqueue for the BFS loop (or fall through
                     # if no queue — legacy single-page caller).
@@ -344,12 +352,13 @@ class WebCrawler:
             # Discover API endpoints from JavaScript
             for script in soup.find_all("script"):
                 if script.string:
-                    self._extract_api_endpoints_from_js(script.string)
+                    self._extract_api_endpoints_from_js(
+                        script.string, depth=depth, _queue=_queue,
+                    )
 
         except Exception as e:
             logger.warning(
-                f"Error parsing HTML from {self._crawl_log_label(url)}: "
-                f"{type(e).__name__}"
+                "Error parsing HTML from %s: %s", self._crawl_log_label(url), type(e).__name__
             )
 
     def _process_json_response(self, url: str, response) -> None:
@@ -365,14 +374,14 @@ class WebCrawler:
                     else [],
                 }
             )
-            logger.info(f"Discovered API endpoint: {self._crawl_log_label(url)}")
+            logger.info("Discovered API endpoint: %s", self._crawl_log_label(url))
         except Exception as e:
             logger.debug(
-                f"Error parsing JSON from {self._crawl_log_label(url)}: "
-                f"{type(e).__name__}"
+                "Error parsing JSON from %s: %s",
+                self._crawl_log_label(url), type(e).__name__
             )
 
-    def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
+    def _parse_form(self, form_element, page_url: str) -> dict | None:
         """Parse HTML form to extract inputs and action."""
         try:
             action = form_element.get("action", "")
@@ -396,11 +405,21 @@ class WebCrawler:
             }
 
         except Exception as e:
-            logger.debug(f"Error parsing form: {type(e).__name__}")
+            logger.debug("Error parsing form: %s", type(e).__name__)
             return None
 
-    def _extract_api_endpoints_from_js(self, js_code: str) -> None:
-        """Extract API endpoints from JavaScript code."""
+    def _extract_api_endpoints_from_js(self, js_code: str, *,
+                                       depth: int = 0,
+                                       _queue=None) -> None:
+        """Extract API endpoints from JavaScript code.
+
+        Discovered endpoints are recorded as API candidates AND
+        enqueued for the crawl — they used to land only in
+        ``discovered_urls``, so a JS-only endpoint was never fetched,
+        never classified as an API, and never contributed parameters:
+        a coverage gap for exactly the URLs reachable only through
+        script analysis.
+        """
         # Cap the JS-code size before per-pattern findall. Pre-fix
         # `re.findall` ran 4 times over the FULL js_code body; for
         # a multi-MB minified bundle (modern frontend SPAs ship
@@ -414,8 +433,7 @@ class WebCrawler:
         _MAX_JS_BYTES = 4 * 1024 * 1024
         if len(js_code) > _MAX_JS_BYTES:
             logger.debug(
-                f"JS body ({len(js_code)} chars) exceeds API-endpoint-scan "
-                f"cap ({_MAX_JS_BYTES}); truncating"
+                "JS body (%s chars) exceeds API-endpoint-scan cap (%s); truncating", len(js_code), _MAX_JS_BYTES
             )
             js_code = js_code[:_MAX_JS_BYTES]
 
@@ -433,7 +451,7 @@ class WebCrawler:
         for pattern in patterns:
             matches = re.findall(pattern, js_code, re.IGNORECASE)
             for match in matches:
-                if match.startswith("/") or match.startswith("http"):
+                if match.startswith(("/", "http")):
                     absolute_url = urljoin(self.client.base_url, match)
                     # Scheme-aware scope check via client._is_in_scope
                     # — bare netloc equality silently accepted a JS-
@@ -444,11 +462,26 @@ class WebCrawler:
                     # (scheme, hostname, port) triple.
                     if self.client._is_in_scope(absolute_url):
                         self.discovered_urls.add(absolute_url)
+                        # Classify as an API candidate now (static
+                        # discovery — no response shape yet; crawling
+                        # the URL refines it via
+                        # _process_json_response).
+                        if not any(a.get("url") == absolute_url
+                                   for a in self.discovered_apis):
+                            self.discovered_apis.append({
+                                "url": absolute_url,
+                                "method": "GET",
+                                "response_keys": [],
+                                "source": "js-static",
+                            })
+                        if (_queue is not None
+                                and absolute_url not in self.visited_urls):
+                            _queue.append((absolute_url, depth + 1))
                         logger.debug(
-                            f"Found API endpoint in JS: {self._crawl_log_label(absolute_url)}"
+                            "Found API endpoint in JS: %s", self._crawl_log_label(absolute_url)
                         )
 
-    def get_results(self) -> Dict:
+    def get_results(self) -> dict:
         """Get crawl results."""
         return {
             "visited_urls": self._redacted_url_list(self.visited_urls),
@@ -460,6 +493,10 @@ class WebCrawler:
                 self._redacted_api(api) for api in self.discovered_apis
             ],
             "discovered_parameters": sorted(self.discovered_parameters),
+            "parameter_urls": {
+                param: self._redacted_url_list(urls)
+                for param, urls in sorted(self.parameter_urls.items())
+            },
             "stats": {
                 "total_pages": len(self.visited_urls),
                 "total_urls": len(self.discovered_urls),

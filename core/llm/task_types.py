@@ -80,4 +80,4 @@ FAST_TIER_TASKS: frozenset[str] = frozenset({
 })
 
 
-__all__ = ["TaskType", "FAST_TIER_TASKS"]
+__all__ = ["FAST_TIER_TASKS", "TaskType"]

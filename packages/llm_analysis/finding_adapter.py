@@ -14,7 +14,7 @@ Schema mapping:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from core.llm.multi_model import BaseVerdictAdapter
 
@@ -25,16 +25,17 @@ class FindingAdapter(BaseVerdictAdapter):
     Items are dicts with at minimum ``finding_id`` and ``is_exploitable``.
     """
 
-    def item_id(self, item: Dict[str, Any]) -> str:
+    def item_id(self, item: dict[str, Any]) -> str:
         fid = item.get("finding_id")
         if not isinstance(fid, str) or not fid:
-            raise ValueError(
+            msg = (
                 f"finding missing required 'finding_id' field: "
                 f"{sorted(item.keys())}"
             )
+            raise ValueError(msg)
         return fid
 
-    def normalize_verdict(self, item: Dict[str, Any]) -> str:
+    def normalize_verdict(self, item: dict[str, Any]) -> str:
         # Mirror legacy ``_select_primary_result``'s truthy check:
         # ``r.get("is_exploitable", False)`` defaults missing to False
         # (negative-equivalent). The substrate's BaseVerdictAdapter
@@ -44,8 +45,8 @@ class FindingAdapter(BaseVerdictAdapter):
         return "positive" if item.get("is_exploitable") else "negative"
 
     def extract_analysis_record(
-        self, result: Dict[str, Any], model_name: str,
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], model_name: str,
+    ) -> dict[str, Any]:
         """Per-model record stored under ``multi_model_analyses``.
 
         Matches /agentic's existing inline shape (preserved verbatim
@@ -62,12 +63,12 @@ class FindingAdapter(BaseVerdictAdapter):
             "is_exploitable": result.get("is_exploitable"),
             "exploitability_score": result.get("exploitability_score"),
             "ruling": result.get("ruling"),
-            "reasoning": result.get("reasoning", ""),
+            "reasoning": result.get("reasoning") or "",
         }
 
     def select_primary_with_error_fallback(
-        self, model_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        self, model_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Filter error entries, then ``select_primary``.
 
         /agentic's caller may pass result lists that contain error
@@ -82,7 +83,8 @@ class FindingAdapter(BaseVerdictAdapter):
         wrapper becomes redundant and can be removed.
         """
         if not model_results:
-            raise ValueError("select_primary_with_error_fallback called with empty list")
+            msg = "select_primary_with_error_fallback called with empty list"
+            raise ValueError(msg)
         non_error = [r for r in model_results if "error" not in r]
         if non_error:
             return self.select_primary(non_error)
@@ -102,8 +104,8 @@ class FindingAdapter(BaseVerdictAdapter):
     _PRIMARY_QUALITY_FLOOR = 0.3
 
     def select_primary(
-        self, model_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        self, model_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Mirror ``_select_primary_result`` behaviour with a
         quality floor on primary promotion.
 
@@ -130,9 +132,10 @@ class FindingAdapter(BaseVerdictAdapter):
           normalize_verdict).
         """
         if not model_results:
-            raise ValueError("select_primary called with empty list")
+            msg = "select_primary called with empty list"
+            raise ValueError(msg)
 
-        def sort_key(r: Dict[str, Any]):
+        def sort_key(r: dict[str, Any]):
             # _quality defaults to 1.0 (legacy quirk)
             q_raw = r.get("_quality", 1.0)
             quality = q_raw if isinstance(q_raw, (int, float)) and not isinstance(q_raw, bool) else 0.0
@@ -144,9 +147,8 @@ class FindingAdapter(BaseVerdictAdapter):
             # anything else→1 (mirrors legacy's truthy check via
             # normalize_verdict).
             verdict_rank = 0 if self.normalize_verdict(r) == "positive" else 1
-            # exploitability_score: legacy uses ``r.get("...", 0) or 0``
-            # so None or 0 both fall back to 0.
-            score = r.get("exploitability_score", 0) or 0
+            score_raw = r.get("exploitability_score", 0) or 0
+            score = score_raw if isinstance(score_raw, (int, float)) and not isinstance(score_raw, bool) else 0.0
             return (below_floor, verdict_rank, -quality, -score)
 
         return dict(sorted(model_results, key=sort_key)[0])

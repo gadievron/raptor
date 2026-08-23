@@ -29,7 +29,6 @@ authoritative.
 from __future__ import annotations
 
 import re
-from typing import List
 
 
 # Grammar: ``<id> (AND|OR|WITH) <id> ...``. Operand characters per
@@ -62,7 +61,7 @@ def looks_like_spdx_expression(text: str) -> bool:
     return bool(_SPDX_EXPR_RE.match(text.strip()))
 
 
-def split_compound_expression(text: str) -> List[str]:
+def split_compound_expression(text: str) -> list[str]:
     """Split a compound SPDX expression into operand identifiers.
 
     Returns an empty list when ``text`` isn't a recognised compound

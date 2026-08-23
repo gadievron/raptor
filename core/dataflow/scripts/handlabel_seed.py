@@ -23,21 +23,15 @@ ids are deterministic).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
-# Repo root: this script lives at core/dataflow/scripts/handlabel_seed.py,
-# three levels deep. parents[3] climbs:
-#   [0] core/dataflow/scripts/  (this file's directory)
-#   [1] core/dataflow/
-#   [2] core/
-#   [3] <repo root>
-# Inserted so direct invocation (``python3 core/dataflow/scripts/handlabel_seed.py``)
-# works without PYTHONPATH setup. Matches the pattern in this dir's
-# ``corpus-metrics`` and ``corpus-run`` scripts.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
+# path ever added to sys.path (hard lookup; KeyError if the
+# script is run outside the launcher, by design).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.dataflow.adapters.codeql import make_finding_id
 from core.dataflow.finding import Finding, Step
@@ -56,12 +50,12 @@ class SeedEntry:
     fixture_path: str
     source_line: int
     sink_line: int
-    intermediate_lines: Tuple[int, ...]
+    intermediate_lines: tuple[int, ...]
     producer: str
     rule_id: str
     message: str
     verdict: str
-    fp_category: Optional[str]
+    fp_category: str | None
     rationale: str
 
 
@@ -75,7 +69,7 @@ _LABELED_AT = "2026-05-10"
 
 _JS = "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes"
 
-JUICE_SHOP: Tuple[SeedEntry, ...] = (
+JUICE_SHOP: tuple[SeedEntry, ...] = (
     # SQL injection: string concatenation into raw query.
     SeedEntry(
         fixture_path=f"{_JS}/dbSchemaChallenge_1.ts",
@@ -215,7 +209,7 @@ JUICE_SHOP: Tuple[SeedEntry, ...] = (
 
 _WG = "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons"
 
-WEBGOAT: Tuple[SeedEntry, ...] = (
+WEBGOAT: tuple[SeedEntry, ...] = (
     # SqlInjectionLesson2: classic executeQuery on tainted string.
     SeedEntry(
         fixture_path=f"{_WG}/sqlinjection/introduction/SqlInjectionLesson2.java",
@@ -323,9 +317,9 @@ WEBGOAT: Tuple[SeedEntry, ...] = (
 )
 
 
-def _load_lines(repo_root: Path, fixture_path: str) -> List[str]:
+def _load_lines(repo_root: Path, fixture_path: str) -> list[str]:
     full = repo_root / fixture_path
-    return full.read_text().splitlines() if full.exists() else []
+    return full.read_text(encoding="utf-8").splitlines() if full.exists() else []
 
 
 def _step(
@@ -336,10 +330,11 @@ def _step(
 ) -> Step:
     lines = _load_lines(repo_root, fixture_path)
     if not (1 <= line <= len(lines)):
-        raise ValueError(
+        msg = (
             f"line {line} out of range for {fixture_path} "
             f"(file has {len(lines)} lines)"
         )
+        raise ValueError(msg)
     snippet = lines[line - 1].strip() or f"line {line}"
     return Step(
         file_path=fixture_path,
@@ -352,13 +347,13 @@ def _step(
 
 def _entry_to_pair(
     entry: SeedEntry, source_label: str, repo_root: Path
-) -> Tuple[Finding, GroundTruth]:
+) -> tuple[Finding, GroundTruth]:
     src = _step(entry.fixture_path, entry.source_line, "source", repo_root)
     sink = _step(entry.fixture_path, entry.sink_line, "sink", repo_root)
     intermediate = tuple(
         _step(entry.fixture_path, ln, "step", repo_root)
         for ln in entry.intermediate_lines
-        if ln != entry.source_line and ln != entry.sink_line
+        if ln not in (entry.source_line, entry.sink_line)
     )
     base_id = make_finding_id(entry.rule_id, src, sink, producer=entry.producer)
     finding_id = f"{source_label}_{base_id}"
@@ -393,16 +388,16 @@ def write_seed(out_dir: Path, repo_root: Path) -> int:
         for entry in entries:
             finding, label = _entry_to_pair(entry, source_label, repo_root)
             (out_dir / f"{finding.finding_id}.json").write_text(
-                finding.to_json(indent=2)
+                finding.to_json(indent=2), encoding="utf-8",
             )
             (out_dir / f"{finding.finding_id}.label.json").write_text(
-                label.to_json(indent=2)
+                label.to_json(indent=2), encoding="utf-8",
             )
             n += 1
     return n
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out-dir",

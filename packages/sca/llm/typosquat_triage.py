@@ -16,7 +16,6 @@ escalates to a human (never auto-trusts on a missing verdict).
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from core.llm.task_types import TaskType
 
@@ -36,7 +35,7 @@ def assess_typosquat(
     twin_rank: int,
     distance: int,
     evidence_text: str,
-) -> Optional[TyposquatTriageVerdict]:
+) -> TyposquatTriageVerdict | None:
     """Run the LLM on one near-name candidate + its registry evidence.
 
     ``evidence_text`` is the rendered registry block (description, age,

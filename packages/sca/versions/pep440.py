@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +39,13 @@ def compare(a: str, b: str) -> int:
     ``versions.compare`` so callers can catch the package-wide error
     rather than the underlying library's exception.
     """
-    if a == b:
-        return 0
     if _HAS_PACKAGING:
         try:
             va = Version(a)
             vb = Version(b)
         except InvalidVersion as e:
-            raise VersionError(f"invalid PEP 440 version: {e}") from e
+            msg = f"invalid PEP 440 version: {e}"
+            raise VersionError(msg) from e
         if va == vb:
             return 0
         return -1 if va < vb else 1
@@ -98,12 +96,14 @@ def _fallback_compare(a: str, b: str) -> int:
     # Ordering tuple: (has_dev_n_or_max, pre_or_none, post_or_none).
     # Build a comparable key.
     def keyof(p):
-        release, pre, post, dev = p
+        _release, pre, post, dev = p
         # dev makes a version "lower" than the same release with no pre.
         # pre similar.
         # Convention: assign small integers to release/pre/post categories.
         # cat: 0 = .devN, 1 = preN.devN, 2 = preN, 3 = release, 4 = postN
-        if dev is not None and pre is None:
+        if post is not None and dev is not None and pre is None:
+            cat = 4  # post+dev: between post(N-1) and postN
+        elif dev is not None and pre is None:
             cat = 0
         elif pre is not None and dev is not None:
             cat = 1
@@ -115,11 +115,20 @@ def _fallback_compare(a: str, b: str) -> int:
             cat = 3
         # within-category subkey
         pre_label_order = {"a": 0, "b": 1, "rc": 2}
+        # PEP 440: 1.0.post1.dev1 sorts between post0 and post1.
+        # Encode as (post - 1, dev) so the dev release sits below
+        # its full post release in a numeric compare.
+        if post is not None and dev is not None:
+            post_key = post - 1
+            dev_key = dev
+        else:
+            post_key = post or 0
+            dev_key = -1 if dev is None and post is not None else (dev or 0)
         sub = (
             pre_label_order.get(pre[0]) if pre else None,
             pre[1] if pre else None,
-            post or 0,
-            dev or 0,
+            post_key,
+            dev_key,
         )
         return (cat, sub)
     ka = keyof(pa)
@@ -135,14 +144,15 @@ def _fallback_compare(a: str, b: str) -> int:
     return -1 if tup_safe(ka) < tup_safe(kb) else 1
 
 
-def _fallback_parse(v: str) -> Tuple[Tuple[int, ...],
-                                      Optional[Tuple[str, int]],
-                                      Optional[int],
-                                      Optional[int]]:
+def _fallback_parse(v: str) -> tuple[tuple[int, ...],
+                                      tuple[str, int] | None,
+                                      int | None,
+                                      int | None]:
     """Best-effort parse for the X.Y.Z[aN|bN|rcN][.postN][.devN] subset."""
     m = _FALLBACK_RE.match(v.strip())
     if not m:
-        raise ValueError(f"unparseable PEP 440 (fallback): {v!r}")
+        msg = f"unparseable PEP 440 (fallback): {v!r}"
+        raise ValueError(msg)
     release = tuple(int(x) for x in m.group("release").split("."))
     pre = None
     if m.group("pre_l") is not None:

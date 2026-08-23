@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -73,47 +75,20 @@ _SCOPE_MAP = {
 }
 
 
-def parse(path: Path) -> List[Dependency]:
+def parse(path: Path) -> list[Dependency]:
     """Return all dependencies declared in ``path``."""
-    if not _AVAILABLE:
-        logger.warning(
-            "sca.parsers.pom: skipping %s — 'defusedxml' not installed", path,
-        )
+    root = _load_root(path)
+    if root is None:
         return []
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.pom: read failed for %s: %s", path, e)
-        return []
-
-    try:
-        root = DET.fromstring(text)
-    except DET.ParseError as e:
-        logger.warning("sca.parsers.pom: XML parse failed for %s: %s", path, e)
-        return []
-    except DefusedXmlException as e:
-        # XXE / DTD / entity-expansion blocked by defusedxml. Treat as a
-        # hostile manifest: emit nothing and surface a warning so the
-        # operator sees the file was rejected.
-        logger.warning(
-            "sca.parsers.pom: defused XML protection rejected %s: %s",
-            path, e,
-        )
-        return []
-
-    _strip_namespaces(root)
 
     properties = _collect_properties(root)
-    project_license = _extract_license(root)
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
 
     # 1) Top-level <dependencies>/<dependency>
     for dep_el in root.findall("./dependencies/dependency"):
         d = _build_dep(dep_el, path, properties, scope_default="compile",
                        is_managed=False, is_plugin=False)
         if d is not None:
-            if project_license:
-                d.declared_license = project_license
             deps.append(d)
 
     # 2) <dependencyManagement>/<dependencies>/<dependency>
@@ -121,8 +96,6 @@ def parse(path: Path) -> List[Dependency]:
         d = _build_dep(dep_el, path, properties, scope_default="import",
                        is_managed=True, is_plugin=False)
         if d is not None:
-            if project_license:
-                d.declared_license = project_license
             deps.append(d)
 
     # 3) Plugin coordinates from <build>/<plugins> and pluginManagement.
@@ -181,9 +154,54 @@ def parse(path: Path) -> List[Dependency]:
     return deps
 
 
+def extract_project_license(path: Path) -> str | None:
+    """License the POM declares for the PROJECT ITSELF.
+
+    ``<licenses>`` describes the project, not its deps — it feeds the
+    SBOM metadata/root component, never ``Dependency.declared_license``
+    (dep licenses come from registry enrichment, or stay None for the
+    policy's ``on_unknown`` path).
+    """
+    root = _load_root(path)
+    if root is None:
+        return None
+    return _extract_license(root)
+
+
+def _load_root(path: Path):
+    """Read + defused-parse + namespace-strip a POM; None on failure."""
+    if not _AVAILABLE:
+        logger.warning(
+            "sca.parsers.pom: skipping %s — 'defusedxml' not installed", path,
+        )
+        return None
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
+        return None
+
+    try:
+        root = DET.fromstring(text)
+    except DET.ParseError as e:
+        logger.warning("sca.parsers.pom: XML parse failed for %s: %s", path, e)
+        return None
+    except DefusedXmlException as e:
+        # XXE / DTD / entity-expansion blocked by defusedxml. Treat as a
+        # hostile manifest: emit nothing and surface a warning so the
+        # operator sees the file was rejected.
+        logger.warning(
+            "sca.parsers.pom: defused XML protection rejected %s: %s",
+            path, e,
+        )
+        return None
+
+    _strip_namespaces(root)
+    return root
+
+
 def _apply_inherited_view(
-    deps: List[Dependency],
-    properties: Dict[str, str],
+    deps: list[Dependency],
+    properties: dict[str, str],
     view: Any,
 ) -> None:
     """Fill in ``version=None`` deps from the inheritance view's
@@ -220,11 +238,14 @@ def _apply_inherited_view(
         if not resolved:
             continue
         dep.version = resolved
-        # Reflect the new version in the purl.
+        dep.pin_style = _classify_version(resolved)[0]
+        if dep.pin_style is PinStyle.RANGE:
+            dep.version_floor, dep.version_ceiling = _range_corridor(resolved)
+        dep.parser_confidence = _confidence(True, resolved, dep.scope == "build")
         dep.purl = _build_purl(group, artifact, resolved)
 
 
-def _resolve_local_dep_management(deps: List[Dependency]) -> None:
+def _resolve_local_dep_management(deps: list[Dependency]) -> None:
     """For any compile/runtime/test-scoped dep with version=None,
     look up its (groupId:artifactId) in the import-scoped managed
     deps and copy the version across. Mutates in place.
@@ -245,16 +266,23 @@ def _resolve_local_dep_management(deps: List[Dependency]) -> None:
         inherited = managed_version.get(d.name)
         if inherited:
             d.version = inherited
+            d.pin_style = _classify_version(inherited)[0]
+            if d.pin_style is PinStyle.RANGE:
+                d.version_floor, d.version_ceiling = _range_corridor(inherited)
+            d.parser_confidence = _confidence(True, inherited, False)
+            if ":" in d.name:
+                g, a = d.name.split(":", 1)
+                d.purl = f"pkg:maven/{g}/{a}@{inherited}"
 
 
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
-def _extract_license(root) -> Optional[str]:
+def _extract_license(root) -> str | None:
     """Collect names from ``<licenses>/<license>/<name>``; returns SPDX-OR
     when multiple are listed."""
-    names: List[str] = []
+    names: list[str] = []
     for el in root.findall("./licenses/license"):
         n = _text(el, "name")
         if n and n.strip():
@@ -276,14 +304,14 @@ def _strip_namespaces(root) -> None:
             el.tag = el.tag[len(prefix):]
 
 
-def _collect_properties(root) -> Dict[str, str]:
+def _collect_properties(root) -> dict[str, str]:
     """Read top-level ``<properties>`` for ${...} substitution.
 
     Maven also exposes built-ins like ``${project.version}`` —
     we resolve a small allowlist of those (project.version,
     project.groupId, project.artifactId) since they're extremely common.
     """
-    props: Dict[str, str] = {}
+    props: dict[str, str] = {}
     props_el = root.find("./properties")
     if props_el is not None:
         for child in props_el:
@@ -307,7 +335,7 @@ def _collect_properties(root) -> Dict[str, str]:
     return props
 
 
-def _resolve(value: Optional[str], properties: Dict[str, str]) -> Tuple[Optional[str], bool]:
+def _resolve(value: str | None, properties: dict[str, str]) -> tuple[str | None, bool]:
     """Substitute ${...} placeholders. Return (resolved, fully_resolved)."""
     if value is None:
         return None, True
@@ -316,7 +344,7 @@ def _resolve(value: Optional[str], properties: Dict[str, str]) -> Tuple[Optional
         return None, True
     fully = True
 
-    def _sub(match: "re.Match[str]") -> str:
+    def _sub(match: re.Match[str]) -> str:
         nonlocal fully
         key = match.group(1)
         if key in properties:
@@ -331,12 +359,12 @@ def _resolve(value: Optional[str], properties: Dict[str, str]) -> Tuple[Optional
 def _build_dep(
     el,
     path: Path,
-    properties: Dict[str, str],
+    properties: dict[str, str],
     *,
     scope_default: str,
     is_managed: bool,
     is_plugin: bool,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Materialise one Dependency from a <dependency>/<plugin>/<parent> element."""
     group_text = _text(el, "groupId")
     artifact_text = _text(el, "artifactId")
@@ -360,6 +388,10 @@ def _build_dep(
 
     name = f"{group}:{artifact}"
     pin_style, version_for_record = _classify_version(version)
+    version_floor, version_ceiling = (
+        _range_corridor(version_for_record)
+        if pin_style is PinStyle.RANGE else (None, None)
+    )
     fully_resolved = group_ok and artifact_ok and version_ok
 
     raw_scope = (scope_text or scope_default).strip().lower()
@@ -386,17 +418,49 @@ def _build_dep(
         direct=not is_managed,
         purl=purl,
         parser_confidence=confidence,
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 
-def _text(el, tag: str) -> Optional[str]:
+def _text(el, tag: str) -> str | None:
     child = el.find(tag)
     if child is None:
         return None
     return child.text
 
 
-def _classify_version(version: Optional[str]) -> Tuple[PinStyle, Optional[str]]:
+# Single-interval Maven range — ``[1.0,2.0)`` / ``(,1.0]`` / ``[1.5,)``.
+# Value classes exclude the structural delimiters so matching stays
+# linear-time on hostile input (same posture as nuget.py's bracket
+# grammar). Multi-interval unions (``(,1.0],[1.2,)``) don't match and
+# carry no corridor.
+_RANGE_RE = re.compile(
+    r"^([\[\(])([^,\[\]\(\)]*),([^,\[\]\(\)]*)([\]\)])$"
+)
+
+
+def _range_corridor(
+    version: str | None,
+) -> tuple[str | None, str | None]:
+    """Return ``(floor, ceiling)`` corridor bounds from a single-interval
+    Maven range, or ``(None, None)`` for anything else.
+
+    harden records these so its upgrade candidate selection stays inside
+    the declared range instead of over-bumping past the upper bound and
+    relying on the rewriter's fail-closed backstop.
+    """
+    if not version:
+        return None, None
+    m = _RANGE_RE.match(version.strip())
+    if m is None:
+        return None, None
+    floor = m.group(2).strip() or None
+    ceiling = m.group(3).strip() or None
+    return floor, ceiling
+
+
+def _classify_version(version: str | None) -> tuple[PinStyle, str | None]:
     """Map a Maven version expression to a PinStyle plus a usable string."""
     if version is None or version == "":
         return PinStyle.UNKNOWN, None
@@ -416,7 +480,7 @@ def _classify_version(version: Optional[str]) -> Tuple[PinStyle, Optional[str]]:
 
 def _confidence(
     fully_resolved: bool,
-    version: Optional[str],
+    version: str | None,
     is_managed: bool,
 ) -> Confidence:
     if not fully_resolved:
@@ -435,7 +499,7 @@ def _confidence(
     return Confidence("high", reason="POM dependency block")
 
 
-def _build_purl(group: str, artifact: str, version: Optional[str]) -> str:
+def _build_purl(group: str, artifact: str, version: str | None) -> str:
     """Build a Maven purl. Encoding follows the purl spec for Maven."""
     base = f"pkg:maven/{group}/{artifact}"
     if version:

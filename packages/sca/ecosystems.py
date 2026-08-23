@@ -7,7 +7,6 @@ ecosystem strings before any registry / OSV call.
 
 from __future__ import annotations
 
-from typing import Optional
 
 KNOWN_ECOSYSTEMS = (
     "PyPI", "npm", "Maven", "Cargo", "Go",
@@ -27,7 +26,7 @@ KNOWN_ECOSYSTEMS = (
 _LOOKUP = {e.lower(): e for e in KNOWN_ECOSYSTEMS}
 
 
-def canonicalise(ecosystem: str) -> Optional[str]:
+def canonicalise(ecosystem: str) -> str | None:
     """Return the canonical ecosystem name, or ``None`` if not recognised.
 
     Case-insensitive lookup against the known list. Callers SHOULD reject

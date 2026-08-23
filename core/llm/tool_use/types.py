@@ -38,10 +38,12 @@ without context:
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +216,59 @@ class TurnResponse:
 
 
 # ---------------------------------------------------------------------------
+# Streaming chunks (L1 substrate)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    """One piece of a streaming response from
+    :meth:`~core.llm.providers.LLMProvider.turn_stream`.
+
+    Providers yield these incrementally as the API response arrives.
+    The :class:`ToolUseLoop` accumulates them into a :class:`TurnResponse`
+    while emitting :class:`StreamDelta` events to subscribers.
+
+    ``type`` discriminates the payload:
+
+    +-----------------+---------------------------------------------------+
+    | type            | populated fields                                  |
+    +=================+===================================================+
+    | text_delta      | ``text`` — incremental text fragment               |
+    +-----------------+---------------------------------------------------+
+    | tool_call_start | ``tool_call_id``, ``tool_call_name``              |
+    +-----------------+---------------------------------------------------+
+    | tool_call_delta | ``tool_call_id``, ``tool_call_input_delta``       |
+    |                 | (partial JSON string)                              |
+    +-----------------+---------------------------------------------------+
+    | tool_call_end   | ``tool_call_id``                                  |
+    +-----------------+---------------------------------------------------+
+    | usage           | token count fields                                |
+    +-----------------+---------------------------------------------------+
+    | done            | ``stop_reason``                                   |
+    +-----------------+---------------------------------------------------+
+    """
+
+    type: Literal[
+        "text_delta",
+        "tool_call_start",
+        "tool_call_delta",
+        "tool_call_end",
+        "usage",
+        "done",
+    ]
+    text: str = ""
+    tool_call_id: str = ""
+    tool_call_name: str = ""
+    tool_call_input_delta: str = ""
+    stop_reason: StopReason | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+
+# ---------------------------------------------------------------------------
 # Cache-control opt-ins
 # ---------------------------------------------------------------------------
 
@@ -264,7 +319,23 @@ class ContextPolicy(Enum):
 class ContextOverflow(RuntimeError):
     """Raised by the loop when ``ContextPolicy.RAISE`` is in effect and
     the next turn's request would exceed the provider's context
-    window."""
+    window.
+
+    Carries the partial-state attributes ``messages`` and
+    ``tool_calls_made`` so callers can persist the trajectory up to the
+    point of termination. Both default to empty/0 when the raiser had
+    no access to them.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        messages: list[Any] | None = None,
+        tool_calls_made: int = 0,
+    ) -> None:
+        super().__init__(*args)
+        self.messages = list(messages) if messages else []
+        self.tool_calls_made = tool_calls_made
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +351,22 @@ class CostBudgetExceeded(RuntimeError):
     Pre-flight only: a single surprise-large response cannot be blocked
     until we know its cost, but subsequent calls in the same loop run
     cannot pile on once the cap is reached.
+
+    Carries the partial-state attributes ``messages`` and
+    ``tool_calls_made`` so callers can persist the trajectory up to the
+    point of termination. Both default to empty/0 when the raiser had
+    no access to them.
     """
+
+    def __init__(
+        self,
+        *args: Any,
+        messages: list[Any] | None = None,
+        tool_calls_made: int = 0,
+    ) -> None:
+        super().__init__(*args)
+        self.messages = list(messages) if messages else []
+        self.tool_calls_made = tool_calls_made
 
 
 class ToolHandlerTimeout(RuntimeError):
@@ -369,6 +455,20 @@ class ToolCallBlocked:
 
 
 @dataclass(frozen=True)
+class StreamDelta:
+    """Real-time chunk from the provider during a streaming turn.
+
+    Emitted between :class:`TurnStarted` and :class:`TurnCompleted`
+    when the :class:`ToolUseLoop` is running in streaming mode. Each
+    event wraps one :class:`StreamChunk` from the provider's
+    :meth:`~core.llm.providers.LLMProvider.turn_stream`.
+    """
+
+    iteration: int
+    chunk: StreamChunk
+
+
+@dataclass(frozen=True)
 class LoopTerminated:
     """Emitted as the final event of a :meth:`ToolUseLoop.run` call.
 
@@ -395,6 +495,8 @@ class LoopTerminated:
         "tool_timeout",              # handler timeout, not configured to terminate
         "context_overflow",          # request would exceed context window
         "provider_error",            # transport / API failure after retries
+        "credit_exhausted",          # account out of credit / billing failure
+        "give_up",                   # caller-supplied should_continue returned False
     ]
     iterations: int
     total_cost_usd: float
@@ -404,6 +506,7 @@ class LoopTerminated:
 LoopEvent = Union[
     TurnStarted,
     TurnCompleted,
+    StreamDelta,
     ToolCallDispatched,
     ToolCallBlocked,
     ToolCallReturned,
@@ -461,5 +564,15 @@ class ToolLoopResult:
         "tool_timeout",
         "context_overflow",
         "provider_error",
+        "credit_exhausted",
+        "give_up",
     ]
     error_message: str | None = None
+    # Per-turn token accounting — one (input, output) tuple per
+    # assistant turn in ``messages``, in order. Zero entries when
+    # the loop couldn't populate them (defensive default; producers
+    # populate on every real turn). Consumers that want per-turn
+    # cost use these alongside the pricing table; consumers that
+    # only want totals use ``total_input_tokens`` / ``total_output
+    # _tokens``.
+    per_turn_tokens: tuple[tuple[int, int], ...] = ()

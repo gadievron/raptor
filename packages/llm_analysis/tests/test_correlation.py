@@ -201,3 +201,74 @@ class TestBuildClusters:
         }
         clusters = _build_clusters(matrix, {})
         assert len(clusters) == 2
+
+
+class TestAbstentions:
+    """Missing/null is_exploitable is an abstention, never a False
+    vote — pre-fix bool(None) turned errored models into 'not
+    exploitable' verdicts."""
+
+    def test_abstainer_plus_agreeing_verdicts_still_high(self):
+        results = {
+            "f-001": _make_result("f-001", [
+                _make_analysis("gemini", True),
+                _make_analysis("gpt-5", True),
+                _make_analysis("claude", None),  # errored — abstains
+            ]),
+        }
+        result = correlate_results(results)
+        assert result["confidence_signals"]["f-001"] == "high"
+
+    def test_single_real_verdict_with_abstainers_not_disputed(self):
+        results = {
+            "f-001": _make_result("f-001", [
+                _make_analysis("gemini", True),
+                _make_analysis("gpt-5", None),
+                _make_analysis("claude", None),
+            ]),
+        }
+        result = correlate_results(results)
+        # One real verdict + abstainers is unanimous-among-voters,
+        # not a 2-1 majority against.
+        assert result["confidence_signals"]["f-001"] == "high"
+        assert result["unique_insights"] == []
+
+    def test_all_abstain_is_not_high_negative(self):
+        results = {
+            "f-001": _make_result("f-001", [
+                _make_analysis("gemini", None),
+                _make_analysis("gpt-5", None),
+            ]),
+        }
+        result = correlate_results(results)
+        # Zero real verdicts must never mint 'high-negative'.
+        assert result["confidence_signals"]["f-001"] == "no-verdict"
+        assert result["summary"]["agreed"] == 0
+        assert result["summary"]["disputed"] == 0
+
+    def test_missing_key_is_abstention_too(self):
+        analyses = [
+            _make_analysis("gemini", False),
+            {"model": "gpt-5", "reasoning": "errored"},  # no key at all
+            _make_analysis("claude", False),
+        ]
+        results = {"f-001": _make_result("f-001", analyses)}
+        result = correlate_results(results)
+        assert result["confidence_signals"]["f-001"] == "high-negative"
+
+    def test_disputed_majority_excludes_abstainers(self):
+        results = {
+            "f-001": _make_result("f-001", [
+                _make_analysis("gemini", True),
+                _make_analysis("gpt-5", True),
+                _make_analysis("claude", False),
+                _make_analysis("mistral", None),  # abstains
+            ]),
+        }
+        result = correlate_results(results)
+        assert result["confidence_signals"]["f-001"] == "disputed"
+        # Minority is the single dissenting REAL vote, not the
+        # abstainer-inflated fake majority.
+        minority = [u["model"] for u in result["unique_insights"]
+                    if u["finding_id"] == "f-001"]
+        assert minority == ["claude"]

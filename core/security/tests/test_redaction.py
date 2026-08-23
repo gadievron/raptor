@@ -44,7 +44,7 @@ def test_redacts_supported_secret_query_parameter_names(param_name):
 
 
 def test_preserves_non_secret_query_parameters_and_fragments():
-    value = "https://example.test/search?q=report&next=/home&page_token=cursor123#section"
+    value = "https://example.test/search?q=report&next=/home&page=cursor123#section"
 
     assert redact_secrets(value) == value
 
@@ -138,3 +138,72 @@ class TestRedactUrlSecretsOnly:
         out = redact_url_secrets_only(value)
         assert "abcdefghijklmnop" not in out
         assert "api_key=[REDACTED]" in out
+
+
+class TestVendorShapeCoverage:
+    """Credential shapes from the injection-evasion battery that
+    survived redaction verbatim — each pinned here with its exact
+    repro form plus the shape family around it."""
+
+    @pytest.mark.parametrize("text,fragment", [
+        # AWS secret access key (assignment-context anchored).
+        ("aws_secret_access_key = "
+         "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYxx", "wJalrXUtnFEMIK7"),
+        ("AWS_SECRET_KEY: wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYxx",
+         "wJalrXUtnFEMIK7"),
+        ('"aws_secret_access_key": "abcdEFGHijklMNOPqrstUVWXyz0123456789ABCD"',
+         "abcdEFGHijklMNOP"),
+        # PEM private-key blocks, with and without the END line.
+        ("dump:\n-----BEGIN PRIVATE KEY-----\n"
+         "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\n"
+         "-----END PRIVATE KEY-----", "MIIEvQIBADAN"),
+        ("truncated:\n-----BEGIN RSA PRIVATE KEY-----\n"
+         "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEA", "MIIEvQIBADAN"),
+        # Azure storage AccountKey and AD client secret.
+        ("AccountKey=QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"
+         "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ==;EndpointSuffix=core.windows.net",
+         "QUFBQUFBQUFB"),
+        ("client_secret: 8Q~dummYsecretVALUEabcdefghijklmnopqrs",
+         "dummYsecretVALUE"),
+        # Slack browser-session token (xoxc — outside the old class).
+        ("session xoxc-1234567890123-abcdefghijklmnop", "abcdefghijklmnop"),
+        # Google OAuth refresh token.
+        ("refresh: 1//0gABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij-klm",
+         "0gABCDEFGHIJ"),
+        # JWT whose header JSON has whitespace (eyA..., not eyJ...).
+        ("auth eyAiYWxnIjogIkhTMjU2IiB9.eyAic3ViIjogIjEyMzQ1Njc4OTAiIH0."
+         "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c", "SflKxwRJSMe"),
+    ])
+    def test_battery_shape_redacted(self, text, fragment):
+        out = redact_secrets(text)
+        assert fragment not in out, out
+
+    @pytest.mark.parametrize("text,password", [
+        ("postgres://svc:sekrit129@db.internal:5432/app", "sekrit129"),
+        ("mongodb+srv://svc:sekrit130@cluster.example/db", "sekrit130"),
+        ("redis://:sekrit131@cache.internal:6379/0", "sekrit131"),
+        ("amqp://svc:sekrit132@mq.internal:5672/", "sekrit132"),
+        ("ftp://svc:sekrit133@files.example/", "sekrit133"),
+    ])
+    def test_connection_string_password_redacted(self, text, password):
+        # Non-http schemes carry credentials in the same userinfo
+        # position; the http-only URL pattern let them all through.
+        out = redact_secrets(text)
+        assert password not in out, out
+        # Host survives — the redaction targets the credential only.
+        host = text.split("@", 1)[1].split("/", 1)[0].split(":", 1)[0]
+        assert host in out
+
+    def test_connection_string_covered_in_url_only_mode(self):
+        out = redact_url_secrets_only("postgres://u:sekrit142@h/db")
+        assert "sekrit142" not in out
+
+    @pytest.mark.parametrize("benign", [
+        "result = 1//divisor",
+        "half = n//2",
+        "the xox token format is documented at api.example",
+        "AccountKey is required for this API",
+        "aws_secret_access_key = <redacted-elsewhere>",
+    ])
+    def test_benign_code_and_prose_untouched(self, benign):
+        assert redact_secrets(benign) == benign

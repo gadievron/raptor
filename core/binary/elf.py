@@ -33,8 +33,11 @@ from __future__ import annotations
 import logging
 import struct
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +113,10 @@ class ElfMetadata:
     arch: str
     bits: int
     binary_format: str = "elf"
-    imports: Set[str] = field(default_factory=set)
+    imports: set[str] = field(default_factory=set)
 
 
-def parse_elf(path: Path) -> Optional[ElfMetadata]:
+def parse_elf(path: Path) -> ElfMetadata | None:
     """Parse ``path`` as ELF and return its capability-relevant
     metadata, or ``None`` on any read / parse failure.
 
@@ -122,7 +125,7 @@ def parse_elf(path: Path) -> Optional[ElfMetadata]:
     memory.
     """
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             return _parse_elf_stream(f)
     except OSError as e:
         logger.debug("core.binary.elf: read failed for %s: %s", path, e)
@@ -133,7 +136,7 @@ def parse_elf(path: Path) -> Optional[ElfMetadata]:
         return None
 
 
-def _parse_elf_stream(f) -> Optional[ElfMetadata]:
+def _parse_elf_stream(f) -> ElfMetadata | None:
     # --- e_ident (first 16 bytes) -----------------------------
     e_ident = f.read(16)
     if len(e_ident) < 16 or e_ident[:4] != _ELF_MAGIC:
@@ -161,7 +164,7 @@ def _parse_elf_stream(f) -> Optional[ElfMetadata]:
     rest = f.read(rest_size)
     if len(rest) < rest_size:
         return None
-    (e_type, e_machine, _e_version, _e_entry, _e_phoff,
+    (_e_type, e_machine, _e_version, _e_entry, _e_phoff,
      e_shoff, _e_flags, _e_ehsize, _e_phentsize, _e_phnum,
      e_shentsize, e_shnum, e_shstrndx) = struct.unpack(
         rest_fmt, rest,
@@ -190,7 +193,7 @@ def _parse_elf_stream(f) -> Optional[ElfMetadata]:
         return _bare_metadata(e_machine, bits)
 
     # Resolve section names so we can find .dynsym + .dynstr
-    named_sections: List[Tuple[str, "_SectionHeader"]] = []
+    named_sections: list[tuple[str, _SectionHeader]] = []
     for sh in sections:
         name = _read_strtab_string(shstrtab, sh.sh_name)
         named_sections.append((name, sh))
@@ -249,9 +252,9 @@ class _SectionHeader:
 def _read_section_headers(
     f, e_shoff: int, e_shentsize: int, e_shnum: int,
     *, bits: int, endian: str,
-) -> Optional[List[_SectionHeader]]:
+) -> list[_SectionHeader] | None:
     f.seek(e_shoff)
-    out: List[_SectionHeader] = []
+    out: list[_SectionHeader] = []
     # ELF64 section header: 64 bytes
     # ELF32 section header: 40 bytes
     if bits == 64:
@@ -287,7 +290,7 @@ def _read_section_headers(
     return out
 
 
-def _read_section_bytes(f, sh: _SectionHeader) -> Optional[bytes]:
+def _read_section_bytes(f, sh: _SectionHeader) -> bytes | None:
     if sh.sh_size == 0:
         return b""
     # Sanity cap — 256 MB is way larger than any realistic
@@ -323,7 +326,7 @@ def _read_strtab_string(strtab: bytes, offset: int) -> str:
 def _read_dynsym_imports(
     f, dynsym: _SectionHeader, dynstr_bytes: bytes,
     *, bits: int, endian: str,
-) -> Set[str]:
+) -> set[str]:
     """Walk ``.dynsym`` and collect undefined-section symbol
     names (the imports)."""
     if dynsym.sh_entsize == 0 or dynsym.sh_size == 0:
@@ -336,15 +339,12 @@ def _read_dynsym_imports(
     #           st_value(Q) st_size(Q)  → 24 bytes
     # ELF32 sym: st_name(I) st_value(I) st_size(I) st_info(B)
     #           st_other(B) st_shndx(H) → 16 bytes
-    if bits == 64:
-        sym_fmt = endian + "IBBHQQ"
-    else:
-        sym_fmt = endian + "IIIBBH"
+    sym_fmt = endian + "IBBHQQ" if bits == 64 else endian + "IIIBBH"
     record_size = struct.calcsize(sym_fmt)
     if dynsym.sh_entsize < record_size:
         return set()
 
-    imports: Set[str] = set()
+    imports: set[str] = set()
     f.seek(dynsym.sh_offset)
     for _ in range(entries):
         buf = f.read(record_size)
@@ -397,7 +397,7 @@ def _bare_metadata(e_machine: int, bits: int) -> ElfMetadata:
 # Detection is FIRST-BYTES-ONLY (one read of the leading 4 KB) so
 # the check is sub-millisecond and can run on every binary the
 # Phase 3 ``binary_in_package`` detector hits.
-_PACKER_SIGNATURES: Tuple[Tuple[str, bytes], ...] = (
+_PACKER_SIGNATURES: tuple[tuple[str, bytes], ...] = (
     ("upx",        b"UPX!"),
     ("upx",        b"$Info: This file is packed with the UPX"),
     ("aspack",     b"aPLib"),
@@ -411,7 +411,7 @@ _PACKER_SIGNATURES: Tuple[Tuple[str, bytes], ...] = (
 )
 
 
-def is_packed(path: Path) -> Optional[str]:
+def is_packed(path: Path) -> str | None:
     """Return the detected packer name when ``path``'s leading
     bytes match a known packer signature, otherwise None.
 
@@ -426,7 +426,7 @@ def is_packed(path: Path) -> Optional[str]:
     arbitrary high-entropy sections (high FP, not deterministic).
     """
     try:
-        with open(path, "rb") as f:
+        with Path(path).open("rb") as f:
             head = f.read(4096)
     except OSError:
         return None

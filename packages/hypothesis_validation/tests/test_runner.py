@@ -5,6 +5,7 @@ mechanical tool evidence, not LLM opinion. When the LLM disagrees with
 the mechanical truth, the mechanical truth wins.
 """
 
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -19,9 +20,12 @@ from packages.hypothesis_validation.adapters.base import (
 )
 from packages.hypothesis_validation.hypothesis import Hypothesis
 from packages.hypothesis_validation.runner import (
+    _EVALUATION_SCHEMA,
+    _TOOL_SELECTION_SCHEMA,
     _build_evaluate_prompt,
     _build_generate_prompt,
     _build_system_prompt,
+    _evaluate_with_refinement,
     _extract_data,
     validate,
 )
@@ -165,6 +169,19 @@ class TestExtractData:
         assert _extract_data(X()) is None
 
 
+class TestEvaluationSchema:
+    def test_matches_support_claim_removed(self):
+        # The evaluation schema must not request the never-read
+        # matches_support_claim boolean (inert scaffolding, wasted tokens).
+        assert "matches_support_claim" not in _EVALUATION_SCHEMA
+
+    def test_consumed_fields_still_requested(self):
+        assert "reasoning" in _EVALUATION_SCHEMA
+        assert "refined_rule" in _EVALUATION_SCHEMA
+        assert "verdict" in _EVALUATION_SCHEMA
+        assert "reasoning" in _TOOL_SELECTION_SCHEMA
+
+
 # validate() ------------------------------------------------------------------
 
 class TestValidateConfirmation:
@@ -305,6 +322,44 @@ class TestValidateInconclusive:
         assert result.inconclusive  # not refuted, despite LLM's claim
 
 
+class TestValidateNeverRaisesOnMalformedSelection:
+    """validate() keeps its never-raises contract when LLM structured
+    output carries null / non-string tool, rule, or refined_rule values."""
+
+    def test_null_rule_is_treated_as_empty(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("t1")
+        llm = FakeLLM([{"tool": "t1", "rule": None}])
+        result = validate(h, [adapter], llm)
+        assert result.verdict == "inconclusive"
+        assert "empty rule" in result.reasoning
+
+    def test_non_string_tool_is_treated_as_unknown(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("t1")
+        llm = FakeLLM([{"tool": ["t1"], "rule": "r"}])
+        result = validate(h, [adapter], llm)
+        assert result.verdict == "inconclusive"
+        assert "not in the available list" in result.reasoning
+
+    def test_non_string_refined_rule_ends_iteration(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("t1", evidence=ToolEvidence(
+            tool="t1", rule="r", success=True,
+            matches=[{"file": "a.c", "line": 1, "message": "m"}],
+            summary="1 match in 1 file",
+        ))
+        llm = FakeLLM([
+            {"tool": "t1", "rule": "r1", "expected_evidence": "x",
+             "reasoning": "y"},
+            {"verdict": "inconclusive", "reasoning": "unclear",
+             "refined_rule": 123},
+        ])
+        result = validate(h, [adapter], llm)
+        assert result.verdict == "inconclusive"
+        assert len(result.evidence) == 1
+
+
 class TestValidateAdapterFiltering:
     def test_unavailable_adapters_filtered_before_llm(self):
         h = Hypothesis(claim="c", target=Path("/src"))
@@ -366,6 +421,27 @@ class TestValidateAuditTrail:
         d = result.to_dict()
         assert d["verdict"] == "confirmed"
         assert d["evidence"][0]["tool"] == "cocci"
+
+    def test_selection_reasoning_reaches_the_log(self, caplog):
+        """The tool-selection reasoning / expected_evidence fields are
+        consumed — logged into the audit trail instead of dropped."""
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("t1")
+        llm = FakeLLM([
+            {"tool": "t1", "rule": "r1",
+             "expected_evidence": "a match at parse()",
+             "reasoning": "syntactic pattern fits t1"},
+            {"verdict": "refuted", "reasoning": "no matches",
+             "refined_rule": ""},
+        ])
+        with caplog.at_level(
+            logging.DEBUG, logger="packages.hypothesis_validation.runner",
+        ):
+            result = validate(h, [adapter], llm)
+        assert result.verdict == "refuted"
+        joined = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "syntactic pattern fits t1" in joined
+        assert "a match at parse()" in joined
 
 
 class TestValidateProvenance:
@@ -429,3 +505,143 @@ class TestValidateProvenance:
         result = validate(h, [adapter], llm)
         assert result.inconclusive
         assert result.evidence[0].refers_to == hash_hypothesis(h)
+
+
+class TestInvalidVerdictUsesClaim:
+    """The invalid-verdict warning paths reference hypothesis.claim —
+    the dataclass has no ``text`` attribute, so referencing it would
+    let an AttributeError escape validate()."""
+
+    def test_refinement_path_invalid_verdict_no_attribute_error(self):
+        h = Hypothesis(claim="buffer overflow in parse", target=Path("/src"))
+        evidence = ToolEvidence(
+            tool="t1", rule="r", success=True,
+            matches=[{"file": "a.c", "line": 1, "message": "m"}],
+            summary="1 match in 1 file",
+        )
+        llm = FakeLLM([{"verdict": "bogus", "reasoning": "x",
+                        "refined_rule": ""}])
+        verdict, reasoning, data = _evaluate_with_refinement(
+            h, evidence, llm, task_type="audit",
+        )
+        assert verdict == "inconclusive"
+        assert reasoning == "x"
+        assert data is not None
+
+    def test_no_match_path_invalid_verdict_falls_back_to_inconclusive(self):
+        h = Hypothesis(claim="buffer overflow in parse", target=Path("/src"))
+        evidence = ToolEvidence(
+            tool="t1", rule="r", success=True, matches=[],
+            summary="no matches",
+        )
+        llm = FakeLLM([{"verdict": "bogus", "reasoning": "x"}])
+        verdict, _, _ = _evaluate_with_refinement(
+            h, evidence, llm, task_type="audit",
+        )
+        assert verdict == "inconclusive"
+
+
+class SequencedAdapter(FakeAdapter):
+    """FakeAdapter variant returning a different ToolEvidence per run()."""
+
+    def __init__(self, name, evidences):
+        super().__init__(name)
+        self._evidences = list(evidences)
+
+    def run(self, rule, target, *, timeout=300, env=None) -> ToolEvidence:
+        self.run_calls.append({"rule": rule, "target": target})
+        ev = self._evidences.pop(0)
+        return ToolEvidence(
+            tool=ev.tool, rule=rule, success=ev.success,
+            matches=list(ev.matches), summary=ev.summary, error=ev.error,
+        )
+
+
+class TestValidateMultiRound:
+    """Multi-round refinement must terminate with a verdict, not a
+    ProvenanceMismatch. Pre-fix, refinement replaced the hypothesis and
+    round-2 evidence carried the refined hash — ValidationResult's
+    ensure_same_provenance then raised on EVERY multi-round run. And
+    the iteration guard compared absolute uncertainty over cumulative
+    evidence, so it could never decrease and round 3 was unreachable."""
+
+    def test_two_round_run_reaches_verdict_with_single_lineage(self):
+        from packages.hypothesis_validation.provenance import hash_hypothesis
+
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "rule too narrow",
+             "refined_rule": "r2"},
+            {"verdict": "confirmed", "reasoning": "match consistent",
+             "refined_rule": ""},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        assert result.verdict == "confirmed"
+        assert result.iterations == 2
+        assert len(result.evidence) == 2
+        # All rounds share the root hypothesis's provenance edge.
+        assert {e.refers_to for e in result.evidence} == {hash_hypothesis(h)}
+
+    def test_third_round_reachable_when_evidence_improves(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+            ToolEvidence(tool="cocci", rule="r3", success=True,
+                         matches=[{"file": "a.c", "line": 1}],
+                         summary="1 match"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "no matches yet",
+             "refined_rule": "r2"},
+            {"verdict": "inconclusive", "reasoning": "match ambiguous",
+             "refined_rule": "r3"},
+            {"verdict": "confirmed", "reasoning": "match consistent",
+             "refined_rule": ""},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        assert result.verdict == "confirmed"
+        assert result.iterations == 3
+        assert len(result.evidence) == 3
+
+    def test_stalls_when_refinement_adds_no_conclusive_evidence(self):
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = SequencedAdapter("cocci", [
+            ToolEvidence(tool="cocci", rule="r1", success=True,
+                         matches=[], summary="no matches"),
+            ToolEvidence(tool="cocci", rule="r2", success=True,
+                         matches=[], summary="no matches"),
+        ])
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "r1",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "inconclusive", "reasoning": "unclear",
+             "refined_rule": "r2"},
+            {"verdict": "inconclusive", "reasoning": "still unclear",
+             "refined_rule": "r3"},
+        ])
+
+        result = validate(h, [adapter], llm)
+
+        # Guard halts the loop before a third tool run.
+        assert result.verdict == "inconclusive"
+        assert len(result.evidence) == 2
+        assert len(adapter.run_calls) == 2

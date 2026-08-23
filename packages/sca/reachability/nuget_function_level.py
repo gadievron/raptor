@@ -29,20 +29,23 @@ UNCERTAIN. Direct static class/method calls work cleanly.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, Reachability
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 def build_nuget_symbol_map(
-    osv_results: Optional[Iterable[Any]],
-) -> Dict[str, List[str]]:
+    osv_results: Iterable[Any] | None,
+) -> dict[str, list[str]]:
     if not osv_results:
         return {}
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for r in osv_results:
         if not hasattr(r, "advisories"):
             continue
@@ -50,7 +53,7 @@ def build_nuget_symbol_map(
         if not dep_key or not dep_key.startswith("NuGet:"):
             continue
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
-        qualified: List[str] = []
+        qualified: list[str] = []
         for adv in r.advisories:
             qualified.extend(_extract_qualified(adv, dep_name))
         if qualified:
@@ -58,8 +61,8 @@ def build_nuget_symbol_map(
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 
-def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
-    out: List[str] = []
+def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
+    out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
     ds = getattr(advisory, "database_specific", None) or {}
     for source in (es, ds):
@@ -70,25 +73,21 @@ def _extract_qualified(advisory: Any, dep_name: str) -> List[str]:
                 continue
             path = imp.get("path") or dep_name
             symbols = imp.get("symbols") or []
-            for s in symbols:
-                if isinstance(s, str) and s and isinstance(path, str):
-                    out.append(f"{path}.{s}")
+            out.extend(f"{path}.{s}" for s in symbols if isinstance(s, str) and s and isinstance(path, str))
         for key in ("affected_symbols", "affected_functions"):
             v = source.get(key)
             if isinstance(v, list) and dep_name:
-                for s in v:
-                    if isinstance(s, str):
-                        out.append(f"{dep_name}.{s}")
+                out.extend(f"{dep_name}.{s}" for s in v if isinstance(s, str) and s)
     return out
 
 
 def refine_nuget_verdicts(
-    deps: List[Dependency],
-    out: Dict[str, Reachability],
+    deps: list[Dependency],
+    out: dict[str, Reachability],
     *,
     target: Path,
-    nuget_symbol_map: Dict[str, List[str]],
-    inventory: Optional[Dict[str, Any]] = None,
+    nuget_symbol_map: dict[str, list[str]],
+    inventory: dict[str, Any] | None = None,
 ) -> None:
     candidates = [
         d for d in deps
@@ -114,25 +113,25 @@ def refine_nuget_verdicts(
             )
             return
 
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     for d in candidates:
         qualified_names = nuget_symbol_map[d.key()]
-        results = []
+        paired = []
         for qn in qualified_names:
             if "." not in qn:
                 continue
             try:
-                results.append(function_called(inventory, qn))
+                paired.append((qn, function_called(inventory, qn)))
             except ValueError:
                 continue
-        if not results:
+        if not paired:
             continue
-        verdicts = {r.verdict for r in results}
+        verdicts = {r.verdict for _, r in paired}
         if Verdict.CALLED in verdicts:
-            evidence: List[str] = []
-            called: List[str] = []
-            for qn, r in zip(qualified_names, results):
+            evidence: list[str] = []
+            called: list[str] = []
+            for qn, r in paired:
                 if r.verdict == Verdict.CALLED:
                     called.append(qn)
                     evidence.extend(f"{p}:{ln}" for p, ln in r.evidence)
@@ -154,7 +153,7 @@ def refine_nuget_verdicts(
                 confidence=Confidence(
                     "high",
                     reason=(
-                        f"package imported but the {len(qualified_names)} "
+                        f"package imported but the {len(paired)} "
                         f"OSV-listed affected symbol(s) are not called "
                         f"from non-test C# source"
                     ),

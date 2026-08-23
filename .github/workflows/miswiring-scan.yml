@@ -1,0 +1,156 @@
+name: Miswiring scan (daily)
+
+# Daily dead-code / miswiring sweep — the signal for the bug class
+# where a wrong call or import is silently swallowed by a broad
+# exception handler and a feature dies without a test failing.
+#
+# Runs .github/scripts/check_miswiring.py (stdlib-only, no deps)
+# against the checked-in baseline. A NEW finding fails the job: fix
+# the miswiring, or — deliberately, with a note — add its key to
+# .github/scripts/miswiring_baseline.json. Baseline entries that no
+# longer fire are warned as stale in the job log.
+#
+# Deliberately a scheduled job, not a PR gate: the full-repo AST
+# index takes ~a minute and the finding classes need human triage
+# judgment, so the daily cadence keeps the signal without taxing
+# the merge queue.
+
+on:
+  schedule:
+    # 05:30 UTC — clear of tests.yml's full-suite cron (Mon/Thu
+    # 06:00) and nightly.yml (07:00).
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.14'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  miswiring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run miswiring detector against baseline
+        run: |
+          python3 .github/scripts/check_miswiring.py
+
+  # Environment-variable documentation drift: extracts every env var
+  # the tree reads/writes (Python AST + bash + the declared policy
+  # tables) and compares against docs/environment.md. A NEW
+  # operator-facing variable without documentation fails, as does a
+  # documented variable that no longer exists in code. Same baseline
+  # semantics as the miswiring job; deliberate exceptions go in
+  # .github/scripts/env_docs_baseline.json with a note (target: keep
+  # it empty — document, don't baseline).
+  env-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run env-var documentation drift check
+        run: |
+          python3 .github/scripts/check_env_docs.py
+
+  # Hardcoded-vocabulary guardrail: flags NEW large literal
+  # function-name lists outside the taxonomy / data packs / tests —
+  # the regression class where library API vocabulary gets baked into
+  # code instead of learned (DomainVocabulary / IRIS / study loop) or
+  # shipped as data. Same baseline semantics as the miswiring job;
+  # deliberate additions go in .github/scripts/vocab_baseline.json
+  # with a review note.
+  vocab-lists:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run vocabulary-list guardrail against baseline
+        run: |
+          python3 .github/scripts/check_vocab_lists.py
+
+  # Canonical-JSON byte-form guardrail: the json.dumps calls whose
+  # exact bytes feed an HMAC, a persisted sha256 identity, or a
+  # digest-keyed cache are frozen — either routed through
+  # core.json.dumps_canonical or pinned raw in the baseline with a
+  # note. A NEW raw dumps in a canonical module, or a new
+  # dumps-into-hash flow anywhere, fails the job. Same baseline
+  # semantics as the miswiring job; baseline in
+  # .github/scripts/canonical_json_baseline.json.
+  canonical-json:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run canonical-JSON guardrail against baseline
+        run: |
+          python3 .github/scripts/check_canonical_json.py
+
+  # Optional-dependency import lint: test files importing modules that
+  # ship commented out in requirements.txt (anthropic SDK, botocore,
+  # tree-sitter grammar wheels, ...) must guard them — importorskip,
+  # try/except ImportError, a sys.modules stub, or a skipif naming the
+  # module. Unguarded imports pass on provisioned developer hosts and
+  # fail on bare CI (the 2026-08 environment-parity failure class).
+  # Same baseline semantics as the miswiring job; the baseline target
+  # is EMPTY — guard, don't baseline.
+  optional-dep-imports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run optional-dep import lint against baseline
+        run: |
+          python3 .github/scripts/check_optional_dep_imports.py

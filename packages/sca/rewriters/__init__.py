@@ -33,11 +33,34 @@ Failure modes:
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 
 logger = logging.getLogger(__name__)
+
+
+# Conservative version-literal grammar for ``RewriteEdit.new_value``.
+# Fix versions originate in OSV advisory ``fixed`` strings — registry
+# content, not operator input — and rewriters splice them verbatim
+# into manifests that are themselves interpreted downstream (csproj
+# XML attributes, TOML strings, Dockerfile ARG lines, YAML image
+# tags, Helm charts). Real fix versions look like ``1.2.3``,
+# ``2.0.0-rc1``, ``32.2.0-jre``, ``1.24+dfsg-1``, ``v5`` — plain
+# alphanumerics with dot / underscore / plus / hyphen separators.
+# Everything a hostile advisory would need to break out of the
+# surrounding syntax (quotes, angle brackets, backslashes, newlines,
+# whitespace, ``$``, braces) is outside the grammar, so a value that
+# fails the check is skipped, never written.
+_VERSION_LITERAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+
+
+def is_safe_version_literal(value: str) -> bool:
+    """True when ``value`` is safe to splice into a manifest verbatim."""
+    return bool(isinstance(value, str) and _VERSION_LITERAL_RE.match(value))
 
 
 @dataclass(frozen=True)
@@ -60,7 +83,7 @@ class RewriteEdit:
     locator: str
     old_value: str
     new_value: str
-    extra: Optional[dict] = None
+    extra: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -73,19 +96,19 @@ class RewriteResult:
 
 
 # Rewriter signature: ``(path, edits) -> List[RewriteResult]``.
-RewriterFn = Callable[[Path, List[RewriteEdit]], List[RewriteResult]]
+RewriterFn = Callable[[Path, list[RewriteEdit]], list[RewriteResult]]
 
 
-_REGISTRY: Dict[str, RewriterFn] = {}
-_PREDICATE_REGISTRY: List[
-    "tuple[Callable[[Path], bool], RewriterFn]"
+_REGISTRY: dict[str, RewriterFn] = {}
+_PREDICATE_REGISTRY: list[
+    tuple[Callable[[Path], bool], RewriterFn]
 ] = []
 
 
 def register(
     *,
-    filenames: Optional[List[str]] = None,
-    predicate: Optional[Callable[[Path], bool]] = None,
+    filenames: list[str] | None = None,
+    predicate: Callable[[Path], bool] | None = None,
 ):
     """Decorator: register a rewriter for the given filename / predicate.
 
@@ -95,10 +118,11 @@ def register(
     def _wrap(fn: RewriterFn) -> RewriterFn:
         for name in filenames or ():
             if name in _REGISTRY and _REGISTRY[name] is not fn:
-                raise RuntimeError(
+                msg = (
                     f"sca.rewriters: duplicate filename "
                     f"registration {name!r}"
                 )
+                raise RuntimeError(msg)
             _REGISTRY[name] = fn
         if predicate is not None:
             _PREDICATE_REGISTRY.append((predicate, fn))
@@ -107,7 +131,7 @@ def register(
     return _wrap
 
 
-def rewrite(path: Path, edits: List[RewriteEdit]) -> List[RewriteResult]:
+def rewrite(path: Path, edits: list[RewriteEdit]) -> list[RewriteResult]:
     """Dispatch to the right rewriter for ``path`` and apply
     ``edits``. Returns one ``RewriteResult`` per edit; an edit
     that doesn't match anything still returns a result with
@@ -121,21 +145,65 @@ def rewrite(path: Path, edits: List[RewriteEdit]) -> List[RewriteResult]:
     if fn is None:
         logger.debug("sca.rewriters: no rewriter for %s", path)
         return []
-    try:
-        return fn(path, edits)
-    except Exception:  # noqa: BLE001 — rewriters must not break pipeline
+
+    # Version-literal gate — single chokepoint for every registered
+    # rewriter. An edit whose ``new_value`` falls outside the
+    # conservative grammar is skipped (with a result the caller can
+    # surface) rather than spliced into the manifest.
+    safe_edits: list[RewriteEdit] = []
+    rejected: dict[int, RewriteResult] = {}
+    for i, edit in enumerate(edits):
+        if is_safe_version_literal(edit.new_value):
+            safe_edits.append(edit)
+            continue
         logger.warning(
-            "sca.rewriters: rewriter raised on %s; reporting "
-            "all edits as failed",
-            path, exc_info=True,
+            "sca.rewriters: refusing to write suspicious version "
+            "literal for %s in %s: %s",
+            edit.locator, path, repr(edit.new_value)[:80],
         )
-        return [
-            RewriteResult(edit=e, applied=False, reason="rewriter raised")
-            for e in edits
-        ]
+        rejected[i] = RewriteResult(
+            edit=edit, applied=False,
+            reason="invalid_new_value: not a safe version literal",
+        )
+
+    if safe_edits:
+        try:
+            inner = fn(path, safe_edits)
+        except Exception:
+            logger.warning(
+                "sca.rewriters: rewriter raised on %s; reporting "
+                "all edits as failed",
+                path, exc_info=True,
+            )
+            inner = [
+                RewriteResult(edit=e, applied=False,
+                              reason="rewriter raised")
+                for e in safe_edits
+            ]
+    else:
+        inner = []
+
+    if not rejected:
+        return inner
+
+    # Merge back into input order: rejected edits keep their
+    # synthesised result, the rest consume the rewriter's results
+    # in sequence (contract: one result per edit, in order).
+    inner_iter = iter(inner)
+    merged: list[RewriteResult] = []
+    for i, edit in enumerate(edits):
+        if i in rejected:
+            merged.append(rejected[i])
+        else:
+            merged.append(next(
+                inner_iter,
+                RewriteResult(edit=edit, applied=False,
+                              reason="rewriter returned no result"),
+            ))
+    return merged
 
 
-def _resolve(path: Path) -> Optional[RewriterFn]:
+def _resolve(path: Path) -> RewriterFn | None:
     name = path.name
     if name in _REGISTRY:
         return _REGISTRY[name]
@@ -143,9 +211,93 @@ def _resolve(path: Path) -> Optional[RewriterFn]:
         try:
             if pred(path):
                 return fn
-        except Exception:    # noqa: BLE001
+        except Exception:
+            logger.debug(
+                "sca.rewriters: predicate raised for %s", path,
+                exc_info=True,
+            )
             continue
     return None
+
+
+def rewrite_file_with(
+    path: Path,
+    edits: list[RewriteEdit],
+    apply_one: Callable[[str, RewriteEdit], tuple[str, RewriteResult]],
+) -> list[RewriteResult]:
+    """Read ``path``, thread every edit through ``apply_one``, and
+    write the result back atomically when anything applied.
+
+    Shared driver for rewriters whose entry point is "read the file,
+    apply each edit in sequence against the evolving text, write
+    once at the end". A read failure fails every edit; a write
+    failure fails the edits that had applied while keeping the
+    results of those that hadn't.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return [RewriteResult(edit=ed, applied=False,
+                              reason=f"error: read failed: {e}")
+                for ed in edits]
+
+    new_text = text
+    results: list[RewriteResult] = []
+    for edit in edits:
+        new_text, result = apply_one(new_text, edit)
+        results.append(result)
+
+    if any(r.applied for r in results):
+        try:
+            _atomic_write(path, new_text)
+        except OSError as e:
+            return [RewriteResult(
+                edit=r.edit, applied=False,
+                reason=f"error: write failed: {e}",
+            ) if r.applied else r
+            for r in results]
+    return results
+
+
+def apply_version_edit(
+    text: str,
+    edit: RewriteEdit,
+    pattern_builders: tuple[Callable[[str], re.Pattern], ...],
+) -> tuple[str, RewriteResult]:
+    """Apply one version edit using the first pattern that matches.
+
+    Shared driver for rewriters whose per-edit logic is "try each
+    locator-derived pattern in preference order; the first pattern
+    with a match decides the outcome". Each pattern must expose a
+    ``version`` named group; the current value must equal
+    ``edit.old_value`` (else ``value_mismatch``), and no pattern
+    matching at all yields ``not_found``.
+    """
+    for pattern_builder in pattern_builders:
+        pat = pattern_builder(edit.locator)
+        match = pat.search(text)
+        if match is None:
+            continue
+        current = match.group("version")
+        if current != edit.old_value:
+            return text, RewriteResult(
+                edit=edit, applied=False,
+                reason=(
+                    f"value_mismatch: file has version={current!r}, "
+                    f"edit expected {edit.old_value!r}"
+                ),
+            )
+        new_text = (
+            text[:match.start("version")]
+            + edit.new_value
+            + text[match.end("version"):]
+        )
+        return new_text, RewriteResult(
+            edit=edit, applied=True, reason="",
+        )
+    return text, RewriteResult(
+        edit=edit, applied=False, reason="not_found",
+    )
 
 
 # Side-effect imports: each module calls register() at import time.
@@ -155,26 +307,28 @@ def _resolve(path: Path) -> Optional[RewriterFn]:
 # as ``dockerfile_arg`` must be importable when ``dockerfile_from``
 # tries to delegate, which is naturally satisfied because
 # ``dockerfile_from`` does a deferred import on first delegation.
-from . import dockerfile_arg          # noqa: E402,F401
-from . import dockerfile_from         # noqa: E402,F401
-from . import gha_uses                # noqa: E402,F401
-from . import helm_chart              # noqa: E402,F401
-from . import yaml_image              # noqa: E402,F401
 # CPM + Gradle catalog rewriters — close the modern .NET / Gradle
 # write-side gap. Without these, harden / bumper writes against
 # CPM-using csproj would either fail (no inline Version to match)
 # or update the wrong file (csproj override that doesn't
 # propagate). See ``parsers/directory_packages_props`` +
 # ``parsers/gradle_version_catalog`` for the read-side.
-from . import csproj                              # noqa: E402,F401
-from . import directory_packages_props            # noqa: E402,F401
-from . import directory_build_targets             # noqa: E402,F401
-from . import gradle_version_catalog              # noqa: E402,F401
-
+from . import (
+    csproj,  # noqa: F401
+    directory_build_targets,  # noqa: F401
+    directory_packages_props,  # noqa: F401
+    dockerfile_arg,  # noqa: F401
+    dockerfile_from,  # noqa: F401
+    gha_uses,  # noqa: F401
+    gradle_version_catalog,  # noqa: F401
+    helm_chart,  # noqa: F401
+    yaml_image,  # noqa: F401
+)
 
 __all__ = [
     "RewriteEdit",
     "RewriteResult",
+    "is_safe_version_literal",
     "register",
     "rewrite",
 ]

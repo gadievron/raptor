@@ -18,7 +18,7 @@ from core.llm.client import LLMClient
 from core.llm.config import LLMConfig, ModelConfig
 
 
-def _model(provider: str, name: str, *, key: str = "test-key", role: str = None) -> ModelConfig:
+def _model(provider: str, name: str, *, key: str = "test-key", role: str | None = None) -> ModelConfig:
     return ModelConfig(
         provider=provider, model_name=name, api_key=key, role=role,
     )
@@ -31,27 +31,6 @@ def _config(primary: ModelConfig, fallbacks: list) -> LLMConfig:
         primary_model=primary, fallback_models=fallbacks,
         enable_caching=False,
     )
-
-
-class _FailingResponse:
-    """Stand-in for an LLMResponse the test never reads — provider raises before this matters."""
-
-
-class _FakeProvider:
-    """Provider stub.
-
-    Tracks which model was actually called via ``calls`` list. ``raise_for``
-    is a set of model names that should raise (simulating provider failure).
-    """
-
-    def __init__(self, calls: list, raise_for: set):
-        self.calls = calls
-        self.raise_for = raise_for
-
-    def generate(self, prompt, system_prompt=None, **kwargs):
-        # The model name is captured via the surrounding LLMClient logic
-        # — we record via a closure in the test fixture below.
-        raise NotImplementedError  # patched per-test
 
 
 @pytest.fixture
@@ -182,12 +161,11 @@ class TestExcludeFallbackTo:
                 calls_log, fail_for={"pro"},
                 succeed_responses={},
             ),
-        ):
-            with pytest.raises(RuntimeError):
-                client.generate(
-                    "test", model_config=pro,
-                    exclude_fallback_to={"flash"},
-                )
+        ), pytest.raises(RuntimeError):
+            client.generate(
+                "test", model_config=pro,
+                exclude_fallback_to={"flash"},
+            )
         assert calls_log == ["pro"]
 
     def test_primary_success_skips_exclude_logic(self, calls_log):

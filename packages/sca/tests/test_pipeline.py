@@ -332,3 +332,76 @@ def test_find_previous_deps_returns_most_recent_by_mtime(
     (newer / "findings.json").write_text("[]")
     result = _find_previous_deps(out_dir)
     assert result == newer / "findings.json"
+
+
+def test_run_sca_scan_reports_fixture_tree_manifests(tmp_path: Path) -> None:
+    """Scanning stays fully inclusive of fixture trees: manifests under
+    fixtures/ and testdata/ are genuine supply-chain surface, and their
+    findings must be REPORTED. Only the write paths (`fix` / `bump`)
+    accept --exclude globs; the scan side never filters these dirs.
+
+    Regression guard for the fixture-pin work: the exclusion knob is
+    write-only policy — adding fixture dirs to the scan walker (e.g. to
+    TEST_DIR_NAMES or EXCLUDED_DIR_NAMES) would silently drop these
+    findings and must fail here.
+    """
+    def _pom(version: str) -> str:
+        return (
+            '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+            '<dependencies><dependency>'
+            '<groupId>org.apache.logging.log4j</groupId>'
+            '<artifactId>log4j-core</artifactId>'
+            f'<version>{version}</version>'
+            '</dependency></dependencies></project>'
+        )
+
+    target = tmp_path / "repo"
+    out = tmp_path / "out"
+    # Distinct versions so the join keeps one dep row per tree (equal
+    # coordinates would canonicalise into a single finding).
+    for d, version in (("fixtures", "2.14.1"), ("testdata", "2.14.0")):
+        (target / d).mkdir(parents=True)
+        (target / d / "pom.xml").write_text(_pom(version), encoding="utf-8")
+
+    class _BothVulnerable(StubHttp):
+        """Flag BOTH 2.14.x pins (base stub matches 2.14.1 only)."""
+
+        def post_json(self, url: str, body: dict, timeout: int = 30) -> dict:
+            self.posts.append((url, body))
+            if url == OSV_QUERY_BATCH_URL:
+                results = []
+                for q in body["queries"]:
+                    if (q["package"]["name"]
+                            == "org.apache.logging.log4j:log4j-core"
+                            and q["version"] in ("2.14.0", "2.14.1")):
+                        results.append(
+                            {"vulns": [{"id": "GHSA-jfh8-c2jp-5v3q"}]})
+                    else:
+                        results.append({})
+                return {"results": results}
+            raise HttpError(f"unexpected POST {url}", status=404)
+
+    http = _BothVulnerable()
+    cache = JsonCache(root=tmp_path / "cache")
+    result = run_sca(
+        target=target, output_dir=out,
+        options=RunOptions(enable_llm_review=False, enable_triage=False),
+        http=http, cache=cache,
+    )
+
+    assert result.deps_analysed == 2, (
+        "both fixture-tree manifests must be discovered and parsed"
+    )
+    rows = json.loads(result.findings_path.read_text())
+    vuln_files = {r["file"] for r in rows
+                  if r.get("vuln_type") == "sca:vulnerable_dependency"}
+    assert any("fixtures/pom.xml" in f for f in vuln_files), (
+        "fixtures/-tree manifest vuln finding must be reported by scan"
+    )
+    # The advisory layer canonicalises same-advisory rows, so the
+    # second tree may not get its own vuln row — but the scan must
+    # still REPORT the testdata/ manifest (any finding kind).
+    all_files = {r["file"] for r in rows}
+    assert any("testdata/pom.xml" in f for f in all_files), (
+        "testdata/-tree manifest must appear in scan findings"
+    )

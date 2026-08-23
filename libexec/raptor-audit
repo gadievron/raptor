@@ -1,0 +1,2424 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""CLI for /audit — hypothesis-driven, tool-grounded security review.
+
+Subcommands:
+    run      — run the full audit orchestrator (LLM review + tool validation)
+    resume   — re-enter a failed/interrupted run as the same run
+    gaps     — compute unreviewed functions from inventory + coverage
+    context  — assemble context slice for one function
+    sweep    — log a tool-grounded check (semgrep/coccinelle/codeql/smt/compilation)
+    record   — append a review-journal entry + audit-log event (enforces G1-G5 gates)
+    rules    — manage synthesized checker rules (Mode 2: save/list/run)
+    report   — generate final summary
+    feedback — import /validate results into the review journal
+    stale    — list annotations with stale source hashes
+    ast      — extract function AST subtree and call targets
+    critique — identify gaps in tool coverage
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import logging
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RAPTOR_DIR))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import dumps_display  # noqa: E402
+
+# Hard-SET (never setdefault) so an ambient RAPTOR_DIR exported by the
+# launching shell for a DIFFERENT checkout cannot steer this run's
+# Python children into importing the other tree's modules (A2:
+# every SMT probe TypeError'd on a stale checkout's core.audit.sweep).
+from core.config import pin_raptor_dir_in_environ  # noqa: E402
+from core.json import load_json  # noqa: E402
+
+# Byte budgets: checklists / inventories / journal indexes track
+# target size (the checklist budget class); scope-coverage is a
+# small sidecar.
+_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
+_MAX_META_BYTES = 8 * 1024 * 1024
+pin_raptor_dir_in_environ()
+
+
+def cmd_gaps(args: argparse.Namespace) -> int:
+    from core.audit.gaps import (
+        compute_gaps,
+        load_checklist,
+        load_context_map,
+        truncate_gaps_to_budget,
+        write_gaps,
+    )
+    from core.coverage.record import load_records
+
+    out_dir = Path(args.out)
+
+    checklist = load_checklist(out_dir)
+    if not checklist:
+        target_path = Path(args.target) if args.target else _guess_target(out_dir)
+        if target_path and target_path.exists():
+            print(f"building checklist from {target_path} ...", file=sys.stderr)
+            import subprocess
+            env = dict(os.environ, CLAUDECODE="1")
+            cp = subprocess.run(
+                [sys.executable, str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
+                 str(target_path), str(out_dir)],
+                env=env, capture_output=True, text=True, timeout=300,
+                check=False,
+            )
+            if cp.returncode != 0:
+                print(f"error: checklist build failed: {cp.stderr.strip()}", file=sys.stderr)
+                return 1
+            print(cp.stdout.strip(), file=sys.stderr)
+            checklist = load_checklist(out_dir)
+        if not checklist:
+            print(f"error: no checklist.json in {out_dir} and no --target to build one",
+                  file=sys.stderr)
+            return 1
+
+    coverage_records = load_records(out_dir)
+    context_map = load_context_map(out_dir)
+
+    if not context_map:
+        print("warning: no context-map.json — gap prioritization will lack "
+              "entry-point and sink data. Run /understand --map first.",
+              file=sys.stderr)
+
+    annotations_dir = Path(args.annotations_dir) if args.annotations_dir else None
+
+    gaps = compute_gaps(
+        checklist,
+        coverage_records,
+        context_map=context_map,
+        strategy_filter=args.strategy,
+        # --prioritize and --rank both defer the budget cut until
+        # after their re-ordering (rank-then-spend).
+        budget=args.budget if not (args.prioritize or args.rank) else None,
+        scope=args.scope,
+        scope_floor=args.scope_floor,
+        annotations_dir=annotations_dir,
+        out_dir=out_dir,
+    )
+
+    if args.prioritize:
+        from core.audit.priority import load_flow_traces, score_functions
+        flow_traces = load_flow_traces(out_dir)
+        gaps = score_functions(
+            gaps, context_map=context_map, flow_traces=flow_traces,
+        )
+        if args.rank:
+            # Rank BEFORE budget truncation so the cut drops the
+            # least promising within-tier tail (rank-then-spend).
+            from core.audit.gap_ranking import rank_gap_queue
+            gaps, rank_note = rank_gap_queue(
+                gaps, model=args.rank_model, head=args.rank_head,
+            )
+            print(f"  {rank_note}", file=sys.stderr)
+        if args.budget and args.budget > 0:
+            # Records the dropped tail as not attempted (budget);
+            # scoped runs get the per-file floor + zero-slot report.
+            gaps = truncate_gaps_to_budget(
+                gaps, args.budget, out_dir,
+                scope=args.scope, scope_floor=args.scope_floor,
+            )
+    elif args.rank:
+        # Non-prioritized path: budget was deferred above so the cut
+        # drops the least promising within-tier tail here too.
+        from core.audit.gap_ranking import rank_gap_queue
+        gaps, rank_note = rank_gap_queue(
+            gaps, model=args.rank_model, head=args.rank_head,
+        )
+        print(f"  {rank_note}", file=sys.stderr)
+        if args.budget and args.budget > 0:
+            gaps = truncate_gaps_to_budget(
+                gaps, args.budget, out_dir,
+                scope=args.scope, scope_floor=args.scope_floor,
+            )
+
+    path = write_gaps(gaps, out_dir)
+    print(f"gaps: {len(gaps)} unreviewed functions → {path}")
+
+    by_priority = {}
+    for g in gaps:
+        p = g["priority"]
+        by_priority[p] = by_priority.get(p, 0) + 1
+    for p in sorted(by_priority):
+        labels = {
+            -1: "entry point",
+            0: "no tool coverage",
+            1: "partial coverage",
+            2: "stale annotation",
+            3: "fully covered",
+            4: "dead code",
+        }
+        print(f"  priority {p} ({labels.get(p, '?')}): {by_priority[p]}")
+
+    return 0
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    from core.audit.context import assemble_context, format_context_for_prompt
+    from core.audit.gaps import load_checklist
+    from core.audit.record import append_audit_log
+
+    out_dir = Path(args.out) if args.out else None
+    target_path = Path(args.target)
+
+    checklist = load_checklist(out_dir) if out_dir else None
+    context_map = None
+    if out_dir:
+        from core.audit.gaps import load_context_map
+        context_map = load_context_map(out_dir)
+
+    line_start = args.line
+    line_end = None
+    if not line_start and checklist:
+        for fi in checklist.get("files", []):
+            if fi.get("path") == args.file:
+                for item in fi.get("items", fi.get("functions", [])):
+                    if item.get("name") == args.function:
+                        line_start = item.get("line_start", 0)
+                        line_end = item.get("line_end")
+                        break
+                break
+
+    ctx = assemble_context(
+        target_path=target_path,
+        file_path=args.file,
+        function_name=args.function,
+        line_start=line_start or 0,
+        line_end=line_end,
+        checklist=checklist,
+        context_map=context_map,
+        inventory=checklist,
+        annotations_dir=(
+            Path(args.annotations_dir) if args.annotations_dir
+            else out_dir / "annotations" if out_dir
+            else None
+        ),
+        out_dir=out_dir,
+    )
+
+    # Write breadcrumb for G5 enforcement — record checks this exists
+    if out_dir:
+        append_audit_log(out_dir, {
+            "action": "context",
+            "key": f"{args.file}:{args.function}",
+            "file": args.file,
+            "function": args.function,
+        })
+
+    from core.security.redaction import redact_secrets
+    raw = dumps_display(ctx) if args.json else format_context_for_prompt(ctx)
+    sanitised = redact_secrets(raw)
+    sys.stdout.write(sanitised)
+    sys.stdout.write("\n")
+
+    return 0
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    from core.audit.journal import ReviewJournalEntry, append_entry, now_iso
+    from core.audit.record import _compute_hash, append_audit_log, load_audit_log
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else _guess_target(out_dir)
+    if not target_path:
+        print("error: --target required (or set in checklist.json)", file=sys.stderr)
+        return 1
+
+    # --- Mechanical gate enforcement ---
+
+    # G5: READ-FIRST — context must have been called for this function,
+    # OR for the primary function if --related-to is set.
+    audit_log = load_audit_log(out_dir)
+    func_key = f"{args.file}:{args.function}"
+    related_to = args.related_to
+
+    has_own_context = any(
+        e.get("action") == "context" and e.get("key") == func_key
+        for e in audit_log
+    )
+    has_related_context = False
+    if related_to:
+        has_related_context = any(
+            e.get("action") == "context" and e.get("key") == related_to
+            for e in audit_log
+        )
+        # related-to must be in the same file
+        rel_file = related_to.split(":")[0] if ":" in related_to else ""
+        if rel_file != args.file:
+            print(
+                f"error [G5 READ-FIRST]: --related-to {related_to} is in a "
+                f"different file than {func_key}.\n"
+                f"  --related-to is for sibling functions in the same file.",
+                file=sys.stderr,
+            )
+            return 1
+
+    has_context = has_own_context or has_related_context
+    if not has_context:
+        if related_to:
+            print(
+                f"error [G5 READ-FIRST]: no context call recorded for "
+                f"primary function {related_to}.\n"
+                f"  The --related-to function must have a context breadcrumb.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"error [G5 READ-FIRST]: no context call recorded for {func_key}.\n"
+                f"  Run: libexec/raptor-audit context --target <path> "
+                f"--file {args.file} --function {args.function} --out {out_dir}",
+                file=sys.stderr,
+            )
+        return 1
+
+    # G2: TOOL-GROUNDED — findings require evidence-tool + vuln-type.
+    # The tool name must be a real one AND backed by an EXECUTED
+    # confirmed sweep receipt for this same function. Previously any
+    # non-empty string satisfied the gate — in-session agents could
+    # type "--evidence-tool semgrep" without ever running a sweep.
+    if args.status == "finding":
+        from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
+        tools = "|".join(sorted(VALID_EVIDENCE_TOOLS))
+        base_tool = (args.evidence_tool or "").split(":", 1)[0].strip().lower()
+        if not args.evidence_tool:
+            print(
+                "error [G2 TOOL-GROUNDED]: --status finding requires "
+                f"--evidence-tool ({tools}).\n"
+                "  If no tool confirms the hypothesis, use --status suspicious.",
+                file=sys.stderr,
+            )
+            return 1
+        if base_tool not in VALID_EVIDENCE_TOOLS:
+            print(
+                f"error [G2 TOOL-GROUNDED]: --evidence-tool "
+                f"{args.evidence_tool!r} is not a recognised tool "
+                f"({tools}).",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.vuln_type:
+            print(
+                "error [G2 TOOL-GROUNDED]: --status finding requires --vuln-type.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # G1: HYPOTHESIS-FIRST — findings/suspicious/dormant require hypothesis
+    if (args.status in ("finding", "suspicious", "dormant")
+            and not args.hypothesis):
+        print(
+            f"error [G1 HYPOTHESIS-FIRST]: --status {args.status} "
+            "requires --hypothesis (testable claim, e.g. "
+            "'if input X reaches sink Y without check Z, CWE-N applies').",
+            file=sys.stderr,
+        )
+        return 1
+
+    # G4: EVIDENCE-IN-ANNOTATION — findings/suspicious/dormant require body
+    if args.status in ("finding", "suspicious", "dormant") and not args.body:
+        print(
+            "error [G4 EVIDENCE-IN-ANNOTATION]: --status finding/suspicious "
+            "requires --body (tool names + results).",
+            file=sys.stderr,
+        )
+        return 1
+
+    # G2 (receipt): the named evidence tool must be backed by an
+    # EXECUTED confirmed sweep for this same function. Checked AFTER
+    # the claim-shape gates (G1 hypothesis, G2 tool/vuln-type args,
+    # G4 body): HYPOTHESIS-FIRST doctrine — a malformed claim is
+    # rejected for what it fails to state, not for a missing receipt
+    # it could never earn. (This block used to sit before G5/G1 and
+    # masked their diagnostics.)
+    if args.status == "finding":
+        base_tool = (args.evidence_tool or "").split(":", 1)[0].strip().lower()
+        has_receipt = any(
+            e.get("action") == "sweep"
+            and e.get("key") == func_key
+            and (e.get("tool") or "").split(":", 1)[0].strip().lower()
+                == base_tool
+            and e.get("outcome") == "confirmed"
+            and e.get("rule_source") != "manual-attestation"
+            for e in audit_log
+        )
+        if not has_receipt:
+            print(
+                "error [G2 TOOL-GROUNDED]: no executed confirmed "
+                f"'{base_tool}' sweep receipt found for {func_key}.\n"
+                "  Run the sweep first (raptor-audit sweep --tool "
+                f"{base_tool} ...) — operator-attested outcomes "
+                "(manual --outcome logging) do not satisfy G2.",
+                file=sys.stderr,
+            )
+            return 1
+
+
+    # G3: NO-SELF-CRITIQUE — re-recording same function requires a sweep
+    # since the last record. First record is always allowed.
+    last_record_idx = None
+    last_sweep_idx = None
+    for i, e in enumerate(audit_log):
+        entry_key = e.get("key") or (
+            f"{e.get('file')}:{e.get('function')}"
+            if e.get("file") and e.get("function") else None
+        )
+        if entry_key != func_key:
+            continue
+        if e.get("action") == "sweep":
+            last_sweep_idx = i
+        elif e.get("status") and e.get("action") != "context":
+            last_record_idx = i
+
+    if last_record_idx is not None:  # noqa: SIM102
+        if last_sweep_idx is None or last_sweep_idx < last_record_idx:
+            print(
+                f"error [G3 NO-SELF-CRITIQUE]: {func_key} was already recorded "
+                f"(entry #{last_record_idx}). Re-recording requires a sweep "
+                f"(tool-grounded check) since the last record.\n"
+                f"  Run a tool first, then: libexec/raptor-audit sweep "
+                f"--out {out_dir} --file {args.file} --function {args.function} "
+                f"--tool <tool> --outcome <confirmed|refuted>",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Auto-resolve line numbers from the checklist when not provided.
+    # Must run before G7 so the reachability check gets the correct
+    # line_start (callers_of matches by exact InternalFunction equality
+    # including line — line=0 silently misses all definitive callers).
+    from core.audit.gaps import load_checklist, load_context_map
+
+    checklist = load_checklist(out_dir)
+    context_map = load_context_map(out_dir)
+
+    line_start = args.line_start or 0
+    line_end = args.line_end
+    if not line_start:
+        for ck_file in checklist.get("files", []):
+            if ck_file.get("path") == args.file:
+                for item in ck_file.get("items", []):
+                    if item.get("name") == args.function:
+                        line_start = item.get("line_start", 0)
+                        if not line_end:
+                            line_end = item.get("line_end")
+                        break
+                break
+
+    # G7: REACHABILITY — findings must be reachable. Two-signal gate:
+    #   - Both call graph (zero callers) AND binary oracle (absent, full
+    #     DWARF) agree → hard downgrade to dormant
+    #   - Call graph only (zero callers, no binary data) → require
+    #     --reach-via explaining how the function is reachable
+    #   - Entry points and functions with callers bypass this gate
+    if args.status == "finding":
+        is_entry = False
+        if context_map:
+            for ep in context_map.get("entry_points", []):
+                if (ep.get("file") == args.file
+                        and ep.get("name") == args.function):
+                    is_entry = True
+                    break
+
+        has_callers = None
+        if not is_entry:
+            inventory = None
+            inventory_path = out_dir / "inventory.json"
+            loaded_inv = load_json(
+                inventory_path, max_bytes=_MAX_CHECKLIST_BYTES,
+            )
+            if loaded_inv is not None:
+                inventory = loaded_inv
+
+            if inventory:
+                try:
+                    from core.analysis.reachability import (
+                        InternalFunction,
+                        callers_of,
+                    )
+                    target = InternalFunction(
+                        file_path=args.file,
+                        name=args.function,
+                        line=line_start,
+                    )
+                    result = callers_of(
+                        inventory, target, exclude_test_files=True,
+                    )
+                    has_callers = len(result.all_callers) > 0
+                except (ImportError, TypeError, ValueError):
+                    pass
+
+        if not is_entry and has_callers is not None and not has_callers:
+            binary_absent = False
+            binary_tier = None
+            for fe in checklist.get("files", []):
+                if fe.get("path") != args.file:
+                    continue
+                for item in fe.get("items", []):
+                    if item.get("name") != args.function:
+                        continue
+                    bo = (item.get("metadata") or {}).get("binary_oracle")
+                    if bo:
+                        binary_absent = bo.get("classification") == "absent"
+                        binary_tier = "full"
+                        for b in bo.get("binaries", []):
+                            if b.get("tier") == "symbol_only":
+                                binary_tier = "symbol_only"
+                                break
+                    break
+                break
+
+            if binary_absent and binary_tier == "full":
+                print(
+                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"callers AND binary oracle says absent (full DWARF). "
+                    f"This function was removed by the compiler.\n"
+                    f"  Use --status dormant (real bug, unreachable code) "
+                    f"instead of --status finding.",
+                    file=sys.stderr,
+                )
+                return 1
+            elif not args.reach_via:
+                print(
+                    f"error [G7 REACHABILITY]: {func_key} has zero static "
+                    f"callers. This may be dead code.\n"
+                    f"  Provide --reach-via explaining how this function "
+                    f"is reachable (e.g. 'callback registered at foo.c:42', "
+                    f"'HTTP route /admin/status', 'exported API', "
+                    f"'Lua FFI binding').\n"
+                    f"  Or use --status dormant if the bug is real but "
+                    f"unreachable.",
+                    file=sys.stderr,
+                )
+                return 1
+
+    # --- End gates ---
+
+    strategies = args.strategies.split(",") if args.strategies else []
+    if not isinstance(strategies, list):
+        strategies = []
+
+    # Under the annotation → journal migration, ``record_review`` (which
+    # wrote coverage-audit.json) was removed. Manual review recording
+    # via ``raptor-audit record ...`` now appends a review-journal
+    # entry directly. The audit-log entry survives as an event log
+    # for gate/consumer tracking; verdict + context live in the
+    # journal.
+    et_normalised = args.evidence_tool
+    if et_normalised and ":" not in et_normalised:
+        et_normalised = f"{et_normalised}:cli"
+
+    source_hash = _compute_hash(
+        target_path, args.file, line_start or 0, line_end,
+    ) or ""
+
+    hypotheses_list = []
+    if args.hypothesis:
+        hypotheses_list = [{"claim": args.hypothesis, "status": args.status}]
+
+    entry = ReviewJournalEntry(
+        ts=now_iso(),
+        run_id=out_dir.name if out_dir.name else "cli-record",
+        file=args.file,
+        function=args.function,
+        verdict=args.status,
+        source_hash=source_hash,
+        line_start=line_start or 0,
+        line_end=line_end,
+        cwe=args.cwe,
+        strategies=strategies,
+        hypotheses=hypotheses_list,
+        body=args.body or "",
+        evidence_tools=[et_normalised] if et_normalised else [],
+        producer="audit",
+    )
+    try:
+        append_entry(out_dir, entry)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: journal append failed: {exc}", file=sys.stderr)
+        return 1
+
+    # Audit-log event mirrors the journal entry with the gate-flavour
+    # metadata (vuln_type, related_to, reach_via) that isn't part of
+    # the journal schema. Journal is the verdict store; audit-log is
+    # the operational event log.
+    audit_event = {
+        "action": "record",
+        "key": func_key,
+        "file": args.file,
+        "function": args.function,
+        "status": args.status,
+        "hash": source_hash,
+        "strategies": strategies,
+    }
+    if args.cwe:
+        audit_event["cwe"] = args.cwe
+    if et_normalised:
+        audit_event["evidence_tool"] = et_normalised
+    if args.hypothesis:
+        audit_event["hypothesis"] = args.hypothesis
+    if args.vuln_type:
+        audit_event["vuln_type"] = args.vuln_type
+    if related_to:
+        audit_event["related_to"] = related_to
+    if args.reach_via:
+        audit_event["reach_via"] = args.reach_via
+    append_audit_log(out_dir, audit_event)
+
+    if args.status == "finding":
+        from core.audit.findings import emit_finding
+        emit_finding(
+            out_dir=out_dir,
+            file_path=args.file,
+            function_name=args.function,
+            line=line_start,
+            title=f"{args.vuln_type or 'novel'}: {args.function}",
+            description=args.body or "",
+            cwe=args.cwe or args.vuln_type,
+            tool_evidence=(
+                [{"tool": et_normalised}] if et_normalised else None
+            ),
+            hypothesis=args.hypothesis,
+        )
+
+    status_display = args.status.title()
+    print(f"recorded: {args.file}:{args.function} → {status_display}")
+    return 0
+
+
+def cmd_sweep(args: argparse.Namespace) -> int:
+    """Run a mechanical tool against a file/function and log the result.
+
+    When --rule-file is provided with semgrep/coccinelle, the tool is
+    executed automatically and the outcome is determined from results.
+    Without --rule-file, only logs a manual sweep entry.
+    """
+    from core.audit.record import append_audit_log
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else _guess_target(out_dir)
+    if not target_path:
+        print("error: --target required", file=sys.stderr)
+        return 1
+
+    tool = args.tool
+    func_key = f"{args.file}:{args.function}"
+
+    # Auto-run mode: --rule or --rule-file triggers actual tool execution
+    rule_file = args.rule_file
+    if not rule_file and args.rule and tool in ("semgrep", "coccinelle"):
+        import tempfile
+        suffix = ".yaml" if tool == "semgrep" else ".cocci"
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, dir=str(out_dir),
+            prefix=".sweep-rule-", delete=False,
+        ) as _tmp:
+            _tmp.write(args.rule)
+            rule_file = _tmp.name
+
+    if rule_file and tool in ("semgrep", "coccinelle", "codeql"):
+        from core.audit.sweep import (
+            run_coccinelle_sweep,
+            run_codeql_sweep,
+            run_semgrep_sweep,
+        )
+
+        rule_path = Path(rule_file)
+        if not rule_path.exists():
+            print(f"error: rule file {rule_path} not found", file=sys.stderr)
+            return 1
+
+        fn_line_start = args.line_start
+        fn_line_end = args.line_end
+        if fn_line_start is None or fn_line_end is None:
+            from core.audit.gaps import load_checklist
+            cl = load_checklist(out_dir)
+            if cl:
+                for fi in cl.get("files", []):
+                    if fi.get("path") == args.file:
+                        for item in fi.get("items", fi.get("functions", [])):
+                            if item.get("name") == args.function:
+                                fn_line_start = fn_line_start or item.get("line_start")
+                                fn_line_end = fn_line_end or item.get("line_end")
+                                break
+                        break
+
+        if tool == "semgrep":
+            result = run_semgrep_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                rule_config=str(rule_path),
+                line_start=fn_line_start or 0,
+                line_end=fn_line_end or 0,
+            )
+        elif tool == "codeql":
+            result = run_codeql_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                query_path=str(rule_path),
+                database_path=args.codeql_db,
+            )
+        else:
+            result = run_coccinelle_sweep(
+                target_path=target_path,
+                file_path=args.file,
+                function_name=args.function,
+                cocci_rule=str(rule_path),
+                line_start=fn_line_start,
+                line_end=fn_line_end,
+            )
+
+        entry = result.to_log_entry()
+        entry["rule_source"] = str(rule_path)
+        if args.rule and not args.rule_file:
+            entry["rule_inline"] = args.rule
+        append_audit_log(out_dir, entry)
+
+        if not args.rule_file and rule_path.name.startswith(".sweep-rule-"):
+            try:
+                rule_path.unlink()
+            except OSError:
+                pass
+
+        match_info = ""
+        if result.matches:
+            match_info = f" ({len(result.matches)} match(es))"
+        print(f"sweep: {func_key} with {tool} → {result.outcome}{match_info}")
+        if result.matches:
+            for m in result.matches[:5]:
+                print(f"  {m}")
+        if result.errors:
+            for e in result.errors[:3]:
+                print(f"  error: {e}", file=sys.stderr)
+        return 0
+
+    # Auto-run mode: SMT — verb + args instead of rule-file
+    if tool == "smt" and args.smt_verb:
+        from core.audit.sweep import run_smt_sweep
+
+        smt_args = {}
+        if args.smt_args:
+            try:
+                smt_args = json.loads(args.smt_args)
+            except json.JSONDecodeError:
+                print("error: --smt-args must be valid JSON", file=sys.stderr)
+                return 1
+
+        result = run_smt_sweep(
+            file_path=args.file,
+            function_name=args.function,
+            verb=args.smt_verb,
+            smt_args=smt_args,
+        )
+
+        entry = result.to_log_entry()
+        entry["smt_verb"] = args.smt_verb
+        if smt_args:
+            entry["smt_args"] = smt_args
+        append_audit_log(out_dir, entry)
+
+        print(f"sweep: {func_key} with smt:{args.smt_verb} → {result.outcome}")
+        if result.raw_output:
+            for line in result.raw_output.splitlines()[:10]:
+                print(f"  {line}")
+        if result.errors:
+            for e in result.errors[:3]:
+                print(f"  error: {e}", file=sys.stderr)
+        return 0
+
+    # Manual logging mode
+    entry = {
+        "action": "sweep",
+        "key": func_key,
+        "file": args.file,
+        "function": args.function,
+        "tool": tool,
+    }
+
+    if args.rule:
+        entry["rule"] = args.rule
+    if args.query:
+        entry["query"] = args.query
+
+    if args.result_file:
+        result_path = Path(args.result_file)
+        if result_path.exists():
+            entry["result_file"] = str(result_path)
+            try:
+                content = result_path.read_text(errors="replace")
+                if len(content) <= 4096:
+                    entry["result_snippet"] = content
+                else:
+                    entry["result_snippet"] = content[:4096] + "\n... (truncated)"
+            except OSError:
+                pass
+        else:
+            print(f"warning: result file {result_path} not found", file=sys.stderr)
+
+    if args.outcome:
+        entry["outcome"] = args.outcome
+        # Manual mode did not execute anything — the outcome is the
+        # operator's/agent's assertion. Tag it so the G2 receipt check
+        # (and any downstream consumer) can distinguish attested
+        # results from executed ones.
+        entry["rule_source"] = "manual-attestation"
+
+    append_audit_log(out_dir, entry)
+    print(f"sweep: {func_key} with {tool} → {args.outcome or 'logged'}")
+    return 0
+
+
+def cmd_rules(args: argparse.Namespace) -> int:
+    """Manage synthesized checker rules (Mode 2)."""
+    from core.audit.rules import list_rules, run_rule_sweep, save_rule
+
+    out_dir = Path(args.out)
+    action = args.action
+
+    if action == "save":
+        if not args.rule_id or not args.tool or not args.content_file:
+            print("error: --rule-id, --tool, and --content-file required for save",
+                  file=sys.stderr)
+            return 1
+        content_path = Path(args.content_file)
+        if not content_path.exists():
+            print(f"error: {content_path} not found", file=sys.stderr)
+            return 1
+        path = save_rule(
+            out_dir=out_dir,
+            rule_id=args.rule_id,
+            tool=args.tool,
+            content=content_path.read_text(),
+            description=args.description or "",
+            origin_file=args.origin_file,
+            origin_function=args.origin_function,
+            cwe=args.cwe,
+        )
+        print(f"saved: {path}")
+        return 0
+
+    elif action == "list":
+        rules = list_rules(out_dir)
+        if not rules:
+            print("no rules saved")
+            return 0
+        for r in rules:
+            status = "ok" if r.get("exists") else "MISSING"
+            desc = r.get("description", "")[:60]
+            print(f"  {r['rule_id']} ({r.get('tool', '?')}) [{status}] — {desc}")
+        print(f"\n{len(rules)} rule(s)")
+        return 0
+
+    elif action == "run":
+        if not args.rule_id:
+            print("error: --rule-id required for run", file=sys.stderr)
+            return 1
+        target_path = Path(args.target) if args.target else _guess_target(out_dir)
+        if not target_path:
+            print("error: --target required", file=sys.stderr)
+            return 1
+        result = run_rule_sweep(
+            out_dir=out_dir,
+            rule_id=args.rule_id,
+            target_path=target_path,
+        )
+        if "error" in result:
+            print(f"error: {result['error']}", file=sys.stderr)
+            return 1
+        print(dumps_display(result, indent=2))
+        return 0
+
+    else:
+        print(f"error: unknown action {action!r}", file=sys.stderr)
+        return 1
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from core.audit.report import generate_report, write_report
+
+    out_dir = Path(args.out)
+    target_path = Path(args.target) if args.target else None
+
+    report = generate_report(out_dir, target_path=target_path)
+    write_report(report, out_dir)
+
+    print(report["summary"])
+    return 0
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    from core.annotations.storage import compute_function_hash, iter_all_annotations
+
+    annotations_dir = Path(args.annotations_dir)
+    target_path = Path(args.target)
+
+    if not annotations_dir.exists():
+        print("no annotations directory found")
+        return 0
+
+    stale_count = 0
+    for ann in iter_all_annotations(annotations_dir):
+        old_hash = ann.metadata.get("hash")
+        if not old_hash:
+            continue
+
+        full_path = target_path / ann.file
+        if not full_path.exists():
+            print(f"  deleted: {ann.file}:{ann.function}")
+            stale_count += 1
+            continue
+
+        try:
+            line_start = int(ann.metadata.get("line_start", "0") or "0")
+            line_end = int(ann.metadata.get("line_end", "0") or "0")
+        except (ValueError, TypeError):
+            line_start, line_end = 0, 0
+        if line_start and line_end:
+            new_hash = compute_function_hash(full_path, line_start, line_end)
+            if new_hash and new_hash != old_hash:
+                print(f"  stale: {ann.file}:{ann.function} (hash {old_hash} → {new_hash})")
+                stale_count += 1
+
+    print(f"\n{stale_count} stale annotation(s)")
+    return 0
+
+
+def cmd_feedback(args: argparse.Namespace) -> int:
+    """Import /validate results back into annotations.
+
+    Closes the Reflexion loop: /validate verdicts flow back into
+    /audit annotations, updating status + body so subsequent runs
+    learn from past mistakes.
+
+    Status transitions:
+      - ruled_out / is_true_positive=false → finding|suspicious → clean
+      - confirmed / exploitable when audit said clean → clean → finding
+      - confirmed / exploitable when audit said finding → no status change,
+        append corroboration note
+    """
+    from core.audit.feedback import import_validation_results
+
+    validation_report = Path(args.validation_report)
+    if not validation_report.exists():
+        print(f"error: {validation_report} not found", file=sys.stderr)
+        return 1
+
+    annotations_dir = Path(args.annotations_dir)
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+
+    audit_out = Path(args.audit_out) if args.audit_out else None
+
+    result = import_validation_results(
+        validation_report=validation_report,
+        annotations_dir=annotations_dir,
+        audit_out_dir=audit_out,
+    )
+
+    print(f"Feedback imported: {result['updated']} annotation(s) updated")
+    if result["downgraded"]:
+        print(f"  Downgraded: {result['downgraded']} "
+              f"(finding/suspicious → clean)")
+    if result["upgraded"]:
+        print(f"  Upgraded: {result['upgraded']} (clean → finding)")
+    if result["corroborated"]:
+        print(f"  Corroborated: {result['corroborated']}")
+    if result["skipped"]:
+        print(f"  Skipped (no matching annotation): {result['skipped']}")
+    return 0
+
+
+def cmd_ast(args: argparse.Namespace) -> int:
+    """Extract AST subtree and call targets for a function."""
+    file_path = Path(args.file)
+    if not file_path.exists():
+        print(f"file not found: {file_path}", file=sys.stderr)
+        return 1
+
+    ext = file_path.suffix.lower()
+    ext_to_lang = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".tsx": "tsx", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp",
+        ".cxx": "cpp", ".hpp": "cpp", ".cs": "csharp", ".go": "go",
+        ".java": "java", ".lua": "lua", ".php": "php", ".rb": "ruby",
+        ".rs": "rust",
+    }
+    lang = ext_to_lang.get(ext)
+    if not lang:
+        print(f"unsupported file type: {ext}", file=sys.stderr)
+        return 1
+
+    from core.inventory.sink_discovery import _get_call_graph_extractors
+    extractors = _get_call_graph_extractors()
+    extractor = extractors.get(lang)
+    if not extractor:
+        print(f"no call graph extractor for {lang}", file=sys.stderr)
+        return 1
+
+    content = file_path.read_text(errors="replace")
+    graph = extractor(content)
+    if graph is None:
+        print("could not parse file", file=sys.stderr)
+        return 1
+
+    func = args.function
+    calls_from = [
+        {"callee": ".".join(c.chain), "line": c.line}
+        for c in graph.calls
+        if c.caller == func
+    ]
+    calls_to = [
+        {"caller": c.caller, "line": c.line}
+        for c in graph.calls
+        if func in c.chain
+    ]
+
+    result = {
+        "file": str(file_path),
+        "function": func,
+        "calls_from": calls_from,
+        "calls_to": calls_to,
+        "indirection": sorted(graph.indirection),
+    }
+
+    print(dumps_display(result, indent=2))
+    return 0
+
+
+def cmd_critique(args: argparse.Namespace) -> int:
+    """Tool-grounded critique pass.
+
+    Analyses the audit log to identify:
+    - Reviewed functions with few tool checks (low sweep:record ratio)
+    - Confirmed findings without a codebase-wide rule (Mode 2 gap)
+    - Functions with ``suspicious`` status that could be re-checked
+    - Untested hypotheses (recorded as ``suspicious`` without a sweep)
+
+    Outputs a critique report the LLM or operator can act on.
+    """
+    from core.audit.record import load_audit_log
+    from core.audit.rules import list_rules
+
+    out_dir = Path(args.out)
+    audit_log = load_audit_log(out_dir)
+
+    if not audit_log:
+        print("no audit activity found")
+        return 0
+
+    # Collect per-function stats from the log
+    func_stats: dict = {}
+    for entry in audit_log:
+        key = entry.get("key")
+        if not key:
+            f, fn = entry.get("file", ""), entry.get("function", "")
+            if f and fn:
+                key = f"{f}:{fn}"
+        if not key:
+            continue
+
+        stats = func_stats.setdefault(key, {
+            "context_count": 0,
+            "sweep_count": 0,
+            "sweep_tools": set(),
+            "record_count": 0,
+            "status": None,
+            "hypothesis": None,
+            "evidence_tool": None,
+        })
+
+        action = entry.get("action", "")
+        if action == "context":
+            stats["context_count"] += 1
+        elif action == "sweep":
+            stats["sweep_count"] += 1
+            stats["sweep_tools"].add(entry.get("tool", ""))
+        elif entry.get("status"):
+            stats["record_count"] += 1
+            stats["status"] = entry.get("status")
+            if entry.get("hypothesis"):
+                stats["hypothesis"] = entry["hypothesis"]
+            if entry.get("evidence_tool"):
+                stats["evidence_tool"] = entry["evidence_tool"]
+
+    # Analysis
+    low_sweep = []
+    mode2_gaps = []
+    suspicious_retestable = []
+    total_reviewed = 0
+
+    existing_rules = set()
+    try:
+        for r in list_rules(out_dir):
+            existing_rules.add(r.get("origin_function", ""))
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "rule listing failed", exc_info=True)
+
+    for key, stats in func_stats.items():
+        if stats["record_count"] == 0:
+            continue
+        total_reviewed += 1
+
+        if stats["sweep_count"] < 2 and stats["status"] != "error":
+            low_sweep.append((key, stats["sweep_count"], stats["status"]))
+
+        if stats["status"] == "finding" and stats["evidence_tool"]:
+            func_name = key.split(":")[-1] if ":" in key else key
+            if func_name not in existing_rules:
+                mode2_gaps.append((key, stats["hypothesis"]))
+
+        if stats["status"] == "suspicious":
+            tools_used = stats["sweep_tools"] - {""}
+            all_tools = {"semgrep", "coccinelle", "codeql", "smt"}
+            untried = all_tools - tools_used
+            if untried:
+                suspicious_retestable.append((key, sorted(untried)))
+
+    # Output
+    print(f"Critique report for {out_dir}")
+    print(f"  Functions reviewed: {total_reviewed}")
+    print()
+
+    if low_sweep:
+        print(f"Low tool coverage ({len(low_sweep)} functions with <2 sweeps):")
+        for key, count, status in low_sweep[:15]:
+            print(f"  {key} — {count} sweep(s), status={status}")
+        if len(low_sweep) > 15:
+            print(f"  ... and {len(low_sweep) - 15} more")
+        print()
+
+    if mode2_gaps:
+        print(f"Mode 2 gaps ({len(mode2_gaps)} findings without codebase-wide rules):")
+        for key, hyp in mode2_gaps[:10]:
+            hyp_short = (hyp[:60] + "...") if hyp and len(hyp) > 60 else hyp
+            print(f"  {key} — {hyp_short or '(no hypothesis recorded)'}")
+        print("  → Generate checker rules to sweep the whole codebase")
+        print()
+
+    if suspicious_retestable:
+        print(f"Suspicious functions with untried tools ({len(suspicious_retestable)}):")
+        for key, untried in suspicious_retestable[:10]:
+            print(f"  {key} — try: {', '.join(untried)}")
+        print()
+
+    if not low_sweep and not mode2_gaps and not suspicious_retestable:
+        print("No critique items found — coverage looks thorough.")
+
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the full audit orchestrator with LLM review."""
+    import subprocess
+
+    target_path = Path(args.target).resolve()
+    if not target_path.is_dir():
+        print(f"error: target not found: {target_path}", file=sys.stderr)
+        return 1
+
+    # --- lifecycle start ---
+    # Explicit --out runs go through lifecycle start too. Pre-fix the
+    # --out branch only mkdir'd the directory: no .raptor-run.json was
+    # ever written, the end-of-run lifecycle complete failed with
+    # "call start_run() first", and the supervisor-advertised
+    # `raptor-audit resume <dir>` refused the directory as "not a run
+    # directory" — an explicit-out run was silently unresumable.
+    lifecycle_cmd = [
+        str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+        "start", "audit", "--target", str(target_path),
+    ]
+    if args.out:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        lifecycle_cmd += ["--out", str(out_dir)]
+    lifecycle = subprocess.run(
+        lifecycle_cmd, capture_output=True, text=True, check=False,
+    )
+    if lifecycle.returncode != 0:
+        print(f"lifecycle start failed: {lifecycle.stderr.strip()}",
+              file=sys.stderr)
+        return 1
+    out_dir = None
+    for line in lifecycle.stdout.strip().splitlines():
+        if line.startswith("OUTPUT_DIR="):
+            out_dir = Path(line.split("=", 1)[1])
+            break
+    if not out_dir:
+        print("lifecycle start did not produce OUTPUT_DIR", file=sys.stderr)
+        return 1
+    for line in lifecycle.stdout.strip().splitlines():
+        print(line)
+
+    # --- build checklist ---
+    checklist_path = out_dir / "checklist.json"
+    if not checklist_path.exists():
+        ck = subprocess.run(
+            [str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
+             str(target_path), "--out", str(out_dir)],
+            capture_output=True, text=True, timeout=300,
+            check=False,
+        )
+        if ck.returncode != 0:
+            print(f"checklist build failed: {ck.stderr.strip()}",
+                  file=sys.stderr)
+            _lifecycle_fail(out_dir, "checklist build failed")
+            return 1
+        for line in ck.stdout.strip().splitlines():
+            print(line)
+
+    # --- context map ---
+    # /audit .md runs /understand --map before dispatching here, so
+    # context-map.json should already exist. If called directly without
+    # the .md shim, the orchestrator's bridge searches sibling runs.
+    context_map_path = out_dir / "context-map.json"
+    if not context_map_path.exists():
+        logging.getLogger(__name__).info(
+            "no context-map.json in output dir — "
+            "orchestrator will search sibling runs via the bridge"
+        )
+
+    # --- legacy state check ---
+    # Only run against ACTIVE-PROJECT runs. Detection: an active
+    # project has a ``raptor-project.json`` alongside its runs OR
+    # is resolved via ``ProjectManager.get_active()`` (the .active
+    # symlink lives in the projects dir, not the caller's cwd).
+    # Standalone runs under ``<repo>/out/`` skip this check —
+    # sibling runs in ``out/`` belong to unrelated tools and would
+    # false-positive.
+    project_dir = None
+    if (out_dir / ".raptor-run.json").exists():
+        candidate = out_dir.parent
+        if (candidate / "raptor-project.json").exists():
+            project_dir = candidate
+        else:
+            # Best-effort active-project detection: symlink reads and
+            # projects-dir mkdir raise OSError; a corrupt project file
+            # can surface ValueError (e.g. NUL in a stored path). A
+            # miswired call propagates instead of skipping the check.
+            with contextlib.suppress(OSError, ValueError):
+                from core.project.project import ProjectManager
+                pm = ProjectManager()
+                active_name = pm.get_active()
+                if active_name:
+                    active_project = pm.load(active_name)
+                    if active_project and active_project.output_dir:
+                        active_out = Path(active_project.output_dir).resolve()
+                        if active_out == candidate.resolve():
+                            project_dir = candidate
+    if project_dir is not None:
+        legacy_diag = _check_legacy_state(project_dir)
+        if legacy_diag:
+            print(f"error: {legacy_diag}", file=sys.stderr)
+            _lifecycle_fail(out_dir, "legacy /audit state — migration required")
+            return 1
+
+    from core.audit.pipeline import AuditPipelineOpts, run_audit_pipeline
+
+    # --- auto-load threat model ---
+    threat_model = None
+    try:
+        from core.threat_model import load_for_target
+        tm = load_for_target(target_path)
+        if tm is not None:
+            threat_model = tm.to_dict()
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "threat-model auto-load failed", exc_info=True)
+
+    # --- load checklist for context assembly (callers, reachability) ---
+    checklist_data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+
+    # --- binary oracle ---
+    binary_verdicts = None
+    from core.analysis.binary_oracle_cli import apply_to_config as _bo_apply
+    binary_paths = _bo_apply(args, target_path)
+    if binary_paths and checklist_data:
+        from core.analysis.binary_oracle import (
+            enrich_inventory_with_binary_oracle,
+            extract_verdicts,
+        )
+        bo_counts = enrich_inventory_with_binary_oracle(
+            checklist_data, binary_paths,
+        )
+        binary_verdicts = extract_verdicts(checklist_data)
+        if binary_verdicts:
+            print(
+                f"Binary oracle: {bo_counts.get('classified', 0)} classified "
+                f"({bo_counts.get('absent', 0)} absent, "
+                f"{bo_counts.get('symbol_present', 0)} present)",
+                flush=True,
+            )
+        # Persist the freshly-computed per-binary verdicts into the
+        # build-ID cache so later runs (and external consumers of the
+        # shared cache) skip re-analysis. Best-effort.
+        try:
+            from core.audit.build_id_cache import (
+                load_build_id_cache,
+                store_oracle_verdicts,
+            )
+            store_oracle_verdicts(
+                load_build_id_cache(), checklist_data,
+                source_command="raptor-audit",
+            )
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "build-id cache population failed", exc_info=True)
+
+    # --- progress callback ---
+    from core.audit._util import format_progress_line
+
+    def on_progress(idx: int, total: int, outcome):
+        print(format_progress_line(idx, total, outcome), flush=True)
+
+    # --- supervisor self-bounding ---
+    # Under a Claude SUBAGENT background shell the harness kills the
+    # whole process group at its shell cap (default 3600s). With no
+    # explicit wall bound set, default one that concludes GRACEFULLY
+    # inside the cap — same drain path as budget exhaustion. Main-
+    # thread / interactive contexts are unaffected (bound is None).
+    max_time = args.max_time
+    supervisor_bound = _apply_supervisor_bound(
+        max_time, args.no_supervisor_bound, out_dir,
+    )
+    if supervisor_bound is not None:
+        max_time = supervisor_bound
+
+    # --- run ---
+    print(f"\nStarting audit of {target_path}", flush=True)
+    print(f"Output: {out_dir}\n", flush=True)
+
+    models = args.model or []
+    opts = AuditPipelineOpts(
+        target_path=target_path,
+        out_dir=out_dir,
+        scope=args.scope,
+        scope_floor=args.scope_floor,
+        pins=args.pin,
+        models=models if models else None,
+        max_cost_usd=args.max_cost,
+        max_seconds=max_time,
+        budget=args.budget,
+        strategy_filter=args.strategy,
+        review_passes=args.review_passes,
+        batch_sloc_threshold=args.batch_sloc_threshold,
+        include_kinds=(
+            {k.strip() for k in args.include_kinds.split(",") if k.strip()}
+            if args.include_kinds else None
+        ),
+        adversarial=args.adversarial,
+        rank_gaps=getattr(args, "rank_gaps", False),
+        edges=args.edges,
+        max_propagation_depth=args.max_propagation_depth,
+        subsystem_depth=args.subsystem_depth,
+        validate=not args.no_validate,
+        no_binary_oracle=getattr(args, "no_binary_oracle", False),
+        binary_verdicts=binary_verdicts,
+        inventory=checklist_data,
+        annotations_dir=Path(args.annotations_dir) if args.annotations_dir else None,
+        codeql_db_path=(args.codeql_db[0] if args.codeql_db else None),
+        codeql_db_paths=args.codeql_db,
+        threat_model=threat_model,
+        on_progress=on_progress,
+        # Tri-state: explicit negative > explicit positive > None
+        # (None defers to the active project's 'dynamic' trust marker
+        # inside the pipeline; default off).
+        dynamic_validation=(False if args.no_dynamic
+                            else (True if args.dynamic else None)),
+        verdict_reuse=not args.no_verdict_reuse,
+        pre_scan=args.pre_scan,
+        caller_contract_context=not args.no_caller_contract_context,
+        schedule=args.schedule,
+        on_demand_synthesis=not args.no_on_demand_synthesis,
+        vendored_triage=not args.no_vendored_triage,
+        probe_determine_value=args.probe_determine_value,
+        deepen_reserve_fraction=args.deepen_reserve,
+        prior_journal_dirs=(
+            [Path(p) for p in args.prior_journal]
+            if args.prior_journal else None
+        ),
+        prior_claims_per_function=args.prior_claims,
+    )
+
+    # Persist the resolved run configuration BEFORE the pipeline
+    # starts, so an externally-killed run can be re-entered as the
+    # same run (`raptor-audit resume <out_dir>`) under the ORIGINAL
+    # checklist/scope/pins/budget. Best-effort: a persist failure
+    # costs resumability, never the run.
+    try:
+        from core.audit.resume import save_run_config
+        save_run_config(out_dir, _run_config_from_args(
+            args, target_path, supervisor_bound_s=supervisor_bound,
+        ))
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "audit-run-config.json persist failed — this run will "
+            "not be resumable", exc_info=True,
+        )
+
+    try:
+        result = run_audit_pipeline(opts)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: audit pipeline failed: {exc}", file=sys.stderr)
+        _lifecycle_fail(out_dir, f"audit pipeline failed: {exc}")
+        return 1
+
+    # --- report + lifecycle (shared with resume) ---
+    model_id = args.model[0] if args.model else ""
+    return _finalize_run(
+        out_dir, result, model_id, scope=args.scope,
+        supervisor_bounded=supervisor_bound is not None,
+    )
+
+
+def _finalize_run(
+    out_dir: Path,
+    result,
+    model_id: str,
+    *,
+    scope=None,
+    segment: int | None = None,
+    supervisor_bounded: bool = False,
+) -> int:
+    """Post-pipeline tail shared by `run` and `resume`: final report,
+    console summary, lifecycle transition, exit code."""
+    import subprocess
+
+    from core.audit.report import generate_report, write_report
+
+    report = generate_report(out_dir)
+    report_path = write_report(report, out_dir)
+
+    # Completed-with-remainder note for supervisor-bounded runs: the
+    # wall stop is a graceful completion, and the operator should know
+    # what is left and how to continue.
+    if supervisor_bounded and result.terminated_by == "max_seconds":
+        remaining = report.get("gaps_remaining", 0)
+        print(
+            f"Supervisor wall bound reached — run completed with "
+            f"remainder: {remaining} gaps left (see report). Continue "
+            f"in a new run; verdict reuse imports this run's verdicts "
+            f"at $0.",
+            flush=True,
+        )
+
+    duration_s = result.total_duration_s
+    duration_str = (
+        f"{int(duration_s // 60)}m{int(duration_s % 60)}s"
+        if duration_s >= 60 else f"{duration_s:.0f}s"
+    )
+    print(f"\n{'='*60}", flush=True)
+    # One counting rule across every surface: "reviewed" = LLM
+    # reviews; post-loop mechanical journal entries are stated
+    # separately (the report derives its counts from the journal,
+    # which contains them — without the split the two summaries
+    # silently contradict each other).
+    mech = getattr(result, "post_loop_mechanical", 0)
+    mech_s = f" (+{mech} mechanical post-loop)" if mech else ""
+    segment_s = f" (segment {segment})" if segment else ""
+    print(f"Audit complete{segment_s} in {duration_str}: "
+          f"{result.reviewed} LLM-reviewed{mech_s}, "
+          f"{result.findings} findings, {result.suspicious} suspicious, "
+          f"{result.clean} clean, {result.errors} errors", flush=True)
+    reused = getattr(result, "reused_from_prior", 0)
+    if reused:
+        origin = "this run's prior segments" if segment else "prior runs"
+        print(f"{reused} reused from {origin} (source unchanged, $0)",
+              flush=True)
+    blocked = getattr(result, "reuse_blocked_reasons", None) or {}
+    if blocked:
+        # Per-reason split: context_reduced re-reviews are by design;
+        # a strategy_changed mass-fire points at unstable strategy
+        # inference inputs and deserves investigation, not silence.
+        split = ", ".join(
+            f"{cls}={n}" for cls, n in sorted(blocked.items()))
+        print(f"{sum(blocked.values())} hash-verified prior review(s) "
+              f"not reused ({split}) — re-reviewed at full cost",
+              flush=True)
+    vend_skipped = getattr(result, "vendored_skipped", 0)
+    vend_glanced = getattr(result, "vendored_glanced", 0)
+    if vend_skipped or vend_glanced:
+        print(f"Vendored/generated triage: {vend_skipped} skipped, "
+              f"{vend_glanced} glanced (records in suppressions.jsonl)",
+              flush=True)
+    from core.audit.cost_tracker import format_cost_summary
+    cost_line = format_cost_summary(result)
+    if cost_line:
+        print(cost_line, flush=True)
+    print(f"Report: {report_path}", flush=True)
+    print(f"Terminated: {result.terminated_by}", flush=True)
+
+    # Deferred pipeline tail (resumed segments only): a launcher that
+    # ran this audit with --no-validate to validate the findings
+    # itself has completed by the time a resume finishes — surface the
+    # remaining tail steps instead of silently dropping them.
+    if segment:
+        try:
+            from core.audit.resume import pipeline_tail_hint
+            hint = pipeline_tail_hint(out_dir, result.findings or 0)
+            if hint:
+                print(f"\n{hint}", flush=True)
+        except Exception:  # noqa: BLE001 — hint is best-effort
+            pass
+    # Scoped-run slot allocation (see gaps.truncate_gaps_to_budget):
+    # zero-slot in-scope files are the silent-failure mode — always
+    # state the allocation when a scope was set.
+    scope_cov_path = out_dir / "scope-coverage.json"
+    if scope and scope_cov_path.is_file():
+        try:
+            _sc = load_json(scope_cov_path, max_bytes=_MAX_META_BYTES)
+            if not isinstance(_sc, dict):
+                _sc = {}
+            _zero = _sc.get("zero_slot_files") or []
+            if _zero:
+                print(
+                    f"Scope coverage: {len(_zero)} of "
+                    f"{_sc.get('in_scope_files', '?')} in-scope files "
+                    f"received ZERO review slots: {', '.join(_zero)} "
+                    f"(see scope-coverage.json)",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Scope coverage: all "
+                    f"{_sc.get('in_scope_files', '?')} in-scope files "
+                    f"received at least one review slot",
+                    flush=True,
+                )
+        except (OSError, ValueError):
+            pass
+
+    # --- lifecycle transition ---
+    if result.terminated_by == "sigterm":
+        # SIGTERM conclusion: the salvage report above covers whatever
+        # the journal holds; the run stays re-enterable.
+        subprocess.run(
+            [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+             "interrupt", str(out_dir),
+             "SIGTERM — salvage report written",
+             "--command", "audit"],
+            capture_output=True, check=False,
+        )
+        print(
+            f"Interrupted by SIGTERM — salvage report written. "
+            f"Resume with: libexec/raptor-audit resume {out_dir}",
+            flush=True,
+        )
+        return 130
+
+    lifecycle_args = [
+        str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+        "complete", str(out_dir),
+        # Ownership claim: refuse if this dir is somehow another
+        # command's run (see raptor-run-lifecycle --command).
+        "--command", "audit",
+    ]
+    if model_id:
+        lifecycle_args.extend(["--model", model_id])
+    # Surface the child's stderr on failure — pre-fix capture_output
+    # swallowed it, so a failed complete (corrupt metadata, journal
+    # merge error) left the run stuck in 'running' with no signal.
+    lifecycle_cp = subprocess.run(
+        lifecycle_args, capture_output=True, text=True, check=False,
+    )
+    if lifecycle_cp.returncode != 0:
+        detail = (lifecycle_cp.stderr or "").strip()
+        print(
+            f"lifecycle complete failed (exit {lifecycle_cp.returncode})"
+            + (f": {detail}" if detail else ""),
+            file=sys.stderr, flush=True,
+        )
+
+    return _exit_code_for(result.terminated_by)
+
+
+# Stop reasons that are COMPLETED runs with a stop reason, not errors.
+# A budget/time stop journals its outcomes, writes its report, and the
+# lifecycle above records status=completed — exiting 1 for it made the
+# exit code contradict the lifecycle status. Nonzero is reserved for
+# errors (pipeline exceptions, missing checklist, legacy state). The
+# stop reason itself is on the console ("Terminated: <reason>") and in
+# the run summary.
+_COMPLETED_STOP_REASONS = frozenset({
+    "complete",
+    "llm_budget_exceeded",
+    "max_cost_usd",
+    "max_seconds",
+})
+
+
+def _exit_code_for(terminated_by: str) -> int:
+    """Process exit code for a finished orchestrator run."""
+    return 0 if terminated_by in _COMPLETED_STOP_REASONS else 1
+
+
+def _check_legacy_state(project_dir: Path) -> str | None:
+    """Detect pre-migration /audit state that predates the review
+    journal. Returns a diagnostic string if legacy state is present
+    without a journal (blocks startup), or ``None`` to proceed.
+
+    Legacy sources checked:
+    - coverage-audit.json in any sibling run dir
+    - source=llm annotations in <project>/annotations/
+    - checked_by=[audit|agentic] entries on checklist.json
+
+    Journal-present check: <project>/review-journal-index.json exists
+    AND has at least one entry, OR .legacy-audit-abandoned marker
+    exists.
+    """
+    if not project_dir or not project_dir.is_dir():
+        return None
+    marker = project_dir / ".legacy-audit-abandoned"
+    if marker.exists():
+        return None
+    index_path = project_dir / "review-journal-index.json"
+    has_journal = False
+    if index_path.is_file():
+        data = load_json(index_path, max_bytes=_MAX_CHECKLIST_BYTES)
+        if isinstance(data, dict) and data.get("entries"):
+            has_journal = True
+    if has_journal:
+        return None
+
+    legacy_sources: list[str] = []
+    for run_dir in project_dir.iterdir():
+        if run_dir.is_dir() and (run_dir / "coverage-audit.json").is_file():
+            legacy_sources.append(f"coverage-audit.json in {run_dir.name}/")
+            break
+    ann_dir = project_dir / "annotations"
+    if ann_dir.is_dir():
+        for ann_path in ann_dir.rglob("*.md"):
+            try:
+                text = ann_path.read_text(errors="replace")
+                if "source=llm" in text:
+                    legacy_sources.append(f"source=llm annotations in {ann_dir.name}/")
+                    break
+            except OSError:
+                continue
+    cl_path = project_dir / "checklist.json"
+    if cl_path.is_file():
+        try:
+            cl = load_json(
+                cl_path, strict=True, max_bytes=_MAX_CHECKLIST_BYTES,
+            ) or {}
+            for fe in cl.get("files", []):
+                for item in fe.get("items", fe.get("functions", [])) or []:
+                    checked = item.get("checked_by") or []
+                    if any(t in ("audit", "agentic") or t.startswith(("audit:", "agentic:"))
+                           for t in checked):
+                        legacy_sources.append("checked_by=[audit|agentic] on checklist.json")
+                        break
+                if legacy_sources and legacy_sources[-1].startswith("checked_by"):
+                    break
+        except (OSError, ValueError):
+            pass
+
+    if not legacy_sources:
+        return None
+
+    return (
+        "legacy /audit state detected on this project but no review "
+        "journal exists. Prior LLM reviews will be treated as "
+        "unreviewed unless migrated.\n\n"
+        "Legacy sources found:\n  - "
+        + "\n  - ".join(legacy_sources)
+        + "\n\nTo migrate: libexec/raptor-migrate-journal "
+        f"{project_dir}\n"
+        "To skip and mark inert: libexec/raptor-migrate-journal "
+        f"{project_dir} --skip-and-mark-inert\n\n"
+        "The migration is idempotent — running it twice is safe."
+    )
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Re-enter a failed/interrupted audit run AS THE SAME RUN.
+
+    Prior-segment journal verdicts are re-imported at $0 (hash-
+    verified), the remaining gaps are recomputed against the ORIGINAL
+    checklist/scope/pins, the remaining budget is the original cap
+    minus booked spend (reconciled ledger authoritative), ledgers and
+    telemetry append with a resume-marker row, and ONE final report
+    covers all segments.
+    """
+    from core.audit.resume import (
+        append_resume_markers,
+        compute_drift,
+        load_prior_cost_breakdown,
+        load_run_config,
+        resolve_prior_spend,
+        resume_ineligibility,
+    )
+    from core.run.metadata import load_run_metadata, resume_run
+
+    out_dir = Path(args.out_dir).resolve()
+    if not out_dir.is_dir():
+        print(f"error: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+
+    err = resume_ineligibility(out_dir, reopen=getattr(args, "reopen", False))
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
+    run_cfg = load_run_config(out_dir)
+    if run_cfg is None:
+        print(
+            f"error: no audit-run-config.json in {out_dir} — this run "
+            "predates resumable audits (or the config persist failed). "
+            "Start a new run instead; cross-run verdict reuse imports "
+            "its journal verdicts at $0.",
+            file=sys.stderr,
+        )
+        return 1
+
+    meta = load_run_metadata(out_dir) or {}
+    target_str = meta.get("target_path") or run_cfg.get("target_path")
+    if not target_str:
+        print("error: run metadata records no target_path", file=sys.stderr)
+        return 1
+    target_path = Path(target_str).resolve()
+    if not target_path.is_dir():
+        print(f"error: target not found: {target_path}", file=sys.stderr)
+        return 1
+
+    checklist_path = out_dir / "checklist.json"
+    if not checklist_path.exists():
+        print(
+            f"error: no checklist.json in {out_dir} — the run died "
+            "before its inventory was built; nothing to resume. "
+            "Start a new run.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- staleness gate: the run's recorded hashes vs the tree NOW ---
+    drifted, checked = compute_drift(out_dir, target_path)
+    if drifted and not args.allow_drift:
+        print(
+            f"error: target tree drifted since this run's reviews — "
+            f"{len(drifted)} of {checked} hashed verdicts no longer "
+            f"match the source:",
+            file=sys.stderr,
+        )
+        for d in drifted[:10]:
+            cur = d.current_hash or "missing"
+            print(
+                f"  {d.file}:{d.function} (hash {d.stored_hash} → {cur})",
+                file=sys.stderr,
+            )
+        if len(drifted) > 10:
+            print(f"  ... and {len(drifted) - 10} more", file=sys.stderr)
+        print(
+            "Refusing to resume. Pass --allow-drift to resume anyway: "
+            "drifted functions are re-verified per-function by the "
+            "journal hash checks and re-reviewed instead of reused.",
+            file=sys.stderr,
+        )
+        return 1
+    if drifted:
+        print(
+            f"--allow-drift: {len(drifted)} of {checked} verdicts "
+            "drifted — each is re-verified by the journal hash checks "
+            "and will RE-REVIEW (not reuse):",
+            flush=True,
+        )
+        for d in drifted:
+            cur = d.current_hash or "missing"
+            print(
+                f"  drift: {d.file}:{d.function} "
+                f"(hash {d.stored_hash} → {cur}) — re-reviewing",
+                flush=True,
+            )
+
+    # --- remaining budget: original cap minus booked spend ---
+    # resolve_prior_spend is the single source of truth: reconciled
+    # ledger, else journal per-entry floor, raised to the incremental
+    # spend floor (hard-killed segments never reconciled). The SAME
+    # resolved figure is threaded into the pipeline below so this
+    # segment's rewritten ledger carries the whole-run cumulative
+    # chain, not just the immediately-prior segment's ledger.
+    prior_breakdown = load_prior_cost_breakdown(out_dir)
+    booked, ledger_note = resolve_prior_spend(out_dir)
+    original_cap = run_cfg.get("max_cost_usd")
+    from core.audit.resume import (
+        EXHAUSTED_BUDGET_EPSILON_USD,
+        remaining_budget_usd,
+    )
+    remaining = remaining_budget_usd(original_cap, booked)
+    if original_cap is not None:
+        print(
+            f"Resume budget: original cap ${float(original_cap):.2f}, "
+            f"booked ${booked:.2f} ({ledger_note}), "
+            f"remaining ${max(0.0, float(original_cap) - booked):.2f}",
+            flush=True,
+        )
+        if remaining == EXHAUSTED_BUDGET_EPSILON_USD:
+            print(
+                "No budget remains — re-importing prior verdicts and "
+                "finalising the report only (no new LLM reviews).",
+                flush=True,
+            )
+    else:
+        print(
+            f"Resume budget: no cap on the original run "
+            f"(booked ${booked:.2f}, {ledger_note})",
+            flush=True,
+        )
+
+    # --- lifecycle: interrupted/failed → running, segment row ---
+    try:
+        segment = resume_run(out_dir, note="raptor-audit resume")
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    append_resume_markers(out_dir, segment)
+    print(f"Resuming {out_dir} as segment {segment}", flush=True)
+
+    # --- rebuild pipeline opts from the ORIGINAL run config ---
+    from core.audit.pipeline import AuditPipelineOpts, run_audit_pipeline
+
+    checklist_data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+
+    # Binary-oracle verdicts were enriched into checklist.json during
+    # segment 1 — re-extract, no re-analysis needed.
+    binary_verdicts = None
+    if checklist_data and not run_cfg.get("no_binary_oracle"):
+        try:
+            from core.analysis.binary_oracle import extract_verdicts
+            binary_verdicts = extract_verdicts(checklist_data) or None
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "binary verdict re-extraction failed", exc_info=True)
+
+    threat_model = None
+    try:
+        from core.threat_model import load_for_target
+        tm = load_for_target(target_path)
+        if tm is not None:
+            threat_model = tm.to_dict()
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "threat-model auto-load failed", exc_info=True)
+
+    from core.audit._util import format_progress_line
+
+    def on_progress(idx: int, total: int, outcome):
+        print(format_progress_line(idx, total, outcome), flush=True)
+
+    models = run_cfg.get("models") or []
+    include_kinds_raw = run_cfg.get("include_kinds")
+    max_seconds = (
+        args.max_time if args.max_time is not None
+        else run_cfg.get("max_seconds")
+    )
+    # Each segment re-derives its own supervisor bound — the resumed
+    # segment is just as killable as segment 1 was.
+    resume_supervisor_bound = _apply_supervisor_bound(
+        max_seconds, args.no_supervisor_bound, out_dir,
+    )
+    if resume_supervisor_bound is not None:
+        max_seconds = resume_supervisor_bound
+    opts = AuditPipelineOpts(
+        target_path=target_path,
+        out_dir=out_dir,
+        scope=run_cfg.get("scope"),
+        scope_floor=bool(run_cfg.get("scope_floor", True)),
+        pins=run_cfg.get("pins"),
+        models=models if models else None,
+        max_cost_usd=remaining,
+        max_seconds=max_seconds,
+        budget=run_cfg.get("budget"),
+        strategy_filter=run_cfg.get("strategy_filter"),
+        review_passes=int(run_cfg.get("review_passes") or 1),
+        batch_sloc_threshold=run_cfg.get("batch_sloc_threshold"),
+        include_kinds=(
+            {k.strip() for k in include_kinds_raw.split(",") if k.strip()}
+            if include_kinds_raw else None
+        ),
+        adversarial=bool(run_cfg.get("adversarial")),
+        rank_gaps=bool(run_cfg.get("rank_gaps")),
+        max_propagation_depth=run_cfg.get("max_propagation_depth"),
+        subsystem_depth=int(run_cfg.get("subsystem_depth") or 0),
+        validate=bool(run_cfg.get("validate", True)),
+        no_binary_oracle=bool(run_cfg.get("no_binary_oracle")),
+        binary_verdicts=binary_verdicts,
+        inventory=checklist_data,
+        annotations_dir=(
+            Path(run_cfg["annotations_dir"])
+            if run_cfg.get("annotations_dir") else None
+        ),
+        codeql_db_path=run_cfg.get("codeql_db_path"),
+        codeql_db_paths=(
+            run_cfg.get("codeql_db_paths")
+            or ([run_cfg["codeql_db_path"]]
+                if run_cfg.get("codeql_db_path") else None)
+        ),
+        threat_model=threat_model,
+        on_progress=on_progress,
+        dynamic_validation=(
+            False if run_cfg.get("no_dynamic")
+            else (True if run_cfg.get("dynamic") else None)
+        ),
+        verdict_reuse=bool(run_cfg.get("verdict_reuse", True)),
+        edges=bool(run_cfg.get("edges")),
+        pre_scan=bool(run_cfg.get("pre_scan")),
+        caller_contract_context=bool(
+            run_cfg.get("caller_contract_context", True)),
+        schedule=run_cfg.get("schedule") or "cost",
+        on_demand_synthesis=bool(run_cfg.get("on_demand_synthesis", True)),
+        vendored_triage=bool(run_cfg.get("vendored_triage", True)),
+        probe_determine_value=bool(run_cfg.get("probe_determine_value")),
+        deepen_reserve_fraction=run_cfg.get("deepen_reserve_fraction"),
+        same_run_reuse=True,
+        prior_cost_breakdown=prior_breakdown,
+        prior_booked_spend_usd=booked,
+        resume_segment=segment,
+        prior_journal_dirs=(
+            [Path(p) for p in run_cfg["prior_journal_dirs"]]
+            if run_cfg.get("prior_journal_dirs") else None
+        ),
+        prior_claims_per_function=int(
+            run_cfg.get("prior_claims_per_function", 3)
+        ),
+    )
+
+    print(f"\nResuming audit of {target_path}", flush=True)
+    print(f"Output: {out_dir}\n", flush=True)
+
+    try:
+        result = run_audit_pipeline(opts)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: audit pipeline failed: {exc}", file=sys.stderr)
+        _lifecycle_fail(out_dir, f"audit resume failed: {exc}")
+        return 1
+
+    model_id = models[0] if models else ""
+    return _finalize_run(
+        out_dir, result, model_id,
+        scope=run_cfg.get("scope"), segment=segment,
+        supervisor_bounded=resume_supervisor_bound is not None,
+    )
+
+
+def _apply_supervisor_bound(
+    max_time: float | None,
+    opt_out: bool,
+    out_dir: Path,
+) -> float | None:
+    """Default wall bound under a capped supervisor shell.
+
+    Returns the bound to apply (with ONE loud line naming the cap, the
+    resume command and the opt-out), or None when an explicit wall
+    bound exists, the operator opted out, or the context is
+    main-thread/interactive (detection returns None).
+    """
+    if max_time is not None or opt_out:
+        return None
+    try:
+        from core.run.supervisor import supervisor_wall_bound
+        bound = supervisor_wall_bound()
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "supervisor bound detection failed", exc_info=True)
+        return None
+    if bound is None:
+        return None
+    print(
+        f"Supervisor self-bound: Claude subagent background shells are "
+        f"killed at ~{bound.cap_s:.0f}s (CLAUDE_SUBAGENT_BG_SHELL_MAX_MS) "
+        f"— wall budget defaulted to {bound.bound_s:.0f}s so this run "
+        f"concludes gracefully inside the cap. Resume later with: "
+        f"libexec/raptor-audit resume {out_dir}. "
+        f"Opt out with --no-supervisor-bound.",
+        flush=True,
+    )
+    return bound.bound_s
+
+
+def _run_config_from_args(
+    args: argparse.Namespace,
+    target_path: Path,
+    *,
+    supervisor_bound_s: float | None = None,
+) -> dict:
+    """Serialise the resolved `run` options for same-run resume.
+
+    Captures what the operator asked for — resume re-derives the
+    remaining work from these plus the run dir's own artifacts
+    (checklist.json pins the inventory; cost-breakdown.json books the
+    spend). Binary-oracle results are not repeated here: they were
+    written into checklist.json at enrichment time and resume re-reads
+    them from there.
+    """
+    return {
+        "version": 1,
+        "target_path": str(target_path),
+        "scope": args.scope,
+        "scope_floor": args.scope_floor,
+        "pins": args.pin,
+        "strategy_filter": args.strategy,
+        "budget": args.budget,
+        "models": args.model or [],
+        "max_cost_usd": args.max_cost,
+        "max_seconds": args.max_time,
+        "review_passes": args.review_passes,
+        "batch_sloc_threshold": args.batch_sloc_threshold,
+        "include_kinds": args.include_kinds,
+        "adversarial": args.adversarial,
+        "rank_gaps": getattr(args, "rank_gaps", False),
+        "edges": args.edges,
+        "max_propagation_depth": args.max_propagation_depth,
+        "subsystem_depth": args.subsystem_depth,
+        "validate": not args.no_validate,
+        "no_binary_oracle": bool(getattr(args, "no_binary_oracle", False)),
+        "annotations_dir": args.annotations_dir,
+        "codeql_db_path": (args.codeql_db[0] if args.codeql_db else None),
+        "codeql_db_paths": args.codeql_db,
+        "dynamic": args.dynamic,
+        "no_dynamic": args.no_dynamic,
+        "verdict_reuse": not args.no_verdict_reuse,
+        "pre_scan": args.pre_scan,
+        "caller_contract_context": not args.no_caller_contract_context,
+        "schedule": args.schedule,
+        "on_demand_synthesis": not args.no_on_demand_synthesis,
+        "vendored_triage": not args.no_vendored_triage,
+        "probe_determine_value": args.probe_determine_value,
+        "deepen_reserve_fraction": args.deepen_reserve,
+        "prior_journal_dirs": args.prior_journal,
+        "prior_claims_per_function": args.prior_claims,
+        # Informational: the self-bound applied to segment 1 (the
+        # operator's explicit max_seconds above stays authoritative
+        # for resume; each segment re-derives its own bound).
+        "supervisor_bound_s": supervisor_bound_s,
+    }
+
+
+def _lifecycle_fail(out_dir: Path, reason: str) -> None:
+    """Call lifecycle fail, swallowing errors."""
+    import subprocess
+    subprocess.run(
+        [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+         "fail", str(out_dir), reason],
+        capture_output=True,
+        check=False,
+    )
+
+
+def _guess_target(out_dir: Path) -> Path | None:
+    """Try to extract target_path from checklist.json.
+
+    The recovered path is corroborated against the ``target_path``
+    sealed into ``.raptor-run.json`` at run start — checklist.json is
+    a mutable run artefact and must not silently redirect the audit
+    to a different tree. On mismatch the guess is refused with an
+    error telling the operator to pass ``--target`` explicitly.
+    """
+    checklist_path = out_dir / "checklist.json"
+    if checklist_path.exists():
+        try:
+            data = load_json(
+                checklist_path, strict=True, max_bytes=_MAX_CHECKLIST_BYTES,
+            ) or {}
+            tp = data.get("target_path")
+            if tp:
+                from core.run.metadata import corroborate_target_path
+                mismatch = corroborate_target_path(out_dir, tp)
+                if mismatch:
+                    print(
+                        f"error: {mismatch}; pass --target explicitly",
+                        file=sys.stderr,
+                    )
+                    return None
+                return Path(tp)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-audit",
+        description="Mechanical helpers for /audit",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # gaps
+    p_gaps = sub.add_parser("gaps", help="Compute unreviewed functions")
+    p_gaps.add_argument("--out", required=True)
+    p_gaps.add_argument("--target", default=None,
+                        help="Target path — used to auto-build checklist if missing")
+    p_gaps.add_argument("--scope-floor", dest="scope_floor",
+                        action="store_true", default=True,
+                        help="Guarantee every in-scope file at least one "
+                             "review slot under --budget (default ON)")
+    p_gaps.add_argument("--no-scope-floor", dest="scope_floor",
+                        action="store_false",
+                        help="Disable the scoped-run coverage floor")
+    p_gaps.add_argument("--scope", action="append", default=None,
+                        help="Restrict to files under this path prefix (repeatable)")
+    p_gaps.add_argument("--strategy", default=None)
+    p_gaps.add_argument("--budget", type=int, default=None)
+    p_gaps.add_argument("--rank", action="store_true",
+                        help="LLM listwise re-rank of the queue head, strictly "
+                             "within priority tiers (metadata-level signal; "
+                             "ordering only, never drops a gap)")
+    p_gaps.add_argument("--rank-model", default=None,
+                        help="model for --rank (default: session default)")
+    p_gaps.add_argument("--rank-head", type=int, default=None,
+                        help="max gaps the LLM re-ranks "
+                             "(default: core.audit.gap_ranking's head cap)")
+    p_gaps.add_argument("--prioritize", action="store_true",
+                        help="Score and re-sort by attack-surface proximity")
+    p_gaps.add_argument("--annotations-dir", default=None,
+                        help="Annotations directory for stale detection")
+
+    # context
+    p_ctx = sub.add_parser("context", help="Assemble context slice")
+    p_ctx.add_argument("--target", required=True)
+    p_ctx.add_argument("--file", required=True)
+    p_ctx.add_argument("--function", required=True)
+    p_ctx.add_argument("--line", type=int, default=0)
+    p_ctx.add_argument("--out", default=None)
+    p_ctx.add_argument("--annotations-dir", default=None,
+                        help="Annotations directory (default: $OUT/annotations)")
+    p_ctx.add_argument("--json", action="store_true")
+
+    # record
+    p_rec = sub.add_parser("record", help="Record a function review")
+    p_rec.add_argument("--out", required=True)
+    p_rec.add_argument("--target", default=None)
+    p_rec.add_argument("--file", required=True)
+    p_rec.add_argument("--function", required=True)
+    p_rec.add_argument("--status", required=True, choices=sorted({"clean", "suspicious", "finding", "error", "dormant"}))
+    p_rec.add_argument("--body", default="")
+    p_rec.add_argument("--line-start", type=int, default=None)
+    p_rec.add_argument("--line-end", type=int, default=None)
+    p_rec.add_argument("--cwe", default=None)
+    p_rec.add_argument("--strategies", default=None)
+    from core.audit.evidence_grade import VALID_EVIDENCE_TOOLS
+    p_rec.add_argument("--evidence-tool", default=None,
+                       choices=sorted(VALID_EVIDENCE_TOOLS),
+                       help="Required for --status finding")
+    p_rec.add_argument("--hypothesis", default=None,
+                       help="Required for --status finding/suspicious/dormant")
+    p_rec.add_argument("--vuln-type", default=None,
+                       help="Required for --status finding")
+    p_rec.add_argument("--related-to", default=None,
+                       help="file:function of primary review this was examined as part of")
+    p_rec.add_argument("--reach-via", default=None,
+                       help="How this function is reachable when it has zero "
+                            "static callers (e.g. 'callback at foo.c:42', "
+                            "'HTTP route /api/x', 'exported API')")
+
+    # sweep
+    p_sweep = sub.add_parser("sweep", help="Log a tool-grounded check")
+    p_sweep.add_argument("--out", required=True)
+    p_sweep.add_argument("--target", default=None)
+    p_sweep.add_argument("--file", required=True)
+    p_sweep.add_argument("--function", required=True)
+    p_sweep.add_argument("--tool", required=True,
+                         choices=["semgrep", "coccinelle", "codeql", "smt", "compilation"])
+    p_sweep.add_argument("--rule", default=None, help="Rule ID or reference")
+    p_sweep.add_argument("--rule-file", default=None,
+                         help="Path to rule file — auto-runs the tool and logs results")
+    p_sweep.add_argument("--query", default=None, help="Query text or file")
+    p_sweep.add_argument("--result-file", default=None, help="Path to tool output")
+    p_sweep.add_argument("--outcome", default=None,
+                         choices=["confirmed", "refuted", "error", "inconclusive"])
+    p_sweep.add_argument("--smt-verb", default=None,
+                         choices=["check-overflow", "check-oob", "check-null-deref",
+                                  "check-overflow-to-oob", "check-negative-bypass",
+                                  "validate-path"],
+                         help="SMT verb to run (requires --tool smt)")
+    p_sweep.add_argument("--smt-args", default=None,
+                         help="JSON dict of args for the SMT verb")
+    p_sweep.add_argument("--codeql-db", default=None,
+                         help="Path to CodeQL database (auto-detected if omitted)")
+    p_sweep.add_argument("--line-start", type=int, default=None,
+                         help="Function start line (auto-detected from checklist)")
+    p_sweep.add_argument("--line-end", type=int, default=None,
+                         help="Function end line (auto-detected from checklist)")
+
+    # rules
+    p_rules = sub.add_parser("rules", help="Manage synthesized checker rules")
+    p_rules.add_argument("action", choices=["save", "list", "run"])
+    p_rules.add_argument("--out", required=True)
+    p_rules.add_argument("--target", default=None)
+    p_rules.add_argument("--rule-id", default=None)
+    p_rules.add_argument("--tool", default=None, choices=["semgrep", "coccinelle"])
+    p_rules.add_argument("--content-file", default=None, help="Path to rule file")
+    p_rules.add_argument("--description", default=None)
+    p_rules.add_argument("--origin-file", default=None)
+    p_rules.add_argument("--origin-function", default=None)
+    p_rules.add_argument("--cwe", default=None)
+
+    # report
+    p_rep = sub.add_parser("report", help="Generate audit summary")
+    p_rep.add_argument("--out", required=True)
+    p_rep.add_argument("--target", default=None)
+
+    # stale
+    p_stale = sub.add_parser("stale", help="List stale annotations")
+    p_stale.add_argument("--annotations-dir", required=True)
+    p_stale.add_argument("--target", required=True)
+
+    # feedback
+    p_fb = sub.add_parser("feedback", help="Import /validate results")
+    p_fb.add_argument("--validation-report", required=True,
+                       help="Path to /validate findings.json or stage-d.json")
+    p_fb.add_argument("--annotations-dir", required=True,
+                       help="Path to audit annotations directory")
+    p_fb.add_argument("--audit-out",
+                       help="Audit output dir (appends correction journal "
+                            "entries and audit-log events)")
+
+    # critique
+    p_crit = sub.add_parser("critique", help="Tool-grounded critique pass")
+    p_crit.add_argument("--out", required=True)
+
+    p_ast = sub.add_parser("ast", help="Extract function AST and call targets")
+    p_ast.add_argument("--file", required=True)
+    p_ast.add_argument("--function", required=True)
+
+    # run (full orchestrator)
+    p_run = sub.add_parser("run", help="Run the full audit orchestrator")
+    p_run.add_argument("target", help="Path to codebase to review")
+    p_run.add_argument("--out", default=None, help="Output directory")
+    p_run.add_argument("--strategy", default=None,
+                       help="Filter to one strategy")
+    p_run.add_argument("--budget", type=int, default=None,
+                       help="Max functions to review")
+    p_run.add_argument("--scope", action="append", default=None,
+                       help="Restrict to a subdirectory (repeatable)")
+    p_run.add_argument("--pin", action="append", default=None,
+                       help="Pin a function into the review schedule: "
+                            "file:function relative to the target, "
+                            "repeatable. Pinned functions are hoisted "
+                            "to the head of the schedule (guaranteed a "
+                            "slot under --budget); the rest of the "
+                            "queue fills normally — unlike a functions "
+                            "filter, nothing is excluded")
+    p_run.add_argument("--scope-floor", dest="scope_floor",
+                       action="store_true", default=True,
+                       help="Guarantee every in-scope file at least one "
+                            "review slot under --budget (default ON for "
+                            "scoped runs)")
+    p_run.add_argument("--no-scope-floor", dest="scope_floor",
+                       action="store_false",
+                       help="Disable the scoped-run coverage floor "
+                            "(zero-slot files are still reported loudly)")
+    p_run.add_argument("--annotations-dir", default=None)
+    p_run.add_argument("--no-validate", action="store_true",
+                       help="Skip automatic /validate post-pass")
+    p_run.add_argument("--model", action="append", default=None,
+                       help="Model ID (repeatable for multi-model consensus)")
+    p_run.add_argument("--adversarial", action="store_true",
+                       help="Enable adversarial reviewer for positive verdicts")
+    p_run.add_argument("--rank-gaps", action="store_true",
+                       help="LLM re-rank of the gap-queue head within "
+                            "priority tiers before pins/budget "
+                            "(ordering only; spend on the run ledger)")
+    p_run.add_argument("--edges", action="store_true",
+                       help="Review cross-function edge obligations: "
+                            "tier-1 boundary edges as dedicated "
+                            "contract units, tier-2 on-path edges "
+                            "folded into caller reviews (flag-gated "
+                            "beta)")
+    p_run.add_argument("--max-propagation-depth", type=int, default=None,
+                       help="Override adaptive constraint propagation depth")
+    p_run.add_argument("--codeql-db", action="append", default=None,
+                       metavar="PATH",
+                       help="CodeQL database for query dispatch and "
+                            "the pre-sweep. Repeatable — one per "
+                            "language for multi-language targets; "
+                            "per-function dispatch routes by the "
+                            "file's language")
+    p_run.add_argument("--max-cost", type=float, default=None,
+                       help="Maximum cost in USD before stopping")
+    p_run.add_argument("--deepen-reserve", type=float, default=None,
+                       metavar="FRACTION",
+                       help="Slice of --max-cost held back for the deepen "
+                            "phase so announced re-reviews can execute "
+                            "(default 0.15; 0 disables)")
+    p_run.add_argument("--max-time", type=float, default=None,
+                       help="Maximum wall-clock seconds before stopping")
+    p_run.add_argument("--no-supervisor-bound", action="store_true",
+                       help="Do not default a wall budget when running "
+                            "under a Claude subagent background shell "
+                            "(whose supervisor kills the shell at "
+                            "CLAUDE_SUBAGENT_BG_SHELL_MAX_MS, default "
+                            "3600s). Only consulted when --max-time is "
+                            "unset; main-thread/interactive runs are "
+                            "never bounded")
+    p_run.add_argument("--review-passes", type=int, default=1,
+                       help="Number of independent review passes per function (self-consistency)")
+    p_run.add_argument("--subsystem-depth", type=int, default=0,
+                       help="Directory grouping depth for subsystem-ordered review")
+    p_run.add_argument("--include-kinds", default=None,
+                       help="Comma-separated item kinds to review beyond "
+                            "functions/methods. Default: top_level, macro, "
+                            "global. A positive list overrides the default "
+                            "extras; '-kind' opts one out (e.g. '-macro'); "
+                            "'none' restricts to functions/methods only. "
+                            "The non-reviewable extraction kinds "
+                            "'declaration' (file-scope pure/extern "
+                            "declarations) and 'constant_macro' "
+                            "(object-like literal macros) are excluded by "
+                            "default; name them in a positive list to opt "
+                            "in")
+    p_run.add_argument("--batch-sloc-threshold", type=int, default=None,
+                       help="Batch functions at or under this SLOC per file "
+                            "into combined reviews (default: 15; 0 disables "
+                            "batching)")
+    p_run.add_argument("--dynamic", action="store_true",
+                       help="Enable dynamic validation (Frida observation / "
+                            "target execution) for confirmed findings")
+    p_run.add_argument("--no-dynamic", action="store_true",
+                       help="Disable dynamic validation for this run, "
+                            "overriding both --dynamic and the active "
+                            "project's 'dynamic' trust marker "
+                            "(raptor project trust dynamic)")
+    p_run.add_argument("--no-verdict-reuse", action="store_true",
+                       help="Disable cross-run verdict reuse (importing "
+                            "prior-run journal verdicts for functions "
+                            "whose source is unchanged); unchanged "
+                            "reviewed functions are then silently "
+                            "suppressed as before")
+    p_run.add_argument("--no-caller-contract-context", action="store_true",
+                       help="Disable the caller-contract call-site "
+                            "digest in review context (all in-repo "
+                            "call sites with guard/reuse windows for "
+                            "teardown-shaped functions)")
+    p_run.add_argument("--no-on-demand-synthesis", action="store_true",
+                       help="Disable on-demand checker synthesis for "
+                            "suspicious hypotheses whose CWE has no "
+                            "tool-chain dispatch entry (synthesis is "
+                            "LLM-cost bearing; capped per run)")
+    p_run.add_argument("--no-vendored-triage", action="store_true",
+                       help="Disable the vendored/generated-code triage "
+                            "tier for this run — vendored and generated "
+                            "files get normal review depth instead of "
+                            "the skip/glance tier (use when auditing a "
+                            "vendored library ON PURPOSE)")
+    p_run.add_argument("--probe-determine-value", action="store_true",
+                       help="Resolve claim-less constant study questions "
+                            "('what is the value of X?') by compile-probe "
+                            "bisection over static assertions (the final "
+                            "equality probe is the only verdict). Up to "
+                            "~66 sandboxed compiles per constant, capped "
+                            "per run — off by default")
+    p_run.add_argument("--pre-scan", action="store_true",
+                       help="When no scan SARIF exists (this run or a "
+                            "fresh sibling run), run one bounded semgrep "
+                            "baseline pass over the scoped target with "
+                            "RAPTOR's local rule library so SARIF "
+                            "corroboration channels have data")
+    p_run.add_argument("--schedule", choices=["cost", "priority"],
+                       default="cost",
+                       help="Parallel review ordering: 'cost' packs "
+                            "predicted-longest reviews first (shortest "
+                            "wall time), 'priority' reviews the most "
+                            "promising functions first (fastest first "
+                            "finding). Serial runs always use priority "
+                            "order")
+    p_run.add_argument("--prior-claims", type=int, default=3,
+                       metavar="N",
+                       help="Max prior finding-grade claims injected "
+                            "per function into review context, newest "
+                            "first (default: 3; 0 disables the "
+                            "injection entirely)")
+    p_run.add_argument("--prior-journal", action="append", default=None,
+                       metavar="RUN_DIR",
+                       help="Run directory whose review-journal.jsonl "
+                            "feeds prior finding-grade claims "
+                            "(/agentic per-finding analyses) into "
+                            "review context (repeatable). Covers "
+                            "journals not yet merged into the project "
+                            "index — the /agentic --audit post-pass "
+                            "passes its own run dir here")
+    from core.analysis.binary_oracle_cli import add_binary_args
+    add_binary_args(p_run, include_edges=False)
+
+    # resume (re-enter a failed/interrupted run as the same run)
+    p_resume = sub.add_parser(
+        "resume",
+        help="Resume a failed/interrupted audit run as the same run",
+    )
+    p_resume.add_argument(
+        "out_dir",
+        help="Output directory of the run to resume",
+    )
+    p_resume.add_argument(
+        "--allow-drift", action="store_true",
+        help="Resume even when the target tree drifted from the run's "
+             "recorded per-function hashes — drifted functions are "
+             "re-verified (loudly, per function) and re-reviewed "
+             "instead of reused",
+    )
+    p_resume.add_argument(
+        "--reopen", action="store_true",
+        help="When the run says 'completed' but has no "
+             "audit-report.json (a step that didn't own the run "
+             "stamped it), flip it back to 'interrupted' and resume. "
+             "A completed run WITH a report stays final regardless.",
+    )
+    p_resume.add_argument(
+        "--max-time", type=float, default=None,
+        help="Wall-clock cap for THIS segment (default: the original "
+             "run's --max-time)",
+    )
+    p_resume.add_argument(
+        "--no-supervisor-bound", action="store_true",
+        help="Do not default a per-segment wall budget under a Claude "
+             "subagent background shell (see `run --help`)",
+    )
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    dispatch = {
+        "gaps": cmd_gaps,
+        "context": cmd_context,
+        "record": cmd_record,
+        "sweep": cmd_sweep,
+        "rules": cmd_rules,
+        "report": cmd_report,
+        "stale": cmd_stale,
+        "feedback": cmd_feedback,
+        "critique": cmd_critique,
+        "ast": cmd_ast,
+        "run": cmd_run,
+        "resume": cmd_resume,
+    }
+
+    return dispatch[args.command](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

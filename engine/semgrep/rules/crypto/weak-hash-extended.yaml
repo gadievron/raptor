@@ -1,29 +1,17 @@
 rules:
   # V11.4.1 extended: weak hash detection for languages not covered in weak-hash.yaml
-  # (Java and Python are handled there; JS, Go, Ruby, PHP, Rust, and C are here)
+  # (Java, Python, and Go are handled there; JS, Ruby, PHP, Rust, and C are here)
 
   - id: raptor.crypto.weak-hash.js
     message: Weak hash function. Use SHA-256 or better for cryptographic purposes.
     languages: [javascript, typescript]
     severity: HIGH
-    pattern-either:
-      - pattern: crypto.createHash('md5')
-      - pattern: crypto.createHash('sha1')
-      - pattern: crypto.createHash("md5")
-      - pattern: crypto.createHash("sha1")
-    metadata:
-      cwe: ["CWE-328"]
-      asvs: ["V11.4.1"]
-
-  - id: raptor.crypto.weak-hash.go
-    message: Weak hash function. Use SHA-256 or SHA-3 for cryptographic purposes.
-    languages: [go]
-    severity: HIGH
-    pattern-either:
-      - pattern: md5.New()
-      - pattern: md5.Sum(...)
-      - pattern: sha1.New()
-      - pattern: sha1.Sum(...)
+    patterns:
+      - pattern: crypto.createHash($ALG)
+      - metavariable-regex:
+          metavariable: $ALG
+          # node accepts OpenSSL digest names case-insensitively
+          regex: (?i)^["'](md5|sha-?1)["']$
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V11.4.1"]
@@ -43,10 +31,17 @@ rules:
       cwe: ["CWE-328"]
       asvs: ["V11.4.1"]
 
+  # md5()/sha1() in PHP are pervasively used for non-security purposes
+  # (cache keys, ETags, dedupe), so an unconditional HIGH is a noise cannon.
+  # The genuinely HIGH case — hashing a password — is covered with context by
+  # raptor.crypto.password.weak-hash.php in insecure-password-hash.yaml.
   - id: raptor.crypto.weak-hash.php
-    message: Weak hash function. Use hash('sha256', ...) or better for cryptographic purposes.
+    message: >
+      Weak hash function. Use hash('sha256', ...) or better for cryptographic
+      purposes. If this hashes a password, see the HIGH finding from
+      raptor.crypto.password.weak-hash.php.
     languages: [php]
-    severity: HIGH
+    severity: MEDIUM
     pattern-either:
       - pattern: md5(...)
       - pattern: sha1(...)
@@ -61,6 +56,9 @@ rules:
     pattern-either:
       - pattern: Md5::new()
       - pattern: Sha1::new()
+      # one-shot digest API of the RustCrypto `digest` trait
+      - pattern: Md5::digest(...)
+      - pattern: Sha1::digest(...)
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V11.4.1"]
@@ -74,6 +72,10 @@ rules:
       - pattern: MD5(...)
       - pattern: SHA1_Init(...)
       - pattern: SHA1(...)
+      # OpenSSL EVP surface: EVP_md5()/EVP_sha1() only exist to select the
+      # digest for EVP_DigestInit-family / HMAC setup calls
+      - pattern: EVP_md5()
+      - pattern: EVP_sha1()
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V11.4.1"]

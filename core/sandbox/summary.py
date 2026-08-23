@@ -12,17 +12,23 @@ Design:
   and cleared at run end.
 - ``record_denial(...)`` is called by ``core/sandbox/observe.py:_check_blocked``
   for each detected denial. Appends one JSONL line to
-  ``<run_dir>/.sandbox-denials.jsonl``.
+  ``<run_dir>/.audit/.sandbox-denials.jsonl`` — the evidence directory
+  the sandboxed child cannot write to (see core/sandbox/evidence.py).
+  Appends go through a per-run held fd opened O_EXCL at first denial;
+  the inode is verified at finalisation so a swapped file is detected.
 - ``summarize_and_write(run_dir)`` is called by ``core/run/metadata.py``
-  ``complete_run`` / ``fail_run`` / ``cancel_run``. Reads the JSONL, writes
+  ``complete_run`` / ``fail_run`` / ``cancel_run``. Reads the JSONL
+  (new ``.audit/`` location first, legacy ``<run_dir>/`` spot as a
+  back-compat fallback for one release), writes
   ``sandbox-summary.json``, removes the intermediate JSONL.
 
 JSONL append is atomic on POSIX up to PIPE_BUF (~4KB) so concurrent writers
 within the same run (multi-threaded callers) don't corrupt each other. Each
 record is well under PIPE_BUF in practice — `cmd_display` is bounded by
 ``_CMD_DISPLAY_MAX_ARGS`` (3 args) and escape_nonprintable'd before reaching
-us. Pathologically long cmd args could exceed PIPE_BUF; defer that defense
-until it surfaces.
+us. Pathologically long single args are defended against too:
+``record_denial`` truncates ``cmd_display`` to ``MAX_CMD_LEN`` (2 KiB)
+before persisting.
 
 Concurrency assumption: the design assumes a single-process, single-active-run
 model. Concurrent threads within a process can record_denial safely (POSIX
@@ -50,15 +56,22 @@ provided.
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import logging
 import os
+import stat as _stat
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
+from core.atomic_fs import write_text_atomically
+from core.logging import log_security_event as _log_security_event
 from core.security.redaction import redact_secrets
+
+from . import evidence as _evidence
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +80,17 @@ logger = logging.getLogger(__name__)
 # either the old or new pointer, never a torn read). Writes are serialised
 # via _lock so concurrent set/clear can't interleave (matters for
 # tests that exercise the lifecycle from multiple threads).
-_active_run_dir: Optional[Path] = None
+_active_run_dir: Path | None = None
 _lock = threading.Lock()
+
+# Per-run held evidence fd (core/sandbox/evidence.EvidenceFile) for
+# record_denial appends. Opened lazily on the first denial so runs
+# without denials leave no file behind; closed (with inode
+# verification) at summarize_and_write / set_active_run_dir. Guarded
+# by _lock. _evidence_open_failed suppresses repeat warnings when the
+# evidence dir cannot be created for a run.
+_evidence_handle: _evidence.EvidenceFile | None = None
+_evidence_open_failed = False
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
@@ -90,21 +112,88 @@ MAX_CMD_LEN = 2048
 
 _denial_count: int = 0  # reset by set_active_run_dir per run
 
+# Parent-side memory of the audit-degraded markers THIS process wrote,
+# keyed by resolved run-dir path. The marker file lives in the
+# target-writable run root and is written BEFORE the (unaudited)
+# workload executes — the target can simply delete it. The parent
+# KNOWS the run degraded, so run finalisation re-asserts the marker
+# from this record (see reassert_audit_degraded). Entries are tiny and
+# per-process run counts are low, so no eviction is needed. Guarded by
+# _lock. Each entry: {"payload": <exact dict written>, "restored":
+# <bool — a re-assert found the on-disk marker missing/altered>}.
+_degraded_markers: dict[str, dict] = {}
 
-def set_active_run_dir(run_dir: Optional[Path]) -> None:
+# Read bound for the marker file during re-assertion. An honest marker
+# is well under 4 KB; anything bigger at the target-writable path is a
+# planted object and reads as "altered".
+_MARKER_MAX_BYTES = 1024 * 1024
+
+# Parent-side memory of each run's sandbox POSTURE, keyed by resolved
+# run-dir path. Records whether the sandbox layers this run engaged
+# could hide parent-side secrets — specifically the telemetry-MAC key
+# at $XDG_DATA_HOME/raptor/telemetry-mac.key — from the child. Kept in
+# parent memory (out of the target's reach) because the on-disk copy
+# embedded in sandbox-summary.json is only as trustworthy as the key
+# itself: a target that could read the key can mint a summary claiming
+# the key was hidden. Guarded by _lock.
+_run_postures: dict[str, dict] = {}
+# Parent-memory mirror of the proxy-events count sidecar, keyed by
+# OUTPUT dir: {"expected_count": int, "flags": [str, ...]}. The MAC'd
+# on-disk sidecar closes suffix/whole truncation of the events file,
+# but a target erasing BOTH artifacts leaves nothing on disk — this
+# record (out of the target's reach) lets in-lifecycle triage read
+# that shape as tampering instead of "no telemetry". One-way: it may
+# condemn a shortened/erased stream, never excuse anything.
+_proxy_persist_state: dict[str, dict] = {}
+
+# Read bound for the denials JSONL. An honest file is capped at
+# MAX_DENIALS_PER_RUN records of well-under-PIPE_BUF lines (~40 MB
+# absolute ceiling, KBs in practice); anything bigger at the
+# target-writable legacy location is a planted object.
+_MAX_DENIALS_BYTES = 64 * 1024 * 1024
+
+
+def set_active_run_dir(run_dir: Path | None) -> None:
     """Mark a run as active (or clear it). Subsequent record_denial() calls
     write to ``<run_dir>/.sandbox-denials.jsonl`` until cleared.
 
     Resets the per-run denial counter so each run starts with a fresh
-    cap (see MAX_DENIALS_PER_RUN).
+    cap (see MAX_DENIALS_PER_RUN). Any held evidence fd from the
+    previous run is finalised (inode-verified, then closed).
     """
-    global _active_run_dir, _denial_count
+    global _active_run_dir, _denial_count, _evidence_handle
+    global _evidence_open_failed
     with _lock:
+        if _evidence_handle is not None:
+            _evidence_handle.close()
+            _evidence_handle = None
+        _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
         _denial_count = 0
 
 
-def get_active_run_dir() -> Optional[Path]:
+def _get_evidence_handle_locked(run_dir: Path):
+    """Return the held evidence fd for the active run, opening it on
+    first use. Caller holds _lock. Returns None when the evidence file
+    cannot be opened (warned once per run)."""
+    global _evidence_handle, _evidence_open_failed
+    if _evidence_handle is not None:
+        return _evidence_handle
+    if _evidence_open_failed:
+        return None
+    try:
+        _evidence_handle = _evidence.EvidenceFile.open(run_dir, DENIALS_FILE)
+    except OSError:
+        _evidence_open_failed = True
+        logger.warning(
+            "record_denial: cannot open evidence file under %s",
+            run_dir, exc_info=True,
+        )
+        return None
+    return _evidence_handle
+
+
+def get_active_run_dir() -> Path | None:
     """Return current active run dir, or None if no run is being recorded."""
     return _active_run_dir
 
@@ -116,7 +205,7 @@ def record_denial(cmd_display: str, returncode: int,
     No-op if no active run is set (sandbox call from outside any tracked
     run, e.g., probes during test setup or sandbox CLI invocations).
 
-    denial_type is one of: ``network``, ``write``, ``seccomp``.
+    denial_type is one of: ``network``, ``write``, ``seccomp``, ``udp``.
     details vary by type — `path` for write, `profile` for seccomp, etc.
     """
     global _denial_count
@@ -191,9 +280,38 @@ def record_denial(cmd_display: str, returncode: int,
         "type": denial_type,
         "suggested_fix": _suggested_fix(denial_type, **details),
     }
-    # JSONL append: open-write-close per line so each record is atomic.
-    # POSIX guarantees writes < PIPE_BUF (~4KB) are atomic when the file
-    # is opened O_APPEND. Each line is well under that threshold.
+    # Security-event stream: mirror the denial into the framework
+    # audit trail. record_denial is the chokepoint every observed
+    # sandbox denial (network / write / seccomp / udp) flows through,
+    # so one emission here covers them all — placed after the per-run
+    # cap so an adversarial target cannot flood the stream, and
+    # independent of the evidence-file append below so a broken
+    # evidence fd doesn't also lose the audit-trail record.
+    # Observability only: never raises (guarded in core.logging),
+    # never changes what record_denial persists. Payload carries the
+    # denial type + already-redacted cmd + context identifiers only
+    # ("type"/"cmd" detail duplicates are skipped so the explicit
+    # fields always win, mirroring `record` above; denial_type /
+    # returncode are named params so **details cannot collide with
+    # them).
+    _log_security_event(
+        "sandbox_denial",
+        f"sandbox denied {denial_type}: {cmd_safe}",
+        denial_type=denial_type,
+        returncode=returncode,
+        **{
+            k: v for k, v in details.items()
+            if k not in ("type", "cmd")
+        },
+    )
+    # JSONL append through the per-run held evidence fd — each line is
+    # a single O_APPEND write, atomic under PIPE_BUF (~4KB); each line
+    # is well under that threshold. The fd is opened O_EXCL in
+    # <run_dir>/.audit/ (a directory excluded from the sandboxed
+    # child's writable view) on the first denial of the run; appending
+    # through the held fd means a path-level swap of the JSONL cannot
+    # redirect later records (and IS detected at finalisation via the
+    # inode check).
     #
     # `default=str` defends against future callers passing non-serializable
     # detail values (Path, datetime, etc.) — without it, json.dumps would
@@ -203,21 +321,15 @@ def record_denial(cmd_display: str, returncode: int,
     # change introduces a different exception path.
     try:
         line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
-        path = run_dir / DENIALS_FILE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW refuses if path is a symlink — defends against
-        # symlink planted by an attacker who got write access to the
-        # run dir (rare but possible on shared filesystems). Plain
-        # open(path, "a") would have followed and written to the
-        # symlink target. Mode 0o600 keeps the JSONL operator-only.
-        fd = os.open(
-            str(path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:  # noqa: BLE001 — best-effort; never fail the sandbox call
+        with _lock:
+            handle = _get_evidence_handle_locked(run_dir)
+            if handle is None:
+                msg = f"evidence file unavailable under {run_dir}"
+                raise OSError(msg)
+            if not handle.write_line(line):
+                msg = f"evidence append failed under {run_dir}"
+                raise OSError(msg)
+    except Exception:
         # WARNING (F071 W21 promote): operators rarely run with DEBUG
         # enabled, so pre-fix this swallow meant every dropped sandbox-
         # denial record was invisible — operator sees "no denials" with
@@ -234,12 +346,13 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
 
     Suggestions reference only the actual operator-facing CLI flags
     exposed by ``core/sandbox/cli.py:add_cli_args`` —
-    ``--sandbox {full,debug,network-only,none}`` and ``--no-sandbox``.
-    Per-host / per-path overrides exist in the sandbox API as kwargs
-    (``proxy_hosts``, ``writable_paths``, ``readable_paths``) but are
-    NOT exposed as CLI flags, so suggesting them would mislead the
-    operator into looking for non-existent flags. The detail value
-    (host, path) appears in the message for context only.
+    ``--sandbox {full,debug,network-only,none}``, ``--no-sandbox``,
+    ``--sandbox-readable-path``, and ``--sandbox-tool-path``.
+    Per-host overrides exist in the sandbox API as kwargs
+    (``proxy_hosts``, ``writable_paths``) but are NOT exposed as CLI
+    flags, so suggesting them would mislead the operator into looking
+    for non-existent flags. The detail value (host, path) appears in
+    the message for context only.
     """
     if denial_type == "network":
         host = details.get("host")
@@ -259,9 +372,22 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
     if denial_type == "write":
         path = details.get("path")
         ctx = f" to `{path}`" if path else ""
-        return (f"write outside allowed paths blocked{ctx}; use "
-                f"`--sandbox network-only` or `--sandbox none` to drop "
-                f"Landlock (or move write into target dir)")
+        return (f"filesystem access outside allowed paths blocked{ctx}; "
+                f"if it was a READ under a read-restricting run, "
+                f"`--sandbox-readable-path <path>` (or "
+                f"`--sandbox-tool-path <dir>` for an operator-installed "
+                f"toolchain) extends the allowlist without dropping "
+                f"Landlock; for writes, move the write into the target "
+                f"dir, or use `--sandbox network-only`/`--sandbox none` "
+                f"to drop Landlock entirely")
+    if denial_type == "udp":
+        return ("UDP/loopback socket use blocked by the sandbox "
+                "network policy (Linux: proxy fallback tier's seccomp "
+                "SOCK_DGRAM deny on netns-incapable hosts; macOS: "
+                "seatbelt network deny); JVM build tools (gradle) need "
+                "a loopback UDP socket at startup — run on a Linux "
+                "netns-capable host where the default proxy tier "
+                "contains UDP topologically, or outside block_network")
     if denial_type == "seccomp":
         profile = details.get("profile")
         if profile == "full":
@@ -271,6 +397,95 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
         return ("syscall blocked by seccomp; use `--sandbox network-only` or "
                 "`--sandbox none` to drop seccomp")
     return "review denial; no specific suggestion available"
+
+
+def record_proxy_persist_state(run_dir: Path, *,
+                               expected_count: int,
+                               flags: "list[str] | None" = None) -> None:
+    """Parent-memory mirror of the proxy-events count sidecar.
+
+    Monotonic on expected_count; flags accumulate. Best-effort —
+    never raises. See _proxy_persist_state for the trust model."""
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return
+    with _lock:
+        cur = _proxy_persist_state.setdefault(
+            run_key, {"expected_count": 0, "flags": []})
+        cur["expected_count"] = max(int(expected_count),
+                                    int(cur["expected_count"]))
+        for f in flags or []:
+            if f not in cur["flags"]:
+                cur["flags"].append(f)
+
+
+def get_proxy_persist_state(run_dir: Path) -> "dict | None":
+    """Parent-memory persist mirror for ``run_dir`` (a copy), or None
+    when no sandbox call persisted proxy events in this process."""
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return None
+    with _lock:
+        cur = _proxy_persist_state.get(run_key)
+        return dict(cur) if cur is not None else None
+
+
+def record_run_posture(run_dir: Path, *, mount_ns_active: bool,
+                       restrict_reads: bool) -> None:
+    """Record whether a sandbox invocation's posture could hide the
+    telemetry-MAC key from the sandboxed child.
+
+    A mount namespace (pivoted rootfs) removes the host tree from the
+    child's view entirely; a read allowlist (``restrict_reads``)
+    denies reads outside the granted paths. With NEITHER — the
+    Landlock-only / read-unrestricted default of the ``full`` and
+    ``target_run`` profiles — the child can read the key file and mint
+    valid telemetry tokens, so token verification proves nothing for
+    that run. Triage consumes this record (via ``get_run_posture``) to
+    demote token-verified telemetry to legacy confidence on such runs.
+
+    Weakest-wins across multiple sandbox calls in one run: if ANY call
+    ran with the key readable, the whole run's telemetry must be
+    treated as mintable by the target.
+
+    Call sites: the sandbox spawn/dispatch layer, once per sandbox()
+    invocation that has a run/audit directory to attribute telemetry
+    to. Best-effort — never raises.
+    """
+    hidden = bool(mount_ns_active) or bool(restrict_reads)
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return
+    with _lock:
+        cur = _run_postures.get(run_key)
+        if cur is None:
+            _run_postures[run_key] = {
+                "mount_ns_active": bool(mount_ns_active),
+                "restrict_reads": bool(restrict_reads),
+                "mac_key_hidden": hidden,
+            }
+        else:
+            cur["mount_ns_active"] = (cur["mount_ns_active"]
+                                      and bool(mount_ns_active))
+            cur["restrict_reads"] = (cur["restrict_reads"]
+                                     and bool(restrict_reads))
+            cur["mac_key_hidden"] = cur["mac_key_hidden"] and hidden
+
+
+def get_run_posture(run_dir: Path) -> dict[str, bool] | None:
+    """Parent-memory posture for ``run_dir`` (a copy), or None when no
+    sandbox call recorded one in this process — e.g. manual post-hoc
+    re-triage in a fresh process, or a run predating posture wiring."""
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return None
+    with _lock:
+        cur = _run_postures.get(run_key)
+        return dict(cur) if cur is not None else None
 
 
 def record_audit_degraded(run_dir: Path, *, reason: str,
@@ -302,45 +517,192 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         "instructions": instructions,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-    tmp = out.with_name(f".~{out.name}.tmp")
+    # Provenance stamp (see telemetry_mac): triage lowers a verdict's
+    # stated confidence when this marker is present, so a target-
+    # planted marker must not verify. Unstampable → legacy unstamped.
+    from . import telemetry_mac as _tmac
+    _token = _tmac.mint(_tmac.audit_degraded_fields(
+        payload, run=_tmac.run_binding(run_dir)))
+    if _token:
+        payload["mac"] = _token
+    # Atomic write: audit-degraded marker is emitted once per run when
+    # sandbox observability degrades; a torn write would leave the
+    # marker in an unparseable state, and operator tooling treats
+    # "corrupt marker" as "audit engaged" (safest default) — silently
+    # hiding the degradation signal we needed to surface.
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(
+        write_text_atomically(
+            out,
             json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
+            tmp_prefix=".~audit-degraded-",
         )
-        os.replace(tmp, out)
     except (OSError, ValueError, TypeError):
         # Marker is best-effort. The log warning is the primary signal.
         # Catch programming-error-shaped failures too (a future payload
         # change with non-serialisable types would otherwise propagate
-        # and abort the caller's cleanup path while still leaking the
-        # `.~sandbox-audit-degraded.json.tmp` file).
-        pass
+        # and abort the caller's cleanup path).
+        return
+    # Remember what was written so run finalisation can re-assert it
+    # if the target deletes/alters the marker (the run root is
+    # target-writable while the workload runs). Registered only after
+    # a SUCCESSFUL write — an absence at re-assert time then genuinely
+    # means the file was removed after we wrote it. A pre-existing
+    # "restored" flag is preserved: tamper evidence from an earlier
+    # re-assert must not be washed out by a later degradation site
+    # re-writing the marker.
+    run_key = str(run_dir.resolve())
+    with _lock:
+        prev = _degraded_markers.get(run_key)
+        _degraded_markers[run_key] = {
+            "payload": payload,
+            "restored": bool(prev and prev.get("restored")),
+        }
+
+
+def _read_marker_bytes(path: Path) -> bytes | None:
+    """Bounded, symlink-refusing read of the audit-degraded marker.
+
+    The marker lives in the target-writable run root, so the same
+    discipline as triage._read_bounded applies: O_NOFOLLOW +
+    O_NONBLOCK at open, regular-file check on the opened inode,
+    size bound. Any refusal returns None — for the re-assert caller,
+    "unreadable" and "absent" both mean "not the marker we wrote".
+    """
+    try:
+        fd = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            return None
+        if st.st_size > _MARKER_MAX_BYTES:
+            return None
+        chunks = []
+        remaining = _MARKER_MAX_BYTES
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 1 << 20))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
     finally:
-        # Ensure the tmp file doesn't leak when write_text succeeded but
-        # os.replace failed (e.g. EBUSY, EXDEV, target dir vanished).
-        # Unlink missing_ok handles both "tmp never existed" and "replace
-        # already moved it" cases as no-ops.
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        os.close(fd)
 
 
-def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
+def reassert_audit_degraded(run_dir: Path) -> bool:
+    """Re-assert the audit-degraded marker after the workload exited.
+
+    ``record_audit_degraded`` writes the marker BEFORE the degraded
+    (unaudited) workload runs, into the target-writable run root — the
+    target can delete or alter it and thereby erase the only persisted
+    signal that its run went unaudited. The parent's own memory of the
+    degradation (``_degraded_markers``) is out of the target's reach,
+    so run finalisation (summarize_and_write, triage) calls this to
+    rewrite the exact original payload when the on-disk copy no longer
+    matches. Best-effort, never raises past its own guards.
+
+    Returns True when this run's marker was found missing/altered at
+    ANY re-assert so far (sticky — tamper evidence must survive the
+    restore itself; the first caller repairs the file, later callers
+    such as triage still need to see that a repair was necessary).
+    Returns False when no marker was recorded by this process for
+    ``run_dir`` or the on-disk copy is intact.
+    """
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return False
+    with _lock:
+        entry = _degraded_markers.get(run_key)
+    if entry is None:
+        return False
+    expected = (
+        json.dumps(entry["payload"], indent=2, ensure_ascii=True) + "\n"
+    ).encode("utf-8")
+    current = _read_marker_bytes(Path(run_dir) / AUDIT_DEGRADED_FILE)
+    if current == expected:
+        return bool(entry.get("restored"))
+    entry["restored"] = True
+    logger.warning(
+        "AUDIT-DEGRADED MARKER TAMPER SUSPECTED in %s: the marker this "
+        "process wrote is %s — restoring it. The run dir is writable "
+        "by the sandboxed target; a removed degradation marker is "
+        "itself tamper evidence.",
+        run_dir, "missing" if current is None else "altered",
+    )
+    _log_security_event(
+        "sandbox_evidence_corrupt",
+        f"audit-degraded marker missing/altered under {run_dir}",
+        marker_missing=current is None,
+    )
+    try:
+        write_text_atomically(
+            Path(run_dir) / AUDIT_DEGRADED_FILE,
+            expected.decode("utf-8"),
+            tmp_prefix=".~audit-degraded-",
+        )
+    except OSError:
+        # Restore is best-effort; the True return (and the security
+        # event above) still carries the tamper evidence to triage.
+        logger.warning(
+            "reassert_audit_degraded: failed to restore marker under %s",
+            run_dir, exc_info=True,
+        )
+    return True
+
+
+def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
 
     Returns the summary dict (also written to disk), or None if no denials
-    were recorded for this run. The intermediate JSONL is removed after
-    successful summary write — operators read the summary, not the JSONL.
+    were recorded for this run. The intermediate JSONL is renamed away
+    up-front and unlinked as soon as its contents are in memory —
+    BEFORE the summary write, and even when the write fails or there
+    are no denials (rename-then-read race hardening; see the inline
+    comments). Operators read the summary, not the JSONL.
 
     Idempotent: if called again with the same run_dir and no JSONL is
     present, returns None without writing.
     """
+    global _evidence_handle
     run_dir = Path(run_dir)
-    jsonl = run_dir / DENIALS_FILE
+    # Re-assert the audit-degraded marker FIRST: summarize_and_write is
+    # the parent-side hook every terminal-state transition runs
+    # (complete_run/fail_run/cancel_run), i.e. AFTER the workload has
+    # exited — a target-deleted marker must not stay deleted. Runs even
+    # when this function goes on to return None (no denials JSONL):
+    # a degraded run naturally produces exactly that artifact state.
+    reassert_audit_degraded(run_dir)
+    # Finalise the held evidence fd for this run BEFORE the rename:
+    # the inode verification fires here (loud warning on a swapped
+    # file), and closing stops any later record_denial from appending
+    # to the renamed inode. Only when the active handle belongs to
+    # this run_dir — sweep-mode calls for other dirs leave it alone.
+    # A failed verification is carried into the summary as an
+    # inode_mismatch tamper flag (MAC-bound) rather than warn-and-
+    # continue: pre-fix the summariser went on to read whatever file
+    # now sat at the path and minted a valid MAC over it, laundering
+    # the swap into integrity=verified.
+    inode_mismatch = False
+    with _lock:
+        if (_evidence_handle is not None
+                and _evidence_handle.path.parent.parent == run_dir):
+            inode_mismatch = not _evidence_handle.close()
+            _evidence_handle = None
+    # New (.audit/) location preferred; legacy <run_dir>/ location
+    # kept as a read fallback for runs produced by older versions.
+    jsonl = _evidence.resolve_read_path(run_dir, DENIALS_FILE)
     if not jsonl.exists():
         return None
 
@@ -360,16 +722,15 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     # renamed inode (which we then unlink — those entries are lost,
     # but they're a strictly small race window vs the bigger
     # multi-second post-summary race the prior code had).
-    import os as _os
     import threading as _threading
     # pid+tid suffix — two threads in the same summariser process can
     # race on the same pid; tid disambiguates. Mirrors core/json/utils.py
     # and core/json/cache.py.
     tmp = jsonl.with_name(
-        f"{jsonl.name}.summarising.{_os.getpid()}.{_threading.get_ident()}"
+        f"{jsonl.name}.summarising.{os.getpid()}.{_threading.get_ident()}"
     )
     try:
-        _os.replace(str(jsonl), str(tmp))
+        os.replace(str(jsonl), str(tmp))
     except OSError:
         # KEEP-SILENT (F071 per-site triage W21): the realistic
         # branch here is "sibling summariser won the rename race and
@@ -379,36 +740,112 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
         # return. WARNING noise would obscure the actual outcome.
         return None
 
-    denials = []
+    records = []
+    corrupt_lines = 0
+    planted_object = ""
+    # The legacy fallback location (<run_dir>/.sandbox-denials.jsonl)
+    # is target-writable on every backend, and the rename above moved
+    # whatever OBJECT sat there verbatim — a plain open() on a planted
+    # FIFO blocks complete_run/fail_run forever (no writer ever
+    # arrives), a symlink points the read at attacker-chosen content
+    # (/dev/zero drives unbounded readline growth), an oversized file
+    # exhausts memory. Open O_NOFOLLOW|O_NONBLOCK and require a
+    # regular file within the size bound — the same discipline
+    # triage._read_bounded documents as mandatory for files in this
+    # directory. Object-shape violations are tamper evidence and flag
+    # the summary (never silence); host-I/O read failures keep the
+    # conservative warn-and-return-None path.
+    raw = b""
+    fd = None
     try:
-        with open(tmp, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    denials.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue  # skip malformed lines, keep going
-    except OSError:
-        # WARNING (F071 W21 promote): we successfully renamed the
-        # JSONL into our private tmp, then failed to read it. This
-        # silently drops the whole summary for the run. Operators
-        # must see it. Mirrors c5a4505 / 8edf0f6 family.
-        logger.warning(
-            "summarize_and_write: failed to read renamed JSONL",
-            exc_info=True,
+        fd = os.open(
+            str(tmp),
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            planted_object = "symlink"
+        else:
+            # WARNING (F071 W21 promote): we successfully renamed the
+            # JSONL into our private tmp, then failed to open it. This
+            # silently drops the whole summary for the run. Operators
+            # must see it. Mirrors c5a4505 / 8edf0f6 family.
+            logger.warning(
+                "summarize_and_write: failed to open renamed JSONL "
+                "for reading",
+                exc_info=True,
+            )
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+    if fd is not None:
         try:
-            tmp.unlink(missing_ok=True)
+            st = os.fstat(fd)
+            if not _stat.S_ISREG(st.st_mode):
+                planted_object = (
+                    f"non-regular file (mode {_stat.S_IFMT(st.st_mode):#o})"
+                )
+            elif st.st_size > _MAX_DENIALS_BYTES:
+                planted_object = f"oversized ({st.st_size} bytes)"
+            else:
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 1 << 20)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if sum(len(c) for c in chunks) > _MAX_DENIALS_BYTES:
+                        planted_object = "grew past the size bound mid-read"
+                        chunks = []
+                        break
+                raw = b"".join(chunks)
         except OSError:
-            # KEEP-SILENT (F071 per-site triage W21): cleanup of a
-            # tmp we may already have lost; missing_ok=True already
-            # suppresses ENOENT.
-            pass
-        return None
+            # See the open() failure branch above.
+            logger.warning(
+                "summarize_and_write: failed to read renamed JSONL",
+                exc_info=True,
+            )
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
-    # tmp file's data is now in memory; remove it.
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            # Honest writers emit exactly one JSON object per line —
+            # a blank/whitespace-only line is what an in-place
+            # overwrite with spaces (same length, same inode,
+            # invisible to the inode check) reads back as. Count it
+            # as corruption, don't skip it silently.
+            corrupt_lines += 1
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            corrupt_lines += 1
+            continue
+        if not isinstance(record, dict):
+            corrupt_lines += 1
+            continue
+        records.append(record)
+
+    # tmp object's data (if any) is now in memory; remove it. Also
+    # removes a planted FIFO/symlink so the run dir finalises clean.
     try:
         tmp.unlink(missing_ok=True)
     except OSError:
@@ -417,8 +854,21 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
         # leaves a leftover file but doesn't affect summary output.
         pass
 
-    if not denials:
+    if (not records and not corrupt_lines and not inode_mismatch
+            and not planted_object):
         return None
+
+    # Verdict split. macOS audit mode records ALLOWED operations too —
+    # ``(allow X (with report))`` stamps them ``verdict: "allow"`` —
+    # and pre-fix they were counted as denials, inflating
+    # total_denials with operations that actually succeeded. Only
+    # verdict "deny" records, or records with no verdict field at all
+    # (the Linux tracer and record_denial never set one — every event
+    # they emit IS an enforcement/would-block event), count as
+    # denials. Allow-verdict records are surfaced separately below as
+    # informational allowed-report counts + records.
+    denials = [r for r in records if r.get("verdict") != "allow"]
+    allowed_reports = [r for r in records if r.get("verdict") == "allow"]
 
     # Enrich tracer-emitted records with `suggested_fix` if they lack it
     # (the tracer subprocess doesn't have the suggestion logic;
@@ -439,7 +889,7 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 d.get("type", "unknown"), **details,
             )
 
-    by_type: Dict[str, int] = {}
+    by_type: dict[str, int] = {}
     for d in denials:
         t = d.get("type", "unknown")
         by_type[t] = by_type.get(t, 0) + 1
@@ -451,13 +901,99 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
         "by_type": by_type,
         "denials": denials,
     }
+    # Key-exposure posture (see record_run_posture): persisted for
+    # operator visibility and for post-hoc re-triage in a fresh
+    # process, and MAC-bound below so it cannot be stripped or flipped
+    # without breaking the token. In-lifecycle triage prefers the
+    # parent-memory copy — this on-disk field is only as trustworthy
+    # as the key, which is exactly what the field is ABOUT.
+    posture = get_run_posture(run_dir)
+    if posture is not None:
+        summary["posture"] = posture
+    if corrupt_lines or inode_mismatch or planted_object:
+        # Tamper flags. Corrupt lines mean someone rewrote evidence in
+        # place (the inode check cannot see that on the Landlock-only
+        # tier, where the run dir is a writable grant and .audit/
+        # cannot be carved out); an inode mismatch means the file was
+        # swapped outright. Either way the record set as a whole is
+        # untrusted — the flags are bound into the MAC below so they
+        # cannot be stripped, and triage refuses to treat a flagged
+        # summary as usable denial evidence (integrity=tampered). The
+        # aggregated records stay in the file for operator forensics
+        # only.
+        #
+        # Residual: an in-place rewrite that substitutes byte-
+        # identical-length VALID JSON is invisible to this layer (and
+        # to the inode check). Closing that fully needs per-record
+        # MACs threaded through the tracer's inherited-fd writer.
+        if corrupt_lines:
+            summary["corrupt_lines"] = corrupt_lines
+        if inode_mismatch:
+            summary["inode_mismatch"] = True
+        if planted_object:
+            summary["planted_object"] = planted_object
+        _details = []
+        if corrupt_lines:
+            _details.append(f"{corrupt_lines} corrupt line(s)")
+        if inode_mismatch:
+            _details.append("evidence-file inode mismatch")
+        if planted_object:
+            _details.append(f"planted object: {planted_object}")
+        logger.warning(
+            "SANDBOX EVIDENCE TAMPER SUSPECTED in %s: %s — the run's "
+            "denial evidence is untrusted as a whole and the summary "
+            "is flagged for triage.",
+            run_dir, "; ".join(_details),
+        )
+        _log_security_event(
+            "sandbox_evidence_corrupt",
+            f"denials evidence corrupt under {run_dir}",
+            corrupt_lines=corrupt_lines,
+            inode_mismatch=inode_mismatch,
+            planted_object=planted_object,
+            surviving_records=len(records),
+        )
+    if allowed_reports:
+        # Informational section: operations the macOS audit profile
+        # ALLOWED and reported. Kept out of the denial counts (they
+        # succeeded) but preserved so operators can review what the
+        # workload touched. Keys only appear when such records exist,
+        # so Linux-produced summaries are unchanged.
+        allowed_by_type: dict[str, int] = {}
+        for r in allowed_reports:
+            t = r.get("type", "unknown")
+            allowed_by_type[t] = allowed_by_type.get(t, 0) + 1
+        summary["total_allowed_reports"] = len(allowed_reports)
+        summary["allowed_by_type"] = allowed_by_type
+        summary["allowed_reports"] = allowed_reports
+    # Provenance stamp over the denial payload (content hash) so a
+    # target-planted or target-edited sandbox-summary.json fails
+    # triage verification: the summariser only writes when denials
+    # exist, so on a denial-free run a pre-planted file would
+    # otherwise survive to run end and feed triage verbatim. An
+    # unstampable environment degrades to the legacy unstamped shape.
+    from . import telemetry_mac as _tmac
+    _denials_sha = hashlib.sha256(
+        json.dumps(denials, sort_keys=True, ensure_ascii=True)
+        .encode("utf-8")
+    ).hexdigest()
+    _token = _tmac.mint(_tmac.summary_fields(
+        len(denials), _denials_sha, run=_tmac.run_binding(run_dir),
+        corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
+        planted_object=planted_object, posture=posture))
+    if _token:
+        summary["mac"] = _token
 
     summary_path = run_dir / SUMMARY_FILE
-    tmp = summary_path.with_name(f".~{summary_path.name}.tmp")
+    # Atomic write: sandbox denial summary is the run's final audit
+    # artefact — a torn write would corrupt the canonical JSON and
+    # surface as a silent audit-integrity gap on the next read.
     try:
-        tmp.write_text(json.dumps(summary, indent=2, ensure_ascii=True) + "\n",
-                       encoding="utf-8")
-        os.replace(tmp, summary_path)
+        write_text_atomically(
+            summary_path,
+            json.dumps(summary, indent=2, ensure_ascii=True) + "\n",
+            tmp_prefix=".~summary-",
+        )
     except OSError:
         # WARNING (F071 W21 promote): the summary write is the run's
         # final-output artifact. Silent loss = silent audit integrity
@@ -468,12 +1004,6 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
             "summarize_and_write: failed to write/replace summary.json",
             exc_info=True,
         )
-        try:
-            tmp.unlink()
-        except OSError:
-            # KEEP-SILENT (F071 per-site triage W21): cleanup of the
-            # tmp we may not have created. Logging here would be noise.
-            pass
         return None
 
     # The intermediate JSONL was already renamed-and-unlinked above
@@ -485,7 +1015,7 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     return summary
 
 
-def _cli_main(argv: Optional[list] = None) -> int:
+def _cli_main(argv: list | None = None) -> int:
     """Retroactive summarize CLI.
 
     Rarely needed in normal operation: ``core.run.metadata._cleanup_abandoned``
@@ -569,7 +1099,7 @@ def _cli_main(argv: Optional[list] = None) -> int:
         try:
             if not child.is_dir() or child.name.startswith((".", "_")):
                 continue
-            if not (child / DENIALS_FILE).exists():
+            if not _evidence.resolve_read_path(child, DENIALS_FILE).exists():
                 continue
         except OSError:
             continue

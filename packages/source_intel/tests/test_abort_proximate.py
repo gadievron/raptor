@@ -30,7 +30,6 @@ from packages.source_intel.analyze import (
 )
 from packages.source_intel.render import derive_evidence_strings
 
-
 # =====================================================================
 # Enclosing-function lookup
 # =====================================================================
@@ -236,16 +235,13 @@ def test_abort_dominance_skipped_for_injection_cwe(tmp_path):
         assert v.validate(finding) == ValidatorVerdict.UNCERTAIN
 
 
-def test_abort_dominance_pure_helper():
+def test_abort_dominance_pure_helper(tmp_path):
     """Direct test of `_abort_dominates_finding` — same-function
     match wins; cross-function does not."""
     # Build a real file so _enclosing_function can derive the finding's
     # function name (Finding has no `function` field — derived from
     # sink (file, line) via the same heuristic both sides use).
-    import tempfile
-    import os
-    src_dir = tempfile.mkdtemp()
-    src_file = os.path.join(src_dir, "x.c")
+    src_file = str(tmp_path / "x.c")
     with open(src_file, "w") as fh:
         fh.write("void f(int *p)\n{\n    BUG_ON(!p);\n    *p = 1;\n    return;\n}\n")
     finding = Finding(

@@ -60,8 +60,6 @@ class TestCatalogEntryFromDict:
             },
             "pipeline": {
                 "recommended": ["scan", "agentic"],
-                "estimated_cost_usd": [10, 30],
-                "estimated_time_min": [20, 60],
             },
             "budget_defaults": {
                 "typical_findings_count": 20,
@@ -80,8 +78,6 @@ class TestCatalogEntryFromDict:
         assert e.attack_surface_high == ("src/http",)
         assert e.attack_surface_low == ("tests",)
         assert e.pipeline_recommended == ("scan", "agentic")
-        assert e.estimated_cost_usd == (10.0, 30.0)
-        assert e.estimated_time_min == (20, 60)
         assert e.typical_findings_count == 20
         assert e.typical_cost_per_run_usd == 15.5
         assert e.version == 2
@@ -111,9 +107,11 @@ class TestLoader:
     def test_all_entries_loads_seed_yamls(self):
         entries = all_entries()
         names = {e.name for e in entries}
-        # Three seed entries shipped with the substrate.
         assert "c.userspace-daemon" in names
+        assert "c.generic" in names
+        assert "go.generic" in names
         assert "python.web-app" in names
+        assert "python.generic" in names
         assert "generic" in names
 
     def test_load_by_name_returns_match(self):
@@ -185,10 +183,11 @@ class TestDetect:
         })
         winner = load(tmp_path)
         assert winner is not None
-        # Must fall through to generic — no framework signals
-        # validate the python.web-app specificity claim.
-        assert winner.name == "generic", (
-            f"expected generic for Python-library-shaped tree; "
+        # Must NOT match python.web-app — no framework signals
+        # validate the specificity claim. python.generic (extension-
+        # only match) is the correct winner for a plain library.
+        assert winner.name in ("generic", "python.generic"), (
+            f"expected generic or python.generic for Python-library-shaped tree; "
             f"got {winner.name!r} — specificity gate regression"
         )
 
@@ -278,7 +277,10 @@ class TestLoadFallback:
 class TestSeedEntrySanity:
     @pytest.mark.parametrize("name,expected_has_packs", [
         ("c.userspace-daemon", True),
+        ("c.generic", True),
+        ("go.generic", True),
         ("python.web-app", True),
+        ("python.generic", True),
         ("generic", True),
     ])
     def test_seed_has_default_packs(self, name, expected_has_packs):
@@ -301,3 +303,47 @@ class TestSeedEntrySanity:
         e = load_by_name("generic")
         assert e.file_globs == ()
         assert e.file_extensions == ()
+
+
+class TestTierAGenericEntries:
+    """rust/java/javascript generic catalog entries (wave-b4 tier A)."""
+
+    def test_new_entries_load(self):
+        names = {e.name for e in all_entries()}
+        for n in ("rust.generic", "java.generic", "javascript.generic"):
+            assert n in names
+
+    def test_cargo_tree_matches_rust_generic(self, tmp_path):
+        _build_tree(tmp_path, {
+            "Cargo.toml": "[package]\nname = \"x\"\n",
+            "src/main.rs": "fn main() {}\n",
+            "src/lib.rs": "",
+        })
+        ranked = detect(tmp_path)
+        assert ranked and ranked[0][0].name == "rust.generic"
+
+    def test_maven_tree_matches_java_generic(self, tmp_path):
+        _build_tree(tmp_path, {
+            "pom.xml": "<project/>",
+            "src/main/java/App.java": "class App {}\n",
+        })
+        ranked = detect(tmp_path)
+        assert ranked and ranked[0][0].name == "java.generic"
+
+    def test_node_tree_matches_javascript_generic(self, tmp_path):
+        _build_tree(tmp_path, {
+            "package.json": "{}",
+            "src/index.ts": "",
+            "src/app.js": "",
+        })
+        ranked = detect(tmp_path)
+        assert ranked and ranked[0][0].name == "javascript.generic"
+
+    def test_pack_ids_resolve_to_registry_convention(self):
+        # Every pack the new entries name must resolve through the
+        # p/<id> naming convention (known baseline/policy pair or the
+        # synthesised-name fallback) — i.e. be a plain pack-id suffix.
+        for n in ("rust.generic", "java.generic", "javascript.generic"):
+            e = load_by_name(n)
+            for pack in (*e.semgrep_packs_default, *e.semgrep_packs_optional):
+                assert pack and "/" not in pack and not pack.startswith("p/")

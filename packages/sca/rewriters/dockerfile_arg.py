@@ -1,4 +1,4 @@
-"""Dockerfile ``ARG <NAME>_VERSION=<value>`` in-place rewriter.
+r"""Dockerfile ``ARG <NAME>_VERSION=<value>`` in-place rewriter.
 
 The bumper-orchestrator emits :class:`RewriteEdit` records with
 the ARG name as the locator, then calls
@@ -21,7 +21,7 @@ package-local ``_atomic`` if core.file isn't available).
 
 Adapted from https://github.com/gadievron/raptor/pull/467 by
 Natalie Somersall — her ``update_dockerfile()`` shipped the
-``rf"^(ARG {arg}=)(\\S+)"`` regex + the idempotent
+``rf"^(ARG {arg}=)(\S+)"`` regex + the idempotent
 skip-if-unchanged + change-tuple-return pattern. This module
 generalises that into the ``RewriteEdit``/``RewriteResult``
 shape used across all SCA rewriters.
@@ -31,10 +31,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 
 from . import RewriteEdit, RewriteResult
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +51,7 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
-    if path.suffix == ".dockerfile":
-        return True
-    return False
+    return path.suffix == ".dockerfile"
 
 
 # NOT @register'd: the Dockerfile predicate is owned by
@@ -59,8 +61,8 @@ def _is_dockerfile(path: Path) -> bool:
 # first-match-wins dispatcher from picking the wrong rewriter
 # for a mixed-edit batch.
 def rewrite_dockerfile_arg(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply ARG version-pin edits to a Dockerfile in place.
 
     Each edit's ``locator`` is the ARG name (``SEMGREP_VERSION``,
@@ -75,7 +77,7 @@ def rewrite_dockerfile_arg(
                               reason=f"error: read failed: {e}")
                 for e2 in edits]
 
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     new_text = text
     for edit in edits:
         new_text, result = _apply_one(new_text, edit)
@@ -85,17 +87,18 @@ def rewrite_dockerfile_arg(
         try:
             _atomic_write(path, new_text)
         except OSError as e:
-            # I/O failure on write — convert every successful edit
+            # I/O failure on write — convert every applied edit
             # to a failure (we couldn't actually persist).
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 
 
 def _apply_one(
     text: str, edit: RewriteEdit,
-) -> "tuple[str, RewriteResult]":
+) -> tuple[str, RewriteResult]:
     """Apply a single ARG edit to the text. Returns the (possibly
     unchanged) text plus the per-edit result."""
     # Pattern matches ``ARG <NAME>=<value>`` with optional
@@ -147,35 +150,15 @@ def _apply_one(
         new_value_quoted = f"'{edit.new_value}'"
     else:
         new_value_quoted = edit.new_value
-    new_text = pattern.sub(rf"\g<1>{new_value_quoted}", text, count=1)
+    # Callable replacement writes the value as an exact literal —
+    # interpolating it into a re.sub template would let backslash /
+    # group-reference sequences in the value rewrite the ARG line
+    # into something other than the validated literal.
+    new_text = pattern.sub(
+        lambda m: m.group(1) + new_value_quoted, text, count=1,
+    )
     return new_text, RewriteResult(
         edit=edit, applied=True, reason="applied",
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    """Atomic write via a sibling tempfile + rename. Uses
-    ``packages.sca._atomic`` if available, else inline."""
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    # Fallback for environments without the helper. Same
-    # tempfile-then-rename pattern.
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise

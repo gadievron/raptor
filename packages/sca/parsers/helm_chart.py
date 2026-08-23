@@ -40,11 +40,13 @@ What we don't cover:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,10 @@ _PURL_TYPE = "helm"
 
 
 @register(filenames=["Chart.yaml", "Chart.lock"])
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning(
-            "sca.parsers.helm_chart: read failed for %s: %s", path, e,
-        )
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
@@ -88,7 +87,7 @@ def parse(path: Path) -> List[Dependency]:
 
     is_lockfile = path.name == "Chart.lock"
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for entry in deps_raw:
         dep = _build_dep(entry, declared_in=path, is_lockfile=is_lockfile)
         if dep is not None:
@@ -98,7 +97,7 @@ def parse(path: Path) -> List[Dependency]:
 
 def _build_dep(
     entry: Any, *, declared_in: Path, is_lockfile: bool,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(entry, dict):
         return None
     name = entry.get("name")
@@ -148,11 +147,13 @@ def _classify_version(version: str) -> PinStyle:
     if any(ch in version for ch in "<>=") or " - " in version:
         return PinStyle.RANGE
     if version[:1].isdigit():
+        if any(seg in ("x", "*") for seg in version.lower().split(".")):
+            return PinStyle.WILDCARD
         return PinStyle.EXACT
     return PinStyle.UNKNOWN
 
 
-def chart_repository_hosts(target: Path) -> List[str]:
+def chart_repository_hosts(target: Path) -> list[str]:
     """Return the union of Helm-repo hostnames referenced by every
     ``Chart.yaml`` under ``target``.
 
@@ -180,13 +181,9 @@ def chart_repository_hosts(target: Path) -> List[str]:
 
     found: set = set()
     for path in target.rglob("Chart.yaml"):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            logger.debug(
-                "sca.parsers.helm_chart: read failed for %s during "
-                "host extraction: %s", path, e,
-            )
+        text = _safe_read.read_bounded(path, follow_symlinks=False)
+        if text is None:
+            # ``read_bounded`` already logged the underlying reason.
             continue
         try:
             import yaml             # type: ignore[import-untyped]

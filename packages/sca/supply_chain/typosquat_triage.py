@@ -1,6 +1,6 @@
 """Typosquat-denylist curation: triage (Stage 3 evidence + Stage A LLM + Stage 4 gate).
 
-Step 2 of the curation loop (``~/design/typosquat-denylist-curation.md``), run
+Step 2 of the curation loop (the design memo), run
 OPERATOR-side by ``raptor-sca triage --llm`` where an LLM is available — never
 in CI. Step 1 (``typosquat_audit.py``) generates the pending candidate delta;
 this module decides what to do with each one:
@@ -32,14 +32,15 @@ from __future__ import annotations
 import datetime
 import enum
 import json as _json
-import os
-import tempfile
+import logging
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from .typosquat_audit import Candidate, _load_name_set
+
+logger = logging.getLogger(__name__)
 
 # Auto-legit floor. A name the LLM calls "legit" is only auto-filed to
 # reviewed-legit when it looks like an established independent project; a YOUNG
@@ -56,13 +57,13 @@ class Evidence:
     that an ecosystem doesn't expose are ``None`` / best-effort."""
 
     candidate: Candidate
-    description: Optional[str] = None
+    description: str | None = None
     num_versions: int = 0
-    age_days: Optional[int] = None        # since first publish
+    age_days: int | None = None        # since first publish
     has_repo: bool = False
     deprecated: bool = False
-    downloads_per_month: Optional[int] = None
-    readme: Optional[str] = None          # capped; only via collect_evidence_rich
+    downloads_per_month: int | None = None
+    readme: str | None = None          # capped; only via collect_evidence_rich
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ class Verdict:
     verdict: str                          # "typosquat" | "legit" | "unsure"
     confidence: str = "low"               # "high" | "medium" | "low"
     rationale: str = ""
-    evidence_cited: List[str] = field(default_factory=list)
+    evidence_cited: list[str] = field(default_factory=list)
 
 
 class Disposition(enum.Enum):
@@ -91,7 +92,7 @@ class GateResult:
 
 
 def _passes_legit_floor(ev: Evidence, *, min_age_days: int,
-                        min_versions: int) -> Optional[str]:
+                        min_versions: int) -> str | None:
     """Return ``None`` if the evidence is strong enough to AUTO-file a "legit"
     verdict, else a short string naming the failing signal (→ escalate)."""
     if ev.deprecated:
@@ -170,16 +171,16 @@ class TriageOutcome:
 
 
 def triage_pending(
-    candidates: List[Candidate],
+    candidates: list[Candidate],
     evidence_fn: EvidenceFn,
     triage_fn: TriageFn,
     *,
     min_age_days: int = _MIN_AGE_DAYS,
     min_versions: int = _MIN_VERSIONS,
-) -> List[TriageOutcome]:
+) -> list[TriageOutcome]:
     """Run Stage 3 → A → 4 for each candidate, returning the outcome per name.
     Pure given the injected seams."""
-    out: List[TriageOutcome] = []
+    out: list[TriageOutcome] = []
     for c in candidates:
         ev = evidence_fn(c)
         verdict = triage_fn(c, ev)
@@ -194,13 +195,13 @@ def triage_pending(
 # ---------------------------------------------------------------------------
 
 def apply_auto_legit(
-    outcomes: List[TriageOutcome],
+    outcomes: list[TriageOutcome],
     ecosystem: str,
     reviewed_legit_path: Path,
     *,
     model: str = "",
-    now: Optional[str] = None,
-) -> List[str]:
+    now: str | None = None,
+) -> list[str]:
     """Append every ``AUTO_LEGIT`` outcome to ``reviewed_legit.json`` under
     ``ecosystem``, with provenance. CONFIRM_SQUAT / ESCALATE are deliberately
     NOT written — a human dispositions those (the denylist write is the
@@ -223,7 +224,7 @@ def apply_auto_legit(
     elif not isinstance(entry, dict):
         entry = {}
     date = now or datetime.date.today().isoformat()
-    filed: List[str] = []
+    filed: list[str] = []
     for o in auto:
         entry[o.candidate.name] = {
             "near_twin": o.candidate.near_twin,
@@ -239,15 +240,11 @@ def apply_auto_legit(
 
 
 def _atomic_write_json(path: Path, obj: object) -> None:
+    """Atomic JSON write via the shared primitive in
+    :mod:`core.atomic_fs`. See that module for the guarantees."""
+    from core.atomic_fs import write_text_atomically
     text = _json.dumps(obj, indent=2) + "\n"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    write_text_atomically(path, text)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +259,7 @@ def _atomic_write_json(path: Path, obj: object) -> None:
 # the candidate escalates to a human, which is the safe direction.
 
 
-def _age_days(iso: Optional[str]) -> Optional[int]:
+def _age_days(iso: str | None) -> int | None:
     if not isinstance(iso, str) or not iso:
         return None
     try:
@@ -275,6 +272,8 @@ def _age_days(iso: Optional[str]) -> Optional[int]:
 
 def _norm_npm(meta: dict) -> dict:
     versions = meta.get("versions") or {}
+    if not isinstance(versions, dict):
+        versions = {}
     latest = (meta.get("dist-tags") or {}).get("latest")
     vm = versions.get(latest, {}) if latest else {}
     return dict(
@@ -336,7 +335,7 @@ _NORMALIZERS = {
 def collect_evidence(
     candidate: Candidate,
     ecosystem: str,
-    get_metadata: Callable[[str], Optional[dict]],
+    get_metadata: Callable[[str], dict | None],
 ) -> Evidence:
     """Stage 3. ``get_metadata`` is a ``name -> registry-doc`` callable (the
     registry client's method); injected so this is tested without network.
@@ -367,7 +366,7 @@ _RAW_MAX_BYTES = 64 * 1024 * 1024     # most candidates are small; huge → esca
 _README_CAP = 600                     # bound the (attacker-controlled) README
 
 
-def _raw_doc(http, url: str) -> Optional[dict]:
+def _raw_doc(http, url: str) -> dict | None:
     try:
         d = http.get_json(url, max_bytes=_RAW_MAX_BYTES)
     except Exception:                  # noqa: BLE001 — fail to thin evidence
@@ -420,7 +419,7 @@ def _evidence_pypi_rich(candidate: Candidate, http) -> Evidence:
 
 def collect_evidence_rich(
     candidate: Candidate, ecosystem: str, http,
-    get_metadata: Callable[[str], Optional[dict]],
+    get_metadata: Callable[[str], dict | None],
 ) -> Evidence:
     """Like :func:`collect_evidence` but recovers description/README for npm and
     PyPI via a raw-registry fetch (``http`` must be the egress-controlled
@@ -438,7 +437,7 @@ def collect_evidence_rich(
 
 def render_evidence(ev: Evidence) -> str:
     """Render Evidence into the text block the LLM (Stage A) reasons over."""
-    def f(v, unknown="unknown"):
+    def f(v, unknown: str="unknown"):
         return unknown if v is None else v
     # Cap the (attacker-controlled) description + README so a package can't
     # blow the LLM prompt budget with a megabyte of text.
@@ -490,17 +489,17 @@ def make_llm_verdict_fn(llm_client, ecosystem: str) -> TriageFn:
 
 
 def triage_ecosystem(
-    candidates: List[Candidate],
+    candidates: list[Candidate],
     ecosystem: str,
     *,
     verdict_fn: TriageFn,
-    evidence_fn: Optional[EvidenceFn] = None,
-    get_metadata: Optional[Callable[[str], Optional[dict]]] = None,
-    reviewed_legit_path: Optional[Path] = None,
+    evidence_fn: EvidenceFn | None = None,
+    get_metadata: Callable[[str], dict | None] | None = None,
+    reviewed_legit_path: Path | None = None,
     model: str = "",
     min_age_days: int = _MIN_AGE_DAYS,
     min_versions: int = _MIN_VERSIONS,
-) -> List[TriageOutcome]:
+) -> list[TriageOutcome]:
     """Full pipeline for one ecosystem: collect evidence, get a verdict per
     candidate, gate, and (if a path is given) auto-file the AUTO_LEGIT names.
     Both seams are injected so this is tested without network or an LLM — pass
@@ -508,7 +507,8 @@ def triage_ecosystem(
     (built into the plain :func:`collect_evidence`)."""
     if evidence_fn is None:
         if get_metadata is None:
-            raise ValueError("triage_ecosystem needs evidence_fn or get_metadata")
+            msg = "triage_ecosystem needs evidence_fn or get_metadata"
+            raise ValueError(msg)
         gm = get_metadata
         evidence_fn = lambda c: collect_evidence(c, ecosystem, gm)  # noqa: E731
     outcomes = triage_pending(
@@ -537,7 +537,7 @@ _OSV_ECOSYSTEM = {
 }
 
 
-def osv_malicious(http, ecosystem: str, names: List[str]) -> set:
+def osv_malicious(http, ecosystem: str, names: list[str]) -> set:
     """Names (from ``names``) that currently carry a ``MAL-`` OSV advisory.
     Batched via OSV ``querybatch``; fail-soft (returns what it found, never
     raises). ``http`` should be the egress-controlled client (api.osv.dev is on
@@ -553,23 +553,23 @@ def osv_malicious(http, ecosystem: str, names: List[str]) -> set:
             body = {"queries": [
                 {"package": {"ecosystem": eco, "name": n}} for n in chunk]}
             resp = http.post_json(OSV_QUERY_BATCH_URL, body)
-            for n, res in zip(chunk, (resp or {}).get("results") or []):
+            for n, res in zip(chunk, (resp or {}).get("results") or [], strict=True):
                 vulns = (res or {}).get("vulns") or []
                 if any(isinstance(v, dict) and isinstance(v.get("id"), str)
                        and v["id"].startswith("MAL-") for v in vulns):
                     mal.add(n)
-    except Exception:                              # noqa: BLE001 — fail-soft
-        pass
+    except Exception as exc:                        # noqa: BLE001 — fail-soft
+        logger.warning("OSV malware advisory check failed: %s", exc)
     return mal
 
 
 def reaudit_reviewed_legit(
     reviewed_legit_path: Path,
-    ecosystems: List[str],
+    ecosystems: list[str],
     *,
-    get_metadata: Callable[[str, str], Optional[dict]],
-    osv_malicious_fn: Optional[Callable[[str, List[str]], set]] = None,
-) -> "dict":
+    get_metadata: Callable[[str, str], dict | None],
+    osv_malicious_fn: Callable[[str, list[str]], set] | None = None,
+) -> dict:
     """Tier-1 re-audit. For each reviewed-legit name, flag a contradiction with
     the 'legit' decision: removed/unreachable, now deprecated, or now carrying a
     MAL- advisory. Returns ``{ecosystem: [(name, reason), ...]}`` (only flagged
@@ -591,7 +591,7 @@ def reaudit_reviewed_legit(
                     "removed from registry or unreachable")
                 continue
             ev = collect_evidence(Candidate(name, "", 0, 0, 0), eco,
-                                  lambda _n: meta)
+                                  lambda _n, _meta=meta: _meta)
             if ev.deprecated:
                 flags.setdefault(name, []).append("now deprecated")
         if osv_malicious_fn is not None:

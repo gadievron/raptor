@@ -13,14 +13,14 @@ the verdict, not the file checksum.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from core.annotations import iter_all_annotations
 
 
-def _load_run(run_dir: Path) -> Dict[tuple, Dict[str, Any]]:
+def _load_run(run_dir: Path) -> dict[tuple, dict[str, Any]]:
     """Index a run's annotations by (file, function) → record dict."""
-    by_pair: Dict[tuple, Dict[str, Any]] = {}
+    by_pair: dict[tuple, dict[str, Any]] = {}
     ann_dir = run_dir / "annotations"
     if not ann_dir.exists():
         return by_pair
@@ -34,16 +34,14 @@ def _load_run(run_dir: Path) -> Dict[tuple, Dict[str, Any]]:
     return by_pair
 
 
-def _has_changed(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+def _has_changed(a: dict[str, Any], b: dict[str, Any]) -> bool:
     """Did the verdict-relevant content change between two records?"""
     if a["body"] != b["body"]:
         return True
-    if a["metadata"].get("status") != b["metadata"].get("status"):
-        return True
-    return False
+    return a["metadata"].get("status") != b["metadata"].get("status")
 
 
-def diff_annotations(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
+def diff_annotations(run_dir_a: Path, run_dir_b: Path) -> dict[str, Any]:
     """Compare annotation trees between two run dirs.
 
     Returns a dict with four lists:
@@ -62,8 +60,8 @@ def diff_annotations(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
     added = [b_index[k] for k in sorted(b_keys - a_keys)]
     removed = [a_index[k] for k in sorted(a_keys - b_keys)]
 
-    changed: List[Dict[str, Any]] = []
-    unchanged: List[Dict[str, Any]] = []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for k in sorted(a_keys & b_keys):
         before = a_index[k]
         after = b_index[k]
@@ -82,9 +80,9 @@ def diff_annotations(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
     }
 
 
-def format_diff(result: Dict[str, Any]) -> str:
+def format_diff(result: dict[str, Any]) -> str:
     """Render a diff result as text suitable for stdout."""
-    lines: List[str] = []
+    lines: list[str] = []
     a, b = result["run_a"], result["run_b"]
     lines.append(f"Annotations diff: {a} → {b}")
     lines.append("")

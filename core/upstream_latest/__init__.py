@@ -39,10 +39,10 @@ __all__ = [
     "GITHUB_API_BASE",
     "NoStableVersionsFound",
     "UpstreamLookupError",
+    "latest_chart_version",
+    "latest_oci_tag",
     "latest_release",
     "latest_tag",
-    "resolve_tag_to_sha",
-    "latest_oci_tag",
     "list_all_oci_tags",
-    "latest_chart_version",
+    "resolve_tag_to_sha",
 ]

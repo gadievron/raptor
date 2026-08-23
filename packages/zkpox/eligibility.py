@@ -18,7 +18,6 @@ docstring (``packages/zkpox/__init__.py``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from core.witness.types import Witness, WitnessOutcome
 
@@ -159,7 +158,7 @@ def render_eligibility_summary(
     witnesses,
     *,
     indent: str = "   ",
-) -> Optional[str]:
+) -> str | None:
     """Console block for the free end-of-run surfacing; ``None``
     when there are no witnesses (caller skips printing a header).
 
@@ -177,7 +176,5 @@ def render_eligibility_summary(
     lines = [
         f"ZKPoX-eligible witnesses: {s['eligible']} / {s['total']}",
     ]
-    for key in ("provable", "outcome_not_provable", "no_target"):
-        if key in s["by_reason"]:
-            lines.append(f"{indent}{key}: {s['by_reason'][key]}")
+    lines.extend(f"{indent}{key}: {s['by_reason'][key]}" for key in ("provable", "outcome_not_provable", "no_target") if key in s["by_reason"])
     return "\n".join(lines)

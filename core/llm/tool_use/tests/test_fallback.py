@@ -11,6 +11,7 @@ subprocess machinery.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional, Tuple
 
 import pytest
@@ -149,7 +150,13 @@ def test_render_messages_tool_call_block() -> None:
     ]
     rendered = LLMProvider._render_messages_as_prompt(msgs)
     assert "search" in rendered
-    assert '"q": "y"' in rendered
+    # The tool input is rendered as JSON for the model to read; the
+    # exact whitespace is encoder-dependent (display rendering makes
+    # no byte promises), so assert the content, not the spacing.
+    assert '"q"' in rendered
+    assert '"y"' in rendered
+    json_span = rendered[rendered.index("{"):rendered.rindex("}") + 1]
+    assert json.loads(json_span) == {"q": "y"}
 
 
 def test_render_messages_tool_result_block() -> None:

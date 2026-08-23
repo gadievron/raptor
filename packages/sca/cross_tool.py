@@ -13,8 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any, TYPE_CHECKING
 from pathlib import Path
-from typing import Any, Dict, List, Set
+
+from core.sarif.parser import load_sarif
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +29,7 @@ _GHSA_RE = re.compile(r"(GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})", re.IGNORECA
 
 def link_related_findings(
     sca_findings_path: Path,
-    sarif_dirs: List[Path],
+    sarif_dirs: list[Path],
 ) -> int:
     """Link SCA findings to sibling SARIF results by CVE/GHSA reference.
 
@@ -60,33 +65,33 @@ def link_related_findings(
         _write_findings(sca_findings_path, findings)
         logger.info(
             "sca.cross_tool: added %d cross-tool link(s) across %d finding(s)",
-            added, len({f["finding_id"] for f in findings
+            added, len({f.get("finding_id", "") for f in findings
                         if any(r.startswith("sarif:") for r in f.get("related_findings", []))}),
         )
 
     return added
 
 
-def _load_findings(path: Path) -> List[Dict[str, Any]]:
+def _load_findings(path: Path) -> list[dict[str, Any]]:
     try:
-        with open(path) as fh:
+        with Path(path).open(encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug("sca.cross_tool: cannot read %s: %s", path, exc)
         return []
 
 
-def _write_findings(path: Path, findings: List[Dict[str, Any]]) -> None:
-    with open(path, "w") as fh:
-        json.dump(findings, fh, indent=2, default=str)
+def _write_findings(path: Path, findings: list[dict[str, Any]]) -> None:
+    from core.json import save_json
+    save_json(path, findings)
 
 
 def _build_cve_index(
-    findings: List[Dict[str, Any]],
-) -> Dict[str, List[str]]:
+    findings: list[dict[str, Any]],
+) -> dict[str, list[str]]:
     """Map CVE/GHSA ID → list of SCA finding IDs that reference it."""
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for f in findings:
         fid = f.get("finding_id", "")
         if not fid:
@@ -97,26 +102,39 @@ def _build_cve_index(
     return out
 
 
-def _extract_cves_from_finding(f: Dict[str, Any]) -> Set[str]:
-    """Extract CVE/GHSA IDs from an SCA finding dict."""
-    ids: Set[str] = set()
-    for adv in f.get("advisories", []):
-        osv_id = adv.get("osv_id", "")
-        if osv_id:
-            ids.add(osv_id.upper())
+def _extract_cves_from_finding(f: dict[str, Any]) -> set[str]:
+    """Extract CVE/GHSA IDs from an SCA finding dict.
+
+    Real findings nest advisory data under ``sca.advisory`` (primary)
+    and ``sca.all_advisories`` (full list), each keyed by ``"id"``.
+    """
+    ids: set[str] = set()
+    sca = f.get("sca") or {}
+    # Primary advisory.
+    primary = sca.get("advisory") or {}
+    adv_id = primary.get("id", "")
+    if adv_id:
+        ids.add(adv_id.upper())
+    for alias in primary.get("aliases", []):
+        ids.add(alias.upper())
+    # All advisories (includes primary + siblings).
+    for adv in sca.get("all_advisories", []):
+        aid = adv.get("id", "")
+        if aid:
+            ids.add(aid.upper())
         for alias in adv.get("aliases", []):
             ids.add(alias.upper())
     return ids
 
 
 def _collect_sarif_refs(
-    sarif_dirs: List[Path],
-) -> Dict[str, List[str]]:
+    sarif_dirs: list[Path],
+) -> dict[str, list[str]]:
     """Scan SARIF files for CVE/GHSA references in results.
 
     Returns ``{CVE_ID: [sarif_ref_id, ...]}``.
     """
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for d in sarif_dirs:
         if not d.is_dir():
             continue
@@ -130,12 +148,16 @@ def _collect_sarif_refs(
 
 def _scan_sarif_file(
     path: Path,
-    out: Dict[str, List[str]],
+    out: dict[str, list[str]],
 ) -> None:
-    try:
-        with open(path) as fh:
-            sarif = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+    # The SARIF glob discovers ANY *.sarif under the given dirs —
+    # including files checked into the scanned target tree — so the
+    # read must be bounded. load_sarif is the canonical guarded
+    # loader (100 MiB stat gate before the read, decode + shape
+    # checks); it returns None on any failure, matching the
+    # skip-this-file behaviour here.
+    sarif = load_sarif(path)
+    if sarif is None:
         return
 
     for run in sarif.get("runs", []):
@@ -149,7 +171,7 @@ def _scan_sarif_file(
 
 
 def _sarif_result_id(
-    result: Dict[str, Any],
+    result: dict[str, Any],
     tool_name: str,
     file_stem: str,
 ) -> str:
@@ -171,11 +193,11 @@ def _sarif_result_id(
 
 
 def _extract_cves_from_sarif_result(
-    result: Dict[str, Any],
-    run: Dict[str, Any],
-) -> Set[str]:
+    result: dict[str, Any],
+    run: dict[str, Any],
+) -> set[str]:
     """Extract CVE/GHSA IDs from a SARIF result's message, tags, and properties."""
-    ids: Set[str] = set()
+    ids: set[str] = set()
 
     msg = result.get("message", {}).get("text", "")
     ids.update(m.group(1).upper() for m in _CVE_RE.finditer(msg))
@@ -205,5 +227,6 @@ def _extract_cves_from_sarif_result(
     ids.update(m.group(1).upper() for m in _CVE_RE.finditer(help_uri))
     for tag in rule.get("properties", {}).get("tags", []):
         ids.update(m.group(1).upper() for m in _CVE_RE.finditer(tag))
+        ids.update(m.group(1).upper() for m in _GHSA_RE.finditer(tag))
 
     return ids

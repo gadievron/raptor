@@ -34,9 +34,12 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Optional, Protocol
+from typing import Protocol, TYPE_CHECKING
 
-from ..models import Dependency, Manifest
+
+if TYPE_CHECKING:
+    from ..models import Dependency, Manifest
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,18 @@ _PARSE_FAILURE_RE = re.compile(
     r"(?P<path>.+?):\s+(?P<reason>.+)$"
 )
 
+# Pattern matching ``_safe_read.read_bounded``'s refusal warnings
+# (``sca.parsers: refusing to read <path> (size=N > max=M) ...`` for
+# oversize manifests, and the non-regular-file variant). Without this
+# an over-cap manifest is warning-logged but invisible in the
+# structured ``parse_failures`` on the run report, while a malformed
+# sibling shows up — the operator would have no structured trace of
+# the skipped file.
+_READ_REFUSAL_RE = re.compile(
+    r"sca\.parsers:\s+refusing to read\s+"
+    r"(?P<path>.+?)\s+\((?P<reason>[^)]+)\)"
+)
+
 
 class _ParseFailureCollector(logging.Handler):
     """Logging handler that captures ``sca.parsers.*`` parse-failed
@@ -87,14 +102,18 @@ class _ParseFailureCollector(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
-        self.failures: List[ParseFailure] = []
+        self.failures: list[ParseFailure] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(_TLS, 'collector', None) is not self:
+            return
         try:
             msg = record.getMessage()
         except Exception:                               # noqa: BLE001
             return
         m = _PARSE_FAILURE_RE.search(msg)
+        if m is None:
+            m = _READ_REFUSAL_RE.search(msg)
         if m is None:
             return
         path_str = m.group("path").strip()
@@ -113,7 +132,7 @@ _TLS = threading.local()
 
 
 @contextmanager
-def capture_parse_failures() -> Iterator[List[ParseFailure]]:
+def capture_parse_failures() -> Iterator[list[ParseFailure]]:
     """Capture parser-emitted parse-failed warnings for the
     duration of the context.
 
@@ -146,33 +165,33 @@ class ManifestParser(Protocol):
     """Structural type every parser conforms to."""
 
     ecosystem: str
-    filenames: List[str]
+    filenames: list[str]
 
-    def parse(self, path: Path) -> List[Dependency]: ...
+    def parse(self, path: Path) -> list[Dependency]: ...
 
 
 # Filename → parser function. Populated by each parser module's
 # ``register()`` call at import time. Functions take an absolute path and
 # return a list of Dependency rows.
-_REGISTRY: Dict[str, Callable[[Path], List[Dependency]]] = {}
+_REGISTRY: dict[str, Callable[[Path], list[Dependency]]] = {}
 
 # Suffix → parser function for extension-based dispatch (e.g., .csproj).
-_SUFFIX_REGISTRY: Dict[str, Callable[[Path], List[Dependency]]] = {}
+_SUFFIX_REGISTRY: dict[str, Callable[[Path], list[Dependency]]] = {}
 
 # Predicate → parser function for shapes that can't be keyed by name alone
 # (e.g., the requirements*.txt convention).
-_PREDICATE_REGISTRY: List[
-    "tuple[Callable[[Path], bool], Callable[[Path], List[Dependency]]]"
+_PREDICATE_REGISTRY: list[
+    tuple[Callable[[Path], bool], Callable[[Path], list[Dependency]]]
 ] = []
 
 
 def register(
     *,
-    filenames: Optional[List[str]] = None,
-    suffixes: Optional[List[str]] = None,
-    predicate: Optional[Callable[[Path], bool]] = None,
+    filenames: list[str] | None = None,
+    suffixes: list[str] | None = None,
+    predicate: Callable[[Path], bool] | None = None,
 ) -> Callable[
-    [Callable[[Path], List[Dependency]]], Callable[[Path], List[Dependency]]
+    [Callable[[Path], list[Dependency]]], Callable[[Path], list[Dependency]]
 ]:
     """Register a parser function for the given filename / suffix / predicate.
 
@@ -181,19 +200,17 @@ def register(
     """
 
     def _wrap(
-        fn: Callable[[Path], List[Dependency]],
-    ) -> Callable[[Path], List[Dependency]]:
+        fn: Callable[[Path], list[Dependency]],
+    ) -> Callable[[Path], list[Dependency]]:
         for name in filenames or ():
             if name in _REGISTRY and _REGISTRY[name] is not fn:
-                raise RuntimeError(
-                    f"sca.parsers: duplicate registration for filename {name!r}"
-                )
+                msg = f"sca.parsers: duplicate registration for filename {name!r}"
+                raise RuntimeError(msg)
             _REGISTRY[name] = fn
         for sfx in suffixes or ():
             if sfx in _SUFFIX_REGISTRY and _SUFFIX_REGISTRY[sfx] is not fn:
-                raise RuntimeError(
-                    f"sca.parsers: duplicate registration for suffix {sfx!r}"
-                )
+                msg = f"sca.parsers: duplicate registration for suffix {sfx!r}"
+                raise RuntimeError(msg)
             _SUFFIX_REGISTRY[sfx] = fn
         if predicate is not None:
             _PREDICATE_REGISTRY.append((predicate, fn))
@@ -202,7 +219,7 @@ def register(
     return _wrap
 
 
-def parse_manifest(manifest: Manifest) -> List[Dependency]:
+def parse_manifest(manifest: Manifest) -> list[Dependency]:
     """Dispatch a Manifest record to its parser; return [] on miss/failure."""
     fn = _resolve(manifest.path)
     if fn is None:
@@ -212,7 +229,8 @@ def parse_manifest(manifest: Manifest) -> List[Dependency]:
         return fn(manifest.path)
     except Exception:  # noqa: BLE001 — parsers must never break the pipeline
         logger.warning(
-            "sca.parsers: parser raised on %s; emitting empty dep list",
+            "sca.parsers.dispatch: uncaught parse failed for %s: "
+            "parser raised an unhandled exception",
             manifest.path,
             exc_info=True,
         )
@@ -221,7 +239,7 @@ def parse_manifest(manifest: Manifest) -> List[Dependency]:
 
 def _resolve(
     path: Path,
-) -> Optional[Callable[[Path], List[Dependency]]]:
+) -> Callable[[Path], list[Dependency]] | None:
     name = path.name
     if name in _REGISTRY:
         return _REGISTRY[name]

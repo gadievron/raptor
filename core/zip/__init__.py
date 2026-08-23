@@ -44,7 +44,15 @@ Limitations:
     at debug). We don't try to crack or guess passwords.
 """
 
-from .eocd import DEFAULT_MAX_ENTRIES, peek_total_entries
+from .eocd import (
+    DEFAULT_MAX_CD_BYTES,
+    DEFAULT_MAX_ENTRIES,
+    MAX_CD_BYTES_PER_ENTRY,
+    EocdSummary,
+    bomb_shaped_reason,
+    peek_eocd,
+    peek_total_entries,
+)
 from .extract import (
     ZipEntryCountExceeded,
     ZipTotalBytesExceeded,
@@ -59,14 +67,19 @@ from .safe_member import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_CD_BYTES",
     "DEFAULT_MAX_ENTRIES",
     "DEFAULT_MAX_MEMBER_BYTES",
     "DEFAULT_MAX_RATIO",
+    "EocdSummary",
+    "MAX_CD_BYTES_PER_ENTRY",
     "UnsafeMemberReason",
     "ZipEntryCountExceeded",
     "ZipTotalBytesExceeded",
+    "bomb_shaped_reason",
     "extract_files_from_zip",
     "is_safe_member",
+    "peek_eocd",
     "peek_total_entries",
     "safe_member_reason",
 ]

@@ -36,13 +36,16 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from core.git import clone_repository, fetch_commit, get_safe_git_env
 from core.git.clone import safe_git_command
 
 from cve_diff.core.exceptions import AcquisitionError
-from cve_diff.core.models import RepoRef
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cve_diff.core.models import RepoRef
+    from pathlib import Path
 
 PROGRESSIVE_DEPTHS: tuple[int, ...] = (100, 500)
 TARGETED_DEPTH = 5
@@ -92,7 +95,8 @@ def _clean_dest(dest: Path) -> None:
     a programming error, not a transient failure.
     """
     if not dest.is_absolute() or len(dest.parts) < 3:
-        raise ValueError(f"_clean_dest refusing dangerous path: {dest!r}")
+        msg = f"_clean_dest refusing dangerous path: {dest!r}"
+        raise ValueError(msg)
     # Single lstat() instead of three separate stat-class calls.
     # Pre-fix `is_symlink()` + `exists()` + `is_dir()` was three
     # syscalls with TOCTOU windows between each: a writer could
@@ -106,11 +110,13 @@ def _clean_dest(dest: Path) -> None:
     except FileNotFoundError:
         return  # No-op when dest doesn't exist
     if _stat.S_ISLNK(st.st_mode):
-        raise ValueError(f"_clean_dest refusing symlink: {dest!r}")
+        msg = f"_clean_dest refusing symlink: {dest!r}"
+        raise ValueError(msg)
     if not _stat.S_ISDIR(st.st_mode):
         # `iterdir()` raises NotADirectoryError on regular files.
         # Refuse explicitly so the error is structured.
-        raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
+        msg = f"_clean_dest refusing non-directory: {dest!r}"
+        raise ValueError(msg)
     if any(dest.iterdir()):
         # ``shutil.rmtree`` rather than spawning ``rm -rf`` via
         # subprocess. Pre-fix this path was a guarded subprocess
@@ -139,7 +145,7 @@ def _clean_dest(dest: Path) -> None:
         import shutil
         import stat as _stat_mod
 
-        def _force_remove(func, path, _exc):
+        def _force_remove(func, path, _exc) -> None:
             try:
                 os.chmod(path, _stat_mod.S_IWRITE | _stat_mod.S_IREAD)
                 func(path)

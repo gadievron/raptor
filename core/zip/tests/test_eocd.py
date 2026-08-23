@@ -12,7 +12,11 @@ import zipfile
 from pathlib import Path
 
 from core.zip.eocd import (
+    DEFAULT_MAX_CD_BYTES,
     DEFAULT_MAX_ENTRIES,
+    EocdSummary,
+    bomb_shaped_reason,
+    peek_eocd,
     peek_total_entries,
 )
 
@@ -71,3 +75,82 @@ def test_peek_nonexistent_path_returns_none(tmp_path: Path):
 
 def test_default_cap_is_10k():
     assert DEFAULT_MAX_ENTRIES == 10_000
+
+
+# ---------------------------------------------------------------------------
+# cd-size cross-check (peek_eocd + bomb_shaped_reason)
+# ---------------------------------------------------------------------------
+
+def _forge_entry_count(data: bytes, forged_count: int) -> bytes:
+    """Patch the EOCD's entries-on-disk + total-entries fields,
+    leaving the (real) cd-size untouched — the forged-count bomb
+    shape: a count-only pre-flight passes while ``ZipFile()`` still
+    materialises the whole real central directory."""
+    import struct
+
+    buf = bytearray(data)
+    off = buf.rfind(b"\x50\x4b\x05\x06")
+    assert off >= 0, "test fixture: EOCD signature not found"
+    struct.pack_into("<HH", buf, off + 8, forged_count, forged_count)
+    return bytes(buf)
+
+
+def test_peek_eocd_returns_entries_and_cd_size():
+    data = _build_zip(5)
+    summary = peek_eocd(data)
+    assert summary is not None
+    assert summary.entries_total == 5
+    # 5 records, 46-byte fixed header + short name each.
+    assert 5 * 46 <= summary.cd_size < 5 * 4096
+
+
+def test_bomb_shaped_reason_accepts_legitimate_archive():
+    summary = peek_eocd(_build_zip(200))
+    assert bomb_shaped_reason(summary) is None
+
+
+def test_bomb_shaped_reason_over_entry_cap():
+    reason = bomb_shaped_reason(EocdSummary(entries_total=10_001, cd_size=1))
+    assert reason is not None
+    assert "zip-bomb shape" in reason
+
+
+def test_forged_small_count_rejected_by_cd_size_cross_check():
+    """The R-class bypass: a zip whose real central directory holds
+    1 000 records but whose EOCD declares 3 entries. A count-only
+    gate passes it; the cd-size cross-check must not."""
+    data = _forge_entry_count(_build_zip(1_000), 3)
+    summary = peek_eocd(data)
+    assert summary is not None
+    assert summary.entries_total == 3            # the forged claim
+    assert summary.cd_size >= 1_000 * 46         # the real CD
+    reason = bomb_shaped_reason(summary)
+    assert reason is not None
+    assert "central directory" in reason
+    assert "zip-bomb shape" in reason
+
+
+def test_bomb_shaped_reason_absolute_cd_cap():
+    # Per-entry bound satisfied (20k entries x 4096 > 65 MiB) but the
+    # absolute cap still fires when the caller raises the entry cap.
+    summary = EocdSummary(entries_total=20_000, cd_size=65 * 1024 * 1024)
+    reason = bomb_shaped_reason(summary, max_entries=50_000)
+    assert reason is not None
+    assert str(DEFAULT_MAX_CD_BYTES) in reason
+
+
+def test_extract_rejects_forged_count_zip():
+    from core.zip import ZipEntryCountExceeded, extract_files_from_zip
+
+    data = _forge_entry_count(_build_zip(1_000), 3)
+    # Graceful mode: empty result.
+    assert extract_files_from_zip(data, selector=lambda n: n) == {}
+    # Raising mode: surfaced to the caller.
+    try:
+        extract_files_from_zip(
+            data, selector=lambda n: n, raise_on_entry_count=True,
+        )
+    except ZipEntryCountExceeded as e:
+        assert "zip-bomb shape" in str(e)
+    else:
+        raise AssertionError("expected ZipEntryCountExceeded")

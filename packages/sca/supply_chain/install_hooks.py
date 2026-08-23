@@ -29,11 +29,15 @@ from __future__ import annotations
 import json as _json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, List
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from ..parsers import _safe_read
 from . import _hook_patterns, _intree_resolve
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +67,7 @@ class InstallHookHit:
 
     script_key: str            # "postinstall" / "preinstall" / ...
     script_body: str           # raw command string
-    reasons: List[str]         # zero or more dangerous-pattern hits
+    reasons: list[str]         # zero or more dangerous-pattern hits
     # In-tree targets the hook body references — see
     # ``_intree_resolve``.  Empty list when the body references no
     # in-tree paths (the legitimate ``node-gyp rebuild`` case).
@@ -83,9 +87,9 @@ class InstallHookHit:
 def scan_manifests(
     manifests: Iterable[Manifest],
     deps: Iterable[Dependency],
-) -> List["InstallHookFinding"]:
+) -> list[InstallHookFinding]:
     """Inspect every npm ``package.json`` and emit findings."""
-    out: List["InstallHookFinding"] = []
+    out: list[InstallHookFinding] = []
     deps_list = list(deps)
     for m in manifests:
         if m.path.name != "package.json" or m.is_lockfile:
@@ -104,7 +108,7 @@ def scan_manifests(
 
 
 def _resolve_host(
-    manifest: Manifest, deps: List[Dependency],
+    manifest: Manifest, deps: list[Dependency],
 ) -> Dependency:
     """Return a Dependency whose ``name`` is the package's OWN name.
 
@@ -118,10 +122,12 @@ def _resolve_host(
       4. Fallback to the generic placeholder when reading the name
          fails.
     """
+    text = _safe_read.read_bounded(manifest.path, follow_symlinks=False)
+    if text is None:
+        return _placeholder_for_manifest(manifest)
     try:
-        text = manifest.path.read_text(encoding="utf-8", errors="replace")
         data = _json.loads(text)
-    except (OSError, _json.JSONDecodeError):
+    except _json.JSONDecodeError:
         return _placeholder_for_manifest(manifest)
     if not isinstance(data, dict):
         return _placeholder_for_manifest(manifest)
@@ -166,12 +172,10 @@ class InstallHookFinding:
     confidence: Confidence
 
 
-def _scan_one(path: Path, host: Dependency) -> List[InstallHookFinding]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("sca.supply_chain.install_hooks: %s read failed: %s",
-                     path, e)
+def _scan_one(path: Path, host: Dependency) -> list[InstallHookFinding]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
     try:
         data = _json.loads(text)
@@ -182,7 +186,7 @@ def _scan_one(path: Path, host: Dependency) -> List[InstallHookFinding]:
     scripts = data.get("scripts")
     if not isinstance(scripts, dict):
         return []
-    out: List[InstallHookFinding] = []
+    out: list[InstallHookFinding] = []
     for key in _LIFECYCLE_KEYS:
         body = scripts.get(key)
         if not isinstance(body, str) or not body.strip():

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat as _stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -46,7 +47,17 @@ def captured_helper_kwargs():
     captured: list[dict] = []
 
     def _capture(cmd, *args, **kwargs):
-        captured.append({"cmd": cmd, "args": args, "kwargs": kwargs})
+        entry = {"cmd": cmd, "args": args, "kwargs": kwargs}
+        # The --system-prompt-file tempfile is unlinked when the
+        # dispatch CM exits, so its content/mode must be snapshotted
+        # at spawn time — exactly what a real child would see.
+        if "--system-prompt-file" in cmd:
+            spf = Path(cmd[cmd.index("--system-prompt-file") + 1])
+            entry["system_prompt_file_content"] = spf.read_text(
+                encoding="utf-8")
+            entry["system_prompt_file_mode"] = _stat.S_IMODE(
+                spf.stat().st_mode)
+        captured.append(entry)
         # Return a stub that downstream parsing can chew on without crashing
         return MagicMock(returncode=0, stdout="{}", stderr="")
 
@@ -81,7 +92,7 @@ def test_invoke_cc_simple_uses_run_untrusted_networked(captured_helper_kwargs, t
 
 
 def test_invoke_cc_simple_passes_documented_proxy_allowlist(
-    captured_helper_kwargs, tmp_path,
+    captured_helper_kwargs, tmp_path, monkeypatch,
 ):
     """proxy_hosts comes from the empirical-default set
     (api.anthropic.com + mcp-proxy.anthropic.com +
@@ -89,6 +100,13 @@ def test_invoke_cc_simple_passes_documented_proxy_allowlist(
     future change adds an unrelated host without justification,
     this fires."""
     from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    # Hermetic on Bedrock/Vertex-configured hosts: the provider-aware
+    # allowlist would otherwise return that cloud's endpoints instead
+    # of the first-party defaults asserted below.
+    for var in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY"):
+        monkeypatch.delenv(var, raising=False)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -364,3 +382,191 @@ def test_live_cc_dispatch_sentinel_home_file_not_leaked(tmp_path):
             sentinel.unlink()
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Schema floor: unknown fields stripped, valid subset kept
+# ---------------------------------------------------------------------------
+
+_FLOOR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["verdict"],
+}
+
+
+def _invoke_with_canned_stdout(tmp_path, stdout: str):
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(exist_ok=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+
+    def _canned(cmd, *args, **kwargs):
+        return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+    with patch("core.sandbox.run_untrusted_networked",
+               side_effect=_canned), \
+         patch("packages.llm_analysis.cc_dispatch.run_untrusted_networked",
+               side_effect=_canned, create=True):
+        return invoke_cc_simple(
+            prompt="ignored", schema=_FLOOR_SCHEMA,
+            repo_path=str(repo), claude_bin="/usr/bin/true",
+            out_dir=str(out_dir), timeout=5,
+        )
+
+
+def test_unknown_field_stripped_valid_subset_kept(tmp_path):
+    """A benign extra top-level key must not void the whole analysis:
+    the unknown field is stripped (never reaches downstream consumers)
+    and the schema-conformant subset survives. This transport has no
+    retry loop, so discard-on-violation silently dropped findings."""
+    import json as _json
+
+    stdout = _json.dumps({"structured_output": {
+        "verdict": "exploitable",
+        "reasoning": "traced the taint",
+        "smuggled_note": "model volunteered an extra key",
+    }})
+    dr = _invoke_with_canned_stdout(tmp_path, stdout)
+
+    assert "error" not in dr.result
+    assert dr.result["verdict"] == "exploitable"
+    assert dr.result["reasoning"] == "traced the taint"
+    # Security property intact: the unknown field never propagates.
+    assert "smuggled_note" not in dr.result
+
+
+def test_conformant_response_untouched_by_floor(tmp_path):
+    import json as _json
+
+    stdout = _json.dumps({"structured_output": {
+        "verdict": "clean",
+        "reasoning": "no path",
+    }})
+    dr = _invoke_with_canned_stdout(tmp_path, stdout)
+
+    assert "error" not in dr.result
+    assert dr.result["verdict"] == "clean"
+
+
+def test_invoke_cc_simple_routes_system_prompt_via_flag(
+    captured_helper_kwargs, tmp_path,
+):
+    """The system prompt travels on CC's dedicated system-prompt
+    channel, never folded into the stdin user prompt — folding drops
+    the role separation the subprocess's prompt-injection defences
+    key off (see CCDispatchConfig.system_prompt). It rides
+    ``--system-prompt-file`` (0600 tempfile), never inline argv: the
+    inline form is world-readable via /proc/<pid>/cmdline on
+    multi-user hosts."""
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    invoke_cc_simple(
+        prompt="user content only",
+        schema=None,
+        repo_path=str(repo),
+        claude_bin="/usr/bin/true",
+        out_dir=str(out_dir),
+        timeout=5,
+        system_prompt="operator system instructions",
+    )
+
+    assert len(captured_helper_kwargs) == 1
+    entry = captured_helper_kwargs[0]
+    cmd = entry["cmd"]
+    assert "--system-prompt-file" in cmd
+    spf_path = cmd[cmd.index("--system-prompt-file") + 1]
+    assert entry["system_prompt_file_content"] == (
+        "operator system instructions")
+    assert entry["system_prompt_file_mode"] == 0o600
+    # argv hygiene: the prompt text itself never appears in argv.
+    assert "--system-prompt" not in cmd
+    assert "operator system instructions" not in " ".join(cmd)
+    # The tempfile is unlinked once the dispatch returns.
+    assert not Path(spf_path).exists()
+    # The sandboxed child runs restrict_reads=True — the tempfile must
+    # be on the read allowlist or the CLI can't load its system prompt.
+    assert spf_path in entry["kwargs"]["readable_paths"]
+    # stdin carries ONLY the user prompt.
+    assert entry["kwargs"]["input"] == "user content only"
+
+
+def test_invoke_cc_simple_no_system_prompt_omits_flag(
+    captured_helper_kwargs, tmp_path,
+):
+    from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    invoke_cc_simple(
+        prompt="user content only",
+        schema=None,
+        repo_path=str(repo),
+        claude_bin="/usr/bin/true",
+        out_dir=str(out_dir),
+        timeout=5,
+    )
+
+    assert len(captured_helper_kwargs) == 1
+    assert "--system-prompt" not in captured_helper_kwargs[0]["cmd"]
+    assert "--system-prompt-file" not in captured_helper_kwargs[0]["cmd"]
+
+
+def test_sysprompt_tempfile_readable_inside_restrict_reads_sandbox(tmp_path):
+    """The ``--system-prompt-file`` tempfile lives in host TMPDIR —
+    outside the restrict_reads default read allowlist. The dispatch
+    sites append its path to ``readable_paths``; this proves the
+    sandbox actually lets the child read it there (Landlock adds a
+    per-file rule; the mount-ns backend bind-mounts file entries at
+    their original path), i.e. a real ``claude`` child can load its
+    system prompt. No LLM, no network — a plain ``cat`` child."""
+    from core.llm.cc_adapter import CCDispatchConfig, system_prompt_file_for
+    from core.sandbox import check_landlock_available
+    from core.sandbox import run as sandbox_run
+
+    if not check_landlock_available():
+        pytest.skip("Landlock not available")
+
+    sentinel = "SYSPROMPT-SANDBOX-READ-PROOF-4c1b"
+    config = CCDispatchConfig(claude_bin="claude", system_prompt=sentinel)
+    out = tmp_path / "out"
+    out.mkdir()
+
+    # With the readable_paths entry the dispatch sites add: readable.
+    with system_prompt_file_for(config) as spf:
+        r = sandbox_run(
+            ["cat", str(spf)],
+            target=str(out), output=str(out),
+            restrict_reads=True,
+            readable_paths=[str(spf)],
+            capture_output=True, text=True, timeout=60,
+        )
+    assert r.returncode == 0, (
+        f"sandboxed child could not read the sysprompt tempfile: "
+        f"rc={r.returncode} stderr={(r.stderr or '')[:300]!r}"
+    )
+    assert sentinel in r.stdout
+
+    # Without it: denied (Landlock EACCES) or absent (mount-ns fresh
+    # /tmp, ENOENT) — proves the readable_paths append is load-bearing.
+    with system_prompt_file_for(config) as spf:
+        r = sandbox_run(
+            ["cat", str(spf)],
+            target=str(out), output=str(out),
+            restrict_reads=True,
+            capture_output=True, text=True, timeout=60,
+        )
+    assert sentinel not in (r.stdout or "")

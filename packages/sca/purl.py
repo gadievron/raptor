@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Sequence
 
 from .ecosystems import canonicalise, known_list
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def main(argv: Sequence[str]) -> int:
@@ -57,6 +60,9 @@ def _valid_name(name: str) -> bool:
         return False
     if any(c in name for c in (" ", "\t", "\n", "\r")):
         return False
+    _SHELL_METACHAR = set(";|&$`<>*?(){}[]!#~")
+    if any(c in _SHELL_METACHAR for c in name):
+        return False
     if "/" in name:
         # Only npm-scoped (@scope/name) is allowed to contain a slash.
         if not (name.startswith("@") and name.count("/") == 1):
@@ -70,9 +76,7 @@ def _valid_version(version: str) -> bool:
         return False
     if "\\" in version or ".." in version or "/" in version:
         return False
-    if any(c in version for c in (" ", "\t", "\n", "\r")):
-        return False
-    return True
+    return not any(c in version for c in (" ", "\t", "\n", "\r"))
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:

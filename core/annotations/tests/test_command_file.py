@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMAND_FILE = REPO_ROOT / ".claude" / "commands" / "annotate.md"
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"

@@ -19,6 +19,7 @@ import pytest
 
 from core.sandbox.fingerprint import (
     HOST_CPU_COUNT,
+    _host_cpu_count,
     _HOSTNAME,
     _DOMAINNAME,
     _MACHINE_ID,
@@ -37,7 +38,7 @@ def test_host_cpu_count_sentinel_resolves_to_host(tmp_path):
     """build_persona(cpu_count=HOST_CPU_COUNT) must resolve to the
     host's actual schedulable CPU count via os.sched_getaffinity(0).
     Persona.cpu_count is the resolved int, not the sentinel."""
-    expected = len(os.sched_getaffinity(0))
+    expected = _host_cpu_count()
     persona = build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
     assert persona.cpu_count == expected, (
         f"sentinel resolved to {persona.cpu_count}, expected {expected}"
@@ -48,7 +49,7 @@ def test_host_cpu_count_sentinel_yields_n_cpuinfo_blocks(tmp_path):
     """With the sentinel, /proc/cpuinfo claims as many processors as
     the host has available — preserves capability surface for callers
     that need real parallelism (codeql, parallel builds)."""
-    expected = len(os.sched_getaffinity(0))
+    expected = _host_cpu_count()
     build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
     content = (tmp_path / "cpuinfo").read_text()
     indices = [
@@ -399,6 +400,52 @@ def test_proc_stat_has_aggregate_plus_n_per_cpu_lines(tmp_path):
     assert cpu_lines[0].startswith("cpu ")
     for i in range(4):
         assert any(line.startswith(f"cpu{i} ") for line in cpu_lines)
+
+
+def test_proc_stat_jiffies_consistent_with_fake_uptime(tmp_path):
+    """The cpu jiffies must corroborate the fabricated uptime — the
+    old hardcoded values summed to ~11.5s of CPU time while
+    /proc/uptime claimed days, an instant cross-check tell. Idle
+    jiffies must equal the /proc/uptime idle figure at USER_HZ, and
+    the total must be within a plausible band of uptime*HZ*cpus."""
+    from core.sandbox.fingerprint import _USER_HZ
+
+    cpu_count = 2
+    persona = build_persona(tmp_path, cpu_count=cpu_count)
+    uptime_line = Path(persona.files["/proc/uptime"]).read_text()
+    uptime_s = float(uptime_line.split()[0])
+    uptime_idle_s = float(uptime_line.split()[1])
+
+    stat = Path(persona.files["/proc/stat"]).read_text()
+    agg = next(line for line in stat.splitlines()
+               if line.startswith("cpu "))
+    fields = [int(x) for x in agg.split()[1:]]
+    user, nice, system, idle = fields[0], fields[1], fields[2], fields[3]
+
+    # Idle jiffies == /proc/uptime idle seconds at USER_HZ (exact by
+    # construction — both derive from the same value).
+    assert idle == int(uptime_idle_s) * _USER_HZ
+    # Total CPU time within a plausible band of wall-clock capacity.
+    total = user + nice + system + idle
+    capacity = uptime_s * _USER_HZ * cpu_count
+    assert 0.9 * capacity <= total <= 1.05 * capacity, (
+        f"total jiffies {total} vs capacity {capacity}"
+    )
+    # Non-trivial busy time (a zero-work box is its own tell).
+    assert user > 0 and system > 0
+
+
+def test_proc_stat_per_cpu_lines_split_the_aggregate(tmp_path):
+    """Per-cpu jiffies must be ~aggregate/cpu_count, not hardcoded."""
+    cpu_count = 4
+    persona = build_persona(tmp_path, cpu_count=cpu_count)
+    stat = Path(persona.files["/proc/stat"]).read_text()
+    agg_idle = int(next(line for line in stat.splitlines()
+                        if line.startswith("cpu ")).split()[4])
+    for i in range(cpu_count):
+        line = next(ln for ln in stat.splitlines()
+                    if ln.startswith(f"cpu{i} "))
+        assert int(line.split()[4]) == agg_idle // cpu_count
 
 
 def test_proc_stat_includes_required_kernel_fields(tmp_path):

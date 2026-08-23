@@ -44,7 +44,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ class RegistryOverride:
     """Operator's override for one ecosystem's registry."""
 
     base_url: str          # full URL to the mirror
-    auth_header: Optional[str] = None
+    auth_header: str | None = None
 
 
 # Env-var names per ecosystem. Mirrors the upstream tool convention
@@ -75,8 +74,8 @@ _ENV_AUTH = {
 
 
 def load_overrides(
-    env: Optional[Dict[str, str]] = None,
-) -> Dict[str, RegistryOverride]:
+    env: dict[str, str] | None = None,
+) -> dict[str, RegistryOverride]:
     """Read env vars; return ``{ecosystem: RegistryOverride}``.
 
     Only ecosystems with a non-empty URL env var land in the
@@ -88,7 +87,7 @@ def load_overrides(
     """
     if env is None:
         env = os.environ
-    out: Dict[str, RegistryOverride] = {}
+    out: dict[str, RegistryOverride] = {}
     for ecosystem, url_var in _ENV_URL.items():
         url = (env.get(url_var) or "").strip()
         if not url:
@@ -110,13 +109,13 @@ def load_overrides(
 
 
 def hosts_for_overrides(
-    overrides: Dict[str, RegistryOverride],
-) -> List[str]:
+    overrides: dict[str, RegistryOverride],
+) -> list[str]:
     """Extract the set of hostnames operators want the EgressClient
     to permit. Used by ``packages.sca.compose_proxy_hosts`` to expand
     the static allowlist with operator-supplied private hosts.
     """
-    hosts: List[str] = []
+    hosts: list[str] = []
     seen: set = set()
     for over in overrides.values():
         host = urlparse(over.base_url).hostname
@@ -128,8 +127,8 @@ def hosts_for_overrides(
 
 def get(
     ecosystem: str,
-    overrides: Optional[Dict[str, RegistryOverride]] = None,
-) -> Optional[RegistryOverride]:
+    overrides: dict[str, RegistryOverride] | None = None,
+) -> RegistryOverride | None:
     """Convenience: fetch one ecosystem's override (or None).
 
     Loads from env when ``overrides`` is not passed."""

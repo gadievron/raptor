@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +49,10 @@ def _is_store_dir(path: Path) -> bool:
 
 
 def discover_witness_stores(
-    output_dir: Optional[Path],
+    output_dir: Path | None,
     *,
-    project_root: Optional[Path] = None,
-) -> List[Path]:
+    project_root: Path | None = None,
+) -> list[Path]:
     """Return all WitnessStore root directories visible to this run.
 
     Args:
@@ -76,7 +75,7 @@ def discover_witness_stores(
     project roots all log at debug and produce a shorter list.
     """
     seen: set = set()
-    out: List[Path] = []
+    out: list[Path] = []
 
     # Run-local first
     if output_dir is not None:
@@ -113,7 +112,7 @@ def discover_witness_stores(
     return out
 
 
-def iter_visible_witnesses(stores: List[Path]):
+def iter_visible_witnesses(stores: list[Path]):
     """Yield (store_path, Witness) pairs across the supplied
     stores in their listed order.
 

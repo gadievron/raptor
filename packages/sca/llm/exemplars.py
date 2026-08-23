@@ -16,7 +16,6 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Tuple
 
 from core.security.prompt_envelope import UntrustedBlock
 
@@ -26,7 +25,7 @@ _DATA_DIR = Path(__file__).resolve().parents[1] / "data"  # packages/sca/data
 
 
 @lru_cache(maxsize=16)
-def popular_names_block(ecosystem: str) -> Optional[UntrustedBlock]:
+def popular_names_block(ecosystem: str) -> UntrustedBlock | None:
     """Return an exemplar block of popular package names for *ecosystem*.
 
     Returns ``None`` when no list exists for the ecosystem.
@@ -35,7 +34,7 @@ def popular_names_block(ecosystem: str) -> Optional[UntrustedBlock]:
     if not path.is_file():
         return None
     try:
-        names = json.loads(path.read_text())
+        names = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         logger.debug("exemplars: failed to load %s", path)
         return None
@@ -54,13 +53,13 @@ def popular_names_block(ecosystem: str) -> Optional[UntrustedBlock]:
 
 
 @lru_cache(maxsize=1)
-def exfil_destinations_block() -> Optional[UntrustedBlock]:
+def exfil_destinations_block() -> UntrustedBlock | None:
     """Return an exemplar block of known exfiltration destination patterns."""
     path = _DATA_DIR / "exfil_destinations.json"
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         entries = data.get("entries", [])
     except Exception:  # noqa: BLE001
         logger.debug("exemplars: failed to load %s", path)
@@ -75,6 +74,9 @@ def exfil_destinations_block() -> Optional[UntrustedBlock]:
         cat = entry.get("category", "other")
         label = entry.get("host") or entry.get("tld") or entry.get("pattern", "?")
         by_category.setdefault(cat, []).append(label)
+
+    if not by_category:
+        return None
 
     lines = [
         "Known exfiltration / payload-staging patterns (URLs matching "
@@ -92,7 +94,7 @@ def exfil_destinations_block() -> Optional[UntrustedBlock]:
 
 def exemplar_blocks_for_supply_chain(
     ecosystem: str,
-) -> Tuple[UntrustedBlock, ...]:
+) -> tuple[UntrustedBlock, ...]:
     """All exemplar blocks relevant to supply-chain analysis.
 
     Returns a tuple suitable for appending to a stage's

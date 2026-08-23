@@ -24,24 +24,28 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List
+
+from core.atomic_fs import write_text_atomically as _atomic_write
 
 from . import RewriteEdit, RewriteResult
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 def rewrite_dockerfile_inline_install(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
-    """Apply inline-pip install version-pin edits to a Dockerfile.
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
+    r"""Apply inline-pip install version-pin edits to a Dockerfile.
 
     Each edit's ``locator`` is the PyPI package name; the regex
     matches ``<name>==<version>`` with optional surrounding
     quoting / whitespace inside any line that looks like part of
     a ``RUN`` instruction. We don't try to parse RUN bodies —
-    they can span multiple physical lines via ``\\`` continuation
+    they can span multiple physical lines via ``\`` continuation
     — instead we rewrite the first matching ``<name>==<value>``
     token anywhere in the file, refusing to touch any other line
     that happens to contain ``<name>==``.
@@ -53,7 +57,7 @@ def rewrite_dockerfile_inline_install(
                               reason=f"error: read failed: {e}")
                 for e2 in edits]
 
-    results: List[RewriteResult] = []
+    results: list[RewriteResult] = []
     new_text = text
     for edit in edits:
         new_text, result = _apply_one(new_text, edit)
@@ -65,13 +69,14 @@ def rewrite_dockerfile_inline_install(
         except OSError as e:
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 
 
 def _apply_one(
     text: str, edit: RewriteEdit,
-) -> "tuple[str, RewriteResult]":
+) -> tuple[str, RewriteResult]:
     """Apply a single inline-install edit. Refuses on value
     mismatch (the file's value differs from what the plan
     expected) so a stale plan never silently corrupts an
@@ -114,25 +119,3 @@ def _apply_one(
     )
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    try:
-        from .._atomic import atomic_write_text
-        atomic_write_text(path, content)
-        return
-    except ImportError:
-        pass
-    import os
-    import tempfile
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp, str(path))
-    except Exception:                # noqa: BLE001
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise

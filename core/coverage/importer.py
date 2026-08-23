@@ -16,8 +16,9 @@ arrives only when a producer emits ranges -- a later format extension.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
 from core.run.metadata import load_run_metadata
@@ -31,26 +32,37 @@ from core.run.provenance import (
 
 from .record import load_records
 from .registry import category_of
-from .store import CoverageStore
-from .summary import _match_to_inventory
+from .summary import _inventory_name_index, _match_to_inventory
+
+if TYPE_CHECKING:
+    from .store import CoverageStore
+    from collections.abc import Iterable
+
+logger = logging.getLogger(__name__)
 
 
-def _inventory_paths(checklist: Dict[str, Any]) -> set:
+def _inventory_paths(checklist: dict[str, Any]) -> set:
     return {fe.get("path") for fe in checklist.get("files", []) if fe.get("path")}
 
 
-def _to_inventory_path(path: str, inventory_paths: set) -> str:
+def _to_inventory_path(
+    path: str, inventory_paths: set, name_index: dict | None = None,
+) -> str:
     """Normalise a tool-reported path to the inventory's key. Scanners report
     ABSOLUTE paths (semgrep) or paths relative to a different root, while the
     inventory keys on target-relative paths — without this the join silently
     misses every file. Reuses Phase 2's tested matcher (exact / ``./`` strip /
-    basename / component-aware suffix); falls back to the raw path."""
+    basename / component-aware suffix); falls back to the raw path.
+
+    Callers looping many paths over one inventory should precompute
+    ``name_index = _inventory_name_index(inventory_paths)`` and pass it
+    so each lookup is O(candidates) instead of O(inventory)."""
     if not inventory_paths:
         return path
-    return _match_to_inventory(path, inventory_paths) or path
+    return _match_to_inventory(path, inventory_paths, name_index) or path
 
 
-def _field(d: Dict[str, Any], *names: str) -> Optional[Any]:
+def _field(d: dict[str, Any], *names: str) -> Any | None:
     for n in names:
         v = d.get(n)
         if v is not None:
@@ -58,7 +70,7 @@ def _field(d: Dict[str, Any], *names: str) -> Optional[Any]:
     return None
 
 
-def run_provenance(run_dir: Path) -> Dict[str, Any]:
+def run_provenance(run_dir: Path) -> dict[str, Any]:
     """Read a run's ``.raptor-run.json`` manifest into a stamping dict
     (``{}`` when absent — pre-provenance runs degrade gracefully). The
     coverage store is the (file,function) sink; this is the run-keyed
@@ -76,8 +88,8 @@ def run_provenance(run_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _tool_stamp(tool: str, prov: Dict[str, Any],
-                record_version: Optional[str] = None) -> Dict[str, Any]:
+def _tool_stamp(tool: str, prov: dict[str, Any],
+                record_version: str | None = None) -> dict[str, Any]:
     """The provenance slice for one (file, tool): engine version for a
     scanner, resolved model(s) for an LLM tool, plus run-level fields.
 
@@ -91,7 +103,7 @@ def _tool_stamp(tool: str, prov: Dict[str, Any],
     see ``(version unrecorded)`` even though the per-tool JSON does
     carry it.
     """
-    stamp: Dict[str, Any] = {
+    stamp: dict[str, Any] = {
         "timestamp": prov.get("timestamp"),
         "target": prov.get("target"),
         "framework_sha": prov.get("framework_sha"),
@@ -114,8 +126,8 @@ def _tool_stamp(tool: str, prov: Dict[str, Any],
     return stamp
 
 
-def _total_lines_by_file(checklist: Dict[str, Any]) -> Dict[str, int]:
-    out: Dict[str, int] = {}
+def _total_lines_by_file(checklist: dict[str, Any]) -> dict[str, int]:
+    out: dict[str, int] = {}
     for fe in checklist.get("files", []):
         path = fe.get("path")
         tl = fe.get("lines")
@@ -124,18 +136,25 @@ def _total_lines_by_file(checklist: Dict[str, Any]) -> Dict[str, int]:
     return out
 
 
-def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
-    """Function-level marks from inventory ``checked_by`` labels.
+def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
+    """DEPRECATED — kept for one release for backward compat.
 
-    Returns the number of (function, tool) marks applied.
+    ``checked_by`` on checklist items was removed under the
+    annotation → journal migration; new /audit runs never write it.
+    This importer is a no-op on fresh runs but retained so that
+    partial upgrades (new engine reading a pre-migration checklist)
+    still surface prior review state. Delete after the migration
+    settles.
     """
     marks = 0
     for fe in checklist.get("files", []):
         path = fe.get("path")
         if not path:
             continue
-        for fn in fe.get("items", fe.get("functions", [])):
-            lo = fn.get("line_start", 0)
+        for fn in fe.get("items", fe.get("functions", [])) or []:
+            lo = fn.get("line_start")
+            if lo is None:
+                continue
             hi = fn.get("line_end")
             hi = hi if hi is not None else lo
             for tool in fn.get("checked_by", []) or []:
@@ -144,11 +163,90 @@ def import_checked_by(store: CoverageStore, checklist: Dict[str, Any]) -> int:
     return marks
 
 
+def import_journal(
+    store: CoverageStore,
+    project_dir: Path,
+    checklist: dict[str, Any],
+) -> int:
+    """Import LLM review existence from the project-level review-
+    journal index into the coverage store.
+
+    Under the annotation → journal migration this replaces
+    ``import_checked_by`` as the source of LLM-review coverage.
+    Journal entries are projected into ``(file, line_range, tool)``
+    intervals — the coverage store's schema — using the checklist's
+    inventory line ranges to translate function names to line
+    intervals. Full context (verdict, hypotheses, body, model,
+    strategies, ``domain_model_hash``) stays exclusively in the
+    journal; the store carries existence only.
+
+    Tool label matches the journal entry's producer convention:
+    ``audit`` for /audit reviews, ``agentic`` for /agentic reviews.
+    Both are already familiar coverage-store tool labels — no
+    consumer changes needed.
+
+    Returns the number of function-level marks applied.
+    """
+    from .journal import entry_producer, load_index
+
+    try:
+        entries = load_index(project_dir)
+    except Exception as exc:  # noqa: BLE001 — journal absence must not fail the import batch
+        # load_index already tolerates corrupt/missing index files
+        # internally, so anything landing here is genuinely unexpected
+        # (schema bug, permission error). Leave a breadcrumb instead of
+        # silently reporting "zero LLM coverage".
+        import logging
+        logging.getLogger("coverage.importer").warning(
+            "journal index load failed: %s: %s", type(exc).__name__, exc,
+        )
+        return 0
+    if not entries:
+        return 0
+
+    # Fast (file, function) → (line_start, line_end) lookup from the
+    # checklist. Functions absent from the checklist are skipped — a
+    # journal entry without an inventory anchor can't be projected
+    # onto a line range. hi is normalised (None → lo) because the
+    # consumer below marks (lo, hi) directly.
+    ranges = _function_ranges(checklist, normalise_hi=True)
+
+    marks = 0
+    for entry in entries.values():
+        if entry.verdict == "error":
+            # Error verdicts are transient failures (budget exceeded,
+            # API error, truncation) — the function was never actually
+            # reviewed. Marking it as covered would misrepresent the
+            # coverage view AND suppress it from any consumer that
+            # derives "already reviewed" from the store. Keep it
+            # unreviewed, consistent with journal.reviewed_set() and
+            # the gap computation's index fold.
+            continue
+        rng = ranges.get((entry.file, entry.function))
+        if rng is None:
+            # Try the entry's own line_start/line_end (may be present
+            # from the journal write path).
+            lo = entry.line_start
+            hi = entry.line_end if entry.line_end is not None else lo
+            if not lo:
+                continue
+            rng = (lo, hi)
+        lo, hi = rng
+        # Tool label: explicit ``producer`` field when stamped (write
+        # path per amendment §1 A2), else the legacy run_id prefix
+        # heuristic — both live in ``journal.entry_producer`` so the
+        # coverage importer and the audit gap fold agree on which
+        # producer an entry belongs to.
+        store.mark(entry.file, lo, hi, entry_producer(entry))
+        marks += 1
+    return marks
+
+
 def import_record(
     store: CoverageStore,
-    record: Dict[str, Any],
-    total_lines: Dict[str, int],
-    provenance: Optional[Dict[str, Any]] = None,
+    record: dict[str, Any],
+    total_lines: dict[str, int],
+    provenance: dict[str, Any] | None = None,
 ) -> int:
     """Whole-file marks from one record's ``files_examined``.
 
@@ -165,9 +263,10 @@ def import_record(
         tool, provenance, record_version=record.get("version"),
     ) if provenance else None
     inv_paths = set(total_lines)                     # inventory keys (target-relative)
+    inv_index = _inventory_name_index(inv_paths)     # once per record, not per path
     marked = 0
     for path in record.get("files_examined", []) or []:
-        key = _to_inventory_path(path, inv_paths)    # tools may report abs paths
+        key = _to_inventory_path(path, inv_paths, inv_index)  # tools may report abs paths
         tl = total_lines.get(key)
         if not tl:
             continue
@@ -182,8 +281,8 @@ def import_record(
 
 
 def import_findings(
-    store: CoverageStore, findings: List[Dict[str, Any]], retained: bool = True,
-    inventory_paths: Optional[set] = None,
+    store: CoverageStore, findings: list[dict[str, Any]], retained: bool = True,
+    inventory_paths: set | None = None,
 ) -> int:
     """Link findings into the store with their line, so functions get an
     ``open`` / ``found_then_lost`` verdict.
@@ -195,6 +294,7 @@ def import_findings(
     Returns the number linked.
     """
     linked = 0
+    inv_index = _inventory_name_index(inventory_paths) if inventory_paths else None
     for f in findings or []:
         if not isinstance(f, dict):
             continue
@@ -202,7 +302,7 @@ def import_findings(
         if not file:
             continue
         if inventory_paths:
-            file = _to_inventory_path(file, inventory_paths)   # match verdict's key
+            file = _to_inventory_path(file, inventory_paths, inv_index)   # match verdict's key
         line = _field(f, "line", "line_start", "start_line")
         # A stable, position-independent id so re-linking the same finding
         # (e.g. backfill then a clean snapshot's retained flip) targets the
@@ -230,26 +330,27 @@ def import_findings(
 _FINDINGS_LOCATIONS = ("findings.json", "validation/findings.json")
 
 
-def _load_findings_file(path: Path) -> List[Dict[str, Any]]:
+def _load_findings_file(path: Path) -> list[dict[str, Any]]:
     data = load_json(path)
     if isinstance(data, dict):
         data = data.get("findings", data.get("results", []))
     return data if isinstance(data, list) else []
 
 
-def load_run_findings(run_dir: Path) -> List[Dict[str, Any]]:
+def load_run_findings(run_dir: Path) -> list[dict[str, Any]]:
     """Union of a run's findings across the layouts producers use (top-level
-    findings.json, validation/, sca/). The store dedups by id on link, so
+    findings.json and validation/ — sca/ is DELIBERATELY excluded, see the
+    comment above _FINDINGS_LOCATIONS). The store dedups by id on link, so
     overlap is harmless; absent files contribute nothing."""
     run = Path(run_dir)
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for rel in _FINDINGS_LOCATIONS:
         out.extend(_load_findings_file(run / rel))
     return out
 
 
 def import_run_findings(
-    store: CoverageStore, run_dir: Path, inventory_paths: Optional[set] = None,
+    store: CoverageStore, run_dir: Path, inventory_paths: set | None = None,
 ) -> int:
     """Link a run's findings (detail present, since the run dir exists)."""
     return import_findings(
@@ -258,7 +359,7 @@ def import_run_findings(
     )
 
 
-def _parse_lines(spec: Optional[str]) -> Optional[tuple]:
+def _parse_lines(spec: str | None) -> tuple | None:
     if not spec or "-" not in spec:
         return None
     try:
@@ -271,44 +372,67 @@ def _parse_lines(spec: Optional[str]) -> Optional[tuple]:
 def import_annotations(
     store: CoverageStore,
     base_dir: Path,
-    checklist: Dict[str, Any],
+    checklist: dict[str, Any],
     tool: str = "annotations",
 ) -> int:
-    """Import durable per-function annotations as llm-category coverage.
+    """Import durable annotations as coverage evidence, tiered by
+    provenance grade.
 
-    Annotations (``core.annotations``) are project-level and survive
-    ``/project clean``, so importing them keeps retained *reviews* counting
-    even after the run dirs that produced them are gone. A ``clean`` status
-    -> clean coverage; ``finding`` / ``suspicious`` -> a linked finding so the
-    function reads ``open``. Function line ranges come from the inventory
-    (file+name), falling back to the annotation's ``lines`` metadata; an
-    annotation that resolves to neither is skipped. Returns the count.
+    Human-grade annotations (``source=human`` with an interactive-TTY
+    provenance stamp, or legacy pre-stamp notes) import as durable
+    operator evidence: marked under ``tool``, and a ``finding`` /
+    ``suspicious`` status creates a retained linked finding.
+
+    Non-human-grade notes — ``source=agent``, and ``source=human``
+    stamped non-interactive (the laundering shape) — still count as
+    examination coverage, but at the machine tier: marked under
+    ``<tool>:machine`` and never linked as operator findings.
+
+    Legacy ``source=llm`` annotations are not imported at all: LLM
+    review state is tracked by the review journal instead (the
+    journal importer marks that coverage).
+
+    Annotations survive ``/project clean``, so importing them keeps
+    retained reviews counting even after the run dirs that produced
+    them are gone.  Returns the count imported.
     """
     base_dir = Path(base_dir)
     if not base_dir.exists():
         return 0
-    from core.annotations.storage import iter_all_annotations
+    from core.annotations import is_human_grade
+    from core.annotations.storage import (
+        annotation_file_mtime,
+        iter_all_annotations,
+    )
 
-    ranges: Dict[tuple, tuple] = {}
-    for fe in checklist.get("files", []):
-        path = fe.get("path")
-        if not path:
-            continue
-        for it in fe.get("items", fe.get("functions", [])):
-            name = it.get("name")
-            if name:
-                ranges[(path, name)] = (it.get("line_start", 0), it.get("line_end"))
+    ranges = _function_ranges(checklist)
 
+    # Per-source-file mtime cache: is_human_grade's legacy date fence
+    # needs the annotation file's mtime; annotations in one file share
+    # a timestamp, so stat each .md once.
+    mtimes: dict[str, float | None] = {}
     imported = 0
     for ann in iter_all_annotations(base_dir):
+        if ann.file not in mtimes:
+            mtimes[ann.file] = annotation_file_mtime(base_dir, ann.file)
+        human_grade = is_human_grade(
+            ann.metadata, note_mtime=mtimes[ann.file],
+        )
+        if not human_grade and ann.metadata.get("source") not in (
+            "human", "agent",
+        ):
+            continue
         rng = ranges.get((ann.file, ann.function)) or _parse_lines(
             ann.metadata.get("lines")
         )
         if rng is None:
             continue
         lo, hi = rng
-        store.mark(ann.file, lo, hi if hi is not None else lo, tool)
-        if ann.metadata.get("status") in ("finding", "suspicious"):
+        label = tool if human_grade else f"{tool}:machine"
+        store.mark(ann.file, lo, hi if hi is not None else lo, label)
+        if human_grade and ann.metadata.get("status") in (
+            "finding", "suspicious",
+        ):
             store.link_finding(
                 ann.file, f"annotation:{ann.file}:{ann.function}",
                 line=lo, retained=True,
@@ -355,7 +479,7 @@ def _understand_points(run_dir: Path):
 
 
 def import_understand(
-    store: CoverageStore, run_dir: Path, checklist: Dict[str, Any],
+    store: CoverageStore, run_dir: Path, checklist: dict[str, Any],
     tool: str = "understand",
 ) -> int:
     """Fold a run's /understand outputs into the store as llm-category coverage.
@@ -366,33 +490,59 @@ def import_understand(
     on-disk context-map may carry absolute / ``./`` paths). Returns marks made.
     """
     inv = _inventory_paths(checklist)
+    inv_index = _inventory_name_index(inv)
     marks = 0
     for f, ln in _understand_points(run_dir):
-        store.mark(_to_inventory_path(f, inv), ln, ln, tool)
+        store.mark(_to_inventory_path(f, inv, inv_index), ln, ln, tool)
         marks += 1
+    # Record the caller→callee structure the traces carry (previously
+    # discarded here after the per-line flatten). Touched-tier extent
+    # for the edge-obligations pass — best-effort, idempotent, never
+    # fails the import.
+    try:
+        from .edges import collect_touched_edges, write_touched
+        edges = collect_touched_edges(Path(run_dir), checklist)
+        if edges:
+            write_touched(Path(run_dir), edges)
+    except Exception:  # noqa: BLE001 — derived artifact only
+        logger.debug("touched-edge capture failed for %s",
+                     run_dir, exc_info=True)
     return marks
 
 
-def _function_ranges(checklist: Dict[str, Any]) -> Dict[tuple, tuple]:
-    """``{(path, name): (line_start, line_end)}`` over every inventory item."""
-    out: Dict[tuple, tuple] = {}
+def _function_ranges(
+    checklist: dict[str, Any], *, normalise_hi: bool = False,
+) -> dict[tuple, tuple]:
+    """``{(path, name): (line_start, line_end)}`` over every inventory item.
+
+    Single source of truth for the checklist range walk (import_journal,
+    import_annotations and import_run_dir all consume it — previously
+    three inline copies that had already drifted on hi handling).
+    With ``normalise_hi=True`` a missing ``line_end`` collapses to
+    ``line_start`` so consumers can mark ``(lo, hi)`` directly.
+    """
+    out: dict[tuple, tuple] = {}
     for fe in checklist.get("files", []):
         path = fe.get("path")
         if not path:
             continue
-        for it in fe.get("items", fe.get("functions", [])):
+        for it in fe.get("items", fe.get("functions", [])) or []:
             name = it.get("name")
-            if name:
-                out[(path, name)] = (it.get("line_start", 0), it.get("line_end"))
+            lo = it.get("line_start")
+            if name and lo is not None:
+                hi = it.get("line_end")
+                if normalise_hi and hi is None:
+                    hi = lo
+                out[(path, name)] = (lo, hi)
     return out
 
 
 def import_functions_analysed(
     store: CoverageStore,
-    record: Dict[str, Any],
-    ranges: Dict[tuple, tuple],
+    record: dict[str, Any],
+    ranges: dict[tuple, tuple],
     inventory_paths: set,
-    provenance: Optional[Dict[str, Any]] = None,
+    provenance: dict[str, Any] | None = None,
 ) -> int:
     """Function-level marks from a record's ``functions_analysed`` — the precise
     "this function was reviewed" signal (an operator ``--mark``, or a
@@ -409,10 +559,11 @@ def import_functions_analysed(
         tool, provenance, record_version=record.get("version"),
     ) if provenance else None
     marked = 0
+    inv_index = _inventory_name_index(inventory_paths)
     for fa in fa_list:
         if not isinstance(fa, dict):
             continue
-        f = _to_inventory_path(fa.get("file") or "", inventory_paths)
+        f = _to_inventory_path(fa.get("file") or "", inventory_paths, inv_index)
         rng = ranges.get((f, fa.get("function")))
         if rng is None:
             continue
@@ -425,7 +576,7 @@ def import_functions_analysed(
 
 
 def import_run_dir(
-    store: CoverageStore, run_dir: Path, checklist: Dict[str, Any],
+    store: CoverageStore, run_dir: Path, checklist: dict[str, Any],
 ) -> int:
     """Import all coverage records in ``run_dir``: whole-file marks from
     ``files_examined`` (a tool examined the file) AND function-level marks from
@@ -445,23 +596,50 @@ def import_run_dir(
 def backfill(
     store: CoverageStore,
     run_dirs: Iterable[Path],
-    checklist: Dict[str, Any],
-    annotations_base: Optional[Path] = None,
+    checklist: dict[str, Any],
+    annotations_base: Path | None = None,
+    project_dir: Path | None = None,
 ) -> int:
-    """One-shot backfill: inventory meta + function-level ``checked_by`` +
-    file-level records from every run dir + (when ``annotations_base`` is
-    given) durable annotations as llm-category coverage. Returns total marks.
+    """One-shot backfill: inventory meta + LLM review existence
+    (from the project-level review-journal index — post-migration
+    source of truth) + file-level records from every run dir +
+    (when ``annotations_base`` is given) durable annotations as
+    llm-category coverage. Returns total marks.
+
+    ``project_dir`` — canonical location of ``review-journal-index.json``.
+    When omitted, falls back to the pre-migration ``import_checked_by``
+    read for backward compat with older projects that lack a journal
+    index. Callers should pass ``project_dir`` explicitly to get the
+    modern behaviour.
 
     The caller saves the store afterwards.
     """
     store.import_inventory_meta(checklist)
     store.set_content_id(checklist)            # git-X ≡ zip-X equivalence id
     inv_paths = _inventory_paths(checklist)
-    total = import_checked_by(store, checklist)
-    for run_dir in run_dirs:
+    if project_dir is not None:
+        total = import_journal(store, project_dir, checklist)
+    else:
+        # Legacy path: no project_dir supplied → still surface any
+        # pre-migration ``checked_by`` entries as LLM coverage.
+        total = import_checked_by(store, checklist)
+    run_dir_list = list(run_dirs)
+    for run_dir in run_dir_list:
         total += import_run_dir(store, run_dir, checklist)
         total += import_understand(store, run_dir, checklist)   # /understand fold-in
         import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
+    try:
+        from core.coverage.frida_bridge import import_frida_coverage
+        total += import_frida_coverage(
+            store, checklist, [Path(d) for d in run_dir_list],
+        )
+    except ImportError:
+        pass
+    except Exception as exc:  # noqa: BLE001 — frida bridge is optional enrichment
+        import logging
+        logging.getLogger("coverage.importer").info(
+            "frida coverage bridge failed: %s: %s", type(exc).__name__, exc,
+        )
     if annotations_base is not None:
         total += import_annotations(store, annotations_base, checklist)
     return total
@@ -480,7 +658,7 @@ def _runs(lines):
 
 
 def mark_runtime(
-    store: CoverageStore, data: Dict[str, Any], checklist: Dict[str, Any],
+    store: CoverageStore, data: dict[str, Any], checklist: dict[str, Any],
     tool: str,
 ) -> int:
     """Mark a ``{source_path: iterable-of-executed-lines}`` map into the store
@@ -491,9 +669,10 @@ def mark_runtime(
     by :func:`import_runtime` (parsed artifacts) and the collectors in
     ``core.coverage.collect`` (tool-run artifacts)."""
     inv = _inventory_paths(checklist)
+    inv_index = _inventory_name_index(inv)
     marked = 0
     for src, lines in data.items():
-        key = _to_inventory_path(src, inv)
+        key = _to_inventory_path(src, inv, inv_index)
         if key not in inv:
             continue          # not an inventory file (system header, non-target)
         for lo, hi in _runs(lines):
@@ -503,8 +682,8 @@ def mark_runtime(
 
 
 def import_runtime(
-    store: CoverageStore, path, checklist: Dict[str, Any],
-    fmt: Optional[str] = None, tool: Optional[str] = None,
+    store: CoverageStore, path, checklist: dict[str, Any],
+    fmt: str | None = None, tool: str | None = None,
 ) -> int:
     """Import external runtime coverage (gcov / lcov / coverage.py) into the
     store (Phase 4). Detects the format (unless ``fmt`` given), parses executed

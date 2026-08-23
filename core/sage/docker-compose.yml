@@ -6,14 +6,46 @@
 #   ollama  - Embedding model server (port 11435)
 #
 # Ports use non-standard mappings to avoid conflicts with local services.
+#
+# Embedding model selection (auto-detected by raptor-sage-setup):
+#   GPU:      nomic-embed-text (137M F16, 768 dims, ~0.1s/embed)
+#   CPU-only: snowflake-arctic-embed:m (110M, 768 dims, ~3s/embed)
+#   Override: export SAGE_EMBED_MODEL=<model> SAGE_EMBED_DIM=<dim>
+#
+# Image pins are BY DIGEST (tag@sha256:...): the pin is the trust
+# anchor that justifies executing the server-emitted boot payload
+# (core/sage/CLAUDE.md), and tags are mutable — a registry-side
+# repoint of the tag would otherwise be self-authorizing and invisible
+# on fresh installs. The tag stays in front of the digest purely as
+# human-readable documentation; the digest is what docker resolves.
+# Bump procedure: docs/sage.md "Upgrading the sidecar".
 
 services:
   ollama:
-    image: ollama/ollama:0.21.0
+    # Digest-pinned (tag is documentation; the digest is what docker
+    # resolves). Bump: resolve the new digest with
+    #   docker buildx imagetools inspect ollama/ollama:<tag>
+    # and update BOTH this entry and ollama-init below — they share
+    # the image so the init CLI can never skew from the server.
+    image: ollama/ollama:0.32.14@sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad
     ports:
-      - "11435:11434"
+      # Loopback-bound: every in-repo consumer targets localhost, and
+      # the sidecars have no peer authentication of their own.
+      - "127.0.0.1:11435:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KEEP_ALIVE=24h
+      # Proxied environments: the ollama SERVER performs the model download
+      # (ollama-init merely drives it over the API), so pass the host's
+      # proxy through. NO_PROXY must include 0.0.0.0 — the image sets
+      # OLLAMA_HOST=0.0.0.0:11434, so the healthcheck's `ollama list` dials
+      # 0.0.0.0 — plus the service names for inter-container traffic.
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
     healthcheck:
       test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 10s
@@ -30,30 +62,63 @@ services:
     #           capabilities: [gpu]
 
   ollama-init:
-    image: ollama/ollama:0.21.0
+    # Same image as the ollama service (this container only runs the
+    # `ollama pull` CLI against it): one digest to bump, no version
+    # skew, and no extra image download.
+    image: ollama/ollama:0.32.14@sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
-    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    entrypoint: ["ollama", "pull", "${SAGE_EMBED_MODEL:-snowflake-arctic-embed:m}"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
+      # No proxy needed here (talks only to the ollama service), but pin
+      # NO_PROXY so a globally-injected proxy (~/.docker/config.json
+      # proxies) cannot hijack the CLI→server call.
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
 
   sage:
-    image: ghcr.io/l33tdawg/sage:8.4.2
+    image: ghcr.io/l33tdawg/sage:11.18.18@sha256:406bf5dd3aafa539b22b9e5b99bbcfae288016dafef254026935885aeed95af6
     ports:
-      - "8090:8080"
+      # Loopback-bound: see the ollama mapping above.
+      - "127.0.0.1:8090:8080"
     volumes:
-      - sage_data:/root/.sage-gui
+      - sage_data:/root/.sage
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     environment:
-      - OLLAMA_URL=http://ollama:11434
+      - SAGE_HOME=/root/.sage
+      - SAGE_EMBEDDING_PROVIDER=openai-compatible
+      - SAGE_EMBEDDING_BASE_URL=http://ollama:11434
+      - SAGE_EMBEDDING_MODEL=${SAGE_EMBED_MODEL:-snowflake-arctic-embed:m}
+      - SAGE_EMBEDDING_DIMENSION=${SAGE_EMBED_DIM:-768}
       - REST_ADDR=0.0.0.0:8080
+      # Same NO_PROXY pin as ollama-init: sage only talks to the ollama
+      # service; keep that traffic off any globally-injected proxy.
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,ollama,sage
+    # Privilege hardening: the upstream image runs everything as root
+    # on a full Debian userland with the key volume writable, so a
+    # compromise of the REST server or CometBFT would otherwise hold
+    # root with the full default capability set. Neither process needs
+    # any capability (both bind >1024 and only touch the SAGE_HOME
+    # volume), so drop them all and forbid privilege re-acquisition.
+    # Takes effect when the container is next (re)created
+    # (`docker compose up -d` / re-running raptor-sage-setup) — a
+    # running container keeps its old settings until then.
+    # read_only rootfs is NOT set: the server writes SAGE_HOME on the
+    # volume but the image also writes scratch paths on the rootfs;
+    # revisit alongside a non-root upstream image.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
-      # ghcr.io/l33tdawg/sage images ship with wget, not curl
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
+      # v11.17.11+ images ship neither wget nor curl; use bash /dev/tcp
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" > /dev/tcp/localhost/8080 && exit 0 || exit 1'"]
       interval: 10s
       timeout: 5s
       retries: 10

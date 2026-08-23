@@ -15,10 +15,30 @@ is unaffected.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+# Invocations that cut out the repo-root conftest (``--confcutdir``, a
+# vendored copy of this package) skip the session-wide git hermeticity
+# pin, so it is re-applied here: this suite's fixture helpers create
+# real commits in several per-file ``_git()`` dialects, and the
+# operator's environment must not steer them — an exported ``GIT_DIR``
+# overrides ``git -C`` discovery and would aim every fixture write at
+# an operator-chosen repo (the incident class), and operator config
+# (``commit.gpgsign=true``, ``core.hooksPath``, ``url.insteadOf``)
+# breaks or instruments the commit/clone shims. Deliberately coarser
+# than core.testing.git_hermeticity's curated strip list (which may
+# not be importable without the root conftest's sys.path setup): drop
+# every ambient GIT_* wholesale — a fixture-building unit suite has no
+# legitimate use for any of them — then pin the two config files.
+# Under a root-conftest run this is a no-op (already pinned/stripped).
+for _key in [k for k in os.environ if k.startswith("GIT_")]:
+    del os.environ[_key]
+os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
+os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
 
 
 # Keep these stubs' signatures in lockstep with

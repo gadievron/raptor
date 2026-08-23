@@ -16,10 +16,17 @@ answers "what did we look at it WITH".
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING
 
+from core.json import load_json
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+# coverage-<tool>.json / scan_metrics.json are small RAPTOR-written
+# run records.
+_MAX_RECORD_BYTES = 8 * 1024 * 1024
 
 # Tool display ordering — most-likely-to-fire first so the block
 # reads top-to-bottom in approximate produce-findings order.
@@ -34,34 +41,28 @@ _TOOL_LABELS = {
 }
 
 
-def _load_coverage_record(out_dir: Path, tool: str) -> Optional[Dict]:
+def _load_coverage_record(out_dir: Path, tool: str) -> dict | None:
     """Read ``coverage-<tool>.json`` from ``out_dir``. Best-effort —
     missing file / malformed JSON returns ``None`` (tool didn't run
     or its coverage emit failed; both fold to ''no record to render''
     in the caller's loop)."""
     p = out_dir / f"coverage-{tool}.json"
-    if not p.is_file():
-        return None
-    try:
-        return json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_json(p, max_bytes=_MAX_RECORD_BYTES)
 
 
-def _findings_for_tool(metrics: Dict, tool: str) -> int:
-    """Count findings attributable to ``tool`` from
-    ``scan_metrics.json::findings_by_rule``. The rule-id namespace
-    distinguishes which tool produced each rule:
+def _findings_for_tool(metrics: dict, tool: str) -> int:
+    """Count findings attributable to ``tool``.
 
-      * ``semgrep`` → keys start with ``engine.semgrep.rules.`` or
-        the registry pack notation ``c.lang.security.foo``
-      * ``codeql`` → keys match ``<lang>/<rule-id>`` (slash-separated)
-      * ``coccinelle`` → keys typically snake_case (``lock_imbalance``)
-
-    Returns 0 when no rules match (the tool ran but found nothing,
-    OR the tool didn't run at all — caller distinguishes via
-    coverage-file presence).
+    Prefers the authoritative ``findings_by_tool`` dict (keyed by
+    canonical tool name, populated from SARIF driver metadata).
+    Falls back to rule-id heuristics for old-format metrics files
+    that lack ``findings_by_tool``.
     """
+    by_tool = metrics.get("findings_by_tool")
+    if by_tool and tool in by_tool:
+        v = by_tool[tool]
+        return v if isinstance(v, int) else 0
+
     findings_by_rule = metrics.get("findings_by_rule") or {}
     total = 0
     for rule_id, count in findings_by_rule.items():
@@ -69,31 +70,20 @@ def _findings_for_tool(metrics: Dict, tool: str) -> int:
             continue
         rule_lower = rule_id.lower()
         if tool == "semgrep":
-            if (rule_lower.startswith("engine.semgrep.")
-                    or rule_lower.startswith("c.lang.")
-                    or rule_lower.startswith("python.lang.")
-                    or "semgrep" in rule_lower):
+            if (rule_lower.startswith(("engine.semgrep.", "c.lang.", "python.lang.")) or "semgrep" in rule_lower):
                 total += count
         elif tool == "codeql":
-            # CodeQL convention: ``<lang>/<rule-id>``. The cpp/, py/,
-            # js/ etc. prefixes disambiguate from
-            # semgrep / coccinelle. Filter to slash-separated ids
-            # whose first segment is a known language.
             head = rule_id.split("/", 1)[0] if "/" in rule_id else ""
             if head in {"cpp", "c", "py", "python", "js", "java",
                         "javascript", "ts", "typescript", "go",
                         "rb", "ruby", "cs", "csharp"}:
                 total += count
-        elif tool == "coccinelle":
-            # Cocci ids are typically a single snake_case token with
-            # no dots / slashes. Distinguish from Semgrep's dotted
-            # ids by absence of separators.
-            if "/" not in rule_id and "." not in rule_id:
-                total += count
+        elif tool == "coccinelle" and "/" not in rule_id and "." not in rule_id:
+            total += count
     return total
 
 
-def render_scan_coverage(out_dir: Path) -> Optional[str]:
+def render_scan_coverage(out_dir: Path) -> str | None:
     """Render the operator-facing tool-execution coverage block for
     a /scan run. Returns ``None`` when no per-tool coverage files
     exist — caller suppresses the section entirely rather than
@@ -111,15 +101,13 @@ def render_scan_coverage(out_dir: Path) -> Optional[str]:
     # scan_metrics.json gives per-tool finding counts via the
     # findings_by_rule namespace split. Best-effort: missing /
     # malformed metrics falls back to ''— findings'' on each line.
-    metrics: Dict = {}
+    metrics: dict = {}
     metrics_path = out_dir / "scan_metrics.json"
-    if metrics_path.is_file():
-        try:
-            metrics = json.loads(metrics_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            metrics = {}
+    loaded_metrics = load_json(metrics_path, max_bytes=_MAX_RECORD_BYTES)
+    if isinstance(loaded_metrics, dict):
+        metrics = loaded_metrics
 
-    rendered_lines: List[str] = []
+    rendered_lines: list[str] = []
     for tool in _TOOL_ORDER:
         rec = _load_coverage_record(out_dir, tool)
         if rec is None:
@@ -141,11 +129,11 @@ def render_scan_coverage(out_dir: Path) -> Optional[str]:
         # failure field surfaced today; codeql / cocci failures
         # surface through their own pipeline — extend as those
         # detectors grow).
-        failed_packs: List = []
+        failed_packs: list = []
         if tool == "semgrep":
             failed_packs = metrics.get("semgrep_failed_packs") or []
 
-        detail_parts: List[str] = []
+        detail_parts: list[str] = []
         if rule_count is not None:
             detail_parts.append(
                 f"{rule_count} rule group{'s' if rule_count != 1 else ''}"
@@ -170,8 +158,7 @@ def render_scan_coverage(out_dir: Path) -> Optional[str]:
     first, *rest = rendered_lines
     indent = " " * len("Coverage: ")
     out_lines = [f"Coverage: {first}"]
-    for line in rest:
-        out_lines.append(f"{indent}{line}")
+    out_lines.extend(f"{indent}{line}" for line in rest)
     return "\n".join(out_lines)
 
 

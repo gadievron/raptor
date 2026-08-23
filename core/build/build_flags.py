@@ -37,7 +37,6 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -71,35 +70,35 @@ class BuildFlagsContext:
     #: a ``-Wno-error=unused-result`` exception) was observed. When
     #: True and source_intel detects ``__must_check`` on a function,
     #: the contract is compile-enforced; otherwise it's advisory.
-    werror_unused_result: Optional[bool] = None
+    werror_unused_result: bool | None = None
 
     #: Bare ``-Werror`` (no ``=spec``). When True, every warning is an
     #: error unless explicitly excepted.
-    werror_all: Optional[bool] = None
+    werror_all: bool | None = None
 
     #: Integer level from ``-D_FORTIFY_SOURCE=N``. glibc accepts 1,2,3;
     #: kernel uses 1. ``None`` means not set.
-    fortify_source_level: Optional[int] = None
+    fortify_source_level: int | None = None
 
     #: One of: "none" (``-fno-stack-protector``) | "weak"
     #: (``-fstack-protector``) | "strong" | "all" | "explicit" | None.
-    stack_protector_level: Optional[str] = None
+    stack_protector_level: str | None = None
 
     #: ``False`` iff ``-fno-delete-null-pointer-checks`` observed
     #: (kernel default). ``True`` iff ``-fdelete-null-pointer-checks``
     #: explicit. ``None`` otherwise — default depends on -O level and
     #: compiler version, so we don't assume.
-    delete_null_pointer_checks: Optional[bool] = None
+    delete_null_pointer_checks: bool | None = None
 
     #: Sanitizer names from ``-fsanitize=NAME[,NAME…]`` (comma-split,
     #: deduped, order preserved). Kernel sanitizers via Kconfig also
     #: surface here as ``"kasan"`` / ``"ubsan"`` / etc.
-    sanitizers_enabled: Tuple[str, ...] = ()
+    sanitizers_enabled: tuple[str, ...] = ()
 
     #: Kernel ``CONFIG_*`` hardening keys observed in ``.config``.
     #: Maps key name → bool (True if ``=y``, False if ``# … is not set``).
     #: Empty when source is not ``kconfig``.
-    relevant_configs: Tuple[Tuple[str, bool], ...] = ()
+    relevant_configs: tuple[tuple[str, bool], ...] = ()
 
 
 # =====================================================================
@@ -158,7 +157,7 @@ def extract_flags(target: Path) -> BuildFlagsContext:
 # Source-specific extractors
 # =====================================================================
 
-def _find_compile_commands(target: Path) -> Optional[Path]:
+def _find_compile_commands(target: Path) -> Path | None:
     """Locate ``compile_commands.json``. CMake convention puts it in
     a build/ subdirectory; Bazel and bear at project root."""
     for candidate in (
@@ -178,15 +177,22 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     have different flags (e.g. some compiled with ``-DCONFIG_KASAN``),
     and we want the most-hardened observed setting per flag.
     """
-    raw = path.read_text(errors="replace")
-    entries = json.loads(raw)
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("malformed compile_commands.json at %s", path)
+        return BuildFlagsContext(
+            source="compile_commands.json",
+            extraction_confidence="absent",
+        )
     if not isinstance(entries, list) or not entries:
         return BuildFlagsContext(
             source="compile_commands.json",
             extraction_confidence="absent",
         )
 
-    pieces: List[str] = []
+    pieces: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -202,7 +208,7 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     )
 
 
-_HARDENING_CONFIGS: Tuple[str, ...] = (
+_HARDENING_CONFIGS: tuple[str, ...] = (
     "CONFIG_FORTIFY_SOURCE",
     "CONFIG_HARDENED_USERCOPY",
     "CONFIG_STACK_PROTECTOR",
@@ -236,8 +242,8 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     config bits since the kernel build doesn't surface raw compiler
     flags via this file.
     """
-    text = path.read_text(errors="replace")
-    configs: Dict[str, bool] = {}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    configs: dict[str, bool] = {}
 
     for m in re.finditer(
         r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$",
@@ -264,14 +270,14 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
         )
 
     # Stack-protector level — strongest observed wins.
-    stack_proto: Optional[str] = None
+    stack_proto: str | None = None
     if configs.get("CONFIG_STACK_PROTECTOR_STRONG"):
         stack_proto = "strong"
     elif configs.get("CONFIG_STACK_PROTECTOR"):
         stack_proto = "weak"
 
     # Sanitizers active.
-    sanitizers: List[str] = []
+    sanitizers: list[str] = []
     if configs.get("CONFIG_KASAN"):
         sanitizers.append("kasan")
     if configs.get("CONFIG_UBSAN"):
@@ -280,7 +286,7 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
         sanitizers.append("kcov")
 
     # Kernel FORTIFY_SOURCE doesn't tier — present means enabled.
-    fortify: Optional[int] = 1 if configs.get("CONFIG_FORTIFY_SOURCE") else None
+    fortify: int | None = 1 if configs.get("CONFIG_FORTIFY_SOURCE") else None
 
     return BuildFlagsContext(
         source="kconfig",
@@ -310,7 +316,7 @@ def _from_makefile(path: Path) -> BuildFlagsContext:
     or follow ``include`` directives — confidence is ``best_effort``
     accordingly.
     """
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
     pieces = [m.group(1) for m in _CFLAGS_LINE_RE.finditer(text)]
     if not pieces:
         return BuildFlagsContext(
@@ -357,18 +363,18 @@ def _parse_flag_string(
     has_specific_werror = "-Werror=unused-result" in text
     has_excepted = "-Wno-error=unused-result" in text
 
-    werror_unused_result: Optional[bool] = None
+    werror_unused_result: bool | None = None
     if has_excepted:
         werror_unused_result = False
     elif has_specific_werror or has_bare_werror:
         werror_unused_result = True
 
-    werror_all: Optional[bool] = True if has_bare_werror else None
+    werror_all: bool | None = True if has_bare_werror else None
 
     # -- _FORTIFY_SOURCE -------------------------------------------------
-    fortify_source_level: Optional[int] = None
+    fortify_source_level: int | None = None
     if _FORTIFY_UNDEF_RE.search(text):
-        fortify_source_level = 0
+        fortify_source_level = None
     else:
         m = _FORTIFY_LEVEL_RE.search(text)
         if m:
@@ -377,7 +383,7 @@ def _parse_flag_string(
             fortify_source_level = 1
 
     # -- Stack protector -------------------------------------------------
-    stack_protector_level: Optional[str] = None
+    stack_protector_level: str | None = None
     if "-fno-stack-protector" in text:
         stack_protector_level = "none"
     else:
@@ -386,14 +392,14 @@ def _parse_flag_string(
             stack_protector_level = m.group(1) or "weak"
 
     # -- delete-null-pointer-checks --------------------------------------
-    delete_null_pointer_checks: Optional[bool] = None
+    delete_null_pointer_checks: bool | None = None
     if "-fno-delete-null-pointer-checks" in text:
         delete_null_pointer_checks = False
     elif "-fdelete-null-pointer-checks" in text:
         delete_null_pointer_checks = True
 
     # -- Sanitizers ------------------------------------------------------
-    sanitizers: List[str] = []
+    sanitizers: list[str] = []
     for m in _SANITIZE_RE.finditer(text):
         for tok in m.group(1).split(","):
             tok = tok.strip()

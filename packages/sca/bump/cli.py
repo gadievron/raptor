@@ -23,11 +23,15 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING
+
+from core.json import dumps_display
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,17 @@ def main(argv: Sequence[str]) -> int:
              "in PR threads.",
     )
     parser.add_argument(
+        "--exclude", action="append", metavar="GLOB", default=None,
+        help="glob of paths to exclude from the WRITE set (no bump "
+             "candidates from matching files); repeatable. Matched "
+             "against the target-relative path; * spans /, and a "
+             "leading **/ also matches at the target root. Typical "
+             "use: protecting test-fixture trees whose deliberately-"
+             "old pins are test assertions (--exclude '**/tests/**' "
+             "--exclude '**/fixtures/**'). Scanning is unaffected — "
+             "findings in excluded trees stay reported.",
+    )
+    parser.add_argument(
         "--no-cache", action="store_true",
         help="bypass cache for upstream-latest + registry lookups",
     )
@@ -84,14 +99,31 @@ def main(argv: Sequence[str]) -> int:
     )
     parser.add_argument(
         "--trust-repo", action="store_true",
-        help="Set the process-wide ``cc_trust`` override. NO "
-             "behaviour change in raptor-sca bump itself — bump's "
-             "defenses (sandbox + egress proxy + atomic write + "
-             "verdict-gated apply) are not trust-gated. Provided "
-             "for cross-subcommand consistency; the override IS "
-             "consulted by adjacent subsystems (``/agentic`` LLM "
-             "dispatch, CodeQL build trust) when they run in the "
-             "same process.",
+        help="Set the process-wide ``cc_trust`` / ``codeql_trust`` "
+             "overrides. NO behaviour change in raptor-sca bump "
+             "itself — bump's defenses (sandbox + egress proxy + "
+             "atomic write + verdict-gated apply) are not "
+             "trust-gated. Provided for cross-subcommand "
+             "consistency; the overrides ARE consulted by adjacent "
+             "subsystems (``/agentic`` LLM dispatch, CodeQL build "
+             "trust) when they run in the same process. The active "
+             "project's ``config`` trust marker implies this flag.",
+    )
+    parser.add_argument(
+        "--no-trust-repo", action="store_true",
+        help="Force repo-untrusted for this run, overriding both "
+             "``--trust-repo`` and the active project's ``config`` "
+             "trust marker (explicit negative wins).",
+    )
+    parser.add_argument(
+        "--offline", action="store_true",
+        help="No network: the HttpClient is replaced by the no-op "
+             "client (every request raises immediately), so every "
+             "upstream-latest / registry / OSV / KEV / EPSS lookup "
+             "fails fast and the corresponding verdicts degrade to "
+             "Unknown / skipped-with-reason. For air-gapped runs and "
+             "hermetic tests — without it, an unreachable feed costs "
+             "the full HTTP retry-backoff schedule per candidate.",
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0,
@@ -101,21 +133,18 @@ def main(argv: Sequence[str]) -> int:
     from ..cli import _configure_logging
     _configure_logging(args.verbose)
 
-    if args.trust_repo:
-        # Same wiring shape as ``raptor-sca fix --harden`` and the
-        # scan path. Untrusted-target safety gates downstream of
-        # ``cc_trust.is_trust_overridden()`` (e.g. the ``cc_dispatch``
-        # block in agentic enrichment, target-pollution guards in
-        # parsers) honour this opt-in. ImportError on cc_trust is
-        # an env mismatch, not a fatal error — bump still works
-        # without the override; the operator just gets the default
-        # untrusted treatment.
-        try:
-            from core.security.cc_trust import set_trust_override
-            set_trust_override(True)
-        except ImportError:
-            logger.debug("raptor-sca bump: cc_trust unavailable; "
-                          "--trust-repo had no effect")
+    # Repo-trust umbrella — same resolution as the scan path
+    # (``--no-trust-repo`` > ``--trust-repo`` > project ``config``
+    # marker > off, banner when the marker decides). The resolved
+    # value drives the process-wide ``cc_trust`` / ``codeql_trust``
+    # overrides consulted by untrusted-target safety gates (e.g. the
+    # ``cc_dispatch`` block in agentic enrichment, target-pollution
+    # guards in parsers) when they run in the same process, AND is
+    # passed explicitly to ``run_bump`` below so the policy-file gate
+    # cannot drift from it (the orchestrator's own fallback resolver
+    # has no negative-flag input).
+    from .._scan_args import resolve_repo_trust
+    trust_repo = resolve_repo_trust(args)
 
     target = args.target.resolve()
     if not target.exists():
@@ -128,7 +157,9 @@ def main(argv: Sequence[str]) -> int:
 
     from core.cve import EpssClient, KevClient
     from core.json import JsonCache
-    from .. import SCA_CACHE_ROOT, default_client as _sca_default_http
+
+    from .. import SCA_CACHE_ROOT
+    from .. import default_client as _sca_default_http
     from ..osv import OsvClient
     from ..registries.npm import NpmClient
     from ..registries.pypi import PyPIClient
@@ -138,16 +169,16 @@ def main(argv: Sequence[str]) -> int:
     # builds the right egress-allowlisted HttpClient with SCA's
     # known-host set augmented by anything the target's Dockerfiles
     # reference.
-    http = _sca_default_http(target=target)
+    http = _sca_default_http(target=target, offline=args.offline)
     cache_root = Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT
     cache = None if args.no_cache else JsonCache(root=cache_root)
-    pypi_client = PyPIClient(http, cache, offline=False)
-    npm_client = NpmClient(http, cache, offline=False)
+    pypi_client = PyPIClient(http, cache, offline=args.offline)
+    npm_client = NpmClient(http, cache, offline=args.offline)
     # OSV vuln-delta gate: if the bump introduces new CVEs the
     # current pin doesn't carry, the verdict escalates.
-    osv_client = OsvClient(http, cache, offline=False)
-    kev_client = KevClient(http, cache, offline=False)
-    epss_client = EpssClient(http, cache, offline=False)
+    osv_client = OsvClient(http, cache, offline=args.offline)
+    kev_client = KevClient(http, cache, offline=args.offline)
+    epss_client = EpssClient(http, cache, offline=args.offline)
 
     try:
         report = run_bump(
@@ -161,14 +192,16 @@ def main(argv: Sequence[str]) -> int:
             apply=args.apply,
             cache=cache,
             github_token=github_token,
+            trust_repo=trust_repo,
+            exclude=args.exclude,
         )
-    except Exception as e:                # noqa: BLE001
+    except Exception as e:
         logger.exception("raptor-sca bump: unrecoverable error")
         print(f"raptor-sca bump: {e}", file=sys.stderr)
         return 3
 
     if args.emit_json:
-        sys.stdout.write(json.dumps(_report_to_dict(report), indent=2))
+        sys.stdout.write(dumps_display(_report_to_dict(report), indent=2))
         sys.stdout.write("\n")
     elif args.pr_comment:
         from .pr_comment import render_pr_comment as _render_pr
@@ -210,6 +243,8 @@ def _report_to_dict(report) -> dict:
         ],
         "results": [
             {
+                "kind": r.candidate.kind,
+                "locator": r.candidate.locator,
                 "arg_name": r.candidate.arg_name,
                 "file": str(r.candidate.file),
                 "current_version": r.candidate.current_version,
@@ -238,5 +273,8 @@ def _report_to_dict(report) -> dict:
         "skipped": [
             {"arg_name": arg, "file": str(path), "reason": reason}
             for arg, path, reason in report.skipped
+        ],
+        "excluded_by_pattern": [
+            str(path) for path in report.excluded_by_pattern
         ],
     }

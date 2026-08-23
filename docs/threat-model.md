@@ -1,6 +1,6 @@
 # Threat Models in RAPTOR
 
-RAPTOR now treats the threat model as a proper project artefact, not a bit of
+RAPTOR treats the threat model as a proper project artefact, not a bit of
 vague chat that disappears once the model context rolls over. The idea is
 simple: before we ask agents to go hunting, we give them a crisp view of what
 matters, where trust changes hands, what noise to ignore, and how a finding
@@ -87,8 +87,10 @@ raptor project threat-model export
 raptor project status
 ```
 
-`project status` now shows whether a threat model exists and how many focus
-areas it has.
+`project status` shows whether a threat model exists and how many focus
+areas it has. Beyond `show`/`export`, the subcommand surface also covers
+`lint` (structural checks), `diff` (compare against the map), `report`,
+`sync`, and `add`/`remove` for focus areas.
 
 ## What To Put In It
 
@@ -130,7 +132,7 @@ Good outcomes should come from things RAPTOR can actually stand behind:
 
 ## Strict Sandbox Mode
 
-There is also a new `--sandbox strict` profile for the awkward agentic cases
+There is also a `--sandbox strict` profile for the awkward agentic cases
 where degrading silently would be daft.
 
 ```bash

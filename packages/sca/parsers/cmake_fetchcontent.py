@@ -47,10 +47,10 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from collections.abc import Iterator
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
 
 logger = logging.getLogger(__name__)
 
@@ -82,21 +82,19 @@ _URL_REF_RE = re.compile(
 
 
 @register(filenames=["CMakeLists.txt"])
-def parse_cmake_lists(path: Path) -> List[Dependency]:
+def parse_cmake_lists(path: Path) -> list[Dependency]:
     """Parse a ``CMakeLists.txt`` for ``FetchContent_Declare`` blocks.
 
     Returns one Dependency per declaration; the project's own
     sources (the ``add_executable`` / ``add_library`` rules)
     are out of scope — we only emit pulled-in external deps.
     """
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("sca.parsers.cmake_fetchcontent: skip %s (%s)",
-                      path, e)
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason.
         return []
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     for name, args_text in _iter_declarations(text):
         dep = _build_dep(name, args_text, declared_in=path)
         if dep is not None:
@@ -104,7 +102,7 @@ def parse_cmake_lists(path: Path) -> List[Dependency]:
     return out
 
 
-def _iter_declarations(text: str) -> Iterator[Tuple[str, str]]:
+def _iter_declarations(text: str) -> Iterator[tuple[str, str]]:
     """Yield ``(name, args_block)`` per matching declaration."""
     for m in _FETCHCONTENT_RE.finditer(text):
         yield m.group("name"), m.group("args")
@@ -112,7 +110,7 @@ def _iter_declarations(text: str) -> Iterator[Tuple[str, str]]:
 
 def _build_dep(
     name: str, args_text: str, *, declared_in: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Map a parsed declaration to a Dependency row.
 
     The ``args_text`` is the inside of the parentheses minus the
@@ -127,7 +125,7 @@ def _build_dep(
 
     ecosystem: str
     canonical_name: str
-    version: Optional[str]
+    version: str | None
     pin_style: PinStyle
     purl: str
 
@@ -140,7 +138,7 @@ def _build_dep(
             purl = f"pkg:github/{owner}/{repo}"
             version = git_tag
             pin_style = (
-                PinStyle.EXACT if version else PinStyle.WILDCARD
+                PinStyle.GIT if version else PinStyle.WILDCARD
             )
         else:
             ecosystem = "CMake-FetchContent"
@@ -148,7 +146,7 @@ def _build_dep(
             purl = f"pkg:generic/{name}"
             version = git_tag
             pin_style = (
-                PinStyle.EXACT if version else PinStyle.WILDCARD
+                PinStyle.GIT if version else PinStyle.WILDCARD
             )
         if version:
             purl = f"{purl}@{version}"
@@ -209,8 +207,13 @@ def _parse_kv(args_text: str) -> dict:
     everything until the next key. Quoting (``"..."``) is
     respected for values; comments (``# ...``) are stripped.
     """
-    # Strip ``# ...`` end-of-line comments before tokenising.
-    text = re.sub(r"#[^\n]*", " ", args_text)
+    # Strip ``# ...`` end-of-line comments before tokenising,
+    # preserving any ``#`` inside double-quoted strings.
+    text = re.sub(
+        r'"[^"]*"|#[^\n]*',
+        lambda m: m.group(0) if m.group(0).startswith('"') else " ",
+        args_text,
+    )
     # CMake keys we recognise — keeps the parser narrow + safe.
     KEYS = {
         "GIT_REPOSITORY", "GIT_TAG", "GIT_SHALLOW", "GIT_PROGRESS",
@@ -240,14 +243,14 @@ def _parse_kv(args_text: str) -> dict:
     return out
 
 
-def _tokenise(text: str) -> List[str]:
+def _tokenise(text: str) -> list[str]:
     """Whitespace-split with quoted-string awareness.
 
     CMake's quote rules are simple — ``"..."`` produces a single
     token preserving inner whitespace. Anything else splits on
     whitespace.
     """
-    tokens: List[str] = []
+    tokens: list[str] = []
     i = 0
     while i < len(text):
         c = text[i]

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -305,6 +307,144 @@ class TestLoadOrCalibrate:
     def test_missing_binary_raises(self, cache_dir, tmp_path):
         with pytest.raises(FileNotFoundError):
             cal.load_or_calibrate(tmp_path / "no-such-bin")
+
+
+# ---------------------------------------------------------------------------
+# _spawn_probe normalisation
+# ---------------------------------------------------------------------------
+
+
+class _FakeObserved:
+    def __init__(self, connects):
+        self.paths_read = ["/b", "/a", "/a"]
+        self.paths_written = []
+        self.paths_stat = []
+        self.connect_targets = connects
+
+
+class _FakeResult:
+    returncode = 0
+    sandbox_info = {"observe_nonce": "n0", "proxy_events": []}
+
+
+def _spawn_with_connects(connects):
+    with patch("core.sandbox.run", return_value=_FakeResult()), \
+         patch("core.sandbox.observe_profile.parse_observe_log",
+               return_value=_FakeObserved(connects)):
+        profile, rc = cal._spawn_probe(
+            "/usr/bin/true", [], timeout=1.0,
+        )
+    return profile
+
+
+def _ct(ip, port, family="AF_INET"):
+    return SimpleNamespace(ip=ip, port=port, family=family)
+
+
+class TestConnectTargetsNormalised:
+    """``_spawn_probe`` must set-normalise ``connect_targets`` like
+    every other observational list, so repeat probes of the same
+    binary serialise to identical JSON (modulo timestamp) as
+    ``to_json`` documents."""
+
+    def test_duplicates_collapsed(self):
+        profile = _spawn_with_connects(
+            [_ct("1.2.3.4", 443), _ct("1.2.3.4", 443)],
+        )
+        assert profile.connect_targets == [
+            cal.ConnectTarget(ip="1.2.3.4", port=443, family="AF_INET"),
+        ]
+
+    def test_order_independent_json(self):
+        a = _spawn_with_connects(
+            [_ct("9.9.9.9", 53), _ct("1.2.3.4", 443)],
+        )
+        b = _spawn_with_connects(
+            [_ct("1.2.3.4", 443), _ct("9.9.9.9", 53)],
+        )
+        # Same reach observed in different tracer-record order must
+        # produce identical JSON modulo the timestamp field.
+        ja = cal.SandboxProfile.from_json(a.to_json())
+        jb = cal.SandboxProfile.from_json(b.to_json())
+        assert ja.connect_targets == jb.connect_targets
+
+    def test_sibling_lists_still_normalised(self):
+        profile = _spawn_with_connects([])
+        assert profile.paths_read == ["/a", "/b"]
+
+
+# ---------------------------------------------------------------------------
+# env_keys plumb-through
+# ---------------------------------------------------------------------------
+
+
+class TestProbeEnvPlumbThrough:
+    """The cache key discriminates on env_keys values, so the probe
+    must actually run WITH them — pre-fix _spawn_probe never received
+    an env and get_safe_env() stripped the discriminators, so every
+    env shape produced the identical (wrong) measurement."""
+
+    def test_probe_env_none_without_keys(self):
+        assert cal._probe_env(()) is None
+        assert cal._probe_env(None) is None
+
+    def test_probe_env_carries_set_discriminators(self, monkeypatch):
+        monkeypatch.setenv("CAL_PROBE_X", "bedrock-on")
+        env = cal._probe_env(["CAL_PROBE_X"])
+        assert env is not None
+        assert env["CAL_PROBE_X"] == "bedrock-on"
+
+    def test_probe_env_removes_unset_discriminators(self, monkeypatch):
+        # An unset discriminator must be ABSENT even if the safe-env
+        # baseline would have carried a stale value through.
+        monkeypatch.delenv("CAL_PROBE_STALE", raising=False)
+        from core.config import RaptorConfig
+        base = dict(RaptorConfig.get_safe_env())
+        base["CAL_PROBE_STALE"] = "stale"
+        monkeypatch.setattr(RaptorConfig, "get_safe_env",
+                            classmethod(lambda cls: dict(base)))
+        env = cal._probe_env(["CAL_PROBE_STALE"])
+        assert "CAL_PROBE_STALE" not in env
+
+    def test_calibrate_binary_passes_discriminators_to_probe(
+            self, cache_dir, fake_binary, monkeypatch):
+        monkeypatch.setenv("CAL_PROBE_X", "corp-index")
+        captured = {}
+
+        def fake_spawn(bin_path, args, *, timeout, extra_env=None):
+            captured["extra_env"] = extra_env
+            return cal.SandboxProfile(
+                binary_path="", binary_sha256="", env_signature="",
+                captured_at="2026-05-09T00:00:00Z",
+                probe_args=list(args),
+                paths_read=["/probed"],
+                paths_written=[], paths_stat=[],
+                proxy_hosts=[], connect_targets=[],
+            ), 0
+
+        monkeypatch.setattr(cal, "_spawn_probe", fake_spawn)
+        cal.calibrate_binary(fake_binary, env_keys=["CAL_PROBE_X"])
+        assert captured["extra_env"] is not None
+        assert captured["extra_env"]["CAL_PROBE_X"] == "corp-index"
+
+    def test_calibrate_binary_no_env_keys_passes_none(
+            self, cache_dir, fake_binary, monkeypatch):
+        captured = {}
+
+        def fake_spawn(bin_path, args, *, timeout, extra_env=None):
+            captured["extra_env"] = extra_env
+            return cal.SandboxProfile(
+                binary_path="", binary_sha256="", env_signature="",
+                captured_at="2026-05-09T00:00:00Z",
+                probe_args=list(args),
+                paths_read=["/probed"],
+                paths_written=[], paths_stat=[],
+                proxy_hosts=[], connect_targets=[],
+            ), 0
+
+        monkeypatch.setattr(cal, "_spawn_probe", fake_spawn)
+        cal.calibrate_binary(fake_binary)
+        assert captured["extra_env"] is None
 
 
 # ---------------------------------------------------------------------------

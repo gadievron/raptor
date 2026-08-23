@@ -35,7 +35,8 @@ def parse_record(record: dict[str, Any]) -> OsvRecord:
     """Parse one OSV vulnerability record. Raises ``ValueError`` if ``id`` is missing."""
     osv_id = str(record.get("id") or "")
     if not osv_id:
-        raise ValueError("OSV record missing id")
+        msg = "OSV record missing id"
+        raise ValueError(msg)
 
     aliases = tuple(
         x for x in (record.get("aliases") or ()) if isinstance(x, str)

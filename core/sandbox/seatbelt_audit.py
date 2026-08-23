@@ -4,9 +4,20 @@ When ``--audit`` is engaged on macOS, the SBPL profile uses
 ``(allow file-write* (with report))`` — the write succeeds AND the
 kernel Sandbox.kext emits an entry to the unified log. This module
 streams those entries live via ``log stream``, parses them, and
-appends RAPTOR-format records to ``<run_dir>/.sandbox-denials.jsonl``
-— matching the JSONL schema produced by the Linux ptrace tracer so
-the existing ``summarize_and_write`` aggregation works unchanged.
+appends RAPTOR-format records to the run's evidence directory —
+``<run_dir>/.audit/.sandbox-denials.jsonl`` (see
+core/sandbox/evidence.py) — matching the JSONL schema produced by the
+Linux ptrace tracer so the existing ``summarize_and_write``
+aggregation works unchanged. macOS records additionally carry a
+``verdict`` field (``allow`` under the audit profile's
+allow-with-report clauses, ``deny`` for genuine blocks);
+``summarize_and_write`` counts only deny-verdict — or verdict-less
+Linux — records as denials and buckets allow-verdict records into a
+separate informational section. The seatbelt profile denies the target
+all writes beneath ``<run_dir>/.audit`` (seatbelt.build_profile's
+``audit_evidence_dir``), so only this parent-side streamer can touch
+the file; appends go through a held fd whose inode is verified when
+the streamer stops.
 
 Spike-validated facts (see scripts/macos_sandbox_spike4.py):
 
@@ -37,17 +48,32 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
+from core.sandbox.escalation_signatures import is_credential_path
+from core.security.log_sanitisation import sanitise_for_terminal
+
+# Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
+# which is shared with the Linux ptrace tracer so the two backends
+# stay in sync. See that module for the full mechanism (token-bucket
+# + per-category + per-PID + 1-in-N sampling + CLI override).
+from . import audit_budget as _audit_budget
+from . import evidence as _evidence_mod
 from .seatbelt import SANDBOX_KEXT_SENDER
 
 logger = logging.getLogger(__name__)
+
+
+class AuditWarmUpError(RuntimeError):
+    """The warm-up attachment gate could not confirm the log-stream
+    feed is live and the caller demanded proof (warm_up_required=True
+    — what _macos_spawn passes for audit_required runs). Raised from
+    ``LogStreamer.start()`` so the fail-closed decision happens
+    BEFORE the workload spawns."""
 
 
 # Filename matches the Linux tracer convention so summarize_and_write
@@ -86,31 +112,160 @@ _WARM_UP_TIMEOUT_S = 5.0
 # keeps the warm-up cheap and side-effect-free.
 _WARM_UP_SBPL = "(version 1)(deny default (with report))"
 
-# Path to the system sandbox-exec binary. Resolved via shutil.which at
-# call site so a non-standard PATH (operator override) works, falling
-# back to the canonical /usr/bin location that ships with macOS.
+# Path to the system sandbox-exec binary. The warm-up resolves it via
+# the trusted-dirs helper (probes._find_sandbox_binary) — never the
+# inherited PATH — falling back to the canonical /usr/bin location
+# that ships with macOS.
 _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
-
-
-# Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
-# which is shared with the Linux ptrace tracer so the two backends
-# stay in sync. See that module for the full mechanism (token-bucket
-# + per-category + per-PID + 1-in-N sampling + CLI override).
-from . import audit_budget as _audit_budget  # noqa: E402
 
 
 # Sandbox kext eventMessage format. Spike #4 confirmed:
 #   "Sandbox: <ProcessName>(<PID>) <verdict> <action> <path>"
 # verdict ∈ {allow, deny}; action is file-* / network-* / etc.
+# Tolerated variants beyond the spike's canonical shape:
+#   * repeat-count verdicts — the kernel coalesces repeated events as
+#     "deny(12) file-read-data ..." — matched and discarded via the
+#     optional (?:\(\d+\)) group;
+#   * process names containing spaces or parentheses ("Google Chrome
+#     Helper (Renderer)") — the name is a non-greedy (.+?) anchored by
+#     the "(<PID>) <verdict>" tail, so the LAST "(digits)" before the
+#     verdict is always the PID.
+# Pre-fix, both shapes silently failed the match and their records
+# were dropped from the audit trail.
 _LOG_LINE_RE = re.compile(
-    r"Sandbox:\s+(\S+)\((\d+)\)\s+(allow|deny)\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
+
+# Parse-ratio diagnostic thresholds (see LogStreamer.stop). When at
+# least this many kext-sender lines were seen and fewer than this
+# fraction parsed into records, emit a loud "parsed M of N" warning —
+# the likely cause is a kernel eventMessage format drift that the
+# regex above no longer matches.
+_PARSE_DIAG_MIN_LINES = 10
+_PARSE_DIAG_MIN_RATIO = 0.5
+
+# Scope/lineage filter tunables (see LogStreamer's class docstring).
+# The `log stream` predicate filters by kext SENDER only — records
+# from EVERY sandboxed process on the host come through, so without
+# a scoping gate a concurrent RAPTOR run (or a hostile same-host
+# sandboxed process minting records that would steer an
+# observe-derived allowlist) pollutes this run's JSONL with the
+# run's own nonce stamped on.
+#   * poll interval: the lineage poller snapshots the process tree so
+#     descendants seen alive are still attributable when their kext
+#     records arrive AFTER they exit (the kernel→log pipeline has
+#     ~1.5s latency; short workloads routinely deliver post-exit).
+#   * pending cap: records arriving between streamer start and the
+#     first register_target_pid are buffered (bounded) and filtered
+#     on registration.
+#   * foreign cache cap: negative attribution results are memoised;
+#     cleared wholesale past the cap so PID reuse cannot poison the
+#     cache indefinitely.
+_LINEAGE_POLL_INTERVAL_S = 0.2
+_PENDING_BUFFER_CAP = 512
+_FOREIGN_CACHE_CAP = 4096
+
+# ppid-chain walk bound in the scope filter — defends against a
+# cyclic/corrupt process-table probe ever looping the reader thread.
+_LINEAGE_WALK_MAX = 64
+
+
+def _default_get_ppid(pid: int) -> int | None:
+    """Best-effort parent PID lookup. /proc on Linux; ps(1) fallback
+    (macOS has no /proc). None when the process is gone or unreadable."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read().decode("utf-8", errors="replace")
+        return int(data.rpartition(")")[2].split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip()
+        return int(out) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _default_list_pid_ppids() -> list[tuple[int, int]]:
+    """Best-effort (pid, ppid) snapshot of the whole process table.
+    /proc scan on Linux; one ps(1) invocation elsewhere. Empty list on
+    failure — the poller then contributes nothing this tick."""
+    pairs: list[tuple[int, int]] = []
+    try:
+        entries = [d for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        entries = []
+    if entries:
+        for d in entries:
+            try:
+                with open(f"/proc/{d}/stat", "rb") as fh:
+                    data = fh.read().decode("utf-8", errors="replace")
+                pairs.append(
+                    (int(d), int(data.rpartition(")")[2].split()[1]))
+                )
+            except (OSError, ValueError, IndexError):
+                continue
+        return pairs
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            try:
+                pairs.append((int(parts[0]), int(parts[1])))
+            except ValueError:
+                continue
+    return pairs
+
+
+# Live-escalation: credential-path matching is shared with triage.py's
+# post-hoc `credential_path_touch` signal via the leaf
+# core.sandbox.escalation_signatures module, so the live stderr notice
+# here and the post-hoc signal agree on what counts by construction.
+#
+# Unlike Linux's escape-primitive syscall set (ptrace, bpf, keyctl,
+# io_uring_*, ...), there is no macOS/SBPL analogue worth inventing
+# here: non-file/network SBPL actions (mach-lookup, process-*,
+# iokit-open, sysctl-*, ...) all collapse to the generic "seccomp"
+# bucket in `_action_to_type` below with no established HIGH-severity
+# subset — fabricating one would be an ungrounded judgment call.
+# Network-level live escalation (resolved_ip_screened / host_recon) is
+# already covered platform-wide by core/sandbox/proxy.py, which both
+# platforms share. Credential-path touches on file-read/file-write
+# records are the one live signal this platform's audit stream can
+# attribute meaningfully on its own.
+def _announce_credential_path_touch(path: str, pid: int) -> None:
+    """Best-effort immediate stderr banner — mirrors
+    core.sandbox.tracer._announce_escape_primitive's use of raw
+    os.write(2, ...) so it survives redirected/odd stdio state.
+
+    The path is attacker-controlled (the sandboxed target chose what
+    to touch); sanitise + bound it before it reaches the operator's
+    terminal — ascii/replace alone keeps ESC/CR/BEL, which are ASCII,
+    so a crafted filename could otherwise inject terminal control
+    sequences into the banner."""
+    try:
+        os.write(2, (
+            f"RAPTOR sandbox ALERT: credential-looking path touched: "
+            f"'{sanitise_for_terminal(path)}' (pid={pid}). "
+            f"See sandbox-triage.json at run end for full context.\n"
+        ).encode("ascii", errors="replace"))
+    except OSError:
+        pass
 
 
 # Map SBPL action prefixes to the RAPTOR sandbox-summary type taxonomy
 # (matches Linux tracer's _NAME_TO_TYPE mapping).
 def _action_to_type(action: str) -> str:
-    if action.startswith("file-write") or action.startswith("file-mknod"):
+    if action.startswith(("file-write", "file-mknod")):
         return "write"
     if action.startswith("file-read"):
         return "read"
@@ -122,7 +277,7 @@ def _action_to_type(action: str) -> str:
 
 def parse_log_entry(entry: dict, *,
                     observe_mode: bool = False,
-                    nonce: Optional[str] = None) -> Optional[dict]:
+                    nonce: str | None = None) -> dict | None:
     """Convert a `log stream` ndjson entry to a RAPTOR audit record.
 
     Returns None if the entry isn't a recognisable Sandbox.kext
@@ -172,23 +327,120 @@ def _now_iso() -> str:
 
 class LogStreamer:
     """Background log-stream subprocess feeding parsed audit records
-    into ``run_dir/.sandbox-denials.jsonl``.
+    into ``run_dir/.audit/.sandbox-denials.jsonl``.
 
     Owned by ``_macos_spawn.run_sandboxed`` for the duration of one
     sandboxed call. NOT a singleton — a fresh streamer per sandbox()
-    call, so concurrent sandboxes don't conflict on filtering /
-    routing of records. Slight overhead (one log-stream subprocess
-    per call) but each is cheap (~10MB resident, ~0 CPU when idle).
+    call, so concurrent sandboxes never conflict on ROUTING: each
+    run's records land in its own run_dir / JSONL with its own nonce.
+    Slight overhead (one log-stream subprocess per call) but each is
+    cheap (~10MB resident, ~0 CPU when idle).
+
+    Event ATTRIBUTION is a separate, weaker guarantee. ``log stream``
+    is a host-wide feed — every Sandbox.kext event on the machine
+    matches the sender predicate, including events from unrelated or
+    sibling sandboxed processes running concurrently. Two scoping
+    layers narrow attribution to this run's process tree:
+
+      * predicate-level — when ``target_pid`` is known at
+        construction, the log-stream predicate itself is narrowed to
+        eventMessages carrying that exact PID (the only PID datum the
+        kext embeds). Precise but narrow: processes the target forks
+        carry other PIDs and their events never arrive, and the
+        warm-up attachment gate is skipped (its synthetic workload's
+        events cannot match the scoped predicate).
+      * parse-time — ``register_target_pid()`` marks a PID (and its
+        process group AND session, when resolvable) as in-scope; the
+        reader thread drops every parsed record whose PID is out of
+        scope BEFORE it is nonce-stamped, budget-counted, or
+        appended. Defence in depth behind the predicate, and the
+        only layer that can widen beyond the exact PID. The session
+        widening is what lets registering the OUTER seatbelt shim
+        cover the sandbox-exec subtree: the shim deliberately forks
+        sandbox-exec into its own process group (so it can killpg
+        it), but every descendant stays in the shim's session until
+        it setsid()s — a setsid()'d descendant is a documented
+        residual of this layer.
+
+    With no scope registered (legacy callers), attribution stays
+    host-wide: kext events from unrelated sandboxed processes ARE
+    written into this run's JSONL, and allowlists derived from it
+    can be contaminated by them. Register the child PID as soon as
+    it is known to close that window.
+
+    ``require_scope=True`` (what ``_macos_spawn`` passes) removes the
+    legacy pass-through entirely: the caller promises to call
+    ``register_target_pid()`` as soon as the workload is spawned.
+    Until then, records are buffered (bounded) rather than appended;
+    afterwards, only records attributable to the registered scope are
+    admitted. Attribution widens beyond exact PID + process group to
+    the workload's process LINEAGE: a background poller snapshots the
+    process tree so descendants seen alive stay attributable when
+    their kext records arrive after they exit (the kernel→log
+    pipeline delivers post-exit for short workloads), and a live
+    ppid-chain walk catches descendants the poller has not seen yet.
+    Foreign records are dropped, counted, and surfaced via a
+    ``foreign_records_dropped`` field on the audit_summary record.
+    Residual: a descendant that lives shorter than one poll interval
+    and whose record arrives post-exit cannot be attributed and is
+    dropped — visible in the same counter.
+    Session widening applies on top: ``register_target_pid``
+    captures the registered PID's session, and same-session
+    records stay attributable — the shim forks sandbox-exec into
+    its own process group but the subtree keeps the shim's
+    session (a setsid()'d descendant is covered by the lineage
+    layers instead).
     """
 
     def __init__(self, run_dir: Path,
-                 budget: Optional["_audit_budget.AuditBudget"] = None,
+                 budget: _audit_budget.AuditBudget | None = None,
                  *, observe_mode: bool = False,
-                 observe_nonce: Optional[str] = None):
+                 observe_nonce: str | None = None,
+                 target_pid: int | None = None,
+                 require_scope: bool = False,
+                 warm_up_required: bool = False,
+                 get_ppid=None,
+                 getpgid=None,
+                 list_pid_ppids=None,
+                 lineage_poll_interval: float = _LINEAGE_POLL_INTERVAL_S) -> None:
         self._run_dir = Path(run_dir)
-        self._proc: Optional[subprocess.Popen] = None
-        self._reader: Optional[threading.Thread] = None
+        self._proc: subprocess.Popen | None = None
+        self._reader: threading.Thread | None = None
         self._stopped = threading.Event()
+        # Scope-required + lineage state (see class docstring). All of
+        # it is guarded by _scope_lock. The process-tree probes are
+        # injectable so tests drive attribution deterministically
+        # without a real /proc, ps, or getpgid.
+        self._require_scope = bool(require_scope)
+        # Fail-closed warm-up: when True, a warm-up gate miss raises
+        # AuditWarmUpError from start() instead of proceeding
+        # best-effort (see start()'s docstring for the trade-offs).
+        self._warm_up_required = bool(warm_up_required)
+        self._pending: list[dict] = []
+        self._foreign_records_dropped = 0
+        self._foreign_pid_cache: set[int] = set()
+        self._get_ppid = get_ppid or _default_get_ppid
+        self._getpgid = getpgid or os.getpgid
+        self._list_pid_ppids = list_pid_ppids or _default_list_pid_ppids
+        self._lineage_poll_interval = float(lineage_poll_interval)
+        self._lineage_poller: threading.Thread | None = None
+        # PID scoping state (see class docstring). _target_pid drives
+        # the predicate-level narrowing in start(); the pid/pgid sets
+        # drive the parse-time filter in _read_loop. Guarded by a
+        # dedicated lock because register_target_pid() is called from
+        # the parent thread while the reader thread consults the sets.
+        self._scope_lock = threading.Lock()
+        self._scope_pids: set[int] = set()
+        self._scope_pgids: set[int] = set()
+        self._scope_sids: set[int] = set()
+        # require_scope=True flips the empty-scope default from
+        # pass-all (legacy host-wide attribution) to drop-all: no
+        # record may be attributed to this run until the caller has
+        # registered its child. See the class docstring.
+        self._require_scope = bool(require_scope)
+        self._target_pid = int(target_pid) if target_pid is not None else None
+        if self._target_pid is not None:
+            self.register_target_pid(self._target_pid)
         # Per-run provenance secret — included in every record so the
         # parser can drop spoofed entries written by the target
         # binary into the bind-mounted JSONL. Held in process state
@@ -215,9 +467,203 @@ class LogStreamer:
         # last write. AuditBudget itself is also single-writer
         # (it's mutated only inside the held lock).
         self._append_lock = threading.Lock()
-        # Lazily-opened directory fd for openat(). See
-        # _append_record_locked for the TOCTOU rationale.
-        self._dirfd: Optional[int] = None
+        # Lazily-opened held evidence fd (core/sandbox/evidence.py).
+        # See _append_record_locked for the tamper rationale.
+        self._evidence: _evidence_mod.EvidenceFile | None = None
+        # Live-escalation dedup: paths already announced to stderr
+        # this run, so a target repeatedly touching the same
+        # credential-looking path doesn't spam the operator's
+        # terminal. One banner per distinct path per run — mirrors
+        # tracer.py's per-syscall-name dedup.
+        self._escalated_paths: set = set()
+        # Parse-ratio bookkeeping for the "parsed M of N kext lines"
+        # diagnostic (kernel eventMessage format drift detector).
+        # Mutated only on the reader thread; read at stop() after the
+        # reader join, so no lock needed.
+        self._kext_lines_seen = 0
+        self._kext_lines_parsed = 0
+
+    def register_target_pid(self, pid: int) -> None:
+        """Mark ``pid`` — and its process group and session, when
+        resolvable — as in-scope for event attribution.
+
+        Call as soon as the sandboxed child's PID is known (it is
+        usually not known when the streamer starts). Repeatable:
+        each call widens the scope, so hybrid runs can register the
+        workload plus helper processes. The group/session lookups are
+        best-effort — a PID that is already gone (or was never local)
+        still gets exact-PID matching, just no group widening.
+
+        Under ``require_scope=True`` this call additionally: flushes
+        the records buffered while no scope was known through the
+        scope gate, and starts the lineage poller so descendants of
+        the registered PID stay attributable after they exit.
+        The session widening is load-bearing for the production
+        caller: the registered PID is the outer seatbelt shim, whose
+        sandbox-exec child runs in a DIFFERENT process group (the
+        shim forks it into its own group so it can killpg it) but the
+        SAME session — under ``start_new_session=True`` a fresh
+        session private to this run. When the caller opted out of a
+        new session, the scope degrades to the caller's own session:
+        wider than one run, still strictly narrower than host-wide.
+        """
+        pid = int(pid)
+        pgid: int | None = None
+        try:
+            pgid = self._getpgid(pid)
+        except OSError:
+            pass
+        sid: int | None = None
+        try:
+            sid = os.getsid(pid)
+        except OSError:
+            pass
+        with self._scope_lock:
+            self._scope_pids.add(pid)
+            self._foreign_pid_cache.discard(pid)
+            if pgid is not None:
+                self._scope_pgids.add(pgid)
+            if sid is not None:
+                self._scope_sids.add(sid)
+            pending, self._pending = self._pending, []
+        if (self._require_scope
+                and self._lineage_poller is None
+                and self._lineage_poll_interval > 0):
+            self._lineage_poller = threading.Thread(
+                target=self._lineage_poll_loop, daemon=True,
+            )
+            self._lineage_poller.start()
+        # Flush the pre-registration buffer through the gate. The
+        # scope is set before the swap above, so a record the reader
+        # processes concurrently either lands in `pending` (swapped
+        # and flushed here) or sees the non-empty scope directly —
+        # never lost, never double-filtered.
+        for record in pending:
+            self._filter_and_append(record)
+
+    def _lineage_poll_loop(self) -> None:
+        """Periodically fold live descendants of the registered scope
+        into it. Runs until stop() sets the event; one final refresh
+        after that catches late spawns."""
+        try:
+            while not self._stopped.wait(self._lineage_poll_interval):
+                self._refresh_lineage_from_tree()
+            self._refresh_lineage_from_tree()
+        except Exception:
+            # A dead poller degrades attribution for post-exit
+            # records (they fall back to the live ppid walk) — worth
+            # a warning, never a crash.
+            logger.warning("seatbelt audit lineage poller crashed",
+                           exc_info=True)
+
+    def _refresh_lineage_from_tree(self) -> None:
+        """One poller tick: walk the (pid, ppid) snapshot and add
+        every transitive child of an in-scope PID to the scope."""
+        pairs = self._list_pid_ppids()
+        if not pairs:
+            return
+        children: dict[int, list[int]] = {}
+        for pid, ppid in pairs:
+            children.setdefault(ppid, []).append(pid)
+        with self._scope_lock:
+            frontier = list(self._scope_pids)
+            while frontier:
+                parent = frontier.pop()
+                for child in children.get(parent, ()):
+                    if child in self._scope_pids:
+                        continue
+                    self._scope_pids.add(child)
+                    # An earlier walk-miss may have negative-cached a
+                    # pid the tree now attributes; lineage wins.
+                    self._foreign_pid_cache.discard(child)
+                    frontier.append(child)
+                    try:
+                        self._scope_pgids.add(self._getpgid(child))
+                    except OSError:
+                        pass
+
+    def _record_in_scope(self, record: dict) -> bool:
+        """Parse-time PID filter (see class docstring).
+
+        With no scope registered, every record passes — legacy
+        host-wide attribution, documented as unguaranteed (callers
+        under ``require_scope=True`` never reach this arm: records
+        are buffered until registration). With a scope, a record is
+        in-scope when its PID was registered directly, or when its
+        process group matches a registered one (catches children the
+        target forked, which the predicate-level narrowing cannot).
+        Under ``require_scope=True`` attribution additionally covers
+        the workload's process lineage: PIDs folded in by the tree
+        poller, and a live ppid-chain walk up to a registered PID. A
+        PID that cannot be attributed by any layer is out of scope —
+        reject rather than attribute an unverifiable event to this
+        run.
+        """
+        with self._scope_lock:
+            if not self._scope_pids and not self._scope_pgids:
+                # Under require_scope nothing may be attributed until
+                # a registration arrives (the reader buffers, but a
+                # direct query must not claim scope membership).
+                return not self._require_scope
+            pid = record.get("target_pid")
+            if not isinstance(pid, int):
+                return False
+            return self._pid_in_scope_locked(pid)
+
+    def _pid_in_scope_locked(self, pid: int) -> bool:
+        """Attribution for one PID. Caller holds ``_scope_lock``."""
+        if pid in self._scope_pids:
+            return True
+        if pid in self._foreign_pid_cache:
+            return False
+        try:
+            if self._getpgid(pid) in self._scope_pgids:
+                self._scope_pids.add(pid)
+                return True
+        except OSError:
+            pass
+        if self._scope_sids:
+            try:
+                if os.getsid(pid) in self._scope_sids:
+                    self._scope_pids.add(pid)
+                    return True
+            except OSError:
+                pass
+        if not self._require_scope:
+            # Legacy scoped callers keep exact-PID + pgid semantics;
+            # the lineage machinery engages only for owners that
+            # promised a registration (require_scope=True).
+            return False
+        chain: list[int] = []
+        cur = pid
+        for _ in range(_LINEAGE_WALK_MAX):
+            if cur in self._scope_pids:
+                self._scope_pids.update(chain)
+                return True
+            chain.append(cur)
+            parent = self._get_ppid(cur)
+            if not parent or parent == cur or parent == 1:
+                break
+            cur = parent
+        if len(self._foreign_pid_cache) > _FOREIGN_CACHE_CAP:
+            self._foreign_pid_cache.clear()
+        self._foreign_pid_cache.update(chain)
+        return False
+
+    def _build_predicate(self) -> str:
+        """log-stream predicate. Always sender-scoped to Sandbox.kext;
+        additionally PID-scoped when the target PID was known at
+        construction. The kext embeds the acting PID in eventMessage
+        as ``<name>(<pid>) ...`` — the only PID datum available at
+        predicate level — so the narrowing is a CONTAINS clause on
+        ``(<pid>) ``. The close-paren + trailing space keep a PID
+        like 123 from matching 1234."""
+        predicate = f'senderImagePath == "{SANDBOX_KEXT_SENDER}"'
+        if self._target_pid is not None:
+            predicate += (
+                f' AND eventMessage CONTAINS "({self._target_pid}) "'
+            )
+        return predicate
 
     def start(self) -> None:
         """Spawn `log stream` filtered to sandbox kext events, gate
@@ -235,11 +681,26 @@ class LogStreamer:
         On hosts where ``sandbox-exec`` is missing (non-Darwin or
         stripped installs) or the warm-up times out, falls back to a
         best-effort proceed: the streamer is started anyway, callers
-        accept that early events may be missed. Logged at debug for
-        operator triage."""
-        predicate = (
-            f'senderImagePath == "{SANDBOX_KEXT_SENDER}"'
-        )
+        accept that early events may be missed. Those two causes are
+        logged at debug for operator triage; a third — the warm-up
+        probe's Popen itself failing (ENOENT / EACCES) — is
+        deliberately logged at WARNING with traceback, since it
+        signals a sandbox-exec regression the operator must see.
+
+        Under ``warm_up_required=True`` (what _macos_spawn passes for
+        audit_required runs) there is no best-effort fallback: a
+        warm-up miss raises :class:`AuditWarmUpError` — with the
+        `log stream` subprocess torn down — so the caller's
+        fail-closed path refuses to run the workload with an
+        unproven log-stream attachment.
+
+        When the predicate is PID-scoped (``target_pid`` at
+        construction), the warm-up gate is skipped entirely: the
+        synthetic workload runs under its own PID, so its kext
+        events can never pass the scoped predicate and the gate
+        would always time out. Callers choosing predicate-level
+        scoping trade away the cold-start attachment confirmation."""
+        predicate = self._build_predicate()
         self._proc = subprocess.Popen(
             [
                 "/usr/bin/log", "stream",
@@ -267,8 +728,31 @@ class LogStreamer:
             start_new_session=True,
         )
         try:
-            attached = self._warm_up_until_attached()
-            if not attached:
+            if self._target_pid is not None:
+                # PID-scoped predicate — the warm-up's synthetic
+                # workload events can't match it (see docstring), so
+                # the gate is structurally unavailable here and
+                # warm_up_required cannot apply: callers choosing
+                # predicate-level scoping trade away the cold-start
+                # attachment confirmation (_macos_spawn never does).
+                logger.debug(
+                    "seatbelt audit: warm-up gate skipped — predicate "
+                    "is PID-scoped to %d and cannot see the synthetic "
+                    "workload's events",
+                    self._target_pid,
+                )
+            elif not self._warm_up_until_attached():
+                if self._warm_up_required:
+                    # Fail closed: the raise lands in the except arm
+                    # below, which tears down the `log stream`
+                    # subprocess before re-raising, so a refused
+                    # attachment never leaks a zombie streamer.
+                    raise AuditWarmUpError(
+                        f"log-stream warm-up attachment was not "
+                        f"confirmed within {_WARM_UP_TIMEOUT_S}s — "
+                        f"refusing to proceed with an unproven audit "
+                        f"feed (warm_up_required=True)"
+                    )
                 logger.debug(
                     "seatbelt audit: warm-up gate did not see kext events "
                     "from synthetic workload within %ss; proceeding in "
@@ -281,6 +765,11 @@ class LogStreamer:
             # doesn't leak a zombie subprocess with nobody reading it.
             try:
                 self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001 — any wait failure (timeout, interpreter shutdown) must escalate to kill
+                    self._proc.kill()
+                    self._proc.wait()
             except OSError:
                 # KEEP-SILENT (F070 per-site triage W21): terminate()
                 # on an already-dead process is the only realistic
@@ -312,8 +801,16 @@ class LogStreamer:
         """
         import selectors as _selectors
 
+        # Trusted-dirs resolution, never the inherited PATH: the
+        # warm-up executes this binary in the UNSANDBOXED parent, so a
+        # PATH-planted sandbox-exec stub (direnv/.envrc-compatible
+        # attack surface) would run host-side with the parent's
+        # authority. Same doctrine (and helper) as the Linux
+        # uidmap/getcap pinning in _spawn.py — this site was the one
+        # shutil.which() left behind.
+        from core.sandbox.probes import _find_sandbox_binary
         sandbox_exec = (
-            shutil.which("sandbox-exec") or _SANDBOX_EXEC_FALLBACK
+            _find_sandbox_binary("sandbox-exec") or _SANDBOX_EXEC_FALLBACK
         )
         if not Path(sandbox_exec).exists():
             # Non-Darwin host or stripped install — no point spawning
@@ -345,15 +842,15 @@ class LogStreamer:
                 env=RaptorConfig.get_safe_env(),
             )
         except OSError:
-            # WARNING (F070 W21 promote): the warm-up gate failing to
+            # WARNING (promoted from DEBUG): the warm-up gate failing to
             # spawn its probe means we will silently fall back to
             # best-effort mode and may miss early audit records. The
             # operator must see this so they can triage (ENOENT means
-            # sandbox-exec is not where shutil.which claimed it was;
+            # sandbox-exec is not where the trusted-dirs resolution
+            # claimed it was;
             # EACCES means a profile/permissions regression). Mirrors
-            # the family-wide DEBUG -> WARNING promotion in c5a4505
-            # (`fix(scorecard): promote producer-error logs ...`) and
-            # 8edf0f6 (sibling F069 in core/sandbox/proxy.py).
+            # the family-wide DEBUG -> WARNING promotion for producer-error
+            # logs (see core/sandbox/proxy.py for the sibling case).
             logger.warning(
                 "seatbelt audit warm-up Popen failed; "
                 "proceeding without warm-up gate",
@@ -365,7 +862,8 @@ class LogStreamer:
 
         # Explicit guard rather than assert — survives `python -O`.
         if self._proc is None:
-            raise RuntimeError("seatbelt_audit: internal invariant — log-stream proc not started")
+            msg = "seatbelt_audit: internal invariant — log-stream proc not started"
+            raise RuntimeError(msg)
         if self._proc.stdout is None:
             try:
                 warm_up.wait(timeout=1.0)
@@ -440,17 +938,42 @@ class LogStreamer:
 
         return seen
 
+    def _maybe_escalate_credential_path(self, record: dict) -> None:
+        """Live stderr escalation for credential-looking path touches.
+        Pulled out of `_read_loop` as its own method purely so tests
+        can exercise it directly against a synthetic `record` dict
+        without needing a real `log stream` subprocess."""
+        path = record.get("path")
+        if (path
+                and record.get("type") in ("read", "write")
+                and path not in self._escalated_paths
+                and not _audit_budget.live_escalation_disabled()
+                and is_credential_path(path)):
+            self._escalated_paths.add(path)
+            # .get: the never-raise-out-of-the-hot-path contract must
+            # not hinge on every record shape carrying target_pid.
+            _announce_credential_path_touch(
+                path, record.get("target_pid", -1))
+
     def _read_loop(self) -> None:
         """Read ndjson lines from `log stream`, parse, and append
         records to the JSONL. Robust to malformed lines (silently
-        skip)."""
+        skip).
+
+        Runs to EOF, deliberately: stop() terminates the producer and
+        joins this thread BEFORE setting the stop flag, so lines that
+        were already buffered in the subprocess pipe at stop() time
+        get parsed rather than dropped. Pre-fix the loop broke on the
+        flag mid-stream and the tail records of every run were
+        silently lost while a healthy summary was appended. EOF is
+        guaranteed: stop() escalates terminate → kill on the
+        producer, which closes the pipe's write end."""
         try:
             # Explicit guard — survives `python -O`.
             if self._proc is None:
-                raise RuntimeError("seatbelt_audit._read_loop: proc not started")
+                msg = "seatbelt_audit._read_loop: proc not started"
+                raise RuntimeError(msg)
             for raw_line in self._proc.stdout or ():
-                if self._stopped.is_set():
-                    break
                 line = raw_line.strip()
                 if not line:
                     continue
@@ -458,6 +981,8 @@ class LogStreamer:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if entry.get("senderImagePath") == SANDBOX_KEXT_SENDER:
+                    self._kext_lines_seen += 1
                 record = parse_log_entry(
                     entry,
                     observe_mode=self._observe_mode,
@@ -465,48 +990,91 @@ class LogStreamer:
                 )
                 if record is None:
                     continue
-                # Defer all budget logic to AuditBudget.evaluate.
-                # Returns (KEEP|DROP, optional marker dict). Marker
-                # is appended FIRST so it lands in the JSONL right
-                # before the (or not, if dropped) original record —
-                # operators see the suppression in-line.
-                #
-                # Hold the append lock across budget.evaluate AND
-                # the marker/record appends so:
-                #   (a) summary_record() called from stop() on the
-                #       parent thread sees a consistent snapshot of
-                #       budget internals (no "dict changed size
-                #       during iteration").
-                #   (b) the marker lands in the JSONL immediately
-                #       before its associated record without another
-                #       writer slipping a record in between.
-                try:
-                    with self._append_lock:
-                        decision, marker = self._budget.evaluate(
-                            record["syscall"], record["target_pid"],
-                        )
-                        if marker is not None:
-                            self._append_record_locked(marker)
-                        if decision != _audit_budget.DROP:
-                            self._append_record_locked(record)
-                except OSError:
-                    # Best-effort. Don't crash the reader thread on
-                    # transient FS errors — a missed record is
-                    # acceptable, a dead reader thread is not.
-                    #
-                    # WARNING (F070 W21 promote): operators rarely run
-                    # with DEBUG enabled, so pre-fix every dropped
-                    # audit record was invisible. Mirrors the family-
-                    # wide DEBUG -> WARNING convention from c5a4505
-                    # and 8edf0f6 (sibling F069 in proxy.py).
-                    logger.warning("seatbelt audit append failed",
-                                   exc_info=True)
+                # Counted before the scope filter: "parsed" measures
+                # regex/format health only — foreign-but-well-formed
+                # events dropped by scoping must not read as drift.
+                self._kext_lines_parsed += 1
+                self._filter_and_append(record)
         except Exception:
             # WARNING (F070 W21 promote): a dead reader thread means
             # ALL subsequent audit records for this run are lost. The
             # operator MUST see this — same rationale as the L447
             # append-failure promote above.
             logger.warning("seatbelt audit reader thread crashed",
+                           exc_info=True)
+
+    def _filter_and_append(self, record: dict) -> None:
+        """Scope gate + budget + JSONL append for one parsed record."""
+        if self._require_scope:
+            with self._scope_lock:
+                if not self._scope_pids and not self._scope_pgids:
+                    # No scope registered yet — the workload cannot
+                    # have produced records, but buffer (bounded)
+                    # rather than drop so the spawn/registration race
+                    # loses nothing. If registration never happens,
+                    # stop() drops the buffer as unattributable.
+                    if len(self._pending) < _PENDING_BUFFER_CAP:
+                        self._pending.append(record)
+                    else:
+                        self._foreign_records_dropped += 1
+                    return
+        if not self._record_in_scope(record):
+            # Host-wide kext event from a process outside the
+            # registered scope — a sibling sandboxed run or an
+            # unrelated sandboxed app. Drop BEFORE the budget
+            # and the append so foreign events are never
+            # nonce-stamped into this run's JSONL and never
+            # consume its audit budget.
+            with self._scope_lock:
+                self._foreign_records_dropped += 1
+            return
+        # Defer all budget logic to AuditBudget.evaluate.
+        # Returns (KEEP|DROP, optional marker dict). Marker
+        # is appended FIRST so it lands in the JSONL right
+        # before the (or not, if dropped) original record —
+        # operators see the suppression in-line.
+        #
+        # Hold the append lock across budget.evaluate AND
+        # the marker/record appends so:
+        #   (a) summary_record() called from stop() on the
+        #       parent thread sees a consistent snapshot of
+        #       budget internals (no "dict changed size
+        #       during iteration");
+        #   (b) the marker lands in the JSONL immediately
+        #       before its associated record without another
+        #       writer slipping a record in between.
+        try:
+            self._maybe_escalate_credential_path(record)
+
+            with self._append_lock:
+                decision, marker = self._budget.evaluate(
+                    record["syscall"], record["target_pid"],
+                )
+                if marker is not None:
+                    self._append_record_locked(marker)
+                # Global-cap notice: the Linux tracer surfaces
+                # this on stderr; there is no tracer on macOS,
+                # so pre-fix the global cap suppressed
+                # silently (only the sub-caps got in-band
+                # markers). Emit the one-shot marker into the
+                # stream where operators actually look.
+                if self._budget.pop_global_cap_notice():
+                    self._append_record_locked(
+                        self._budget.global_cap_marker(),
+                    )
+                if decision != _audit_budget.DROP:
+                    self._append_record_locked(record)
+        except OSError:
+            # Best-effort. Don't crash the reader thread on
+            # transient FS errors — a missed record is
+            # acceptable, a dead reader thread is not.
+            #
+            # WARNING (F070 W21 promote): operators rarely run
+            # with DEBUG enabled, so pre-fix every dropped
+            # audit record was invisible. Mirrors the family-
+            # wide DEBUG -> WARNING convention from c5a4505
+            # and 8edf0f6 (sibling F069 in proxy.py).
+            logger.warning("seatbelt audit append failed",
                            exc_info=True)
 
     def _append_record(self, record: dict) -> None:
@@ -522,30 +1090,29 @@ class LogStreamer:
     def _append_record_locked(self, record: dict) -> None:
         """Real append logic. Called with self._append_lock held.
 
-        Uses an O_DIRECTORY|O_NOFOLLOW dirfd cached at first call
-        and an `openat(dirfd, DENIALS_FILE, ...)` for each append.
-        Without the dirfd, an attacker who can write to run_dir's
-        parent could swap run_dir with a symlink between
-        `mkdir(...)` and `open(...)` (TOCTOU) and redirect audit
-        records into a host file. The dirfd is opened once, before
-        any writes, and survives any later replacement of the
-        path-to-the-directory.
+        Uses a held evidence fd (core/sandbox/evidence.EvidenceFile)
+        opened O_EXCL in ``<run_dir>/.audit/`` at first call. The
+        held fd means a swap/rename of the JSONL path cannot
+        redirect later appends (the fd pins the original inode), and
+        the O_EXCL create defeats a pre-planted file or symlink. The
+        inode recorded at open is verified when stop() closes the
+        streamer. The profile-side ``audit_evidence_dir`` deny keeps
+        the target away from the path entirely; this is the
+        defence-in-depth layer for operator-misconfigured profiles.
         """
-        line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
-        if self._dirfd is None:
-            # First call: materialise run_dir AND pin it as a dirfd.
+        if self._evidence is None:
+            # First call: materialise run_dir AND pin the evidence
+            # file beneath it.
             self._run_dir.mkdir(parents=True, exist_ok=True)
-            self._dirfd = os.open(
-                str(self._run_dir),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            self._evidence = _evidence_mod.EvidenceFile.open(
+                self._run_dir, self._filename,
             )
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
-        fd = os.open(self._filename, flags, mode=0o600,
-                     dir_fd=self._dirfd)
-        try:
-            os.write(fd, line.encode("utf-8"))
-        finally:
-            os.close(fd)
+        if not self._evidence.write_record(record):
+            msg = (
+                f"evidence append failed for {self._filename} "
+                f"under {self._run_dir}"
+            )
+            raise OSError(msg)
 
     def stop(self, *, drain_timeout: float = 1.5) -> None:
         """Stop the streamer. Gives `log stream` a brief window to
@@ -556,11 +1123,19 @@ class LogStreamer:
         has visible latency (spike #4 measured ~1.5s for a cold
         first event); without the drain we'd lose the tail-end
         records of short workloads.
+
+        Ordering is load-bearing: terminate the producer FIRST, drain
+        the reader to EOF (bounded join), and only THEN set the stop
+        flag and append the summary. Pre-fix the flag was set before
+        the terminate while _read_loop broke on it before parsing
+        already-buffered lines — the pipe-buffered tail of every run
+        was silently dropped, yet the summary still asserted a
+        healthy capture.
         """
-        self._stopped.set()
         if self._proc is not None:
-            # Give the reader a brief window to consume any buffered
-            # output before we kill the subprocess.
+            # Terminate the producer: no new lines are generated, the
+            # pipe's write end closes, and whatever is already
+            # buffered drains to EOF under the reader.
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=drain_timeout)
@@ -570,29 +1145,46 @@ class LogStreamer:
                     self._proc.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     pass
-            # Reader thread is daemon — if it's still draining stdout,
-            # let it finish naturally; we don't block process exit on it.
-            #
-            # Pre-fix the join timeout was 0.5s. The kernel log
-            # streamer (`log show --predicate`) buffers messages in
-            # its stdout pipe; on stop, the proc.terminate above
-            # closes the pipe but bytes ALREADY in the buffer still
-            # need draining. Lines that arrived in the last ~500ms
-            # before stop didn't make it into the JSONL because the
-            # reader hadn't consumed them by the time the join
-            # timed out and the summary record fired (the lock
-            # below blocks further appends after summary, by
-            # design).
-            #
-            # Bump to 3s. Operators are willing to wait 3s for
-            # shutdown to fully drain the audit trail; missing
-            # the last few sandbox-denial events is a worse
-            # outcome than a 2.5s extra shutdown delay. Daemon
-            # status preserves the original "don't block exit
-            # forever" intent — a hung reader after 3s still
-            # gets killed by interpreter shutdown.
+            # Drain the reader to EOF before the summary fires (the
+            # append lock makes the summary the last write only for
+            # appends that RACE it — records the reader hasn't parsed
+            # yet would simply be lost after it). Bounded join: the
+            # kernel log streamer buffers messages in its stdout
+            # pipe, and bytes already in the buffer still need
+            # parsing after the terminate above. Operators are
+            # willing to wait 3s for shutdown to fully drain the
+            # audit trail; missing the last few sandbox-denial
+            # events is a worse outcome than a 3s extra shutdown
+            # delay. Daemon status preserves the original "don't
+            # block exit forever" intent — a hung reader after 3s
+            # still gets killed by interpreter shutdown.
             if self._reader is not None and self._reader.is_alive():
                 self._reader.join(timeout=3.0)
+        # Stop flag AFTER the drain: _read_loop runs to EOF by design
+        # (see its docstring); the flag's remaining consumer is the
+        # lineage poller's clock.
+        self._stopped.set()
+        # Lineage poller: signalled via _stopped above; its loop does
+        # one final tree refresh on the way out. Bounded join.
+        if (self._lineage_poller is not None
+                and self._lineage_poller.is_alive()):
+            self._lineage_poller.join(timeout=2.0)
+        # Records still pending mean no scope was ever registered
+        # (the spawn failed before register_target_pid) — they are
+        # unattributable, so drop + count as foreign.
+        with self._scope_lock:
+            if self._pending:
+                self._foreign_records_dropped += len(self._pending)
+                self._pending = []
+            foreign_dropped = self._foreign_records_dropped
+        if foreign_dropped:
+            logger.info(
+                "seatbelt audit: dropped %d kext record(s) from outside "
+                "the workload's process scope (records from other "
+                "sandboxed processes on this host, or descendants that "
+                "exited before they could be attributed)",
+                foreign_dropped,
+            )
         # Final summary record. Always emitted regardless of proc
         # state so operators see one of:
         #   - 0 records, 0 drops → audit ran cleanly, nothing to log
@@ -604,12 +1196,35 @@ class LogStreamer:
         # zero counts — operators can distinguish it from
         # "summary file missing entirely" (streamer never even
         # constructed).
+        # Parse-ratio diagnostic: a high drop ratio on kext-sender
+        # lines means the eventMessage format drifted away from
+        # _LOG_LINE_RE — the audit trail is silently incomplete and
+        # operators must see it. Counters are stable here (reader
+        # joined or abandoned above; a straggler under-counts at
+        # worst, never crashes).
+        seen = self._kext_lines_seen
+        parsed = self._kext_lines_parsed
+        if (seen >= _PARSE_DIAG_MIN_LINES
+                and parsed < seen * _PARSE_DIAG_MIN_RATIO):
+            logger.warning(
+                "seatbelt audit: parsed %d of %d kext log lines — "
+                "the kernel Sandbox log format may have drifted from "
+                "_LOG_LINE_RE; the audit JSONL is likely incomplete",
+                parsed, seen,
+            )
         try:
             # Hold the lock across summary_record + append so the
             # snapshot read and the JSONL write are atomic with
             # respect to any reader thread still draining.
             with self._append_lock:
                 summary = self._budget.summary_record()
+                # Parse-ratio surface for operators reading the JSONL
+                # (extra keys tolerated by consumers per contract).
+                summary["kext_lines_seen"] = seen
+                summary["kext_lines_parsed"] = parsed
+                # Scope-gate diagnostic: how many records were
+                # rejected as outside the workload's process scope.
+                summary["foreign_records_dropped"] = foreign_dropped
                 # Stamp nonce on the summary so an observe-mode
                 # parser attributes it to this run and rejects one
                 # spoofed by a target binary writing a fake summary
@@ -625,27 +1240,22 @@ class LogStreamer:
             # Mirrors c5a4505 / 8edf0f6 promotion family.
             logger.warning("seatbelt audit summary append failed",
                            exc_info=True)
-        # Close the cached dirfd. Best-effort — fd leaks on
-        # daemon-thread paths are bounded by the per-process fd
-        # limit, but keeping process exit clean here avoids
-        # ResourceWarnings in test runs.
+        # Finalise the held evidence fd: verify the on-disk path
+        # still names the inode created at first append (loud
+        # warning inside close() on a swap), then release the fd so
+        # test runs stay free of ResourceWarnings.
         with self._append_lock:
-            if self._dirfd is not None:
-                try:
-                    os.close(self._dirfd)
-                except OSError:
-                    # KEEP-SILENT (F070 per-site triage W21): closing
-                    # a (potentially already-closed) cached dirfd is
-                    # ResourceWarning-prevention housekeeping. EBADF
-                    # here is benign; OS will reclaim on process exit.
-                    # WARNING would be noise.
-                    pass
-                self._dirfd = None
+            if self._evidence is not None:
+                self._evidence.close()
+                self._evidence = None
 
 
 def start_log_streamer(run_dir: Path, *,
                        observe_mode: bool = False,
-                       observe_nonce: Optional[str] = None,
+                       observe_nonce: str | None = None,
+                       target_pid: int | None = None,
+                       require_scope: bool = False,
+                       warm_up_required: bool = False,
                        ) -> LogStreamer:
     """Convenience: instantiate + start a LogStreamer.
 
@@ -662,8 +1272,29 @@ def start_log_streamer(run_dir: Path, *,
     record. Pass the same value to parse_observe_log(expected_nonce)
     so spoofed records (written by the target into the bind-mounted
     JSONL) get dropped. Generated by core.sandbox.context.
+
+    `target_pid`: scope event attribution to this PID at the
+    log-stream predicate level (see LogStreamer's class docstring
+    for the trade-offs). Callers that only learn the child PID after
+    spawn should instead call ``register_target_pid()`` on the
+    returned streamer for parse-time scoping.
+
+    `require_scope`: engage the mandatory scope gate — the caller
+    promises to call ``register_target_pid(pid)`` as soon as the
+    workload is spawned; until then records are buffered, and from
+    then on only records attributable to the registered scope's
+    process lineage are admitted (foreign sandboxed processes on the
+    host are dropped + counted). _macos_spawn passes True.
+
+    `warm_up_required`: fail closed on the warm-up attachment gate —
+    a miss raises AuditWarmUpError from start() instead of the
+    best-effort proceed. _macos_spawn passes the run's
+    audit_required flag.
     """
     s = LogStreamer(run_dir, observe_mode=observe_mode,
-                    observe_nonce=observe_nonce)
+                    observe_nonce=observe_nonce,
+                    target_pid=target_pid,
+                    require_scope=require_scope,
+                    warm_up_required=warm_up_required)
     s.start()
     return s

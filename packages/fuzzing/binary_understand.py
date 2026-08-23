@@ -15,11 +15,11 @@ from packages.binary_analysis.radare2_understand import (
 )
 
 __all__ = [
+    "_DANGEROUS_IMPORTS",
+    "_ENTRY_POINT_HINTS",
     "BinaryContextMap",
     "BinaryUnderstand",
     "FunctionInfo",
-    "_DANGEROUS_IMPORTS",
-    "_ENTRY_POINT_HINTS",
     "analyse_binary_context",
     "probe_capability",
 ]

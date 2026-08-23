@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from packages.sca import verify
 from core.json import JsonCache
 from packages.sca.osv import OSV_QUERY_BATCH_URL, OSV_VULN_URL_TEMPLATE
@@ -107,6 +109,7 @@ def test_clean_verdict_when_proposed_clears_all_findings(tmp_path: Path) -> None
     assert "New: **0**" in delta_md
 
 
+@pytest.mark.slow
 def test_regression_verdict_when_proposed_does_not_clear(tmp_path: Path) -> None:
     target = _build_target(tmp_path)
     proposed = _build_proposed(tmp_path, "1.5.0")  # still vulnerable
@@ -116,14 +119,76 @@ def test_regression_verdict_when_proposed_does_not_clear(tmp_path: Path) -> None
         [str(target), "--proposed", str(proposed), "--out", str(out)],
         http=StubHttp(), cache=cache,
     )
-    # Same advisory hits both versions → no resolution, no regression
-    # (canonical-id dedup). Verdict is clean (no NEW findings).
-    assert rc == 0
+    # Same advisory hits both versions → persistent — in a file the
+    # patch rewrote, so the advisory the operator expected to clear
+    # didn't. Documented contract: exit 1.
+    assert rc == 1
     delta_md = (out / "delta.md").read_text()
+    assert "Verdict: not cleared" in delta_md
     assert "Resolved: **0**" in delta_md
     assert "New: **0**" in delta_md
 
 
+def test_verdict_persistent_outside_patched_files_is_clean() -> None:
+    """Pre-existing findings persisting in files the patch never
+    touched must not gate the exit code — a targeted fix isn't
+    responsible for the unrelated backlog."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[{"severity": "critical", "id": "OLD-001",
+                     "file": "/overlay/other/requirements.txt"}],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="low", applied=[Path("package.json")],
+    )
+    assert exit_code == 0
+    assert summary["persistent_above_threshold"] == 1
+    assert summary["not_cleared_above_threshold"] == 0
+
+
+def test_verdict_persistent_in_patched_file_exits_nonzero() -> None:
+    """An advisory persisting in a manifest the proposed/ patch rewrote
+    means the patch failed to clear it — documented exit-1 contract."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[{"severity": "high", "id": "OLD-001",
+                     "file": "/overlay/requirements.txt"}],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high", applied=[Path("requirements.txt")],
+    )
+    assert exit_code == 1
+    assert summary["not_cleared_above_threshold"] == 1
+
+
+def test_verdict_persistent_below_threshold_does_not_gate() -> None:
+    """A low-severity advisory persisting in a patched file stays below
+    the operator's --fail-on-severity floor."""
+    from types import SimpleNamespace
+    delta = SimpleNamespace(
+        new=[],
+        resolved=[],
+        persistent=[{"severity": "low", "id": "OLD-001",
+                     "file": "/overlay/requirements.txt"}],
+        suppression_added=[],
+        suppression_lifted=[],
+    )
+    summary, exit_code = verify._verdict(
+        delta, severity_floor="high", applied=[Path("requirements.txt")],
+    )
+    assert exit_code == 0
+    assert summary["not_cleared_above_threshold"] == 0
+
+
+@pytest.mark.slow
 def test_findings_path_lets_caller_skip_baseline_run(tmp_path: Path) -> None:
     """When ``--findings`` points at an existing file we don't re-run
     analyse on the original target."""
@@ -207,6 +272,7 @@ def test_overlay_skips_vendored_dirs(tmp_path: Path) -> None:
     assert (out / "overlay" / "node_modules").exists() is False
 
 
+@pytest.mark.slow
 def test_overlay_preserves_non_overlaid_files(tmp_path: Path) -> None:
     target = _build_target(tmp_path)
     proposed = _build_proposed(tmp_path, "2.0.0")
@@ -220,6 +286,7 @@ def test_overlay_preserves_non_overlaid_files(tmp_path: Path) -> None:
         == "import vuln_pkg\n"
 
 
+@pytest.mark.slow
 def test_delta_json_records_applied_files(tmp_path: Path) -> None:
     target = _build_target(tmp_path)
     proposed = _build_proposed(tmp_path, "2.0.0")

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class _SlopsquatModel:
 SLOPSQUAT_MODEL = _SlopsquatModel()
 
 
-def _finding_to_variant(finding: Any, repo: Path) -> Dict[str, Any]:
+def _finding_to_variant(finding: Any, repo: Path) -> dict[str, Any]:
     """Map a ``SlopsquatFinding`` to the variant-dict shape the
     ``VariantAdapter`` expects (file/line/function/snippet/confidence/tool).
 
@@ -89,7 +89,7 @@ def slopsquat_hunt_dispatch(
     model: Any,
     pattern: str,
     repo_path: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """``HuntDispatchFn`` backed by the SCA slopsquat detector.
 
     ``model`` and ``pattern`` are accepted for interface parity but

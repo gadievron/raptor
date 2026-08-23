@@ -7,15 +7,18 @@ fires the moment ``import malicious_pkg`` runs — before any code
 written by the operator gets a chance to vet it. ``setup.py`` is the
 classic vector but ``__init__.py`` works just as well.
 
-We AST-walk every ``.py`` under the target's source tree and flag
+We AST-walk every ``.py`` under the target's vendored / third-party
+trees (``vendor/``, ``third_party/``, … — see ``_VENDOR_DIR_NAMES``
+below; first-party code is deliberately out of scope) and flag
 top-level statements whose semantics imply *execution at import time*:
 
-- ``subprocess`` / ``os.system`` / ``os.popen`` calls
-- ``socket`` connect / ``urllib`` / ``urllib2`` / ``urllib3`` /
-  ``requests`` / ``httpx`` / ``http.client`` calls
-- ``eval`` / ``exec`` / ``compile`` / ``__import__`` / ``importlib``
-  dynamic-import calls
-- File IO at module scope (``open(...)`` followed by ``.write/.read``)
+- any call on the ``subprocess`` / ``os`` / ``socket`` / ``urllib`` /
+  ``urllib2`` / ``urllib3`` / ``requests`` / ``httpx`` / ``http``
+  module surfaces (the whole module, not just the shell-out
+  functions — this walk only sees vendored code)
+- bare ``eval`` / ``exec`` / ``compile`` / ``__import__`` calls
+- ``importlib`` dynamic-import calls
+- File IO at module scope (``open(...)``)
 
 Tolerates the common legitimate shapes:
 
@@ -40,11 +43,14 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Set
 
 from .._test_paths import is_test_path as _shared_is_test_path
 from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +72,7 @@ logger = logging.getLogger(__name__)
 # ``vendor/``, ``third_party/``, ``_vendor/`` patterns common in
 # Go-style monorepos and security-conscious Python projects) get
 # the heuristic against vendored content only.
-_VENDOR_DIR_NAMES: Set[str] = {
+_VENDOR_DIR_NAMES: set[str] = {
     "vendor",
     "_vendor",
     "third_party",
@@ -78,7 +84,7 @@ _VENDOR_DIR_NAMES: Set[str] = {
 # (we want to walk INTO those). ``site-packages`` is added because any
 # virtualenv that snuck in is the operator's local dev environment,
 # not a checked-in vendored dep.
-_EXCLUDED_DIRS: Set[str] = (
+_EXCLUDED_DIRS: set[str] = (
     EXCLUDED_DIR_NAMES - _VENDOR_DIR_NAMES
 ) | {"site-packages"}
 
@@ -88,7 +94,7 @@ _EXCLUDED_DIRS: Set[str] = (
 
 # Top-level module names whose function calls at import time we
 # consider suspicious. Paired with the call vocabulary below.
-_SUSPICIOUS_MODULE_PREFIXES: Set[str] = {
+_SUSPICIOUS_MODULE_PREFIXES: set[str] = {
     "subprocess",
     "os",
     "socket",
@@ -99,21 +105,16 @@ _SUSPICIOUS_MODULE_PREFIXES: Set[str] = {
 
 # Bare names — calls like ``eval(...)``, ``exec(...)``, ``__import__(...)``
 # at module scope without a module qualifier.
-_SUSPICIOUS_BARE_CALLS: Set[str] = {
-    "eval", "exec", "compile", "__import__",
+_SUSPICIOUS_BARE_CALLS: set[str] = {
+    "eval", "exec", "compile", "__import__", "open",
 }
 
-# Specific (module, attr) pairs we always want to flag.
-_SUSPICIOUS_ATTR_PAIRS: Set["tuple[str, str]"] = {
-    ("os", "system"), ("os", "popen"),
-    ("subprocess", "run"), ("subprocess", "call"),
-    ("subprocess", "Popen"), ("subprocess", "check_call"),
-    ("subprocess", "check_output"),
-    ("socket", "create_connection"), ("socket", "connect"),
-    ("urllib", "urlopen"), ("urllib2", "urlopen"),
-    ("requests", "get"), ("requests", "post"), ("requests", "put"),
-    ("httpx", "get"), ("httpx", "post"),
-    ("http", "client"),
+# Specific (module, attr) pairs we always want to flag. Only list
+# pairs whose root module is NOT in _SUSPICIOUS_MODULE_PREFIXES —
+# ``_is_suspicious_call`` matches the prefix set first and flags
+# every call on those modules, so a pair entry for a prefix-listed
+# module would be unreachable dead config.
+_SUSPICIOUS_ATTR_PAIRS: set[tuple[str, str]] = {
     ("importlib", "import_module"), ("importlib", "__import__"),
 }
 
@@ -138,8 +139,9 @@ def scan_target(
     *,
     max_depth: int = _DEFAULT_MAX_DEPTH,
     cache=None,
-) -> List[ImportTimeFinding]:
-    """Walk ``target`` Python sources; return per-file flagged statements.
+) -> list[ImportTimeFinding]:
+    """Walk ``target``'s vendored Python sources (see
+    ``_VENDOR_DIR_NAMES``); return per-file flagged statements.
 
     ``cache`` (a :class:`core.json.JsonCache`) caches the per-file
     flagged-call list (line + label) keyed by file content hash —
@@ -151,7 +153,7 @@ def scan_target(
     """
     target = target.resolve()
     manifests_list = list(manifests)
-    out: List[ImportTimeFinding] = []
+    out: list[ImportTimeFinding] = []
     from .._file_scan_cache import cached_per_file
     for path in _walk_python_sources(target, max_depth=max_depth):
         if _looks_like_test_path(path, target):
@@ -180,23 +182,20 @@ def scan_target(
                     path, e,
                 )
                 return []
-            recs = []
-            for f in _scan_module(tree, path, target, manifests_list):
-                recs.append({
+            recs = [{
                     "detail": f.detail,
                     "line": f.line,
                     "severity": f.severity,
                     "confidence_level": f.confidence.level,
                     "confidence_reason": f.confidence.reason,
-                })
+                } for f in _scan_module(tree, path, target, manifests_list)]
             return recs
 
         recs = cached_per_file(
             cache, "supply_chain:py-imports", text, _compute,
         )
         host_dep = _project_host_dep(manifests_list, path, target)
-        for r in recs:
-            out.append(ImportTimeFinding(
+        out.extend(ImportTimeFinding(
                 dependency=host_dep,
                 detail=r["detail"],
                 path=path,
@@ -205,7 +204,7 @@ def scan_target(
                 confidence=Confidence(
                     r["confidence_level"], reason=r["confidence_reason"],
                 ),
-            ))
+            ) for r in recs)
     return out
 
 
@@ -217,7 +216,7 @@ def _scan_module(
     tree: ast.Module,
     path: Path,
     target: Path,
-    manifests: List[Manifest],
+    manifests: list[Manifest],
 ) -> Iterable[ImportTimeFinding]:
     for node in tree.body:
         # Whole-statement allowlists.
@@ -227,6 +226,28 @@ def _scan_module(
                              ast.ClassDef)):
             continue
         if _is_main_guard(node) or _is_type_checking_guard(node):
+            for else_stmt in getattr(node, "orelse", []):
+                if isinstance(else_stmt, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef,
+                                          ast.ClassDef)):
+                    continue
+                for call in _find_suspicious_calls(else_stmt):
+                    yield ImportTimeFinding(
+                        dependency=_project_host_dep(manifests, path, target),
+                        detail=(
+                            f"`{_rel(path, target)}:{call.lineno}` runs "
+                            f"`{_render_call(call)}` at import time "
+                            f"(else-branch of guard)"
+                        ),
+                        path=path,
+                        line=call.lineno,
+                        severity="medium",
+                        confidence=Confidence(
+                            "medium",
+                            reason="suspicious call in else-branch of "
+                            "main/TYPE_CHECKING guard",
+                        ),
+                    )
             continue
         if _is_constant_assignment(node):
             continue
@@ -256,12 +277,16 @@ def _scan_module(
 
 def _find_suspicious_calls(node: ast.AST) -> Iterable[ast.Call]:
     """Yield every ``ast.Call`` inside ``node`` whose target is in our
-    suspicious set."""
-    for sub in ast.walk(node):
-        if not isinstance(sub, ast.Call):
+    suspicious set, skipping nested function/class bodies."""
+    queue = list(ast.iter_child_nodes(node))
+    while queue:
+        sub = queue.pop()
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.ClassDef)):
             continue
-        if _is_suspicious_call(sub):
+        if isinstance(sub, ast.Call) and _is_suspicious_call(sub):
             yield sub
+        queue.extend(ast.iter_child_nodes(sub))
 
 
 def _is_suspicious_call(call: ast.Call) -> bool:
@@ -296,7 +321,7 @@ def _render_call(call: ast.Call) -> str:
         return f"{func.id}()"
     if isinstance(func, ast.Attribute):
         # Walk back to leftmost name and rebuild the dotted form.
-        names: List[str] = [func.attr]
+        names: list[str] = [func.attr]
         node: ast.AST = func.value
         while isinstance(node, ast.Attribute):
             names.append(node.attr)
@@ -333,9 +358,7 @@ def _is_type_checking_guard(node: ast.AST) -> bool:
         return False
     if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
         return True
-    if isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING":
-        return True
-    return False
+    return bool(isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING")
 
 
 def _is_constant_assignment(node: ast.AST) -> bool:
@@ -359,7 +382,7 @@ def _is_simple_literal(node: ast.AST) -> bool:
     if isinstance(node, ast.Dict):
         return all(
             (k is None or _is_simple_literal(k)) and _is_simple_literal(v)
-            for k, v in zip(node.keys, node.values)
+            for k, v in zip(node.keys, node.values, strict=True)
         )
     if isinstance(node, ast.UnaryOp):
         return _is_simple_literal(node.operand)
@@ -411,9 +434,9 @@ def _looks_like_test_path(path: Path, target: Path) -> bool:
 
 
 def _project_host_dep(
-    manifests: List[Manifest], path: Path, target: Path,
+    manifests: list[Manifest], path: Path, target: Path,
 ) -> Dependency:
-    closest: "Manifest | None" = None
+    closest: Manifest | None = None
     for m in manifests:
         if m.is_lockfile:
             continue

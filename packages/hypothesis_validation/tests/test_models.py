@@ -1,4 +1,5 @@
-"""Tests for Hypothesis, ValidationResult, ToolCapability, ToolEvidence."""
+"""Tests for Hypothesis, Location, FlowStep, ValidationResult,
+ToolCapability, ToolEvidence."""
 
 import sys
 from pathlib import Path
@@ -10,7 +11,11 @@ from packages.hypothesis_validation.adapters.base import (
     ToolEvidence,
     ToolInvocation,
 )
-from packages.hypothesis_validation.hypothesis import Hypothesis
+from packages.hypothesis_validation.hypothesis import (
+    FlowStep,
+    Hypothesis,
+    Location,
+)
 from packages.hypothesis_validation.result import Evidence, ValidationResult
 
 
@@ -66,6 +71,54 @@ class TestHypothesis:
         assert h2.claim == h.claim
         assert h2.target == h.target
         assert h2.cwe == h.cwe
+
+
+class TestLocationLineCoercion:
+    """LLM-supplied JSON with a non-numeric ``line`` must degrade to
+    line=0, never raise from ``int()`` coercion."""
+
+    def test_non_numeric_string_becomes_zero(self):
+        assert Location.from_dict({"line": "not-a-number"}).line == 0
+
+    def test_numeric_string_parses(self):
+        assert Location.from_dict({"line": "42"}).line == 42
+
+    def test_none_becomes_zero(self):
+        assert Location.from_dict({"line": None}).line == 0
+
+    def test_truthy_non_numeric_type_becomes_zero(self):
+        assert Location.from_dict({"line": ["7"]}).line == 0
+
+    def test_int_passes_through(self):
+        assert Location.from_dict({"line": 7}).line == 7
+
+
+class TestFlowStepLineCoercion:
+    def test_non_numeric_string_becomes_zero(self):
+        assert FlowStep.from_dict({"line": "abc"}).line == 0
+
+    def test_numeric_string_parses(self):
+        assert FlowStep.from_dict({"line": "13"}).line == 13
+
+    def test_truthy_non_numeric_type_becomes_zero(self):
+        assert FlowStep.from_dict({"line": {"n": 3}}).line == 0
+
+
+class TestHypothesisFromDictLineCoercion:
+    def test_bad_lines_in_nested_fields_do_not_raise(self):
+        h = Hypothesis.from_dict({
+            "claim": "c",
+            "target": "/src",
+            "source": {"kind": "network", "line": "unknown"},
+            "sink": {"kind": "exec", "line": "12"},
+            "flow_steps": [
+                {"function": "f", "line": "??"},
+                {"function": "g", "line": 9},
+            ],
+        })
+        assert h.source.line == 0
+        assert h.sink.line == 12
+        assert [s.line for s in h.flow_steps] == [0, 9]
 
 
 class TestEvidence:

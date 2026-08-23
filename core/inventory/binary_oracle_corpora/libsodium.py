@@ -18,13 +18,19 @@ Cache layout::
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Literal, TYPE_CHECKING
+
+from core.inventory.binary_oracle_corpora._sandbox_exec import (
+    run_build_step,
+    run_tool,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +50,7 @@ class _LibsodiumDriver:
         "Ground truth from `make check` (60+ test binaries).")
     mode: Literal["gcov"] = "gcov"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / LIBSODIUM_TAG.replace("-", "_")
         sentinel = tag_dir / "sentinel.ok"
@@ -52,9 +58,9 @@ class _LibsodiumDriver:
         build_o2 = tag_dir / "build_o2"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         live = _collect_gcov_liveness(build_o0)
         candidates = _enumerate_candidates(build_o0)
@@ -74,25 +80,35 @@ class _LibsodiumDriver:
 
 
 def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
-    """Clone (full history so the tag can be checked out) → autogen →
-    configure × 2 → build × 2 → ``make check`` on the O0 build."""
+    """Clone (shallow, tag-only) → autogen → configure × 2 → build × 2
+    → run the single target test binary on the O0 coverage build."""
     tag_dir.mkdir(parents=True, exist_ok=True)
     src = tag_dir / "src"
 
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
-    logger.info("libsodium: cloning %s → %s", LIBSODIUM_URL, src)
-    if not clone_repository(LIBSODIUM_URL, src, depth=None):
-        raise RuntimeError(f"libsodium: clone failed for {LIBSODIUM_URL}")
+    shutil.rmtree(src, ignore_errors=True)
+    logger.info("libsodium: cloning %s (tag %s) → %s",
+                LIBSODIUM_URL, LIBSODIUM_TAG, src)
+    if not clone_repository(LIBSODIUM_URL, src, depth=1):
+        msg = f"libsodium: clone failed for {LIBSODIUM_URL}"
+        raise RuntimeError(msg)
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", LIBSODIUM_TAG),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", LIBSODIUM_TAG),
+        # Dials origin outside the sandbox egress proxy — keep the
+        # operator proxy vars (get_safe_git_env contract).
+        env=get_safe_git_env(preserve_proxy=True), check=True, timeout=60,
+    )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
         env=get_safe_git_env(), check=True, timeout=60,
     )
 
-    subprocess.run(["./autogen.sh"], cwd=src, check=True, timeout=120)
+    # Fetched build system — sandboxed with sanitised env (see
+    # _sandbox_exec).
+    run_build_step(["./autogen.sh"], cwd=src, timeout=120)
 
     for build_dir, cflags, ldflags, target_only in [
         (build_o0, "-O0 -g --coverage", "--coverage", True),
@@ -100,24 +116,27 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        if build_dir.exists():
-            shutil.rmtree(build_dir)
+        shutil.rmtree(build_dir, ignore_errors=True)
         build_dir.mkdir(parents=True)
-        env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
-        subprocess.run(
+        flags = {"CFLAGS": cflags, "LDFLAGS": ldflags}
+        # scope=tag_dir: out-of-tree autotools build — under mount-ns
+        # isolation the sibling src/ tree is invisible unless the
+        # sandbox root spans both src/ and the build dir.
+        run_build_step(
             [str((src / "configure").resolve()),
              "--enable-static", "--disable-shared"],
-            cwd=build_dir, env=env, check=True, timeout=180,
+            cwd=build_dir, scope=tag_dir, extra_env=flags, timeout=180,
         )
         # libsodium's test binaries (the only artifacts with realistic
         # --gc-sections DCE on a libsodium-linked executable) are only
         # produced by ``make check`` — plain ``make`` builds just the
-        # static archive. Run check on BOTH configs to materialise the
-        # test binaries.
-        subprocess.run(["make", "-j4"], cwd=build_dir,
-                       env=env, check=True, timeout=600)
-        subprocess.run(["make", "check"], cwd=build_dir,
-                       env=env, check=True, timeout=900)
+        # static archive. ``TESTS=`` builds the check_PROGRAMS targets
+        # without executing them; only the O0 coverage path needs to
+        # actually run the target binary (below).
+        run_build_step(["make", "-j4"], cwd=build_dir, scope=tag_dir,
+                       extra_env=flags, timeout=600)
+        run_build_step(["make", "check", "TESTS="], cwd=build_dir,
+                       scope=tag_dir, extra_env=flags, timeout=900)
         if target_only:
             # Reset gcov counters and run ONLY the classifier target
             # binary. This aligns ground truth (what gcov saw executed)
@@ -140,17 +159,16 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             # tag is trusted but supply-chain compromise on a pinned
             # ref is the residual risk; running an executable should
             # be contained (Landlock + namespace; no network needed).
-            # writable_paths includes build_dir because gcov writes
-            # .gcda files alongside .o files — without the allow,
-            # the live_set would be silently empty.
-            from core.sandbox import run as _sandbox_run
+            # scope=tag_dir: the binary reads its expected-output
+            # fixture from the SRC tree (out-of-tree autotools srcdir
+            # — src/test/default/aead_aegis128l.exp) and gcov writes
+            # .gcda files across the whole build tree; both live
+            # under tag_dir, and writable_paths don't survive into
+            # the mount-ns view.
             target = build_dir / "test" / "default" / "aead_aegis128l"
-            _sandbox_run(
-                [str(target)], cwd=str(target.parent),
-                target=str(target.parent),
-                writable_paths=[str(build_dir)],
-                block_network=True,
-                check=True, timeout=60,
+            run_build_step(
+                [str(target)], cwd=target.parent, scope=tag_dir,
+                timeout=60,
             )
 
     shutil.rmtree(src, ignore_errors=True)
@@ -164,7 +182,7 @@ _GCOV_FN_RE = re.compile(r"^Function '([^']+)'")
 _GCOV_LINES_RE = re.compile(r"^Lines executed:([\d.]+)% of \d+")
 
 
-def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
+def _collect_gcov_liveness(build_dir: Path) -> set[str]:
     """Walk ``src/libsodium/sodium/`` and the per-area subdirs for
     .gcda/.c pairs, run ``gcov -f``, accumulate functions with > 0%
     line execution. libsodium splits its source across many subdirs
@@ -174,12 +192,12 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
         logger.warning("libsodium: %s missing", libsodium_root)
         return set()
 
-    live: Set[str] = set()
+    live: set[str] = set()
     for gcda in libsodium_root.rglob("*.gcda"):
         gcda_dir = gcda.parent
-        out = subprocess.run(
+        out = run_tool(
             ["gcov", "-f", gcda.name], cwd=gcda_dir,
-            capture_output=True, text=True, check=False, timeout=60,
+            check=False, timeout=60,
         ).stdout
         current = None
         for line in out.splitlines():
@@ -196,7 +214,7 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
     return live
 
 
-def _enumerate_candidates(build_o0: Path) -> List[str]:
+def _enumerate_candidates(build_o0: Path) -> list[str]:
     """Functions defined in ``libsodium.a`` — the candidate population.
 
     libtool prefixes symbols in archived objects with ``libsodium_la-``
@@ -206,10 +224,9 @@ def _enumerate_candidates(build_o0: Path) -> List[str]:
     if not archive.exists():
         logger.warning("libsodium: %s missing", archive)
         return []
-    out = subprocess.run(["nm", str(archive)],
-                         capture_output=True, text=True,
-                         check=False, timeout=30).stdout
-    fns: Set[str] = set()
+    out = run_tool(["nm", str(archive)],
+                   check=False, timeout=30).stdout
+    fns: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[-2] in ("T", "t", "W", "w"):

@@ -8,6 +8,7 @@ and the orphan/expired/matched buckets that ``check`` produces."""
 from __future__ import annotations
 
 import json
+import typing
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -20,6 +21,8 @@ import pytest
 yaml = pytest.importorskip("yaml")  # noqa: F841
 
 from packages.sca import suppress_cli  # noqa: E402
+from packages.sca.suppress_cli import _describe_entry  # noqa: E402
+from packages.sca.suppressions import SuppressionEntry  # noqa: E402
 
 
 def _write_yaml(path: Path, entries: List[Dict[str, Any]]) -> None:
@@ -115,6 +118,38 @@ def test_list_json_output_parseable(tmp_path: Path, capsys) -> None:
     assert len(payload) == 1
     assert payload[0]["advisory_id"] == "GHSA-x"
     assert payload[0]["reason"] == "for testing"
+
+
+# ---------------------------------------------------------------------------
+# _describe_entry — the matcher-kind / label classification behind list
+# ---------------------------------------------------------------------------
+
+def test_return_annotation_resolves_to_tuple() -> None:
+    """``_describe_entry``'s return annotation resolves under
+    ``typing.get_type_hints`` to a concrete tuple type."""
+    hints = typing.get_type_hints(_describe_entry)
+    assert hints["return"] == tuple[str, str]
+
+
+def test_describe_finding_id_wins() -> None:
+    e = SuppressionEntry(reason="r", finding_id="sca:x", advisory_id="GHSA-y")
+    assert _describe_entry(e) == ("finding_id", "sca:x")
+
+
+def test_describe_advisory_id() -> None:
+    e = SuppressionEntry(reason="r", advisory_id="GHSA-y")
+    assert _describe_entry(e) == ("advisory_id", "GHSA-y")
+
+
+def test_describe_package_matcher() -> None:
+    e = SuppressionEntry(reason="r", ecosystem="npm", name="lodash",
+                         version="4.17.20")
+    assert _describe_entry(e) == ("package", "npm:lodash:4.17.20")
+
+
+def test_describe_no_matcher() -> None:
+    e = SuppressionEntry(reason="r")
+    assert _describe_entry(e) == ("?", "(no matcher)")
 
 
 # ---------------------------------------------------------------------------

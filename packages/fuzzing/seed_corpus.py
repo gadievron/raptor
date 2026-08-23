@@ -15,7 +15,10 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 TEXT_EXTENSIONS = {
     ".cfg": "text",
@@ -119,6 +122,24 @@ LOCKFILE_NAMES = {
 
 DEFAULT_MAX_FILE_SIZE = 1024 * 1024
 GENERATED_SEED_KINDS = set(TEXT_EXTENSIONS.values()) | {"binary"}
+BUILTIN_SEED_CORPUS_DIR = Path(__file__).resolve().parent / "data" / "seed_corpus"
+
+# packages/fuzzing/seed_corpus.py → repo root is two levels up.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _portable_path(path: Path) -> str:
+    """Repo-relative POSIX form for paths inside the checkout.
+
+    Generated manifests can be committed (seeds/); an absolute path
+    would embed the local checkout location into the repository.
+    Paths outside the checkout (run output dirs) keep their absolute
+    form — there is nothing stable to relativise them against.
+    """
+    try:
+        return path.resolve().relative_to(_REPO_ROOT).as_posix()
+    except (ValueError, OSError):
+        return str(path)
 
 
 @dataclass(frozen=True)
@@ -173,7 +194,7 @@ def _classify_seed(relative_path: Path) -> str | None:
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with open(path, "rb") as fh:
+    with Path(path).open("rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -218,14 +239,18 @@ def _is_git_repository_root(path: Path) -> bool:
 def _validate_output_directory(source_dir: Path, out_dir: Path) -> None:
     dangerous_paths = {Path(out_dir.anchor).resolve(), Path.home().resolve()}
     if out_dir in dangerous_paths:
-        raise ValueError("seed output directory is too broad or dangerous")
+        msg = "seed output directory is too broad or dangerous"
+        raise ValueError(msg)
     if _is_git_repository_root(out_dir):
-        raise ValueError("seed output directory must not be a repository root")
+        msg = "seed output directory must not be a repository root"
+        raise ValueError(msg)
 
     if out_dir == source_dir:
-        raise ValueError("seed output directory must not be the source directory")
+        msg = "seed output directory must not be the source directory"
+        raise ValueError(msg)
     if _is_relative_to(source_dir, out_dir):
-        raise ValueError("seed output directory must not be an ancestor of the source directory")
+        msg = "seed output directory must not be an ancestor of the source directory"
+        raise ValueError(msg)
 
 
 def _reset_generated_output(out_dir: Path) -> None:
@@ -238,14 +263,16 @@ def _reset_generated_output(out_dir: Path) -> None:
 
     for kind in GENERATED_SEED_KINDS:
         kind_dir = out_dir / kind
-        if kind_dir.is_dir() and not kind_dir.is_symlink():
-            shutil.rmtree(kind_dir)
-        elif kind_dir.exists():
-            kind_dir.unlink()
+        try:
+            if kind_dir.is_dir() and not kind_dir.is_symlink():
+                shutil.rmtree(kind_dir)
+            else:
+                kind_dir.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
 
     manifest_path = out_dir / "manifest.json"
-    if manifest_path.is_file() or manifest_path.is_symlink():
-        manifest_path.unlink()
+    manifest_path.unlink(missing_ok=True)
 
 
 def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
@@ -257,9 +284,11 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
     source_dir = options.source_dir.resolve()
     out_dir = options.out_dir.resolve()
     if not source_dir.is_dir():
-        raise FileNotFoundError(f"source directory not found: {options.source_dir}")
+        msg = f"source directory not found: {options.source_dir}"
+        raise FileNotFoundError(msg)
     if options.max_file_size <= 0:
-        raise ValueError("max_file_size must be positive")
+        msg = "max_file_size must be positive"
+        raise ValueError(msg)
 
     _validate_output_directory(source_dir, out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -324,8 +353,8 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
             skipped.append({"path": rel, "reason": f"unreadable: {type(exc).__name__}"})
 
     manifest = {
-        "source_dir": str(source_dir),
-        "out_dir": str(out_dir),
+        "source_dir": _portable_path(source_dir),
+        "out_dir": _portable_path(out_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "max_file_size": options.max_file_size,
         "include_lockfiles": options.include_lockfiles,
@@ -342,4 +371,135 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
     return manifest
 
 
-__all__ = ["DEFAULT_MAX_FILE_SIZE", "SeedCorpusOptions", "prepare_seed_corpus"]
+def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict:
+    """Materialise RAPTOR's curated community seed corpus into ``out_dir``.
+
+    The checked-in corpus is deliberately source-controlled and tiny. This helper
+    copies it into a flat AFL/libFuzzer-friendly directory and writes a generated
+    manifest with sizes and hashes for the exact seeds used by this run.
+    """
+
+    out_dir = Path(out_dir).resolve()
+    _validate_builtin_output_directory(out_dir)
+    manifest_path = BUILTIN_SEED_CORPUS_DIR / "manifest.json"
+    if not manifest_path.is_file():
+        msg = f"built-in seed corpus manifest missing: {manifest_path}"
+        raise FileNotFoundError(msg)
+
+    try:
+        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        msg = f"malformed seed corpus manifest: {exc}"
+        raise ValueError(msg) from exc
+    seeds_config = source_manifest.get("seeds") or []
+    if not isinstance(seeds_config, list):
+        msg = "built-in seed corpus manifest has invalid seeds list"
+        raise ValueError(msg)
+
+    selected: list[tuple[dict, str, Path]] = []
+    for item in seeds_config:
+        profiles = set(item.get("profiles") or ["default"])
+        if profile not in profiles and "default" not in profiles:
+            continue
+
+        name = str(item.get("name") or "").strip()
+        path_str = str(item.get("path") or "").strip()
+        if not name or "/" in name or "\\" in name or name in {".", ".."}:
+            msg = f"invalid built-in seed name: {name!r}"
+            raise ValueError(msg)
+        if not path_str:
+            msg = f"empty path for built-in seed: {name!r}"
+            raise ValueError(msg)
+        source_rel = Path(path_str)
+        if source_rel.is_absolute() or ".." in source_rel.parts:
+            msg = f"invalid built-in seed path: {source_rel}"
+            raise ValueError(msg)
+
+        source = BUILTIN_SEED_CORPUS_DIR / source_rel
+        if not source.is_file() or source.is_symlink():
+            msg = f"built-in seed missing: {source_rel}"
+            raise FileNotFoundError(msg)
+
+        selected.append((item, name, source_rel))
+
+    if not selected:
+        msg = f"built-in seed corpus profile produced no seeds: {profile}"
+        raise ValueError(msg)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _reset_builtin_output(out_dir, {name for _, name, _ in selected})
+
+    copied: list[dict] = []
+    for item, name, source_rel in selected:
+        source = BUILTIN_SEED_CORPUS_DIR / source_rel
+        destination = out_dir / name
+        shutil.copyfile(source, destination)
+        copied.append({
+            "name": name,
+            "source": source_rel.as_posix(),
+            "destination": name,
+            "kind": item.get("kind", "generic"),
+            "description": item.get("description", ""),
+            "size": destination.stat().st_size,
+            "sha256": _sha256_file(destination),
+        })
+
+    manifest = {
+        "source": "raptor_builtin_seed_corpus",
+        "source_manifest": _portable_path(manifest_path),
+        "version": source_manifest.get("version", 1),
+        "profile": profile,
+        "out_dir": _portable_path(out_dir),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "seed_count": len(copied),
+        "seeds": copied,
+    }
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _validate_builtin_output_directory(out_dir: Path) -> None:
+    dangerous_paths = {Path(out_dir.anchor).resolve(), Path.home().resolve()}
+    if out_dir in dangerous_paths:
+        msg = "built-in seed output directory is too broad or dangerous"
+        raise ValueError(msg)
+    if _is_git_repository_root(out_dir):
+        msg = "built-in seed output directory must not be a repository root"
+        raise ValueError(msg)
+
+
+def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
+    generated_names = set(seed_names)
+    existing_manifest = out_dir / "manifest.json"
+    if existing_manifest.is_file():
+        try:
+            previous = json.loads(existing_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        if previous.get("source") == "raptor_builtin_seed_corpus":
+            for seed in previous.get("seeds") or []:
+                destination = str(seed.get("destination") or "")
+                if destination and "/" not in destination and "\\" not in destination and ".." not in destination:
+                    generated_names.add(destination)
+        existing_manifest.unlink()
+
+    for name in generated_names:
+        path = out_dir / name
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+        except (FileNotFoundError, OSError):
+            pass
+
+
+__all__ = [
+    "DEFAULT_MAX_FILE_SIZE",
+    "SeedCorpusOptions",
+    "prepare_builtin_seed_corpus",
+    "prepare_seed_corpus",
+]

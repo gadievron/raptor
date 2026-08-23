@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 RAPTOR Crash Analyzer
 
@@ -6,26 +5,49 @@ Analyses crashes from fuzzing to extract exploitability information.
 This is so much of a WIP, it's not even funny. However, you can see what we are trying to do and how it could be useful. 
 """
 
+import os
+import platform
 import re
 import subprocess
-from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
-# _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from core.binary.inspect import inspect_binary as _inspect_binary
+from core.binary.inspect import nm as _nm
+from core.binary.inspect import objdump as _objdump
+from core.binary.inspect import readelf as _readelf
+from core.config import RaptorConfig
+from core.hash import sha256_string
+from core.logging import get_logger
+from core.run.toolprobe import probe
+from core.sandbox import run as _sandbox_run
+from core.sandbox import run_trusted as _run_trusted
+
+# readelf/nm go through core.binary.inspect (FULL sandbox — the bytes
+# they parse are the crashing target's, and binutils' ELF parsers have
+# a long CVE history). _run_trusted remains for the remaining
+# read-only tools (file, strings, objdump, addr2line, otool) — sweep
+# candidates for the same helper.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
 # Each call site specifies target+output for Landlock engagement.
-import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
-import platform
-
-from core.config import RaptorConfig
-from core.hash import sha256_string
-from core.logging import get_logger
 from packages.binary_analysis._validators import is_valid_hex_address
 
 logger = get_logger()
+
+_SIGSEGV_SIGNALS = frozenset({"11", "sigsegv", "segmentation fault"})
+_SIGABRT_SIGNALS = frozenset({"6", "06", "sigabrt", "abort"})
+_SIGFPE_SIGNALS = frozenset({"8", "08", "sigfpe", "floating point exception"})
+_SIGILL_SIGNALS = frozenset({"4", "04", "sigill", "illegal instruction"})
+_SIGPIPE_SIGNALS = frozenset({"13", "sigpipe", "broken pipe"})
+_SIGBUS_SIGNALS = frozenset({"7", "07", "sigbus", "bus error"})
+_STACK_OVERFLOW_FUNCS = frozenset({"strcpy", "strcat", "gets", "sprintf"})
+_HEAP_ALLOC_FUNCS = frozenset({"malloc", "realloc", "calloc"})
+_BUFFER_COPY_FUNCS = frozenset({"strcpy", "strcat", "strncpy", "memcpy", "memmove"})
+_ASM_INSTRUCTIONS = frozenset({"mov", "call", "jmp", "ret", "push", "pop", "add", "sub", "cmp"})
+_DISASM_MARKERS = frozenset({"<", ">", "mov", "call", "jmp", "ret", "push", "pop"})
 
 
 @dataclass
@@ -38,7 +60,7 @@ class CrashContext:
 
     # From debugger
     stack_trace: str = ""
-    registers: Dict[str, str] = field(default_factory=dict)
+    registers: dict[str, str] = field(default_factory=dict)
     crash_instruction: str = ""
     crash_address: str = ""
     stack_hash: str = ""  # Hash of stack trace for deduplication
@@ -49,16 +71,16 @@ class CrashContext:
     source_location: str = ""  # file:line from addr2line
 
     # Binary information
-    binary_info: Dict[str, str] = field(default_factory=dict)
+    binary_info: dict[str, str] = field(default_factory=dict)
 
     # Analysis results (filled by LLM)
     exploitability: str = "unknown"  # "exploitable", "likely", "unlikely", "not_exploitable"
     crash_type: str = "unknown"      # "heap_overflow", "stack_overflow", "null_deref", etc.
     cvss_estimate: float = 0.0
-    analysis: Dict = field(default_factory=dict)
+    analysis: dict = field(default_factory=dict)
 
     # Generated artifacts
-    exploit_code: Optional[str] = None
+    exploit_code: str | None = None
 
     # Compile-verification result for ``exploit_code``. ``None`` means
     # verification was not attempted (no LLM exploit emitted, target
@@ -70,8 +92,8 @@ class CrashContext:
     # LLM's exploit didn't build. Empty list means "no errors
     # observed" or "compilation not attempted". Mirrors the contract
     # defined in ``packages.llm_analysis.exploit_verify``.
-    exploit_compiled: Optional[bool] = None
-    exploit_compile_errors: List[str] = field(default_factory=list)
+    exploit_compiled: bool | None = None
+    exploit_compile_errors: list[str] = field(default_factory=list)
 
     # Intent-match verdict on ``exploit_code`` — whether the
     # LLM-emitted exploit targets THIS crash specifically. Produced
@@ -80,7 +102,7 @@ class CrashContext:
     # means the judge was not invoked (no exploit, opt-out via
     # ``--no-judge-intent``, or pre-judge stage). Mirrors the
     # contract on ``VulnerabilityContext.intent_match``.
-    intent_match: Optional[Dict] = None
+    intent_match: dict | None = None
 
     # Executed-outcome from running the compiled exploit in the
     # sandbox (only populated when ``--execute-exploits`` is on).
@@ -92,19 +114,20 @@ class CrashContext:
     # carries the structured outcome detail (signal name, sanitizer
     # type, blocked-actions list, etc.); empty when execution
     # wasn't attempted.
-    execute_outcome: Optional[str] = None
-    execute_detail: Dict = field(default_factory=dict)
+    execute_outcome: str | None = None
+    execute_detail: dict = field(default_factory=dict)
 
 
 class CrashAnalyser:
     """Analyses crashes using debugger and LLM."""
 
-    def __init__(self, binary_path: Path):
+    def __init__(self, binary_path: Path) -> None:
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
-            raise FileNotFoundError(f"Binary not found: {binary_path}")
+            msg = f"Binary not found: {binary_path}"
+            raise FileNotFoundError(msg)
 
-        logger.info(f"Crash analyser initialized for: {self.binary}")
+        logger.info("Crash analyser initialized for: %s", self.binary)
         
         # Check tool availability first
         self._available_tools = self._check_tool_availability()
@@ -117,43 +140,33 @@ class CrashAnalyser:
         """Detect the appropriate debugger for this platform and binary type."""
         system = platform.system().lower()
         
-        # Check binary type first
-        try:
-            result = _run_trusted(
-                ["file", str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            binary_type = result.stdout.lower()
-        except (OSError, subprocess.SubprocessError):
-            binary_type = ""
+        # Check binary type first (sandboxed; never raises).
+        result = _inspect_binary("file", (), self.binary, timeout=5)
+        binary_type = result.stdout.lower()
 
-        # For macOS binaries (Mach-O), prefer LLDB
+        # For macOS binaries (Mach-O), prefer LLDB. Version probes go
+        # through core.run.toolprobe (sanitised env, resolved-path
+        # exec, never raises).
         if system == "darwin" or "mach-o" in binary_type:
-            logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
-            try:
-                result = _run_trusted(["lldb", "--version"], capture_output=True, text=True, timeout=5)
-                logger.info(f"LLDB version check result: {result.returncode}, stdout: {result.stdout[:100]}, stderr: {result.stderr[:100]}")
-                if result.returncode == 0:
-                    logger.info("Using LLDB debugger for macOS/Mach-O binary")
-                    return "lldb"
-            except Exception as e:
-                logger.warning(f"LLDB version check failed: {e}")
+            logger.info("Detected macOS/Mach-O binary, trying LLDB. Binary type: %s...", binary_type[:100])
+            info = probe("lldb", timeout=5)
+            if info is not None:
+                logger.info("LLDB version check result: %s, stdout: %s, stderr: %s", info.returncode, info.stdout[:100], info.stderr[:100])
+            if info is not None and info.returncode == 0:
+                logger.info("Using LLDB debugger for macOS/Mach-O binary")
+                return "lldb"
             logger.warning("LLDB not available for macOS binary, this may not work well")
-        
-        # Default to gdb for Linux/Windows or if LLDB fails
-        try:
-            result = _run_trusted(["gdb", "--version"], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                logger.info("Using GDB debugger")
-                return "gdb"
-        except (OSError, subprocess.SubprocessError):
-            pass
-            
-        raise RuntimeError("No suitable debugger found (gdb or lldb)")
 
-    def _check_tool_availability(self) -> Dict[str, bool]:
+        # Default to gdb for Linux/Windows or if LLDB fails
+        info = probe("gdb", timeout=2)
+        if info is not None and info.returncode == 0:
+            logger.info("Using GDB debugger")
+            return "gdb"
+
+        msg = "No suitable debugger found (gdb or lldb)"
+        raise RuntimeError(msg)
+
+    def _check_tool_availability(self) -> dict[str, bool]:
         """Check which reverse engineering tools are available on the system. There are many more but this is a start."""
         tools = {
             "nm": "symbol table extraction",
@@ -165,46 +178,33 @@ class CrashAnalyser:
         }
         
         available = {}
-        for tool, description in tools.items():
-            try:
-                result = _run_trusted(
-                    [tool, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                available[tool] = result.returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                available[tool] = False
+        for tool in tools:
+            info = probe(tool, timeout=2)
+            available[tool] = info is not None and info.returncode == 0
                 
         # Log availability
         available_tools = [tool for tool, avail in available.items() if avail]
         missing_tools = [tool for tool, avail in available.items() if not avail]
         
         if available_tools:
-            logger.info(f"Available reverse engineering tools: {', '.join(available_tools)}")
+            logger.info("Available reverse engineering tools: %s", ', '.join(available_tools))
         if missing_tools:
-            logger.warning(f"Missing reverse engineering tools: {', '.join(missing_tools)}")
+            logger.warning("Missing reverse engineering tools: %s", ', '.join(missing_tools))
             
         return available
 
-    def _load_symbol_table(self) -> Dict[str, str]:
+    def _load_symbol_table(self) -> dict[int, str]:
         """Load symbol table from binary for address-to-function mapping."""
-        symbols = {}
+        symbols: dict[int, str] = {}
         
         if not self._available_tools.get("nm", False):
             logger.warning("nm not available - symbol table resolution will be limited")
             return symbols
         
         try:
-            # Use nm to get symbol table
-            result = _run_trusted(
-                ["nm", "-C", str(self.binary)],  # -C demangles C++ symbols
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            
+            # Use nm to get symbol table (-C demangles C++ symbols)
+            result = _nm(self.binary, "-C", timeout=10)
+
             if result.returncode == 0:
                 for line in result.stdout.split("\n"):
                     if line.strip():
@@ -245,10 +245,10 @@ class CrashAnalyser:
                                 continue
                             symbols[addr_int] = name
                             
-        except Exception as e:
-            logger.debug(f"Failed to load symbol table with nm: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.debug("Failed to load symbol table with nm: %s", e)
             
-        logger.info(f"Loaded {len(symbols)} symbols from binary")
+        logger.info("Loaded %d symbols from binary", len(symbols))
         return symbols
 
     def _resolve_address_to_function(self, address: str) -> str:
@@ -297,8 +297,8 @@ class CrashAnalyser:
                     file_line = lines[1].strip()
                     return function, file_line
                     
-        except Exception as e:
-            logger.debug(f"addr2line failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.debug("addr2line failed: %s", e)
             
         return "unknown", "unknown"
 
@@ -315,9 +315,9 @@ class CrashAnalyser:
             CrashContext with extracted information
         """
         logger.info("=" * 70)
-        logger.info(f"Analysing crash: {crash_id}")
-        logger.info(f"  Signal: {signal}")
-        logger.info(f"  Input: {input_file}")
+        logger.info("Analysing crash: %s", crash_id)
+        logger.info("  Signal: %s", signal)
+        logger.info("  Input: %s", input_file)
 
         context = CrashContext(
             crash_id=crash_id,
@@ -330,8 +330,8 @@ class CrashAnalyser:
         try:
             context.binary_info = self._get_binary_info()
             logger.info("✓ Binary info extracted")
-        except Exception as e:
-            logger.error(f"✗ Binary info failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Binary info failed: %s", e)
 
         # Check for ASan instrumentation
         has_asan = self._detect_asan_binary()
@@ -347,8 +347,8 @@ class CrashAnalyser:
                     logger.info("✓ ASan diagnostics parsed")
                 else:
                     logger.warning("ASan analysis produced no output")
-            except Exception as e:
-                logger.error(f"✗ ASan analysis failed: {e}")
+            except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+                logger.error("✗ ASan analysis failed: %s", e)
         else:
             logger.info("ℹ️  Binary not ASan-instrumented - using debugger analysis")
             context.binary_info["asan_enabled"] = "false"
@@ -361,39 +361,39 @@ class CrashAnalyser:
             else:
                 self._parse_gdb_output(context, debugger_output)
             logger.info("✓ Debugger analysis complete")
-        except Exception as e:
-            logger.error(f"✗ Debugger analysis failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Debugger analysis failed: %s", e)
 
         # Get disassembly at crash site
         try:
             context.disassembly = self._get_disassembly(context.crash_address)
             logger.info("✓ Disassembly extracted")
-        except Exception as e:
-            logger.error(f"✗ Disassembly failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Disassembly failed: %s", e)
 
         # Get memory layout and protection information
         try:
             memory_info = self._get_memory_layout_info()
             context.binary_info.update(memory_info)
-            logger.info("✓ Memory layout and protections analyzed")
-        except Exception as e:
-            logger.error(f"✗ Memory layout analysis failed: {e}")
+            logger.info("✓ Memory layout and protections analysed")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Memory layout analysis failed: %s", e)
 
         # Detect environmental crashes (debugger artifacts, etc.)
         try:
             env_info = self._detect_environmental_crash(context)
             context.binary_info.update(env_info)
             logger.info("✓ Environmental crash detection complete")
-        except Exception as e:
-            logger.error(f"✗ Environmental crash detection failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Environmental crash detection failed: %s", e)
 
         # Analyze memory regions around crash address
         try:
             region_info = self._analyze_memory_regions(context)
             context.binary_info.update(region_info)
             logger.info("✓ Memory region analysis complete")
-        except Exception as e:
-            logger.error(f"✗ Memory region analysis failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.error("✗ Memory region analysis failed: %s", e)
 
         # Try to resolve function name if not found in backtrace
         if not context.function_name or context.function_name == "unknown":
@@ -403,54 +403,54 @@ class CrashAnalyser:
                 if func_name != "unknown":
                     context.function_name = func_name
                     context.source_location = file_line
-                    logger.info(f"✓ Function resolved with addr2line: {func_name} at {file_line}")
+                    logger.info("✓ Function resolved with addr2line: %s at %s", func_name, file_line)
                 else:
                     # Fall back to symbol table
                     func_name = self._resolve_address_to_function(context.crash_address)
                     if func_name != "unknown":
                         context.function_name = func_name
-                        logger.info(f"✓ Function resolved with symbols: {func_name}")
+                        logger.info("✓ Function resolved with symbols: %s", func_name)
             
             # Also try to resolve using link register (lr) for return address
             if context.registers and "lr" in context.registers:
                 lr_addr = context.registers["lr"]
                 if lr_addr and lr_addr.startswith("0x"):
                     func_name, file_line = self._resolve_address_with_addr2line(lr_addr)
-                    if func_name != "unknown" and func_name != context.function_name:
-                        logger.info(f"✓ Return address resolved: {func_name} at {file_line}")
+                    if func_name not in ("unknown", context.function_name):
+                        logger.info("✓ Return address resolved: %s at %s", func_name, file_line)
                         # Update source location if we found a better one
                         if not context.source_location or context.source_location == "unknown":
                             context.source_location = file_line
 
         # Log extracted information for debugging
         logger.info("Extracted crash information:")
-        logger.info(f"  Signal: {context.signal}")
-        logger.info(f"  Crash address: {context.crash_address}")
-        logger.info(f"  Crash instruction: {context.crash_instruction}")
-        logger.info(f"  Function: {context.function_name}")
+        logger.info("  Signal: %s", context.signal)
+        logger.info("  Crash address: %s", context.crash_address)
+        logger.info("  Crash instruction: %s", context.crash_instruction)
+        logger.info("  Function: %s", context.function_name)
         if context.source_location:
-            logger.info(f"  Source location: {context.source_location}")
-        logger.info(f"  Registers: {len(context.registers)} found")
-        logger.info(f"  Stack trace: {len(context.stack_trace.split())} frames")
-        logger.info(f"  Disassembly: {len(context.disassembly.split()) if context.disassembly else 0} lines")
-        logger.info(f"  Binary info: {len(context.binary_info)} fields")
+            logger.info("  Source location: %s", context.source_location)
+        logger.info("  Registers: %d found", len(context.registers))
+        logger.info("  Stack trace: %d frames", len(context.stack_trace.split()))
+        logger.info("  Disassembly: %d lines", len(context.disassembly.split()) if context.disassembly else 0)
+        logger.info("  Binary info: %d fields", len(context.binary_info))
         
         # Log security-relevant information
         if context.binary_info.get("aslr_enabled") != "unknown":
-            logger.info(f"  ASLR: {context.binary_info.get('aslr_enabled')}")
+            logger.info("  ASLR: %s", context.binary_info.get('aslr_enabled'))
         if context.binary_info.get("stack_canaries") != "unknown":
-            logger.info(f"  Stack canaries: {context.binary_info.get('stack_canaries')}")
+            logger.info("  Stack canaries: %s", context.binary_info.get('stack_canaries'))
         if context.binary_info.get("nx_enabled") != "unknown":
-            logger.info(f"  NX/DEP: {context.binary_info.get('nx_enabled')}")
+            logger.info("  NX/DEP: %s", context.binary_info.get('nx_enabled'))
         if context.binary_info.get("environmental_crash") == "true":
-            logger.info(f"  Environmental crash: {context.binary_info.get('reason', 'unknown')}")
+            logger.info("  Environmental crash: %s", context.binary_info.get('reason', 'unknown'))
         if context.binary_info.get("memory_region"):
-            logger.info(f"  Memory region: {context.binary_info.get('memory_region')}")
+            logger.info("  Memory region: %s", context.binary_info.get('memory_region'))
 
         # Compute stack hash for deduplication
         context.stack_hash = self._compute_stack_hash(context.stack_trace)
         if context.stack_hash:
-            logger.info(f"  Stack hash: {context.stack_hash}")
+            logger.info("  Stack hash: %s", context.stack_hash)
 
         return context
 
@@ -466,56 +466,55 @@ class CrashAnalyser:
         """
         # Signal-based classification
         signal = context.signal.lower()
-        if signal in ["11", "sigsegv", "segmentation fault"]:
+        if signal in _SIGSEGV_SIGNALS:
             # Segmentation fault - analyze further
             memory_region = context.binary_info.get("memory_region", "").lower()
             
             if "heap" in memory_region or "malloc" in context.function_name.lower():
                 return "heap_overflow"
-            elif "stack" in memory_region or any(word in context.function_name.lower() for word in ["strcpy", "strcat", "gets", "sprintf"]):
+            if "stack" in memory_region or any(word in context.function_name.lower() for word in _STACK_OVERFLOW_FUNCS):
                 return "stack_overflow"
-            elif "null" in memory_region or context.crash_address in ["0x0", "0x00000000"]:
+            if "null" in memory_region or context.crash_address in ["0x0", "0x00000000"]:
                 return "null_deref"
-            else:
-                return "memory_access_violation"
+            return "memory_access_violation"
                 
-        elif signal in ["6", "sigabrt", "abort"]:
+        if signal in _SIGABRT_SIGNALS:
             # Abort signal - could be ASan, assert, or double-free
             if context.binary_info.get("asan_enabled") == "true":
                 return "asan_detected_bug"
-            elif "free" in context.function_name.lower() or "double free" in context.stack_trace.lower():
+            if "free" in context.function_name.lower().split("_") or "double free" in context.stack_trace.lower():
                 return "double_free"
-            else:
-                return "abort_signal"
-                
-        elif signal in ["8", "sigfpe", "floating point exception"]:
+            return "abort_signal"
+
+        if signal in _SIGFPE_SIGNALS:
             return "arithmetic_error"
-            
-        elif signal in ["4", "sigill", "illegal instruction"]:
+
+        if signal in _SIGILL_SIGNALS:
             return "illegal_instruction"
-            
-        elif signal in ["13", "sigpipe", "broken pipe"]:
+
+        if signal in _SIGPIPE_SIGNALS:
             return "broken_pipe"
-            
-        elif signal in ["10", "sigbus", "bus error"]:
+
+        if signal in _SIGBUS_SIGNALS:
             return "bus_error"
             
         # Function name based classification
         func_name = context.function_name.lower()
-        if any(word in func_name for word in ["malloc", "free", "realloc", "calloc"]):
+        func_words = func_name.split("_")
+        if "free" in func_words or any(w in func_name for w in _HEAP_ALLOC_FUNCS):
             return "heap_corruption"
-        elif any(word in func_name for word in ["strcpy", "strcat", "strncpy", "memcpy", "memmove"]):
+        if any(word in func_name for word in _BUFFER_COPY_FUNCS):
             return "buffer_overflow"
-        elif "printf" in func_name or "format" in func_name:
+        if "printf" in func_name:
             return "format_string_vulnerability"
             
         # Stack trace based classification
         stack_lower = context.stack_trace.lower()
         if "heap" in stack_lower and "overflow" in stack_lower:
             return "heap_overflow"
-        elif "stack" in stack_lower and "overflow" in stack_lower:
+        if "stack" in stack_lower and "overflow" in stack_lower:
             return "stack_overflow"
-        elif "use after free" in stack_lower or "double free" in stack_lower:
+        if "use after free" in stack_lower or "double free" in stack_lower:
             return "use_after_free"
             
         # Default classification
@@ -525,8 +524,40 @@ class CrashAnalyser:
         """Run debugger to analyze crash."""
         if self._debugger == "lldb":
             return self._run_lldb_analysis(input_file)
-        else:
-            return self._run_gdb_analysis_internal(input_file)
+        return self._run_gdb_analysis_internal(input_file)
+
+    def _write_debugger_script(self, commands: list[str], prefix: str) -> Path:
+        """Write a debugger command script NEXT TO the binary, not /tmp.
+
+        The debugger runs under the mount-namespace sandbox, which
+        gives the child a FRESH tmpfs at /tmp — a script written to the
+        host /tmp is invisible inside the sandbox, and gdb -batch exits
+        0 after silently failing to read it, so the analysis returned
+        empty output with no error signal. The binary's parent dir is
+        bind-mounted into the sandbox at its original path (it is the
+        Landlock target/output), so a script placed there is visible.
+        Mirrors debugger.py's mkstemp(dir=binary_dir) convention,
+        including the random name (defeats symlink pre-plant on shared
+        systems) and the explicit 0o600.
+        """
+        binary_dir = self.binary.parent
+        fd, script_name = tempfile.mkstemp(
+            prefix=prefix, suffix=".txt", dir=str(binary_dir),
+        )
+        script_file = Path(script_name)
+        os.close(fd)
+        try:
+            os.chmod(script_file, 0o600)
+        except OSError:
+            # Non-POSIX filesystem — mkstemp's own 0600 default is the
+            # best available; not fatal.
+            pass
+        try:
+            script_file.write_text("\n".join(commands), encoding="utf-8")
+        except BaseException:
+            script_file.unlink(missing_ok=True)
+            raise
+        return script_file
 
     def _run_gdb_analysis_internal(self, input_file: Path) -> str:
         """Run GDB to analyze crash."""
@@ -549,23 +580,20 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file (delete=False to keep it during execution).
-        # cmd_f.write runs inside the `with`, BEFORE the try/finally below. A
-        # failing write (ENOSPC, I/O error) would leak the stub. Do the create
-        # + write + name-capture inside the try so finally always catches.
+        # Write commands next to the binary so the mount-ns sandbox can
+        # see them (see _write_debugger_script — host /tmp is invisible
+        # inside the sandbox's fresh tmpfs). Cleanup in finally.
         cmd_file = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_gdb_commands.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(gdb_commands))
+            cmd_file = self._write_debugger_script(
+                gdb_commands, prefix=".raptor_gdb_crash_",
+            )
 
             # Run GDB with input file via stdin (not in GDB script — avoids path injection)
             # profile='debug' permits ptrace; all other seccomp blocks remain.
             cmd = ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)]
             binary_dir = str(self.binary.parent.resolve())
-            with open(input_file, "rb") as f:
+            with Path(input_file).open("rb") as f:
                 result = _sandbox_run(
                     cmd, profile="debug",
                     target=binary_dir, output=binary_dir,
@@ -598,9 +626,22 @@ class CrashAnalyser:
         # lines that summarise stdout/stderr lengths so operators
         # who care about diagnostics still see the size signal.
         if result.stdout:
-            logger.debug(f"GDB stdout length: {len(result.stdout)} chars")
+            logger.debug("GDB stdout length: %d chars", len(result.stdout))
         if result.stderr:
-            logger.debug(f"GDB stderr length: {len(result.stderr)} chars")
+            logger.debug("GDB stderr length: %d chars", len(result.stderr))
+
+        # gdb -batch exits 0 even when the script produced nothing
+        # (unreadable script, target exited before any handler fired).
+        # Empty output means the analysis has no registers/backtrace to
+        # parse — surface it instead of silently returning nothing.
+        if not (result.stdout or "").strip():
+            logger.warning(
+                "GDB produced no output for %s (rc=%s) — the command "
+                "script produced no sections; crash context will be "
+                "empty. stderr tail: %s",
+                input_file, result.returncode,
+                (result.stderr or "")[-300:],
+            )
 
         return result.stdout
 
@@ -610,18 +651,27 @@ class CrashAnalyser:
         # these even when an exception fires between mkstemp and the
         # inner try. Pre-fix mkstemp ran outside the try, leaving the
         # two _lldb_*.txt files behind on any early raise.
+        # Both redirect stubs live NEXT TO the binary (mkstemp
+        # dir=binary_dir) for the same reason as the command script:
+        # host-/tmp paths do not exist inside the mount-ns sandbox, so
+        # `process launch -o/-e <host-tmp-path>` would fail there.
         lldb_out = None
         lldb_err = None
         cmd_file = None
+        binary_dir_path = self.binary.parent
         try:
-            lldb_out = tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_out.txt', delete=False,
+            out_fd, out_name = tempfile.mkstemp(
+                prefix=".raptor_lldb_out_", suffix=".txt",
+                dir=str(binary_dir_path),
             )
-            lldb_err = tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_err.txt', delete=False,
+            os.close(out_fd)
+            lldb_out = Path(out_name)
+            err_fd, err_name = tempfile.mkstemp(
+                prefix=".raptor_lldb_err_", suffix=".txt",
+                dir=str(binary_dir_path),
             )
-            lldb_out.close()
-            lldb_err.close()
+            os.close(err_fd)
+            lldb_err = Path(err_name)
 
             # LLDB commands - different syntax from GDB
             lldb_commands = [
@@ -632,7 +682,7 @@ class CrashAnalyser:
                 "process handle SIGBUS -s true -n true",   # Stop on bus errors
                 "process handle SIGILL -s true -n true",   # Stop on illegal instructions
                 "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
-                f"process launch -o {lldb_out.name} -e {lldb_err.name}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
+                f"process launch -o {lldb_out} -e {lldb_err}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
                 "register read",                   # Get register state
                 "thread backtrace --extended true", # Get full backtrace
                 "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
@@ -641,16 +691,16 @@ class CrashAnalyser:
                 "quit",
             ]
 
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_commands.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(lldb_commands))
+            # Script next to the binary — see _write_debugger_script
+            # (host /tmp is invisible inside the mount-ns sandbox).
+            cmd_file = self._write_debugger_script(
+                lldb_commands, prefix=".raptor_lldb_crash_",
+            )
 
-            # Run LLDB with longer timeout — debugger needs ptrace. 
+            # Run LLDB with longer timeout — debugger needs ptrace.
             try:
                 binary_dir = str(self.binary.parent.resolve())
-                with open(input_file, "rb") as stdin_f:
+                with Path(input_file).open("rb") as stdin_f:
                     result = _sandbox_run(
                         ["lldb", "-s", str(cmd_file), str(self.binary)],
                         profile="debug",
@@ -665,8 +715,8 @@ class CrashAnalyser:
                 logger.warning("LLDB analysis timed out - trying fallback approach")
                 # Clean up temp files before fallback
                 try:
-                    Path(lldb_out.name).unlink()
-                    Path(lldb_err.name).unlink()
+                    lldb_out.unlink()
+                    lldb_err.unlink()
                 except OSError:
                     pass
                 return self._run_lldb_fallback(input_file)
@@ -679,9 +729,9 @@ class CrashAnalyser:
             # caller; the operator's logging surfaces capture the
             # data without the temp-file sidecar.
             if result.stdout:
-                logger.debug(f"LLDB stdout length: {len(result.stdout)} chars")
+                logger.debug("LLDB stdout length: %d chars", len(result.stdout))
             if result.stderr:
-                logger.debug(f"LLDB stderr length: {len(result.stderr)} chars")
+                logger.debug("LLDB stderr length: %d chars", len(result.stderr))
 
             return result.stdout
         finally:
@@ -693,17 +743,16 @@ class CrashAnalyser:
                 except OSError:
                     pass
             # lldb_out / lldb_err may be None if the very first
-            # NamedTemporaryFile constructor raised before
-            # assignment. Guard each unlink individually so a stub
-            # failure on _err doesn't leak _out.
+            # mkstemp raised before assignment. Guard each unlink
+            # individually so a stub failure on _err doesn't leak _out.
             if lldb_out is not None:
                 try:
-                    Path(lldb_out.name).unlink()
+                    lldb_out.unlink()
                 except OSError:
                     pass
             if lldb_err is not None:
                 try:
-                    Path(lldb_err.name).unlink()
+                    lldb_err.unlink()
                 except OSError:
                     pass
 
@@ -731,20 +780,18 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file. Same hazard as the other two
-        # spots in this module: pull the create+write inside the try so a
-        # failing write doesn't leak the stub before reaching the finally.
+        # Script next to the binary — see _write_debugger_script (host
+        # /tmp is invisible inside the mount-ns sandbox). Cleanup in
+        # finally; cmd_file stays None if the write itself raised.
         cmd_file = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='_lldb_fallback.txt', delete=False,
-            ) as cmd_f:
-                cmd_file = Path(cmd_f.name)
-                cmd_f.write("\n".join(lldb_commands))
+            cmd_file = self._write_debugger_script(
+                lldb_commands, prefix=".raptor_lldb_fallback_",
+            )
 
             # LLDB fallback — also a debugger, needs ptrace (profile='debug').
             binary_dir = str(self.binary.parent.resolve())
-            with open(input_file, "rb") as fh_in:
+            with Path(input_file).open("rb") as fh_in:
                 result = _sandbox_run(
                     ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
                     stdin=fh_in,
@@ -788,7 +835,7 @@ class CrashAnalyser:
                 elif "SIGBUS" in line:
                     context.signal = "07"
                 break
-            elif "stop reason = EXC_BREAKPOINT" in line:
+            if "stop reason = EXC_BREAKPOINT" in line:
                 # macOS exception for breakpoint (SIGTRAP)
                 context.signal = "05"
                 break
@@ -866,10 +913,11 @@ class CrashAnalyser:
             # Frame lines: `frame #N: ...` or `* frame #N` (current
             # frame marker). Reject the bare `*` header that also
             # starts with `*` but isn't a frame.
-            if stripped.startswith("frame #") or stripped.startswith("* frame #"):
+            if stripped.startswith(("frame #", "* frame #")):
                 backtrace_lines.append(stripped)
 
-        context.stack_trace = "\n".join(backtrace_lines)
+        if not context.stack_trace:
+            context.stack_trace = "\n".join(backtrace_lines)
 
         # Extract crash instruction and address from disassembly
         crash_instruction_found = False
@@ -897,7 +945,7 @@ class CrashAnalyser:
                             addr_part,
                         )
                 crash_instruction_found = True
-                logger.debug(f"Found crash instruction: {context.crash_instruction}")
+                logger.debug("Found crash instruction: %s", context.crash_instruction)
 
         # If no crash instruction found, try to find PC register value
         if not context.crash_address and context.registers:
@@ -913,7 +961,7 @@ class CrashAnalyser:
             if "disassemble" in line.lower():
                 in_disassembly = True
                 continue
-            elif in_disassembly and line.strip() and "0x" in line and ":" in line:
+            if in_disassembly and line.strip() and "0x" in line and ":" in line:
                 disassembly_lines.append(line.strip())
                 if len(disassembly_lines) >= 10:
                     break
@@ -926,18 +974,21 @@ class CrashAnalyser:
             for line in backtrace_lines:
                 if "`" in line and "(" in line:
                     func_part = line.split("`")[1].split("(")[0].strip()
-                    context.function_name = func_part
-                    
+                    if func_part:
+                        context.function_name = func_part
+
                     # Extract source location if available
-                    if " at " in line and ".c:" in line or ".cpp:" in line:
-                        source_part = line.split(" at ")[1].split()[0].strip()
-                        context.source_location = source_part
-                        logger.info(f"✓ Source location extracted from backtrace: {source_part}")
+                    if " at " in line and (".c:" in line or ".cpp:" in line):
+                        parts = line.split(" at ")[1].split()
+                        if parts:
+                            context.source_location = parts[0].strip()
+                            logger.info("✓ Source location extracted from backtrace: %s", parts[0].strip())
                     break
                 # Alternative format without backticks
-                elif " in " in line:
-                    func_part = line.split(" in ")[1]
-                    context.function_name = func_part.split()[0].split("(")[0].strip()
+                if " in " in line:
+                    parts = line.split(" in ")[1].split()
+                    if parts:
+                        context.function_name = parts[0].split("(")[0].strip()
                     break
 
     def _parse_gdb_output(self, context: CrashContext, gdb_output: str) -> None:
@@ -1028,7 +1079,8 @@ class CrashAnalyser:
                 elif "quit" in line.lower():
                     break
 
-        context.stack_trace = "\n".join(backtrace_lines)
+        if not context.stack_trace:
+            context.stack_trace = "\n".join(backtrace_lines)
 
         # Extract crash instruction and address
         crash_instruction_found = False
@@ -1040,28 +1092,30 @@ class CrashAnalyser:
                     addr_start = line.index("0x")
                     addr_end = addr_start + 18  # Allow for longer addresses
                     addr_part = line[addr_start:addr_end].split()[0]
-                    if addr_part.startswith("0x"):
+                    if is_valid_hex_address(addr_part):
                         context.crash_address = addr_part
                 crash_instruction_found = True
-                logger.debug(f"Found crash instruction: {context.crash_instruction}")
+                logger.debug("Found crash instruction: %s", context.crash_instruction)
 
         # If no crash instruction found with =>, try to find it from disassembly
         if not crash_instruction_found:
             for line in lines:
-                if "0x" in line and any(instr in line.lower() for instr in ["mov", "call", "jmp", "ret", "push", "pop", "add", "sub", "cmp"]):
-                    # Look for lines that look like disassembly
-                    if ":" in line and not line.startswith("(gdb)"):
-                        context.crash_instruction = line.strip()
-                        # Extract address
-                        if "0x" in line:
-                            addr_start = line.index("0x")
-                            addr_end = addr_start + 18
-                            addr_part = line[addr_start:addr_end].split()[0]
-                            if addr_part.startswith("0x"):
-                                context.crash_address = addr_part
-                        crash_instruction_found = True
-                        logger.debug(f"Found crash instruction from disassembly: {context.crash_instruction}")
-                        break
+                if ("0x" in line
+                        and any(instr in line.lower()
+                                for instr in _ASM_INSTRUCTIONS)
+                        # Look for lines that look like disassembly
+                        and ":" in line and not line.startswith("(gdb)")):
+                    context.crash_instruction = line.strip()
+                    # Extract address
+                    if "0x" in line:
+                        addr_start = line.index("0x")
+                        addr_end = addr_start + 18
+                        addr_part = line[addr_start:addr_end].split()[0]
+                        if is_valid_hex_address(addr_part):
+                            context.crash_address = addr_part
+                    crash_instruction_found = True
+                    logger.debug("Found crash instruction from disassembly: %s", context.crash_instruction)
+                    break
 
         # If no crash instruction found, try to find PC/RIP register value
         if not context.crash_address and context.registers:
@@ -1077,7 +1131,7 @@ class CrashAnalyser:
             if "=>" in line and "0x" in line:
                 in_disassembly = True
                 continue
-            elif in_disassembly and line.strip() and not line.startswith("(gdb)") and "0x" in line:
+            if in_disassembly and line.strip() and not line.startswith("(gdb)") and "0x" in line:
                 disassembly_lines.append(line.strip())
                 if len(disassembly_lines) >= 10:  # Limit to 10 instructions
                     break
@@ -1089,8 +1143,9 @@ class CrashAnalyser:
         if backtrace_lines:
             first_frame = backtrace_lines[0]
             if "in " in first_frame:
-                func_part = first_frame.split("in ")[1]
-                context.function_name = func_part.split()[0].split("(")[0].strip()  # Handle function(args)
+                parts = first_frame.split("in ")[1].split()
+                if parts:
+                    context.function_name = parts[0].split("(")[0].strip()
             elif "@" in first_frame:  # Alternative format
                 func_part = first_frame.split("@")[0].strip()
                 context.function_name = func_part
@@ -1132,10 +1187,10 @@ class CrashAnalyser:
 
         try:
             # Use objdump for simple disassembly with more context
-            result = _run_trusted(
-                ["objdump", "-d", "--start-address=" + address, "-C", str(self.binary)],  # -C demangles
-                capture_output=True,
-                text=True,
+            # (-C demangles). Sandboxed via core.binary.inspect — the
+            # bytes parsed come from the analysed binary.
+            result = _objdump(
+                self.binary, "-d", "--start-address=" + address, "-C",
                 timeout=10,
             )
 
@@ -1151,61 +1206,42 @@ class CrashAnalyser:
                 if "<" in line and ">" in line:  # Function start marker
                     in_disassembly = True
                     continue
-                elif in_disassembly and ":" in line and any(c in line for c in ["<", ">", "mov", "call", "jmp", "ret", "push", "pop"]):
+                if in_disassembly and ":" in line and any(c in line for c in _DISASM_MARKERS):
                     disasm_lines.append(line.strip())
                     if len(disasm_lines) >= num_instructions:
                         break
                         
             if disasm_lines:
                 return "\n".join(disasm_lines)
-            else:
-                return "No disassembly instructions found"
+            return "No disassembly instructions found"
 
-        except Exception as e:
-            logger.debug(f"Disassembly failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.debug("Disassembly failed: %s", e)
             return f"Disassembly unavailable: {e}"
 
-    def _get_binary_info(self) -> Dict[str, str]:
+    def _get_binary_info(self) -> dict[str, str]:
         """Get basic information about the binary."""
         info = {}
         
         if self._available_tools.get("file", False):
-            try:
-                # Get file type
-                result = _run_trusted(
-                    ["file", str(self.binary)],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    info["file_type"] = result.stdout.strip()
-                    
-            except Exception as e:
-                logger.debug(f"file command failed: {e}")
+            # Get file type (sandboxed; never raises).
+            result = _inspect_binary("file", (), self.binary, timeout=5)
+            if result.returncode == 0:
+                info["file_type"] = result.stdout.strip()
         else:
             logger.debug("file tool not available - skipping binary type detection")
         
         if self._available_tools.get("readelf", False):
-            try:
-                # Get ELF header info (will work for ELF binaries, may fail for Mach-O)
-                result = _run_trusted(
-                    ["readelf", "-h", str(self.binary)],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0:
-                    info["elf_header"] = result.stdout.strip()
-                    
-            except Exception as e:
-                logger.debug(f"readelf failed: {e}")
+            # ELF header info (works for ELF binaries, fails for Mach-O)
+            result = _readelf(self.binary, "-h", timeout=5)
+            if result.returncode == 0:
+                info["elf_header"] = result.stdout.strip()
         else:
             logger.debug("readelf tool not available - skipping ELF header analysis")
             
         return info
 
-    def _get_memory_layout_info(self) -> Dict[str, str]:
+    def _get_memory_layout_info(self) -> dict[str, str]:
         """Get information about memory layout and protections."""
         info = {}
 
@@ -1259,19 +1295,15 @@ class CrashAnalyser:
         except (OSError, subprocess.SubprocessError):
             info["aslr_enabled"] = "unknown"
             
-        # Check if binary has stack canaries
-        try:
-            result = _run_trusted(
-                ["objdump", "-d", str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+        # Check if binary has stack canaries via symbol table (not objdump -d
+        # which disassembles the entire binary and can OOM on large inputs)
+        result = _nm(self.binary, "-D", timeout=10)
+        if result.returncode == 0:
             if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
                 info["stack_canaries"] = "enabled"
             else:
                 info["stack_canaries"] = "not_detected"
-        except (OSError, subprocess.SubprocessError):
+        else:
             info["stack_canaries"] = "unknown"
             
         # Check for NX/DEP
@@ -1282,29 +1314,23 @@ class CrashAnalyser:
                 text=True,
                 timeout=5,
             )
-            if "NOUNDEFS" in result.stdout or "NO_HEAP_EXECUTION" in result.stdout:
+            if "NO_HEAP_EXECUTION" in result.stdout:
                 info["nx_enabled"] = "enabled"
             else:
                 info["nx_enabled"] = "not_detected"
         except (OSError, subprocess.SubprocessError):
-            try:
-                # Try Linux way
-                result = _run_trusted(
-                    ["readelf", "-l", str(self.binary)],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if "GNU_STACK" in result.stdout and "RWE" not in result.stdout:
-                    info["nx_enabled"] = "enabled"
-                else:
-                    info["nx_enabled"] = "not_detected"
-            except (OSError, subprocess.SubprocessError):
+            # Try Linux way
+            result = _readelf(self.binary, "-l", timeout=5)
+            if result.returncode is None:
                 info["nx_enabled"] = "unknown"
+            elif "GNU_STACK" in result.stdout and "RWE" not in result.stdout:
+                info["nx_enabled"] = "enabled"
+            else:
+                info["nx_enabled"] = "not_detected"
                 
         return info
 
-    def _detect_environmental_crash(self, context: CrashContext) -> Dict[str, str]:
+    def _detect_environmental_crash(self, context: CrashContext) -> dict[str, str]:
         """Detect if crash is environmental (debugger artifacts, etc.).
 
         All keyword checks here use word-boundary matching. Pre-fix
@@ -1329,21 +1355,20 @@ class CrashAnalyser:
         """
         info = {"environmental_crash": "false", "reason": ""}
 
-        # Check for SIGTRAP which could be debugger breakpoint
-        if context.signal == "05":  # SIGTRAP
-            # Look for debugger-related patterns in disassembly
-            if context.disassembly:
-                disassembly_lower = context.disassembly.lower()
-                if (
-                    re.search(r"\bint3\b", disassembly_lower)
-                    or re.search(r"\bbreakpoint\b", disassembly_lower)
-                ):
-                    info["environmental_crash"] = "true"
-                    info["reason"] = "debugger_breakpoint"
-                elif re.search(r"\btrap\b", disassembly_lower) \
-                        and re.search(r"\binvalid\b", disassembly_lower):
-                    info["environmental_crash"] = "true"
-                    info["reason"] = "invalid_trap_instruction"
+        # Check for SIGTRAP which could be debugger breakpoint —
+        # look for debugger-related patterns in disassembly.
+        if context.signal == "05" and context.disassembly:  # SIGTRAP
+            disassembly_lower = context.disassembly.lower()
+            if (
+                re.search(r"\bint3\b", disassembly_lower)
+                or re.search(r"\bbreakpoint\b", disassembly_lower)
+            ):
+                info["environmental_crash"] = "true"
+                info["reason"] = "debugger_breakpoint"
+            elif re.search(r"\btrap\b", disassembly_lower) \
+                    and re.search(r"\binvalid\b", disassembly_lower):
+                info["environmental_crash"] = "true"
+                info["reason"] = "invalid_trap_instruction"
 
         # Check for crashes in debugger/library code — word-boundary
         # so `gdb` doesn't false-match `gdbus`, `gdbm_open`.
@@ -1370,9 +1395,9 @@ class CrashAnalyser:
 
         return info
 
-    def _analyze_memory_regions(self, context: CrashContext) -> Dict[str, str]:
+    def _analyze_memory_regions(self, context: CrashContext) -> dict[str, str]:
         """Analyze memory regions around crash address."""
-        info = {}
+        info: dict[str, str] = {}
         
         if not context.crash_address or not context.crash_address.startswith("0x"):
             return info
@@ -1473,12 +1498,7 @@ class CrashAnalyser:
         """Detect if binary was compiled with AddressSanitizer."""
         try:
             # Check for ASan symbols
-            result = _run_trusted(
-                ["nm", str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            result = _nm(self.binary, timeout=10)
             asan_symbols = [
                 "__asan_", "__sanitizer", "_ZN6__asan", 
                 "__asan_report", "__asan_handle"
@@ -1497,8 +1517,8 @@ class CrashAnalyser:
             if "libclang_rt.asan" in result.stdout or "asan" in result.stdout.lower():
                 return True
                 
-        except Exception as e:
-            logger.debug(f"ASan detection failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.debug("ASan detection failed: %s", e)
             
         return False
 
@@ -1534,7 +1554,7 @@ class CrashAnalyser:
             # the default `full` profile (seccomp incl. ptrace
             # block, Landlock, net block) is appropriate.
             binary_dir = str(self.binary.parent.resolve())
-            with open(input_file, "rb") as fh_in:
+            with Path(input_file).open("rb") as fh_in:
                 result = _sandbox_run(
                     [str(self.binary)],
                     stdin=fh_in,
@@ -1565,15 +1585,14 @@ class CrashAnalyser:
             if "AddressSanitizer" in asan_output or "runtime error" in asan_output:
                 logger.info("✓ ASan diagnostics captured")
                 return asan_output
-            else:
-                logger.debug("No ASan output detected")
-                return ""
+            logger.debug("No ASan output detected")
+            return ""
                 
         except subprocess.TimeoutExpired:
             logger.warning("ASan analysis timed out")
             return "ASan analysis timed out"
-        except Exception as e:
-            logger.debug(f"ASan analysis failed: {e}")
+        except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the analysis
+            logger.debug("ASan analysis failed: %s", e)
             return f"ASan analysis failed: {e}"
 
     def _parse_asan_output(self, context: CrashContext, asan_output: str) -> None:
@@ -1615,79 +1634,64 @@ class CrashAnalyser:
             logger.info("✓ Enhanced stack trace from ASan")
             
         # Store ASan output in binary_info for LLM analysis
-        context.binary_info["asan_output"] = asan_output[:2000]  # Truncate if too long
-        """Heuristically classify crash type based on available information."""
-        # Simple heuristics based on signal and crash info
+        context.binary_info["asan_output"] = asan_output[:2000]
+        if context.crash_type in ("unknown", ""):
+            context.crash_type = self._classify_crash_type(context)
+
+    @staticmethod
+    def _classify_crash_type(context: "CrashContext") -> str:
+        """Heuristically classify crash type from signal, registers, and stack."""
         if context.signal == "11":  # SIGSEGV
             if "rsp" in context.registers and "rip" in context.registers:
                 rsp = context.registers.get("rsp", "")
-
                 if rsp and "0x00000" in rsp:
                     return "null_deref"
-                elif "call" in context.crash_instruction.lower():
+                if context.crash_instruction and "call" in context.crash_instruction.lower():
                     return "call_to_invalid_address"
-                else:
-                    return "memory_access_violation"
-
+                return "memory_access_violation"
         elif context.signal == "06":  # SIGABRT
-            if "malloc" in context.stack_trace or "free" in context.stack_trace:
+            if context.stack_trace and ("malloc" in context.stack_trace or "free" in context.stack_trace):
                 return "heap_corruption"
-            else:
-                return "assertion_failure"
-
+            return "assertion_failure"
         elif context.signal == "04":  # SIGILL
             return "invalid_instruction"
-
         elif context.signal == "08":  # SIGFPE
             return "arithmetic_error"
-
         elif context.signal == "05":  # SIGTRAP
             if context.crash_instruction and ("int3" in context.crash_instruction.lower() or "breakpoint" in context.crash_instruction.lower()):
                 return "debug_breakpoint"
-            elif context.stack_trace and "assert" in context.stack_trace.lower():
+            if context.stack_trace and "assert" in context.stack_trace.lower():
                 return "assertion_failure"
-            elif context.stack_trace and ("sanitizer" in context.stack_trace.lower() or "asan" in context.stack_trace.lower()):
+            if context.stack_trace and ("sanitizer" in context.stack_trace.lower() or "asan" in context.stack_trace.lower()):
                 return "sanitizer_violation"
-            elif "__chk_fail" in context.stack_trace or "buffer overflow" in str(context.registers):
+            if context.stack_trace and ("__chk_fail" in context.stack_trace or "buffer overflow" in str(context.registers)):
                 return "stack_buffer_overflow"
-            else:
-                return "trap_signal"
-
+            return "trap_signal"
         elif context.signal == "07":  # SIGBUS
             return "bus_error"
-
-        elif context.signal == "10":  # SIGUSR1
+        elif context.signal in ("10", "12"):  # SIGUSR1/SIGUSR2
             return "user_signal"
-
-        elif context.signal == "12":  # SIGUSR2
-            return "user_signal"
-
         elif context.signal == "13":  # SIGPIPE
             return "broken_pipe"
-
         elif context.signal == "14":  # SIGALRM
             return "alarm_timeout"
-
         elif context.signal == "15":  # SIGTERM
             return "termination_signal"
 
-        # Fallback classification based on crash instruction or stack trace
         if context.crash_instruction:
             instr = context.crash_instruction.lower()
             if "div" in instr and ("zero" in instr or "/ 0" in instr):
                 return "division_by_zero"
-            elif "int3" in instr or "breakpoint" in instr:
+            if "int3" in instr or "breakpoint" in instr:
                 return "debug_breakpoint"
-            elif "call" in instr and ("0x0" in instr or "null" in instr):
+            if "call" in instr and ("0x0" in instr or "null" in instr):
                 return "call_to_null"
-
         if context.stack_trace:
             trace = context.stack_trace.lower()
-            if "sanitizer" in trace or "asan" in trace:
+            if "sanitizer" in trace or re.search(r'(?:^|[^a-z])asan(?:$|[^a-z])', trace):
                 return "sanitizer_violation"
-            elif "assert" in trace:
+            if "assert" in trace:
                 return "assertion_failure"
-            elif "malloc" in trace or "free" in trace:
+            if "malloc" in trace or re.search(r'(?:^|[^a-z])free(?:$|[^a-z])', trace):
                 return "heap_issue"
-
         return "unknown_crash_type"

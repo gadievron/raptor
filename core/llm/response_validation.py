@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from core.schema_constants import (
     AGENTIC_RULING_VALUES,
@@ -33,6 +33,125 @@ _CVSS_RE = re.compile(
 _CWE_RE = re.compile(r"^CWE-\d+$")
 
 
+class SchemaUnknownFieldError(ValueError):
+    """An LLM structured response carried top-level fields outside the
+    requested schema.
+
+    Raised at the ``generate_structured`` boundary (the mandatory
+    strict floor — the ``extra="forbid"`` equivalent for the dict-based
+    schema format). A schema-invalid response is treated exactly like a
+    malformed response: the client's retry / fallback machinery handles
+    it, and the model's schema-validity scorecard cell records the
+    failure.
+    """
+
+
+# Schemas that legitimately accept open-ended top-level shapes, keyed
+# by their full property-name signature. Registering a signature here
+# is an EXPLICIT, reviewable exemption from the unknown-field floor —
+# never skip silently by weakening the check itself. Each entry must
+# carry a comment explaining why the open shape is legitimate.
+# (Schemas can also opt out in-band by declaring
+# ``"additionalProperties": True`` — that is the JSON-Schema-native
+# way to say "open object" and is honoured below.)
+_OPEN_SCHEMA_SIGNATURES: frozenset = frozenset({
+    # (empty — no consumer currently needs an open top-level shape)
+})
+
+
+# LLM-output parse sites that do NOT flow through generate_structured
+# (they parse free-form ``generate`` text) and are explicitly exempted
+# from conversion to the unknown-field floor, each with a reason. This
+# registry exists so exemptions are documented and greppable rather
+# than silent; a new free-form JSON parse of LLM output should either
+# implement the floor locally (see core/audit/batch_glance.py,
+# core/audit/llm_summaries.py, core/audit/spec_inference.py for the
+# pattern) or be added here with a reason.
+EXEMPT_FREEFORM_PARSE_SITES: tuple = (
+    (
+        "core/audit/dark_verify/_prompts.py",
+        "parse_witness_response",
+        (
+            "prompt-module owned by the prompt-envelope work stream; the "
+            "parse extracts an explicit field set into DarkWitnessSpec "
+            "(unknown fields never propagate) and witness execution runs "
+            "under the fail-closed sandbox"
+        ),
+    ),
+    (
+        "libexec/raptor-study-prep",
+        "_llm_seed_concepts_from_names",
+        (
+            "response is a JSON array of identifier strings intersected "
+            "against a mechanical allowlist (study-list names) — only "
+            "already-known identifiers survive, so unknown values are "
+            "structurally impossible"
+        ),
+    ),
+    (
+        "core/dataflow/barrier_synth.py",
+        "default_completer/_extract_ql",
+        (
+            "output is CodeQL source text (open-ended code by design), not "
+            "structured JSON; the synthesised query is validated by "
+            "compiling and running it against before/after databases"
+        ),
+    ),
+)
+
+
+def _allowed_top_level_keys(schema: dict[str, Any]) -> set[str] | None:
+    """Return the set of permitted top-level keys, or None when the
+    schema does not describe a closed object (strict check skipped).
+
+    Handles both schema formats used in the codebase:
+      - JSON Schema: ``{"properties": {...}}`` — closed unless
+        ``additionalProperties`` is explicitly truthy.
+      - Simple: ``{"field": "type description"}`` (all-str values) —
+        always closed.
+    Unrecognised shapes (top-level arrays, mixed dicts) return None so
+    the floor never rejects a response the schema didn't constrain.
+    """
+    if not isinstance(schema, dict) or not schema:
+        return None
+    if "properties" in schema:
+        props = schema.get("properties")
+        if not isinstance(props, dict) or not props:
+            return None
+        if schema.get("additionalProperties"):
+            return None  # explicitly-open object
+        keys = set(props)
+    elif "type" not in schema and all(isinstance(v, str) for v in schema.values()):
+        # Simple format. A top-level "type" key marks a JSON Schema
+        # fragment (e.g. {"type": "array"}) rather than a field list —
+        # skip those conservatively. (A simple schema with a field
+        # literally named "type" also skips: conservative, never
+        # rejects a response the schema didn't clearly constrain.)
+        keys = set(schema)
+    else:
+        return None
+    if frozenset(keys) in _OPEN_SCHEMA_SIGNATURES:
+        return None
+    return keys
+
+
+def unknown_response_fields(
+    raw: Any,
+    schema: dict[str, Any],
+) -> list[str]:
+    """Return the top-level keys of ``raw`` not permitted by ``schema``.
+
+    Empty list means the response passes the strict floor (or the
+    schema doesn't describe a closed object — see
+    :func:`_allowed_top_level_keys`). Non-dict ``raw`` returns [] here;
+    dict-shape enforcement stays with the caller's existing handling.
+    """
+    allowed = _allowed_top_level_keys(schema)
+    if allowed is None or not isinstance(raw, dict):
+        return []
+    return sorted(k for k in raw if k not in allowed)
+
+
 @dataclass
 class FieldResult:
     """Outcome of validating a single field."""
@@ -43,19 +162,19 @@ class FieldResult:
 @dataclass
 class ValidatedResponse:
     """Result of validate_structured_response."""
-    data: Dict[str, Any]
+    data: dict[str, Any]
     quality: float
-    incomplete: List[str] = field(default_factory=list)
-    coerced: List[str] = field(default_factory=list)
-    fields: Dict[str, FieldResult] = field(default_factory=dict)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    incomplete: list[str] = field(default_factory=list)
+    coerced: list[str] = field(default_factory=list)
+    fields: dict[str, FieldResult] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 # ---- Field weights per schema ------------------------------------------------
 # Keyed by a schema identifier (first required field tuple as a proxy).
 # Unknown schemas get uniform weights.
 
-_ANALYSIS_WEIGHTS: Dict[str, float] = {
+_ANALYSIS_WEIGHTS: dict[str, float] = {
     "is_true_positive": 1.0,
     "is_exploitable": 1.0,
     "reasoning": 1.0,
@@ -74,7 +193,7 @@ _ANALYSIS_WEIGHTS: Dict[str, float] = {
     "prerequisites": 0.2,
 }
 
-_FINDING_RESULT_WEIGHTS: Dict[str, float] = {
+_FINDING_RESULT_WEIGHTS: dict[str, float] = {
     "finding_id": 1.0,
     "is_true_positive": 1.0,
     "is_exploitable": 1.0,
@@ -96,7 +215,7 @@ _FINDING_RESULT_WEIGHTS: Dict[str, float] = {
     "patch_code": 0.1,
 }
 
-_DATAFLOW_VALIDATION_WEIGHTS: Dict[str, float] = {
+_DATAFLOW_VALIDATION_WEIGHTS: dict[str, float] = {
     "is_exploitable": 1.0,
     "source_attacker_controlled": 1.0,
     "sanitizers_effective": 0.9,
@@ -118,7 +237,7 @@ _DATAFLOW_VALIDATION_WEIGHTS: Dict[str, float] = {
 }
 
 # Registry: recognise schema by its field set and return the right weights.
-_WEIGHT_REGISTRY: List[tuple[Set[str], Dict[str, float]]] = [
+_WEIGHT_REGISTRY: list[tuple[set[str], dict[str, float]]] = [
     ({"finding_id", "is_true_positive", "is_exploitable", "reasoning"}, _FINDING_RESULT_WEIGHTS),
     ({"source_attacker_controlled", "sanitizers_effective", "path_reachable"}, _DATAFLOW_VALIDATION_WEIGHTS),
     ({"is_true_positive", "is_exploitable", "reasoning"}, _ANALYSIS_WEIGHTS),
@@ -138,19 +257,19 @@ _DEFAULT_WEIGHT = 0.5
 _QUALITY_RETRY_THRESHOLD: float = 0.5
 
 
-def _resolve_weights(schema: Dict[str, Any]) -> Dict[str, float]:
+def _resolve_weights(schema: dict[str, Any]) -> dict[str, float]:
     """Pick the right weight table for a schema, or fall back to uniform."""
     props = _get_properties(schema)
-    field_names = set(props.keys())
+    field_names = set(props)
     for signature, weights in _WEIGHT_REGISTRY:
         if signature <= field_names:
             return weights
-    return {f: _DEFAULT_WEIGHT for f in field_names}
+    return dict.fromkeys(field_names, _DEFAULT_WEIGHT)
 
 
 # ---- Schema helpers ----------------------------------------------------------
 
-def _get_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
+def _get_properties(schema: dict[str, Any]) -> dict[str, Any]:
     if "properties" in schema:
         return schema.get("properties", {})
     # Simple schema: values are description strings like "boolean" or
@@ -159,16 +278,17 @@ def _get_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
     return schema
 
 
-def _get_required(schema: Dict[str, Any]) -> Set[str]:
+def _get_required(schema: dict[str, Any]) -> set[str]:
     if "properties" in schema:
         return set(schema.get("required", []))
-    return set(schema.keys())
+    return set(schema)
 
 
 def _get_field_type(field_spec: Any) -> str:
     """Extract the primary type from a JSON Schema property or simple description."""
     if isinstance(field_spec, str):
-        token = field_spec.split()[0].strip().lower()
+        parts = field_spec.split()
+        token = parts[0].strip().lower() if parts else "string"
         return {"bool": "boolean", "str": "string", "int": "integer",
                 "float": "number", "list": "array"}.get(token, token)
     if isinstance(field_spec, dict):
@@ -231,7 +351,7 @@ def _normalise_confidence(value: Any) -> tuple[Any, bool]:
     return value, False
 
 
-_DOMAIN_NORMALISERS: Dict[str, Any] = {
+_DOMAIN_NORMALISERS: dict[str, Any] = {
     "vuln_type": _normalise_vuln_type,
     "ruling": _normalise_status_field,
     "severity_assessment": _normalise_severity,
@@ -284,7 +404,7 @@ def _validate_score_0_10(value: Any) -> bool:
     return 0.0 <= value <= 10.0
 
 
-_DOMAIN_VALIDATORS: Dict[str, Any] = {
+_DOMAIN_VALIDATORS: dict[str, Any] = {
     "vuln_type": _validate_vuln_type,
     "ruling": _validate_ruling,
     "severity_assessment": _validate_severity,
@@ -352,8 +472,8 @@ def _coerce_value(value: Any, field_type: str) -> tuple[Any, bool]:
 # ---- Main entry point --------------------------------------------------------
 
 def validate_structured_response(
-    raw: Dict[str, Any],
-    schema: Dict[str, Any],
+    raw: dict[str, Any],
+    schema: dict[str, Any],
 ) -> ValidatedResponse:
     """Validate and normalise an LLM response dict against a schema.
 
@@ -372,10 +492,10 @@ def validate_structured_response(
     required = _get_required(schema)
     weights = _resolve_weights(schema)
 
-    data: Dict[str, Any] = {}
-    fields: Dict[str, FieldResult] = {}
-    incomplete: List[str] = []
-    coerced_fields: List[str] = []
+    data: dict[str, Any] = {}
+    fields: dict[str, FieldResult] = {}
+    incomplete: list[str] = []
+    coerced_fields: list[str] = []
 
     weighted_score = 0.0
     total_weight = 0.0
@@ -390,7 +510,10 @@ def validate_structured_response(
             if nullable or field_name not in required:
                 data[field_name] = None
                 fields[field_name] = FieldResult(status="missing")
-                # Optional missing fields don't penalise quality
+                # A missing optional field earns half its weight —
+                # partial credit, not a free pass: a response omitting
+                # every optional field scores 0.5, exactly at
+                # _QUALITY_RETRY_THRESHOLD.
                 weighted_score += weight * 0.5
             else:
                 data[field_name] = None
@@ -409,11 +532,10 @@ def validate_structured_response(
                 fields[field_name] = FieldResult(status="ok", original=original)
                 weighted_score += weight
                 continue
-            else:
-                data[field_name] = None
-                fields[field_name] = FieldResult(status="invalid", original=original)
-                incomplete.append(field_name)
-                continue
+            data[field_name] = None
+            fields[field_name] = FieldResult(status="invalid", original=original)
+            incomplete.append(field_name)
+            continue
 
         # Type coercion
         value, type_coerced = _coerce_value(value, field_type)
@@ -433,18 +555,17 @@ def validate_structured_response(
 
         # Domain validation
         validator = _DOMAIN_VALIDATORS.get(field_name)
-        if validator is not None and value is not None:
-            if not validator(value):
-                data[field_name] = value
-                status = "coerced" if was_coerced else "invalid"
-                fields[field_name] = FieldResult(status=status, original=original)
-                if was_coerced:
-                    coerced_fields.append(field_name)
-                    weighted_score += weight * 0.5
-                else:
-                    incomplete.append(field_name)
-                    weighted_score += weight * 0.25
-                continue
+        if validator is not None and value is not None and not validator(value):
+            data[field_name] = value
+            status = "coerced" if was_coerced else "invalid"
+            fields[field_name] = FieldResult(status=status, original=original)
+            if was_coerced:
+                coerced_fields.append(field_name)
+                weighted_score += weight * 0.5
+            else:
+                incomplete.append(field_name)
+                weighted_score += weight * 0.25
+            continue
 
         # Passed
         data[field_name] = value
@@ -497,8 +618,8 @@ def validate_structured_response(
     )
 
 
-def quality_retry_prompt(original_prompt: str, incomplete: List[str],
-                         coerced: List[str]) -> str:
+def quality_retry_prompt(original_prompt: str, incomplete: list[str],
+                         coerced: list[str]) -> str:
     """Build a retry prompt that tells the LLM which fields need fixing."""
     problems = []
     if incomplete:
@@ -519,14 +640,14 @@ def quality_retry_prompt(original_prompt: str, incomplete: List[str],
 
 def attempt_quality_retry(
     llm: Any,
-    validated: "ValidatedResponse",
+    validated: ValidatedResponse,
     prompt: str,
-    schema: Dict[str, Any],
+    schema: dict[str, Any],
     *,
-    system_prompt: Optional[str] = None,
+    system_prompt: str | None = None,
     task_type: Any = None,
     threshold: float = _QUALITY_RETRY_THRESHOLD,
-) -> "ValidatedResponse":
+) -> ValidatedResponse:
     """If `validated.quality` is below `threshold`, build a corrective
     retry prompt and call the LLM once more. Return whichever response
     is higher quality.
@@ -555,7 +676,7 @@ def attempt_quality_retry(
         prompt, validated.incomplete, validated.coerced,
     )
 
-    kwargs: Dict[str, Any] = {"prompt": retry_prompt, "schema": schema}
+    kwargs: dict[str, Any] = {"prompt": retry_prompt, "schema": schema}
     if system_prompt is not None:
         kwargs["system_prompt"] = system_prompt
     if task_type is not None:
@@ -563,7 +684,7 @@ def attempt_quality_retry(
 
     try:
         raw_retry, _ = llm.generate_structured(**kwargs)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — retry must never break the caller
         # Retry must never break the caller. Fall back to the original
         # validated response and let the caller log the low-quality
         # warning the same way it would have without retry.

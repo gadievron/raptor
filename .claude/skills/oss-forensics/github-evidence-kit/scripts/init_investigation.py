@@ -78,7 +78,7 @@ def initialize_evidence_store(workdir):
     return evidence_path
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     import argparse
 

@@ -39,7 +39,7 @@ the family stay in lock-step.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
@@ -48,11 +48,11 @@ logger = logging.getLogger(__name__)
 
 
 def record_consensus_outcomes(
-    scorecard: Optional[ModelScorecard],
+    scorecard: ModelScorecard | None,
     *,
-    correlation: Dict[str, Any],
-    results_by_id: Dict[str, Dict],
-    per_finding_results: Optional[Dict[str, Any]] = None,
+    correlation: dict[str, Any],
+    results_by_id: dict[str, dict],
+    per_finding_results: dict[str, Any] | None = None,
     decision_class_prefix: str = "agentic",
 ) -> int:
     """Walk a correlation result; record one
@@ -83,9 +83,9 @@ def record_consensus_outcomes(
     and prefilter signals share the same cell.
 
     Failure path: any per-event ``record_event`` exception is logged
-    at debug level and swallowed; one bad event must not abort the
+    at WARNING level and swallowed; one bad event must not abort the
     whole batch and must never block the calling orchestrator's
-    flow. Operators who care will see the per-event log line.
+    flow. The per-event log line keeps a regressed producer visible.
     """
     if scorecard is None or not correlation:
         return 0
@@ -99,7 +99,7 @@ def record_consensus_outcomes(
         if confidence.get(fid) != "disputed":
             continue
 
-        verdicts: Dict[str, bool] = {}
+        verdicts: dict[str, bool] = {}
         for model, mr in per_model.items():
             v = mr.get("is_exploitable")
             if v is None:
@@ -164,12 +164,13 @@ def record_consensus_outcomes(
                 # primary's reasoning — that would mis-attribute the
                 # majority's text to the dissenter.
                 reasoning = str(this_model_result.get("reasoning") or "")
+                truth_label = (
+                    f"majority of {len(verdicts)} models voted "
+                    f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
+                )
                 sample = {
                     "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
-                    "other_reasoning": (
-                        f"majority of {len(verdicts)} models voted "
-                        f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
-                    ),
+                    "other_reasoning": truth_label,
                 }
             try:
                 scorecard.record_event(

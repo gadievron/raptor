@@ -22,7 +22,6 @@ Public API:
 from __future__ import annotations
 
 import re
-from typing import Tuple
 
 
 #: Known macro / syntax spellings for warn_unused_result. Grouped by
@@ -51,7 +50,7 @@ WUR_ALIASES_BY_ORIGIN: dict = {
 }
 
 #: Flat tuple of all WUR alias spellings, used for fast substring checks.
-ALL_WUR_ALIASES: Tuple[str, ...] = tuple(
+ALL_WUR_ALIASES: tuple[str, ...] = tuple(
     spelling
     for spellings in WUR_ALIASES_BY_ORIGIN.values()
     for spelling in spellings

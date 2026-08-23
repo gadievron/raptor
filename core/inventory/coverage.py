@@ -1,18 +1,18 @@
 """Coverage tracking with checked_by labels."""
 
-from typing import Any, Dict, List
+from typing import Any
 
 
 def _get_items(file_info):
     """Read code items from a file entry. Handles both old and new format."""
-    return file_info.get("items", file_info.get("functions", []))
+    return file_info.get("items", file_info.get("functions", [])) or []
 
 
 def update_coverage(
-    inventory: Dict[str, Any],
-    checked_functions: List[Dict[str, str]],
+    inventory: dict[str, Any],
+    checked_functions: list[dict[str, str]],
     source_label: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark functions as checked by a specific tool/stage.
 
     Args:
@@ -69,7 +69,7 @@ def update_coverage(
             key = (path, cls, name)
             legacy_key = (path, "", name)
             if key in checked_set or legacy_key in checked_set:
-                checked_by = func.get('checked_by', [])
+                checked_by = func.get('checked_by') or []
                 if source_label not in checked_by:
                     checked_by.append(source_label)
                 func['checked_by'] = checked_by
@@ -77,7 +77,7 @@ def update_coverage(
     return inventory
 
 
-def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
+def get_coverage_stats(inventory: dict[str, Any]) -> dict[str, Any]:
     """Compute coverage statistics from an inventory.
 
     Returns:
@@ -86,8 +86,8 @@ def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
     """
     total = 0
     checked = 0
-    by_source: Dict[str, int] = {}
-    by_kind: Dict[str, Dict[str, int]] = {}  # kind -> {total, checked}
+    by_source: dict[str, int] = {}
+    by_kind: dict[str, dict[str, int]] = {}  # kind -> {total, checked}
 
     for file_info in inventory.get('files', []):
         for item in _get_items(file_info):
@@ -98,7 +98,7 @@ def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
                 by_kind[kind] = {"total": 0, "checked": 0}
             by_kind[kind]["total"] += 1
 
-            checked_by = item.get('checked_by', [])
+            checked_by = item.get('checked_by') or []
             if checked_by:
                 checked += 1
                 by_kind[kind]["checked"] += 1
@@ -121,20 +121,20 @@ def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def format_coverage_summary(inventory: Dict[str, Any]) -> str:
+def format_coverage_summary(inventory: dict[str, Any]) -> str:
     """Format a human-readable coverage summary.
 
     Returns a multi-line string for printing to stdout.
     """
     stats = get_coverage_stats(inventory)
     total_files = inventory.get('total_files', 0)
-    excluded = len(inventory.get('excluded_files', []))
+    excluded = len(inventory.get('excluded_files') or [])
     sloc = stats.get('total_sloc', 0)
 
     # Inventory line: files, SLOC, items by kind
     _PLURALS = {"function": "functions", "global": "globals", "macro": "macros", "class": "classes"}
     kind_parts = []
-    for kind, counts in sorted(stats.get('by_kind', {}).items()):
+    for kind, counts in sorted((stats.get('by_kind') or {}).items()):
         label = _PLURALS.get(kind, kind + "s")
         kind_parts.append(f"{counts['total']} {label}")
     items_str = ", ".join(kind_parts) if kind_parts else f"{stats['total_items']} items"

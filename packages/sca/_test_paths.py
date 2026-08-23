@@ -20,18 +20,28 @@ Operators who DO need findings from test files (e.g. a security-
 research repo where the test corpus IS the analysis target) can
 filter the SBOM / findings.json themselves; we don't (yet) ship a
 ``--include-tests`` toggle.
+
+``is_test_resident`` is the WRITE-path variant used by the surfaces
+that edit files (``fix --harden`` / ``bump``): everything
+``is_test_path`` matches PLUS fixture-data directory names
+(``testdata/``, ``fixtures/``). Fixture manifests are test
+assertions — deliberately-old pins the test suite depends on — so
+the write paths must never bump them, while the scan side keeps
+reporting findings in them (they are genuine supply-chain surface).
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Set
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Directory names treated as test trees. Same set across both
 # reachability and supply-chain — a project's "tests" dir is its
 # tests dir regardless of which detector is asking.
-TEST_DIR_NAMES: Set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
+TEST_DIR_NAMES: set[str] = {"tests", "test", "__tests__", "spec", "e2e"}
 
 # Test-file naming conventions across the languages /sca handles.
 # Cross-ecosystem extension landed after the docker-moby sweep
@@ -69,6 +79,14 @@ _TEST_FILE_RE = re.compile(
 )
 
 
+# Fixture-data directory names — recognised by the WRITE-path
+# predicate only. NOT folded into TEST_DIR_NAMES: the scan /
+# detector layers must keep seeing fixture-tree manifests (findings
+# there are valid supply-chain results), so widening the shared
+# scan-side set would silently shrink scan coverage.
+FIXTURE_DIR_NAMES: set[str] = {"testdata", "fixtures"}
+
+
 def is_test_path(path: Path, target: Path) -> bool:
     """True if ``path`` is part of the project's test suite.
 
@@ -88,4 +106,29 @@ def is_test_path(path: Path, target: Path) -> bool:
     return any(part in TEST_DIR_NAMES for part in rel.parts)
 
 
-__all__ = ["TEST_DIR_NAMES", "is_test_path"]
+def is_test_resident(path: Path, target: Path) -> bool:
+    """True if ``path`` lives in the project's test suite OR a
+    fixture-data tree (``testdata/`` / ``fixtures/``).
+
+    This is the predicate the WRITE paths (``fix --harden`` /
+    ``bump``) use to refuse edits: fixture manifests are test
+    assertions with deliberately-old pins, so auto-bumping them
+    breaks the tests they feed. Strictly broader than
+    ``is_test_path`` — scanning keeps using the narrower predicate
+    so findings in fixture trees stay reported.
+    """
+    if is_test_path(path, target):
+        return True
+    try:
+        rel = path.relative_to(target)
+    except ValueError:
+        rel = path
+    return any(part in FIXTURE_DIR_NAMES for part in rel.parts)
+
+
+__all__ = [
+    "FIXTURE_DIR_NAMES",
+    "TEST_DIR_NAMES",
+    "is_test_path",
+    "is_test_resident",
+]

@@ -1,7 +1,7 @@
 """Tests for libexec/raptor-r2-sandboxed.
 
 Three layers:
-  1. Unit  — argv whitelist + env-var refusal (no r2 spawn needed)
+  1. Unit  — argv allowlist + env-var refusal (no r2 spawn needed)
   2. Integration — drive r2 through the wrapper against a real ELF
      binary; verify r2's output matches a direct r2 invocation
   3. Adversarial — confirm sandbox isolation engages (network blocked,
@@ -21,7 +21,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-r2-sandboxed"
@@ -54,9 +53,7 @@ def _mount_ns_usable() -> bool:
     if not shutil.which("newuidmap") or not shutil.which("newgidmap"):
         return False
     sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-    if sysctl.exists() and sysctl.read_text().strip() == "1":
-        return False
-    return True
+    return not (sysctl.exists() and sysctl.read_text().strip() == "1")
 
 
 def _r2_available() -> bool:
@@ -77,6 +74,7 @@ def _run_wrapper(args, env=None, stdin=None, timeout=30):
     cmd = [str(WRAPPER), *args]
     return subprocess.run(
         cmd,
+        check=False,
         env=env or _trusted_env(),
         stdin=stdin,
         capture_output=True,
@@ -96,7 +94,7 @@ _RC_ENV_INVALID    = 103
 _RC_BINARY_MISSING = 104
 
 
-class TestArgvWhitelist:
+class TestArgvAllowlist:
     """The wrapper refuses argv outside the r2pipe-spawn shape."""
 
     def test_no_args_refuses(self, tmp_path):
@@ -114,16 +112,16 @@ class TestArgvWhitelist:
     def test_unknown_flag_refuses(self, tmp_path):
         """A flag that smuggles arbitrary r2 command, e.g. -c 'cmd', or
         opens a file with attacker-controlled mode (-w) — must refuse.
-        Binary is /bin/ls (real file) so we exercise the flag-whitelist
+        Binary is /bin/ls (real file) so we exercise the flag-allowlist
         path, not the missing-binary check."""
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         r = _run_wrapper(["-c", "system('id')", "/bin/ls"], env=env)
         assert r.returncode == _RC_ARGV_REFUSED, r.stderr
-        assert "not in whitelist" in r.stderr
+        assert "not in allowlist" in r.stderr
 
     def test_write_mode_flag_refuses(self, tmp_path):
         """`-w` puts r2 in write mode — could modify the target binary
-        on disk. Not in the whitelist."""
+        on disk. Not in the allowlist."""
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         r = _run_wrapper(["-w", "/bin/ls"], env=env)
         assert r.returncode == _RC_ARGV_REFUSED, r.stderr
@@ -201,6 +199,7 @@ class TestSymlinkResolution:
         try:
             r = subprocess.run(
                 [str(WRAPPER), "-2", str(link)],
+                check=False,
                 env=env, input="q\n", capture_output=True, text=True,
                 timeout=5,
             )
@@ -245,6 +244,7 @@ class TestR2Invocation:
         )
         r = subprocess.run(
             [str(WRAPPER), "-2", *extra_flags, str(self.binary)],
+            check=False,
             env=env,
             input=r2_commands + "\nq\n",
             capture_output=True, text=True, timeout=timeout,
@@ -316,6 +316,7 @@ class TestAdversarialIsolation:
         )
         r = subprocess.run(
             [str(WRAPPER), "-2", str(self.binary)],
+            check=False,
             env=env,
             input=r2_commands + "\nq\n",
             capture_output=True, text=True, timeout=60,
@@ -363,45 +364,45 @@ class TestAdversarialIsolation:
         )
 
     def test_network_is_blocked(self):
-        """block_network=True → no interfaces → outbound connect fails.
-        Use r2's `!` shell escape to try a connection."""
-        # `getent hosts localhost` is a local-only resolution; doesn't
-        # touch DNS. We want something that EXPECTS network. Use python
-        # to attempt a TCP connect to a non-routable IP — sandbox should
-        # cause it to fail fast.
-        # If /usr/bin/python3 isn't in the sandbox (it should be — bind-
-        # mounted RO via /usr/bin), use sh to read /sys/class/net entries.
-        # Simpler check: count network interfaces. block_network removes
-        # all of them (lo only, sometimes none).
-        r = self._r2_check("!ls /sys/class/net")
-        # In a block_network sandbox, /sys/class/net is typically empty
-        # OR contains only `lo`. Real hosts have many interfaces (eth0,
-        # wlan0, docker0, etc.). Assert at most "lo".
-        net_iface_listing = r.stdout
-        # Strip r2 prompts and noise; look at the lines that look like
-        # interface names.
-        candidate_lines = [
-            line.strip() for line in net_iface_listing.splitlines()
-            if line.strip() and not line.startswith("[")
-            and ":" not in line
-            and " " not in line.strip()
-            and len(line.strip()) < 20
-        ]
-        # Filter out r2 prompts (e.g. "[0x00000000]>")
-        candidate_lines = [
-            line for line in candidate_lines
-            if not line.startswith(">") and not line.startswith("0x")
-        ]
-        # We should see at most {lo} in a properly isolated sandbox.
-        # Don't be too strict — r2's output is noisy. Just assert that
-        # known non-loopback interface names from the host (eth0, wlan0)
-        # don't appear.
-        for known_host_iface in ("eth0", "wlan0", "docker0", "enp"):
-            assert known_host_iface not in net_iface_listing, (
-                f"network isolation failed — sandbox sees host "
-                f"interface {known_host_iface!r}. "
-                f"stdout={net_iface_listing!r}"
+        """block_network=True → outbound TCP connect fails.
+
+        unshare --net creates a new network namespace, but sysfs is NOT
+        remounted — /sys/class/net still reflects the host's interfaces.
+        So we test actual connectivity: attempt a TCP connect to a
+        non-routable IP from inside r2's shell escape.
+        """
+        # 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed non-routable.
+        # In a new net-ns only loopback exists (unconfigured), so connect
+        # fails with "Network is unreachable" rather than a slow timeout.
+        r = self._r2_check(
+            "!python3 -c \""
+            "import socket,sys; s=socket.socket(); s.settimeout(3); "
+            "r=1; "
+            "try:\n s.connect(('192.0.2.1',80))\n"
+            "except Exception:\n r=0\n"
+            "finally:\n s.close()\n"
+            "print('CONNECT_OK' if r else 'CONNECT_BLOCKED'); "
+            "sys.exit(r)\""
+        )
+        stdout = r.stdout
+        # If python3 isn't available in the sandbox, fall back to
+        # bash /dev/tcp probe (bash built-in, no binary needed).
+        if "CONNECT_BLOCKED" in stdout:
+            return  # pass — network is blocked
+        if "CONNECT_OK" in stdout:
+            raise AssertionError(
+                "network isolation failed — TCP connect to 192.0.2.1:80 "
+                f"succeeded inside sandbox. stdout={stdout!r}"
             )
+        # python3 call didn't produce expected output — try bash probe
+        r2 = self._r2_check(
+            "!bash -c 'echo > /dev/tcp/192.0.2.1/80 2>/dev/null "
+            "&& echo CONNECT_OK || echo CONNECT_BLOCKED'"
+        )
+        assert "CONNECT_OK" not in r2.stdout, (
+            "network isolation failed — /dev/tcp connect succeeded "
+            f"inside sandbox. stdout={r2.stdout!r}"
+        )
 
     def test_fake_home_blocks_radare2rc(self, tmp_path):
         """A malicious ~/.radare2rc that runs `?e SANDBOX_PWNED` must
@@ -429,7 +430,7 @@ class TestAdversarialIsolation:
         (operator's home, blocked by restrict_reads=True)."""
         # Try to read ~/.ssh/known_hosts via shell escape. Even with
         # cfg.sandbox=0 (which we can't set without -e, and that's
-        # blocked by the argv whitelist), the read should fail because
+        # blocked by the argv allowlist), the read should fail because
         # Landlock's restrict_reads denies $HOME.
         home = os.path.expanduser("~/.ssh")
         if not os.path.isdir(home):

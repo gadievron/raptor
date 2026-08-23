@@ -35,7 +35,7 @@ from typing import Any, Dict, List
 
 
 from core.inventory.call_graph import extract_call_graph_python
-from core.inventory.reachability import InternalFunction
+from core.analysis.reachability import InternalFunction
 from packages.sca.reachability._host_reachability import (
     all_call_sites_in_dead_code,
     classify_called_or_dead,

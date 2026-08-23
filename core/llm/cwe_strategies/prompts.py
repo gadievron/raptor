@@ -28,9 +28,12 @@ already rejected the most pathological structural inputs.)
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
 
-from .models import Exemplar, Strategy
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import Exemplar, Strategy
+    from collections.abc import Iterable
 
 
 # Default soft cap on rendered output. Picked-strategies × addenda +
@@ -61,7 +64,7 @@ def render_strategy(
     truncation logic in ``render_strategies`` drop sub-sections
     progressively when the budget is tight.
     """
-    parts: List[str] = []
+    parts: list[str] = []
     parts.append(f"## Strategy: {strategy.name}")
     if strategy.description:
         # Description may already be multi-line from YAML | block.
@@ -71,8 +74,7 @@ def render_strategy(
     if include_questions and strategy.key_questions:
         parts.append("")
         parts.append("### Key questions")
-        for q in strategy.key_questions:
-            parts.append(f"- {q}")
+        parts.extend(f"- {q}" for q in strategy.key_questions)
 
     if strategy.prompt_addendum:
         parts.append("")
@@ -96,7 +98,7 @@ def _byte_len(text: str) -> int:
 def render_strategies(
     strategies: Iterable[Strategy],
     *,
-    max_bytes: Optional[int] = DEFAULT_MAX_BYTES,
+    max_bytes: int | None = DEFAULT_MAX_BYTES,
 ) -> str:
     """Render multiple strategies as a single markdown block.
 

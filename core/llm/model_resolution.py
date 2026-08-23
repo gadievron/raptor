@@ -22,7 +22,6 @@ conditional in the integration point at :func:`_read_config_models`.
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
 from core.logging import get_logger
 
@@ -35,7 +34,7 @@ logger = get_logger()
 # transient network failure at startup doesn't trigger a retry on every
 # subsequent read of ``models.json`` — the same posture as Anthropic's
 # own SDK, which caches model lists between calls.
-_INVENTORY: Optional[list[str]] = None
+_INVENTORY: list[str] | None = None
 _INVENTORY_PROBED: bool = False
 _INVENTORY_LOCK = threading.Lock()
 
@@ -48,7 +47,7 @@ _INVENTORY_LOCK = threading.Lock()
 _LOGGED_RESOLUTIONS: set[tuple[str, str]] = set()
 
 
-def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
+def resolve_anthropic(name: str, api_key: str | None) -> str:
     """Return the canonical Anthropic model ID for *name*.
 
     Resolution rules, in order:
@@ -110,9 +109,8 @@ def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
             else:
                 _emit = False
         if _emit:
-            logger.info(
-                f"Resolved Anthropic model alias {name} -> {resolved} "
-                f"(from /v1/models inventory)"
+            logger.debug(
+                "Resolved Anthropic model alias %s -> %s (from /v1/models inventory)", name, resolved
             )
     return resolved
 
@@ -128,7 +126,7 @@ def _next_segment_is_date(model_id: str, prefix_len: int) -> bool:
     return len(seg) == 8 and seg.isdigit()
 
 
-def _get_inventory(api_key: Optional[str]) -> list[str]:
+def _get_inventory(api_key: str | None) -> list[str]:
     """Return the cached inventory, fetching it on first call.
 
     Thread-safe: concurrent first-callers from multiple threads collapse
@@ -137,7 +135,7 @@ def _get_inventory(api_key: Optional[str]) -> list[str]:
     global _INVENTORY, _INVENTORY_PROBED
 
     # Fast path — already probed. Reads of ``_INVENTORY_PROBED`` and
-    # ``_INVENTORY`` are atomic in CPython (PEP 13), so the lockless
+    # ``_INVENTORY`` are atomic in CPython (GIL), so the lockless
     # check is safe for the steady-state read pattern.
     if _INVENTORY_PROBED:
         return _INVENTORY or []
@@ -148,7 +146,7 @@ def _get_inventory(api_key: Optional[str]) -> list[str]:
         try:
             _INVENTORY = _fetch_inventory(api_key) if api_key else []
         except Exception as exc:
-            logger.debug(f"Anthropic model inventory fetch failed: {exc}")
+            logger.debug("Anthropic model inventory fetch failed: %s", exc)
             _INVENTORY = []
         _INVENTORY_PROBED = True
         return _INVENTORY
@@ -162,11 +160,11 @@ def _fetch_inventory(api_key: str) -> list[str]:
     """
     import requests
 
-    # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
     # Hardcoded Anthropic API hostname — not SSRF.
-    r = requests.get(
+    r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
         "https://api.anthropic.com/v1/models",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        params={"limit": 1000},
         timeout=5,
     )
     if r.status_code != 200:

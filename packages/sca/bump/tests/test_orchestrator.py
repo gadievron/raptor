@@ -7,15 +7,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
 from packages.sca.bump.orchestrator import (
-    BumpCandidate, _VERDICT_BLOCK, _VERDICT_CLEAN, _VERDICT_REVIEW,
-    render_report, run_bump,
+    _VERDICT_BLOCK,
+    _VERDICT_CLEAN,
+    _VERDICT_REVIEW,
+    BumpCandidate,
+    render_report,
+    run_bump,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub HTTP — replies with operator-supplied JSON per URL.
@@ -25,7 +28,7 @@ class _StubResp:
     def __init__(self, body: dict, status=200):
         self._body = body
         self.status_code = status
-        self.headers: Dict[str, str] = {}
+        self.headers: dict[str, str] = {}
 
     @property
     def content(self):
@@ -34,7 +37,7 @@ class _StubResp:
 
 
 class _StubHttp:
-    def __init__(self, responses: Dict[str, Any]):
+    def __init__(self, responses: dict[str, Any]):
         self._responses = responses
 
     def get_json(self, url: str, **kw):
@@ -178,7 +181,7 @@ def test_upstream_lookup_failure_records_in_skipped(
     report = run_bump(tmp_path, http=http)
     assert report.candidates == []
     assert len(report.skipped) == 1
-    arg, path, reason = report.skipped[0]
+    arg, _path, reason = report.skipped[0]
     assert arg == "SEMGREP_VERSION"
     assert "upstream lookup failed" in reason
 
@@ -310,7 +313,7 @@ def test_render_report_no_candidates_message(tmp_path: Path) -> None:
 class _CountingHttp(_StubHttp):
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.calls: List[str] = []
+        self.calls: list[str] = []
 
     def get_json(self, url: str, **kw):
         self.calls.append(url)
@@ -346,8 +349,8 @@ def test_from_image_with_clean_semver_tag_becomes_candidate(
     assert cand.current_version == "3.11"
     assert cand.target_version == "3.13"
     # No bump-tier signals available for OCI yet → Clean.
-    matching_result = [r for r in report.results
-                        if r.candidate is cand][0]
+    matching_result = next(r for r in report.results
+                            if r.candidate is cand)
     assert matching_result.verdict == _VERDICT_CLEAN
 
 
@@ -1009,25 +1012,6 @@ def test_helm_chart_without_repository_silently_skipped(
 # Git submodule pins (Phase 3.e)
 # ---------------------------------------------------------------------------
 
-def _gitmodules(tmp_path: Path, url: str, sm_path: str, sha: str) -> Path:
-    """Build a minimal git-repo-shaped target with one
-    submodule recorded at ``sha``. The .gitmodules parser walks
-    the parent's git object DB to find the submodule SHA, so we
-    have to build enough of a git tree for it to find — OR set
-    up a stub. Simpler: bypass the parser's git-resolution by
-    pre-resolving and feeding the parser a fixture."""
-    (tmp_path / ".git").mkdir(exist_ok=True)
-    # Minimal: write .gitmodules + an index entry mock would
-    # require real git surgery. Use the parser internals directly
-    # in tests instead — see test_git_submodule_candidate.
-    gm = tmp_path / ".gitmodules"
-    gm.write_text(
-        f'[submodule "vendor/foo"]\n'
-        f'\tpath = {sm_path}\n'
-        f'\turl = {url}\n'
-    )
-    return gm
-
 
 def test_git_submodule_candidate_via_parser(tmp_path: Path) -> None:
     """The .gitmodules parser resolves submodule SHAs by walking
@@ -1044,7 +1028,9 @@ def test_git_submodule_candidate_via_parser(tmp_path: Path) -> None:
         _enumerate_git_submodule_candidates,
     )
     from packages.sca.models import (
-        Confidence, Dependency, PinStyle,
+        Confidence,
+        Dependency,
+        PinStyle,
     )
 
     current_sha = "a" * 40
@@ -1085,7 +1071,7 @@ def test_git_submodule_candidate_via_parser(tmp_path: Path) -> None:
     try:
         # Need a discoverable .gitmodules manifest.
         (tmp_path / ".gitmodules").write_text("# stub\n")
-        cands, skipped = _enumerate_git_submodule_candidates(
+        cands, _skipped = _enumerate_git_submodule_candidates(
             tmp_path, http=http, cache=None,
             github_token=None, sub_cache={},
         )
@@ -1234,7 +1220,7 @@ class _StubOsv:
 
 
 def _adv(osv_id, severity="high"):
-    from packages.sca.models import AffectedRange, Advisory, CVSSScore
+    from packages.sca.models import Advisory, AffectedRange, CVSSScore
     return Advisory(
         osv_id=osv_id, aliases=[], summary="x", details="",
         affected=[AffectedRange(type="ECOSYSTEM",
@@ -1565,9 +1551,11 @@ class TestBinaryCapabilityDeltaWiring:
         """Policy on + from_image candidate → extractor called
         twice (current + target), detector called once."""
         from packages.sca.bump import orchestrator as orch_mod
-
         from packages.sca.models import (
-            Confidence, Dependency, PinStyle, SupplyChainFinding,
+            Confidence,
+            Dependency,
+            PinStyle,
+            SupplyChainFinding,
         )
 
         fetched = []
@@ -1705,7 +1693,10 @@ class TestBinaryCapabilityDeltaWiring:
         from packages.sca.bump import orchestrator as orch_mod
         from packages.sca.bump.gha_action_image import GhaActionImage
         from packages.sca.models import (
-            Confidence, Dependency, PinStyle, SupplyChainFinding,
+            Confidence,
+            Dependency,
+            PinStyle,
+            SupplyChainFinding,
         )
 
         resolved = []
@@ -1977,3 +1968,177 @@ class TestIsMinorSkewBump:
     def test_unparseable_returns_false(self):
         from packages.sca.bump.orchestrator import _is_minor_skew_bump
         assert _is_minor_skew_bump("latest", "3.14", threshold=2) is False
+
+
+# ---------------------------------------------------------------------------
+# Repo-trust gating of the policy file's operator-only toggles
+# ---------------------------------------------------------------------------
+
+class TestRunBumpPolicyTrustGate:
+    """``run_bump`` threads its ``trust_repo`` state into
+    ``load_policy`` so a repo-shipped ``.raptor-sca-bump.yml`` can't
+    flip operator-only machinery on an untrusted run."""
+
+    def test_untrusted_run_ignores_repo_policy_toggle(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        (tmp_path / ".raptor-sca-bump.yml").write_text(
+            "binary_capability_delta: true\n",
+        )
+        http = _StubHttp({})
+        with caplog.at_level("WARNING",
+                              logger="packages.sca.bump.policy"):
+            run_bump(tmp_path, http=http, trust_repo=False)
+        # The whole repo policy file is now ignored on untrusted
+        # runs (not just the operator-only toggle) — the warning
+        # names the file and the opt-in rather than each key.
+        warned = [r for r in caplog.records
+                  if "not repo-trusted" in r.getMessage()
+                  and "--trust-repo" in r.getMessage()]
+        assert warned, "expected the not-repo-trusted warning"
+
+    def test_trusted_run_honours_repo_policy_toggle(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        (tmp_path / ".raptor-sca-bump.yml").write_text(
+            "binary_capability_delta: true\n",
+        )
+        http = _StubHttp({})
+        with caplog.at_level("WARNING",
+                              logger="packages.sca.bump.policy"):
+            run_bump(tmp_path, http=http, trust_repo=True)
+        assert not [r for r in caplog.records
+                    if "not repo-trusted" in r.getMessage()]
+
+    def test_explicit_policy_bypasses_resolution(
+        self, tmp_path: Path,
+    ) -> None:
+        """A caller-supplied policy object skips file loading and
+        trust resolution entirely (no env reads)."""
+        from packages.sca.bump.policy import BumpPolicy
+        http = _StubHttp({})
+        report = run_bump(
+            tmp_path, http=http,
+            policy=BumpPolicy(binary_capability_delta_enabled=False),
+        )
+        assert report.candidates == []
+
+
+# ---------------------------------------------------------------------------
+# --exclude: operator globs filter the WRITE candidate set
+# ---------------------------------------------------------------------------
+
+def _semgrep_stubs():
+    """Stub upstream (release 1.119.0, old enough to be Clean) shared
+    by the --exclude tests."""
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+    })
+    pypi = _StubPyPI({
+        "semgrep": {"releases": {
+            "1.119.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+        }},
+    })
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    return http, pypi, now
+
+
+def test_exclude_globs_protect_fixture_dockerfile(tmp_path: Path) -> None:
+    """--exclude '**/testdata/**' + --apply edits the prod Dockerfile
+    only; the fixture pin (a test assertion) stays untouched and the
+    exclusion is surfaced in the report — never a silent truncation."""
+    prod = tmp_path / "Dockerfile"
+    prod.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    fixture_dir = tmp_path / "testdata"
+    fixture_dir.mkdir()
+    fixture = fixture_dir / "Dockerfile"
+    fixture.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+
+    http, pypi, now = _semgrep_stubs()
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, now=now, apply=True,
+        exclude=["**/testdata/**"],
+    )
+    assert "1.119.0" in prod.read_text()
+    assert fixture.read_text() == "ARG SEMGREP_VERSION=1.50.0\n", (
+        "fixture Dockerfile must not be edited"
+    )
+    assert [p for p in report.excluded_by_pattern] == [fixture]
+    text = render_report(report)
+    assert "1 surface(s) excluded from write by --exclude patterns" in text
+
+
+def test_exclude_anchors_at_root_level_test_dir(tmp_path: Path) -> None:
+    """'**/test/**' must also cover a ROOT-level test/ directory (the
+    raptor repo ships test/data/... fixtures) — raw fnmatch would
+    require a leading path component."""
+    prod = tmp_path / "Dockerfile"
+    prod.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    fixture = tmp_path / "test" / "data" / "Dockerfile.fixture"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+
+    http, pypi, now = _semgrep_stubs()
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, now=now, apply=True,
+        exclude=["**/test/**"],
+    )
+    assert "1.119.0" in prod.read_text()
+    assert "1.50.0" in fixture.read_text()
+    assert report.excluded_by_pattern == [fixture]
+
+
+def test_no_exclude_is_fully_inclusive_with_note(tmp_path: Path) -> None:
+    """No --exclude → every surface is written (exclusion is caller
+    policy, not a tool default), and the report carries the
+    informational guardrail pointing at --exclude."""
+    prod = tmp_path / "Dockerfile"
+    prod.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    fixture = tmp_path / "testdata" / "Dockerfile"
+    fixture.parent.mkdir()
+    fixture.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+
+    http, pypi, now = _semgrep_stubs()
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, now=now, apply=True,
+    )
+    assert "1.119.0" in prod.read_text()
+    assert "1.119.0" in fixture.read_text()
+    assert report.excluded_by_pattern == []
+    text = render_report(report)
+    assert "note:" in text and "--exclude" in text
+
+
+def test_exclude_drops_workflow_files_before_parse(tmp_path: Path) -> None:
+    """GHA workflow files under an excluded tree are dropped at the
+    file-list stage (before any uses: parsing / upstream lookups) and
+    still surface in excluded_by_pattern."""
+    wf = (tmp_path / "tests" / "fixture-repo" / ".github" / "workflows"
+          / "ci.yml")
+    wf.parent.mkdir(parents=True)
+    wf.write_text(
+        "jobs:\n  b:\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+    )
+    http = _StubHttp({})
+    report = run_bump(
+        tmp_path, http=http, exclude=["**/tests/**"],
+    )
+    assert report.candidates == []
+    assert wf in report.excluded_by_pattern
+
+
+def test_pr_comment_reports_exclusions(tmp_path: Path) -> None:
+    from packages.sca.bump.pr_comment import render_pr_comment
+
+    fixture = tmp_path / "testdata" / "Dockerfile"
+    fixture.parent.mkdir()
+    fixture.write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    http, pypi, now = _semgrep_stubs()
+    report = run_bump(
+        tmp_path, http=http, pypi_client=pypi, now=now,
+        exclude=["**/testdata/**"],
+    )
+    md = render_pr_comment(report)
+    assert "excluded from write by `--exclude` patterns" in md

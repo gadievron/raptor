@@ -15,7 +15,8 @@ Coverage today (per ecosystem):
   * RubyGems   — per-version yanked flag
   * Maven      — no native yanked concept; skipped
   * Composer   — no native yanked concept; skipped
-  * NuGet      — ``listed: false`` via registration index
+  * NuGet      — ``listed: false`` via registration index; stubbed
+                 (not yet implemented)
 
 Emits ``sca:hygiene:yanked_version`` HygieneFinding rows.
 Severity is medium — yanked means the maintainer pulled the
@@ -26,11 +27,14 @@ may still be running it.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional
 
 from ..models import (
     Confidence, Dependency, HygieneFinding,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,7 @@ def scan_pinned_versions(
     cargo_client=None,
     rubygems_client=None,
     nuget_client=None,
-) -> List[HygieneFinding]:
+) -> list[HygieneFinding]:
     """For each exact-pinned dep, query its registry for the
     yanked flag on the pinned version. Emit a finding for each
     confirmed yanked version.
@@ -54,7 +58,7 @@ def scan_pinned_versions(
       * Ecosystems with no yanked concept (Maven, Composer)
       * Clients not provided
     """
-    out: List[HygieneFinding] = []
+    out: list[HygieneFinding] = []
     seen: set = set()
     for dep in deps:
         if not dep.version:
@@ -99,7 +103,7 @@ def _check_yanked(
     *,
     pypi_client, npm_client, cargo_client,
     rubygems_client, nuget_client,
-) -> Optional[str]:
+) -> str | None:
     """Return a non-empty reason string when yanked; None otherwise.
 
     Per-ecosystem dispatch."""
@@ -116,7 +120,7 @@ def _check_yanked(
     return None
 
 
-def _yanked_pypi(client, name, version) -> Optional[str]:
+def _yanked_pypi(client, name, version) -> str | None:
     if hasattr(client, "get_version_metadata"):
         meta = client.get_version_metadata(name, version)
         if isinstance(meta, dict):
@@ -135,7 +139,7 @@ def _yanked_pypi(client, name, version) -> Optional[str]:
     return None
 
 
-def _yanked_npm(client, name, version) -> Optional[str]:
+def _yanked_npm(client, name, version) -> str | None:
     meta = client.get_metadata(name) if hasattr(client, "get_metadata") else None
     if not isinstance(meta, dict):
         return None
@@ -154,18 +158,17 @@ def _yanked_npm(client, name, version) -> Optional[str]:
     return None
 
 
-def _yanked_cargo(client, name, version) -> Optional[str]:
+def _yanked_cargo(client, name, version) -> str | None:
     meta = client.get_metadata(name) if hasattr(client, "get_metadata") else None
     if not isinstance(meta, dict):
         return None
     for v in meta.get("versions") or []:
-        if isinstance(v, dict) and v.get("num") == version:
-            if v.get("yanked"):
-                return "crate version was yanked from crates.io."
+        if isinstance(v, dict) and v.get("num") == version and v.get("yanked"):
+            return "crate version was yanked from crates.io."
     return None
 
 
-def _yanked_rubygems(client, name, version) -> Optional[str]:
+def _yanked_rubygems(client, name, version) -> str | None:
     if hasattr(client, "get_version_metadata"):
         meta = client.get_version_metadata(name, version)
         if isinstance(meta, dict) and meta.get("yanked"):
@@ -173,7 +176,7 @@ def _yanked_rubygems(client, name, version) -> Optional[str]:
     return None
 
 
-def _yanked_nuget(client, name, version) -> Optional[str]:
+def _yanked_nuget(client, _name, _version) -> str | None:
     """NuGet uses ``listed: false`` rather than a yanked flag.
     Available only via the registration-index endpoint, which our
     client doesn't expose today. Stubbed for future expansion."""

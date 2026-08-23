@@ -22,18 +22,26 @@ shape — re-run ``raptor-sca`` if a fresh SBOM is needed.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from collections import Counter
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, TYPE_CHECKING
 
 from .findings import severity_rank
 from .models import REACHABILITY_LABELS, REACHABILITY_ORDER
 from .sarif import write_sarif
+
+from core.json import load_json
+
+# findings.json artifacts are RAPTOR-written run output — the
+# findings-class budget.
+_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +58,13 @@ def main(argv: Sequence[str]) -> int:
               file=sys.stderr)
         return 2
     try:
-        rows = json.loads(findings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        rows = load_json(
+            findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+        )
+        if rows is None:
+            # Strict load_json soft-returns None for a missing file.
+            raise FileNotFoundError(findings_path)
+    except (OSError, ValueError) as e:
         print(f"raptor-sca render: cannot read {findings_path}: {e}", file=sys.stderr)
         return 2
     if not isinstance(rows, list):
@@ -66,6 +79,7 @@ def main(argv: Sequence[str]) -> int:
     sarif_path = Path(args.out_sarif).resolve() if args.out_sarif else (
         base_dir / "findings.sarif"
     )
+    all_rows = rows
     try:
         rows = _apply_reachability_filters(rows, args)
     except ValueError as e:
@@ -73,11 +87,12 @@ def main(argv: Sequence[str]) -> int:
         return 2
 
     target = Path(args.target).resolve() if args.target else base_dir
-    wrote: List[str] = []
+    wrote: list[str] = []
     if not args.no_md:
         md = _render_markdown(rows, target=target)
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md, encoding="utf-8")
+        from ._atomic import atomic_write_text
+        atomic_write_text(md_path, md)
         wrote.append(f"report.md → {md_path}")
     if not args.no_sarif:
         write_sarif(sarif_path, target=target, rows=rows)
@@ -97,7 +112,7 @@ def main(argv: Sequence[str]) -> int:
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
-        passed, fails = eval_thresholds(rows, cfg)
+        passed, fails = eval_thresholds(all_rows, cfg)
         print_result(passed, fails, prog="raptor-sca render")
         return 0 if passed else 1
 
@@ -152,8 +167,8 @@ _NOT_REACHABLE_VERDICTS = {"not_reachable", "not_function_reachable"}
 
 
 def _apply_reachability_filters(
-    rows: List[Dict[str, Any]], args: argparse.Namespace,
-) -> List[Dict[str, Any]]:
+    rows: list[dict[str, Any]], args: argparse.Namespace,
+) -> list[dict[str, Any]]:
     """Filter vuln rows by reachability while preserving other rows."""
     requested = []
     if args.only_reachable:
@@ -181,12 +196,13 @@ def _apply_reachability_filters(
             if item.strip()
         }
         if not allowed:
-            raise ValueError("--reachability needs at least one verdict")
+            msg = "--reachability needs at least one verdict"
+            raise ValueError(msg)
 
     if allowed is None and denied is None:
         return rows
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for row in rows:
         if row.get("vuln_type") != "sca:vulnerable_dependency":
             out.append(row)
@@ -200,7 +216,7 @@ def _apply_reachability_filters(
     return out
 
 
-def _row_reachability_verdict(row: Dict[str, Any]) -> str:
+def _row_reachability_verdict(row: dict[str, Any]) -> str:
     sca = row.get("sca") or {}
     reach = sca.get("reachability") or {}
     verdict = reach.get("verdict")
@@ -222,7 +238,7 @@ _SEV_LABEL = {
 
 
 
-def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
+def _render_markdown(rows: list[dict[str, Any]], *, target: Path) -> str:
     # Defensive — hand-edited findings.json may contain non-dict
     # elements; filter them out rather than crash on `.get()`.
     rows = [r for r in rows if isinstance(r, dict)]
@@ -258,7 +274,7 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
 
     buf.write("## Summary\n\n")
     buf.write("| Severity | Count |\n|---|---|\n")
-    for sev in ("critical", "high", "medium", "low", "info"):
+    for sev in ("critical", "high", "medium", "low", "info", "none"):
         n = severity_counts.get(sev, 0)
         if n:
             buf.write(f"| {_SEV_LABEL[sev]} | {n} |\n")
@@ -295,7 +311,7 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
     return buf.getvalue()
 
 
-def _render_reachability_breakdown(rows: List[Dict[str, Any]]) -> str:
+def _render_reachability_breakdown(rows: list[dict[str, Any]]) -> str:
     counts: Counter[str] = Counter()
     for row in rows:
         if row.get("suppressed"):
@@ -316,7 +332,7 @@ def _render_reachability_breakdown(rows: List[Dict[str, Any]]) -> str:
     return buf.getvalue()
 
 
-def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
+def _render_vuln_table(buf: StringIO, rows: list[dict[str, Any]]) -> None:
     ordered = sorted(
         rows,
         key=lambda r: (
@@ -341,7 +357,8 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
             f" ({aliases[0]})" if aliases else ""
         )
         kev = "yes" if sca.get("in_kev") else ""
-        epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
+        epss_val = sca.get("epss")
+        epss = f"{epss_val:.2f}" if isinstance(epss_val, (int, float)) else ""
         fix = sca.get("fixed_version") or ""
         reach = REACHABILITY_LABELS.get(
             _row_reachability_verdict(r),
@@ -354,7 +371,7 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
     buf.write("\n")
 
 
-def _render_kind_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
+def _render_kind_table(buf: StringIO, rows: list[dict[str, Any]]) -> None:
     # Collapse identical (severity, kind, ecosystem, name) rows that
     # share the same detail — a dep loose-pinned across both
     # ``requirements.txt`` and ``requirements-dev.txt`` produces two
@@ -364,7 +381,7 @@ def _render_kind_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
     # detail is suffixed with `(in N manifests)`.
     from collections import defaultdict
 
-    groups: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = defaultdict(list)
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         sca = r.get("sca") or {}
         key = (

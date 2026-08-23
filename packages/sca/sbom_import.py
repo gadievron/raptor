@@ -41,10 +41,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
-from typing import List, Optional, Tuple
 
 from .models import Confidence, Dependency, PinStyle
+from .parsers import _safe_read
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +82,7 @@ _SCOPE_MAP = {
 }
 
 
-def parse_cyclonedx(path: Path) -> Tuple[List[Dependency], List[str]]:
+def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
     """Parse a CycloneDX 1.5 JSON file at ``path``.
 
     Returns ``(deps, warnings)`` — the parsed dep list and a list
@@ -87,30 +90,46 @@ def parse_cyclonedx(path: Path) -> Tuple[List[Dependency], List[str]]:
     Errors that prevent the entire SBOM from being read (bad
     JSON, wrong shape) raise ``ValueError``.
     """
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        raise ValueError(f"failed to read SBOM file {path}: {e}") from e
+    # Bounded read: an SBOM is target/operator-supplied input, and an
+    # unbounded read_text is a memory-exhaustion primitive. The 50 MB
+    # package cap comfortably covers legitimate monorepo SBOMs.
+    text = _safe_read.read_bounded(path)
+    if text is None:
+        cap = _safe_read._MAX_PARSER_BYTES
+        try:
+            size = path.stat().st_size
+        except OSError as e:
+            msg = f"failed to read SBOM file {path}: {e}"
+            raise ValueError(msg) from e
+        if size > cap:
+            msg = (
+                f"SBOM file {path} is {size} bytes — exceeds the "
+                f"{cap}-byte read cap; refusing to parse"
+            )
+        else:
+            msg = f"failed to read SBOM file {path}"
+        raise ValueError(msg)
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"invalid JSON in SBOM {path}: {e}") from e
+        msg = f"invalid JSON in SBOM {path}: {e}"
+        raise ValueError(msg) from e
 
     if not isinstance(data, dict):
-        raise ValueError(
-            f"SBOM root must be a JSON object, got {type(data).__name__}"
-        )
+        msg = f"SBOM root must be a JSON object, got {type(data).__name__}"
+        raise ValueError(msg)
 
     # Sanity: bomFormat must be "CycloneDX". Operators who pass
     # an SPDX SBOM see a clear error rather than a silent miss.
     bom_format = data.get("bomFormat")
     if bom_format != "CycloneDX":
-        raise ValueError(
+        msg = (
             f"SBOM at {path} is not CycloneDX (bomFormat={bom_format!r}); "
             f"SPDX or other formats are not supported. Convert with "
             f"`cyclonedx-cli convert` first if needed."
         )
+        raise ValueError(msg)
 
     components = data.get("components")
     if not isinstance(components, list):
@@ -118,8 +137,8 @@ def parse_cyclonedx(path: Path) -> Tuple[List[Dependency], List[str]]:
         # but it produces zero deps; emit empty + warning.
         return [], [f"SBOM at {path} has no components array"]
 
-    deps: List[Dependency] = []
-    warnings: List[str] = []
+    deps: list[Dependency] = []
+    warnings: list[str] = []
     for i, comp in enumerate(components):
         if not isinstance(comp, dict):
             warnings.append(f"component #{i}: not a dict, skipping")
@@ -137,7 +156,7 @@ def parse_cyclonedx(path: Path) -> Tuple[List[Dependency], List[str]]:
 
 def _component_to_dep(
     comp: dict, *, sbom_path: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     """Convert one CycloneDX component → SCA ``Dependency``.
 
     Returns ``None`` when the component lacks the minimum
@@ -193,13 +212,12 @@ def _component_to_dep(
 # on the (eco, name, version) triple.
 _PURL_RE = re.compile(
     r"^pkg:(?P<type>[A-Za-z0-9.+-]+)"
-    r"/(?P<path>[^@?#]+)"
-    r"(?:@(?P<version>[^?#]+))?"
+    r"/(?P<path_and_version>[^?#]+)"
     r"(?:[?#].*)?$"
 )
 
 
-def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
+def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
     """Return ``(ecosystem, name, version)`` parsed from a purl,
     or ``None`` for malformed / unsupported ecosystems."""
     if not isinstance(purl, str):
@@ -216,8 +234,14 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
             type_lc, purl,
         )
         return None
-    path = m.group("path")
-    version = m.group("version")
+    path_and_version = m.group("path_and_version")
+    last_at = path_and_version.rfind("@")
+    if last_at > 0:
+        path = path_and_version[:last_at]
+        version: str | None = path_and_version[last_at + 1:]
+    else:
+        path = path_and_version
+        version = None
 
     # Maven uses ``pkg:maven/<group>/<artifact>@<version>`` — recombine
     # group + artifact with ``:`` (SCA's canonical Maven name).
@@ -228,18 +252,20 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
         # Go modules: ``pkg:golang/<host>/<owner>/<repo>@<version>``
         # → the FULL path is the import path; keep it intact.
         name = path
-    elif ecosystem == "npm" and path.startswith("%40"):
-        # URL-encoded ``@scope/name`` — decode the leading ``@``.
-        name = "@" + path[3:]
+    elif ecosystem == "npm" and (path.startswith(("%40", "@"))):
+        name = "@" + path[3:] if path.startswith("%40") else path
+    elif ecosystem == "Packagist" and "/" in path:
+        # Composer/Packagist names are ``vendor/package`` (two-segment).
+        name = path
     else:
-        # Single-segment ecosystems (PyPI, Cargo, RubyGems, NuGet,
-        # Packagist) — name is the trailing path component.
+        # Single-segment ecosystems (PyPI, Cargo, RubyGems, NuGet)
+        # — name is the trailing path component.
         name = path.rsplit("/", 1)[-1]
 
     return (ecosystem, name, version)
 
 
-def _extract_license(licenses_block) -> Optional[str]:
+def _extract_license(licenses_block) -> str | None:
     """Pull the first license expression / SPDX id from a CycloneDX
     licenses array.
 

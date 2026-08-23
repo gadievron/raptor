@@ -1,4 +1,4 @@
-"""Phase D PR2 measurement harness — A/B compare LLM verdicts with
+r"""Phase D PR2 measurement harness — A/B compare LLM verdicts with
 and without source_intel evidence injection.
 
 Runs N corpus entries through the CodeQL ``DataflowValidator``
@@ -8,8 +8,8 @@ source_intel evidence. Reports per-entry verdict deltas and an
 aggregate error-rate change vs ground truth.
 
 Usage:
-  PYTHONPATH=$(pwd) RAPTOR_DIR=$(pwd) _RAPTOR_TRUSTED=1 \\
-      python3 -m packages.source_intel.measurement \\
+  PYTHONPATH=$(pwd) RAPTOR_DIR=$(pwd) _RAPTOR_TRUSTED=1 \
+      python3 -m packages.source_intel.measurement \
       --count 10 [--output csv] [--target-prefix str]
 
   --count N           number of memory-corruption corpus entries to
@@ -20,6 +20,8 @@ Usage:
                       tabular stdout only.
   --target-prefix S   filter corpus entries by filename prefix
                       (e.g. ``source_intel_``).
+  --model NAME        pin the LLM model for both conditions;
+                      otherwise the LLMClient default applies.
   --verdict V         restrict the sample to entries with this
                       ground-truth verdict (``true_positive`` or
                       ``false_positive``). Cannot be combined with
@@ -63,10 +65,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.dataflow.finding import Finding
 from core.dataflow.label import (
@@ -87,6 +90,8 @@ from packages.source_intel import (
     make_source_intel_collector,
 )
 from packages.source_intel.cache import SourceIntelCache
+
+logger = logging.getLogger(__name__)
 
 
 # packages/source_intel/measurement.py → repo root is parents[2].
@@ -140,7 +145,7 @@ def _finding_to_dataflow_path(finding: Finding) -> DataflowPath:
     def _step(s, label):
         return DataflowStep(
             file_path=s.file_path, line=int(s.line),
-            column=int(s.column or 1),
+            column=int(s.column) if s.column is not None else 1,
             snippet=s.snippet or "", label=label,
         )
     return DataflowPath(
@@ -156,9 +161,9 @@ def _finding_to_dataflow_path(finding: Finding) -> DataflowPath:
 
 
 def _iter_memory_corruption_corpus(
-    *, prefix: Optional[str], count: int, stratified: bool,
-    verdict: Optional[str] = None,
-) -> List[tuple]:
+    *, prefix: str | None, count: int, stratified: bool,
+    verdict: str | None = None,
+) -> list[tuple]:
     """Yield up to ``count`` (finding, label, name) tuples for
     memory-corruption corpus entries matching the optional prefix.
 
@@ -175,15 +180,16 @@ def _iter_memory_corruption_corpus(
     the caller is asking for an explicitly skewed sample, usually
     to probe for SI-induced false negatives on TP-only entries.
     """
-    candidates: List[tuple] = []
+    candidates: list[tuple] = []
     for fp in sorted(_CORPUS_DIR.glob("*.json")):
         if fp.name.endswith(".label.json"):
             continue
         if prefix and not fp.name.startswith(prefix):
             continue
         try:
-            finding = Finding.from_json(fp.read_text())
+            finding = Finding.from_json(fp.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug("skipping %s: parse error", fp.name, exc_info=True)
             continue
         if not _is_memory_corruption(finding):
             continue
@@ -191,8 +197,12 @@ def _iter_memory_corruption_corpus(
         if not label_path.exists():
             continue
         try:
-            label = GroundTruth.from_json(label_path.read_text())
+            label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug(
+                "skipping %s: label parse error",
+                label_path.name, exc_info=True,
+            )
             continue
         if verdict and label.verdict != verdict:
             continue
@@ -204,18 +214,18 @@ def _iter_memory_corruption_corpus(
     # Stratified: round-robin across buckets until we hit count or
     # buckets are empty.
     from collections import defaultdict
-    buckets: Dict[str, List[tuple]] = defaultdict(list)
+    buckets: dict[str, list[tuple]] = defaultdict(list)
     for entry in candidates:
-        finding, label, name = entry
+        finding, label, _name = entry
         key = (
             f"{label.verdict}:{label.fp_category}"
             if label.verdict == "false_positive"
             else label.verdict
         )
         buckets[key].append(entry)
-    out: List[tuple] = []
+    out: list[tuple] = []
     while len(out) < count and any(buckets.values()):
-        for key in sorted(buckets.keys()):
+        for key in sorted(buckets):
             if not buckets[key]:
                 continue
             out.append(buckets[key].pop(0))
@@ -251,7 +261,7 @@ def _result_to_verdict(result) -> ValidatorVerdict:
     return ValidatorVerdict.UNCERTAIN
 
 
-def _aggregate(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute aggregate stats over a list of per-entry result dicts.
 
     Each entry must have ``baseline_correct``, ``si_correct``, and
@@ -324,7 +334,7 @@ def main() -> int:
     print()
 
     from core.llm.client import LLMClient
-    llm = LLMClient()
+    llm = LLMClient(pinned_model=args.model) if args.model else LLMClient()
 
     # Two validators differ only in collector.
     # Baseline: sanitizer-only (the PR1 V2 default for non-injection
@@ -366,7 +376,7 @@ def main() -> int:
     # above — distinct concerns, separately controlled.
     repo_root = _REPO_ROOT
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for i, (finding, label, name) in enumerate(rows, 1):
         gt = label.verdict
         sys.stderr.write(
@@ -429,8 +439,8 @@ def main() -> int:
     print(f"  error reduction:     {stats['err_reduction']:.1f}%  "
           f"(exit gate: ≥10%)")
 
-    if args.output:
-        with args.output.open("w", newline="") as f:
+    if args.output and results:
+        with args.output.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=results[0].keys())
             writer.writeheader()
             writer.writerows(results)

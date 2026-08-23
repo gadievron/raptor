@@ -5,16 +5,23 @@ No Claude Code, no LLM — pure Python.
 """
 
 import argparse
-import json
 import os
 import stat as _stat
 import sys
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.json import dumps_display
 from core.run.output import unique_run_suffix
 
-from .project import ProjectManager
+from .oplock import OpLockContention, project_op_lock
+from .project import DEFAULT_OUTPUT_BASE, ProjectManager
+
+# Help text for the shared --wait flag on mutating subcommands.
+_WAIT_HELP = ("Block until a concurrent project operation releases the "
+              "lock (default: 3s silent grace, then error naming the "
+              "holder)")
 
 
 def _c(text, code):
@@ -132,7 +139,7 @@ def _emit_json_payload(payload) -> None:
     payload, indent=2, sort_keys=True))`` — pipe-friendly, one
     trailing newline.
     """
-    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    data = dumps_display(payload, sort_keys=True).encode("utf-8")
     sys.stdout.buffer.write(data)
     sys.stdout.buffer.write(b"\n")
 
@@ -165,26 +172,8 @@ def _format_project_tuning(entry) -> list:
     /agentic, /codeql defaults on this project. Returns a list of
     lines (caller decides where they land — stdout / file / etc.).
     """
-    from core.run.estimator import RunEstimate, format_estimate
     lines: list = []
     lines.append(f"  Target type: {entry.name}")
-    # Cost/time — synthesise a RunEstimate from the catalog so we
-    # share the format_estimate renderer (single source of truth
-    # for the operator-facing string).
-    cost_low, cost_high = entry.estimated_cost_usd
-    time_low, time_high = entry.estimated_time_min
-    if cost_high > 0 or time_high > 0:
-        _est = RunEstimate(
-            cost_low=cost_low, cost_high=cost_high,
-            time_low=time_low, time_high=time_high,
-            target_type=entry.name,
-        )
-        _est_line = format_estimate(_est)
-        if _est_line:
-            # Strip the ``(target type: X)`` suffix — already
-            # printed above in the tuning block.
-            _est_line = _est_line.split(" (target type:", 1)[0]
-            lines.append(f"  {_est_line}")
     if entry.semgrep_packs_default:
         lines.append(
             f"  /scan baseline packs: "
@@ -205,11 +194,11 @@ def _format_project_tuning(entry) -> list:
 
 class _Fmt(argparse.HelpFormatter):
     """Wider help alignment for subcommand option lists."""
-    def __init__(self, prog):
+    def __init__(self, prog) -> None:
         super().__init__(prog, max_help_position=34)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="raptor project",
         usage="raptor project <command> [args]",
@@ -217,7 +206,7 @@ def main():
         formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=20),
     )
     sub = parser.add_subparsers(dest="subcommand", title="commands", metavar="")
-    _F = {"formatter_class": _Fmt}  # shorthand for subparsers
+    _F: dict[str, Any] = {"formatter_class": _Fmt}  # shorthand for subparsers
 
     # create
     p_create = sub.add_parser("create", help="Create a new project",
@@ -243,6 +232,7 @@ def main():
               "targets or stale catalog drift BEFORE any LLM cost. "
               "On mismatch the project is NOT created."),
     )
+    p_create.add_argument("--wait", action="store_true", help=_WAIT_HELP)
 
     # binary — per-project binary management
     p_bin = sub.add_parser(
@@ -260,6 +250,82 @@ def main():
         "path", nargs="?", default=None,
         help="Binary path (required for add/remove)")
     p_bin.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_bin.add_argument("--wait", action="store_true", help=_WAIT_HELP)
+
+    # trust / untrust — per-project trust markers
+    p_trust = sub.add_parser(
+        "trust",
+        help=("List or set trust markers (config/build/dynamic) — "
+              "operator assertions persisted on the project"),
+        usage="raptor project trust [<marker>] [<name>]",
+        **_F,
+    )
+    p_trust.add_argument(
+        "marker", nargs="?", default=None,
+        help=("Marker to set: config (--trust-repo umbrella), build "
+              "(traced-build CodeQL extraction), dynamic (dynamic "
+              "validation). Omit to list current markers."))
+    p_trust.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_trust.add_argument("--wait", action="store_true", help=_WAIT_HELP)
+
+    p_untrust = sub.add_parser(
+        "untrust",
+        help="Remove a trust marker",
+        usage="raptor project untrust <marker> [<name>]",
+        **_F,
+    )
+    p_untrust.add_argument(
+        "marker", help="Marker to remove: config, build, or dynamic")
+    p_untrust.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_untrust.add_argument("--wait", action="store_true", help=_WAIT_HELP)
+
+    # set / unset / get — registry-validated project settings
+    p_set = sub.add_parser(
+        "set",
+        help=("List or set project settings (registry-validated: "
+              "description, notes, threat-model, target-kind, "
+              "build-command[.<lang>])"),
+        usage="raptor project set [<key> <value>] [<name>]",
+        **_F,
+    )
+    p_set.add_argument(
+        "key", nargs="?", default=None,
+        help="Setting key (omit to list all settings)")
+    p_set.add_argument(
+        "value", nargs="?", default=None,
+        help="Setting value (required when a key is given)")
+    p_set.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_set.add_argument("--wait", action="store_true", help=_WAIT_HELP)
+
+    p_unset = sub.add_parser(
+        "unset",
+        help="Remove a project setting",
+        usage="raptor project unset <key> [<name>]",
+        **_F,
+    )
+    p_unset.add_argument("key", help="Setting key to remove")
+    p_unset.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_unset.add_argument("--wait", action="store_true", help=_WAIT_HELP)
+
+    p_get = sub.add_parser(
+        "get",
+        help=("Print one setting's bare value (script-friendly; "
+              "exit 1 when unset)"),
+        usage="raptor project get <key> [<name>]",
+        **_F,
+    )
+    p_get.add_argument("key", help="Setting key to read")
+    p_get.add_argument(
         "name", nargs="?", default=None,
         help="Project name (default: active)")
 
@@ -412,12 +478,6 @@ def main():
         p_notes.add_argument("--edit", action="store_true", help="Open in $EDITOR")
     p_notes.add_argument("--file", default=None, metavar="<path>", help="Read notes from file")
 
-    # description
-    p_desc = sub.add_parser("description", help="View or update project description",
-                            usage="raptor project description <name> [<text>]", **_F)
-    p_desc.add_argument("name", help="Project name")
-    p_desc.add_argument("text", nargs="?", help="New description text")
-
     # add
     p_add = sub.add_parser("add", help="Add existing runs to a project",
                            usage="raptor project add <name> <directory> [--target <path>] [--output-dir <dir>]", **_F)
@@ -425,6 +485,24 @@ def main():
     p_add.add_argument("directory", help="Directory containing runs")
     p_add.add_argument("--target", metavar="<path>", help="Target path (creates project if needed)")
     p_add.add_argument("--output-dir", default=None, metavar="<dir>", help="Custom output directory")
+
+    # adopt — retro-create + add: give existing project-less run(s) a
+    # project after the fact. Target defaults to what the run itself
+    # recorded.
+    p_adopt = sub.add_parser(
+        "adopt",
+        help="Retro-create a project around existing run(s) "
+             "(create-if-missing + add; target inferred from the run)",
+        usage="raptor project adopt <name> <run-or-directory>... "
+              "[--target <path>]", **_F)
+    p_adopt.add_argument("name", help="Project name (created if missing)")
+    p_adopt.add_argument(
+        "runs", nargs="+",
+        help="Run directory(ies), or a directory containing runs")
+    p_adopt.add_argument(
+        "--target", metavar="<path>",
+        help="Target path (default: inferred from the first run's "
+             ".raptor-run.json)")
 
     # remove
     p_remove = sub.add_parser("remove", help="Move a run out of the project",
@@ -476,6 +554,7 @@ def main():
                               "(provably lossless), ignoring --keep")
     p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
     p_clean.add_argument("--yes", action="store_true", help="Skip confirmation")
+    p_clean.add_argument("--wait", action="store_true", help=_WAIT_HELP)
 
     # correlate
     p_correlate = sub.add_parser("correlate", help="Cross-run finding correlation",
@@ -516,7 +595,16 @@ def main():
 
     mgr = ProjectManager()
 
+    _op_guard = None
     try:
+        # Operation-granular project lock: mutating subcommands hold
+        # <project_dir>/.op.lock for the mutation's duration so two
+        # sessions' concurrent mutations serialise instead of
+        # interleaving. Read-only subcommands never lock — two
+        # sessions merely having a project active is NOT contention.
+        # Acquired inside the try so OpLockContention gets the same
+        # one-line "Error: ..." + exit-1 treatment as ValueError.
+        _op_guard = _acquire_mutation_lock(mgr, args)
         if args.subcommand == "help":
             if args.topic:
                 # Find the subparser and print its help
@@ -605,27 +693,53 @@ def main():
                     ))
                     return
                 resolved = str(resolved_path)
-                if resolved in p.binaries:
-                    print(f"Already present: {resolved}")
-                else:
-                    p.binaries.append(resolved)
-                    save_json(project_file, p.to_dict())
-                    print(_green(f"Added: {resolved}"))
+                # RMW under the project-file lock (re-load inside it)
+                # so a concurrent mutator's write isn't dropped.
+                from .project import project_file_lock
+                with project_file_lock(project_file):
+                    p = mgr.load(name)
+                    if not p:
+                        print(_red(f"Project '{name}' not found."))
+                        return
+                    if resolved in p.binaries:
+                        print(f"Already present: {resolved}")
+                    else:
+                        p.binaries.append(resolved)
+                        save_json(project_file, p.to_dict())
+                        print(_green(f"Added: {resolved}"))
             elif args.action == "remove":
                 if not args.path:
                     print(_red("remove requires a <path> argument"))
                     return
                 resolved = str(Path(args.path).resolve())
-                if resolved not in p.binaries:
-                    print(f"Not present: {resolved}")
-                else:
-                    p.binaries.remove(resolved)
-                    save_json(project_file, p.to_dict())
-                    print(_green(f"Removed: {resolved}"))
+                from .project import project_file_lock
+                with project_file_lock(project_file):
+                    p = mgr.load(name)
+                    if not p:
+                        print(_red(f"Project '{name}' not found."))
+                        return
+                    if resolved not in p.binaries:
+                        print(f"Not present: {resolved}")
+                    else:
+                        p.binaries.remove(resolved)
+                        save_json(project_file, p.to_dict())
+                        print(_green(f"Removed: {resolved}"))
             elif args.action == "clear":
-                p.binaries = []
-                save_json(project_file, p.to_dict())
+                from .project import project_file_lock
+                with project_file_lock(project_file):
+                    p = mgr.load(name)
+                    if not p:
+                        print(_red(f"Project '{name}' not found."))
+                        return
+                    p.binaries = []
+                    save_json(project_file, p.to_dict())
                 print(_green(f"Cleared binaries for '{name}'"))
+
+        elif args.subcommand in ("trust", "untrust"):
+            _handle_trust(mgr, args)
+
+        elif args.subcommand in ("set", "unset", "get"):
+            _handle_settings(mgr, args)
 
         elif args.subcommand == "threat-model":
             _handle_threat_model(mgr, args)
@@ -737,6 +851,8 @@ def main():
             if args.name == "none":
                 prev = mgr.get_active()
                 mgr.set_active(None)
+                from .sessions import record_session
+                record_session(None)  # clear this session's registry entry
                 if prev:
                     print(f"Cleared active project: {prev}")
                 else:
@@ -746,9 +862,29 @@ def main():
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
+            if p.expires_at:
+                # Operator override for machine-project auto-expiry:
+                # explicitly choosing the project makes it
+                # operator-owned — clear the marker so it cannot
+                # expire out from under them.
+                p.expires_at = ""
+                mgr._save(p)
+                print(
+                    f"  note: cleared auto-expiry marker on "
+                    f"'{p.name}' — explicit use makes it "
+                    f"operator-owned"
+                )
             mgr.set_active(args.name)
             print(f"Active project: {p.name} ({p.target})")
             print(f"  Output dir: {p.output_dir}")
+            # Session-awareness (advisory, never lock-based): project
+            # switch is one of exactly two places this line surfaces —
+            # the other is launcher startup. Contention messages never
+            # repeat it.
+            from .sessions import awareness_lines, record_session
+            _own_pid = record_session(args.name)
+            for _line in awareness_lines(args.name, exclude_pid=_own_pid):
+                print(f"  note: {_line}")
 
         elif args.subcommand == "delete":
             p = mgr.load(args.name)
@@ -825,15 +961,15 @@ def main():
                         f"(got {size}). Trim before passing."
                     )
                     return
-                mgr.update_notes(args.name, path.read_text().strip())
+                mgr.update_notes(args.name, path.read_text(encoding="utf-8").strip())
                 print("Notes updated.")
             elif getattr(args, "edit", False):
                 if not os.isatty(0):
                     print("--edit requires an interactive terminal. Use --file or pass text directly.")
                     return
                 import shlex
-                import tempfile
                 import subprocess
+                import tempfile
                 p = mgr.load(args.name)
                 if not p:
                     print(f"Project '{args.name}' not found.")
@@ -858,7 +994,7 @@ def main():
                 #
                 # Reject editor strings containing shell-meta
                 # characters that aren't valid in canonical editor
-                # invocations. Whitelist editor command names to
+                # invocations. Allowlist editor command names to
                 # the canonical set; reject otherwise (operator
                 # can use the printed message to override
                 # explicitly).
@@ -888,16 +1024,16 @@ def main():
                     ) as tf:
                         tf_path = tf.name
                         tf.write(p.notes or "")
-                    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
                     # Operator-launched editor invocation. The
                     # ``EDITOR`` env var is the operator's own
                     # choice; if it's compromised they have bigger
                     # problems than RAPTOR launching it.
-                    result = subprocess.run(editor_argv + [tf_path])
+                    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+                    result = subprocess.run(editor_argv + [tf_path], check=False)
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
                         return
-                    new_notes = Path(tf_path).read_text().strip()
+                    new_notes = Path(tf_path).read_text(encoding="utf-8").strip()
                     mgr.update_notes(args.name, new_notes)
                     print("Notes updated.")
                 finally:
@@ -913,24 +1049,37 @@ def main():
                 else:
                     print(f"Project '{args.name}' not found.")
 
-        elif args.subcommand == "description":
-            if args.text:
-                mgr.update_description(args.name, args.text)
-                print("Description updated.")
-            else:
-                p = mgr.load(args.name)
-                if p:
-                    print(p.description or "(no description)")
-                else:
-                    print(f"Project '{args.name}' not found.")
-
         elif args.subcommand == "add":
             added = mgr.add_directory(args.name, args.directory, target=args.target,
                                        output_dir=args.output_dir)
             if added:
-                print(f"Added {added} run(s) to project '{args.name}'")
+                print(f"Added {added} run(s) to project '{args.name}' "
+                      "(journal index + coverage projections re-run)")
             else:
-                print(f"No new runs added (already present or none found in {args.directory})")
+                print(f"No new runs added (already present, target mismatch, "
+                      f"or none found in {args.directory})")
+
+        elif args.subcommand == "adopt":
+            target = args.target
+            if not target and not mgr.load(args.name):
+                for candidate in args.runs:
+                    target = mgr.adopt_target_for(candidate)
+                    if target:
+                        print(f"Target inferred from run metadata: {target}")
+                        break
+                if not target:
+                    print("No project by that name, no --target, and no run "
+                          "records a target — pass --target explicitly.")
+                    return
+            total = 0
+            for candidate in args.runs:
+                total += mgr.add_directory(args.name, candidate, target=target)
+            if total:
+                print(f"Adopted {total} run(s) into project '{args.name}' "
+                      "(journal index + coverage projections re-run)")
+            else:
+                print("No runs adopted (already present, target mismatch, "
+                      "or no run directories found)")
 
         elif args.subcommand == "remove":
             mgr.remove_run(args.name, args.run, to_path=args.to)
@@ -1021,8 +1170,9 @@ def main():
             print(f"  sha256: {result['sha256']}")
 
         elif args.subcommand == "import":
-            from .export import import_project
             from core.hash import sha256_file
+
+            from .export import import_project
             zip_path = Path(args.path)
             if args.sha256:
                 actual = sha256_file(zip_path)
@@ -1058,12 +1208,82 @@ def main():
                 return
             _do_merge(p, args.type, args.yes)
 
-    except (ValueError, FileExistsError) as e:
+    except (ValueError, FileExistsError, OpLockContention) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nCancelled.")
         sys.exit(130)
+    finally:
+        if _op_guard is not None:
+            _op_guard.__exit__(None, None, None)
+
+
+def _mutation_lock_target(mgr, args: argparse.Namespace):
+    """Resolve ``(project_output_dir, operation)`` for subcommands that
+    mutate project state; ``None`` for read-only invocations.
+
+    Mirrors each handler's ergonomics so listing forms never lock:
+    ``trust`` with no marker (or a project name in the marker slot)
+    lists; ``set`` without a value lists (or the ``set <name>`` form);
+    ``binary list`` reads. The lock keys on the project OUTPUT dir —
+    the same directory run-start contention keys on — so a mutation
+    and a run start contend on one lock file.
+    """
+    sc = args.subcommand
+    if sc == "create":
+        # Validate the name BEFORE deriving a path from it — a hostile
+        # name must not mkdir outside the output base. Invalid names
+        # skip the lock; create itself re-validates and errors.
+        try:
+            ProjectManager._validate_name(args.name)
+        except ValueError:
+            return None
+        out = args.output_dir or str(
+            (DEFAULT_OUTPUT_BASE / args.name).resolve())
+        return Path(out), "project create"
+    name = getattr(args, "name", None)
+    if sc == "binary":
+        if args.action not in ("add", "remove", "clear"):
+            return None
+        # Same positional shuffle the handler applies for
+        # ``binary clear <project>`` (no path argument).
+        if args.action == "clear" and args.path and not name:
+            name = args.path
+    elif sc == "trust":
+        from core.project.project import VALID_TRUST_MARKERS
+        if getattr(args, "marker", None) not in VALID_TRUST_MARKERS:
+            return None  # listing form (no marker / project-name slot)
+    elif sc == "set":
+        if not getattr(args, "key", None) or args.value is None:
+            return None  # listing form
+    elif sc not in ("unset", "untrust", "clean"):
+        return None
+    name = name or _get_active_project()
+    if not name:
+        return None
+    p = mgr.load(name)
+    if not p or not p.output_dir:
+        return None
+    return Path(p.output_dir), f"project {sc}"
+
+
+def _acquire_mutation_lock(mgr, args):
+    """Enter the op lock for a mutating subcommand.
+
+    Returns the entered context manager (caller exits it in main()'s
+    ``finally``) or ``None`` when the invocation is read-only /
+    unresolvable. Raises ``OpLockContention`` after the silent grace
+    when another operation holds the lock and ``--wait`` wasn't given.
+    """
+    target = _mutation_lock_target(mgr, args)
+    if target is None:
+        return None
+    project_dir, operation = target
+    cm = project_op_lock(project_dir, operation,
+                         wait=getattr(args, "wait", False))
+    cm.__enter__()
+    return cm
 
 
 def _get_active_project():
@@ -1072,7 +1292,7 @@ def _get_active_project():
     return mgr.get_active()
 
 
-def _count_sarif_results(run_dir):
+def _count_sarif_results(run_dir: Path):
     """Count total results across all SARIF files in a run directory."""
     from core.json import load_json
     count = 0
@@ -1080,8 +1300,8 @@ def _count_sarif_results(run_dir):
         data = load_json(sarif_path)
         if not data or not isinstance(data, dict):
             continue
-        for run in data.get("runs", []):
-            count += len(run.get("results", []))
+        for run in (data.get("runs") or []):
+            count += len(run.get("results") or [])
     return count
 
 
@@ -1136,7 +1356,128 @@ def _get_output_summary(run_dir, meta):
     return result
 
 
-def _handle_threat_model(mgr, args) -> None:
+def _resolve_project_or_exit(mgr, name):
+    """Common "which project?" resolution for the trust/settings
+    handlers: explicit name, else the active project. Exits 1 with a
+    message when neither resolves or the project doesn't exist."""
+    name = name or _get_active_project()
+    if not name:
+        print(_red("No project specified and no active project. "
+                   "Pass a project name or run 'raptor project use "
+                   "<name>' first."), file=sys.stderr)
+        sys.exit(1)
+    p = mgr.load(name)
+    if not p:
+        print(_red(f"Project '{name}' not found."), file=sys.stderr)
+        sys.exit(1)
+    return name, p
+
+
+def _handle_trust(mgr, args: argparse.Namespace) -> None:
+    """List, set, or remove operator trust markers on a project.
+
+    Markers are operator assertions persisted in the project JSON
+    under the RAPTOR projects dir — NEVER auto-set from detection
+    heuristics and NEVER read from the scanned repo. Per-run flags
+    always override them at consumption time.
+    """
+    from core.project.project import _TRUST_MARKER_HELP, VALID_TRUST_MARKERS
+
+    marker = getattr(args, "marker", None)
+    name = args.name
+    # Ergonomics: ``raptor project trust <name>`` (a first positional
+    # that isn't a marker but names an existing project) lists that
+    # project's markers. Typos in marker names still error below —
+    # this branch only fires when a project by that name exists.
+    if (args.subcommand == "trust" and marker
+            and marker not in VALID_TRUST_MARKERS
+            and name is None and mgr.load(marker) is not None):
+        name, marker = marker, None
+    name, p = _resolve_project_or_exit(mgr, name)
+
+    if args.subcommand == "trust" and not marker:
+        # All trust assertions in one place: the three markers plus
+        # the persisted binary-oracle binaries count.
+        print(f"Project '{name}' trust assertions "
+              f"(operator-set; per-run flags override):")
+        for m in VALID_TRUST_MARKERS:
+            ts = p.trust.get(m)
+            state = f"set {ts}" if ts else "not set"
+            print(f"  {m:<8} {state}")
+            print(f"           {_TRUST_MARKER_HELP[m]}")
+        print(f"  binaries {len(p.binaries)} persisted "
+              f"(binary-oracle; see 'raptor project binary list')")
+        return
+
+    if args.subcommand == "trust":
+        # ValueError (unknown marker, listing valid ones) propagates
+        # to main()'s handler → "Error: ..." + exit 1.
+        ts = mgr.set_trust_marker(name, marker)
+        print(_green(f"Trust marker '{marker}' set on '{name}' ({ts})"))
+        if marker == "build":
+            print("  note: build does not imply config — unsafe CodeQL "
+                  "pack config still refuses without the config marker.")
+        return
+
+    # untrust
+    removed = mgr.clear_trust_marker(name, marker)
+    if removed:
+        print(_green(f"Trust marker '{marker}' removed from '{name}'"))
+    else:
+        print(f"Trust marker '{marker}' was not set on '{name}'")
+
+
+def _handle_settings(mgr, args: argparse.Namespace) -> None:
+    """List / set / unset / get registry-validated project settings."""
+    key = getattr(args, "key", None)
+    value = getattr(args, "value", None)
+    name = args.name
+
+    # Ergonomics: ``raptor project set <name>`` (a bare positional that
+    # names an existing project, no value) lists that project's
+    # settings. Registry keys shadow project names by design.
+    if (args.subcommand == "set" and key and value is None
+            and name is None):
+        from core.project.project import SETTINGS_REGISTRY
+        if key not in SETTINGS_REGISTRY and mgr.load(key) is not None:
+            name, key = key, None
+
+    name, p = _resolve_project_or_exit(mgr, name)
+
+    if args.subcommand == "get":
+        # ValueError for unknown keys propagates (exit 1 with the
+        # valid-key list). Unset → nothing on stdout, exit 1.
+        val = p.get_setting(key)
+        if val is None:
+            sys.exit(1)
+        print(val)
+        return
+
+    if args.subcommand == "unset":
+        removed = mgr.remove_setting(name, key)
+        if removed:
+            print(_green(f"Unset '{key}' on '{name}'"))
+        else:
+            print(f"'{key}' was not set on '{name}'")
+        return
+
+    # set
+    if not key:
+        view = p.settings_view()
+        print(f"Project '{name}' settings:")
+        width = max(len(k) for k in view)
+        for k, v in view.items():
+            print(f"  {k:<{width}}  {v or '(unset)'}")
+        return
+    if value is None:
+        print(_red(f"set requires a value: raptor project set {key} "
+                   f"<value> [<name>]"), file=sys.stderr)
+        sys.exit(1)
+    mgr.update_setting(name, key, value)
+    print(_green(f"Set {key} on '{name}'"))
+
+
+def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
     """Create, show, export, or resync a project's threat-model artefact."""
     from core.json import load_json, save_json
     from core.threat_model import (
@@ -1213,7 +1554,7 @@ def _handle_threat_model(mgr, args) -> None:
         return
 
     if args.action in ("add", "remove"):
-        from core.threat_model import _clip_str, _MAX_LIST_ENTRIES
+        from core.threat_model import _MAX_LIST_ENTRIES, _clip_str
         _MUTABLE_LIST_FIELDS = {
             "assets", "entry_points", "trust_boundaries",
             "trusted_inputs", "untrusted_inputs",
@@ -1374,7 +1715,7 @@ def _handle_threat_model(mgr, args) -> None:
         print(f"  - {item}")
 
 
-def _print_status(project):
+def _print_status(project) -> None:
     """Print project status."""
     from core.run import load_run_metadata
     from core.threat_model import (
@@ -1403,12 +1744,31 @@ def _print_status(project):
     if project.notes:
         print(f"Notes: {project.notes}")
 
+    # Trust block — trust state must never be invisible.
+    from core.project.project import VALID_TRUST_MARKERS
+    trust_parts = [
+        f"{m} ({project.trust[m][:10]})"
+        for m in VALID_TRUST_MARKERS if m in project.trust
+    ]
+    print("Trust: " + (", ".join(trust_parts) if trust_parts else "none"))
+
+    # Settings block — the registry keys that persist in the settings
+    # dict (description/notes/threat-model already have lines above).
+    setting_parts = [
+        f"{k}={v}" for k, v in project.settings_view().items()
+        if v and (k == "target-kind" or k.startswith("build-command"))
+    ]
+    print("Settings: " + (", ".join(setting_parts)
+                          if setting_parts else "(defaults)"))
+
     runs = project.get_run_dirs(sweep=False)
     if runs:
         print(f"\nRuns: {len(runs)}")
         name_col = max(max(len(d.name) for d in runs) + 2, 20)
         for d in runs:
             meta = load_run_metadata(d)
+            if not isinstance(meta, dict):
+                meta = None
             cmd = meta.get("command", "?") if meta else "?"
             status = meta.get("status", "?") if meta else "?"
             findings_str = _get_output_summary(d, meta)
@@ -1461,18 +1821,18 @@ def _print_status(project):
         print("\nNo runs.")
 
 
-def _print_provenance(project):
+def _print_provenance(project) -> None:
     """Print the project-level provenance rollup across all runs."""
     from core.run import load_run_metadata
     from core.run.provenance import aggregate_provenance, format_provenance_rollup
 
     runs = project.get_run_dirs(sweep=False)
-    metadatas = [load_run_metadata(d) for d in runs]
+    metadatas = [m if isinstance(m, dict) else None for m in (load_run_metadata(d) for d in runs)]
     print(f"Project: {project.name}")
     print(format_provenance_rollup(aggregate_provenance(metadatas)))
 
 
-def _print_run_provenance(project, run_query):
+def _print_run_provenance(project, run_query) -> None:
     """Print one run's provenance detail. ``run_query`` matches a run dir by
     exact name, else by unique substring."""
     from core.run import load_run_metadata
@@ -1491,7 +1851,8 @@ def _print_run_provenance(project, run_query):
         return
 
     d = matches[0]
-    meta = load_run_metadata(d) or {}
+    raw_meta = load_run_metadata(d)
+    meta = raw_meta if isinstance(raw_meta, dict) else {}
     print(f"Run: {d.name}")
     print(f"  Command: {meta.get('command', '?')}")
     ts = (meta.get("timestamp") or "")[:19]
@@ -1502,27 +1863,30 @@ def _print_run_provenance(project, run_query):
     print(block or "  (no provenance manifest)")
 
 
-def _print_coverage(project, detailed=False, fail_under=None):
+def _print_coverage(project, detailed: bool=False, fail_under=None):
     """Print project coverage — the unified store-backed report (coverage
     state + per-run execution detail), plus the ``--fail-under`` check."""
-    from core.json import load_json
     from core.coverage.store_summary import (
         coverage_view,
         format_store_threshold_result,
         render_coverage,
         store_coverage_threshold_met,
     )
+    from core.json import load_json
 
     base = Path(project.output_dir)
     try:
         run_dirs = list(project.get_run_dirs(sweep=False))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — best-effort listing
+        import logging as _logging
+        _logging.getLogger(__name__).warning("failed to list run dirs: %s", exc)
         run_dirs = []
     checklist = load_json(base / "checklist.json")
-    if not checklist:
+    if not isinstance(checklist, dict):
+        checklist = None
         for d in run_dirs:
             cl = load_json(d / "checklist.json")
-            if cl:
+            if isinstance(cl, dict):
                 checklist = cl
                 break
     store_path = base / "coverage.json"
@@ -1545,7 +1909,7 @@ def _print_coverage(project, detailed=False, fail_under=None):
     return None
 
 
-def _print_findings(project, detailed=False):
+def _print_findings(project, detailed: bool=False) -> None:
     """Print merged findings across all runs.
 
     Code findings (each run's ``findings.json``) render first; SCA /
@@ -1553,8 +1917,8 @@ def _print_findings(project, detailed=False):
     their own section below, so dependency-CVE volume doesn't swamp the
     code-finding table.
     """
-    from .merge import merge_findings
     from .findings_utils import merge_sca_findings
+    from .merge import merge_findings
 
     run_dirs = project.get_run_dirs(sweep=False)
     merged = merge_findings(run_dirs)
@@ -1572,11 +1936,16 @@ def _print_findings(project, detailed=False):
         _print_sca_findings_section(sca_findings, detailed)
 
 
-def _print_code_findings(merged, detailed=False):
+def _print_code_findings(merged, detailed: bool=False) -> None:
     """Render code findings as a grouped table (the original view)."""
-    from .findings_utils import count_vulns, group_findings
     from core.reporting.findings import build_findings_summary, findings_summary_line
-    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
+    from core.reporting.formatting import (
+        get_display_status,
+        title_case_type,
+        truncate_path,
+    )
+
+    from .findings_utils import count_vulns, group_findings
 
     vuln_count = count_vulns(merged)
     counts = build_findings_summary(merged)
@@ -1588,14 +1957,14 @@ def _print_code_findings(merged, detailed=False):
 
     # Build grouped rows: one row per vuln
     grouped_rows = []  # (file_loc, type, status, cvss, findings_list)
-    for key, findings in groups.items():
+    for findings in groups.values():
         # Use the first finding for display, pick best status/cvss across group
         rep = findings[0]  # representative finding
         fpath = rep.get("file", "")
         fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
 
         # Lines: show all lines in the group
-        lines_in_group = sorted(set(f.get("line", 0) for f in findings))
+        lines_in_group = sorted({f.get("line") or 0 for f in findings})
         if len(lines_in_group) == 1:
             loc = f"{fname}:{lines_in_group[0]}"
         else:
@@ -1610,7 +1979,7 @@ def _print_code_findings(merged, detailed=False):
 
         grouped_rows.append((loc, vtype, status, cvss_str, findings, fpath))
 
-    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line", 0) for f in r[4])))
+    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line") or 0 for f in r[4])))
 
     # Compact table
     headers = ("File", "Type", "Status", "CVSS")
@@ -1674,7 +2043,7 @@ def _sca_finding_kind(finding):
     """Human label for an SCA finding's class/kind, from its
     ``vuln_type`` tag (``sca:<class>:<kind>``)."""
     vt = finding.get("vuln_type", "")
-    tag = vt[4:] if vt.startswith("sca:") else vt
+    tag = vt.removeprefix("sca:")
     return tag.replace("_", " ").replace(":", " · ").title() or "—"
 
 
@@ -1701,7 +2070,7 @@ def _sca_finding_escalations(finding):
     return [str(r) for r in reasons] if isinstance(reasons, list) else []
 
 
-def _print_sca_findings_section(sca_findings, detailed=False):
+def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
     """Render SCA / dependency findings in their own section.
 
     Discovered from each run's ``sca/findings.json`` (see
@@ -1756,7 +2125,7 @@ def _print_sca_findings_section(sca_findings, detailed=False):
         print()
 
 
-def _finding_label(f):
+def _finding_label(f) -> str:
     """Location-based label for a finding."""
     return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
 
@@ -1768,15 +2137,22 @@ def _parse_since(spec: str):
     if not spec:
         return None
     spec = spec.strip().lower()
+    if not spec:
+        return None
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
     if spec[-1] in multipliers:
         try:
             n = float(spec[:-1])
         except ValueError:
             return None
+        if n < 0:
+            return None
         return time.time() - n * multipliers[spec[-1]]
     try:
-        return time.time() - float(spec)
+        n = float(spec)
+        if n < 0:
+            return None
+        return time.time() - n
     except ValueError:
         return None
 
@@ -1784,7 +2160,7 @@ def _parse_since(spec: str):
 def _print_annotations(
     project, status_filter=None, source_filter=None, file_filter=None,
     cwe_filter=None, rule_id_filter=None, grep=None, since=None,
-):
+) -> None:
     """List annotations across all runs in the project.
 
     Walks every run dir's ``annotations/`` subdir plus the project's
@@ -1878,7 +2254,7 @@ def _print_annotations(
               f"{status:<14}  {source:<5}  {snippet}")
 
 
-def _print_diff(result):
+def _print_diff(result) -> None:
     """Print diff results."""
     if result["new"]:
         print(f"New ({len(result['new'])}):")
@@ -1895,16 +2271,16 @@ def _print_diff(result):
     print(f"Unchanged: {result['unchanged']}")
 
 
-def _do_correlate(project, json_out=False):
+def _do_correlate(project, json_out: bool=False) -> None:
     """Cross-run finding correlation — action-oriented output."""
-    import json
+
     from .correlate import correlate_project
 
     result = correlate_project(project)
     summary = result["summary"]
 
     if json_out:
-        print(json.dumps(result, indent=2))
+        print(dumps_display(result))
         return
 
     print(f"Project: {project.name}")
@@ -1959,7 +2335,7 @@ def _do_correlate(project, json_out=False):
         display = persistent[:10]
         rows = []
         for pf in display:
-            models = ", ".join(pf.get("models", [])) or "—"
+            models = ", ".join(pf.get("models") or []) or "—"
             rows.append((
                 f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
                 pf.get("vuln_type", ""),
@@ -1989,13 +2365,16 @@ def _do_correlate(project, json_out=False):
         print(f"\n  Coverage: {', '.join(cov_parts)} files")
 
 
-def _do_clean(project, keep, dry_run, yes, dedup=False):
+def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     """Clean old runs from a project. With ``dedup``, the deletion set is the
     coverage-aware lossless subset (runs fully subsumed by a survivor) rather
     than recency-based ``--keep N``."""
-    from .clean import plan_clean, plan_dedup, execute_clean
+    from .clean import execute_clean, plan_clean, plan_dedup
 
     plan = plan_dedup(project) if dedup else plan_clean(project, keep=keep)
+
+    for name in plan.get("skipped_live", []):
+        print(f"  Skipped (still running): {name}")
 
     if not plan["deleted"]:
         print("No redundant runs to dedup." if dedup else "Nothing to clean.")
@@ -2029,17 +2408,17 @@ def _do_clean(project, keep, dry_run, yes, dedup=False):
         print("\n(dry run — no changes)")
         return
 
-    if not yes:
-        if input("\nProceed? [y/N] ").lower() != "y":
-            print("Cancelled.")
-            return
+    if not yes and input("\nProceed? [y/N] ").lower() != "y":
+        print("Cancelled.")
+        return
 
     # Snapshot coverage into the durable store BEFORE deleting (preserves
     # clean/examined coverage; flips sole-source findings to found_then_lost).
     _apply_clean_coverage(project, plan, consequences)
 
-    # Execute the exact plan that was shown — no re-query
-    execute_clean(plan)
+    # Execute the exact plan that was shown — no re-query. Containment
+    # anchored on the project's own output dir, not the plan's paths.
+    execute_clean(plan, output_path=project.output_path)
     for name in plan["deleted"]:
         print(_red(f"  Deleted: {name}"))
     print(f"Done. {len(plan['deleted'])} runs deleted ({freed_mb:.1f}MB freed)")
@@ -2050,8 +2429,8 @@ def _classify_clean_coverage(project, plan):
     (duplicate / sole-clean / sole-source-findings). Best-effort — a coverage
     hiccup must never block a clean. Returns [] when there's no inventory."""
     try:
-        from core.json import load_json
         from core.coverage.clean import classify_removal
+        from core.json import load_json
 
         checklist = load_json(Path(project.output_dir) / "checklist.json")
         victims = plan.get("delete_dirs", [])
@@ -2061,48 +2440,65 @@ def _classify_clean_coverage(project, plan):
         survivors = [d for d in project.get_run_dirs(sweep=False)
                      if d not in victim_set]
         return [classify_removal(v, survivors) for v in victims]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — must never block a clean
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "clean consequence computation failed: %s", exc,
+        )
         return []
 
 
-def _apply_clean_coverage(project, plan, consequences):
+def _apply_clean_coverage(project, plan, consequences) -> None:
     """Snapshot to-be-deleted runs' coverage into the durable project
     ``coverage.json`` (and flip sole-source findings to found_then_lost)
     before the dirs are removed. Best-effort — never blocks the clean."""
     if not consequences:
         return
     try:
-        from core.json import load_json
-        from core.coverage.store import CoverageStore, coverage_store_lock
         from core.coverage.clean import apply_removal
+        from core.coverage.store import CoverageStore, coverage_store_lock
+        from core.json import load_json
 
         checklist = load_json(Path(project.output_dir) / "checklist.json")
-        if not checklist:
+        if not isinstance(checklist, dict):
             return
         cov_path = Path(project.output_dir) / "coverage.json"
         # Lock the whole read-modify-write: a run completing mid-clean snapshots
         # into the same coverage.json (see _snapshot_run_coverage).
         with coverage_store_lock(cov_path):
             store = CoverageStore(cov_path)
-            for victim, cons in zip(plan.get("delete_dirs", []), consequences):
+            for victim, cons in zip(plan.get("delete_dirs", []), consequences, strict=True):
                 apply_removal(store, victim, checklist, cons)
             store.save()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — must never block a clean
         print(_red(f"  (coverage snapshot skipped: {e})"))
 
 
-def _do_merge(project, merge_type, yes):
+def _do_merge(project, merge_type, yes) -> None:
     """Merge runs per command type."""
     import shutil
     from datetime import datetime, timezone
-    from .merge import merge_runs
+
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
+
+    from .clean import split_live_runs
+    from .merge import merge_runs
 
     groups = project.get_run_dirs_by_type()
 
     if merge_type != "all":
         groups = {k: v for k, v in groups.items() if k == merge_type}
+
+    # Never merge (then delete) a live run — its directory is still
+    # being written by an in-flight worker.
+    filtered = {}
+    for cmd_type, dirs in groups.items():
+        rest, live = split_live_runs(dirs)
+        for d in live:
+            print(f"  {cmd_type}: skipped (still running): {d.name}")
+        filtered[cmd_type] = rest
+    groups = filtered
 
     # Filter to groups that actually have something to merge
     mergeable = {k: v for k, v in groups.items() if len(v) >= 2}
@@ -2115,10 +2511,9 @@ def _do_merge(project, merge_type, yes):
     for cmd_type, dirs in mergeable.items():
         print(f"  {cmd_type}: {len(dirs)} runs → 1")
 
-    if not yes:
-        if input("\nProceed? [y/N] ").lower() != "y":
-            print("Cancelled.")
-            return
+    if not yes and input("\nProceed? [y/N] ").lower() != "y":
+        print("Cancelled.")
+        return
 
     groups = mergeable
 
@@ -2128,7 +2523,7 @@ def _do_merge(project, merge_type, yes):
 
         try:
             stats = merge_runs(dirs, merged_dir)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — abort merge, keep sources
             print(f"  {cmd_type}: merge failed — {e}")
             print("  Source runs preserved.")
             continue
@@ -2141,7 +2536,7 @@ def _do_merge(project, merge_type, yes):
                 "status": "completed",
                 "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
             })
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — abort delete, keep sources
             # Pre-fix this printed a warning and PROCEEDED to delete
             # source runs. The merged output then existed without
             # `RUN_METADATA_FILE`, which downstream consumers
@@ -2165,7 +2560,7 @@ def _do_merge(project, merge_type, yes):
         for d in dirs:
             try:
                 shutil.rmtree(d)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — continue past one failure
                 failed_deletes.append(f"{d.name}: {e}")
         if failed_deletes:
             for msg in failed_deletes:

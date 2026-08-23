@@ -13,14 +13,18 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from core.llm.cc_adapter import (
     CCDispatchConfig,
     build_cc_command,
-    parse_cc_structured,
+    cc_subprocess_env,
     parse_cc_freeform,
+    parse_cc_structured,
+    system_prompt_file_for,
 )
+from core.security.log_sanitisation import escape_nonprintable
+from core.security.redaction import redact_secrets
 from packages.llm_analysis.dispatch import DispatchResult
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
 
@@ -31,10 +35,16 @@ CC_BUDGET_PER_FINDING = "1.00"  # string — passed as CLI arg to --max-budget-u
 
 
 def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
-                     timeout=CC_TIMEOUT):
+                     timeout=CC_TIMEOUT, system_prompt=None):
     """CC invocation with pre-built prompt. Returns DispatchResult.
 
     Used as a dispatch_fn callable by dispatch_task().
+
+    ``system_prompt`` routes through CCDispatchConfig.system_prompt
+    (the ``--system-prompt-file`` channel) — never fold it into ``prompt``:
+    concatenation sends operator instructions on the same channel as
+    finding-derived user content, dropping the role separation CC's
+    prompt-injection defences key off (see CCDispatchConfig).
     """
     # Use the caller's schema. Pre-fix this was
     # `build_schema() if schema else None`, which IGNORED the
@@ -59,15 +69,15 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         budget_usd=CC_BUDGET_PER_FINDING,
         timeout_s=timeout,
         json_schema=effective_schema,
+        system_prompt=system_prompt,
     )
-    cmd = build_cc_command(config)
 
     try:
-        from core.sandbox import run_untrusted_networked
         from core.llm.cc_proxy_hosts import (
             proxy_hosts_for_cc_dispatch,
             readable_paths_for_cc_dispatch,
         )
+        from core.sandbox import run_untrusted_networked
         # Sandboxed Claude Code dispatch with restrict_reads=True so the
         # sub-agent can't read host secrets ($HOME, /proc/<host_pid>/) on
         # Landlock-only hosts (Ubuntu 24.04+ default with
@@ -85,13 +95,39 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         # setting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC /
         # ENABLE_CLAUDEAI_MCP_SERVERS env vars: undocumented Claude
         # Code internals; the egress proxy allowlist is OUR policy.
-        proc = run_untrusted_networked(
-            cmd, input=prompt, capture_output=True, text=True,
-            timeout=timeout, target=str(repo_path), output=str(out_dir),
-            readable_paths=readable_paths_for_cc_dispatch(claude_bin),
-            proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
-            caller_label="claude-sub-agent",
-        )
+        # env: safe baseline + CLAUDE_CODE_*/ANTHROPIC_*/AWS_* overlay —
+        # a Bedrock/Vertex-backed CLI child needs its backend env to
+        # authenticate (bare get_safe_env leaves it credential-less and
+        # it hangs to timeout). The sandbox's proxy_env_overrides still
+        # win for HTTPS_PROXY, so egress stays on the chokepoint.
+        #
+        # System prompt via 0600 tempfile + --system-prompt-file — never
+        # in the child's world-readable /proc/<pid>/cmdline (see
+        # build_cc_command's hygiene contract). Spawn AND wait stay
+        # inside the CM; the file path joins readable_paths because the
+        # child runs restrict_reads=True and TMPDIR is outside the
+        # sandbox's read allowlist (the mount-ns backend bind-mounts
+        # file entries at their original paths, Landlock adds a
+        # per-file read rule).
+        with system_prompt_file_for(config) as _sys_prompt_path:
+            cmd = build_cc_command(
+                config, system_prompt_file=_sys_prompt_path,
+            )
+            readable_paths = readable_paths_for_cc_dispatch(claude_bin)
+            if _sys_prompt_path is not None:
+                readable_paths = [*readable_paths, str(_sys_prompt_path)]
+            proc = run_untrusted_networked(
+                cmd, input=prompt, capture_output=True, text=True,
+                timeout=timeout, target=str(repo_path), output=str(out_dir),
+                # mint_aws_credentials: sandboxed child — Landlock denies
+                # ~/.aws, egress denies IMDS; on IAM-role Bedrock hosts its
+                # own AWS chain is dead. The parent attaches frozen session
+                # credentials at its trust boundary.
+                env=cc_subprocess_env(mint_aws_credentials=True),
+                readable_paths=readable_paths,
+                proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
+                caller_label="claude-sub-agent",
+            )
     except subprocess.TimeoutExpired:
         return DispatchResult(result={"error": f"timeout after {timeout}s"})
     except (FileNotFoundError, PermissionError) as e:
@@ -111,7 +147,17 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         return DispatchResult(result={"error": f"OS error invoking sandbox: {e!r}"})
 
     if proc.returncode != 0:
-        stderr_excerpt = (proc.stderr or "")[:500]
+        # Redact + defang stderr before embedding into the error
+        # message — the CC child's env carries minted AWS session
+        # credentials and SDK verbose output can echo bearer headers;
+        # stderr can also carry ANSI / BIDI / control bytes that forge
+        # log entries on operator TTYs. Same pattern as
+        # parse_cc_structured in core.llm.cc_adapter. Redact BEFORE
+        # truncating so a secret split at the cap can't survive as a
+        # partial credential.
+        stderr_excerpt = escape_nonprintable(
+            redact_secrets(proc.stderr or ""),
+        )[:500]
         result = {"error": f"exit code {proc.returncode}: {stderr_excerpt}"}
         write_debug(out_dir, "dispatch", proc.stdout, proc.stderr, result)
         return DispatchResult(result=result)
@@ -141,7 +187,38 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
 
     quality = 1.0
     if schema and isinstance(parsed, dict) and "error" not in parsed:
-        from core.llm.response_validation import validate_structured_response
+        from core.llm.response_validation import (
+            unknown_response_fields,
+            validate_structured_response,
+        )
+        # Strict schema floor — same security property as
+        # LLMClient.generate_structured: fields outside the requested
+        # schema never reach downstream consumers. The CC subprocess
+        # transport bypasses the client, so the check must run here
+        # too — but unlike the client's structured path there is NO
+        # retry/fallback loop at this level, so treating a benign
+        # extra key as a whole-response failure silently dropped an
+        # otherwise-valid analysis. Strip the unknown fields, keep
+        # the valid subset, and record the event for diagnosis.
+        # ``finding_id`` is transport-injected (parse_cc_structured
+        # setdefaults it into every envelope), not model-smuggled —
+        # exempt it for schemas that don't declare it.
+        unknown = [
+            k for k in unknown_response_fields(parsed, effective_schema)
+            if k != "finding_id"
+        ]
+        if unknown:
+            logger.warning(
+                "CC response carried fields outside the requested "
+                "schema (%s) — stripped; keeping the valid subset",
+                unknown,
+            )
+            write_debug(
+                out_dir, "dispatch_schema", proc.stdout, proc.stderr,
+                {"warning": f"unknown fields stripped: {unknown}"},
+            )
+            for k in unknown:
+                parsed.pop(k, None)
         validated = validate_structured_response(parsed, effective_schema)
         parsed = validated.data
         quality = validated.quality
@@ -158,12 +235,12 @@ _SAFE_ID_MAX = 80
 
 
 def _safe_id(finding_id: str) -> str:
-    """Sanitise a finding_id for filesystem use.
+    r"""Sanitise a finding_id for filesystem use.
 
     Pre-fix `Path(finding_id).name.replace("..", "_")` was the
     only sanitisation. Three failure modes:
 
-    * NUL bytes: `Path("foo\\x00bar").name` returned the
+    * NUL bytes: `Path("foo\x00bar").name` returned the
       original value on Linux, then `write_text` raised
       ValueError mid-write.
     * Long IDs: SARIF rule IDs can be 200+ chars (vendor-rule
@@ -174,9 +251,9 @@ def _safe_id(finding_id: str) -> str:
       attribute of `"sub/dir/leaf"` is `"leaf"` — losing the
       sub/dir context but also opening the door to weird
       Windows-path interactions if `finding_id` contained
-      backslashes (`Path("a\\\\b").name` is OS-dependent).
+      backslashes (`Path("a\\b").name` is OS-dependent).
 
-    Whitelist `[A-Za-z0-9._-]` (sub everything else with `_`)
+    Allowlist `[A-Za-z0-9._-]` (sub everything else with `_`)
     and cap at 80 chars (well under any FS limit, leaves room
     for the `cc_` prefix and `.txt` suffix). Empty / whitespace
     -> "unknown".
@@ -186,7 +263,7 @@ def _safe_id(finding_id: str) -> str:
     sanitised = _SAFE_ID_RE.sub("_", finding_id.strip())
     # Defence-in-depth: collapse multiple consecutive `..` runs
     # to one `_` so even after sanitisation no traversal token
-    # remains (whitelist already excludes `/` so this is mostly
+    # remains (allowlist already excludes `/` so this is mostly
     # cosmetic, but keeps the filename predictable).
     sanitised = sanitised.replace("..", "_")
     if len(sanitised) > _SAFE_ID_MAX:
@@ -217,25 +294,45 @@ def _safe_id(finding_id: str) -> str:
 
 
 def write_debug(
-    out_dir: Path,
+    out_dir: Path | str,
     finding_id: str,
     stdout: str,
     stderr: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
 ) -> None:
-    """Write raw CC output to a debug file on failure."""
+    """Write CC output to a debug file on failure (secrets redacted).
+
+    The dump persists to disk in the run's output directory, which
+    operators share when reporting issues — the child's stderr can
+    carry the minted AWS session credentials from its env (SDK
+    verbose/error output echoes auth material), so both streams are
+    redacted and control bytes defanged (newlines preserved for
+    readability) before writing.
+    """
     try:
-        debug_dir = out_dir / "debug"
+        # Coerce: invoke_cc_simple's callers pass str out_dirs; a bare
+        # `str / str` TypeError here would turn a debug-artifact write
+        # into a dispatch crash.
+        debug_dir = Path(out_dir) / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
         safe_id = _safe_id(finding_id)
         debug_file = debug_dir / f"cc_{safe_id}.txt"
-        debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}")
+        safe_stdout = escape_nonprintable(
+            redact_secrets(stdout or "(empty)"), preserve_newlines=True,
+        )
+        safe_stderr = escape_nonprintable(
+            redact_secrets(stderr or "(empty)"), preserve_newlines=True,
+        )
+        debug_file.write_text(
+            f"STDOUT:\n{safe_stdout}\n\nSTDERR:\n{safe_stderr}",
+            encoding="utf-8",
+        )
         result["cc_debug_file"] = f"debug/cc_{safe_id}.txt"
     except OSError:
         pass
 
 
-def build_schema(no_exploits: bool = False, no_patches: bool = False) -> Dict[str, Any]:
+def build_schema(no_exploits: bool = False, no_patches: bool = False) -> dict[str, Any]:
     """Build JSON Schema for CC output, excluding fields the user didn't ask for."""
     schema = copy.deepcopy(FINDING_RESULT_SCHEMA)
     if no_exploits:

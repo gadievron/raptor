@@ -1,6 +1,5 @@
 """Console table renderer — box-drawing terminal output."""
 
-from typing import Dict, List, Optional, Tuple
 
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -42,11 +41,11 @@ def _pad_to_width(s: str, target_width: int) -> str:
 
 
 def render_console_table(
-    columns: List[str],
-    rows: List[Tuple],
+    columns: list[str],
+    rows: list[tuple],
     title: str = "Results at a Glance",
-    footer: Optional[str] = None,
-    max_widths: Optional[Dict[int, int]] = None,
+    footer: str | None = None,
+    max_widths: dict[int, int] | None = None,
 ) -> str:
     """Render a box-drawing table for terminal display.
 
@@ -88,9 +87,17 @@ def render_console_table(
     for j, cap in max_widths.items():
         widths[j] = min(widths[j], cap)
 
+    def _truncate_to_width(s: str, w: int) -> str:
+        cur = 0
+        for i, _ch in enumerate(s):
+            cur = _display_width(s[: i + 1])
+            if cur > w:
+                return s[:i]
+        return s
+
     def fmt_row(cols):
         return "  │ " + " │ ".join(
-            _pad_to_width(str(c), widths[j])[:widths[j]]
+            _pad_to_width(_truncate_to_width(str(c), widths[j]), widths[j])
             for j, c in enumerate(cols)
         ) + " │"
 

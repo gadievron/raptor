@@ -11,12 +11,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-
 from packages.code_understanding.dispatch.hunt_dispatch import (
     _build_hunt_strategy_block,
     _format_user_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # CWE-id pin → strategy
@@ -258,11 +256,89 @@ class TestStrategyBlockDirect:
 
 
 class TestLifecycleDriftReaches:
-    def test_dumpable_pattern_pins_lifecycle_drift(self):
+    def test_dumpable_pattern_pins_lifecycle_drift(self, tmp_path):
         # lifecycle_drift has no CWE signal; the ``dumpable`` token in
-        # ``get_dumpable`` is what pins it, exemplar and all.
+        # ``get_dumpable`` is what pins it, exemplar and all. Its
+        # signal set is kernel vocabulary, so the pin needs the
+        # kernel-marked repo (linux_kernel profile).
+        (tmp_path / "Kconfig").write_text("config FOO\n")
         block = _build_hunt_strategy_block(
             "get_dumpable trusted for tasks without an mm",
+            repo_path=tmp_path,
         )
         assert "## Strategy: lifecycle_drift" in block
         assert "CVE-2026-46333" in block  # lifecycle_drift exemplar
+
+
+# ---------------------------------------------------------------------------
+# Exemplar slot wiring — L3 retrieval first, legacy fallback
+# ---------------------------------------------------------------------------
+
+
+def _retrieved_exemplar(exemplar_id="abcd1234-2026-06-03T14:05:32+00:00"):
+    from core.labeled_attempts import RetrievedExemplar
+    return RetrievedExemplar(
+        exemplar_id=exemplar_id,
+        cwe="CWE-22",
+        finding_summary="CWE-22 · finding=FND-1",
+        exploit_code="open('../../etc/passwd')",
+        evidence="observed=sanitizer_report",
+        environment="x86_64",
+        timestamp="2026-06-03T14:05:32+00:00",
+    )
+
+
+class TestExemplarSlotWiring:
+    def test_retrieval_serves_slot_when_pool_has_entries(self, monkeypatch):
+        """When L3 retrieval has records for the pattern's CWE, the
+        retrieved exemplars ride the untrusted envelope in the user
+        message (the legacy VerifiedOutcome rollup is not consulted)."""
+        ex = _retrieved_exemplar()
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [ex],
+        )
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project", lambda: None,
+        )
+        out = _format_user_message("CWE-22 in upload handler")
+        assert "<untrusted_verified_outcomes>" in out
+        assert "## RAPTOR-verified exemplars" in out
+        assert ex.exemplar_id in out
+
+    def test_fallback_to_legacy_block_when_retrieval_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_block_for_finding",
+            lambda finding, **kw: "## RAPTOR-verified exemplars\n\nlegacy entry F-9",
+        )
+        out = _format_user_message("CWE-22 in upload handler")
+        assert "<untrusted_verified_outcomes>" in out
+        assert "legacy entry F-9" in out
+
+    def test_empty_store_leaves_message_unchanged(self, monkeypatch):
+        monkeypatch.setattr(
+            "core.labeled_attempts.retrieval.retrieve_exemplars",
+            lambda **kw: [],
+        )
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_block_for_finding",
+            lambda finding, **kw: "",
+        )
+        out = _format_user_message("CWE-22 in upload handler")
+        assert "<untrusted_verified_outcomes>" not in out
+        assert "RAPTOR-verified exemplars" not in out
+
+    def test_slot_failure_does_not_break_hunt(self, monkeypatch):
+        def boom(finding, **kw):
+            raise RuntimeError("simulated slot failure")
+
+        monkeypatch.setattr(
+            "core.labeled_attempts.view.exemplar_slot_for_finding", boom,
+        )
+        out = _format_user_message("CWE-22 in upload handler")
+        assert "<pattern>" in out
+        assert "<untrusted_verified_outcomes>" not in out

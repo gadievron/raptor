@@ -54,9 +54,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Set, Tuple
+from typing import Literal
 
 from core.json import save_json
+from core.llm.scorecard import integrity
 from core.llm.scorecard.freshness import (
     bucket_key,
     flatten_counts,
@@ -64,15 +65,21 @@ from core.llm.scorecard.freshness import (
     weighted_counts,
 )
 from core.logging import get_logger
+from types import TracebackType
 
 logger = get_logger()
+
+# Paths whose unverified-sidecar warning already fired this process —
+# read-heavy workloads (CLI table renders, estimator sweeps) would
+# otherwise repeat it on every lock cycle.
+_unverified_warned_paths: set = set()
 
 
 # v2 (2026-05): per-event-type counts are stratified into "YYYY-MM" age buckets
 # (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
 # flat ``{"correct", "incorrect"}``, so reads can freshness-weight by bucket age.
 # Migration from v1 folds the flat counts into a single bucket keyed by the
-# cell's last-seen month. See ``freshness.py`` + ``~/design/scorecard-model-versioning.md``.
+# cell's last-seen month. See ``freshness.py`` + the design memo.
 SCHEMA_VERSION = 2
 
 # Wilson 95% upper bound is the gate; this many failures (or failure
@@ -142,6 +149,16 @@ class EventType:
     # heuristic-first with a 2-step LLM tiebreak, no ground-truth
     # calibration.
     EXPLOIT_INTENT_MATCH = "exploit_intent_match"
+    # Terminal-fire chain-closure outcome from /exploit's engine.
+    # ``correct`` = engine verdict achieved (post-confirm-k, post-
+    # harness-side-channel demotion). ``incorrect`` = attempted +
+    # returned candidate code but couldn't achieve the goal on this
+    # target. Producer: ``packages.llm_analysis.exploit_engine.
+    # labeled_attempt_bridge.persist_engine_labeled_attempt``.
+    # Uncertain outcomes (budget cap, interrupt, no candidate) and
+    # HARNESS_SIDE_CHANNEL demotions are intentionally NOT recorded
+    # — they measure substrate limits, not model reliability.
+    EXPLOIT_CHAIN_CLOSURE = "exploit_chain_closure"
     # Per-call structured-output validity: did the response parse + match the
     # schema. ``correct`` = passed first time, ``incorrect`` = failed (the
     # provider may retry internally; this records the externally-observable
@@ -150,9 +167,56 @@ class EventType:
     # class so it's a universal "how often does this model follow the schema"
     # axis, decoupled from any task-specific reliability cell.
     SCHEMA_VALID = "schema_valid"
+    # Cross-run verdict stability: same model, same finding, different
+    # run — did the normalised verdict (positive/negative/inconclusive)
+    # stay the same? ``correct`` = held; ``incorrect`` = flipped.
+    # Producer: :mod:`core.llm.scorecard.stability`.
+    CROSS_RUN_STABILITY = "cross_run_stability"
+    # Cross-family check: a different model family re-analyses a
+    # finding the primary flagged. ``correct`` = checker agreed;
+    # ``incorrect`` = checker disputed (conservative override applied).
+    # Producer: :mod:`core.llm.scorecard.cross_family`.
+    CROSS_FAMILY_CHECK = "cross_family_check"
+    # Self-consistency: Stage F retried a finding (contradictory or
+    # low confidence). ``correct`` = verdict held after retry;
+    # ``incorrect`` = verdict flipped.
+    # Producer: :mod:`core.llm.scorecard.self_consistency`.
+    SELF_CONSISTENCY = "self_consistency"
+    # Dataflow validation: mechanical dataflow analysis (CodeQL/IRIS
+    # or structural tree-sitter) checked the LLM's reachability
+    # claim. ``correct`` = confirmed; ``incorrect`` = refuted.
+    # Producer: :mod:`core.llm.scorecard.dataflow_validation`.
+    DATAFLOW_VALIDATION = "dataflow_validation"
+    # Study-loop answer at the re-review trigger point (the
+    # verdict-changing path). ``correct`` = the independent second
+    # resolution agreed and the answer was delivered; ``incorrect`` =
+    # it disagreed / abstained / failed receipt verification and the
+    # answer was quarantined as inconclusive. Recorded under the
+    # ``study_question`` decision class so calibrated consensus can
+    # weight models on study reliability. Producer: the audit study
+    # consumer's agreement gate.
+    STUDY_QUESTION = "study_question"
+    # Offline audit-corpus probe against labelled ground truth.
+    # ``correct`` = the model's verdict matched the corpus label.
+    # Producer: ``core.audit.corpus.run_corpus._record_scorecard``
+    # under ``audit:<bug_class>`` cells. (That producer referenced
+    # this constant before it existed — the AttributeError was
+    # swallowed by its best-effort catch, so corpus runs recorded
+    # nothing.)
+    CORPUS_GROUND_TRUTH = "corpus_ground_truth"
+    # /validate came back on a prior audit LLM verdict via the
+    # Reflexion feedback importer. ``correct`` = the model's journal
+    # verdict agreed with /validate's conclusion (positive verdict
+    # confirmed, or clean verdict not contradicted); ``incorrect`` =
+    # /validate disproved a positive verdict or confirmed a finding
+    # the model called clean. Producer:
+    # :mod:`core.llm.scorecard.validate_feedback`, wired from
+    # ``core.audit.feedback.import_validation_results`` — the live
+    # writer of ``audit:<CWE>`` cells (the corpus harness is offline).
+    VALIDATE_FEEDBACK = "validate_feedback"
 
 
-ALL_EVENT_TYPES: Tuple[str, ...] = (
+ALL_EVENT_TYPES: tuple[str, ...] = (
     EventType.CHEAP_SHORT_CIRCUIT,
     EventType.MULTI_MODEL_CONSENSUS,
     EventType.JUDGE_REVIEW,
@@ -160,7 +224,15 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.OPERATOR_FEEDBACK,
     EventType.REASONING_DIVERGENCE,
     EventType.EXPLOIT_INTENT_MATCH,
+    EventType.EXPLOIT_CHAIN_CLOSURE,
     EventType.SCHEMA_VALID,
+    EventType.CROSS_RUN_STABILITY,
+    EventType.CROSS_FAMILY_CHECK,
+    EventType.SELF_CONSISTENCY,
+    EventType.DATAFLOW_VALIDATION,
+    EventType.STUDY_QUESTION,
+    EventType.CORPUS_GROUND_TRUTH,
+    EventType.VALIDATE_FEEDBACK,
 )
 
 
@@ -216,8 +288,8 @@ class DecisionClassStats:
     last_seen_at: str
     model_version: str
     policy_override: PolicyOverride
-    events: Dict[str, _EventCounts]
-    disagreement_samples: List[Dict[str, str]] = field(default_factory=list)
+    events: dict[str, _EventCounts]
+    disagreement_samples: list[dict[str, str]] = field(default_factory=list)
     # Lifecycle metrics — a volume/cost/speed signal, separate from the
     # correct/incorrect reliability events. Bumped by register_uses once per
     # run lifecycle; never affects the Wilson verdict. The cost + tokens are
@@ -270,24 +342,25 @@ def _now_iso() -> str:
 
 def _safe_int(v, default: int = 0) -> int:
     """Coerce to ``int`` defensively — wrong-type/malformed cell fields
-    (a hand-edited ``"calls": "abc"``, a JSON list slipped in, ``None``) coerce
-    to the default rather than raising out of the locked context and aborting
-    the whole write."""
-    try:
-        return int(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+    (a hand-edited ``"calls": "abc"``, a JSON list slipped in,
+    ``None``) coerce to the default rather than raising out of the
+    locked context and aborting the whole write.
+
+    Delegates to :func:`core.llm.coerce.to_int_safe`; kept as a local
+    named export because the cell-coercion sites throughout this
+    module call it positionally.
+    """
+    from core.llm.coerce import to_int_safe
+    return to_int_safe(v, default=default)
 
 
 def _safe_float(v, default: float = 0.0) -> float:
     """Float counterpart to :func:`_safe_int`. Wrong-type values → default."""
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+    from core.llm.coerce import to_float_safe
+    return to_float_safe(v, default=default)
 
 
-def _empty_events() -> Dict[str, Dict[str, Dict[str, int]]]:
+def _empty_events() -> dict[str, dict[str, dict[str, int]]]:
     """A fresh ``events`` dict: every known event type present, each mapped to
     an empty age-bucket map (``{}``). Buckets (``"YYYY-MM" -> {correct,
     incorrect}``) are added lazily by :meth:`ModelScorecard.record_event`. All
@@ -295,7 +368,7 @@ def _empty_events() -> Dict[str, Dict[str, Dict[str, int]]]:
     return {et: {} for et in ALL_EVENT_TYPES}
 
 
-def _migrate_events_v1_to_v2(cell: Dict) -> None:
+def _migrate_events_v1_to_v2(cell: dict) -> None:
     """In place: convert a cell's flat v1 ``events[type] = {correct, incorrect}``
     to v2 age-bucketed ``events[type] = {month: {correct, incorrect}}``.
 
@@ -320,12 +393,12 @@ def _migrate_events_v1_to_v2(cell: Dict) -> None:
         events[et] = {month: {"correct": c, "incorrect": i}} if (c or i) else {}
 
 
-def _migrate(data: Dict, from_version) -> bool:
+def _migrate(data: dict, from_version) -> bool:
     """Migrate ``data`` in place from ``from_version`` to ``SCHEMA_VERSION``.
     Returns True on success, False for an unknown version (caller raises rather
     than silently corrupting). Currently: v1 -> v2 (flat -> bucketed events)."""
     if from_version == 1:
-        for by_dc in data.get("models", {}).values():
+        for by_dc in (data.get("models") or {}).values():
             if not isinstance(by_dc, dict):
                 continue
             for cell in by_dc.values():
@@ -362,12 +435,12 @@ class ModelScorecard:
         retain_samples: bool = True,
         miss_rate_ceiling: float = DEFAULT_MISS_RATE_CEILING,
         shadow_rate: float = 0.0,
-        auto_gc_after_days: Optional[int] = DEFAULT_AUTO_GC_AFTER_DAYS,
+        auto_gc_after_days: int | None = DEFAULT_AUTO_GC_AFTER_DAYS,
         auto_gc_interval_seconds: float = _AUTO_GC_INTERVAL_SECONDS,
-        keep_models: Optional[Set[str]] = None,
-        freshness_half_life_days: Optional[float] = None,
+        keep_models: set[str] | None = None,
+        freshness_half_life_days: float | None = None,
         rng=None,
-    ):
+    ) -> None:
         """``shadow_rate`` is the probability (0-1) that a call to a
         trusted cell returns ``Policy.SHADOW`` instead of
         ``SHORT_CIRCUIT``. The consumer then runs full ANALYSE
@@ -382,9 +455,8 @@ class ModelScorecard:
         ``random.random``.
         """
         if not 0.0 <= shadow_rate <= 1.0:
-            raise ValueError(
-                f"shadow_rate must be in [0, 1], got {shadow_rate}"
-            )
+            msg = f"shadow_rate must be in [0, 1], got {shadow_rate}"
+            raise ValueError(msg)
         self.path = Path(path)
         self.retain_samples = retain_samples
         self.miss_rate_ceiling = miss_rate_ceiling
@@ -404,10 +476,19 @@ class ModelScorecard:
         # tests that don't pass it get unprotected behaviour
         # (manual ``reset --model X`` still works to retire a
         # specific model). Frozen ``set`` for cheap lookups.
-        self.keep_models: Set[str] = (
+        self.keep_models: set[str] = (
             set(keep_models) if keep_models else set()
         )
         self._rng = rng if rng is not None else random.random
+        # Trust state of the most recent locked read (set by
+        # _LockCtx). False only in the key-unusable clamp: the
+        # sidecar content is readable for introspection but the
+        # trust surface (short-circuit, force_short_circuit pins)
+        # must not act on unverifiable data. Tampered/legacy files
+        # under a USABLE key never reach consumers at all — they are
+        # discarded at read and quarantined on the next write (see
+        # core.llm.scorecard.integrity).
+        self._last_read_trusted: bool = True
 
     # ----- public API -----
 
@@ -418,8 +499,8 @@ class ModelScorecard:
         event_type: str,
         outcome: Outcome,
         *,
-        model_version: Optional[str] = None,
-        sample: Optional[Dict[str, str]] = None,
+        model_version: str | None = None,
+        sample: dict[str, str] | None = None,
     ) -> None:
         """Record one observation for a ``(model, decision_class)``
         cell.
@@ -433,18 +514,21 @@ class ModelScorecard:
         cell on a most-recent-wins basis.
         """
         if event_type not in ALL_EVENT_TYPES:
-            raise ValueError(
+            msg = (
                 f"unknown event_type {event_type!r} — must be one of "
                 f"{sorted(ALL_EVENT_TYPES)}"
             )
+            raise ValueError(msg)
         if outcome not in ("correct", "incorrect"):
-            raise ValueError(
-                f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
-            )
+            msg = f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
+            raise ValueError(msg)
         with self._with_lock() as data:
             cell = self._ensure_cell(data, model, decision_class)
             now_iso = _now_iso()
-            bucket = cell["events"][event_type].setdefault(
+            # setdefault on the event-type key too: cells persisted
+            # before an event type existed lack its key (the schema
+            # migration only backfills known-at-migration types).
+            bucket = cell["events"].setdefault(event_type, {}).setdefault(
                 bucket_key(now_iso), {"correct": 0, "incorrect": 0}
             )
             bucket[outcome] += 1
@@ -469,7 +553,7 @@ class ModelScorecard:
                         samples[-MAX_DISAGREEMENT_SAMPLES:]
                     )
 
-    def register_uses(self, uses: List[Dict]) -> None:
+    def register_uses(self, uses: list[dict]) -> None:
         """Record per-(model, decision_class) USAGE — a volume/presence signal,
         not a reliability outcome. Bumps each cell's ``calls`` counter and
         last_seen; never touches the correct/incorrect events, so it cannot
@@ -509,8 +593,9 @@ class ModelScorecard:
                 # event so the result counts towards the standard Wilson view
                 # over that slot. correct = response parsed + matched schema;
                 # incorrect = it didn't.
-                pass_n = int(u.get("schema_valid_pass", 0))
-                fail_n = int(u.get("schema_valid_fail", 0))
+                from core.llm.coerce import to_int_safe
+                pass_n = to_int_safe(u.get("schema_valid_pass", 0))
+                fail_n = to_int_safe(u.get("schema_valid_fail", 0))
                 if pass_n or fail_n:
                     now_iso = _now_iso()
                     sv = cell["events"].setdefault(EventType.SCHEMA_VALID, {})
@@ -552,6 +637,16 @@ class ModelScorecard:
             return Policy.LEARNING
 
         override = cell.get("policy_override", "auto")
+        if not self._last_read_trusted:
+            # Key-unusable clamp (see integrity module): the sidecar
+            # can't be verified, so nothing in it may grant trust. A
+            # force_fall_through pin is still honoured — more
+            # analysis is the safe direction — but measured counts
+            # and force_short_circuit pins are exactly what a forger
+            # would plant.
+            if override == "force_fall_through":
+                return Policy.FALL_THROUGH
+            return Policy.LEARNING
         if override == "force_short_circuit":
             return Policy.SHORT_CIRCUIT
         if override == "force_fall_through":
@@ -575,7 +670,7 @@ class ModelScorecard:
         return Policy.SHORT_CIRCUIT
 
     def _measured_policy(
-        self, ev: Dict, half_life_days: Optional[float],
+        self, ev: dict, half_life_days: float | None,
         *, sample_size_floor: int = 10,
     ) -> str:
         """The measured short-circuit policy for one cell's
@@ -603,7 +698,7 @@ class ModelScorecard:
 
     def measure_freshness_impact(
         self, half_life_days: float, *, sample_size_floor: int = 10,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """Offline gate: compare the cheap-short-circuit verdict for every cell
         with decay OFF (baseline) vs ON at ``half_life_days``, and tally how
         many trusted cells would FALL OUT of SHORT_CIRCUIT (and to which
@@ -655,8 +750,8 @@ class ModelScorecard:
         finding_id: str,
         outcome: Outcome,
         *,
-        model_version: Optional[str] = None,
-        sample: Optional[Dict[str, str]] = None,
+        model_version: str | None = None,
+        sample: dict[str, str] | None = None,
     ) -> bool:
         """Atomic check-and-record for (decision_class, model,
         finding_id) — F088 atomicity closure.
@@ -682,11 +777,11 @@ class ModelScorecard:
         recorded — idempotent no-op).
         """
         if not finding_id:
-            raise ValueError("finding_id must be non-empty for idempotency")
+            msg = "finding_id must be non-empty for idempotency"
+            raise ValueError(msg)
         if outcome not in ("correct", "incorrect"):
-            raise ValueError(
-                f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
-            )
+            msg = f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
+            raise ValueError(msg)
         with self._with_lock() as data:
             cell = self._ensure_cell(data, model, decision_class)
             seen = cell.setdefault("tool_evidence_finding_ids", [])
@@ -726,17 +821,18 @@ class ModelScorecard:
         returns the cell to data-driven behaviour."""
         if policy_override not in ("auto", "force_short_circuit",
                                     "force_fall_through"):
-            raise ValueError(
+            msg = (
                 f"policy_override must be auto/force_short_circuit/"
                 f"force_fall_through, got {policy_override!r}"
             )
+            raise ValueError(msg)
         with self._with_lock() as data:
             cell = self._ensure_cell(data, model, decision_class)
             cell["policy_override"] = policy_override
 
     def get_stats(
-        self, *, freshness_half_life_days: Optional[float] = None,
-    ) -> List[DecisionClassStats]:
+        self, *, freshness_half_life_days: float | None = None,
+    ) -> list[DecisionClassStats]:
         """Materialise every cell as :class:`DecisionClassStats`.
         Used by the CLI; not the hot path.
 
@@ -745,7 +841,7 @@ class ModelScorecard:
         derives from it (policy / wilson-UB / calls-saved) — reflects the same
         freshness the live gate would apply. Weighted counts are rounded for a
         clean integer display."""
-        out: List[DecisionClassStats] = []
+        out: list[DecisionClassStats] = []
         with self._with_lock(write=False) as data:
             for model, by_dc in (data.get("models") or {}).items():
                 for dc, cell in by_dc.items():
@@ -756,7 +852,7 @@ class ModelScorecard:
 
     def get_stat(
         self, decision_class: str, model: str,
-    ) -> Optional[DecisionClassStats]:
+    ) -> DecisionClassStats | None:
         """Return one cell's stats, or None if absent."""
         with self._with_lock(write=False) as data:
             cell = self._read_cell(data, model, decision_class)
@@ -767,9 +863,9 @@ class ModelScorecard:
     def reset(
         self,
         *,
-        decision_class: Optional[str] = None,
-        model: Optional[str] = None,
-        older_than_days: Optional[int] = None,
+        decision_class: str | None = None,
+        model: str | None = None,
+        older_than_days: int | None = None,
         all_: bool = False,
     ) -> int:
         """Delete cells matching the given criteria.
@@ -783,10 +879,11 @@ class ModelScorecard:
         """
         if (decision_class is None and model is None
                 and older_than_days is None and not all_):
-            raise ValueError(
+            msg = (
                 "reset() requires a filter — pass decision_class, "
                 "model, older_than_days, or all_=True"
             )
+            raise ValueError(msg)
 
         deleted = 0
         with self._with_lock() as data:
@@ -797,7 +894,7 @@ class ModelScorecard:
                 data["models"] = {}
                 return deleted
 
-            cutoff_iso: Optional[str] = None
+            cutoff_iso: str | None = None
             if older_than_days is not None:
                 cutoff = time.time() - older_than_days * 86400
                 cutoff_iso = datetime.fromtimestamp(
@@ -824,11 +921,75 @@ class ModelScorecard:
                     del models[m_key]
         return deleted
 
+    def adopt_unverified(self, source: Path | None = None) -> bool:
+        """Operator-deliberate re-blessing of an unverified sidecar.
+
+        Reads the raw JSON at *source* — default: the quarantine file
+        ``<sidecar>.unverified`` when present, else the sidecar
+        itself — and REPLACES the sidecar's content with it, stamped
+        with this install's integrity token. This is the sanctioned
+        path for keeping genuine pre-MAC calibration history (or a
+        hand-restored backup): the operator asserts trust in the
+        bytes; the machinery never re-stamps unverified content on
+        its own (that would launder a forgery — see the integrity
+        module).
+
+        Returns True when content was adopted; False when there was
+        nothing to adopt (no source file / empty). Raises
+        ``ValueError`` on unparseable JSON or an unusable key (an
+        adoption that cannot be stamped would demote again on the
+        next read — surface that instead of pretending).
+        """
+        import json
+
+        if source is None:
+            quarantine = self.path.with_suffix(
+                self.path.suffix + ".unverified",
+            )
+            source = quarantine if quarantine.exists() else self.path
+        source = Path(source)
+        try:
+            content = source.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return False
+        if not content.strip():
+            return False
+        adopted = json.loads(content)
+        if not isinstance(adopted, dict):
+            msg = (
+                f"cannot adopt {source}: expected a JSON object, got "
+                f"{type(adopted).__name__}"
+            )
+            raise ValueError(msg)
+        if not integrity.key_usable():
+            msg = (
+                "cannot adopt: no usable scorecard MAC key on this "
+                "install — fix the key file first (see the warning in "
+                "the log for the path and remedy)"
+            )
+            raise ValueError(msg)
+        adopted.pop(integrity.TOKEN_KEY, None)
+        version = adopted.get("version")
+        if version is None:
+            _migrate(adopted, 1)
+            adopted["version"] = SCHEMA_VERSION
+        elif version != SCHEMA_VERSION and not _migrate(adopted, version):
+            msg = (
+                f"cannot adopt {source}: unknown schema version "
+                f"{version!r}"
+            )
+            raise ValueError(msg)
+        with self._with_lock() as data:
+            data.clear()
+            data.update(adopted)
+            data.setdefault("models", {})
+        return True
+
     # ----- internals -----
 
     def _read_cell(
-        self, data: Dict, model: str, decision_class: str,
-    ) -> Optional[Dict]:
+        self, data: dict, model: str, decision_class: str,
+    ) -> dict | None:
         """Return the raw cell dict if it exists, else None.
         Caller holds the lock."""
         return (
@@ -838,8 +999,8 @@ class ModelScorecard:
         )
 
     def _ensure_cell(
-        self, data: Dict, model: str, decision_class: str,
-    ) -> Dict:
+        self, data: dict, model: str, decision_class: str,
+    ) -> dict:
         """Return the raw cell dict, creating with defaults if
         absent. Caller holds the lock."""
         models = data.setdefault("models", {})
@@ -885,8 +1046,8 @@ class ModelScorecard:
         return cell
 
     def _cell_to_stats(
-        self, model: str, decision_class: str, cell: Dict,
-        *, freshness_half_life_days: Optional[float] = None,
+        self, model: str, decision_class: str, cell: dict,
+        *, freshness_half_life_days: float | None = None,
     ) -> DecisionClassStats:
         events = {}
         for et in ALL_EVENT_TYPES:
@@ -895,9 +1056,18 @@ class ModelScorecard:
                 wc, wi = weighted_counts(
                     buckets, freshness_half_life_days,
                     datetime.now(timezone.utc))
-                c, i = round(wc), round(wi)
             else:
-                c, i = flatten_counts(buckets)
+                wc, wi = flatten_counts(buckets)
+            # ``flatten_counts`` returns floats (buckets are integer
+            # today; the deferred Phase 4's posterior-weighted updates
+            # will make them fractional, and this read path is already
+            # float-ready). The DecisionClassStats CLI surface stays
+            # int-typed for clean display — round here. Wilson UB
+            # math is invariant under this rounding for cells with
+            # ``total >= 10`` (where the gate fires); pre-gate
+            # ``learning`` cells are unaffected by ±0.5 fractional
+            # rounding in the counts.
+            c, i = round(wc), round(wi)
             events[et] = _EventCounts(correct=c, incorrect=i)
         return DecisionClassStats(
             decision_class=decision_class,
@@ -907,7 +1077,7 @@ class ModelScorecard:
             model_version=cell.get("model_version", ""),
             policy_override=cell.get("policy_override", "auto"),
             events=events,
-            disagreement_samples=list(cell.get("disagreement_samples", [])),
+            disagreement_samples=list(cell.get("disagreement_samples") or []),
             calls=_safe_int(cell.get("calls"), 0),
             cost_usd=_safe_float(cell.get("cost_usd"), 0.0),
             tokens=_safe_int(cell.get("tokens"), 0),
@@ -932,13 +1102,13 @@ class ModelScorecard:
         The ``.lock`` file is never renamed; flock on its inode is
         stable across the lifetime of the scorecard.
         """
-        def __init__(self, scorecard: "ModelScorecard", *, write: bool):
+        def __init__(self, scorecard: ModelScorecard, *, write: bool) -> None:
             self.scorecard = scorecard
             self.write = write
             self.lock_fh = None
-            self.data: Dict = {"version": SCHEMA_VERSION, "models": {}}
+            self.data: dict = {"version": SCHEMA_VERSION, "models": {}}
 
-        def __enter__(self) -> Dict:
+        def __enter__(self) -> dict:
             path = self.scorecard.path
             path.parent.mkdir(parents=True, exist_ok=True)
             # Lock file is a stable-inode sibling. ``a+`` create-if-
@@ -947,6 +1117,14 @@ class ModelScorecard:
             # contents.
             lock_path = path.with_suffix(path.suffix + ".lock")
             self.lock_fh = open(lock_path, "a+", encoding="utf-8")
+            try:
+                return self._enter_under_lock(path, lock_path)
+            except BaseException:
+                self.lock_fh.close()
+                self.lock_fh = None
+                raise
+
+        def _enter_under_lock(self, path, lock_path):
             try:
                 fcntl.flock(
                     self.lock_fh.fileno(),
@@ -957,9 +1135,7 @@ class ModelScorecard:
                 # Log once and proceed lock-free; correctness in that
                 # environment depends on operator running serially.
                 logger.warning(
-                    f"scorecard: flock not available on "
-                    f"{lock_path} — concurrent updates may race "
-                    f"(error: {e})"
+                    "scorecard: flock not available on %s — concurrent updates may race (error: %s)", lock_path, e
                 )
             # Read the data file under lock. May not exist on cold
             # start; treat as empty. Doesn't matter that this is a
@@ -967,7 +1143,7 @@ class ModelScorecard:
             # have exclusive access to the rename-replace dance.
             content = ""
             try:
-                with open(path, "r", encoding="utf-8") as data_fh:
+                with open(path, encoding="utf-8") as data_fh:
                     content = data_fh.read()
             except FileNotFoundError:
                 pass
@@ -975,16 +1151,21 @@ class ModelScorecard:
                 try:
                     import json
                     self.data = json.loads(content)
+                    if not isinstance(self.data, dict):
+                        msg = f"expected dict, got {type(self.data).__name__}"
+                        raise TypeError(msg)
                 except (ValueError, TypeError) as e:
-                    # Corrupt sidecar — degrade gracefully. We do
-                    # NOT raise: a corrupt scorecard should never
-                    # block a scan. Operator can inspect / restore
-                    # via the CLI's reset --all if needed.
                     logger.warning(
-                        f"scorecard: corrupt JSON at {path} — "
-                        f"reading as empty (error: {e})"
+                        "scorecard: corrupt JSON at %s — reading as empty (error: %s)", path, e
                     )
                     self.data = {"version": SCHEMA_VERSION, "models": {}}
+                else:
+                    # Integrity gate: the sidecar steers
+                    # model routing, so forged content must never be
+                    # acted on OR laundered by a re-stamping write.
+                    # Verified against the raw parsed document,
+                    # BEFORE any migration mutates it.
+                    self._check_integrity(path)
             # Schema version guard. Refuse to write back data we
             # don't recognise — better to surface a hard error than
             # silently downgrade.
@@ -1004,16 +1185,67 @@ class ModelScorecard:
                 # Forward-migrate known older versions in memory; the migrated
                 # data is persisted on the next write under the lock we hold.
                 if not _migrate(self.data, existing_version):
-                    raise RuntimeError(
+                    msg = (
                         f"scorecard: schema version mismatch at {path}: "
                         f"file has version={existing_version}, code "
                         f"expects {SCHEMA_VERSION} and has no migration "
                         f"path. Migrate or delete the sidecar to continue."
                     )
+                    raise RuntimeError(msg)
             self.data.setdefault("models", {})
             return self.data
 
-        def __exit__(self, exc_type, exc, tb):
+        def _check_integrity(self, path: Path) -> None:
+            """Verify the parsed sidecar's HMAC token; demote on
+            failure. Caller holds the lock; ``self.data`` is the raw
+            parsed document.
+
+            Three outcomes (rationale in
+            :mod:`core.llm.scorecard.integrity`):
+
+            * verifies — trusted; token stripped (a fresh one is
+              minted on the next write).
+            * fails under a USABLE key — tampered-or-legacy; the
+              content is discarded in memory (merging or re-stamping
+              it would launder a forgery on the first honest write)
+              and, when we hold the write lock, the file is
+              quarantined to ``<sidecar>.unverified`` so the
+              operator can inspect and deliberately re-adopt genuine
+              pre-MAC history via ``scorecard adopt``.
+            * fails under an UNUSABLE key — operator-side condition;
+              content stays readable but ``_last_read_trusted``
+              clamps the trust surface.
+            """
+            token = integrity.extract_token(self.data)
+            if integrity.verify(self.data, token):
+                self.data.pop(integrity.TOKEN_KEY, None)
+                self.scorecard._last_read_trusted = True
+                return
+            if not integrity.key_usable():
+                # Can't verify anything on this install — keep the
+                # data for introspection, clamp the trust surface.
+                self.data.pop(integrity.TOKEN_KEY, None)
+                self.scorecard._last_read_trusted = False
+                return
+            # Usable key, unverified content: quarantine.
+            quarantine = path.with_suffix(path.suffix + ".unverified")
+            if str(path) not in _unverified_warned_paths:
+                _unverified_warned_paths.add(str(path))
+                logger.warning(
+                    "scorecard: %s failed integrity verification (missing or invalid provenance token) — its content will NOT steer model routing. Discarding in memory; the file moves to %s on the next write. If this is genuine pre-MAC history, re-bless it with: raptor-llm-scorecard adopt", path, quarantine
+                )
+            if self.write:
+                try:
+                    import os as _os
+                    _os.replace(path, quarantine)
+                except OSError as e:
+                    logger.warning(
+                        "scorecard: could not quarantine unverified sidecar %s: %s", path, e
+                    )
+            self.data = {"version": SCHEMA_VERSION, "models": {}}
+            self.scorecard._last_read_trusted = True
+
+        def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> Literal[False]:
             try:
                 if exc_type is None and self.write:
                     # Run auto-GC inside the write lock so concurrent
@@ -1029,7 +1261,15 @@ class ModelScorecard:
                     # mode=0o600 — scorecard captures model-routing info,
                     # finding IDs, decision classes, and reasoning samples
                     # that may incidentally include sensitive snippets.
-                    save_json(self.scorecard.path, self.data, mode=0o600)
+                    # Stamped with the integrity token so the next read
+                    # can verify provenance; with no usable
+                    # key the file persists unstamped and every read
+                    # clamps the trust surface instead.
+                    save_json(
+                        self.scorecard.path,
+                        integrity.stamp(self.data),
+                        mode=0o600,
+                    )
             finally:
                 if self.lock_fh is not None:
                     try:
@@ -1050,12 +1290,12 @@ class ModelScorecard:
                     self.lock_fh.close()
             return False
 
-    def _with_lock(self, *, write: bool = True) -> "_LockCtx":
+    def _with_lock(self, *, write: bool = True) -> _LockCtx:
         return ModelScorecard._LockCtx(self, write=write)
 
     # ----- auto-GC -----
 
-    def _maybe_auto_gc(self, data: Dict) -> None:
+    def _maybe_auto_gc(self, data: dict) -> None:
         """Drop stale cells if retention has elapsed since the last
         sweep. Caller MUST hold the write lock.
 
@@ -1106,7 +1346,7 @@ class ModelScorecard:
         # actually got dropped end up in the dict — protected models
         # never appear here even if they would otherwise have been
         # GC candidates.
-        per_model_counts: Dict[str, int] = {}
+        per_model_counts: dict[str, int] = {}
         events_correct = 0
         events_incorrect = 0
         models = data.get("models") or {}
@@ -1144,24 +1384,27 @@ class ModelScorecard:
             # RaptorLogger takes a single pre-formatted message string,
             # not %-style positional args. Build the message here so
             # the log line stays one greppable line.
+            # Round the events totals for display — flatten_counts
+            # returns floats (the deferred Phase 4's calibrated buckets
+            # would contribute fractional values); the log line is purely
+            # informational and integers read more cleanly here. The
+            # underlying cells / on-disk JSON retain their actual fractional
+            # values.
+            ec_display = round(events_correct)
+            ei_display = round(events_incorrect)
             logger.info(
-                f"scorecard auto-GC: dropped {total_dropped} cells "
-                f"across {len(per_model_counts)} deprecated model(s) "
-                f"({per_model_str}); totals: "
-                f"{events_correct + events_incorrect} events purged "
-                f"({events_correct} correct, {events_incorrect} "
-                "incorrect)"
+                "scorecard auto-GC: dropped %s cells across %s deprecated model(s) (%s); totals: %s events purged (%s correct, %s incorrect)", total_dropped, len(per_model_counts), per_model_str, ec_display + ei_display, ec_display, ei_display
             )
 
 
 __all__ = [
-    "ModelScorecard",
-    "EventType",
-    "Policy",
-    "Outcome",
-    "PolicyOverride",
-    "DecisionClassStats",
     "ALL_EVENT_TYPES",
-    "SCHEMA_VERSION",
     "MAX_DISAGREEMENT_SAMPLES",
+    "SCHEMA_VERSION",
+    "DecisionClassStats",
+    "EventType",
+    "ModelScorecard",
+    "Outcome",
+    "Policy",
+    "PolicyOverride",
 ]

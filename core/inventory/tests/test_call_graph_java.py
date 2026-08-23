@@ -245,7 +245,7 @@ def test_resolver_called_against_java_data():
     """Static method call resolves correctly through the
     import map. ``Util.run()`` → ``com.example.Util.run`` →
     matches the OSV-style qualified name."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_java(
         "package x;\n"
@@ -268,7 +268,7 @@ def test_resolver_uncertain_with_class_forname():
     target. The reflective dispatch could be the call;
     UNCERTAIN. (When the chain DOES resolve, the resolver
     returns CALLED — evidence trumps masking.)"""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_java(
         "package x;\n"
@@ -290,7 +290,7 @@ def test_resolver_uncertain_with_class_forname():
 
 
 def test_resolver_not_called_when_function_unused():
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_java(
         "package x;\n"
@@ -311,7 +311,7 @@ def test_resolver_static_import_resolves():
     """``import static x.Y.helper; helper();`` — the static
     import binds the helper name; bare-call resolves to its
     full path."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_java(
         "package x;\n"
@@ -514,7 +514,7 @@ def test_resolver_no_module_level_collision_for_java():
     the other's Util.helper would canonicalise wrong. The fix
     skips the module-level ``<pkg>.<fn>`` candidate for Java
     (which has no module-level functions anyway)."""
-    from core.inventory.reachability import _get_or_build_index
+    from core.analysis.reachability import _get_or_build_index
 
     a = extract_call_graph_java(
         "package com.example.Util;\nclass X { void helper() {} }\n"
@@ -551,7 +551,7 @@ def test_function_called_resolves_java_implicit_this():
     chain-based ``_resolves_to`` path can't see it. The
     receiver_class fast-path on ``function_called`` synthesises
     ``<pkg>.<receiver_class>.<tail>`` and compares to the target."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     cg = extract_call_graph_java(
         "package com.example;\n"
@@ -579,7 +579,7 @@ def test_resolver_cross_file_class_qualified():
     void helper() {} }``. The resolver canonicalises the callee
     to ``com.example.Util.helper`` (class-qualified) and matches
     the internal definition that lives in B."""
-    from core.inventory.reachability import Verdict, function_called
+    from core.analysis.reachability import Verdict, function_called
 
     util = extract_call_graph_java(
         "package com.example;\n"

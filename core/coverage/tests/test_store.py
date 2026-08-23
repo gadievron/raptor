@@ -264,3 +264,31 @@ def test_coverage_store_lock_excludes_other_process(tmp_path):
         assert held.returncode == 3              # mutual exclusion across processes
     released = subprocess.run([sys.executable, str(child)])
     assert released.returncode == 0              # lock dropped on context exit
+
+
+# --- byte budget -----------------------------------------------------------
+
+
+def test_oversize_store_starts_empty(tmp_path, monkeypatch):
+    # A coverage.json over the byte budget (e.g. arriving via a
+    # project-archive import) must not be buffered — the store starts
+    # empty, matching the corrupt-store degrade path.
+    import json
+
+    import core.coverage.store as store_mod
+
+    p = tmp_path / "coverage.json"
+    payload = {"version": 1, "target": "zip:abc123",
+               "files": {}, "padding": "x" * 4096}
+    p.write_text(json.dumps(payload))
+    monkeypatch.setattr(store_mod, "_MAX_STORE_BYTES", 64)
+    s = CoverageStore(p, target="zip:abc123")
+    assert s.to_dict()["files"] == {}
+
+
+def test_store_within_budget_loads(tmp_path):
+    s = _store(tmp_path)
+    s.mark("a.c", 0, 9, "semgrep")
+    s.save()
+    reloaded = CoverageStore(tmp_path / "coverage.json")
+    assert reloaded.covered_lines("a.c") == [[0, 9]]

@@ -12,7 +12,6 @@ every registry kind benefits."""
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
 
 # Stable-semver shapes we accept:
 #   * ``1``, ``1.2``, ``1.2.3``, ``1.2.3.4`` (1-4 part numeric)
@@ -44,7 +43,7 @@ _VARIANT_RE = re.compile(
 )
 
 
-def parse_stable(tag: str) -> Optional[Tuple[int, ...]]:
+def parse_stable(tag: str) -> tuple[int, ...] | None:
     """Return the numeric tuple if ``tag`` is stable-semver, else None.
 
     Tuple ordering matches lexical comparison: ``(1, 17, 21) >
@@ -59,7 +58,7 @@ def parse_stable(tag: str) -> Optional[Tuple[int, ...]]:
 
 def parse_stable_with_variant(
     tag: str,
-) -> Optional[Tuple[Tuple[int, ...], str]]:
+) -> tuple[tuple[int, ...], str] | None:
     """Return ``(version_tuple, variant_suffix)`` for either:
 
       * bare stable semver — ``"3.12"`` → ``((3, 12), "")``
@@ -83,7 +82,7 @@ def parse_stable_with_variant(
     return nums, variant
 
 
-def highest_stable(tags: List[str]) -> Optional[str]:
+def highest_stable(tags: list[str]) -> str | None:
     """Return the highest stable-semver tag from ``tags``, or None
     if no tag matches the stable shape.
 
@@ -91,7 +90,7 @@ def highest_stable(tags: List[str]) -> Optional[str]:
     on None — keeps this function pure / testable without
     exception coupling.
     """
-    stable: List[Tuple[Tuple[int, ...], str]] = []
+    stable: list[tuple[tuple[int, ...], str]] = []
     for tag in tags:
         parts = parse_stable(tag)
         if parts is None:
@@ -103,8 +102,8 @@ def highest_stable(tags: List[str]) -> Optional[str]:
 
 
 def highest_stable_with_variant(
-    tags: List[str], variant: str,
-) -> Optional[str]:
+    tags: list[str], variant: str,
+) -> str | None:
     """Return the highest tag matching ``<stable-semver>-<variant>``
     in ``tags``, or None if no tag with that variant suffix exists.
 
@@ -118,7 +117,7 @@ def highest_stable_with_variant(
     filtered to ``<x>-slim`` shape, finds ``python:3.12-slim``, and
     proposes that.
     """
-    stable: List[Tuple[Tuple[int, ...], str]] = []
+    stable: list[tuple[tuple[int, ...], str]] = []
     for tag in tags:
         parsed = parse_stable_with_variant(tag)
         if parsed is None:

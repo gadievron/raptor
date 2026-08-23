@@ -29,10 +29,24 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 _ON_WORDS = frozenset({"on", "true", "yes", "1", "enable", "enabled"})
 _OFF_WORDS = frozenset({"off", "false", "no", "0", "disable", "disabled"})
+
+_RE_PYPROJECT_PROJECT = re.compile(r"(?m)^\s*\[project\]")
+_RE_PYPROJECT_POETRY = re.compile(r"(?m)^\s*\[tool\.poetry\]")
+_RE_PYPROJECT_SCRIPTS = re.compile(r"(?m)^\s*\[project\.(gui-)?scripts\]")
+_RE_PYPROJECT_POETRY_SCRIPTS = re.compile(r"(?m)^\s*\[tool\.poetry\.scripts\]")
+_RE_SETUP_PACKAGES = re.compile(r"\b(packages|py_modules)\s*=")
+_RE_SETUP_PACKAGES_TOML = re.compile(r"(?m)^\s*packages\s*=")
+_RE_CSPROJ_OUTPUT_TYPE = re.compile(
+    r"<OutputType>\s*([A-Za-z]+)\s*</OutputType>", re.IGNORECASE,
+)
+_RE_CSPROJ_SDK_LIB = re.compile(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk"', re.IGNORECASE)
+_RE_CSPROJ_SDK_APP = re.compile(
+    r'Sdk\s*=\s*"Microsoft\.NET\.Sdk\.(Web|Worker)"', re.IGNORECASE,
+)
 
 # Directories never worth descending for manifests. Mirrors the dir entries of
 # exclusions.DEFAULT_EXCLUDES (kept as a local exact-match frozenset for speed).
@@ -70,7 +84,7 @@ def _rel(p: Path, root: Path) -> str:
         return p.name
 
 
-def _read_text(path: Path) -> Optional[str]:
+def _read_text(path: Path) -> str | None:
     try:
         if path.stat().st_size > _MAX_MANIFEST_BYTES:
             return None
@@ -79,18 +93,18 @@ def _read_text(path: Path) -> Optional[str]:
         return None
 
 
-def _collect_manifests(root: Path) -> Dict[str, List[Path]]:
+def _collect_manifests(root: Path) -> dict[str, list[Path]]:
     """One bounded, vendor-skipping walk that buckets manifest files by kind.
 
     A single walk (rather than one per ecosystem) keeps the cost bounded
     regardless of how many ecosystems are present.
     """
-    out: Dict[str, List[Path]] = {
+    out: dict[str, list[Path]] = {
         "npm": [], "pyproject": [], "setup": [], "csproj": [],
         "composer": [], "pom": [], "gradle": [], "pymain": [],
     }
     seen = 0
-    stack: List[Path] = [root]
+    stack: list[Path] = [root]
     while stack and seen < _MAX_DIRS:
         d = stack.pop()
         seen += 1
@@ -174,16 +188,16 @@ def _check_python(manifests, root):
         app = f"{_rel(manifests['pymain'][0], root)}"
     for p in manifests["pyproject"]:
         text = _read_text(p) or ""
-        if (re.search(r"(?m)^\s*\[project\]", text)
-                or re.search(r"(?m)^\s*\[tool\.poetry\]", text)):
+        if (_RE_PYPROJECT_PROJECT.search(text)
+                or _RE_PYPROJECT_POETRY.search(text)):
             package = package or f"{_rel(p, root)} ([project]/[tool.poetry])"
-        if (re.search(r"(?m)^\s*\[project\.(gui-)?scripts\]", text)
-                or re.search(r"(?m)^\s*\[tool\.poetry\.scripts\]", text)):
+        if (_RE_PYPROJECT_SCRIPTS.search(text)
+                or _RE_PYPROJECT_POETRY_SCRIPTS.search(text)):
             app = app or f"{_rel(p, root)} ([project.scripts])"
     for p in manifests["setup"]:
         text = _read_text(p) or ""
-        if (re.search(r"\b(packages|py_modules)\s*=", text)
-                or re.search(r"(?m)^\s*packages\s*=", text)):
+        if (_RE_SETUP_PACKAGES.search(text)
+                or _RE_SETUP_PACKAGES_TOML.search(text)):
             package = package or f"{_rel(p, root)} (packages=)"
         if "console_scripts" in text or "gui_scripts" in text:
             app = app or f"{_rel(p, root)} (console_scripts)"
@@ -207,7 +221,7 @@ def _check_csharp(manifests, root):
         if text is None:
             continue
         rel = _rel(p, root)
-        m = re.search(r"<OutputType>\s*([A-Za-z]+)\s*</OutputType>", text, re.I)
+        m = _RE_CSPROJ_OUTPUT_TYPE.search(text)
         if m:
             if m.group(1).lower() == "library":
                 lib = lib or f"{rel} (OutputType=Library)"
@@ -216,9 +230,9 @@ def _check_csharp(manifests, root):
             continue
         # No OutputType: bare Microsoft.NET.Sdk defaults to Library; the
         # trailing quote keeps Sdk.Web / Sdk.Worker (apps) from matching.
-        if re.search(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk"', text, re.I):
+        if _RE_CSPROJ_SDK_LIB.search(text):
             lib = lib or f"{rel} (SDK class library)"
-        elif re.search(r'Sdk\s*=\s*"Microsoft\.NET\.Sdk\.(Web|Worker)"', text, re.I):
+        elif _RE_CSPROJ_SDK_APP.search(text):
             app = app or f"{rel} (Web/Worker SDK)"
     if lib and app:
         return ("hybrid", f"C# library {lib} + app {app}")
@@ -266,7 +280,7 @@ def _check_java(manifests, root, has_main):
         text = _read_text(p)
         if text is None:
             continue
-        m = re.search(r"<packaging>\s*([a-z]+)\s*</packaging>", text, re.I)
+        m = re.search(r"<packaging>\s*([a-z]+)\s*</packaging>", text, re.IGNORECASE)
         packaging = m.group(1).lower() if m else "jar"  # Maven default = jar
         if packaging in ("war", "ear"):
             return ("application", f"{_rel(p, root)}: Maven {packaging}")
@@ -285,7 +299,7 @@ def _check_java(manifests, root, has_main):
     return (None, "")
 
 
-def _has_java_main(files_info: Optional[List[Dict[str, Any]]]) -> bool:
+def _has_java_main(files_info: list[dict[str, Any]] | None) -> bool:
     for f in files_info or []:
         if not isinstance(f, dict):
             continue
@@ -299,8 +313,8 @@ def _has_java_main(files_info: Optional[List[Dict[str, Any]]]) -> bool:
 
 def detect_target_kind(
     target_path: str,
-    files_info: Optional[List[Dict[str, Any]]] = None,
-) -> Tuple[str, str]:
+    files_info: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
     """Classify a target as ``library`` | ``hybrid`` | ``application`` |
     ``unknown`` from its package manifests, with a human ``reason``.
 
@@ -330,8 +344,8 @@ def detect_target_kind(
         lambda: _check_php(manifests, root),
         lambda: _check_java(manifests, root, has_main),
     )
-    lib_reasons: List[str] = []
-    app_reasons: List[str] = []
+    lib_reasons: list[str] = []
+    app_reasons: list[str] = []
     for fn in checks:
         try:
             verdict, reason = fn()
@@ -357,15 +371,15 @@ def detect_target_kind(
 
 def detect_library_target(
     target_path: str,
-    files_info: Optional[List[Dict[str, Any]]] = None,
-) -> Tuple[bool, str]:
+    files_info: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
     """Back-compat bool wrapper over :func:`detect_target_kind`. Library mode is
     enabled for ``library`` and ``hybrid`` kinds (both have a consumed API)."""
     kind, reason = detect_target_kind(target_path, files_info)
     return (kind in ("library", "hybrid"), reason)
 
 
-def _kind_from_token(tok: str) -> Optional[Tuple[bool, str]]:
+def _kind_from_token(tok: str) -> tuple[bool, str] | None:
     """Map an operator override token to ``(library_mode_enabled, kind)``, or
     ``None`` for ``auto``/unrecognised (→ fall through to detection).
 
@@ -386,10 +400,10 @@ def _kind_from_token(tok: str) -> Optional[Tuple[bool, str]]:
 
 
 def resolve_library_mode(
-    setting: Union[bool, str, None],
+    setting: bool | str | None,
     target_path: str,
-    files_info: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    files_info: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Resolve the ``treat_exports_as_entries`` setting to a record
     ``{enabled, source, reason, kind}``.
 

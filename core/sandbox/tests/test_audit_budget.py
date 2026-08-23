@@ -39,7 +39,8 @@ def test_categorise_handles_linux_syscall_names():
     """Same coarsening should apply to Linux syscall names so the
     Linux tracer benefits from the same per-cat semantics."""
     cf = audit_budget._default_categorise
-    assert cf("openat") == "file-read-metadata"
+    assert cf("openat") == "file-open"
+    assert cf("stat") == "file-read-metadata"
     assert cf("write") == "file-write"
     assert cf("read") == "file-read-data"
     assert cf("connect") == "network"
@@ -294,6 +295,155 @@ def test_global_cap_fires_when_categories_collectively_exhaust():
     # 5 keep, 3 drop.
     assert sum(1 for d in decisions if d == audit_budget.KEEP) == 5
     assert sum(1 for d in decisions if d == audit_budget.DROP) == 3
+
+
+def test_global_cap_honours_post_cap_sampling():
+    """Once the global cap is hit, records in a sampling-configured
+    category keep flowing at 1-in-N — the documented "evaluated
+    through sampling" contract, matching the category-cap path.
+    Un-sampled categories still drop outright."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=2,
+        pid_cap=1000,
+        category_caps={"network": 100, "process-exec": 100},
+        refill_rates={"network": 0.0, "process-exec": 0.0},
+        sampling_rates={"network": 3},
+        clock=clock,
+    )
+    # Exhaust the global pool on the un-sampled category.
+    for _ in range(2):
+        d, _ = budget.evaluate("execve", pid=1)
+        assert d == audit_budget.KEEP
+    # Un-sampled category: dropped outright past the global cap.
+    d, _ = budget.evaluate("execve", pid=1)
+    assert d == audit_budget.DROP
+    # Sampled category: 1-in-3 kept above the cap, but the trickle
+    # is itself bounded — cumulative sampled keeps <= global_cap (2
+    # here), so the 3rd would-be sampled keep (event 9) is refused.
+    decisions = [budget.evaluate("network-outbound", pid=1)[0]
+                 for _ in range(9)]
+    assert sum(1 for d in decisions if d == audit_budget.KEEP) == 2
+    assert decisions[2] == audit_budget.KEEP
+    assert decisions[5] == audit_budget.KEEP
+    assert decisions[8] == audit_budget.DROP
+
+
+# ---------------------------------------------------------------------
+# Sampled-keep ceiling
+# ---------------------------------------------------------------------
+
+def test_sampled_keep_ceiling_stops_the_trickle():
+    """Post-cap sampled keeps are hard-bounded at global_cap. An
+    over-cap flood produces keeps only until the sampled-keep budget
+    is spent — after that, NO keeps at all, no matter the volume.
+    Pre-fix, JSONL output stayed proportional (1/N) to attacker
+    volume forever despite the documented hard ceiling."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=5,
+        pid_cap=10_000,
+        category_caps={"file-read-metadata": 1},
+        refill_rates={"file-read-metadata": 0.0},
+        sampling_rates={"file-read-metadata": 2},  # 1-in-2 after cap
+        clock=clock,
+    )
+    # One in-bucket keep, then flood: 1-in-2 sampled keeps until the
+    # cumulative sampled-keep count reaches global_cap (5).
+    decisions = [budget.evaluate("file-read-metadata", pid=1)[0]
+                 for _ in range(200)]
+    keeps = sum(1 for d in decisions if d == audit_budget.KEEP)
+    # 1 in-bucket + exactly 5 sampled keeps — never more.
+    assert keeps == 6, f"expected 6 total keeps, got {keeps}"
+    # Everything after the budget is spent is a drop (flood goes
+    # fully dark): in-bucket keep at 0, sampled keeps at 2,4,6,8,10.
+    assert all(d == audit_budget.DROP for d in decisions[11:]), (
+        "over-cap flood must stop producing keeps entirely once the "
+        "sampled-keep budget is spent")
+
+
+def test_sampled_keep_ceiling_is_cross_category():
+    """The ceiling is cumulative across ALL sampled categories — a
+    flood cannot multiply its trickle by cycling category names."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=3,
+        pid_cap=10_000,
+        category_caps={"file-read-metadata": 1, "iokit-open": 1},
+        refill_rates={"file-read-metadata": 0.0, "iokit-open": 0.0},
+        sampling_rates={"file-read-metadata": 2, "iokit-open": 2},
+        clock=clock,
+    )
+    decisions = []
+    for i in range(100):
+        cat = "file-read-metadata" if i % 2 == 0 else "iokit-open"
+        decisions.append(budget.evaluate(cat, pid=1)[0])
+    keeps = sum(1 for d in decisions if d == audit_budget.KEEP)
+    # 2 in-bucket (one per category) + at most 3 sampled keeps total.
+    assert keeps == 5, f"expected 5 total keeps, got {keeps}"
+
+
+def test_sampled_keep_exhaustion_emits_one_marker():
+    """Operators get a one-shot in-band marker when the trickle
+    stops, mirroring the category/PID cap markers."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=2,
+        pid_cap=10_000,
+        category_caps={"file-read-metadata": 1},
+        refill_rates={"file-read-metadata": 0.0},
+        sampling_rates={"file-read-metadata": 2},
+        clock=clock,
+    )
+    markers = []
+    for _ in range(50):
+        _, m = budget.evaluate("file-read-metadata", pid=1)
+        if m is not None:
+            markers.append(m)
+    exhaust = [m for m in markers
+               if m["type"] == "sampling_budget_exceeded"]
+    assert len(exhaust) == 1, (
+        f"expected exactly one sampling-budget marker, got {markers}")
+    assert exhaust[0]["cap"] == 2
+
+
+def test_total_records_emitted_counts_sampled_keeps_exactly():
+    """total_records_emitted = counted keeps + sampled keeps, exact
+    (the sampled-keep counter is bumped at the keep site)."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=100,
+        pid_cap=10_000,
+        category_caps={"file-read-metadata": 2},
+        refill_rates={"file-read-metadata": 0.0},
+        sampling_rates={"file-read-metadata": 3},
+        clock=clock,
+    )
+    kept = 0
+    for _ in range(20):
+        d, _ = budget.evaluate("file-read-metadata", pid=1)
+        if d == audit_budget.KEEP:
+            kept += 1
+    assert budget.total_records_emitted == kept
+    assert budget.total_records == 2  # only in-bucket keeps counted
+
+
+def test_summary_record_reports_sampled_keeps():
+    """The end-of-run audit_summary carries the sampled-keep count so
+    the JSONL volume is fully accounted for."""
+    clock = _FakeClock()
+    budget = audit_budget.AuditBudget(
+        global_cap=100,
+        pid_cap=10_000,
+        category_caps={"file-read-metadata": 1},
+        refill_rates={"file-read-metadata": 0.0},
+        sampling_rates={"file-read-metadata": 2},
+        clock=clock,
+    )
+    for _ in range(9):
+        budget.evaluate("file-read-metadata", pid=1)
+    rec = budget.summary_record()
+    assert rec["sampled_keeps"] == 4  # events 2,4,6,8 of the flood
 
 
 # ---------------------------------------------------------------------

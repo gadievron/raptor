@@ -1,4 +1,4 @@
-"""Log-output sanitisation for untrusted strings.
+r"""Log-output sanitisation for untrusted strings.
 
 When RAPTOR logs a string that may contain attacker-influenced content —
 scanned-repo filenames in argv, subprocess stderr / ASAN bug-type, CONNECT
@@ -12,7 +12,7 @@ escape sequences and other non-printable characters can:
     control bytes inside what the reader expects is one record).
   - Hide evidence from post-incident review by re-rendering log text.
 
-`escape_nonprintable()` replaces such characters with `\\xHH` so downstream
+`escape_nonprintable()` replaces such characters with `\xHH` so downstream
 log consumers see inert, reviewable text. `has_nonprintable()` is the
 predicate form for callers that prefer to reject the input outright (e.g.
 the egress proxy's CONNECT-target parser fails-closed with a 400 Bad
@@ -29,7 +29,7 @@ _STRUCTURAL_WHITESPACE = frozenset(('\n', '\t'))
 
 
 def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
-    """Return `s` with each non-printable character replaced by `\\xHH`.
+    r"""Return `s` with each non-printable character replaced by `\xHH`.
 
     Use this on any string that may contain attacker-influenced content
     before emitting it through `logging` (f-strings in log calls are the
@@ -38,19 +38,46 @@ def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
     Printable characters — including ASCII space and Unicode letters
     with legitimate non-ASCII categories — pass through unchanged.
 
-    When `preserve_newlines` is True, ``\\n`` and ``\\t`` are kept as-is
+    When `preserve_newlines` is True, ``\n`` and ``\t`` are kept as-is
     (they are structural in source code and multi-line prose). All other
     non-printable characters are still escaped.
     """
     if preserve_newlines:
         return "".join(
-            c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else f"\\x{ord(c):02x}"
+            c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else _escape_char(c)
             for c in s
         )
     return "".join(
-        c if c.isprintable() else f"\\x{ord(c):02x}"
+        c if c.isprintable() else _escape_char(c)
         for c in s
     )
+
+
+def sanitise_for_terminal(s: str, *, max_len: int = 256) -> str:
+    """Escape non-printables AND bound length — for attacker-influenced
+    strings interpolated into operator-facing terminal output (e.g. the
+    sandbox live-escalation stderr banners).
+
+    `escape_nonprintable` alone is not enough there: printable content
+    is unbounded (a hostile target can pick a 100 KB "hostname" or path
+    to flood the operator's terminal, or to stuff instructions into a
+    banner an LLM harness may later read), so the escaped string is
+    truncated at `max_len` with an explicit elision marker rather than
+    silently.
+    """
+    out = escape_nonprintable(s)
+    if len(out) > max_len:
+        out = out[:max_len] + f"...[+{len(out) - max_len} chars]"
+    return out
+
+
+def _escape_char(c: str) -> str:
+    o = ord(c)
+    if o <= 0xFF:
+        return f"\\x{o:02x}"
+    if o <= 0xFFFF:
+        return f"\\u{o:04x}"
+    return f"\\U{o:08x}"
 
 
 def has_nonprintable(s: str) -> bool:

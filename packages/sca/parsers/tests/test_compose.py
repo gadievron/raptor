@@ -227,3 +227,15 @@ def test_fragment_file_skipped_quietly(tmp_path, caplog):
         f"fragment compose file emitted WARN: "
         f"{[r.getMessage() for r in warn]}"
     )
+
+
+def test_floating_tags_consistent_across_parsers():
+    # Historically each parser carried its own _FLOATING_TAGS copy and
+    # this test guarded against drift. The classifier now lives once in
+    # models; guard that no parser grows a private variant again.
+    from packages.sca.models import classify_pin_style
+    from packages.sca.parsers import compose, gitlab_ci, kubernetes
+
+    for mod in (compose, kubernetes, gitlab_ci):
+        assert mod._classify_pin_style is classify_pin_style, mod.__name__
+        assert not hasattr(mod, "_FLOATING_TAGS"), mod.__name__

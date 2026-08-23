@@ -1,0 +1,2340 @@
+{
+  "core/analysis/binary_oracle.py::_BOILERPLATE_NAMES": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/analysis/binary_oracle_precision.py::to_dict": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/concepts/compiler.py::to_dict": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/analysis/cfg_builder_cpp.py::_BULK_COPY_FUNCS": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "core/analysis/cfg_conditions.py::keywords": {
+    "count": 29,
+    "kind": "literal"
+  },
+  "core/analysis/peer_groups.py::_NON_DISTINCTIVE_TYPES": {
+    "count": 156,
+    "kind": "literal",
+    "note": "language-primitive / ubiquitous-stdlib TYPE-name stoplist for the L4 type-cohort producer (language taxonomy, not target API names; a type in this set can never define a peer cohort)"
+  },
+  "core/analysis/peer_groups.py::_VERB_PREFIX_RE": {
+    "count": 77,
+    "kind": "alternation"
+  },
+  "core/analysis/reach_witness.py::VERDICTS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::PROFILES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_FRAMEWORK_DISPATCH_TAILS": {
+    "count": 48,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_FRAMEWORK_REGISTRATION_TAILS": {
+    "count": 34,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_JAVA_CLASS_STEREOTYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_JAVA_FRAMEWORK_BASES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_JAVA_METHOD_DISPATCH_ANNOTATIONS": {
+    "count": 36,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_JAVA_SERVLET_METHODS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_PHP_FRAMEWORK_BASES": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_PYTHON_FRAMEWORK_BASES": {
+    "count": 45,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_SAFE_BUILTIN_BASES": {
+    "count": 51,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_TS_CLASS_STEREOTYPE_DECORATORS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/analysis/reachability.py::_TS_METHOD_DISPATCH_DECORATORS": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "core/analysis/reachability_gates.py::DANGEROUS_LIBC_SINKS": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "core/analysis/reachability_gates.py::_CORE_QUERY_SINKS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/analysis/reachability_gates.py::_NEGATION_WORDS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/analysis/sanitizer_cut_postpass.py::to_dict": {
+    "count": 11,
+    "kind": "literal",
+    "note": "enforcement-stats field names (post-pass gate record JSON), not name vocabulary \u2014 same class as the sanitizer_cut_precision to_dict entry"
+  },
+  "core/analysis/sanitizer_cut_precision.py::to_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "precision-report field names (counts/cross-tab keys of the sanitizer-cut gate report JSON), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+  },
+  "core/analysis/summaries.py::to_dict": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/analysis/taint_approx.py::MEMORY_SINKS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_GO_SINKS": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_JAVA_SINKS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_JS_SINKS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_RUST_SINKS": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_extract_callees_go": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_extract_callees_rust": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/analysis/taint_summaries.py::_UNKNOWN_CALLABLES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/analysis/test_discovery.py::_infer_target_functions": {
+    "count": 37,
+    "kind": "literal"
+  },
+  "core/analysis/typestate.py::_BLOCKING_CALLS": {
+    "count": 26,
+    "kind": "literal"
+  },
+  "core/ast/view.py::_CALL_GRAPH_DISPATCH": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/_util.py::_SECURITY_SINK_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/api_boundary.py::_STMT_KEYWORDS": {
+    "count": 13,
+    "kind": "alternation"
+  },
+  "core/audit/asm_zero_len_loop.py::check_zero_length_loop_entry": {
+    "count": 11,
+    "kind": "literal",
+    "note": "structured finding-dict field names (line refs, counter reg, CWE) for the asm zero-length-loop check - not a name vocabulary"
+  },
+  "core/audit/binary_layer0.py::_CALLEE_KEYWORDS": {
+    "count": 40,
+    "kind": "literal",
+    "note": "language-keyword stopwords for callee extraction, not an API vocabulary"
+  },
+  "core/audit/binary_layer0.py::_CHECKED_RETURN_CALLS": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/audit/binary_layer0.py::_COPY_CALLS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/binary_layer0.py::_PRINTF_FAMILY": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/binary_layer0.py::_SECURITY_CRITICAL_ATTR_RE": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/binary_layer0.py::_SENSITIVE_NAME_FRAGMENTS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/binary_layer0.py::_SENSITIVE_STACK_RE": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/block_review.py::_get_dangerous_targets": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/audit/block_sibling_analysis.py::_AUTH_RE": {
+    "count": 16,
+    "kind": "alternation"
+  },
+  "core/audit/block_sibling_analysis.py::_SANITIZER_RE": {
+    "count": 16,
+    "kind": "alternation"
+  },
+  "core/audit/block_sibling_analysis.py::_VALIDATION_RE": {
+    "count": 11,
+    "kind": "alternation"
+  },
+  "core/audit/block_sibling_analysis.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/callsite_consistency.py::_CONDITION_FIELDS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "AST node-type / language-keyword vocabulary (framework mechanics, not target API names)"
+  },
+  "core/audit/callsite_consistency.py::_KEYWORDS": {
+    "count": 78,
+    "kind": "literal"
+  },
+  "core/audit/callsite_consistency.py::_SECURITY_CALLEE_RE": {
+    "count": 44,
+    "kind": "alternation"
+  },
+  "core/audit/cocci_flow.py::_PROSE_VICTIMS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "core/audit/cocci_flow.py::_RETURNING_FNS_HINT": {
+    "count": 11,
+    "kind": "alternation"
+  },
+  "core/audit/compiler_sweep.py::_STOP_WORDS": {
+    "count": 95,
+    "kind": "literal"
+  },
+  "core/audit/concept_discovery.py::_NOISE_WORDS": {
+    "count": 50,
+    "kind": "literal"
+  },
+  "core/audit/condition_adequacy.py::<module>": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/condition_binding.py::_KEYWORDS": {
+    "count": 144,
+    "kind": "literal"
+  },
+  "core/audit/condition_extraction.py::_CALL_TYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/condition_extraction.py::_CONDITIONAL_TYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/condition_extraction.py::_EXIT_TYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/condition_extraction.py::_FUNCTION_TYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/condition_extraction_python.py::_PY_SINKS": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "core/audit/condition_smt.py::_ATOMIC_ACCESSOR_RE": {
+    "count": 22,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_CAST_CONSUMERS": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Go builtin numeric/string conversion names for the bare-cast producer idiom (language taxonomy, not target API names)"
+  },
+  "core/audit/condition_smt.py::_CAST_NARROWING_RE": {
+    "count": 32,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_GO_TYPE_WIDTHS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/condition_smt.py::_SIGNED_TYPES": {
+    "count": 19,
+    "kind": "literal",
+    "note": "C/C++ signed integer type spellings (int, __s32, ptrdiff_t, ...) used to thread operand signedness into the overflow-disproof SMT encoding \u2014 fixed language/kernel-typedef grammar, not a learned API vocabulary"
+  },
+  "core/audit/condition_smt.py::_SIGNED_TYPE_NAMES": {
+    "count": 20,
+    "kind": "literal",
+    "note": "signed C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
+  },
+  "core/audit/condition_smt.py::_TOCTOU_C_CHECKS": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_TOCTOU_C_USES": {
+    "count": 22,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_TOCTOU_GO_USES": {
+    "count": 14,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_TOCTOU_PY_USES": {
+    "count": 13,
+    "kind": "alternation"
+  },
+  "core/audit/condition_smt.py::_TYPE_WIDTHS": {
+    "count": 35,
+    "kind": "literal"
+  },
+  "core/audit/condition_smt.py::_UNSIGNED_TYPE_NAMES": {
+    "count": 14,
+    "kind": "literal",
+    "note": "unsigned C/kernel integer type names for declared-signedness evidence (language taxonomy, not target API names)"
+  },
+  "core/audit/condition_smt.py::memcpy_sinks": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/consistency_dimensions.py::d": {
+    "count": 13,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/consistency_prepass.py::run_consistency_prepass": {
+    "count": 13,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/consistency_verify.py::_HYPOTHESIS_STOPWORDS": {
+    "count": 48,
+    "kind": "literal",
+    "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
+  },
+  "core/audit/context.py::_BUILTIN_TYPES": {
+    "count": 29,
+    "kind": "literal"
+  },
+  "core/audit/context.py::_DANGEROUS_APIS": {
+    "count": 35,
+    "kind": "literal"
+  },
+  "core/audit/context.py::_PATTERN_STOPWORDS": {
+    "count": 43,
+    "kind": "literal"
+  },
+  "core/audit/context.py::_SANITIZER_PATTERNS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/context.py::_SINK_CWE_MAP": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "core/audit/context.py::_build_auto_traces": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/context.py::format_context_for_prompt": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/context.py::trace_entry": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/cost_tracker.py::_KNOWN_PHASES": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/audit/cross_function_verify.py::_VERIFIER_DISPATCH": {
+    "count": 35,
+    "kind": "alternation"
+  },
+  "core/audit/cross_function_verify.py::alloc_sinks": {
+    "count": 16,
+    "kind": "alternation"
+  },
+  "core/audit/cross_function_verify.py::cleanup_patterns": {
+    "count": 17,
+    "kind": "alternation"
+  },
+  "core/audit/cross_function_verify.py::keyword_sinks": {
+    "count": 13,
+    "kind": "alternation"
+  },
+  "core/audit/cross_function_verify.py::skip": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/cwe_dispatch.py::CWE_TO_TOOL_DISPATCH": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/dark_verify/_execute.py::_DANGEROUS_INTERP_FUNCS": {
+    "count": 32,
+    "kind": "literal"
+  },
+  "core/audit/dark_verify/_execute.py::_EXECUTORS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/dark_verify/_prompts.py::_TEMPLATES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/dark_verify/_types.py::_SUPPORTED_LANGS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/dark_verify/_types.py::to_dict": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/edge_obligations.py::build_edge_obligations": {
+    "count": 10,
+    "kind": "literal",
+    "note": "obligation-record field keys (ambiguous, boundary_functions, degraded, dispatch_resolved, ...) \u2014 a serialization schema consumed verbatim by the edge fold and /review, not an API vocabulary"
+  },
+  "core/audit/edge_review.py::gap": {
+    "count": 10,
+    "kind": "literal",
+    "note": "journal field-key names for the edge-obligation gap record (edge_callee*, edge_verdicts, ...) \u2014 a serialization schema, not an API vocabulary; readers and the fold consume these exact keys"
+  },
+  "core/audit/evidence_fusion.py::_extract_concern_key": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/evidence_grade.py::_TOOL_NAMESPACES": {
+    "count": 15,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names); grew to 13 with the five-channel programme's resource_bounds/release_order/protocol_state namespaces"
+  },
+  "core/audit/executor.py::_process_glance_batch": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/fail_open_census.py::_lead_from": {
+    "count": 12,
+    "kind": "literal",
+    "note": "lead receipt-dict field names (schema keys, not a function-name vocabulary)"
+  },
+  "core/audit/fail_open_lang.py::_classify_ignored_return_site": {
+    "count": 10,
+    "kind": "literal",
+    "note": "AST node-type / language-keyword vocabulary (framework mechanics, not target API names)"
+  },
+  "core/audit/fail_open_roles.py::_GUARD_SEMANTICS_RE": {
+    "count": 17,
+    "kind": "alternation",
+    "note": "guard-semantics stem vocabulary for role classification (framework mechanics)"
+  },
+  "core/audit/fail_open_verify.py::_HYPOTHESIS_STOPWORDS": {
+    "count": 44,
+    "kind": "literal",
+    "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
+  },
+  "core/audit/findings_export.py::finding": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/fix_history.py::_GENERIC_CALLEES": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/audit/invariant_gate.py::_ANCHOR_STOPWORDS": {
+    "count": 109,
+    "kind": "literal",
+    "note": "language-keyword / prose stopword list for the G2 structural-anchor matcher \u2014 tokens that anchor NOTHING (keywords, stock types, ubiquitous prose), not an API vocabulary; the anchors themselves come from study receipt quotes"
+  },
+  "core/audit/iris_specs.py::_SECURITY_NAME_PATTERNS": {
+    "count": 47,
+    "kind": "literal"
+  },
+  "core/audit/joern_verify.py::_STOP_WORDS": {
+    "count": 42,
+    "kind": "literal"
+  },
+  "core/audit/layer_resolution.py::_LANGUAGE_PROFILES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/layer_resolution.py::_VALID_EVASION_MECHANISMS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/llm_review.py::REVIEW_SCHEMA": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/audit/llm_review.py::REVIEW_SCHEMA_BLIND": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/llm_review.py::_BUG_CLASS_FIELD": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/audit/llm_review.py::specificity_markers": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/audit/lock_region.py::run_lock_region_prepass": {
+    "count": 10,
+    "kind": "literal",
+    "note": "framework-internal lead-dict keys (not target API names)"
+  },
+  "core/audit/measurement.py::d": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/mechanical_gates.py::_DANGEROUS_CALLS_PYTHON": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "core/audit/mechanical_gates.py::_PRIMITIVE_SAFE_TYPES": {
+    "count": 36,
+    "kind": "literal"
+  },
+  "core/audit/mechanical_gates.py::_UNTRUSTED_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/negative_space.py::_AMR_KEYWORDS": {
+    "count": 17,
+    "kind": "literal",
+    "note": "language keywords / Python builtins excluded from call-name extraction in the auth-mode-registration check - language taxonomy, not target API names"
+  },
+  "core/audit/negative_space.py::_AMR_REGISTRATION_SHAPE_RE": {
+    "count": 15,
+    "kind": "alternation",
+    "note": "wiring-verb and view/api suffix morphology gating auth-mode asymmetry receipts to registration-shaped callees (verb/suffix taxonomy, not target API names)"
+  },
+  "core/audit/negative_space.py::_NON_REENTRANT_CALLS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/negative_space.py::_SIGNAL_UNSAFE_CALLS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/audit/negative_space.py::handler_signals": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/audit/orchestrator.py::_FUNCTION_LOCAL_TOOL_FAMILIES": {
+    "count": 12,
+    "kind": "literal",
+    "note": "RAPTOR's own tool-channel taxonomy (which engines model one function at a time) for the premise-binding gate - internal tool ids, not target API names"
+  },
+  "core/audit/orchestrator.py::_R2_ABI_TABLES": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/orchestrator.py::_REFUTED_CHEAP_CHANNELS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "framework-internal channel-name registry for the refuted-hypothesis cheap re-verification lane (not target API names); grew to 10 when the five-channel programme's resource_bounds/release_order/protocol_state joined"
+  },
+  "core/audit/orchestrator.py::_compute_audit_prep": {
+    "count": 57,
+    "kind": "literal",
+    "note": "prep-result dict keys (channel artifacts join here as they land; not a function-name vocabulary)"
+  },
+  "core/audit/orchestrator.py::_demotion_log_entry": {
+    "count": 10,
+    "kind": "literal",
+    "note": "audit-log demotion record field names (framework record keys, not target API names)"
+  },
+  "core/audit/orchestrator.py::_make_tier_counters": {
+    "count": 34,
+    "kind": "literal"
+  },
+  "core/audit/orchestrator.py::_post_loop_receipt_rescue": {
+    "count": 10,
+    "kind": "literal",
+    "note": "audit-log refutation-gate record field names (framework record keys, not target API names)"
+  },
+  "core/audit/orchestrator.py::_review_items": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/orchestrator.py::study_consumer_thread": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/pattern_completeness.py::exclusion_hints": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/peer_evidence.py::d": {
+    "count": 11,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/pipeline.py::HYPOTHESIS_CLASS_KW": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/postcondition_verify.py::_ENCODER_PATTERNS": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/postcondition_verify.py::_SANITISER_PATTERNS": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/prefilter.py::_AUTH_KEYWORDS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_CONCURRENCY_OPS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_CRYPTO_APIS": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_C_APIS": {
+    "count": 39,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_GO_CALLEES": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_JAVA_CALLEES": {
+    "count": 28,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_JS_CALLEES": {
+    "count": 31,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_LUA_CALLEES": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_MACROS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_PERL_CALLEES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_PHP_CALLEES": {
+    "count": 32,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_DANGEROUS_PY_APIS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_FAMILY_KEYWORDS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_LIFECYCLE_OPS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_SECURITY_SENSITIVE_NAMES": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/audit/prefilter.py::_check_js_patterns": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/prefilter.py::real_calls": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/preprocessor_view.py::_C_KEYWORDS": {
+    "count": 50,
+    "kind": "literal"
+  },
+  "core/audit/prompt_defence.py::_INJECTION_PATTERNS": {
+    "count": 13,
+    "kind": "alternation"
+  },
+  "core/audit/protocol_state.py::run_protocol_state_prepass": {
+    "count": 11,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/protocol_state.py::telemetry": {
+    "count": 10,
+    "kind": "literal",
+    "note": "prepass telemetry record field names (framework record keys, not target API names)"
+  },
+  "core/audit/ptr_lifecycle.py::_HYPOTHESIS_STOPWORDS": {
+    "count": 42,
+    "kind": "literal",
+    "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
+  },
+  "core/audit/ptr_lifecycle.py::run_ptr_lifecycle_prepass": {
+    "count": 13,
+    "kind": "literal",
+    "note": "framework-internal lead-dict keys (not target API names)"
+  },
+  "core/audit/refutation.py::_CALLEE_VULN_PATTERNS": {
+    "count": 17,
+    "kind": "alternation"
+  },
+  "core/audit/refutation.py::_EVENT_LOOP_CALLS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/refutation.py::_KNOWN_RETURN_BOUNDS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/refutation.py::_RESOURCE_LEAK_KW": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/audit/release_order.py::run_release_order_prepass": {
+    "count": 11,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/resource_bounds.py::_HYPOTHESIS_STOPWORDS": {
+    "count": 45,
+    "kind": "literal",
+    "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
+  },
+  "core/audit/resource_bounds.py::run_resource_bounds_prepass": {
+    "count": 11,
+    "kind": "literal",
+    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+  },
+  "core/audit/sandbox_policy.py::_LLM_PHASES": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "core/audit/sandbox_policy.py::_TOOL_POLICIES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/sibling_analysis.py::_STRONG_SANITIZERS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/audit/sibling_analysis.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/sink_heuristics.py::_SIDE_EFFECT_TARGETS": {
+    "count": 34,
+    "kind": "literal"
+  },
+  "core/audit/spec_inference.py::_ATTR_INVARIANTS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/spec_inference.py::_NEGATIVE_KEYWORDS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/strategy.py::_PATH_SIGNALS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/audit/strategy.py::_SOURCE_SIGNALS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/audit/struct_accessor_index.py::_NOISE_FIELDS": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "core/audit/sweep.py::_PROSE_STOP_WORDS": {
+    "count": 51,
+    "kind": "literal"
+  },
+  "core/audit/sweep.py::raw": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/audit/taint_specs.py::_SANITISER_PATTERNS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/audit/taint_specs.py::_SINK_PATTERNS": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/audit/taint_specs.py::_SOURCE_PATTERNS": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "core/audit/taint_specs.py::_THREAT_CLASSES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/transform_sequence.py::_DOUBLE_ENCODE_CLASSES": {
+    "count": 11,
+    "kind": "alternation"
+  },
+  "core/audit/transform_sequence.py::_FUNC_HEADER_RE": {
+    "count": 23,
+    "kind": "alternation"
+  },
+  "core/audit/transform_sequence.py::_SECURITY_TRANSFORM_RE": {
+    "count": 23,
+    "kind": "alternation"
+  },
+  "core/audit/triage.py::_MEM_WRITERS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_ASSIGNMENT_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_CALL_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_CASE_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_ERROR_HANDLER_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_LOOP_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_NULL_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_RETURN_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_STRING_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/ts_extract.py::_SWITCH_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/audit/type_confusion.py::_DESER_APIS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/audit/uninit_detector.py::_COPY_SINKS": {
+    "count": 13,
+    "kind": "alternation"
+  },
+  "core/audit/uninit_detector.py::_COPY_SINK_NAMES": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/validate_bridge.py::_extract_verdict_history": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/audit/value_space_checker.py::_FIELD_NAME_RE": {
+    "count": 31,
+    "kind": "alternation"
+  },
+  "core/audit/value_space_checker.py::to_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "serialization field names, not a name vocabulary"
+  },
+  "core/concepts/audit_bridge.py::_STOPWORDS": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/concepts/contract_pairs.py::_CONTRACT_SPECS": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/concepts/contract_pairs.py::_NOISE_NOUNS": {
+    "count": 53,
+    "kind": "literal"
+  },
+  "core/concepts/lang_resolve.py::_CALL_STOPWORDS": {
+    "count": 36,
+    "kind": "literal"
+  },
+  "core/concepts/lang_resolve.py::_STOP_KEYWORDS": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/concepts/study.py::_RESPONSE_SCHEMA": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/concepts/study.py::_STOP_WORDS": {
+    "count": 91,
+    "kind": "literal"
+  },
+  "core/concepts/study.py::_dedup_study_items": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/config/__init__.py::DANGEROUS_ENV_VARS": {
+    "count": 83,
+    "kind": "literal"
+  },
+  "core/config/__init__.py::LLM_API_KEY_VARS": {
+    "count": 21,
+    "kind": "literal",
+    "note": "LLM credential env vars layered by get_llm_env (provider API keys - infrastructure constants, not a learnable name vocabulary); grew to 21 when AWS_BEARER_TOKEN_BEDROCK joined as a Bedrock selection signal + credential"
+  },
+  "core/config/__init__.py::LLM_ROUTING_ENV_VARS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "LLM transport-routing env vars carried into LLM child envs (backend-selection flags and AWS profile/region names - infrastructure constants, not a learnable name vocabulary); same class as cc_proxy_hosts._PROVIDER_ENV_KEYS"
+  },
+  "core/config/__init__.py::SAFE_ENV_ALLOWLIST": {
+    "count": 28,
+    "kind": "literal"
+  },
+  "core/config/__init__.py::TOOL_DEPS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "tool-dependency registry keys (doctor/banner); crossed the seed threshold when the perl entry (perlasm generated-asm inventory) was added - not a name vocabulary"
+  },
+  "core/container/compose.py::_BUILD_ALLOWED_KEYS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "compose-spec build sub-keys (external standard schema) forming the build-block pass-through ALLOWLIST; static and reviewable by design (see _SERVICE_ALLOWED_KEYS)."
+  },
+  "core/container/compose.py::_SAFE_CAP_ADD": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Linux capability names (Docker's default grant set + SYS_NICE) \u2014 kernel/docker external standard, not project API vocab; security ALLOWLIST whose membership must be static and reviewable, never learned from the scanned target."
+  },
+  "core/container/compose.py::_SERVICE_ALLOWED_KEYS": {
+    "count": 33,
+    "kind": "literal",
+    "note": "compose-spec service keys (external standard schema) forming the sanitizer's pass-through ALLOWLIST; must be static and reviewable \u2014 a learned or data-pack list would let hostile input steer which host-resource keys survive."
+  },
+  "core/container/failures.py::DockerFailureClass": {
+    "count": 11,
+    "kind": "literal",
+    "note": "docker/compose failure-class enum (Literal type): infra failure taxonomy for stderr classification, not target API names"
+  },
+  "core/coverage/registry.py::_REGISTRY": {
+    "count": 23,
+    "kind": "literal"
+  },
+  "core/coverage/store_summary.py::store_view": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/dataflow/extension_pack.py::DEFAULT_SINK_KINDS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "CodeQL models-as-data kind taxonomy (upstream engine-defined sink kind strings, threat-model/MaD spec) \u2014 engine vocabulary like the QL predicate names themselves, not project APIs; learned project names flow through ModelRow validation, never this list"
+  },
+  "core/dataflow/extension_pack.py::DEFAULT_SOURCE_KINDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "CodeQL models-as-data kind taxonomy (upstream engine-defined source kind strings, threat-model/MaD spec) \u2014 engine vocabulary like the QL predicate names themselves, not project APIs; learned project names flow through ModelRow validation, never this list"
+  },
+  "core/dataflow/path_annotator.py::_COMMON_NOISE": {
+    "count": 31,
+    "kind": "literal"
+  },
+  "core/dataflow/sanitizer_cut_parity.py::to_json": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/dataflow/smt_barrier.py::_JAVA_NOT_FUNC": {
+    "count": 12,
+    "kind": "alternation"
+  },
+  "core/dataflow/smt_barrier.py::_JS_NOT_FUNC": {
+    "count": 14,
+    "kind": "alternation"
+  },
+  "core/dataflow/structural_validator.py::_CONDITION_NODE_TYPES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/dataflow/structural_validator.py::_EXTRACTORS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/dockerfile/parser.py::_KNOWN_DIRECTIVES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/env/verify.py::HTTP_REQUEST_KEY_ALIASES": {
+    "count": 14,
+    "kind": "literal",
+    "note": "verify-plan protocol key aliases: LLM/operator spelling -> canonical http_request check field names (schema normalisation, not API vocabulary)"
+  },
+  "core/env/verify.py::TCP_PROBE_KEY_ALIASES": {
+    "count": 15,
+    "kind": "literal",
+    "note": "verify-plan protocol key aliases: LLM/operator spelling -> canonical tcp_probe check field names (schema normalisation, not API vocabulary)"
+  },
+  "core/evidence/__init__.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/inventory/builder.py::inventory": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/inventory/dead_scope.py::_C_NOT_FUNC_NAMES": {
+    "count": 37,
+    "kind": "literal"
+  },
+  "core/inventory/exclusions.py::ROOT_ANCHORED_EXCLUDE_DIRS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/inventory/exclusions.py::_GENERATED_PATH_HINTS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "path-convention tokens corroborating generated-file markers, not API names"
+  },
+  "core/inventory/extractors.py::C_TYPE_HINTS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::KEYWORDS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::_CLASS_TYPES": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::_C_INERT_INIT_TYPES": {
+    "count": 19,
+    "kind": "literal",
+    "note": "tree-sitter C grammar NODE-TYPE allowlist for the constant-macro initializer classifier (parser taxonomy, not target API names; same class as the _NON_DISTINCTIVE_TYPES language-taxonomy entry)"
+  },
+  "core/inventory/extractors.py::_FUNC_TYPES": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::_REGEX_EXTRACTORS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::_TS_PROBE_LANGUAGES": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/inventory/extractors.py::is_class_decl": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/inventory/header_api.py::_EXCLUDE_DIRS": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "core/inventory/header_api.py::_SKIP_NAMES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/inventory/header_functions.py::_SKIP_NAMES": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/inventory/js_lexer.py::_REGEX_PRECEDER_KEYWORDS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "ECMA-262 keywords after which a '/' token lexes as a regex literal (return, case, typeof, ...) \u2014 fixed language grammar for the JS dead-scope lexer, not an API vocabulary"
+  },
+  "core/inventory/languages.py::LANG_DISPLAY": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "core/inventory/macro_resolve.py::_SKIP_IDENTS_C": {
+    "count": 46,
+    "kind": "literal"
+  },
+  "core/inventory/macro_resolve.py::_SKIP_IDENTS_RUST": {
+    "count": 81,
+    "kind": "literal"
+  },
+  "core/inventory/module_load_abort.py::_RB_OPENER": {
+    "count": 10,
+    "kind": "alternation"
+  },
+  "core/inventory/sink_discovery.py::_LANGUAGE_BUILTINS": {
+    "count": 115,
+    "kind": "literal"
+  },
+  "core/inventory/sink_discovery.py::_SOURCE_LEVEL_SINKS": {
+    "count": 141,
+    "kind": "literal"
+  },
+  "core/inventory/sink_discovery.py::_get_call_graph_extractors": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/inventory/translation_view.py::_C_NON_CALL_KW": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/iris/scorecard_bridge.py::TAINT_CLASS_TO_CWE": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/iris/specs.py::_SECURITY_NAME_PATTERNS": {
+    "count": 47,
+    "kind": "literal"
+  },
+  "core/iris/synthesise.py::_SANITISE_KW": {
+    "count": 12,
+    "kind": "alternation"
+  },
+  "core/iris/synthesise.py::_SECURITY_DECISION_KW": {
+    "count": 18,
+    "kind": "alternation"
+  },
+  "core/json/__init__.py::_LAZY_EXPORTS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface"
+  },
+  "core/labeled_attempts/test_store.py::bad_blob": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/labeled_attempts/view.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/llm/cc_probe.py::_SIGNATURE_ENV": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/llm/cc_proxy_hosts.py::_PROVIDER_ENV_KEYS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Claude Code backend-selection env vars (infrastructure constants, not a learnable name vocabulary); grew to 10 when the Bedrock Mantle flag joined the calibration signature"
+  },
+  "core/llm/client.py::flush_usage_to_scorecard": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/llm/dispatcher/auth.py::__init__": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/llm/dispatcher/auth.py::build_rules": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/llm/response_validation.py::_ANALYSIS_WEIGHTS": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "core/llm/response_validation.py::_DATAFLOW_VALIDATION_WEIGHTS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/llm/response_validation.py::_DOMAIN_VALIDATORS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/llm/response_validation.py::_FINDING_RESULT_WEIGHTS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/llm/scorecard/cli.py::_stats_to_json": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/llm/scorecard/scorecard.py::cell": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/llm/tool_use/types.py::reason": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/llm/tool_use/types.py::terminated_by": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/logging/__init__.py::_RESERVED_LOGRECORD_NAMES": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/orchestration/agentic_passes.py::_convert_one_finding": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/orchestration/audit_bridge.py::hypothesis": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/orchestration/context_map_sinks.py::exec_targets": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/orchestration/context_map_sinks.py::shell_targets": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "core/orchestration/frida_validation_bridge.py::_KEYWORDS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/orchestration/understand_bridge.py::entry": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/orchestration/understand_bridge.py::path": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/project/cli.py::_MUTABLE_LIST_FIELDS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/project/cli.py::_SAFE_EDITOR_NAMES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/project/merge.py::_STATUS_RANK": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/project/project.py::to_dict": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/project/report.py::generate_project_report": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/recall/cvefix_manifest.py::fp_twin": {
+    "count": 10,
+    "kind": "literal",
+    "note": "recall-manifest schema field names (fp-only twin dict), not name vocabulary \u2014 same class as the report field-name entries"
+  },
+  "core/recall/score.py::to_dict": {
+    "count": 16,
+    "kind": "literal",
+    "note": "recall-report field names (counts/percentages/lists of the recall measurement JSON), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+  },
+  "core/recall/verify_enforced.py::verify_enforced": {
+    "count": 12,
+    "kind": "literal",
+    "note": "verify-enforced review-record field names, not name vocabulary \u2014 same class as the recall-report field-name entries"
+  },
+  "core/recall/warm.py::apply_would_suppress": {
+    "count": 10,
+    "kind": "literal",
+    "note": "mechanical-warm report field names (raw/warm FP counts, per-CWE rows, damage list), not name vocabulary \u2014 same class as the recall-report field-name entries"
+  },
+  "core/reporting/findings.py::counts": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/reporting/formatting.py::_DISPLAY_NAMES": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/reporting/formatting.py::status_map": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/reporting/scan_coverage.py::_findings_for_tool": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/run/findings.py::_ALLOWED_FIELDS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/run/orchestrated_report_schema.py::SCHEMA": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/run/orchestrated_report_schema.py::_FINDING_SCHEMA": {
+    "count": 23,
+    "kind": "literal"
+  },
+  "core/run/orchestrated_report_schema.py::_ORCHESTRATION_SCHEMA": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/sage/hooks.py::content": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/sage/hooks.py::fields": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/sandbox/_daemon.py::_SAFE_EVAL_NODES": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/sandbox/_daemon.py::_handle_probe": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/sandbox/_daemon.py::_handle_spawn": {
+    "count": 10,
+    "kind": "literal",
+    "note": "RPC reply payload keys (wire shape of the spawn verb, not a name vocabulary)"
+  },
+  "core/sandbox/context.py::_NETWORKED_ALLOWED_KWARGS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/sandbox/context.py::_UNTRUSTED_ALLOWED_KWARGS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "core/sandbox/escalation_signatures.py::ESCAPE_PRIMITIVE_SYSCALLS": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Linux syscall names mirroring seccomp's block sets (drift-pinned by test_escalation_signatures.py::test_escape_primitives_match_seccomp_block_sets) \u2014 kernel ABI vocabulary like the tracer's _NAME_TO_TYPE entry, not project APIs"
+  },
+  "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
+    "count": 23,
+    "kind": "literal"
+  },
+  "core/sandbox/proxy.py::event": {
+    "count": 11,
+    "kind": "literal",
+    "note": "proxy tunnel-event telemetry field names (framework record keys, not target API names)"
+  },
+  "core/sandbox/proxy.py::_PROXY_EVENT_RESULTS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "pinned proxy event-result enum, drift-pinned by the structural test in test_audit_filter.py \u2014 a fixed taxonomy, not learnable vocabulary"
+  },
+  "core/sandbox/seatbelt.py::MACOS_STRICT_MACH_SERVICES": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/sandbox/seccomp.py::_AUDIT_HARD_DENY_SYSCALLS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Linux syscall names (kernel ABI escape primitives kept SCMP_ACT_ERRNO under audit mode), not target API name vocabulary \u2014 fixed security policy, same class as the seccomp blocklists"
+  },
+  "core/sandbox/seccomp.py::_AUDIT_EXTRA_TRACE_SYSCALLS": {
+    "count": 27,
+    "kind": "literal",
+    "note": "Linux syscall names traced under audit mode (open/connect + filesystem-mutation families) \u2014 kernel ABI vocabulary, same class as the seccomp blocklists"
+  },
+  "core/sandbox/seccomp.py::_SECCOMP_BLOCK_ALWAYS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/sandbox/tracer.py::_MUTATION_PATH_ARGS": {
+    "count": 23,
+    "kind": "literal",
+    "note": "kernel syscall ABI path-argument index table for the audit tracer \u2014 fixed kernel taxonomy mirroring _AUDIT_EXTRA_TRACE_SYSCALLS"
+  },
+  "core/sandbox/tracer.py::_NAME_TO_TYPE": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Linux syscall names (POSIX/kernel ABI), permitted like libc vocab"
+  },
+  "core/sarif/import_normalizer.py::_DEPENDENCY_MANIFEST_NAMES": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "core/sarif/import_normalizer.py::_SAST_TOOL_KEYWORDS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/sarif/parser.py::parse_sarif_findings": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "core/schema_constants/__init__.py::MEMORY_CORRUPTION_TYPES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/schema_constants/__init__.py::VULN_TYPES": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "core/schema_constants/__init__.py::VULN_TYPE_ALIASES": {
+    "count": 74,
+    "kind": "literal"
+  },
+  "core/schema_constants/__init__.py::VULN_TYPE_TO_CWE": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/security/cc_trust.py::_COMPREHENSIVE_DANGEROUS_ENV_VARS": {
+    "count": 60,
+    "kind": "literal"
+  },
+  "core/security/prompt_envelope_audit.py::_NON_LLM_CALLS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "core/security/prompt_envelope_audit.py::_UNTRUSTED_ATTRS": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "core/security/redaction.py::_SECRET_QUERY_KEYS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "core/security/report_writer_audit.py::_LLM_DERIVED_KEYS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/security/report_writer_audit.py::_SANITISERS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/security/rule_of_two.py::_CI_ENV_VARS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "core/smt_solver/path_feasibility.py::_CALL_SUMMARIES": {
+    "count": 11,
+    "kind": "literal",
+    "note": "libc/POSIX call-summary axiom table (strlen/abs/min-max family) \u2014 language-runtime names, doctrine-sanctioned hardcoding; project-API summaries must come from learned vocabulary, never this table (enforced by the table comment)"
+  },
+  "core/status/__init__.py::_STATUS_ALIASES": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "core/threat_model/__init__.py::_EVIDENCE_RAW_KEY_ALLOWLIST": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/threat_model/__init__.py::_data_flows_from_context_map": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/threat_model/__init__.py::_threats_from_context_map": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "core/threat_model/__init__.py::to_dict": {
+    "count": 29,
+    "kind": "literal"
+  },
+  "core/trajectories/test_store.py::base": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "core/testing/git_hermeticity.py::GIT_ENV_STRIP": {
+    "count": 17,
+    "kind": "literal",
+    "note": "git-documented environment variable names (identity + repo-redirection family) stripped at test-session start for hermeticity \u2014 an env-var strip-list, not learned API vocabulary"
+  },
+  "core/tuning/__init__.py::_DEFAULTS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "core/tuning/__init__.py::_KEY_COMMENTS": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "core/tuning/__init__.py::_VALID_KEYS": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "libexec/raptor-audit::_run_config_from_args": {
+    "count": 29,
+    "kind": "literal",
+    "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
+  },
+  "libexec/raptor-audit::dispatch": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "libexec/raptor-review::dispatch": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "libexec/raptor-review::known_commands": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "libexec/raptor-run-feasibility::main": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "libexec/raptor-sage::dispatch": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_ALLOC_NAMES": {
+    "count": 31,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_BOUNDS_NAMES": {
+    "count": 29,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_BUILD_INDICATORS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_FREE_NAMES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_INFRA_TYPES": {
+    "count": 41,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_LOCK_NAMES": {
+    "count": 79,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_LOCK_PARAM_RE": {
+    "count": 12,
+    "kind": "alternation"
+  },
+  "libexec/raptor-study-prep::_ORDERING_NAMES": {
+    "count": 41,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_QUALIFIERS": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_RCU_NAMES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_RESOURCE_LIFECYCLE_NAMES": {
+    "count": 38,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_RESOURCE_OPENER_NAMES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_extract_struct_blocks": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::_extract_structural_signals": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "libexec/raptor-study-prep::out_data": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "libexec/raptor-tune::_KEY_ORDER": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "libexec/raptor-understand::_do_hunt": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "libexec/raptor-understand::_do_trace": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "libexec/raptor-validation-helper::_BUILD_SYSTEM_MARKERS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/cli.py::_COMMANDS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/fuzz_suitability.py::assess_fuzz_suitability": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/harness.py::_APP_INGRESS_KINDS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/harness.py::spec": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/ingress.py::to_dict": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/investigation.py::_CLASS_TOKENS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/investigation.py::_rank_classes": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/investigation.py::_rank_surfaces": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/investigation.py::build_investigation": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/macho.py::to_dict": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/manifest.py::to_dict": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/parser_boundary.py::extract_parser_boundaries": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_build_candidate_flows": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_build_entry_points": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_call_graph_edges": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_context_map": {
+    "count": 33,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_decompilation_artifact": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_runtime_input_flows": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::_runtime_parser_flows": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::analyse_blackbox_binary": {
+    "count": 28,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::item": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::method_item": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/pipeline.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/radare2_understand.py::fn_dict": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/radare2_understand.py::to_dict": {
+    "count": 24,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/runtime_evidence.py::load_runtime_evidence": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/topology.py::_boundary_description": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/binary_analysis/validation_handoff.py::build_validation_handoff": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/checker_synthesis/cwe_families.py::_FAMILIES": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/checker_synthesis/library.py::d": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/checker_synthesis/models.py::to_dict": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/checker_synthesis/replay_sweep.py::summary_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "structured summary-report field names (counts/paths for the variant-sweep summary.json), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+  },
+  "packages/coccinelle/runner.py::_COCCI_POS_VAR_DENY": {
+    "count": 59,
+    "kind": "literal"
+  },
+  "packages/codeql/autonomous_analyzer.py::VULNERABILITY_ANALYSIS_SCHEMA": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/codeql/language_detector.py::CODEQL_SUPPORTED": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/codeql/language_detector.py::LANGUAGE_PATTERNS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/codeql/query_runner.py::SECURITY_EXTENDED_SUITES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/codeql/query_runner.py::SECURITY_SUITES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/agent/tools.py::_DEFAULT_FORGE_HOSTS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/cli/bench.py::_SURRENDER_REASONS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/cli/bench.py::_agent_attrs": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/cli/bench.py::outcome_order": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/diffing/shape.py::_NOTES_NAMES": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/diffing/shape.py::_PACKAGING_NAMES": {
+    "count": 31,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/report/markdown.py::_TOOL_INTENT": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/report/markdown.py::_humanize_class": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/cve_env/cve_env/agent/audit.py::AuditStatus": {
+    "count": 15,
+    "kind": "literal",
+    "note": "audit-trail status enum (Literal type) for per-turn agent audit rows, pinned by the classifier test corpus - framework taxonomy, not target API names"
+  },
+  "packages/cve_env/cve_env/agent/audit.py::payload": {
+    "count": 12,
+    "kind": "literal",
+    "note": "audit JSONL record field names (framework record keys, not target API names)"
+  },
+  "packages/cve_env/cve_env/agent/core_loop.py::_TERMINATED_TO_STOP_REASON": {
+    "count": 14,
+    "kind": "literal",
+    "note": "ToolUseLoop terminated_by -> stop_reason translation table between two framework-internal enums the shared _map_status classifier keys on"
+  },
+  "packages/cve_env/cve_env/agent/tools.py::ALL_TOOLS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "JSON-schema required-parameter names inside the dockerfile_gen ToolDef declaration (tool input schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/agent/tools.py::TOOL_NAMES": {
+    "count": 11,
+    "kind": "literal",
+    "note": "the agent's own canonical tool belt (framework tool registry, mirrored by ALL_TOOLS ToolDefs), not target API vocabulary"
+  },
+  "packages/cve_env/cve_env/agent/tools.py::docker_build": {
+    "count": 10,
+    "kind": "literal",
+    "note": "tool-result payload field names returned to the agent as JSON (record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/agent/tools.py::payload": {
+    "count": 10,
+    "kind": "literal",
+    "note": "tool-result payload field names returned to the agent as JSON (record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/cli.py::_STAGE_BY_TOOL": {
+    "count": 22,
+    "kind": "literal",
+    "note": "framework tool-name -> pipeline-stage map for the end-of-run human report; intentionally divergent sibling of config.py::TOOL_TO_STAGE (different value schema/consumer, drift-guarded by test_stage_table_sync.py) - internal taxonomy, not target API names"
+  },
+  "packages/cve_env/cve_env/cli.py::outcome_dict": {
+    "count": 18,
+    "kind": "literal",
+    "note": "outcome-sidecar JSON field names (manual allowlist over Outcome dataclass fields; record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/config.py::TOOL_TO_STAGE": {
+    "count": 21,
+    "kind": "literal",
+    "note": "framework tool-name -> budget-stage map for per-stage cost attribution; intentionally divergent sibling of cli.py::_STAGE_BY_TOOL (uppercase stage schema) - internal taxonomy, not target API names"
+  },
+  "packages/cve_env/cve_env/models.py::OutcomeStatus": {
+    "count": 14,
+    "kind": "literal",
+    "note": "terminal build-outcome status enum (Literal type, includes legacy aliases) - framework failure-class taxonomy, not target API names"
+  },
+  "packages/cve_env/cve_env/tools/docker_compose_up.py::docker_compose_up_payload": {
+    "count": 11,
+    "kind": "literal",
+    "note": "tool-result payload field names returned to the agent as JSON (record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/tools/github_fetch.py::_BUILD_ARTIFACT_BASENAMES": {
+    "count": 25,
+    "kind": "literal",
+    "note": "cross-ecosystem build-manifest basenames (Dockerfile, pom.xml, go.mod, ...) prioritised when listing a repo tree - ecosystem file-name taxonomy, not target API function names"
+  },
+  "packages/cve_env/cve_env/tools/github_fetch.py::github_fetch_payload": {
+    "count": 10,
+    "kind": "literal",
+    "note": "tool-result payload field names returned to the agent as JSON (record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/tools/nvd_lookup.py::nvd_lookup_payload": {
+    "count": 11,
+    "kind": "literal",
+    "note": "tool-result payload field names returned to the agent as JSON (record schema keys, not a name vocabulary)"
+  },
+  "packages/cve_env/cve_env/tools/source_build.py::_BUILD_CONFIG_TO_TYPE": {
+    "count": 11,
+    "kind": "literal",
+    "note": "ecosystem build-config basename -> build-type map (maven/gradle/npm/...) - ecosystem file-name taxonomy, not target API function names"
+  },
+  "packages/describe/package_manager.py::_INSTALL_ADVICE": {
+    "count": 11,
+    "kind": "literal",
+    "note": "host tool binary-name registry keyed to install advice (mirrors the RaptorConfig.TOOL_DEPS binaries), operator environment guidance, not target API vocabulary"
+  },
+  "packages/describe/report.py::doc": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/describe/tool_readiness.py::_BUILD_SYSTEM_DEPS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/analyzer.py::input_funcs": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/analyzer.py::result": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/api.py::WEB_VULN_TYPES": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/api.py::analyze_binary": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/api.py::context": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/api.py::get_primitive_requirements": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/config.py::env_mapping": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/config.py::to_dict": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/constants.py::COMMON_FUNCTIONS": {
+    "count": 23,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/constraints.py::GOOD_FINGERPRINT_SYMBOLS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/finding_mapper.py::_ASSESSORS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/mechanism_coverage.py::MITIGATION_COVERAGE": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/mechanism_techniques.py::available_mechanism_techniques": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/schema.py::CONTEXT_SCHEMA": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/smt_onegadget.py::_X86_64_REGS": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/smt_path.py::validate_path": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/exploit_feasibility/techniques.py::get_technique_requirements": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/agentic.py::finding": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/orchestrator.py::STATUS_DISPLAY": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/orchestrator.py::_run_stage_e": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/orchestrator.py::keyword_map": {
+    "count": 32,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/schemas.py::ATTACK_PATH_SCHEMA": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/schemas.py::ATTACK_TREE_SCHEMA": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/schemas.py::FINDING_SCHEMA": {
+    "count": 47,
+    "kind": "literal"
+  },
+  "packages/exploitability_validation/schemas.py::HYPOTHESIS_SCHEMA": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/exploitation/bootstrap.py::_result": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/exploitation/reporting.py::counts": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/frida/observe_adapter.py::_WRITE_FNS": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/frida/runner.py::payload": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/fuzzing/seed_corpus.py::SENSITIVE_SUBSTRINGS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/hypothesis_validation/adapters/codeql.py::describe": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::C_CPP": {
+    "count": 42,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::GO": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::JAVA": {
+    "count": 26,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::JAVASCRIPT": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::PYTHON": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::STANDARD_SWEEP_SINKS": {
+    "count": 35,
+    "kind": "literal"
+  },
+  "packages/joern/lang_config.py::_PROFILES": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/joern/runner.py::_DANGEROUS_QUERY_PATTERNS": {
+    "count": 12,
+    "kind": "alternation"
+  },
+  "packages/llm_analysis/agent.py::_is_sanitizer": {
+    "count": 14,
+    "kind": "alternation"
+  },
+  "packages/llm_analysis/agent.py::convert_validated_to_agent_format": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/agent.py::report": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/agent.py::result": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/checker_followup.py::load_variant_candidates": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/checker_followup.py::record": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/crash_agent.py::analysis_schema": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/crash_agent.py::slots": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/orchestrator.py::orchestrate": {
+    "count": 34,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/patch_gate.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/prefilter.py::agentic_fp_analysis": {
+    "count": 17,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/prompts/schemas.py::ANALYSIS_SCHEMA": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/prompts/schemas.py::DATAFLOW_VALIDATION_SCHEMA": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/llm_analysis/prompts/schemas.py::FINDING_RESULT_SCHEMA": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/sca/__init__.py::SCA_ALLOWED_HOSTS": {
+    "count": 21,
+    "kind": "literal"
+  },
+  "packages/sca/api.py::_summarise": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/sca/bump/cli.py::_report_to_dict": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/sca/bump/upstream_map.py::_BUILTIN_UPSTREAM_MAP": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/sca/calibration/build.py::output": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/calibration/project_samples.py::_sanitise_findings": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/sca/calibration/refit.py::to_dict": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/sca/cli.py::SUBCOMMANDS": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/sca/conftest.py::_CURATED_POPULAR": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/sca/discovery.py::LOCKFILE_NAMES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/sca/discovery.py::MANIFEST_FILENAMES": {
+    "count": 33,
+    "kind": "literal"
+  },
+  "packages/sca/dockerfile_from.py::_IMAGE_DISCOVERY_EXCLUDE_PARENT_DIRS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/dockerfile_from.py::_RESERVED": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/ecosystems.py::KNOWN_ECOSYSTEMS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/findings.py::_hygiene_finding_to_row": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/findings.py::_license_finding_to_row": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/findings.py::_scan_health_to_row": {
+    "count": 13,
+    "kind": "literal",
+    "note": "findings.json row-schema keys (same class as the other baselined row/to_dict builders), not function-name vocabulary"
+  },
+  "packages/sca/findings.py::_supply_chain_finding_to_row": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/findings.py::_vuln_finding_to_row": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/harden.py::_write_report": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/harden.py::registries": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/llm/triage.py::keep_keys": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/sca/models.py::SupplyChainKind": {
+    "count": 33,
+    "kind": "literal"
+  },
+  "packages/sca/models.py::FLOATING_TAGS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "OCI floating-tag release-channel names (latest/stable/nightly/...), not target API names; single shared copy after the container-parser dedup (previously baselined 3x under packages/sca/parsers/*)."
+  },
+  "packages/sca/osv_offline.py::_BUCKET_NAME": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/sca/parsers/cmake_fetchcontent.py::KEYS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/sca/parsers/gitlab_ci.py::_RESERVED_KEYS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/parsers/gradle_dsl.py::_CONFIG_TO_SCOPE": {
+    "count": 22,
+    "kind": "literal"
+  },
+  "packages/sca/parsers/gradle_lockfile.py::_MAIN_CONFIGS": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/parsers/inline_installs/_arg_version_pins.py::_BUILTIN_ARG_MAP": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "packages/sca/reachability/nodejs.py::_BUILTINS": {
+    "count": 35,
+    "kind": "literal"
+  },
+  "packages/sca/registries/npm.py::_NPM_TOP_STRIP_FIELDS": {
+    "count": 14,
+    "kind": "literal"
+  },
+  "packages/sca/registries/npm.py::_NPM_VERSION_STRIP_FIELDS": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/sca/registries/pypi.py::_PYPI_INFO_STRIP_FIELDS": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/sca/resolvers/__init__.py::sandbox_kwargs": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/risk.py::CONSTANT_BOUNDS": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/sca/risk.py::TUNABLE_CONSTANTS": {
+    "count": 16,
+    "kind": "literal"
+  },
+  "packages/sca/sbom_import.py::_PURL_ECO_MAP": {
+    "count": 15,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/__init__.py::_commit_provenance_to_finding": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/commit_provenance.py::_MANIFEST_FILENAMES": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/composite.py::_FAMILY": {
+    "count": 33,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/sink_vocab.py::SHARED_SUPPLY_CHAIN_SINKS": {
+    "count": 29,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/sink_vocab.py::VERSION_DIFF_EXTRA_SINKS": {
+    "count": 20,
+    "kind": "literal"
+  },
+  "packages/sca/supply_chain/slopsquat.py::_GENERIC_WORDS": {
+    "count": 28,
+    "kind": "literal"
+  },
+  "packages/sca/update.py::_INLINE_INSTALL_CMD_RES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/sca/update.py::_INLINE_SUB_FNS": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/sca/versions/__init__.py::_ECOSYSTEM_ALIASES": {
+    "count": 25,
+    "kind": "literal"
+  },
+  "packages/sca/versions/maven.py::_QUALIFIER_ORDER": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/sca/wheel_compat/wheel_tags.py::_PLATFORM_ARCH_ALIASES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "packages/semgrep/findings.py::to_findings": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/semgrep/models.py::to_dict": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/source_intel/adapter.py::_DYNAMIC_ALLOCATORS_PATTERN": {
+    "count": 24,
+    "kind": "alternation"
+  },
+  "packages/source_intel/adapter.py::_FORTIFIED_WRITE_CALLS": {
+    "count": 30,
+    "kind": "literal"
+  },
+  "packages/source_intel/adapter.py::_MACRO_REGISTERED_SUFFIXES": {
+    "count": 27,
+    "kind": "literal"
+  },
+  "packages/source_intel/analyze.py::_C_KEYWORDS": {
+    "count": 19,
+    "kind": "literal"
+  },
+  "packages/source_intel/analyze.py::_DECORATION_PREFIXES": {
+    "count": 12,
+    "kind": "literal"
+  },
+  "packages/source_intel/analyze.py::_USER_INPUT_VAR_NAMES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/source_intel/measurement.py::main": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/source_intel/render.py::_RELEVANT_SANITIZERS": {
+    "count": 10,
+    "kind": "literal"
+  },
+  "packages/static-analysis/scanner.py::_SEMGREP_LANG_ALIASES": {
+    "count": 11,
+    "kind": "literal"
+  },
+  "core/analysis/_reach_cache.py::_index_to_jsonable": {
+    "count": 15,
+    "kind": "literal",
+    "note": "serializer field manifest for the reachability adjacency cache JSON format (persistence schema keys, not a learned name vocabulary; must stay in lockstep with _index_from_jsonable)"
+  },
+  "core/analysis/_reach_cache.py::_MANDATORY_INDEX_FIELDS": {
+    "count": 15,
+    "kind": "literal",
+    "note": "mandatory-field manifest for the reachability adjacency cache decode gate (same persistence schema keys as _index_to_jsonable; an index missing any of them is a cache miss, not a vocabulary)"
+  },
+  "core/env/build.py::_validate_aux_name": {
+    "count": 17,
+    "kind": "literal",
+    "note": "Linux/OCI image system-directory names an aux build stage must not collide with (filesystem taxonomy, not target API names; same class as the tree-sitter node-type allowlist entry)"
+  },
+  "packages/fuzzing/env_build.py::record": {
+    "count": 11,
+    "kind": "literal",
+    "note": "env-build.json provenance record field names (serialization schema, not name vocabulary \u2014 same class as the enforcement-stats field-names entry)"
+  },
+  "core/audit/caller_contract.py::digest": {
+    "count": 10,
+    "kind": "literal",
+    "note": "result-dict field names of the caller-contract digest (identity, render caps, enumeration-honesty fields), not an API-name vocabulary \u2014 call sites are enumerated from the call graph / tree scan, never name-matched against this list"
+  }
+}

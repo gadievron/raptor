@@ -387,6 +387,38 @@ def test_promoted_skips_vulnerable_versions() -> None:
     assert cand.candidates_rejected_for_cve == 1
 
 
+def test_promoted_records_cleared_advisories() -> None:
+    """cve_cleared answers WHY this pin matters: the advisories on the
+    current version that the promotion clears."""
+    dep = _dep(version="1.0")
+    osv = _FakeOsv(advisories_by_version={
+        "1.0": [_adv("GHSA-old-1"), _adv("GHSA-old-2")],
+        "1.5": [],                      # clean target
+    })
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "promoted"
+    assert cand.cve_cleared == ["GHSA-old-1", "GHSA-old-2"]
+    assert cand.cve_remaining == []
+
+
+def test_degraded_excludes_residuals_from_cleared() -> None:
+    """An advisory still present on the degraded target is remaining,
+    not cleared."""
+    dep = _dep(version="1.0")
+    osv = _FakeOsv(advisories_by_version={
+        "1.0": [_adv("GHSA-shared", "medium"), _adv("GHSA-gone", "medium")],
+        "1.5": [_adv("GHSA-shared", "medium")],
+    })
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "degraded_safety"
+    assert cand.cve_remaining == ["GHSA-shared"]
+    assert cand.cve_cleared == ["GHSA-gone"]
+
+
 # ---------------------------------------------------------------------------
 # Status: review_required
 # ---------------------------------------------------------------------------
@@ -618,7 +650,7 @@ def test_plan_skips_commented_out_deps(
     object.__setattr__(ghost, "commented_out", True)
 
     monkeypatch.setattr(harden_mod, "find_manifests",
-                        lambda _t: [Path("/fake/requirements.txt")])
+                        lambda _t, **_kw: [Path("/fake/requirements.txt")])
     monkeypatch.setattr(harden_mod, "parse_manifest",
                         lambda _m: [real, ghost])
 
@@ -1199,6 +1231,24 @@ def test_report_lists_unsupported_section() -> None:
     assert "**PyPI:pkg**" in text and "Dockerfile" in text
 
 
+def test_report_promoted_shows_cleared_advisories() -> None:
+    """The Promoted section must say WHY the pin matters — the
+    advisories it clears."""
+    import tempfile
+    from packages.sca.harden import _write_report
+    cand = HardenCandidate(
+        ecosystem="PyPI", name="pkg", manifest="requirements.txt",
+        pin_style="exact", from_version="1.0", to_version="1.5",
+        crosses_major=False, status="promoted",
+        cve_cleared=["GHSA-old-1", "GHSA-old-2"],
+    )
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "report.md"
+        _write_report(out, [cand], [], target_kind="application")
+        text = out.read_text()
+    assert "clears GHSA-old-1, GHSA-old-2" in text
+
+
 def test_target_kind_cli_flag_sets_env(monkeypatch) -> None:
     """`raptor-sca fix --harden --target-kind library` sets RAPTOR_TARGET_KIND
     so the in-process detector honours the operator's intent (the same env
@@ -1212,5 +1262,140 @@ def test_target_kind_cli_flag_sets_env(monkeypatch) -> None:
     import os
     from core.config import RaptorConfig
     if args.target_kind != "auto":
-        os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
+        monkeypatch.setenv(RaptorConfig.ENV_TARGET_KIND, args.target_kind)
     assert os.environ.get(RaptorConfig.ENV_TARGET_KIND) == "library"
+
+
+# ---------------------------------------------------------------------------
+# --exclude: operator globs filter the WRITE candidate set
+# ---------------------------------------------------------------------------
+
+def _write_tree_with_fixture_manifest(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A prod requirements.txt at the root plus a deliberately-old
+    fixture pin under tests/fixtures/ — the shape of the self-bump
+    regression (fixture pins are test assertions)."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    prod = target / "requirements.txt"
+    prod.write_text("requests==1.0\n", encoding="utf-8")
+    fixture_dir = target / "tests" / "fixtures"
+    fixture_dir.mkdir(parents=True)
+    fixture = fixture_dir / "requirements.txt"
+    fixture.write_text("requests==0.5\n", encoding="utf-8")
+    return target, prod, fixture
+
+
+def test_plan_exclude_globs_drop_fixture_manifests(tmp_path: Path) -> None:
+    """--exclude '**/tests/**' keeps fixture manifests out of the plan
+    and records them in the excluded-surfaces out-list (reported, never
+    silently truncated)."""
+    from packages.sca.harden import plan
+
+    target, prod, fixture = _write_tree_with_fixture_manifest(tmp_path)
+    excluded: list[str] = []
+    candidates = plan(
+        target=target,
+        registries={"PyPI": _FakeRegistry(["1.0", "1.5"])},
+        osv=_FakeOsv(),
+        offline=False, allow_major=False,
+        exclude=["**/tests/**"],
+        excluded_surfaces=excluded,
+    )
+    manifests = {c.manifest for c in candidates}
+    assert manifests, "prod manifest should still be planned"
+    assert all("tests" not in Path(m).parts for m in manifests)
+    assert len(excluded) == 1
+    assert excluded[0].endswith("tests/fixtures/requirements.txt")
+
+
+def test_plan_without_exclude_is_fully_inclusive(tmp_path: Path) -> None:
+    """No --exclude → the write plan covers EVERY manifest the walker
+    can see, including test-tree ones (test-tree manifests hold real
+    dev dependencies in ordinary repos; exclusion is caller policy)."""
+    from packages.sca.harden import plan
+
+    target, prod, fixture = _write_tree_with_fixture_manifest(tmp_path)
+    excluded: list[str] = []
+    candidates = plan(
+        target=target,
+        registries={"PyPI": _FakeRegistry(["0.5", "1.0", "1.5"])},
+        osv=_FakeOsv(),
+        offline=False, allow_major=False,
+        excluded_surfaces=excluded,
+    )
+    manifests = {Path(c.manifest).relative_to(target.resolve()).as_posix()
+                 for c in candidates}
+    assert "requirements.txt" in manifests
+    assert "tests/fixtures/requirements.txt" in manifests
+    assert excluded == []
+
+
+def test_harden_patch_hunks_respect_exclude(tmp_path: Path) -> None:
+    """End-to-end through _apply + _emit_git_patch: with --exclude, the
+    emitted patch has hunks ONLY for the prod manifest."""
+    import os
+
+    from packages.sca.harden import _apply, plan
+    from packages.sca.update import _emit_git_patch
+
+    target, prod, fixture = _write_tree_with_fixture_manifest(tmp_path)
+    candidates = plan(
+        target=target,
+        registries={"PyPI": _FakeRegistry(["1.0", "1.5"])},
+        osv=_FakeOsv(),
+        offline=False, allow_major=False,
+        exclude=["**/tests/**"],
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    changes = _apply(
+        candidates, target=target, out_dir=out_dir,
+        allow_major_without_review=False, allow_degraded=False,
+    )
+    applied = [c for c in changes if c.skipped_reason is None]
+    assert applied, "prod bump should be applied"
+    prev = Path.cwd()
+    try:
+        os.chdir(target)
+        patch_path, _root = _emit_git_patch(applied, out_dir.resolve())
+    finally:
+        os.chdir(prev)
+    assert patch_path is not None
+    body = patch_path.read_text(encoding="utf-8")
+    assert "requirements.txt" in body
+    assert "tests/fixtures" not in body, (
+        "fixture manifest must not receive patch hunks"
+    )
+    assert "requests==1.5" in body
+    # The fixture pin is untouched on disk too.
+    assert fixture.read_text(encoding="utf-8") == "requests==0.5\n"
+
+
+def test_parse_args_exclude_is_repeatable() -> None:
+    from packages.sca.harden import _parse_args
+    args = _parse_args(["/tmp", "--exclude", "**/tests/**",
+                        "--exclude", "**/fixtures/**"])
+    assert args.exclude == ["**/tests/**", "**/fixtures/**"]
+    assert _parse_args(["/tmp"]).exclude is None
+
+
+def test_print_summary_notes_test_path_writes(capsys, tmp_path: Path) -> None:
+    """Without --exclude, promoted candidates under test/fixture paths
+    draw a one-line informational note (a guardrail, not a skip); with
+    --exclude given the operator has stated policy, so no note."""
+    from packages.sca.harden import _print_summary
+
+    cand = HardenCandidate(
+        ecosystem="PyPI", name="requests",
+        manifest=str(tmp_path / "tests" / "fixtures" / "requirements.txt"),
+        pin_style="exact", from_version="1.0", to_version="1.5",
+        crosses_major=False, status="promoted",
+    )
+    _print_summary([cand], [], tmp_path, target=tmp_path)
+    out = capsys.readouterr().out
+    assert "test/fixture paths" in out and "--exclude" in out
+
+    _print_summary([cand], [], tmp_path, target=tmp_path,
+                   exclude_patterns=["**/unrelated/**"])
+    out = capsys.readouterr().out
+    assert "test/fixture paths" not in out

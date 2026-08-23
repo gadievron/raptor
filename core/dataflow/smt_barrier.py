@@ -8,9 +8,14 @@ FIRST on any case where the fix adds a charset/regex-shaped validator.
 The whoogle archetype is::
 
     name = request.args.get('name')
-    if not re.match(r'^[A-Za-z0-9_.+-]+$', name):
+    if not re.match(r'^[A-Za-z0-9_+-]+$', name):
         return error()
     open(os.path.join(CONFIG_PATH, name))            # CWE-22 sink
+
+(The historical whoogle charset also admitted '.'; the pathtrav danger
+model now includes '.' — '..' segments escape via multi-component
+joins the charset model cannot see — so a dot-admitting charset is
+DECLINED, not SOUND.)
 
 The Tier 2 LLM keeps failing to express that as a CodeQL barrier-guard;
 Z3 dispatches it directly by proving the validator's language and the
@@ -65,11 +70,10 @@ import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
 
 from core.dataflow import sanitizer_cut_config as _sc_config
-from core.smt_solver import z3, z3_available as _z3_available
-
+from core.smt_solver import z3
+from core.smt_solver import z3_available as _z3_available
 
 # --------------------------------------------------------------------------
 # Sink danger model.  Each sink_class maps to the set of characters whose
@@ -80,22 +84,41 @@ from core.smt_solver import z3, z3_available as _z3_available
 # Tier 2.
 # --------------------------------------------------------------------------
 _DANGER_CHARS = {
-    # Path separators are the load-bearing chars for traversal.  Without '/'
-    # (or '\') the value can't escape os.path.join's base directory or name
-    # an absolute path.  Conservative — a lone '..' without separators
-    # resolves to a directory, not an arbitrary file.
-    "pathtrav": ["/", "\\"],
-    # Shell metachars that introduce command separation, substitution, or
-    # backgrounding.  Newlines included because they terminate a command in
-    # most shell contexts.
-    "cmdi":     [";", "|", "&", "$", "`", "\n"],
-    # SQL quote / comment / statement-terminator chars.  Wider than strict
-    # SQLi exploits need (a lone '-' isn't an exploit), so the verdict here
-    # will more often be DECLINED than for pathtrav/cmdi.  Honest scope.
-    "sqli":     ["'", '"', ";", "-"],
-    # XSS tag- and attribute-breakers.  Same fuzziness caveat as SQLi.
-    "xss":      ["<", ">", '"', "'"],
+    # Path separators are the load-bearing chars for traversal, and '.'
+    # builds '..' segments.  Whether a bare '..' (no separator) is
+    # dangerous depends on how the value is joined downstream —
+    # ``join(base, name, "x")`` escapes via name=".." — which the
+    # charset model cannot see, so '.' must be excluded for the
+    # verdict to be sound.
+    "pathtrav": ["/", "\\", "."],
+    # Shell metachars that introduce command separation, substitution,
+    # backgrounding, or redirection.  Newlines included because they
+    # terminate a command in most shell contexts; '<' / '>' because
+    # redirects need no separator (``foo>x`` clobbers x).  Residual
+    # known gap: option injection (a leading '-') is argument-position
+    # dependent and out of scope for a charset model.
+    "cmdi":     [";", "|", "&", "$", "`", "\n", "<", ">"],
+    # SQL quote / comment / statement-terminator chars PLUS the chars
+    # that suffice in an UNQUOTED (numeric) context, where no quote is
+    # needed to change the query: whitespace and grouping/comparison
+    # chars (``1 OR 1``, ``1)--``).  The charset model cannot see the
+    # interpolation context, so both contexts must be covered for the
+    # verdict to be sound.  Digits-only charsets remain provably safe.
+    "sqli":     ["'", '"', ";", "-", " ", "\t", "\n", "\r",
+                 "=", "(", ")"],
+    # XSS tag- and attribute-breakers PLUS unquoted-attribute-context
+    # injectors: whitespace and '=' add new attributes without any of
+    # <>"' (``x onmouseover=...``), '`' breaks IE-legacy attributes.
+    "xss":      ["<", ">", '"', "'", " ", "\t", "\n", "=", "`"],
 }
+
+
+def danger_chars_for(sink_class: str):
+    """Public read of the per-class danger model (None for unknown
+    classes). Finite-set consumers (the collection-membership guard)
+    decide per element with the same chars the regex-intersection
+    proof uses — the finite-language specialisation of one model."""
+    return _DANGER_CHARS.get(sink_class)
 
 
 # --------------------------------------------------------------------------
@@ -119,7 +142,6 @@ class ValidatorSpec:
     var_name: str                   # the variable the validator constrains
     charset: str = ""               # kind=="charset": whole-string allowed chars
     source_line: str = ""           # the literal diff `+` line for diagnostics
-    diff_line_offset: int = 0       # position within the diff hunk (for tests)
     forbidden: str = ""             # kind=="charset_sub": stripped-out chars
 
 
@@ -137,13 +159,13 @@ class Tier0Status(str, Enum):
 class Tier0Result:
     status: Tier0Status
     reasoning: str
-    spec: Optional[ValidatorSpec] = None
-    counterexample: Optional[str] = None
+    spec: ValidatorSpec | None = None
+    counterexample: str | None = None
     # Pre-formatted spec string suitable to persist in the synth_results
     # ``barrier_query`` column.  Populated only on SOUND; lets the bridge
     # store a self-describing artifact (`smt:charset:[A-Za-z0-9_.+-]@app.py:429`)
     # without callers re-formatting.
-    artifact: Optional[str] = None
+    artifact: str | None = None
     extras: dict = field(default_factory=dict)
 
 
@@ -180,11 +202,26 @@ _STR_LITERAL = (
 # `re.match(pattern, var)` or `re.fullmatch(pattern, var)`.  Captures the
 # string literal verbatim (with its quotes/prefix) so the anchor analysis
 # can be exact.
+#
+# The call must CLOSE right after the var (`\s*\)`).  Pre-fix the match
+# was an open prefix, so a third ``flags`` argument was silently
+# accepted: with ``re.MULTILINE``, ``$`` in ``^[chars]+$`` becomes a
+# LINE anchor and the real validator passes any string whose FIRST line
+# conforms while smuggling arbitrary danger content after a newline
+# (``'abc\n; rm -rf /'``) — yet the Z3 model still treated the pattern
+# as a whole-string charset and proved SOUND.  Other flags mis-model
+# too (``re.IGNORECASE`` widens the accepted set, ``re.VERBOSE``
+# changes the parse), and a method-call suffix (``var.strip()``)
+# validates a DIFFERENT value than the one the chain check tracks to
+# the sink.  No supported flag is modeled, so any suffix refuses the
+# spec-lift (Tier 2 takes the case).  The Ruby extractor refuses
+# line-anchored guards for exactly this hazard.
 _RE_MATCH_CALL = _re.compile(
     r"re\.(?:match|fullmatch)\s*\(\s*"
     rf"(?P<pat>{_STR_LITERAL})"
     r"\s*,\s*"
     r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\s*\)"
 )
 
 # `^[chars]+$` / `^[chars]*$` inside a captured string literal.  The body
@@ -210,6 +247,12 @@ _FULLMATCH_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]$")
 #      different danger char.
 #   3. Pattern body is a single `[...]+` or `[...]*` character class
 #      (same shape as the allowlist case, just used inversely).
+#   4. The call CLOSES right after the input argument.  ``re.sub``
+#      takes optional ``count`` and ``flags`` — a trailing
+#      ``count=1`` strips only the FIRST occurrence (the "every
+#      forbidden char removed" claim breaks), and flags change the
+#      pattern semantics.  Same suffix-blindness hazard as
+#      _RE_MATCH_CALL above.
 _RE_SUB_REBIND = _re.compile(
     r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
     r"re\.sub\s*\(\s*"
@@ -218,6 +261,7 @@ _RE_SUB_REBIND = _re.compile(
     r"(?:''|\"\")"                    # empty replacement, strictly
     r"\s*,\s*"
     r"(?P=var)"                       # same identifier on the RHS
+    r"\s*\)"
 )
 
 # Body of the `[...]` charset inside a re.sub pattern.  Quantifier optional
@@ -271,22 +315,33 @@ _JAVA_GUARD = _re.compile(
 )
 
 # Ruby — `return|raise … unless <var> =~ /^[chars]+$/`
+# Ruby anchors: ^ and $ are ALWAYS line anchors (Onigmo has no flag
+# that changes this; /m only alters `.`), so /^[chars]+$/ passes any
+# string containing ONE conforming line — "safe\n../../etc/passwd"
+# satisfies the guard while smuggling the danger characters on another
+# line. Only \A...\z proves whole-string membership (\Z would readmit
+# the trailing-newline hazard). Line-anchored Ruby guards therefore
+# never lift; the fix author must use \A\z for the proof to hold.
+# The trailing ``(?![a-zA-Z])`` refuses regex-literal FLAGS after the
+# closing ``/`` — ``/\A[a-z]+\z/i`` (IGNORECASE) accepts characters
+# outside the modeled set; none of Onigmo's flags are modeled, so any
+# flagged literal declines the spec-lift (same suffix-blindness
+# doctrine as _RE_MATCH_CALL).
 _RUBY_GUARD_UNLESS = _re.compile(
     r"(?:return|raise)\b[^\n]*?\s+unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
-    r"/\^\[(?P<chars>[^\]]+)\][+*]\$/"
+    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
 )
-# Ruby — `return|raise … if <var> !~ /^[chars]+$/`
+# Ruby — `return|raise … if <var> !~ /\A[chars]+\z/`
 _RUBY_GUARD_IF_NOT_MATCH = _re.compile(
     r"(?:return|raise)\b[^\n]*?\s+if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
-    r"/\^\[(?P<chars>[^\]]+)\][+*]\$/"
+    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
 )
 
 
 def _strip_string_literal(raw: str) -> str:
     """Strip Python string-literal quoting (and the `r` prefix) from a
     token captured by ``_RE_MATCH_CALL``.  Returns the inner regex body."""
-    if raw.startswith("r"):
-        raw = raw[1:]
+    raw = raw.removeprefix("r")
     if len(raw) >= 2 and raw[0] in ("'", '"') and raw[-1] == raw[0]:
         return raw[1:-1]
     return raw
@@ -311,17 +366,22 @@ def _strip_string_literal(raw: str) -> str:
 # Rejecting any alphabetic backslash escape sidesteps the whole class
 # of bugs.  Callers that want to model ``[\\d]`` properly will need a
 # richer extractor — Tier 2 takes those cases for now.
-_ALPHA_BACKSLASH_ESCAPE = _re.compile(r"\\[A-Za-z]")
+#
+# Digits are rejected for the same reason: inside a char class Python
+# reads ``\\1`` as an OCTAL escape (chr(1)), which our literal-char
+# extractor would misread as the character ``'1'`` — a modeled
+# language disjoint from the real one.
+_ALPHA_BACKSLASH_ESCAPE = _re.compile(r"\\[A-Za-z0-9]")
 
 
 def _charset_body_is_safe(body: str) -> bool:
-    """Reject character-class bodies our literal-char extractor would
+    r"""Reject character-class bodies our literal-char extractor would
     misread:
 
       * **Negation** (``[^chars]``) — inverts the language and would
         need entirely different proof semantics.  Currently silently
         misread as a literal ``^`` plus the chars.
-      * **Regex shorthand classes** (``\\d``, ``\\W``, ...) — see
+      * **Regex shorthand classes** (``\d``, ``\W``, ...) — see
         ``_ALPHA_BACKSLASH_ESCAPE`` above.
     """
     if not body or body.startswith("^"):
@@ -329,23 +389,7 @@ def _charset_body_is_safe(body: str) -> bool:
     return _ALPHA_BACKSLASH_ESCAPE.search(body) is None
 
 
-def _unescape_charclass(chars: str) -> str:
-    """Strip backslash escapes from a regex character-class body.
-
-    Inside ``[...]`` only ``]``, ``\\``, and a leading ``^`` need real
-    escaping; other escape sequences (``\\!``, ``\\@``, ...) are
-    unnecessary but legal, and the unescaped character is what the
-    pattern actually matches.  Stripping them gives us the true
-    member-set of the class.
-
-    Used by the ``re.sub`` extractor where authors often over-escape
-    (e.g. Gerapy's
-    ``'[\\!\\@\\#\\$\\;\\&\\*\\~\\"\\'\\{\\}\\]\\[\\-\\+\\%\\^]+'``).
-    """
-    return _re.sub(r"\\(.)", r"\1", chars)
-
-
-def _try_charset_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_charset_validator(line: str) -> ValidatorSpec | None:
     """Match the whole-string `re.match`/`re.fullmatch` over `^[chars]+$`
     pattern.  Returns ``None`` on no match so the caller can try other
     extractors."""
@@ -362,11 +406,11 @@ def _try_charset_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
         return None
     return ValidatorSpec(
         kind="charset", var_name=var_name, charset=cs.group(1),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_charset_sub_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_charset_sub_validator(line: str) -> ValidatorSpec | None:
     """Match the ``x = re.sub('[forbidden]+', '', x)`` rebind pattern.
     Returns ``None`` on no match."""
     m = _RE_SUB_REBIND.search(line)
@@ -376,15 +420,17 @@ def _try_charset_sub_validator(line: str, offset: int) -> Optional[ValidatorSpec
     cs = _SUB_CHARSET.match(pattern)
     if not cs or not _charset_body_is_safe(cs.group(1)):
         return None
-    forbidden = _unescape_charclass(cs.group(1))
+    # Store the RAW class body: _expand_charset_body is the single
+    # escape interpreter.  Unescaping here and expanding later double-
+    # processes the body — a stored ``\\`` swallows the following char
+    # (``[/\\.]`` lost the backslash from the forbidden set).
     return ValidatorSpec(
         kind="charset_sub", var_name=m.group("var"),
-        forbidden=forbidden, source_line=line.strip(),
-        diff_line_offset=offset,
+        forbidden=cs.group(1), source_line=line.strip(),
     )
 
 
-def _try_jsts_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_jsts_validator(line: str) -> ValidatorSpec | None:
     """JS / TS guard-and-exit shapes.  Single regex match implies both
     the validator and its exit-on-fail are on the line — dominance is
     established by the diff itself."""
@@ -393,29 +439,34 @@ def _try_jsts_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_java_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
+def _try_java_validator(line: str) -> ValidatorSpec | None:
     """Java ``String.matches`` guard-and-exit shape."""
     m = _JAVA_GUARD.search(line)
     if m is None or not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
-def _try_ruby_validator(line: str, offset: int) -> Optional[ValidatorSpec]:
-    """Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes."""
+def _try_ruby_validator(line: str) -> ValidatorSpec | None:
+    r"""Ruby ``unless x =~ /…/`` and ``if x !~ /…/`` guard shapes.
+
+    Only ``\A[chars]+\z``-anchored patterns lift — Ruby ``^``/``$``
+    are line anchors, so a line-anchored guard does not bound the whole
+    string (see the anchor note on the guard regexes above).
+    """
     m = _RUBY_GUARD_UNLESS.search(line) or _RUBY_GUARD_IF_NOT_MATCH.search(line)
     if m is None or not _charset_body_is_safe(m.group("chars")):
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(), diff_line_offset=offset,
+        source_line=line.strip(),
     )
 
 
@@ -433,7 +484,33 @@ _LANG_EXTRACTORS = {
 }
 
 
-def extract_validator(fix_diff: str, language: str = "python") -> Optional[ValidatorSpec]:
+def extractor_languages() -> frozenset:
+    """Languages the mechanical validator extractor supports."""
+    return frozenset(_LANG_EXTRACTORS)
+
+
+def extract_validator_from_line(
+    line: str, language: str = "python",
+) -> ValidatorSpec | None:
+    """Run the per-``language`` extractor table on ONE source line.
+
+    Shared by the fix-diff scanner below and the live-finding
+    injection prescreen (core.dataflow.injection_prescreen), which
+    lifts validators from dataflow-path step lines instead of diff
+    ``+`` lines. First matching extractor wins; None when the line
+    carries no recognised validator shape.
+    """
+    extractors = _LANG_EXTRACTORS.get(language)
+    if not extractors:
+        return None
+    for try_fn in extractors:
+        spec = try_fn(line)
+        if spec is not None:
+            return spec
+    return None
+
+
+def extract_validator(fix_diff: str, language: str = "python") -> ValidatorSpec | None:
     """Scan the fix diff for a recognised mechanical validator pattern.
 
     Iterates every line starting with ``+`` (excluding the ``+++`` file
@@ -450,17 +527,14 @@ def extract_validator(fix_diff: str, language: str = "python") -> Optional[Valid
     """
     if not fix_diff:
         return None
-    extractors = _LANG_EXTRACTORS.get(language)
-    if not extractors:
+    if language not in _LANG_EXTRACTORS:
         return None
-    for offset, raw in enumerate(fix_diff.splitlines()):
+    for raw in fix_diff.splitlines():
         if not raw.startswith("+") or raw.startswith("+++"):
             continue
-        line = raw[1:]
-        for try_fn in extractors:
-            spec = try_fn(line, offset)
-            if spec is not None:
-                return spec
+        spec = extract_validator_from_line(raw[1:], language)
+        if spec is not None:
+            return spec
     return None
 
 
@@ -535,12 +609,12 @@ def _block_always_exits(body: list) -> bool:
     return False
 
 
-def _function_containing(tree: ast.AST, line: int) -> Optional[ast.AST]:
+def _function_containing(tree: ast.AST, line: int) -> ast.AST | None:
     """Smallest-range FunctionDef / AsyncFunctionDef containing ``line``,
     or None.  "Smallest range" so nested functions resolve to the inner
     one, matching the semantics of "same function" we want for dominance."""
-    best: Optional[ast.AST] = None
-    best_size: Optional[int] = None
+    best: ast.AST | None = None
+    best_size: int | None = None
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             start = node.lineno
@@ -560,10 +634,7 @@ def _block_uses_raise(body: list) -> bool:
     the sink — soundness requires checking the surrounding context."""
     if not body:
         return False
-    for stmt in body:
-        if isinstance(stmt, ast.Raise):
-            return True
-    return False
+    return any(isinstance(stmt, ast.Raise) for stmt in body)
 
 
 def _line_in_try_body_with_catching_handler(
@@ -634,15 +705,15 @@ def _validator_block_exits_on_failure(
                 return False
             # If the exit is `raise` and we're inside a catching try,
             # the raise gets caught — decline.
-            if (_block_uses_raise(failure_body)
-                    and _line_in_try_body_with_catching_handler(
-                        tree, validator_line)):
-                return False
-            return True
+            return not (
+                _block_uses_raise(failure_body)
+                and _line_in_try_body_with_catching_handler(
+                    tree, validator_line)
+            )
     return False
 
 
-def find_validator_line(source_text: str, spec: ValidatorSpec) -> Optional[int]:
+def find_validator_line(source_text: str, spec: ValidatorSpec) -> int | None:
     """Locate the validator's 1-based line number in the post-fix source
     text.  Matches by the stripped line-text the extractor saved on the
     spec; first occurrence wins (multiple matches are unusual and any of
@@ -705,9 +776,10 @@ def _variable_reassigned_between(
         targets: list = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
-            targets = [node.target]
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
+        elif isinstance(
+            node,
+            (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor),
+        ):
             targets = [node.target]
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
@@ -791,18 +863,17 @@ def lexical_fallback_status() -> dict:
             "data."
         ),
         "mode": _sc_config.current().mode,
-        "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
     }
 
 
 def _maybe_record_parity(
     *,
     kind: str,
-    file_path: Optional[str],
+    file_path: str | None,
     validator_line: int,
     sink_line: int,
-    cwe: Optional[str],
-    language: Optional[str],
+    cwe: str | None,
+    language: str | None,
     lexical_suppressed: bool,
 ) -> None:
     """Phase 15 shadow telemetry. When a parity-log path is configured
@@ -842,19 +913,52 @@ def _maybe_record_parity(
             value_bound_verdict=verdict,
         )
         append_parity_record(log_path, record)
-    except Exception:                                       # noqa: BLE001
-        # Telemetry is best-effort; swallow everything.
+    except OSError:
+        # Telemetry is best-effort; append_parity_record already
+        # swallows write failures, so only residual filesystem errors
+        # remain legitimate. A TypeError from a drifted record-builder
+        # signature must propagate, not vanish.
         pass
+
+
+def _record_value_bound_audit(finding, result) -> None:
+    """Record-only audit bridge: write the value-bound gate's verdict
+    to ``suppressions.jsonl`` under the configured audit dir
+    (``sanitizer_cut_config.audit_dir`` — set by the consuming
+    command's ``--sanitizer-cut on|strict`` + run dir).
+
+    Always ``enforce=False``: the sanitizer-cut witness has not earned
+    hard-suppression on the zero-false-suppress corpus
+    (``libexec/raptor-sanitizer-cut-precision``), so every record
+    carries ``dropped: false`` — evidence for the operator, never a
+    drop. Best-effort: telemetry must not break a run.
+    """
+    try:
+        audit = _sc_config.audit_dir()
+        if not audit:
+            return
+        from pathlib import Path as _Path
+
+        from core.analysis.sanitizer_cut import (
+            record_sanitizer_cut_suppression,
+        )
+        record = dict(finding)
+        record.setdefault("line", finding.get("sink_line"))
+        record_sanitizer_cut_suppression(
+            _Path(audit), record, result, enforce=False,
+        )
+    except Exception:                                       # noqa: BLE001
+        return
 
 
 def _value_bound_dominates(
     *,
-    file_path: Optional[str],
+    file_path: str | None,
     validator_line: int,
     sink_line: int,
-    cwe: Optional[str],
-    language: Optional[str],
-):
+    cwe: str | None,
+    language: str | None,
+) -> bool | None:
     """Phase 7 of the value-binding arc — wire ``validator_dominates_sink``
     and ``substitution_dominates_sink`` through the value-bound gate.
 
@@ -870,7 +974,8 @@ def _value_bound_dominates(
     * ``None``  → "consult lexical fallback." Returned when the
       value-bound gate is disabled (``off`` / ``shadow`` mode), the
       resolver can't normalise the finding (missing kwargs, file
-      unreadable, function not found, non-python language, …), or the
+      unreadable, function not found, or a language without a
+      resolver leg — python, c/c++, and java are wired), or the
       gate's verdict was ``candidate_only`` (control-flow holds but
       value binding unproven).
 
@@ -883,11 +988,11 @@ def _value_bound_dominates(
     if not (file_path and cwe and language):
         return None
 
-    from core.inventory.finding_resolver import (
+    from core.analysis.finding_resolver import (
         ResolvedFinding,
         resolve_finding,
     )
-    from core.inventory.sanitizer_cut import (
+    from core.analysis.sanitizer_cut import (
         VERDICT_NO_SUPPRESS,
         VERDICT_SUPPRESS,
         evaluate_finding,
@@ -911,6 +1016,16 @@ def _value_bound_dominates(
         resolved = resolve_finding(finding)
         if not isinstance(resolved, ResolvedFinding):
             return None
+        java_text = None
+        if resolved.language == "java" and file_path:
+            # The constant-definers pre-check folds over the file's
+            # AST; an unreadable file skips that check, never the gate.
+            try:
+                java_text = Path(file_path).read_text(
+                    encoding="utf-8", errors="replace",
+                )
+            except OSError:
+                java_text = None
         result = evaluate_finding(
             resolved.cfg,
             [resolved.source_node],
@@ -919,9 +1034,17 @@ def _value_bound_dominates(
             language=resolved.language,
             source_symbols=resolved.source_symbols,
             sink_arg=resolved.sink_arg,
+            # Phase 14 resolver contract: inter-procedural synthetic
+            # sanitizer bindings must reach the gate, and the parity
+            # shadow path already passes them — omitting them here made
+            # the production gate evaluate DIFFERENT bindings than the
+            # telemetry used for the strict-promotion decision.
+            extra_bindings=resolved.inter_proc_bindings,
+            java_source_text=java_text,
         )
     except Exception:                                       # noqa: BLE001
         return None
+    _record_value_bound_audit(finding, result)
     if result.verdict == VERDICT_SUPPRESS:
         return True
     if result.verdict == VERDICT_NO_SUPPRESS:
@@ -938,9 +1061,9 @@ def validator_dominates_sink(
     validator_line: int,
     sink_line: int,
     *,
-    file_path: Optional[str] = None,
-    cwe: Optional[str] = None,
-    language: Optional[str] = None,
+    file_path: str | None = None,
+    cwe: str | None = None,
+    language: str | None = None,
 ) -> bool:
     """Sound dominance for the ``kind="charset"`` form — whole-string
     allowlist guarded by an ``if``-statement.
@@ -1103,10 +1226,7 @@ def _crosses_function_boundary(
         return False
     lines = source_text.splitlines()
     # lines is 0-indexed; validator/sink are 1-indexed lines.
-    for ln in lines[validator_line:sink_line - 1]:
-        if pat.search(ln):
-            return True
-    return False
+    return any(pat.search(ln) for ln in lines[validator_line:sink_line - 1])
 
 
 def _collect_target_names(target: ast.AST, names: set) -> None:
@@ -1120,6 +1240,30 @@ def _collect_target_names(target: ast.AST, names: set) -> None:
             _collect_target_names(elt, names)
     elif isinstance(target, ast.Starred):
         _collect_target_names(target.value, names)
+
+
+def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
+    """True when a string-building operator expression inside ``value``
+    combines a chain member with a non-chain :class:`ast.Name`.
+
+    Covers ``BinOp`` (``+`` concatenation and ``%`` formatting) and
+    f-strings (``JoinedStr``).  Call-ARGUMENT mixing
+    (``os.path.join(BASE, name)``) is deliberately NOT flagged: the
+    chain's documented contract accepts derivations through calls
+    (the whoogle archetype), and distinguishing a module constant
+    from a tainted local inside an argument list needs real taint
+    tracking — Tier 2's job.  Operator mixing is the shape the
+    charset proof actually breaks on: the concatenated non-chain
+    operand's characters reach the sink unvalidated.
+    """
+    for sub in ast.walk(value):
+        if isinstance(sub, (ast.BinOp, ast.JoinedStr)):
+            names = {
+                n.id for n in ast.walk(sub) if isinstance(n, ast.Name)
+            }
+            if (names & chain) and (names - chain):
+                return True
+    return False
 
 
 def _python_chain_reaches_sink(
@@ -1142,42 +1286,145 @@ def _python_chain_reaches_sink(
 
     Chain growth: any Assign/AnnAssign/AugAssign between validator and
     sink whose RHS references a chain variable adds its target name(s)
-    to the chain.  Conservative w.r.t. control flow (every assignment
-    is treated as reachable) — soundness for the Tier 0 verdict still
-    rests on the SMT proof + the dominance check; this is just the
-    soundness layer that the validator's constraint applies to what
-    reaches the sink.
+    to the chain — UNLESS the RHS operator-mixes taint
+    (:func:`_operator_mixes_taint`): ``cmd = name + raw`` combines the
+    validated ``name`` with the unvalidated ``raw``, so ``cmd`` never
+    joins the chain (and a chain-member target is killed).  Mixing
+    through call ARGUMENTS is not modeled (see the helper's docstring).
+
+    Chain KILL: an assignment whose target is a chain member and whose
+    RHS references NO chain member REBINDS that variable to a fresh
+    value — the validator's constraint no longer applies to it.
+    Without the kill, ``y = name; y = request.args.get('raw')`` left
+    ``y`` "validated" at the sink and the Tier 0 verdict suppressed a
+    live flow.  Assignments are processed in source order (single
+    forward pass) so a later rebind wins over earlier derivation;
+    loop-carried back-edges are not modeled, which can only SHRINK the
+    chain (fewer SOUND verdicts — the conservative direction).
+
+    Conservative w.r.t. control flow (every assignment is treated as
+    reachable) — soundness for the Tier 0 verdict still rests on the
+    SMT proof + the dominance check; this is the soundness layer that
+    the validator's constraint applies to what reaches the sink.
     """
     chain: set = {start_var}
-    # Iterate multiple passes — a derived variable assigned later might
-    # itself feed a still-later assignment.  Fixed point on a small
-    # chain is cheap (at most ~function-line-count iterations).
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+    assigns = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+        and validator_line <= (getattr(node, "lineno", None) or 0) <= sink_line
+        and node.value is not None
+    ]
+    assigns.sort(key=lambda n: (n.lineno, n.col_offset))
+    for node in assigns:
+        rhs_names = {
+            n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)
+        }
+        targets = (list(node.targets) if isinstance(node, ast.Assign)
+                   else [node.target])
+        target_names: set = set()
+        for t in targets:
+            _collect_target_names(t, target_names)
+        # The validator line's own assignment BINDS the validated
+        # value (``abs_path = safe_join(...)``, ``x = re.sub(...)``) —
+        # it must not be treated as a rebind of the start variable.
+        at_validator = node.lineno == validator_line
+        if isinstance(node, ast.AugAssign):
+            # ``x += rhs`` mixes the old value with the RHS.  It never
+            # ADDS to the chain (the old target value may be
+            # unvalidated), and it kills a chain member when the RHS
+            # references any non-chain name (the mixed-in data is not
+            # covered by the validator's constraint).
+            if rhs_names - chain and not at_validator:
+                chain -= target_names
+            continue
+        if chain & rhs_names:
+            if _operator_mixes_taint(node.value, chain):
+                # Taint mixing on a plain Assign: a string-building
+                # operator expression (``cmd = name + raw``, an
+                # f-string interpolating both) combines a chain
+                # member with a non-chain name.  The target carries
+                # PARTIALLY-unvalidated data, so it must never join
+                # the chain — and if it was a member, it stops being
+                # one.  Pre-fix any RHS referencing at least one
+                # chain member added the target as fully validated,
+                # so the Tier 0 SOUND verdict suppressed the live
+                # ``raw``→sink flow (the AugAssign form already
+                # killed; the Assign spelling of the same mix did
+                # not).
+                if not at_validator:
+                    chain -= target_names
                 continue
-            node_line = getattr(node, "lineno", None) or 0
-            if not (validator_line <= node_line <= sink_line):
+            chain |= target_names
+        elif not at_validator:
+            # Rebind from non-chain RHS: the target no longer carries
+            # the validated value.
+            chain -= target_names
+    if not chain:
+        return False
+    return any(_re.search(rf"\b{_re.escape(var)}\b", sink_line_text) for var in chain)
+
+
+def _lexical_var_reaches_sink(
+    var: str, source_text: str, validator_line: int,
+    sink_line: int, sink_line_text: str,
+) -> bool:
+    r"""AST-free analogue of ``_python_chain_reaches_sink``'s rebind-KILL,
+    for languages without a parsed tree (JS/TS/Java).
+
+    Returns ``True`` iff ``var`` appears at the sink line AND is not
+    rebound between the validator and the sink. Previously the non-Python
+    path was a bare ``\bvar\b`` match at the sink with NO rebind-KILL
+    (a204f309): ``x = validate(raw); x = req.query.evil; sink(x)`` left
+    ``x`` "validated" at the sink and the charset prescreen suppressed a
+    live flow. A reassignment ``var = <expr not referencing var>`` between
+    validator and sink rebinds it to a value the validator never
+    constrained, so it must KILL the reach.
+
+    Compound assignments (``var += rhs`` and the other ``op=`` forms,
+    including JS logical assignment ``||= &&= ??=``) MIX new data into
+    the validated value; they KILL the reach whenever the RHS
+    references any identifier other than ``var`` itself — the mixed-in
+    operand's characters were never covered by the validator's charset
+    proof.  Pre-fix ``\bvar\b\s*=(?!=)`` matched only the plain
+    ``=`` spelling, so ``x += req.query.evil`` slid past the
+    rebind-KILL entirely (the lexical analogue of the AugAssign mixing
+    kill the AST path already had).  Identifier detection does not
+    strip string literals, so ``x += ".cfg"`` also kills — extra
+    conservatism in the sound direction.
+
+    Conservative by design: it detects reassignments lexically and errs
+    toward KILL (declining the suppression → the finding falls through to
+    LLM validation), which is the sound direction for a false-negative
+    fix. Member/index writes (``var.f = …``, ``var[i] = …``) and
+    comparisons (``==``/``!=``/``<=``/``>=``) do not count as rebinds.
+    Residual (documented): the self-referencing plain-assign mix
+    ``x = x + evil`` still passes — the AST path covers it for Python;
+    modelling it lexically without breaking ``x = validate(x)`` needs
+    a parser.
+    """
+    if not _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
+        return False
+    lines = source_text.splitlines()
+    assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
+    compound_re = _re.compile(
+        rf"\b{_re.escape(var)}\b\s*"
+        r"(?:[-+*/%&|^]|<<|>>|\*\*|\|\||&&|\?\?)=(?!=)"
+    )
+    self_re = _re.compile(rf"\b{_re.escape(var)}\b")
+    ident_re = _re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+    for lineno in range(validator_line + 1, sink_line):
+        if 1 <= lineno <= len(lines):
+            text = lines[lineno - 1]
+            m = compound_re.search(text)
+            if m:
+                rhs_idents = set(ident_re.findall(text[m.end():]))
+                if rhs_idents - {var}:
+                    return False  # compound assign mixes taint -> KILL
                 continue
-            value = node.value
-            if value is None:
-                continue
-            rhs_names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
-            if not (chain & rhs_names):
-                continue
-            targets = (list(node.targets) if isinstance(node, ast.Assign)
-                       else [node.target])
-            before = len(chain)
-            for t in targets:
-                _collect_target_names(t, chain)
-            if len(chain) > before:
-                changed = True
-    for var in chain:
-        if _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
-            return True
-    return False
+            m = assign_re.search(text)
+            if m and not self_re.search(text[m.end():]):
+                return False  # rebind from a non-self RHS -> KILL
+    return True
 
 
 def substitution_dominates_sink(
@@ -1186,9 +1433,9 @@ def substitution_dominates_sink(
     sink_line: int,
     var_name: str,
     *,
-    file_path: Optional[str] = None,
-    cwe: Optional[str] = None,
-    language: Optional[str] = None,
+    file_path: str | None = None,
+    cwe: str | None = None,
+    language: str | None = None,
 ) -> bool:
     """Sound dominance for ``kind="charset_sub"`` — assignment-form
     sanitizer (``x = re.sub('[forbidden]+', '', x)``).
@@ -1252,24 +1499,72 @@ def _lexical_substitution_dominates(
 # SMT: regex-intersection emptiness.
 # --------------------------------------------------------------------------
 
+def _iter_charclass_atoms(body: str):
+    r"""Tokenize a Python `[...]` char-class body into literal chars and
+    ascending ``(lo, hi)`` ranges, interpreting a backslash escape on
+    EITHER range endpoint.
+
+    Yields ``("lit", ch)`` and ``("range", lo, hi)`` tuples.  This is
+    the single range/escape interpreter shared by :func:`_charclass_to_re`
+    (allowlist Z3 model) and :func:`_expand_charset_body` (forbidden-set
+    expansion) — pre-fix each had its own parse and BOTH misread an
+    escaped range endpoint as literals: for body ``\--z`` the escape
+    branch consumed ``\-`` and the remaining ``-z`` read as two
+    literals, so the modeled language was ``{'-','z'}`` while Python's
+    real semantics for ``[\--z]`` are the RANGE 0x2D..0x7A (which
+    includes ``/ . ; < > =`` — every pathtrav/cmdi/xss danger char).
+    Z3 then proved the under-approximated language disjoint from the
+    danger set and returned SOUND for a validator that in reality
+    accepts the danger chars — attacker-controlled self-suppression
+    of live findings via an innocuous-looking guard.
+
+    A DESCENDING range (``z-a``) is a compile-time ``re.error`` in
+    Python — the guard would never run; treat it as three literals
+    (same doctrine both consumers already used).
+
+    Alphabetic/digit escapes (``\d``, ``\2``…) never reach this
+    tokenizer: :func:`_charset_body_is_safe` rejects those bodies.
+    """
+    i, n = 0, len(body)
+
+    def _atom(j: int) -> tuple[str, int]:
+        if body[j] == "\\" and j + 1 < n:
+            return body[j + 1], j + 2
+        return body[j], j + 1
+
+    while i < n:
+        first, after = _atom(i)
+        if after < n and body[after] == "-" and after + 1 < n:
+            second, after2 = _atom(after + 1)
+            if ord(first) <= ord(second):
+                yield ("range", first, second)
+            else:
+                yield ("lit", first)
+                yield ("lit", "-")
+                yield ("lit", second)
+            i = after2
+            continue
+        yield ("lit", first)
+        i = after
+
+
 def _charclass_to_re(chars: str):
     """Build a Z3 regex matching ONE char from a Python `[...]` body
-    (literal chars and `a-z` ranges).  Limited to the syntax our extractor
-    captures — escapes and `\\d`-style metachars are out of scope for the
-    first cut."""
+    (literal chars and `a-z` ranges, escapes allowed on either range
+    endpoint via the shared tokenizer).  ``\\d``-style metachars are
+    out of scope — the body-safety gate rejects them upstream."""
     alts = []
-    i, n = 0, len(chars)
-    while i < n:
-        if i + 2 < n and chars[i + 1] == "-":
-            alts.append(z3.Range(chars[i], chars[i + 2]))
-            i += 3
+    for tok in _iter_charclass_atoms(chars):
+        if tok[0] == "range":
+            alts.append(z3.Range(tok[1], tok[2]))
         else:
-            alts.append(z3.Re(z3.StringVal(chars[i])))
-            i += 1
+            alts.append(z3.Re(z3.StringVal(tok[1])))
+    if not alts:
+        return None
     return z3.Union(*alts) if len(alts) > 1 else alts[0]
 
 
-def _danger_re(danger: List[str]):
+def _danger_re(danger: list[str]):
     """Regex for strings containing any danger char: ``.*[danger].*``."""
     rs = z3.ReSort(z3.StringSort())
     anystr = z3.Star(z3.AllChar(rs))
@@ -1283,39 +1578,63 @@ def _danger_re(danger: List[str]):
 @dataclass
 class _ProofVerdict:
     sound: bool
-    counterexample: Optional[str]
+    counterexample: str | None
     reasoning: str
+
+
+# Widest code-point span a single ``X-Y`` range may expand to.  Real
+# sanitizer charsets are ASCII-sized; without a cap, one attacker-shaped
+# range in a fix diff (space to U+10FFFF) materializes a ~1.1M-element
+# set.  Over-cap ranges are treated as three literals — that UNDER-
+# approximates the forbidden set, which can only push the charset_sub
+# verdict toward DECLINED (sound direction; Tier 2 takes the case).
+_RANGE_EXPANSION_CAP = 1024
 
 
 def _expand_charset_body(body: str) -> set:
     """Expand a regex char-class body like ``A-Za-z0-9_.+-`` into the
     finite set of characters it matches.
 
-    Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` and literal chars;
-    everything else (including ``X-Y`` where ``X`` and ``Y`` aren't in
-    range-ascending order — would silently drop chars under a naive
-    ``range(ord(X), ord(Y)+1)``) is treated as three separate literals.
+    Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` (spanning at most
+    :data:`_RANGE_EXPANSION_CAP` code points, escapes allowed on either
+    endpoint via the shared tokenizer) and literal chars; everything
+    else (descending ranges — a compile-time ``re.error`` in Python —
+    and over-cap ranges) is treated as three separate literals.
     """
     out: set = set()
-    i, n = 0, len(body)
-    while i < n:
-        if (i + 2 < n and body[i + 1] == "-"
-                and ord(body[i]) <= ord(body[i + 2])):
-            for cp in range(ord(body[i]), ord(body[i + 2]) + 1):
-                out.add(chr(cp))
-            i += 3
+    for tok in _iter_charclass_atoms(body):
+        if tok[0] == "range":
+            lo, hi = tok[1], tok[2]
+            if ord(hi) - ord(lo) <= _RANGE_EXPANSION_CAP:
+                for cp in range(ord(lo), ord(hi) + 1):
+                    out.add(chr(cp))
+            else:
+                out.update((lo, "-", hi))
         else:
-            out.add(body[i])
-            i += 1
+            out.add(tok[1])
     return out
 
 
-def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _ProofVerdict:
+def _prove_charset(
+    spec: ValidatorSpec, sink_class: str, danger: list[str],
+    timeout_ms: int | None = None,
+) -> _ProofVerdict:
     """Z3 regex-intersection emptiness for whole-string anchored allowlists."""
     name = z3.String("name")
     char_re = _charclass_to_re(spec.charset)
+    if char_re is None:
+        return _ProofVerdict(
+            True, None,
+            "empty charset — validator rejects all input",
+        )
     validator_re = z3.Plus(char_re)
     s = z3.Solver()
+    if timeout_ms:
+        # Hard per-query bound for callers on a latency budget (the
+        # live-finding prescreen). Timeout surfaces as z3 `unknown`,
+        # which the caller below already treats as "declining" — a
+        # timed-out proof can never read as SOUND.
+        s.set("timeout", timeout_ms)
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
     r = s.check()
     if r == z3.unsat:
@@ -1327,7 +1646,10 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _
     if r == z3.sat:
         try:
             ce = s.model()[name].as_string()
-        except Exception:
+        except (AttributeError, z3.Z3Exception):
+            # Unconstrained var: model()[name] is None (no .as_string),
+            # or Z3 refuses the conversion — verdict stands without a
+            # printable counterexample.
             ce = None
         return _ProofVerdict(
             False, ce,
@@ -1339,7 +1661,7 @@ def _prove_charset(spec: ValidatorSpec, sink_class: str, danger: List[str]) -> _
 
 
 def _prove_charset_sub(
-    spec: ValidatorSpec, sink_class: str, danger: List[str],
+    spec: ValidatorSpec, sink_class: str, danger: list[str],
 ) -> _ProofVerdict:
     """Finite-set inclusion for ``x = re.sub('[forbidden]+', '', x)``.
 
@@ -1368,9 +1690,9 @@ def _prove_charset_sub(
             f"{sink_class} danger char {danger!r} -> validator provably "
             f"neutralises {sink_class}",
         )
-    # Stable counterexample pick — sort so the message is deterministic
-    # across runs (sets have no order).
-    ce = sorted(missing)[0]
+    # Stable counterexample pick — deterministic across runs (sets
+    # have no order).
+    ce = min(missing)
     return _ProofVerdict(
         False, ce,
         f"set inclusion fails: re.sub strips [{spec.forbidden}]+ but "
@@ -1378,7 +1700,10 @@ def _prove_charset_sub(
     )
 
 
-def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
+def prove_neutralizes(
+    spec: ValidatorSpec, sink_class: str,
+    timeout_ms: int | None = None,
+) -> _ProofVerdict:
     """Dispatch on ``spec.kind`` to the appropriate sound proof:
 
       * ``charset``     -> Z3 regex-intersection emptiness
@@ -1387,6 +1712,10 @@ def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
     Either way, SOUND verdicts are real mathematical proofs of
     language neutralisation; SAT/missing-element verdicts carry a
     concrete counterexample input.
+
+    ``timeout_ms`` bounds the Z3 query (charset kind only —
+    finite-set inclusion is constant-time); ``None`` keeps the
+    unbounded patch-verification behaviour.
     """
     danger = _DANGER_CHARS.get(sink_class)
     if danger is None:
@@ -1395,7 +1724,7 @@ def prove_neutralizes(spec: ValidatorSpec, sink_class: str) -> _ProofVerdict:
             f"no danger model for sink_class={sink_class!r}",
         )
     if spec.kind == "charset":
-        return _prove_charset(spec, sink_class, danger)
+        return _prove_charset(spec, sink_class, danger, timeout_ms=timeout_ms)
     if spec.kind == "charset_sub":
         return _prove_charset_sub(spec, sink_class, danger)
     return _ProofVerdict(
@@ -1448,7 +1777,7 @@ def try_tier0(
             spec=spec,
         )
     try:
-        source_text = src_path.read_text(errors="replace")
+        source_text = src_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
@@ -1536,9 +1865,9 @@ def try_tier0(
                 chain_tree, spec.var_name, line, sink_line, sink_line_text,
             )
     else:
-        var_reaches = bool(_re.search(
-            rf"\b{_re.escape(spec.var_name)}\b", sink_line_text,
-        ))
+        var_reaches = _lexical_var_reaches_sink(
+            spec.var_name, source_text, line, sink_line, sink_line_text,
+        )
     if not var_reaches:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

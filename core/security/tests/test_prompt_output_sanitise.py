@@ -115,3 +115,136 @@ def test_code_caps_length():
 def test_code_default_cap_is_generous():
     s = sanitise_code("x" * 5000)
     assert len(s) == 5000
+
+
+# ---------------------------------------------------------------------------
+# Regression: zero-width chars between markdown heading chars
+# ---------------------------------------------------------------------------
+
+
+def test_zwj_between_markdown_heading_chars_stripped_before_defang():
+    """Zero-width joiner (U+200D) between two '#' chars at line start.
+
+    Before the fix: _strip_autofetch_markup ran AFTER _LINE_LEAD_MD_RE.sub,
+    so the ZWJ prevented the regex from seeing '##' (it saw '#\\u200d#'
+    which doesn't match the [#] character class grouping), and the heading
+    markup survived into the output.
+
+    After the fix: _strip_autofetch_markup runs FIRST, stripping the
+    invisible char, then _LINE_LEAD_MD_RE correctly matches '##' and
+    defangs it.
+    """
+    # U+200D = zero-width joiner; inserted between two '#' chars.
+    payload = "#‍# heading"
+    result = sanitise_string(payload, max_chars=500)
+    # Both heading chars must be removed by the defanging regex.
+    assert "#" not in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: block-structure forgery in report-bound strings
+# ---------------------------------------------------------------------------
+# sanitise_string only defanged line-LEADING inline control chars;
+# setext heading underlines, `---` rules, and table rows survived into
+# rendered reports (audit-report.md / agentic findings), letting a
+# coaxed LLM string forge document structure (headings, metric tables)
+# in operator-facing markdown. Payload shapes pinned from the battery
+# repros (S05 reasoning-setext / reasoning-table-forge; S07 setext-eq /
+# setext-dash).
+
+import re as _re
+
+
+def test_setext_equals_underline_neutralised():
+    out = sanitise_string("x\nZOUT SETX\n=====")
+    assert not _re.search(r"(?m)^ZOUT SETX\n=+$", out)
+    assert "ZOUT SETX" in out  # prose survives, structure dies
+
+
+def test_setext_dash_underline_neutralised():
+    out = sanitise_string("ZOUT SETD\n---")
+    assert not _re.search(r"(?m)^ZOUT SETD\n-+$", out)
+
+
+def test_horizontal_rule_line_neutralised():
+    out = sanitise_string("above\n---\nbelow")
+    assert not _re.search(r"(?m)^-+$", out)
+
+
+def test_table_forgery_neutralised():
+    # A leading-pipe row + a delimiter row is what renders as a table.
+    out = sanitise_string(
+        "ok\n| ZEVILMETRIC | 0 findings |\n|---|---|",
+    )
+    assert not _re.search(r"(?m)^\|", out)          # no leading pipes
+    assert not _re.search(r"(?m)^[ \t|:=-]*-[ \t|:=-]*$", out)
+    assert "ZEVILMETRIC" in out
+
+
+def test_table_delimiter_with_colons_neutralised():
+    out = sanitise_string("h1 | h2\n:---|---:")
+    assert not _re.search(r"(?m)^[ \t|:=-]*-[ \t|:=-]*$", out)
+
+
+def test_blockquote_lead_stripped():
+    assert sanitise_string("> forged quote").lstrip() == "forged quote"
+
+
+def test_prose_with_dashes_mid_line_survives():
+    out = sanitise_string("range 3-5 and a = b stay readable")
+    assert "3-5" in out and "a = b" in out
+
+
+# ---------------------------------------------------------------------------
+# Regression: autofetch attribute cousins (report side)
+# ---------------------------------------------------------------------------
+# These HTML forms slip the input-side envelope regex; the report-side
+# sanitiser must be a genuine second layer for them (battery variants:
+# reasoning-autofetch-image-alias / title-image-alias and the S03
+# attribute-fetch family, verified surviving sanitise_string pre-fix).
+
+
+def test_image_tag_alias_stripped():
+    # HTML parsers alias <image> to <img> — an auto-fetching tag.
+    out = sanitise_string('see <image src="//evil.example/Z">')
+    assert "<image" not in out.lower()
+    assert "evil.example" not in out
+
+
+def test_input_type_image_stripped():
+    out = sanitise_string("<input type=image src=//evil.example/Z>")
+    assert "<input" not in out.lower()
+
+
+def test_frame_and_track_tags_stripped():
+    assert "<frame" not in sanitise_string(
+        "<frame src=//evil.example/Z>",
+    ).lower()
+    assert "<track" not in sanitise_string(
+        "<track src=//evil.example/Z>",
+    ).lower()
+
+
+def test_style_attribute_url_fetch_stripped():
+    # The fetch primitive is the style-attribute url(...) — assert IT
+    # dies. (How much surrounding text survives depends on whether the
+    # input-side envelope regex rewrote the tag first; both layers
+    # leave no url( behind.)
+    out = sanitise_string(
+        '<div style="background:url(//evil.example/Z)">x',
+    )
+    assert "url(" not in out.lower()
+    assert out.endswith("x")
+
+
+def test_a_slash_href_stripped():
+    # `/` also delimits attributes in HTML: <a/href=...> is a live
+    # link the envelope's `<a\s` arm misses.
+    out = sanitise_string('<a/href="javascript:alert(1)">c</a>')
+    assert "javascript:" not in out.lower()
+
+
+def test_case_insensitive_tag_forms_stripped():
+    assert "<IMAGE" not in sanitise_string(
+        '<IMAGE SRC="//evil.example/Z">',
+    ).upper().replace("[REDACTED-AUTOFETCH-MARKUP]".upper(), "")

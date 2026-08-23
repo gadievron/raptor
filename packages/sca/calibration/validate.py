@@ -31,8 +31,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +49,22 @@ class ValidationReport:
     findings_with_signal: int
     top_20_precision: float
     top_50_precision: float
-    spearman_rho: Optional[float]
-    by_ecosystem: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    corpus_provenance: Dict[str, str] = field(default_factory=dict)
+    spearman_rho: float | None
+    by_ecosystem: dict[str, dict[str, Any]] = field(default_factory=dict)
+    corpus_provenance: dict[str, str] = field(default_factory=dict)
     threshold_top_20: float = 0.5     # operator-tunable
     threshold_spearman: float = 0.4   # operator-tunable
     verdict: str = "unverified"       # "validated_v1" | "unverified" | "needs_retune"
-    notes: List[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d = self.__dict__.copy()
-        return d
+    def to_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
 
 
 def validate_corpus(
     corpus_dir: Path,
     *,
-    out_path: Optional[Path] = None,
+    out_path: Path | None = None,
     threshold_top_20: float = 0.5,
     threshold_spearman: float = 0.4,
 ) -> ValidationReport:
@@ -83,10 +84,12 @@ def validate_corpus(
 
     # Flatten all findings into one ranked list, keeping the per-
     # ecosystem breakdown separately.
-    all_findings: List[Tuple[str, float, bool]] = []   # (eco, score, exploited)
-    by_eco: Dict[str, List[Tuple[float, bool]]] = {}
+    all_findings: list[tuple[str, float, bool]] = []   # (eco, score, exploited)
+    by_eco: dict[str, list[tuple[float, bool]]] = {}
     for sample in samples:
         for f in sample["findings"]:
+            if not isinstance(f, dict):
+                continue
             score = f.get("raptor_risk_estimate")
             if score is None or not isinstance(score, (int, float)):
                 continue
@@ -114,7 +117,7 @@ def validate_corpus(
     )
 
     # Per-ecosystem.
-    eco_breakdown: Dict[str, Dict[str, Any]] = {}
+    eco_breakdown: dict[str, dict[str, Any]] = {}
     for eco, rows in by_eco.items():
         sorted_rows = sorted(rows, key=lambda t: -t[0])
         eco_breakdown[eco] = {
@@ -167,7 +170,7 @@ def validate_corpus(
 # ---------------------------------------------------------------------------
 
 
-def _load_ground_truth(corpus_dir: Path) -> Set[str]:
+def _load_ground_truth(corpus_dir: Path) -> set[str]:
     """Union of CVE IDs that have ANY exploitation signal.
 
     All four sources mirror what ``refit._load_ground_truth`` reads.
@@ -176,7 +179,7 @@ def _load_ground_truth(corpus_dir: Path) -> Set[str]:
     silent drift between validate's exploited-set and refit's would
     have skewed the precision metric vs the metric refit optimises.
     """
-    exploited: Set[str] = set()
+    exploited: set[str] = set()
     for fname in ("kev_signals.json", "exploitdb_signals.json",
                    "metasploit_signals.json", "github_poc_signals.json",
                    "osv_evidence_signals.json",
@@ -198,10 +201,10 @@ def _load_ground_truth(corpus_dir: Path) -> Set[str]:
     return exploited
 
 
-def _load_project_samples(samples_dir: Path) -> List[Dict[str, Any]]:
+def _load_project_samples(samples_dir: Path) -> list[dict[str, Any]]:
     """Read all project-sample JSONs under
     ``samples_dir/<eco>/<name>.json``."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     if not samples_dir.is_dir():
         return out
     for path in sorted(samples_dir.rglob("*.json")):
@@ -217,7 +220,7 @@ def _load_project_samples(samples_dir: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
+def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
     """Pull CVE IDs out of an advisory summary block.
 
     Returns an empty list for ``informational`` advisories
@@ -228,16 +231,14 @@ def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
     non-security findings as ``exploited`` and depress
     Spearman ρ. Validator (and refit) skip them entirely so the
     metric measures actual exploitation signal only."""
-    out: List[str] = []
+    out: list[str] = []
     if not isinstance(advisory, dict):
         return out
     if advisory.get("informational"):
         return out
     aliases = advisory.get("aliases") or []
     if isinstance(aliases, list):
-        for a in aliases:
-            if isinstance(a, str) and a.startswith("CVE-"):
-                out.append(a)
+        out.extend(a for a in aliases if isinstance(a, str) and a.startswith("CVE-"))
     osv_id = advisory.get("osv_id") or ""
     if isinstance(osv_id, str) and osv_id.startswith("CVE-"):
         out.append(osv_id)
@@ -250,7 +251,7 @@ def _extract_cve_ids(advisory: Dict[str, Any]) -> List[str]:
 
 
 def _top_n_precision(
-    sorted_findings: List[Tuple[str, float, bool]], n: int,
+    sorted_findings: list[tuple[str, float, bool]], n: int,
 ) -> float:
     if not sorted_findings:
         return 0.0
@@ -259,7 +260,7 @@ def _top_n_precision(
 
 
 def _top_n_precision_2(
-    sorted_findings: List[Tuple[float, bool]], n: int,
+    sorted_findings: list[tuple[float, bool]], n: int,
 ) -> float:
     if not sorted_findings:
         return 0.0
@@ -268,8 +269,8 @@ def _top_n_precision_2(
 
 
 def _spearman_rho(
-    x: List[float], y: List[int],
-) -> Optional[float]:
+    x: list[float], y: list[int],
+) -> float | None:
     """Spearman rank correlation, hand-rolled (no scipy).
 
     ρ = 1 - (6 · Σd²) / (n · (n² - 1))
@@ -288,11 +289,17 @@ def _spearman_rho(
         return None
     rx = _ranks(x)
     ry = _ranks(y)
-    d2 = sum((rx[i] - ry[i]) ** 2 for i in range(n))
-    return 1.0 - (6.0 * d2) / (n * (n * n - 1))
+    mean_rx = sum(rx) / n
+    mean_ry = sum(ry) / n
+    num = sum((rx[i] - mean_rx) * (ry[i] - mean_ry) for i in range(n))
+    den_x = sum((rx[i] - mean_rx) ** 2 for i in range(n)) ** 0.5
+    den_y = sum((ry[i] - mean_ry) ** 2 for i in range(n)) ** 0.5
+    if den_x == 0 or den_y == 0:
+        return None
+    return num / (den_x * den_y)
 
 
-def _ranks(values: List[float]) -> List[float]:
+def _ranks(values: list[float]) -> list[float]:
     """Average-rank ranking (handles ties)."""
     indexed = sorted(range(len(values)), key=lambda i: values[i])
     ranks = [0.0] * len(values)
@@ -316,10 +323,10 @@ def _ranks(values: List[float]) -> List[float]:
 
 def _verdict(
     *,
-    p20: float, rho: Optional[float], with_score: int,
+    p20: float, rho: float | None, with_score: int,
     threshold_top_20: float, threshold_spearman: float,
-) -> Tuple[str, List[str]]:
-    notes: List[str] = []
+) -> tuple[str, list[str]]:
+    notes: list[str] = []
     if with_score < 50:
         notes.append(
             f"only {with_score} scored findings — corpus needs more "
@@ -350,11 +357,11 @@ def _verdict(
 # ---------------------------------------------------------------------------
 
 
-def _provenance_summary(corpus_dir: Path) -> Dict[str, str]:
+def _provenance_summary(corpus_dir: Path) -> dict[str, str]:
     """Capture which snapshot date each ground-truth source had
     when validation ran. Lets reviewers reproduce metrics
     against the same corpus state."""
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for fname in ("kev_signals.json", "epss_signals.json",
                    "exploitdb_signals.json", "metasploit_signals.json"):
         path = corpus_dir / fname

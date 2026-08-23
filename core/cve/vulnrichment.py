@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from core.http import HttpClient, HttpError
 from core.json import JsonCache
@@ -74,8 +73,8 @@ class SSVCDecision:
     ``/validate`` reports)."""
 
     exploitation: str           # "none" / "poc" / "active"
-    automatable: Optional[str]  # "yes" / "no" / None when unset
-    technical_impact: Optional[str]  # "total" / "partial" / None
+    automatable: str | None  # "yes" / "no" / None when unset
+    technical_impact: str | None  # "total" / "partial" / None
 
     @property
     def has_exploit(self) -> bool:
@@ -121,7 +120,7 @@ class VulnrichmentClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def lookup(self, cve_id: str) -> Optional[SSVCDecision]:
+    def lookup(self, cve_id: str) -> SSVCDecision | None:
         """Return the SSVC decision for ``cve_id`` or ``None``.
 
         Returns ``None`` when:
@@ -153,7 +152,7 @@ class VulnrichmentClient:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_record(self, cve_id: str) -> Optional[dict]:
+    def _fetch_record(self, cve_id: str) -> dict | None:
         """Disk-cached fetch of one Vulnrichment entry. Returns
         the decoded JSON document, ``None`` on miss / failure.
 
@@ -210,7 +209,7 @@ class VulnrichmentClient:
         return record
 
 
-def _url_for_cve(cve_id: str) -> Optional[str]:
+def _url_for_cve(cve_id: str) -> str | None:
     """Build the ``raw.githubusercontent.com`` URL for a CVE's
     Vulnrichment entry. Returns ``None`` for malformed inputs.
 
@@ -235,7 +234,7 @@ def _url_for_cve(cve_id: str) -> Optional[str]:
     )
 
 
-def _decode_ssvc(record: object) -> Optional[SSVCDecision]:
+def _decode_ssvc(record: object) -> SSVCDecision | None:
     """Pluck SSVC fields out of a CVE-JSON-5 record's CISA-ADP
     container. Returns ``None`` when the record doesn't carry an
     SSVC scorecard (CISA's enrichment is staged — some entries

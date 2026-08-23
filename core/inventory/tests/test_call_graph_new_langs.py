@@ -18,6 +18,7 @@ from core.inventory.call_graph import (
     INDIRECTION_WILDCARD_IMPORT,
     extract_call_graph_csharp,
     extract_call_graph_javascript,
+    extract_call_graph_lua,
     extract_call_graph_php,
     extract_call_graph_ruby,
     extract_call_graph_rust,
@@ -675,3 +676,80 @@ def test_js_class_expression_assigned_to_const():
     method_names = [m[0] for m in foo.methods]
     assert "method" in method_names
     assert "helper" in method_names
+
+
+# ---------------------------------------------------------------------------
+# Lua
+# ---------------------------------------------------------------------------
+
+_LUA_TS_AVAILABLE = True
+try:
+    import tree_sitter_lua  # noqa: F401
+except ImportError:
+    _LUA_TS_AVAILABLE = False
+
+
+@pytest.mark.skipif(not _LUA_TS_AVAILABLE,
+                    reason="tree-sitter-lua not installed")
+class TestLuaCallGraph:
+
+    def test_require_import(self):
+        g = extract_call_graph_lua(
+            'local uci = require("luci.model.uci")\n'
+            'uci.cursor()\n',
+        )
+        assert "uci" in g.imports
+        assert g.imports["uci"] == "luci.model.uci"
+
+    def test_dot_call(self):
+        g = extract_call_graph_lua(
+            'local http = require("luci.http")\n'
+            'http.redirect("/cgi-bin/luci")\n',
+        )
+        chains = [tuple(c.chain) for c in g.calls]
+        assert ("http", "redirect") in chains
+
+    def test_colon_method_call(self):
+        g = extract_call_graph_lua(
+            'function M.run(self)\n'
+            '  self:dispatch()\n'
+            'end\n',
+        )
+        chains = [tuple(c.chain) for c in g.calls]
+        assert ("self", "dispatch") in chains
+
+    def test_pcall_records_callee(self):
+        g = extract_call_graph_lua(
+            'pcall(dangerous, 1, 2)\n',
+        )
+        chains = [tuple(c.chain) for c in g.calls]
+        assert ("dangerous",) in chains
+
+    def test_loadstring_indirection(self):
+        g = extract_call_graph_lua(
+            'loadstring("return 1")()\n',
+        )
+        assert INDIRECTION_EVAL in g.indirection
+
+    def test_nested_dot_chain(self):
+        g = extract_call_graph_lua(
+            'luci.model.uci.cursor()\n',
+        )
+        chains = [tuple(c.chain) for c in g.calls]
+        assert ("luci", "model", "uci", "cursor") in chains
+
+    def test_dofile_import(self):
+        g = extract_call_graph_lua(
+            'dofile("/usr/lib/lua/helper.lua")\n',
+        )
+        assert "helper" in g.imports
+
+    def test_enclosing_function(self):
+        g = extract_call_graph_lua(
+            'function dispatch(req)\n'
+            '  route(req)\n'
+            'end\n',
+        )
+        route_calls = [c for c in g.calls if c.chain == ["route"]]
+        assert len(route_calls) == 1
+        assert route_calls[0].caller == "dispatch"

@@ -59,11 +59,14 @@ def test_unicode_round_trips(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_no_temp_file_left_after_success(tmp_path: Path) -> None:
-    """A successful write leaves no .tmp.<pid> debris in the dir."""
+    """A successful write leaves no tempfile debris in the dir.
+    Scan for any sibling — including dotfile prefixes — since the
+    shared primitive uses a leading-dot tempfile name (``.atomic-…``)
+    that ``glob('*')`` would not surface."""
     p = tmp_path / "manifest.txt"
     atomic_write_text(p, "x\n")
-    leftover = list(tmp_path.glob("*.tmp.*"))
-    assert leftover == [], f"unexpected temp files: {leftover}"
+    debris = [c for c in tmp_path.iterdir() if c != p]
+    assert debris == [], f"unexpected temp files: {debris}"
 
 
 def test_temp_file_cleaned_up_on_failure(tmp_path: Path) -> None:
@@ -75,13 +78,13 @@ def test_temp_file_cleaned_up_on_failure(tmp_path: Path) -> None:
         # destination locked on Windows.
         raise OSError("simulated rename failure")
 
-    with patch("packages.sca._atomic.os.replace", _boom):
+    with patch("core.atomic_fs.os.replace", _boom):
         with pytest.raises(OSError, match="simulated rename failure"):
             atomic_write_text(p, "x\n")
 
     # Original (none) preserved; no temp file left behind.
     assert not p.exists()
-    assert list(tmp_path.glob("*.tmp.*")) == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_keyboard_interrupt_during_write_cleans_up(tmp_path: Path) -> None:
@@ -95,13 +98,13 @@ def test_keyboard_interrupt_during_write_cleans_up(tmp_path: Path) -> None:
     def _interrupt(*a, **kw):
         raise KeyboardInterrupt()
 
-    with patch("packages.sca._atomic.os.fsync", _interrupt):
+    with patch("core.atomic_fs.os.fsync", _interrupt):
         with pytest.raises(KeyboardInterrupt):
             atomic_write_text(p, "x\n")
 
     # Original (none) preserved; no temp file left behind.
     assert not p.exists()
-    assert list(tmp_path.glob("*.tmp.*")) == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_failure_does_not_corrupt_existing(tmp_path: Path) -> None:
@@ -112,7 +115,7 @@ def test_failure_does_not_corrupt_existing(tmp_path: Path) -> None:
     def _boom(src, dst, *a, **kw):
         raise OSError("simulated")
 
-    with patch("packages.sca._atomic.os.replace", _boom):
+    with patch("core.atomic_fs.os.replace", _boom):
         with pytest.raises(OSError):
             atomic_write_text(p, "NEW CONTENT\n")
 
@@ -120,24 +123,27 @@ def test_failure_does_not_corrupt_existing(tmp_path: Path) -> None:
     assert p.read_text() == "ORIGINAL CONTENT\n"
 
 
-def test_pid_suffix_isolates_concurrent_runs(tmp_path: Path) -> None:
-    """The PID suffix means parallel writers don't collide on the
-    temp filename."""
+def test_isolates_from_unrelated_neighbour_files(tmp_path: Path) -> None:
+    """An unrelated pre-existing sibling file in the target directory
+    (e.g. another tool's scratch / another writer's aborted draft)
+    is not touched. The atomic-write primitive isolates its own
+    tempfile via a PID+TID+random suffix; earlier iterations used a
+    deterministic ``.tmp.<pid>`` name which this test guarded against
+    colliding with. Both schemes satisfy the contract; this test
+    keeps enforcing it against the shared primitive."""
     p = tmp_path / "manifest.txt"
-    expected_tmp = tmp_path / f"manifest.txt.tmp.{os.getpid()}"
 
-    # Pre-create a temp file with a DIFFERENT PID — should not collide
-    # with our write.
-    other_pid_tmp = tmp_path / "manifest.txt.tmp.999999"
-    other_pid_tmp.write_text("another writer's draft\n")
+    neighbour = tmp_path / "manifest.txt.tmp.999999"
+    neighbour.write_text("another writer's draft\n")
 
     atomic_write_text(p, "ours\n")
     assert p.read_text() == "ours\n"
-    # Other writer's temp is untouched.
-    assert other_pid_tmp.exists()
-    assert other_pid_tmp.read_text() == "another writer's draft\n"
-    # Our temp was consumed by os.replace.
-    assert not expected_tmp.exists()
+    assert neighbour.exists()
+    assert neighbour.read_text() == "another writer's draft\n"
+    # No tempfile debris in the target directory (whatever the
+    # primitive's naming scheme).
+    debris = [c for c in tmp_path.iterdir() if c not in (p, neighbour)]
+    assert debris == [], f"unexpected leftover files: {debris}"
 
 
 def test_preserves_existing_mode_bits(tmp_path: Path) -> None:

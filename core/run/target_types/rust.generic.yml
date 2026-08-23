@@ -1,0 +1,40 @@
+name: rust.generic
+description: |
+  General Rust projects. CLI tools, libraries, services built
+  with cargo. Catches any repo whose primary language is Rust
+  via Cargo.toml plus file-extension scoring.
+
+detection:
+  file_globs:
+    - Cargo.toml
+  file_extensions:
+    - .rs
+  negative_globs: []
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+    - trailofbits
+  optional:
+    - secrets
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - tests
+    - benches
+    - examples
+    - docs
+    - target
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+
+budget_defaults:
+  typical_findings_count: 10
+  typical_cost_per_run_usd: 15
+
+version: 1

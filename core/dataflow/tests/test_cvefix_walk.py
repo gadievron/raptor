@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +13,16 @@ import pytest
 
 from core.dataflow import cvefix_walk
 from core.dataflow.cvefix_loader import CveFixPair
-from core.dataflow.cvefix_walk import WalkResult, process_pair, promote_misses, query_for, walk
+from core.dataflow.cvefix_walk import (
+    WalkResult,
+    process_pair,
+    promote_misses,
+    query_for,
+    walk,
+)
+from core.git.clone import safe_git_command, safe_git_readonly_command
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 
 def test_query_for_maps_lang_and_cwe():
@@ -59,7 +71,7 @@ def test_process_pair_yield(monkeypatch, tmp_path: Path):
     res = process_pair(_pair(), work_dir=tmp_path)
     assert res.status == "ok"
     assert res.after_count == 1 and res.before_count == 3
-    assert res.is_yield and res.is_fp_candidate
+    assert res.is_yield
 
 
 def test_process_pair_build_fail(monkeypatch, tmp_path: Path):
@@ -86,10 +98,10 @@ def _make_meta_db(path: Path):
     G = "https://github.com/org/"
     for i in (1, 2):
         repo, h = f"{G}app{i}", f"fix{i}"
-        con.execute("INSERT INTO cwe_classification VALUES(?,?)", ("CVE-%d" % i, "CWE-89"))
-        con.execute("INSERT INTO fixes VALUES(?,?,?)", ("CVE-%d" % i, h, repo))
-        con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, "['par%d']" % i))
-        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, "app%d" % i, "Python"))
+        con.execute("INSERT INTO cwe_classification VALUES(?,?)", (f"CVE-{i}", "CWE-89"))
+        con.execute("INSERT INTO fixes VALUES(?,?,?)", (f"CVE-{i}", h, repo))
+        con.execute("INSERT INTO commits VALUES(?,?,?)", (h, repo, f"['par{i}']"))
+        con.execute("INSERT INTO repository VALUES(?,?,?)", (repo, f"app{i}", "Python"))
     con.commit()
     con.close()
 
@@ -352,8 +364,12 @@ def test_codeql_tunables_from_tuning_resolves_central_defaults(monkeypatch):
         codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
+        joern_enabled=True,
+        joern_heap_mb=2048,
+        joern_cpg_timeout_s=300,
+        joern_query_timeout_s=300,
         max_semgrep_workers=4, max_codeql_workers=2,
-        max_agentic_parallel=3, max_fuzz_parallel=4,
+        max_fuzz_parallel=4,
         max_inventory_workers=4, max_json_memo_mb=128,
     )
     monkeypatch.setattr(core.tuning, "get_tuning", lambda: fake_tuning)
@@ -372,8 +388,12 @@ def test_codeql_tunables_from_tuning_operator_override_wins(monkeypatch):
         codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
+        joern_enabled=True,
+        joern_heap_mb=2048,
+        joern_cpg_timeout_s=300,
+        joern_query_timeout_s=300,
         max_semgrep_workers=4, max_codeql_workers=2,
-        max_agentic_parallel=3, max_fuzz_parallel=4,
+        max_fuzz_parallel=4,
         max_inventory_workers=4, max_json_memo_mb=128,
     )
     monkeypatch.setattr(core.tuning, "get_tuning", lambda: fake_tuning)
@@ -404,6 +424,7 @@ def test_build_db_passes_tunables_into_create_command(monkeypatch, tmp_path: Pat
         return True
 
     monkeypatch.setattr(cvefix_walk, "_run", fake_run)
+    monkeypatch.setattr(cvefix_walk, "_run_git", lambda *a, **k: True)
     src = tmp_path / "src"
     src.mkdir()
     db = tmp_path / "db"
@@ -411,7 +432,7 @@ def test_build_db_passes_tunables_into_create_command(monkeypatch, tmp_path: Pat
     ok = cvefix_walk._build_db(src, "abc", db, "python", "codeql", 120, None, tunables=t)
     assert ok
     cmd = captured["cmd"]
-    # _run was called twice (git checkout + codeql); the codeql one is captured last.
+    # git checkout routes through _run_git (stubbed); _run sees only codeql.
     assert "-j" in cmd and "8" in cmd
     assert "-M" in cmd and "4096" in cmd
     assert "--max-disk-cache=1024" in cmd
@@ -476,3 +497,163 @@ def test_walk_limit(monkeypatch, tmp_path: Path):
     walk(meta, results, work_dir=tmp_path / "w", limit=1, log=lambda *a: None)
     with sqlite3.connect(str(results)) as con:
         assert con.execute("SELECT count(*) FROM walk_results").fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Hardened git substrate (core.git shared helpers)
+# ---------------------------------------------------------------------------
+
+
+def _capture_subprocess(monkeypatch):
+    """Record every subprocess.run call in the walker, faking success."""
+    calls: list[dict] = []
+
+    def fake_run(cmd, **kw):
+        calls.append({"cmd": list(cmd), **kw})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cvefix_walk.subprocess, "run", fake_run)
+    return calls
+
+
+def test_fetch_pair_argv_is_hardened(monkeypatch, tmp_path: Path):
+    """Every git invocation carries the shared per-invocation hardening
+    (a hostile clone's .git/config must never execute code): local steps
+    get the STRICT read-only posture, the fetch keeps the network-capable
+    posture (it genuinely needs a transport).  Asserted via the shared
+    helpers, not duplicated literals."""
+    calls = _capture_subprocess(monkeypatch)
+    sha = "f" * 40
+    assert cvefix_walk._fetch_pair(
+        "https://github.com/o/r", sha, tmp_path / "d", 60)
+    assert len(calls) == 3
+    ro_prefix = safe_git_readonly_command()
+    net_prefix = safe_git_command()
+    init_cmd, remote_cmd, fetch_cmd = (c["cmd"] for c in calls)
+    for cmd in (init_cmd, remote_cmd):
+        assert cmd[:len(ro_prefix)] == ro_prefix
+        assert "protocol.allow=never" in cmd
+    assert fetch_cmd[:len(net_prefix)] == net_prefix
+    assert "protocol.allow=never" not in fetch_cmd  # fetch needs a transport
+    assert fetch_cmd[len(net_prefix):] == [
+        "-C", str(tmp_path / "d"), "fetch", "-q",
+        "--depth", "2", "origin", sha,
+    ]
+    for c in calls:
+        # List argv only — never a shell string.
+        assert isinstance(c["cmd"], list)
+        assert all(isinstance(a, str) for a in c["cmd"])
+        assert not c.get("shell")
+        assert c.get("env") is not None
+
+
+def test_run_git_builds_argv_from_shared_helpers(monkeypatch):
+    """_run_git must emit exactly what core.git's helpers build — one
+    source of truth, no local flag lists to drift."""
+    calls = _capture_subprocess(monkeypatch)
+    assert cvefix_walk._run_git(["rev-parse", "HEAD"], 5)
+    assert cvefix_walk._run_git(["fetch", "origin", "x"], 5, network=True)
+    assert calls[0]["cmd"] == safe_git_readonly_command("rev-parse", "HEAD")
+    assert calls[1]["cmd"] == safe_git_command("fetch", "origin", "x")
+
+
+def test_run_git_env_from_safe_git_env(monkeypatch):
+    """Env comes from the shared sanitised git env; proxy vars are kept
+    only for the network path (the remote has no route without them on
+    mandatory-egress-proxy hosts; local git ops never dial out)."""
+    envs = {False: {"GIT_KIND": "local"}, True: {"GIT_KIND": "net"}}
+    monkeypatch.setattr(
+        cvefix_walk, "get_safe_git_env",
+        lambda *, preserve_proxy=False: envs[preserve_proxy],
+    )
+    calls = _capture_subprocess(monkeypatch)
+    cvefix_walk._run_git(["rev-parse", "HEAD"], 5)
+    cvefix_walk._run_git(["fetch"], 5, network=True)
+    assert calls[0]["env"] == {"GIT_KIND": "local"}
+    assert calls[1]["env"] == {"GIT_KIND": "net"}
+
+
+def test_build_db_checkout_routes_through_run_git(monkeypatch, tmp_path: Path):
+    """The per-commit checkout operates on the untrusted clone and must
+    go through the hardened local (non-network) git path."""
+    git_calls = []
+
+    def fake_run_git(args, timeout, *, network=False):
+        git_calls.append((list(args), network))
+        return True
+
+    monkeypatch.setattr(cvefix_walk, "_run_git", fake_run_git)
+    monkeypatch.setattr(cvefix_walk, "_run", lambda cmd, timeout: True)
+    src = tmp_path / "src"
+    src.mkdir()
+    assert cvefix_walk._build_db(src, "abc", tmp_path / "db", "python", "codeql", 60)
+    assert git_calls == [(["-C", str(src), "checkout", "-q", "abc"], False)]
+
+
+def _hermetic_git_env(home: Path) -> dict:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def _make_src_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """Local two-commit fixture repo; returns (path, fix_sha, parent_sha).
+    ``uploadpack.allowAnySHA1InWant`` is enabled on the SOURCE side so a
+    by-SHA fetch works (GitHub enables the equivalent server-side)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    env = _hermetic_git_env(tmp_path)
+
+    def g(*args):
+        subprocess.run(
+            ["git", "-C", str(src), "-c", "user.name=t",
+             "-c", "user.email=t@example.invalid",
+             "-c", "commit.gpgsign=false", *args],
+            check=True, capture_output=True, env=env,
+        )
+
+    subprocess.run(["git", "init", "-q", str(src)],
+                   check=True, capture_output=True, env=env)
+    (src / "a.py").write_text("x = 1\n")
+    g("add", ".")
+    g("commit", "-q", "-m", "parent commit")
+    (src / "a.py").write_text("x = 2\n")
+    g("add", ".")
+    g("commit", "-q", "-m", "fix commit")
+    g("config", "uploadpack.allowAnySHA1InWant", "true")
+    r = subprocess.run(
+        ["git", "-C", str(src), "rev-parse", "HEAD", "HEAD~1"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    fix, parent = r.stdout.split()
+    return src, fix, parent
+
+
+@needs_git
+def test_fetch_pair_functional_outputs_unchanged(monkeypatch, tmp_path: Path):
+    """Hermetic end-to-end pin: the hardened substrate must not change
+    WHAT is fetched — fix + parent both present after the depth-2 fetch,
+    and the (strict-variant) checkout yields the right tree for each."""
+    src, fix, parent = _make_src_repo(tmp_path)
+    monkeypatch.setattr(
+        cvefix_walk, "get_safe_git_env",
+        lambda **kw: _hermetic_git_env(tmp_path),
+    )
+    dest = tmp_path / "clone"
+    assert cvefix_walk._fetch_pair(str(src), fix, dest, 60)
+    env = _hermetic_git_env(tmp_path)
+    for sha in (fix, parent):
+        proc = subprocess.run(
+            ["git", "-C", str(dest), "cat-file", "-e", f"{sha}^{{commit}}"],
+            capture_output=True, env=env, check=False,
+        )
+        assert proc.returncode == 0, f"commit {sha} missing after fetch"
+    # The checkout step (as _build_db drives it) under the strict variant.
+    assert cvefix_walk._run_git(["-C", str(dest), "checkout", "-q", parent], 30)
+    assert (dest / "a.py").read_text() == "x = 1\n"
+    assert cvefix_walk._run_git(["-C", str(dest), "checkout", "-q", fix], 30)
+    assert (dest / "a.py").read_text() == "x = 2\n"

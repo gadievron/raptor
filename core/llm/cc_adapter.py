@@ -6,14 +6,490 @@ The subprocess counterpart to the SDK providers in ``core.llm.providers``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
-from dataclasses import dataclass
-from typing import Any, Optional
+import os
+import stat
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from core.security.redaction import redact_secrets
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
+
+
+# Env-var families the ``claude`` CLI needs to select and authenticate
+# its backend: CLAUDE_CODE_* (USE_BEDROCK / USE_VERTEX / USE_MANTLE and
+# friends), ANTHROPIC_* (API key, MODEL mapping for alternate clouds).
+# Prefix families rather than an exact list so new provider knobs keep
+# working. The Anthropic secret pair is subtracted from the overlay
+# when an alternate-cloud backend is selected — see cc_subprocess_env.
+# RAPTOR_BEDROCK_/RAPTOR_CC_: RAPTOR's own LLM operator knobs
+# (model/profile/region pins, effort, budget). The pure-LLM substrate
+# child ignores them, but skill-pass children (skill_dispatch,
+# cc_dispatch) drive RAPTOR's libexec helpers whose model resolution
+# reads them - dropping the knobs at this hop silently reverts the
+# grandchildren to defaults. Names and flags only, never credentials.
+_CC_BACKEND_ENV_PREFIXES = (
+    "CLAUDE_CODE_", "ANTHROPIC_", "RAPTOR_BEDROCK_", "RAPTOR_CC_",
+)
+
+# Interactivity marker for dispatched CLI children. Every claude child
+# RAPTOR spawns is unattended by definition — no operator will answer a
+# structured prompt it raises — so cc_subprocess_env stamps the
+# explicit non-interactive override the AskUserQuestion gate
+# (core/ux/interactivity.py, libexec/raptor-may-ask) checks first.
+# String literal rather than an import: this module must not grow a
+# core.ux import edge for one constant; the pinning test in
+# core/llm/tests/test_cc_adapter.py keeps the two in sync.
+_NONINTERACTIVE_ENV = "RAPTOR_NONINTERACTIVE"
+
+# AWS names a Bedrock-backed CLI child needs, passed ONLY when
+# CLAUDE_CODE_USE_BEDROCK is set. An explicit allowlist, NOT the AWS_*
+# prefix: the previous blanket copy swept every ambient AWS_* value —
+# static long-lived secrets included — into CLI children, some of
+# which (cc_dispatch, validate post-pass) run with Bash+Write enabled
+# against hostile repos. Non-secret selection/config names only;
+# secret material flows exclusively through
+# _mint_child_aws_credentials (sandboxed children, scoped session
+# trio) or the explicit static-trio passthrough for unsandboxed
+# substrate children (see cc_subprocess_env).
+_CC_AWS_PASSTHROUGH_NAMES = (
+    "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
+    "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_CA_BUNDLE",
+    # The Bedrock bearer token is the CLI's API-key-style Bedrock auth;
+    # it cannot be minted through the credential chain, so on installs
+    # that use it the child needs the literal value.
+    "AWS_BEARER_TOKEN_BEDROCK",
+)
+
+# The SigV4 credential trio. Passed through verbatim ONLY for
+# unsandboxed substrate children (mint_aws_credentials=False): they
+# resolve their own chain (~/.aws, IMDS) for role/profile identities,
+# but env-provided static credentials are the one source the child
+# cannot re-resolve. Sandboxed children never receive the ambient
+# values — they get the minted (short-lived where the identity allows)
+# session trio instead.
+_CC_AWS_STATIC_CREDENTIAL_NAMES = (
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+)
+
+# credential_mode="proxy": names/prefixes that must NOT ride the
+# backend overlay into a proxy-mode child. Credential material is the
+# obvious set. Operator base-URL pins are stripped because the caller
+# sets the one true gateway route after the overlay, and the
+# CLAUDE_CODE_SKIP_* family is stripped-then-reset so only the
+# skip-auth flags THIS mode needs are present. Backend-SELECTION flags
+# (CLAUDE_CODE_USE_*) are deliberately KEPT: the CLI's provider mode
+# decides which gateway env vars it reads (verified against the CLI —
+# a Bedrock install ignores ``ANTHROPIC_BASE_URL`` and reads
+# ``ANTHROPIC_BEDROCK_MANTLE_BASE_URL`` instead).
+_CC_PROXY_STRIP_EXACT = frozenset({
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+})
+_CC_PROXY_STRIP_PREFIXES = ("CLAUDE_CODE_SKIP_",)
+
+
+def _cc_proxy_strip(key: str) -> bool:
+    if key in _CC_PROXY_STRIP_EXACT:
+        return True
+    if key.startswith(_CC_PROXY_STRIP_PREFIXES):
+        return True
+    # Operator base-URL pins (ANTHROPIC_BASE_URL, and the per-cloud
+    # ANTHROPIC_*_BASE_URL variants) — the caller sets the one true
+    # gateway route after the overlay.
+    return key.startswith("ANTHROPIC_") and "BASE_URL" in key
+
+
+def resolve_claude_cli(explicit: str | None = None) -> str | None:
+    """Resolve the ``claude`` CLI to its REAL path for sandboxed dispatch.
+
+    Standard installs place a symlink launcher on PATH
+    (``~/.local/bin/claude`` -> versioned install dir). The sandbox's
+    mount-ns visibility check realpaths ``cmd[0]`` and requires the
+    REAL location inside the bind tree, so dispatching via the
+    un-realpath'd ``shutil.which`` result silently downgrades
+    isolation to the Landlock-only fallback tier whenever the resolved
+    parent isn't bound — the same class as the fixed semgrep / codeql
+    symlink bugs (selftest-05 precedent: exec scanners via their real
+    path). Resolving once at construction also locks the binary in
+    against PATH mutation between probe and exec.
+
+    Args:
+        explicit: caller-supplied path (wins over PATH lookup); may
+            itself be a symlink and is realpath'd too.
+
+    Returns ``None`` when the CLI is not found.
+    """
+    import os as _os
+    import shutil as _shutil
+    path = explicit or _shutil.which("claude")
+    if not path:
+        return None
+    try:
+        return _os.path.realpath(path)
+    except OSError:
+        return path
+
+
+def cc_subprocess_env(
+    *,
+    mint_aws_credentials: bool = False,
+    credential_mode: str = "env",
+    proxy_base_url: str | None = None,
+    proxy_auth_token: str | None = None,
+) -> dict:
+    """Sanitised env for spawning the trusted ``claude`` binary.
+
+    ``credential_mode`` selects the child's credential posture:
+
+    * ``"env"`` (default) — current behaviour: backend-selection AND
+      credential families overlay from the parent env (plus optional
+      AWS credential minting for sandboxed Bedrock children).
+    * ``"proxy"`` — the child holds ZERO provider credentials. No
+      ``ANTHROPIC_API_KEY``, no ``AWS_*`` material, no minting. It
+      authenticates to the local LLM dispatcher with a scoped minted
+      token: ``proxy_base_url`` is the dispatcher gateway ORIGIN
+      (``http://127.0.0.1:<port>``) and ``proxy_auth_token`` the
+      minted token, carried in ``ANTHROPIC_AUTH_TOKEN`` (the CLI
+      sends it as ``Authorization: Bearer``). Backend-selection vars
+      (``CLAUDE_CODE_USE_*``, model pins) are kept — they decide
+      which gateway route family is set (see
+      :func:`_cc_proxy_mode_env`); credential families are stripped.
+      ``NO_PROXY`` gains ``127.0.0.1``/``localhost`` so the loopback
+      gateway is never hijacked by an operator's corporate proxy.
+      Both proxy arguments are mandatory in this mode (ValueError
+      otherwise) — a proxy-mode child without a dispatcher route must
+      fail fast at spawn, not hang credential-less at its first API
+      call.
+
+    ``mint_aws_credentials=True`` additionally resolves the parent's
+    AWS credential chain and attaches the frozen session credentials
+    when the Bedrock overlay carries no secret material (see
+    :func:`_mint_child_aws_credentials`). Opt-in per call site: only
+    SANDBOXED children need it (Landlock denies ``~/.aws``, egress
+    denies IMDS); unsandboxed substrate children resolve their own
+    chain, and defaulting to minting would widen credential exposure
+    to every CLI child.
+
+    Starts from ``RaptorConfig.get_safe_env()`` (drops shell-evaluated
+    / exec-capable vars a poisoned dotfile might set), then overlays
+    the backend-selection + auth families from the parent env. Without
+    the overlay, a Bedrock/Vertex-backed CLI child may get a backend
+    selected via ``~/.claude/settings.json`` (HOME survives the
+    allowlist) but no AWS profile / credentials / model mapping — every
+    dispatch then hangs until the provider timeout.
+
+    Also restores the operator's proxy env (via
+    ``egress.operator_proxy_env()`` — the launch-time values, not the
+    in-process loopback pointer ``enable_llm_egress`` may have swapped
+    in). get_safe_env() strips proxy vars to stop a hostile repo
+    redirecting untrusted children through an attacker proxy; the
+    operator's own launch-time proxy is trusted input, and on
+    mandatory-egress-proxy hosts the CLI has no route to any backend
+    without it.
+
+    ONLY for the ``claude`` CLI used as a pure-LLM substrate (internal
+    tools disabled via ``--allowed-tools ""``). Do NOT reuse for
+    children that execute target-repo code: get_safe_env()'s whole
+    point is that untrusted children never see cloud credentials.
+    """
+    import os
+
+    from core.config import RaptorConfig
+    from core.llm.egress import augment_child_no_proxy, operator_proxy_env
+
+    if credential_mode not in ("env", "proxy"):
+        msg = (
+            f"credential_mode must be 'env' or 'proxy', "
+            f"got {credential_mode!r}"
+        )
+        raise ValueError(msg)
+    if credential_mode == "proxy":
+        env = _cc_proxy_mode_env(proxy_base_url, proxy_auth_token)
+        env[_NONINTERACTIVE_ENV] = "1"
+        return env
+    if proxy_base_url or proxy_auth_token:
+        msg = (
+            "proxy_base_url/proxy_auth_token are only valid with "
+            "credential_mode='proxy'"
+        )
+        raise ValueError(msg)
+
+    env = RaptorConfig.get_safe_env()
+    # Bedrock installs signal via env (the launcher exports it).
+    # Settings.json-only Bedrock setups must export the var too —
+    # documented trade-off; the gate keeps AWS credentials out of
+    # children on every install that never asked for Bedrock.
+    bedrock = bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
+    vertex = bool(os.environ.get("CLAUDE_CODE_USE_VERTEX"))
+    for key, value in os.environ.items():
+        if key.startswith(_CC_BACKEND_ENV_PREFIXES):
+            env[key] = value
+    if bedrock or vertex:
+        # The child's provider is an alternate cloud — the first-party
+        # Anthropic API key/token is dead weight there, and some of
+        # these children run with tools enabled against hostile repos.
+        # Keep the key only where the child's provider requires it
+        # (first-party API installs, where it IS the auth).
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if bedrock:
+        for key in _CC_AWS_PASSTHROUGH_NAMES:
+            if key in os.environ:
+                env[key] = os.environ[key]
+        if mint_aws_credentials:
+            _mint_child_aws_credentials(env)
+        else:
+            # Unsandboxed substrate children resolve role/profile
+            # identities themselves (~/.aws + IMDS are reachable);
+            # only env-provided static credentials need the explicit
+            # named passthrough.
+            for key in _CC_AWS_STATIC_CREDENTIAL_NAMES:
+                if key in os.environ:
+                    env[key] = os.environ[key]
+    env.update(operator_proxy_env())
+    # Children that resolve their own credential chain (unsandboxed
+    # substrate children) probe IMDS during resolution; on proxied
+    # hosts those link-local probes must never travel to the operator
+    # proxy, which denies them (observed as constant denied
+    # token/credential request pairs in the proxy's logs). Append the
+    # operational-only NO_PROXY entries — loopback semantics and the
+    # egress chokepoint bypass are untouched. Unproxied hosts stay
+    # mutation-free: no proxy pointer means nothing to exempt from.
+    if any(env.get(v) for v in ("HTTPS_PROXY", "https_proxy",
+                                "HTTP_PROXY", "http_proxy",
+                                "ALL_PROXY", "all_proxy")):
+        merged = augment_child_no_proxy(
+            env.get("NO_PROXY") or env.get("no_proxy") or "")
+        env["NO_PROXY"] = merged
+        env["no_proxy"] = merged
+    env[_NONINTERACTIVE_ENV] = "1"
+    return env
+
+
+def _cc_proxy_mode_env(
+    proxy_base_url: str | None, proxy_auth_token: str | None,
+) -> dict:
+    """Build the credential-free env for a proxy-mode CLI child.
+
+    See :func:`cc_subprocess_env` (credential_mode="proxy") for the
+    contract. Invariant this function owns: the returned dict carries
+    NO provider credential material — no ``ANTHROPIC_API_KEY``, no
+    ``AWS_*`` values at all — only the minted scoped token in
+    ``ANTHROPIC_AUTH_TOKEN`` and loopback dispatcher gateway routes.
+
+    ``proxy_base_url`` is the dispatcher gateway ORIGIN
+    (``http://127.0.0.1:<port>``); the per-install route suffixes are
+    derived here because they follow the CLI's backend mode:
+
+    * API-key installs: ``ANTHROPIC_BASE_URL = <origin>/anthropic``
+      with the token as the CLI's gateway bearer.
+    * Bedrock installs: the CLI ignores ``ANTHROPIC_BASE_URL`` — it
+      reads the Bedrock gateway family (names verified against the
+      shipped CLI, 2.1.234): ``ANTHROPIC_BEDROCK_MANTLE_BASE_URL``
+      (Mantle data-plane; the CLI POSTs ``<base>/v1/messages?beta=
+      true`` with ``Authorization: Bearer $ANTHROPIC_AUTH_TOKEN`` when
+      ``CLAUDE_CODE_SKIP_MANTLE_AUTH=1``) and
+      ``ANTHROPIC_BEDROCK_BASE_URL`` (control-plane; the CLI probes
+      ``GET <base>/inference-profiles``, which the dispatcher answers
+      with a canned empty listing for scoped tokens). The Mantle
+      surface is FORCED (``CLAUDE_CODE_USE_MANTLE=1``): the dispatcher
+      fronts Bedrock through its Mantle leg — native Anthropic
+      Messages with SSE streaming — while the legacy InvokeModel
+      streaming surface has no dispatcher leg.
+    """
+    import os
+
+    from core.config import RaptorConfig
+    from core.llm.egress import operator_proxy_env
+
+    if not proxy_base_url or not proxy_auth_token:
+        msg = (
+            "credential_mode='proxy' requires proxy_base_url and "
+            "proxy_auth_token — spawn must fail fast when no "
+            "dispatcher route exists"
+        )
+        raise ValueError(msg)
+
+    env = RaptorConfig.get_safe_env()
+    bedrock = bool(os.environ.get("CLAUDE_CODE_USE_BEDROCK"))
+    if not bedrock and (
+        os.environ.get("CLAUDE_CODE_USE_VERTEX")
+        or os.environ.get("CLAUDE_CODE_USE_FOUNDRY")
+    ):
+        msg = (
+            "credential_mode='proxy' supports Anthropic-API and "
+            "Bedrock installs — the dispatcher has no Vertex/Foundry "
+            "leg to front"
+        )
+        raise ValueError(msg)
+    for key, value in os.environ.items():
+        if not key.startswith(_CC_BACKEND_ENV_PREFIXES):
+            continue
+        if _cc_proxy_strip(key):
+            continue
+        env[key] = value
+    origin = proxy_base_url.rstrip("/")
+    if bedrock:
+        # Force the Mantle surface and normalize the install's model
+        # pins to ids Mantle accepts, so the child requests a model
+        # the dispatcher's Mantle leg can serve.
+        env["CLAUDE_CODE_USE_MANTLE"] = "1"
+        env["ANTHROPIC_BEDROCK_MANTLE_BASE_URL"] = (
+            origin + "/bedrock/mantle"
+        )
+        env["ANTHROPIC_BEDROCK_BASE_URL"] = origin + "/bedrock"
+        env["CLAUDE_CODE_SKIP_MANTLE_AUTH"] = "1"
+        env["CLAUDE_CODE_SKIP_BEDROCK_AUTH"] = "1"
+        try:
+            from core.llm.bedrock_prefixes import mantle_model_id
+            for model_var in ("ANTHROPIC_MODEL",
+                              "ANTHROPIC_SMALL_FAST_MODEL"):
+                pinned = env.get(model_var)
+                if isinstance(pinned, str) and pinned:
+                    env[model_var] = mantle_model_id(pinned)
+        except Exception:  # noqa: BLE001 — best-effort normalization
+            logger.debug(
+                "proxy-mode model-id normalization failed", exc_info=True,
+            )
+    else:
+        env["ANTHROPIC_BASE_URL"] = origin + "/anthropic"
+    env["ANTHROPIC_AUTH_TOKEN"] = proxy_auth_token
+    # Operator proxy env for any non-LLM egress the CLI attempts (the
+    # sandbox's own proxy overrides win when sandboxed)…
+    env.update(operator_proxy_env())
+    # …but the loopback dispatcher must NEVER route through a corporate
+    # proxy: merge loopback into NO_PROXY (union with whatever the
+    # operator set — same helper the egress chokepoint uses).
+    from core.llm.egress import _augment_no_proxy
+    existing = env.get("NO_PROXY") or env.get("no_proxy") or ""
+    merged = _augment_no_proxy(existing)
+    env["NO_PROXY"] = merged
+    env["no_proxy"] = merged
+
+    # Belt-and-braces enforcement of the zero-credential invariant —
+    # get_safe_env plus the strip above already guarantee it, but this
+    # assert is what the security posture rests on, so verify rather
+    # than trust the layering.
+    leaked = [
+        k for k in env
+        if k.startswith("AWS_")
+        or (k == "ANTHROPIC_API_KEY")
+    ]
+    for key in leaked:
+        env.pop(key, None)
+    if leaked:
+        logger.warning(
+            "proxy-mode child env: stripped unexpected credential-"
+            "family keys that survived filtering: %s", sorted(leaked),
+        )
+    return env
+
+
+def _mint_child_aws_credentials(env: dict) -> None:
+    """Attach resolved AWS session credentials for a Bedrock-backed
+    CLI child that cannot resolve its own.
+
+    The allowlisted AWS overlay above passes only *names*
+    (``AWS_PROFILE``, ``AWS_REGION``), never secret material: the real
+    credentials live behind ``~/.aws`` + IMDS. The child runs sandboxed — Landlock
+    denies ``~/.aws`` and the egress allowlist has no route to IMDS
+    (169.254.169.254:80) — so every provider in the child's own AWS
+    credential chain is dead and the CLI exits 1 with "Could not load
+    credentials from any providers" (the observed validate post-pass
+    failure).
+
+    Resolve the chain HERE, at the parent's trust boundary, and pass
+    the frozen (short-lived, auto-expiring for role/session
+    identities) credentials by env — the same model the LLM dispatcher
+    applies to workers ("the dispatcher attaches them at the parent's
+    trust boundary"). No trust is widened: the child receives exactly
+    the identity the parent already holds, scoped to env vars, only on
+    installs that opted into Bedrock. Never raises; failure is loud
+    (the child is about to fail anyway — say why).
+    """
+    if env.get("AWS_ACCESS_KEY_ID") or env.get("AWS_BEARER_TOKEN_BEDROCK"):
+        return  # static material already present — nothing to mint
+    try:
+        import botocore.session
+    except ImportError:
+        logger.warning(
+            "Bedrock-backed CLI child has no credential path: env "
+            "carries no AWS secret material and botocore is not "
+            "installed to mint session credentials",
+        )
+        return
+    frozen = None
+    try:
+        session = botocore.session.Session(
+            profile=env.get("AWS_PROFILE") or None,
+        )
+        creds = session.get_credentials()
+        if creds is not None:
+            frozen = creds.get_frozen_credentials()
+    except Exception:  # noqa: BLE001 — resolution failure must not break the spawn
+        logger.warning(
+            "AWS credential resolution for the CLI child failed — the "
+            "child has no credential path (sandbox denies ~/.aws and "
+            "IMDS)", exc_info=True,
+        )
+        return
+    if frozen is None:
+        logger.warning(
+            "AWS credential chain resolved nothing — the Bedrock-backed "
+            "CLI child will fail with 'Could not load credentials from "
+            "any providers'",
+        )
+        return
+    env["AWS_ACCESS_KEY_ID"] = frozen.access_key
+    env["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
+    if frozen.token:
+        env["AWS_SESSION_TOKEN"] = frozen.token
+    # The AWS SDKs' default provider chain SKIPS env credentials when
+    # AWS_PROFILE is set — and the profile is unreadable inside the
+    # sandbox. Drop the profile/config pointers so the minted env
+    # credentials are actually used; region pins stay.
+    for var in ("AWS_PROFILE", "AWS_SHARED_CREDENTIALS_FILE",
+                "AWS_CONFIG_FILE"):
+        env.pop(var, None)
+
+
+_neutral_cwd: str | None = None
+
+
+def neutral_cwd() -> str:
+    """Private empty directory for ``claude`` CLI children.
+
+    The CLI treats its working directory as a project root: it loads
+    CLAUDE.md, .claude/settings hooks, and skills from there. A
+    pure-LLM substrate child must not inherit whatever project the
+    parent process happens to be running in — that bloats every call
+    with the project's boot context (cost + latency) and runs the
+    project's SessionStart hooks. mode-0700 mkdtemp rather than
+    ``tempfile.gettempdir()`` because /tmp is world-writable: another
+    local user could plant ``/tmp/.claude`` hooks the child would
+    execute. Lazily created once per process, removed at exit.
+
+    Process-lifetime scratch: created through core.run.scratch (the
+    one way to make a temp work area — mkdtemp is 0700 by contract),
+    held open on an ExitStack that atexit closes.
+    """
+    import os
+    global _neutral_cwd
+    if _neutral_cwd is None or not os.path.isdir(_neutral_cwd):
+        import atexit
+        from core.run.scratch import scratch_dir
+        stack = contextlib.ExitStack()
+        _neutral_cwd = str(stack.enter_context(scratch_dir("raptor-cc-cwd-")))
+        atexit.register(stack.close)
+    return _neutral_cwd
 
 
 @dataclass(frozen=True)
@@ -26,7 +502,9 @@ class CCDispatchConfig:
     timeout_s: int = 300
     json_schema: dict[str, Any] | None = None
     capture_json_envelope: bool = True
-    # System prompt passed via the `--system-prompt` flag rather than
+    # System prompt passed via the CLI's system-prompt channel
+    # (`--system-prompt-file`, or inline `--system-prompt` for
+    # out-of-repo back-compat — see build_cc_command) rather than
     # prepended to the user prompt. Pre-fix `ClaudeCodeLLMProvider`
     # concatenated `f"{system_prompt}\n\n{prompt}"` and sent the
     # combined text as the user message — the model then saw it as
@@ -37,7 +515,7 @@ class CCDispatchConfig:
     # smuggle a re-instruction past the system layer the operator
     # thought they were setting. None means "no system prompt"
     # (pass-through).
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     # Default-True: sub-agents spawned by raptor's dispatch paths
     # (cc_dispatch, build_detector) don't need MCP servers and
     # shouldn't inherit the operator's ``~/.claude.json`` config.
@@ -47,29 +525,112 @@ class CCDispatchConfig:
     # False only if a caller genuinely needs MCP servers available
     # inside the sub-agent (no current consumer does). (gh #549)
     strict_mcp: bool = True
+    model: str | None = None
+    session_id: str | None = None
+    persist_session: bool = False
+    stream_json: bool = False
+    # Move per-machine system-prompt sections (cwd, env info, git
+    # status) into the first user message so the system prefix is
+    # byte-stable across processes and machines — the server-side
+    # prompt cache then hits across separate ``claude -p`` children
+    # (measured: 19k cache-read tokens and ~13x cost drop on the
+    # second identical-prefix call). The CLI ignores the flag when a
+    # custom ``--system-prompt`` is passed, so it is safe to emit
+    # unconditionally.
+    exclude_dynamic_sections: bool = True
+    # Operator knobs, resolved from env by default (field factories)
+    # so every dispatch site inherits them without call-site churn:
+    #   RAPTOR_CC_EFFORT          → ``--effort`` (low|medium|high|
+    #                               xhigh|max); invalid values warn
+    #                               and are dropped.
+    #   RAPTOR_CC_FALLBACK_MODEL  → ``--fallback-model``: the CLI
+    #                               retries on its own fallback when
+    #                               the default model is overloaded —
+    #                               backend-native resilience the
+    #                               transport can't replicate.
+    effort: str | None = field(default_factory=lambda: _env_cc_effort())
+    fallback_model: str | None = field(
+        default_factory=lambda: _env_cc_fallback_model(),
+    )
 
 
-def build_cc_command(config: CCDispatchConfig) -> list[str]:
+_CC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def _env_cc_effort() -> str | None:
+    raw = os.environ.get("RAPTOR_CC_EFFORT", "").strip().lower()
+    if not raw:
+        return None
+    if raw not in _CC_EFFORT_LEVELS:
+        logger.warning(
+            "RAPTOR_CC_EFFORT=%r not in %s — ignoring",
+            raw, sorted(_CC_EFFORT_LEVELS),
+        )
+        return None
+    return raw
+
+
+def _env_cc_fallback_model() -> str | None:
+    raw = os.environ.get("RAPTOR_CC_FALLBACK_MODEL", "").strip()
+    return raw or None
+
+
+def build_cc_command(
+    config: CCDispatchConfig,
+    *,
+    system_prompt_file: Path | str | None = None,
+) -> list[str]:
     """Build the argument list for ``claude -p``.
 
     Does not include the prompt (passed via stdin) or sandbox wrapping
     (caller decides sandbox posture).
+
+    ``system_prompt_file``: path to a file already holding
+    ``config.system_prompt`` (see ``system_prompt_file_for``). When
+    given and a system prompt is set, the command carries
+    ``--system-prompt-file <path>`` instead of the inline
+    ``--system-prompt <text>`` form.
+
+    Hygiene contract: in-repo callers MUST use the file form. The
+    inline form puts the full system prompt — which can embed operator
+    context and target excerpts — into the child's argv, where it is
+    world-readable via ``/proc/<pid>/cmdline`` on multi-user hosts
+    (``ps -eaf`` showed ~44KB argv per ``claude -p`` child pre-fix).
+    The inline fallback exists only for out-of-repo back-compat.
+    ``--json-schema`` deliberately stays on argv: the CLI has no file
+    variant for it, and the value is structural (schema shape, bounded
+    size), not operator/target content.
     """
-    cmd = [
-        config.claude_bin, "-p",
-        "--no-session-persistence",
-        "--allowed-tools", config.tools,
-        "--max-budget-usd", config.budget_usd,
-    ]
+    cmd = [config.claude_bin, "-p"]
+    if config.session_id:
+        cmd.extend(["--resume", config.session_id])
+    if not config.persist_session:
+        cmd.append("--no-session-persistence")
+    cmd.extend(["--allowed-tools", config.tools])
+    cmd.extend(["--max-budget-usd", config.budget_usd])
+    if config.model:
+        cmd.extend(["--model", config.model])
+    if config.fallback_model:
+        cmd.extend(["--fallback-model", config.fallback_model])
+    if config.effort:
+        cmd.extend(["--effort", config.effort])
+    if config.exclude_dynamic_sections:
+        cmd.append("--exclude-dynamic-system-prompt-sections")
     if config.system_prompt is not None and config.system_prompt.strip():
-        # `--system-prompt` keeps the system prompt in its own
-        # role-channel rather than concatenated to the user
-        # prompt. See CCDispatchConfig.system_prompt comment for
-        # the prompt-injection rationale.
-        cmd.extend(["--system-prompt", config.system_prompt])
+        # `--system-prompt`/`--system-prompt-file` keeps the system
+        # prompt in its own role-channel rather than concatenated to
+        # the user prompt. See CCDispatchConfig.system_prompt comment
+        # for the prompt-injection rationale, and this function's
+        # docstring for why the file form is mandatory in-repo.
+        if system_prompt_file is not None:
+            cmd.extend(["--system-prompt-file", str(system_prompt_file)])
+        else:
+            cmd.extend(["--system-prompt", config.system_prompt])
     for d in config.add_dirs:
         cmd.extend(["--add-dir", str(d)])
-    if config.capture_json_envelope:
+    if config.stream_json:
+        cmd.extend(["--output-format", "stream-json", "--verbose"])
+    elif config.capture_json_envelope:
         cmd.extend(["--output-format", "json"])
     if config.json_schema is not None:
         cmd.extend(["--json-schema", json.dumps(config.json_schema)])
@@ -95,6 +656,56 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
     return cmd
 
 
+@contextlib.contextmanager
+def system_prompt_file_for(config: CCDispatchConfig) -> Iterator[Path | None]:
+    """Stage ``config.system_prompt`` in a private tempfile for the
+    ``--system-prompt-file`` argv-hygiene form (see build_cc_command).
+
+    Yields ``None`` when the config carries no system prompt (empty or
+    unset — mirrors build_cc_command's emit condition, so the pair
+    composes as ``build_cc_command(cfg, system_prompt_file=path)``
+    unconditionally). Otherwise yields the path of a 0600 tempfile
+    (``cc-sysprompt-*.txt`` in TMPDIR) holding the prompt utf-8; the
+    file is unlinked when the block exits, so keep the child's spawn
+    AND wait inside the ``with`` block.
+
+    Sandboxed callers (Landlock restrict_reads / mount-ns spawns) must
+    add the yielded path to the run's ``readable_paths`` — TMPDIR is
+    not readable inside the sandbox by default.
+
+    Residual: a SIGKILL between spawn and cleanup leaves the 0600 file
+    behind in TMPDIR. It is same-user-readable only (never in argv, so
+    never in /proc/<pid>/cmdline), and pytest runs are contained by the
+    session scratch redirect.
+    """
+    if config.system_prompt is None or not config.system_prompt.strip():
+        yield None
+        return
+    fd, raw_path = tempfile.mkstemp(prefix="cc-sysprompt-", suffix=".txt")
+    path = Path(raw_path)
+    try:
+        try:
+            # 0600 is guaranteed by the mkstemp contract; assert
+            # anyway — the prompt can embed operator context and
+            # target excerpts, so a permissive-umask regression in a
+            # future tempfile implementation must fail loud, not leak.
+            mode = stat.S_IMODE(os.fstat(fd).st_mode)
+            if mode != 0o600:
+                msg = f"mkstemp returned mode {mode:04o}, expected 0600"
+                raise AssertionError(msg)
+        except BaseException:
+            os.close(fd)
+            raise
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(config.system_prompt)
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
 def strip_json_fences(text: str) -> str:
     """Strip markdown code fences wrapping JSON.
 
@@ -114,10 +725,25 @@ def strip_json_fences(text: str) -> str:
     if "```" not in text:
         return text
     parts = text.split("```")
-    last_candidate: Optional[str] = None
+    last_candidate: str | None = None
     for part in parts[1::2]:
         lines = part.strip().split("\n", 1)
-        candidate = lines[1].strip() if len(lines) > 1 and not lines[0].startswith("{") else part.strip()
+        # First line is a language tag ("json") only when it doesn't
+        # already start the JSON payload. Pre-fix the check covered
+        # "{" but not "[": a fenced array whose "[" sat alone on the
+        # first line had that line discarded as a "tag", corrupting
+        # the candidate and dropping the block entirely.
+        candidate = (
+            lines[1].strip()
+            if len(lines) > 1 and not lines[0].lstrip().startswith(("{", "["))
+            else part.strip()
+        )
+        if candidate and candidate[0] not in "{[":
+            # Single-line fenced block with the language tag on the
+            # same line ("```json {...}```") — drop the tag.
+            head, _, rest = candidate.partition(" ")
+            if head.isalpha() and rest.lstrip()[:1] in ("{", "["):
+                candidate = rest.lstrip()
         if candidate and candidate[0] in "{[":
             last_candidate = candidate
     return last_candidate if last_candidate is not None else text
@@ -150,7 +776,7 @@ def extract_envelope_metadata(envelope: dict, into: dict) -> None:
         # tracking when multiple models are summed under one name.
         # Sort for deterministic output (envelope dict ordering is
         # CC's choice, may vary across CC versions).
-        into["analysed_by"] = ",".join(sorted(model_usage.keys()))
+        into["analysed_by"] = ",".join(sorted(model_usage))
     elif "analysed_by" not in into:
         # Pre-fix this branch unconditionally set
         # `into["analysed_by"] = "claude-code"`, clobbering any
@@ -165,11 +791,46 @@ def extract_envelope_metadata(envelope: dict, into: dict) -> None:
         # already provided a value. Honors caller intent when
         # they have richer attribution context than the envelope.
         into["analysed_by"] = "claude-code"
-    usage = envelope.get("usage", {})
+    usage = envelope.get("usage")
+    if not isinstance(usage, dict):
+        # Same malformed-envelope tolerance as the modelUsage branch
+        # above — a non-dict ``usage`` must degrade to "no token
+        # figures", not crash the parse.
+        usage = {}
     in_tokens = usage.get("input_tokens", 0) or 0
     out_tokens = usage.get("output_tokens", 0) or 0
     if "input_tokens" in usage or "output_tokens" in usage:
         into["_tokens"] = in_tokens + out_tokens
+
+
+def _envelope_error(envelope: dict) -> Any | None:
+    """In-band failure reported by a ``claude -p`` JSON envelope, or None.
+
+    Shared by :func:`parse_cc_structured` and :func:`parse_cc_freeform`
+    so the two parsers cannot drift on what counts as a failed run.
+
+    ``is_error is True`` covers the canonical bool. We also accept
+    string ``"true"`` / ``"True"`` because some upstream JSON
+    serialisers / fixture builders coerce bool to string. The
+    error-string check rejects the literal ``"false"`` / ``"none"`` /
+    ``"null"`` which are truthy by Python's bool() but semantically
+    empty — ``if envelope.get("error")`` alone fired for
+    ``error: "false"`` on responses that were actually fine.
+    """
+    err_field = envelope.get("error")
+    if isinstance(err_field, str) and err_field.strip().lower() in (
+        "false", "none", "null", "0", "",
+    ):
+        err_field = None
+    is_error_flag = envelope.get("is_error")
+    is_error = (
+        is_error_flag is True
+        or (isinstance(is_error_flag, str)
+            and is_error_flag.strip().lower() == "true")
+    )
+    if is_error or err_field:
+        return err_field or "claude -p reported is_error=true"
+    return None
 
 
 def parse_cc_structured(
@@ -204,6 +865,30 @@ def parse_cc_structured(
                 inner.setdefault("finding_id", finding_id)
                 extract_envelope_metadata(result, inner)
                 return inner
+            # Envelope reporting an in-band failure (is_error=true /
+            # non-empty error) with no structured_output: surface it
+            # as an error result. Pre-fix the whole envelope was
+            # returned verbatim as if it were a valid parsed finding —
+            # a failed run masked as a garbage result (and the
+            # parse_cc_freeform comment claiming this check existed
+            # here was false). Same redaction + defang rationale as
+            # the empty-output path above: the error text comes from
+            # the CC subprocess and may carry credentials or
+            # terminal-control bytes.
+            env_error = _envelope_error(result)
+            if env_error is not None:
+                from core.security.prompt_output_sanitise import escape_nonprintable
+                out: dict[str, Any] = {
+                    "finding_id": finding_id,
+                    "error": escape_nonprintable(
+                        redact_secrets(str(env_error)[:500])
+                    ),
+                }
+                # Failed runs still cost money — keep the envelope's
+                # cost/duration/model telemetry, as parse_cc_freeform
+                # does on its error path.
+                extract_envelope_metadata(result, out)
+                return out
             result.setdefault("finding_id", finding_id)
             return result
     except json.JSONDecodeError:
@@ -212,13 +897,19 @@ def parse_cc_structured(
     if "```" in content:
         try:
             parts = content.split("```")
+            last_valid = None
             for part in parts[1::2]:
                 lines = part.strip().split("\n", 1)
                 json_str = lines[1] if len(lines) > 1 and not lines[0].startswith("{") else part
-                result = json.loads(json_str.strip())
-                if isinstance(result, dict):
-                    result.setdefault("finding_id", finding_id)
-                    return result
+                try:
+                    candidate = json.loads(json_str.strip())
+                    if isinstance(candidate, dict):
+                        last_valid = candidate
+                except (json.JSONDecodeError, IndexError):
+                    continue
+            if last_valid is not None:
+                last_valid.setdefault("finding_id", finding_id)
+                return last_valid
         except (json.JSONDecodeError, IndexError):
             pass
 
@@ -277,31 +968,391 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
             # An envelope with is_error=true (or non-empty error) reports an
             # in-band failure; without this check, "" content would surface
             # as if it were a successful empty response. parse_cc_structured
-            # already checks this — keep behaviour symmetric here.
-            #
-            # `is True` covers the canonical bool. We also accept string
-            # `"true"` / `"True"` because some upstream JSON serialisers
-            # / fixture builders coerce bool to string. The error-string
-            # check rejects the literal `"false"` / `"none"` / `"null"`
-            # which are truthy by Python's bool() but semantically empty
-            # — `if envelope.get("error")` alone fired for `error: "false"`
-            # on responses that were actually fine.
-            err_field = envelope.get("error")
-            if isinstance(err_field, str) and err_field.strip().lower() in (
-                "false", "none", "null", "0", "",
-            ):
-                err_field = None
-            is_error_flag = envelope.get("is_error")
-            is_error = (
-                is_error_flag is True
-                or (isinstance(is_error_flag, str)
-                    and is_error_flag.strip().lower() == "true")
-            )
-            if is_error or err_field:
-                parsed["error"] = err_field or "claude -p reported is_error=true"
+            # runs the same check via the shared _envelope_error helper —
+            # keep behaviour symmetric here.
+            env_error = _envelope_error(envelope)
+            if env_error is not None:
+                parsed["error"] = env_error
             extract_envelope_metadata(envelope, parsed)
             return parsed
     except json.JSONDecodeError:
         pass
 
     return {"content": content}
+
+
+def extract_session_id(stdout: str) -> str | None:
+    """Extract ``session_id`` from a ``claude -p --output-format json`` envelope."""
+    try:
+        envelope = json.loads(stdout.strip())
+        if isinstance(envelope, dict):
+            sid = envelope.get("session_id")
+            if isinstance(sid, str) and sid:
+                return sid
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return None
+
+
+@dataclass
+class StreamJsonResult:
+    """Parsed result from ``--output-format stream-json --verbose``."""
+    content: str = ""
+    structured_output: dict[str, Any] | None = None
+    session_id: str | None = None
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    model: str | None = None
+    error: str | None = None
+
+
+def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
+    """Parse JSON lines from ``--output-format stream-json --verbose``.
+
+    Each line is a JSON object with a ``type`` field:
+    - ``assistant``: contains the model response in ``message.content``
+    - ``result``: final metadata — session_id, cost, usage
+    - ``system``: hook events (ignored)
+    """
+    result = StreamJsonResult()
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+
+        msg_type = obj.get("type")
+        if msg_type == "assistant":
+            # ACCUMULATE across assistant events — one invocation can
+            # emit several ``type: "assistant"`` lines (one per
+            # message). Overwriting silently dropped every message but
+            # the last from ``content`` and under-counted usage. The
+            # final ``result`` event below stays the authoritative
+            # override for token totals where present.
+            message = obj.get("message", {})
+            content_blocks = message.get("content", [])
+            texts = [block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text"]
+            text = "\n".join(texts)
+            if text:
+                result.content = (
+                    f"{result.content}\n{text}" if result.content else text
+                )
+            usage = message.get("usage", {})
+            result.input_tokens += usage.get("input_tokens", 0) or 0
+            result.output_tokens += usage.get("output_tokens", 0) or 0
+            cache_read = usage.get("cache_read_input_tokens", 0)
+            cache_create = usage.get("cache_creation_input_tokens", 0)
+            if cache_read:
+                result.cache_read_tokens += cache_read
+            if cache_create:
+                result.cache_creation_tokens += cache_create
+            result.model = message.get("model") or result.model
+
+        elif msg_type == "result":
+            result.session_id = obj.get("session_id")
+            # With ``--json-schema``, current CLIs (>= 2.1.x) have the
+            # model deliver the object via a StructuredOutput tool call
+            # — the assistant messages carry no text blocks, and the
+            # validated object arrives here instead. Older CLIs echoed
+            # the JSON as assistant text, which is why content-text
+            # parsing alone used to work.
+            structured = obj.get("structured_output")
+            if isinstance(structured, dict):
+                result.structured_output = structured
+            cost = obj.get("total_cost_usd")
+            if isinstance(cost, (int, float)):
+                result.cost_usd = cost
+            usage = obj.get("usage", {})
+            if isinstance(usage.get("input_tokens"), int):
+                result.input_tokens = usage["input_tokens"]
+            if isinstance(usage.get("output_tokens"), int):
+                result.output_tokens = usage["output_tokens"]
+            if obj.get("is_error"):
+                # ``result`` may be an empty string on abort events
+                # (e.g. budget cap: subtype error_max_budget_usd with
+                # result "") — fall through to the subtype so the
+                # cause is never silently dropped.
+                result.error = (
+                    obj.get("result")
+                    or obj.get("subtype")
+                    or "stream-json reported is_error"
+                )
+
+    return result
+
+
+# Retention ceilings for the streamed child's stdout/stderr. The
+# drain loop in run_cc_streaming exists to avoid pipe deadlock, but
+# pre-fix it retained every line/chunk, so the only memory bound was
+# endpoint bandwidth x the call deadline — a hostile or compromised
+# endpoint could stream gigabytes into parent memory. Ceilings are
+# generous (the largest legitimate stream-json transcripts are a few
+# MiB) and env-overridable; a single readline allocation is bounded
+# separately so one endless unterminated line can't balloon inside
+# readline itself.
+_STREAM_STDOUT_CAP_DEFAULT = 64 * 1024 * 1024
+_STREAM_STDERR_CAP_DEFAULT = 8 * 1024 * 1024
+_STREAM_READ_MAX = 16 * 1024 * 1024
+
+
+def _env_byte_cap(name: str, default: int) -> int:
+    """Positive-int env override with silent fallback to *default*."""
+    import os
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class _CappedCapture:
+    """Head + rolling-tail capture with a cumulative byte ceiling.
+
+    Keeps the HEAD of the stream (init/system lines, the first error
+    spew) and a rolling TAIL (the newest bytes — the authoritative
+    stream-json ``result`` event always arrives last), dropping the
+    middle once the ceiling is hit. Protocol correctness survives
+    truncation: :func:`parse_stream_json_lines` skips non-JSON
+    fragments, and the result line rides the retained tail.
+    """
+
+    def __init__(self, cap: int) -> None:
+        from collections import deque
+        self._head_cap = cap // 2
+        self._tail_cap = cap - self._head_cap
+        self._head: list = []
+        self._head_bytes = 0
+        self._tail = deque()
+        self._tail_bytes = 0
+        self.dropped_bytes = 0
+
+    def append(self, item) -> None:
+        size = len(item)
+        if not self._tail and self._head_bytes + size <= self._head_cap:
+            self._head.append(item)
+            self._head_bytes += size
+            return
+        self._tail.append(item)
+        self._tail_bytes += size
+        # Evict oldest tail items; always keep the newest one even if
+        # it alone exceeds the tail budget (single items are already
+        # bounded by the read-size caps at the append sites).
+        while self._tail_bytes > self._tail_cap and len(self._tail) > 1:
+            dropped = self._tail.popleft()
+            self._tail_bytes -= len(dropped)
+            self.dropped_bytes += len(dropped)
+
+    @property
+    def truncated(self) -> bool:
+        return self.dropped_bytes > 0
+
+    def items(self) -> list:
+        return self._head + list(self._tail)
+
+
+def run_cc_streaming(
+    cmd: list[str],
+    prompt: str,
+    env: dict[str, str],
+    timeout_s: int | None,
+    cwd: str | None = None,
+) -> StreamJsonResult:
+    """Run ``claude -p --output-format stream-json`` via Popen, reading
+    JSON lines as they arrive.
+
+    Returns as soon as the process exits. The assistant message content
+    is available from the first ``assistant`` JSON line — typically
+    seconds before the process finishes its cleanup.
+
+    ``cwd=None`` (the default) runs the child in :func:`neutral_cwd`,
+    NOT the parent's cwd: the CLI loads project context (CLAUDE.md,
+    settings hooks, memory bootstrap) from its working directory, so
+    inheriting the parent's cwd makes every pure-LLM call boot
+    whatever project lives there — measured 98s / $0.35 for a
+    one-line prompt from the RAPTOR repo vs 7s / $0.05 from a neutral
+    dir — and executes that project's hooks, which is an injection
+    surface when the cwd is not operator-controlled. Pass an explicit
+    path only when a caller genuinely wants project context loaded.
+    """
+    import os
+    import select
+    import subprocess
+    import time as _time
+
+    # Spawn-time pin: refuse PATH-dependent (bare-name) and
+    # cwd-relative argv[0]. Every spawn from here carries backend
+    # credentials in its env, so re-resolving the binary against the
+    # ambient PATH at exec time is a substitution surface — callers
+    # must pin an absolute path first (see resolve_claude_cli).
+    if not cmd or not os.path.isabs(cmd[0]):
+        raise FileNotFoundError(
+            f"refusing PATH-dependent exec of {cmd[0] if cmd else None!r}: "
+            "the claude CLI must be resolved to an absolute path before "
+            "spawn (resolve_claude_cli)"
+        )
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=cwd if cwd is not None else neutral_cwd(),
+    )
+
+    # Feed the prompt through the SAME deadline-governed select loop
+    # that drains stdout/stderr, in non-blocking chunks. Pre-fix the
+    # full prompt was written in ONE blocking call before the loop
+    # started: a prompt larger than the pipe buffer (64KB) sent to a
+    # child that is itself blocked writing to stdout/stderr — which
+    # nothing was draining yet — deadlocks both processes, and the
+    # write sat outside timeout coverage, so the call hung forever
+    # instead of raising TimeoutExpired. The stdin fd joins the
+    # writable select set until the prompt is fully drained, then
+    # closes (EOF for the child); the deadline covers every chunk.
+    stdin_data = prompt.encode("utf-8")
+    stdin_pos = 0
+    stdin_fd = proc.stdin.fileno() if proc.stdin else None
+    if stdin_fd is not None:
+        os.set_blocking(stdin_fd, False)
+
+    def _close_stdin() -> None:
+        nonlocal stdin_fd
+        if stdin_fd is None:
+            return
+        stdin_fd = None
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+    collected = _CappedCapture(
+        _env_byte_cap("RAPTOR_CC_STREAM_STDOUT_CAP", _STREAM_STDOUT_CAP_DEFAULT),
+    )
+    # Drain stderr WHILE the child runs. A child that writes more
+    # than the 64KB pipe buffer to stderr (network retry spew, node
+    # warnings) otherwise blocks in write(2) forever and the call
+    # dies as a timeout instead of surfacing the real error. Read via
+    # os.read on the raw fd — readline() on the text wrapper could
+    # block on a partial line even after select() reports readiness.
+    stderr_chunks = _CappedCapture(
+        _env_byte_cap("RAPTOR_CC_STREAM_STDERR_CAP", _STREAM_STDERR_CAP_DEFAULT),
+    )
+    stderr_fd = proc.stderr.fileno() if proc.stderr else None
+    start = _time.monotonic()
+    deadline = start + timeout_s if timeout_s else None
+
+    while proc.poll() is None:
+        remaining = None
+        if deadline is not None:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                _close_stdin()
+                proc.kill()
+                proc.wait()
+                raise subprocess.TimeoutExpired(cmd, timeout_s or 0)
+        read_set = [s for s in (proc.stdout, proc.stderr) if s]
+        write_set = [stdin_fd] if stdin_fd is not None else []
+        ready, writable, _ = select.select(
+            read_set, write_set, [], min(remaining or 1.0, 1.0),
+        )
+        if stdin_fd is not None and stdin_fd in writable:
+            try:
+                stdin_pos += os.write(
+                    stdin_fd, stdin_data[stdin_pos:stdin_pos + 65536],
+                )
+            except BlockingIOError:
+                pass
+            except (BrokenPipeError, OSError):
+                # A child that exits at startup (bad flag, missing
+                # backend) closes its end before consuming the prompt.
+                # Swallow so control reaches the returncode path below,
+                # which reports "claude -p exited N" with the child's
+                # stderr instead of crashing the caller.
+                _close_stdin()
+            if stdin_fd is not None and stdin_pos >= len(stdin_data):
+                _close_stdin()
+        if proc.stdout in ready:
+            # Bounded readline: an endless unterminated line otherwise
+            # accumulates inside readline itself. Oversize lines split
+            # into fragments the parser skips.
+            line = proc.stdout.readline(_STREAM_READ_MAX)
+            if line:
+                collected.append(line)
+        if proc.stderr in ready and stderr_fd is not None:
+            chunk = os.read(stderr_fd, 65536)
+            if chunk:
+                stderr_chunks.append(chunk)
+
+    # Child exited — if it did so without consuming the whole prompt,
+    # release our end so nothing lingers.
+    _close_stdin()
+
+    if proc.stdout:
+        while True:
+            line = proc.stdout.readline(_STREAM_READ_MAX)
+            if not line:
+                break
+            collected.append(line)
+    # Drain whatever stderr remains without blocking (zero-timeout
+    # select guards against a grandchild holding the pipe open).
+    while stderr_fd is not None:
+        ready, _, _ = select.select([stderr_fd], [], [], 0)
+        if not ready:
+            break
+        chunk = os.read(stderr_fd, 65536)
+        if not chunk:
+            break
+        stderr_chunks.append(chunk)
+
+    for stream_name, capture in (
+        ("stdout", collected), ("stderr", stderr_chunks),
+    ):
+        if capture.truncated:
+            logger.warning(
+                "claude -p %s exceeded the retention ceiling — dropped "
+                "%d bytes from the middle of the stream (head and tail "
+                "kept)", stream_name, capture.dropped_bytes,
+            )
+
+    if proc.returncode != 0:
+        stderr_text = b"".join(stderr_chunks.items()).decode("utf-8", "replace")
+        from core.security.prompt_output_sanitise import escape_nonprintable
+        partial = parse_stream_json_lines(collected.items())
+        # Aborts (budget cap, API refusal) exit nonzero with EMPTY
+        # stderr — the cause lives in the final stream-json result
+        # event. Prefer stderr when present, else the parsed event's
+        # error/subtype, so the operator never sees a bare "exited 1:".
+        cause = (stderr_text or "").strip() or (partial.error or "")
+        err = StreamJsonResult()
+        err.error = (
+            f"claude -p exited {proc.returncode}: "
+            f"{escape_nonprintable(redact_secrets(cause[:500]))}"
+        )
+        err.session_id = partial.session_id
+        # A failed call still SPENT money — a budget abort
+        # (error_max_budget_usd) burns up to the per-call cap before
+        # exiting nonzero. Carry the parsed telemetry so the caller
+        # can book the spend on its ledger; dropping it here made N
+        # budget-aborted calls invisible to max-cost enforcement.
+        err.cost_usd = partial.cost_usd
+        err.input_tokens = partial.input_tokens
+        err.output_tokens = partial.output_tokens
+        err.cache_read_tokens = partial.cache_read_tokens
+        err.cache_creation_tokens = partial.cache_creation_tokens
+        err.model = partial.model
+        return err
+
+    return parse_stream_json_lines(collected.items())

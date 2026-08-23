@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Run Phase 2 + 3 of /understand --study: LLM concept extraction.
+
+Usage:
+    raptor-study-run <output_dir> [--model MODEL]
+
+Reads study-list.json from output_dir (written by raptor-study-prep),
+dispatches items to an LLM in batches, synthesises results, and writes
+domain-model.json to the same directory.
+
+Requires an LLM provider (set ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.).
+"""
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+from core.concepts.study import run_study  # noqa: E402
+
+logger = logging.getLogger("raptor-study-run")
+
+
+def _progress(phase: str, message: str) -> None:
+    print(f"study-run[{phase}]: {message}", file=sys.stderr, flush=True)
+
+
+
+
+def _ensure_llm_dispatcher(client, label: str) -> None:
+    """Self-serve the in-process LLM dispatcher for Bedrock-routed
+    models. Pipeline runs inherit one from their parent; a standalone
+    CLI is its own parent — without this every Bedrock call dies with
+    "requires the RAPTOR LLM dispatcher". Shared gate with
+    raptor-llm-ask; no-op when a route exists or none is needed.
+    """
+    try:
+        from core.llm.dispatcher.lifecycle import (
+            ensure_route_for_model_configs,
+        )
+        configs = [getattr(client.config, "primary_model", None)]
+        configs += list(getattr(client.config, "fallback_models", []) or [])
+        ensure_route_for_model_configs(configs, label=label)
+    except Exception:  # noqa: BLE001 — provider errors surface at call time
+        pass
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-study-run",
+        description="Phase 2 + 3: LLM concept extraction and synthesis.",
+    )
+    ap.add_argument("output_dir", help="Directory with study-list.json.")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override (e.g. claude-sonnet-4-6).")
+    ap.add_argument("--batch-target", type=int, default=80,
+                    help="Items per Phase-2 LLM batch (default 80). "
+                         "Lower it for slow/thinking models whose "
+                         "single-batch responses outlive transport "
+                         "read timeouts.")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if parsed.verbose else logging.INFO,
+        format="%(name)s: %(message)s",
+    )
+    for _noisy in ("httpx", "httpcore", "urllib3"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+    output_dir = Path(parsed.output_dir).resolve()
+    study_list = output_dir / "study-list.json"
+    if not study_list.is_file():
+        print(
+            f"study-run: {study_list} not found — run raptor-study-prep first",
+            file=sys.stderr,
+        )
+        return 1
+
+    from packages.llm_analysis import get_client
+
+    if parsed.model:
+        from core.llm.config import LLMConfig
+
+        cfg = LLMConfig()
+        mc = cfg.config_for_model(parsed.model)
+        # Some providers are keyless BY DESIGN: Bedrock workers never
+        # hold AWS credentials (the dispatcher attaches them at the
+        # parent's trust boundary), the claudecode subprocess carries
+        # its own CLI auth, and ollama is a local server. Only
+        # key-carrying providers fail fast here.
+        keyless_ok = {"bedrock", "claudecode", "claudecode-resumable", "ollama"}
+        if not mc.api_key and mc.provider not in keyless_ok:
+            print(
+                f"study-run: no API key for --model {parsed.model}\n"
+                f"  Set the provider env var or add the key to models.json",
+                file=sys.stderr,
+            )
+            return 1
+        client = get_client(config=LLMConfig(primary_model=mc, fallback_models=[]))
+        _ensure_llm_dispatcher(client, "raptor-study-run")
+    else:
+        client = get_client()
+
+    if client is None:
+        print(
+            "study-run: no LLM provider available. "
+            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or similar.",
+            file=sys.stderr,
+        )
+        return 1
+
+    _progress("start", f"Reading {study_list}")
+    model = run_study(
+        study_list,
+        output_dir,
+        client,
+        on_progress=_progress,
+        batch_target=parsed.batch_target,
+    )
+
+    print(
+        f"study-run: domain model written — "
+        f"{len(model.concepts)} concepts, "
+        f"{len(model.invariants)} invariants, "
+        f"{len(model.contracts)} contracts",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

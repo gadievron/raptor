@@ -26,15 +26,16 @@ from __future__ import annotations
 
 import json as _json
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any
 
-from core.cve import EpssClient
-from core.cve import KevClient
+from core.cve import EpssClient, KevClient
 from core.cve.vulnrichment import VulnrichmentClient
+
 from .models import (
     Advisory,
     Confidence,
@@ -46,11 +47,12 @@ from .models import (
     VulnFinding,
 )
 from .osv import OsvResult
-from .versions import VersionError, compare as version_compare
+from .versions import VersionError
+from .versions import compare as version_compare
 
 logger = logging.getLogger(__name__)
 
-_SEVERITY_RANK: Dict[str, int] = {
+_SEVERITY_RANK: dict[str, int] = {
     "info": 0, "none": 0,
     "low": 1, "medium": 2, "high": 3, "critical": 4,
 }
@@ -70,11 +72,11 @@ _DEFAULT_REACHABILITY = Reachability(
 def build_vuln_findings(
     deps: Sequence[Dependency],
     osv_results: Sequence[OsvResult],
-    kev: Optional[KevClient] = None,
-    epss: Optional[EpssClient] = None,
-    reachability: Optional[Dict[str, Reachability]] = None,
-    vulnrichment: Optional["VulnrichmentClient"] = None,
-) -> List[VulnFinding]:
+    kev: KevClient | None = None,
+    epss: EpssClient | None = None,
+    reachability: dict[str, Reachability] | None = None,
+    vulnrichment: VulnrichmentClient | None = None,
+) -> list[VulnFinding]:
     """Combine signal layers into one ``VulnFinding`` per (dep, advisory).
 
     Args:
@@ -90,38 +92,40 @@ def build_vuln_findings(
             KEV / EPSS / EDB / MSF / PoC return nothing for the
             majority of advisories. ``None`` skips the SSVC layer.
     """
-    out: List[VulnFinding] = []
+    out: list[VulnFinding] = []
 
     # Pre-pass: dedup advisories that are aliases of the same CVE. OSV
     # routinely returns ``GHSA-…`` AND ``PYSEC-…`` for one underlying
     # CVE; emitting both produces visually-duplicate findings the
     # operator has to triage twice.
-    deduped_results: Dict[str, List[Advisory]] = {}
+    deduped_results: dict[str, list[Advisory]] = {}
     for r in osv_results:
         deduped_results[r.dep_key] = _dedup_alias_advisories(r.advisories)
 
     # First pass: compute related-finding IDs per dep so each finding can
     # carry the cross-references in one shot.
-    related_by_dep: Dict[str, List[str]] = {}
+    related_by_dep: dict[str, list[str]] = {}
     for d in deps:
-        advisories = deduped_results.get(d.key())
-        if advisories is None:
+        groups = deduped_results.get(d.key())
+        if groups is None:
             continue
         related_by_dep[d.key()] = [
-            _vuln_finding_id(d, a) for a in advisories
+            _vuln_finding_id(d, _group_representative(g)) for g in groups
         ]
 
     for d in deps:
-        advisories = deduped_results.get(d.key())
-        if not advisories:
+        groups = deduped_results.get(d.key())
+        if not groups:
             continue
         sibling_ids = related_by_dep.get(d.key(), [])
-        for adv in advisories:
-            this_id = _vuln_finding_id(d, adv)
+        for group in groups:
+            rep = _group_representative(group)
+            this_id = _vuln_finding_id(d, rep)
             related = [i for i in sibling_ids if i != this_id]
             out.append(_assemble_finding(
                 dep=d,
-                advisory=adv,
+                group=group,
+                advisory=rep,
                 this_id=this_id,
                 related_ids=related,
                 kev=kev,
@@ -132,28 +136,57 @@ def build_vuln_findings(
     return out
 
 
-def _dedup_alias_advisories(advisories: List[Advisory]) -> List[Advisory]:
-    """Collapse advisories pointing at the same underlying CVE.
+def _dedup_alias_advisories(advisories: list[Advisory]) -> list[list[Advisory]]:
+    """Group advisories pointing at the same underlying CVE.
 
-    Keys on the first ``CVE-*`` alias when present (the canonical name);
-    falls back to the OSV id otherwise. Preference order when multiple
-    OSV records share a CVE: GHSA-* > CVE-* > PYSEC-* > everything else
-    (GHSA records are usually the most complete).
+    Keys on the sorted tuple of ALL ``CVE-*`` aliases when any exist
+    (the canonical name set); falls back to the OSV id otherwise.
+    Records whose CVE-alias sets differ do NOT merge — emitting two
+    findings over-reports, which is the safe direction under a hostile
+    advisory feed.
+
+    Every member of a group is KEPT (returned as a list), and the
+    assembly stage combines them conservatively: a merged group can
+    only add scrutiny, never remove it. Pre-fix, one survivor was
+    picked by osv-id prefix (GHSA-* first) and alone drove severity /
+    fix version / summary — so a crafted GHSA record sharing a real
+    CVE alias defanged the genuine finding (severity=none, understated
+    fix version, benign summary). See ``_group_representative`` and
+    ``_assemble_finding`` for the conservative combination rules.
     """
-    by_key: Dict[str, Advisory] = {}
-    order: List[str] = []
+    by_key: dict[tuple | str, list[Advisory]] = {}
+    order: list[tuple | str] = []
     for a in advisories:
-        cve = next((x for x in a.aliases
-                    if isinstance(x, str) and x.upper().startswith("CVE-")),
-                   None)
-        key = cve.upper() if cve else a.osv_id
+        cves = sorted({
+            x.upper() for x in a.aliases
+            if isinstance(x, str) and x.upper().startswith("CVE-")
+        })
+        key: tuple | str = tuple(cves) if cves else a.osv_id
         if key not in by_key:
-            by_key[key] = a
+            by_key[key] = []
             order.append(key)
-            continue
-        if _advisory_priority(a) < _advisory_priority(by_key[key]):
-            by_key[key] = a
+        by_key[key].append(a)
     return [by_key[k] for k in order]
+
+
+def _group_representative(group: list[Advisory]) -> Advisory:
+    """The advisory whose identity and text face the operator.
+
+    Chosen AMONG the advisories achieving the group's maximum severity
+    (so a crafted low-severity record sharing the real CVE alias can
+    never become the face of the finding), tie-broken by
+    ``_advisory_priority`` (GHSA records are usually the most
+    complete) and then first-seen order.
+    """
+    top = max(
+        _SEVERITY_RANK[_severity_for_advisory(a)] for a in group
+    )
+    contenders = [
+        a for a in group
+        if _SEVERITY_RANK[_severity_for_advisory(a)] == top
+    ]
+    # ``min`` is stable: first-seen wins among equal priorities.
+    return min(contenders, key=_advisory_priority)
 
 
 def _advisory_priority(a: Advisory) -> int:
@@ -163,7 +196,7 @@ def _advisory_priority(a: Advisory) -> int:
         return 0
     if p.startswith("CVE-"):
         return 1
-    if p.startswith("PYSEC-") or p.startswith("OSV-"):
+    if p.startswith(("PYSEC-", "OSV-")):
         return 2
     return 3
 
@@ -171,17 +204,38 @@ def _advisory_priority(a: Advisory) -> int:
 def _assemble_finding(
     *,
     dep: Dependency,
+    group: list[Advisory],
     advisory: Advisory,
     this_id: str,
-    related_ids: List[str],
-    kev: Optional[KevClient],
-    epss: Optional[EpssClient],
-    reachability: Optional[Dict[str, Reachability]],
-    vulnrichment: Optional[VulnrichmentClient] = None,
+    related_ids: list[str],
+    kev: KevClient | None,
+    epss: EpssClient | None,
+    reachability: dict[str, Reachability] | None,
+    vulnrichment: VulnrichmentClient | None = None,
 ) -> VulnFinding:
-    cve_aliases = [a for a in advisory.aliases if a.upper().startswith("CVE-")]
+    """Assemble one finding from an alias-merged advisory ``group``.
+
+    ``advisory`` is the group representative (see
+    ``_group_representative``) — it supplies the finding id, summary,
+    and CVSS vector. Severity and fix version are combined
+    CONSERVATIVELY across the whole group: severity is the group
+    maximum, and the fix version is the highest of each member's own
+    smallest-applicable fix. A crafted advisory sharing a real CVE
+    alias can therefore add scrutiny but never defang the genuine
+    record's severity, fix version, or summary.
+    """
+    # Union of CVE aliases across the group, first-seen order. With
+    # the sorted-alias-tuple grouping key the members' CVE sets are
+    # identical, so this normally equals the representative's — kept
+    # as a union so KEV / EPSS / SSVC enrichment stays complete if the
+    # grouping key ever loosens.
+    cve_aliases: list[str] = []
+    for a in group:
+        for alias in a.aliases:
+            if alias.upper().startswith("CVE-") and alias not in cve_aliases:
+                cve_aliases.append(alias)
     in_kev = bool(kev and any(kev.contains(c) for c in cve_aliases))
-    epss_score: Optional[float] = None
+    epss_score: float | None = None
     if epss and cve_aliases:
         scores = epss.scores(cve_aliases)
         if scores:
@@ -201,8 +255,8 @@ def _assemble_finding(
     # is still wormable-potential in practice. The risk formula
     # consumes this as a small bonus multiplier on top of the
     # SSVC tier when Exploitation>=poc.
-    ssvc_exploitation: Optional[str] = None
-    ssvc_automatable: Optional[str] = None
+    ssvc_exploitation: str | None = None
+    ssvc_automatable: str | None = None
     if vulnrichment is not None and cve_aliases:
         decisions = [
             vulnrichment.lookup(c) for c in cve_aliases
@@ -219,10 +273,28 @@ def _assemble_finding(
         elif any((d.automatable or "").lower() == "no" for d in decisions):
             ssvc_automatable = "no"
 
-    fixed = _smallest_applicable_fix(
-        dep.ecosystem, dep.version, advisory.fixed_versions,
+    # Highest of each member's own smallest-applicable fix: upgrading
+    # further than one record suggests is safe; an attacker-lowered
+    # fix version (crafted record claiming fix=1.0.0) is not.
+    fix_candidates = [
+        f for f in (
+            _smallest_applicable_fix(
+                dep.ecosystem, dep.version, a.fixed_versions,
+            )
+            for a in group
+        ) if f
+    ]
+    fixed = (
+        max(fix_candidates, key=_VersionKey(dep.ecosystem))
+        if fix_candidates else None
     )
-    severity_str = _severity_for_advisory(advisory)
+    # Group-maximum severity — the representative achieves it by
+    # construction, but compute it explicitly so the conservative rule
+    # holds even if representative selection changes.
+    severity_str = max(
+        (_severity_for_advisory(a) for a in group),
+        key=lambda s: _SEVERITY_RANK[s],
+    )
     if dep.commented_out:
         # Commented-out lines (`# pkg==X` in requirements.txt) are
         # documentation, not active deps. Downgrade to ``info`` so the
@@ -247,7 +319,10 @@ def _assemble_finding(
     f = VulnFinding(
         finding_id=this_id,
         dependency=dep,
-        advisories=[advisory],
+        # Representative first — consumers reading ``advisories[0]``
+        # get the record that drove severity / summary / CVSS; the
+        # rest of the merged group rides along for transparency.
+        advisories=[advisory, *(a for a in group if a is not advisory)],
         in_kev=in_kev,
         epss=epss_score,
         fixed_version=fixed,
@@ -276,15 +351,22 @@ def _severity_for_advisory(advisory: Advisory) -> Severity:
         s = advisory.severity.severity
         if s in ("none", "low", "medium", "high", "critical"):
             return s             # type: ignore[return-value]
+    # No scoreable CVSS vector — use the database-provided label when
+    # the OSV layer derived one (CVSS_V4-only advisories with a GHSA
+    # ``database_specific.severity``) before degrading.
+    if advisory.severity_fallback in (
+        "none", "low", "medium", "high", "critical",
+    ):
+        return advisory.severity_fallback  # type: ignore[return-value]
     # No CVSS — degrade to "medium" since the advisory exists at all.
     return "medium"
 
 
 def _smallest_applicable_fix(
     ecosystem: str,
-    installed_version: Optional[str],
-    fixed_versions: List[str],
-) -> Optional[str]:
+    installed_version: str | None,
+    fixed_versions: list[str],
+) -> str | None:
     """Smallest fix version that *upgrades from* the installed version.
 
     OSV advisories often carry multiple fix versions across multiple
@@ -302,15 +384,15 @@ def _smallest_applicable_fix(
     """
     if not fixed_versions:
         return None
-    if installed_version is None or len(fixed_versions) == 1:
-        # No installed version to compare against, or only one fix —
-        # nothing to filter; preserve OSV order on parse errors.
+    if installed_version is None:
+        # No installed version to compare against — nothing to filter;
+        # preserve OSV order on parse errors.
         try:
             return min(fixed_versions, key=_VersionKey(ecosystem))
         except VersionError:
             return fixed_versions[0]
 
-    upgrades: List[str] = []
+    upgrades: list[str] = []
     for v in fixed_versions:
         try:
             if version_compare(ecosystem, v, installed_version) > 0:
@@ -334,7 +416,7 @@ class _VersionKey:
     def __init__(self, ecosystem: str) -> None:
         self.ecosystem = ecosystem
 
-    def __call__(self, value: str) -> "_Sortable":
+    def __call__(self, value: str) -> _Sortable:
         return _Sortable(self.ecosystem, value)
 
 
@@ -349,10 +431,21 @@ class _Sortable:
         self.eco = ecosystem
         self.v = value
 
-    def __lt__(self, other: "_Sortable") -> bool:
+    def __lt__(self, other: _Sortable) -> bool:
+        self_ok = other_ok = True
         try:
             return version_compare(self.eco, self.v, other.v) < 0
         except VersionError:
+            try:
+                version_compare(self.eco, self.v, self.v)
+            except VersionError:
+                self_ok = False
+            try:
+                version_compare(other.eco, other.v, other.v)
+            except VersionError:
+                other_ok = False
+            if self_ok != other_ok:
+                return self_ok
             return self.v < other.v
 
 
@@ -374,32 +467,44 @@ def write_findings_json(
     hygiene_findings: Iterable[HygieneFinding] = (),
     supply_chain_findings: Iterable[SupplyChainFinding] = (),
     license_findings: Iterable[Any] = (),
+    scan_health: Iterable[dict[str, Any]] = (),
 ) -> int:
     """Write the merged finding list to ``path`` and return its row count.
 
     Output shape: a top-level list of dicts, each tagged with one of
     ``sca:vulnerable_dependency`` / ``sca:hygiene:<kind>`` /
-    ``sca:supply_chain:<kind>`` / ``sca:license:<kind>``.
+    ``sca:supply_chain:<kind>`` / ``sca:license:<kind>`` /
+    ``sca:scan_health:<kind>``.
+
+    ``scan_health`` entries record scan-level degradation (e.g. OSV
+    lookups that failed transiently) as ``info``-severity rows so CI
+    consumers of findings.json can see that the scan's coverage was
+    incomplete. Each entry is a dict with ``kind`` (snake_case tag),
+    ``detail`` (human-readable description) and optional ``evidence``
+    (JSON-serialisable dict merged into the row's ``sca`` block).
+    These rows never trip the ``--fail-on-*`` gates — thresholds
+    evaluate specific finding classes only — but they are stable,
+    machine-readable markers a pipeline can gate on explicitly.
     """
-    rows: List[Dict[str, Any]] = []
-    for f in vuln_findings:
-        rows.append(_vuln_finding_to_row(f))
-    for f in hygiene_findings:
-        rows.append(_hygiene_finding_to_row(f))
-    for f in supply_chain_findings:
-        rows.append(_supply_chain_finding_to_row(f))
-    for f in license_findings:
-        rows.append(_license_finding_to_row(f))
+    rows: list[dict[str, Any]] = [_vuln_finding_to_row(f) for f in vuln_findings]
+    rows.extend(_hygiene_finding_to_row(f) for f in hygiene_findings)
+    rows.extend(_supply_chain_finding_to_row(f) for f in supply_chain_findings)
+    rows.extend(_license_finding_to_row(f) for f in license_findings)
+    rows.extend(_scan_health_to_row(h) for h in scan_health)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _json.dump(rows, fh, indent=2, default=_json_default)
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            _json.dump(rows, fh, indent=2, default=_json_default)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(path)
     return len(rows)
 
 
-def _vuln_finding_to_row(f: VulnFinding) -> Dict[str, Any]:
+def _vuln_finding_to_row(f: VulnFinding) -> dict[str, Any]:
     primary = f.advisories[0] if f.advisories else None
     title = _vuln_title(f, primary)
     return {
@@ -454,7 +559,7 @@ def _vuln_finding_to_row(f: VulnFinding) -> Dict[str, Any]:
     }
 
 
-def _exploit_evidence_summary(ev) -> Optional[Dict[str, Any]]:
+def _exploit_evidence_summary(ev) -> dict[str, Any] | None:
     """Render :class:`ExploitEvidence` as the ``sca.exploit_evidence``
     block in findings.json. Emits None when annotation didn't run
     (e.g. corpus missing) so the field is absent rather than
@@ -474,7 +579,7 @@ def _commented_severity(dep: Dependency, severity: str) -> str:
     """Downgrade hygiene / supply-chain / license severities on
     commented-out dep lines.
 
-    Mirrors the vuln-finding downgrade in ``_vuln_finding_to_row``:
+    Mirrors the vuln-finding downgrade in ``_assemble_finding``:
     a ``# pkg==X`` comment is documentation, not an active dep, so
     operators don't want CI gated on it. Floor at ``info``; the
     operator can opt back in with ``--fail-on-info`` when they
@@ -485,7 +590,7 @@ def _commented_severity(dep: Dependency, severity: str) -> str:
     return severity
 
 
-def _hygiene_finding_to_row(f: HygieneFinding) -> Dict[str, Any]:
+def _hygiene_finding_to_row(f: HygieneFinding) -> dict[str, Any]:
     severity = _commented_severity(f.dependency, f.severity)
     return {
         "id": f.finding_id,
@@ -515,7 +620,7 @@ def _hygiene_finding_to_row(f: HygieneFinding) -> Dict[str, Any]:
     }
 
 
-def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
+def _supply_chain_finding_to_row(f: SupplyChainFinding) -> dict[str, Any]:
     severity = _commented_severity(f.dependency, f.severity)
     return {
         "id": f.finding_id,
@@ -542,7 +647,7 @@ def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
     }
 
 
-def _license_finding_to_row(f: Any) -> Dict[str, Any]:
+def _license_finding_to_row(f: Any) -> dict[str, Any]:
     kind_short = f.kind.replace('license_', '')
     severity = _commented_severity(f.dependency, f.severity)
     return {
@@ -571,7 +676,38 @@ def _license_finding_to_row(f: Any) -> Dict[str, Any]:
     }
 
 
-def _vuln_title(f: VulnFinding, primary: Optional[Advisory]) -> str:
+def _scan_health_to_row(h: dict[str, Any]) -> dict[str, Any]:
+    """Render one scan-health entry as a findings.json row.
+
+    Shape mirrors the other row builders so schema-tolerant consumers
+    (SARIF emitter, diff, thresholds) handle it without special-casing;
+    consumers key on the ``sca:scan_health:`` vuln_type prefix.
+    """
+    kind = str(h.get("kind") or "unknown")
+    detail = str(h.get("detail") or "")
+    evidence = h.get("evidence")
+    sca_block: dict[str, Any] = {"kind": kind}
+    if isinstance(evidence, dict):
+        sca_block.update(evidence)
+    finding_id = f"sca:scan_health:{kind}"
+    return {
+        "id": finding_id,
+        "finding_id": finding_id,
+        "vuln_type": f"sca:scan_health:{kind}",
+        "tool": "sca",
+        "file": "",
+        "function": "",
+        "line": 0,
+        "severity": "info",
+        "suppressed": False,
+        "suppression_reason": None,
+        "title": kind.replace("_", " ").capitalize(),
+        "description": detail,
+        "sca": sca_block,
+    }
+
+
+def _vuln_title(f: VulnFinding, primary: Advisory | None) -> str:
     """Short human-readable title for a vuln finding.
 
     ``{name}@{version} — {advisory summary}`` when an advisory is
@@ -617,10 +753,10 @@ def _describe_vuln(f: VulnFinding) -> str:
     return " ".join(parts)
 
 
-def _advisory_summary(a: Optional[Advisory]) -> Optional[Dict[str, Any]]:
+def _advisory_summary(a: Advisory | None) -> dict[str, Any] | None:
     if a is None:
         return None
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "id": a.osv_id,
         "aliases": list(a.aliases),
         "summary": a.summary,
@@ -630,16 +766,25 @@ def _advisory_summary(a: Optional[Advisory]) -> Optional[Dict[str, Any]]:
         "published": a.published.isoformat() if a.published else None,
         "modified": a.modified.isoformat() if a.modified else None,
     }
+    if a.severity_fallback:
+        # Label-only severity (CVSS_V4-only advisory scored via the
+        # database-provided label) — surfaced so consumers can tell a
+        # derived label from a computed CVSS bucket.
+        out["severity_fallback"] = a.severity_fallback
     if a.informational:
         # RUSTSEC "unsound" / "unmaintained" / "notice" markers,
         # and similar non-security flags on other ecos. Surface
         # in the JSON so calibration tooling + future scan-time
         # severity gating can distinguish from real CVEs.
         out["informational"] = a.informational
+    if a.cwe_ids:
+        # Weakness classes (GHSA database_specific.cwe_ids) — consumed
+        # by the audit-side advisory bridge for per-CWE-family priors.
+        out["cwe_ids"] = list(a.cwe_ids)
     return out
 
 
-def _cvss_summary(a: Advisory) -> Optional[Dict[str, Any]]:
+def _cvss_summary(a: Advisory) -> dict[str, Any] | None:
     if a.severity is None:
         return None
     return {
@@ -649,7 +794,7 @@ def _cvss_summary(a: Advisory) -> Optional[Dict[str, Any]]:
     }
 
 
-def _reachability_summary(r: Reachability) -> Dict[str, Any]:
+def _reachability_summary(r: Reachability) -> dict[str, Any]:
     return {
         "verdict": r.verdict,
         "confidence": _confidence_summary(r.confidence),
@@ -657,7 +802,7 @@ def _reachability_summary(r: Reachability) -> Dict[str, Any]:
     }
 
 
-def _confidence_summary(c: Confidence) -> Dict[str, Any]:
+def _confidence_summary(c: Confidence) -> dict[str, Any]:
     return {"level": c.level, "numeric": c.numeric, "reason": c.reason}
 
 
@@ -671,7 +816,8 @@ def _json_default(obj: Any) -> Any:
         return obj.isoformat()
     if is_dataclass(obj):
         return asdict(obj)
-    raise TypeError(f"Cannot serialise {type(obj).__name__}: {obj!r}")
+    msg = f"Cannot serialise {type(obj).__name__}: {obj!r}"
+    raise TypeError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +837,6 @@ def severity_rank(severity: Severity) -> int:
 
 __all__ = [
     "build_vuln_findings",
-    "write_findings_json",
     "severity_rank",
+    "write_findings_json",
 ]

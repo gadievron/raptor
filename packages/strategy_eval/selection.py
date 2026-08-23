@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
@@ -24,19 +23,15 @@ def default_cases_path() -> Path:
     return Path(__file__).resolve().parent / "data" / "selection_cases.yml"
 
 
-def load_cases(path: Optional[Path] = None) -> List[SelectionCase]:
+def load_cases(path: Path | None = None) -> list[SelectionCase]:
     path = Path(path) if path is not None else default_cases_path()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    cases: List[SelectionCase] = []
-    for raw in data.get("cases", []):
-        cases.append(
-            SelectionCase(
+    cases: list[SelectionCase] = [SelectionCase(
                 name=raw["name"],
                 signals=dict(raw.get("signals", {})),
                 expect_selected=tuple(raw.get("expect_selected", ())),
                 expect_not_selected=tuple(raw.get("expect_not_selected", ())),
-            )
-        )
+            ) for raw in data.get("cases", [])]
     return cases
 
 
@@ -50,17 +45,17 @@ def run_case(case: SelectionCase) -> SelectionOutcome:
 
 
 def run_selection_eval(
-    cases: Optional[List[SelectionCase]] = None,
-) -> List[SelectionOutcome]:
+    cases: list[SelectionCase] | None = None,
+) -> list[SelectionOutcome]:
     cases = cases if cases is not None else load_cases()
     return [run_case(c) for c in cases]
 
 
-def per_strategy_recall(outcomes: List[SelectionOutcome]) -> Dict[str, float]:
+def per_strategy_recall(outcomes: list[SelectionOutcome]) -> dict[str, float]:
     """For each strategy named in any ``expect_selected``, the fraction of
     its positive cases where it was actually selected."""
-    hits: Dict[str, int] = defaultdict(int)
-    total: Dict[str, int] = defaultdict(int)
+    hits: dict[str, int] = defaultdict(int)
+    total: dict[str, int] = defaultdict(int)
     for o in outcomes:
         for name in o.case.expect_selected:
             total[name] += 1
@@ -69,7 +64,7 @@ def per_strategy_recall(outcomes: List[SelectionOutcome]) -> Dict[str, float]:
     return {name: hits[name] / total[name] for name in sorted(total)}
 
 
-def format_report(outcomes: List[SelectionOutcome]) -> str:
+def format_report(outcomes: list[SelectionOutcome]) -> str:
     passed = [o for o in outcomes if o.passed]
     failed = [o for o in outcomes if not o.passed]
     lines = [
@@ -83,20 +78,17 @@ def format_report(outcomes: List[SelectionOutcome]) -> str:
     if failed:
         lines.append("")
         lines.append("Failures:")
-        for o in failed:
-            lines.append(
-                f"  {o.case.name}\n"
+        lines.extend(f"  {o.case.name}\n"
                 f"    picked      = {list(o.picked)}\n"
                 f"    missing     = {list(o.missing)}\n"
-                f"    overfired   = {list(o.overfired)}"
-            )
+                f"    overfired   = {list(o.overfired)}" for o in failed)
     return "\n".join(lines)
 
 
-def uncovered_strategies(outcomes: List[SelectionOutcome]) -> List[str]:
+def uncovered_strategies(outcomes: list[SelectionOutcome]) -> list[str]:
     """Bundled strategies with no positive selection case — the eval would
     silently stop covering them."""
-    covered = set()
+    covered: set[str] = set()
     for o in outcomes:
         covered.update(o.case.expect_selected)
     return sorted({s.name for s in load_all()} - covered)

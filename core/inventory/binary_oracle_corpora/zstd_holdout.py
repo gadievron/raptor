@@ -18,13 +18,19 @@ zstd v1.5.6 — pure C, ~50k LOC, two compilation modes:
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Literal, TYPE_CHECKING
+
+from core.inventory.binary_oracle_corpora._sandbox_exec import (
+    run_build_step,
+    run_tool,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +47,7 @@ class _ZstdHoldoutDriver:
         "HELD OUT: classifier was never tuned against this corpus.")
     mode: Literal["gcov"] = "gcov"
 
-    def prepare(self, work_dir: Path) -> Dict[str, Any]:
+    def prepare(self, work_dir: Path) -> dict[str, Any]:
         work_dir = work_dir.resolve()
         tag_dir = work_dir / ZSTD_TAG.replace(".", "_")
         sentinel = tag_dir / "sentinel.ok"
@@ -49,9 +55,9 @@ class _ZstdHoldoutDriver:
         build_o2 = tag_dir / "build_o2"
 
         if (not sentinel.exists()
-                or sentinel.read_text().strip() != CACHE_VERSION):
+                or sentinel.read_text(encoding="utf-8").strip() != CACHE_VERSION):
             _build_fresh(tag_dir, build_o0, build_o2)
-            sentinel.write_text(CACHE_VERSION)
+            sentinel.write_text(CACHE_VERSION, encoding="utf-8")
 
         live = _collect_gcov_liveness(build_o0)
         candidates = _enumerate_candidates(build_o0)
@@ -71,15 +77,16 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
     from core.git import clone_repository, get_safe_git_env
     from core.git.clone import safe_git_command
 
-    if src.exists():
-        shutil.rmtree(src)
+    shutil.rmtree(src, ignore_errors=True)
     logger.info("zstd_holdout: cloning %s → %s", ZSTD_URL, src)
     if not clone_repository(ZSTD_URL, src, depth=None):
-        raise RuntimeError(f"zstd_holdout: clone failed for {ZSTD_URL}")
+        msg = f"zstd_holdout: clone failed for {ZSTD_URL}"
+        raise RuntimeError(msg)
     subprocess.run(
         safe_git_command("-C", str(src), "checkout", ZSTD_TAG),
         env=get_safe_git_env(), check=True, timeout=60,
     )
+    shutil.rmtree(src / ".git", ignore_errors=True)
 
     for build_dir, cflags, ldflags, run_target in [
         (build_o0, "-O0 -g --coverage", "--coverage", True),
@@ -87,8 +94,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
          "-O2 -g -ffunction-sections -fdata-sections",
          "-Wl,--gc-sections", False),
     ]:
-        if build_dir.exists():
-            shutil.rmtree(build_dir)
+        shutil.rmtree(build_dir, ignore_errors=True)
         # zstd's Makefile build can't take an out-of-tree dir, so we
         # copy the source into the build dir each time. ``cp -a`` via
         # subprocess (rather than ``shutil.copytree``) — on Python 3.14
@@ -100,10 +106,13 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             ["cp", "-a", f"{src}/.", str(build_dir)],
             check=True, timeout=120,
         )
-        env = {**os.environ, "CFLAGS": cflags, "LDFLAGS": ldflags}
-        subprocess.run(
+        # Fetched build system — sandboxed with sanitised env (see
+        # _sandbox_exec).
+        run_build_step(
             ["make", "-j4", "lib-mt", "zstd"],
-            cwd=build_dir, env=env, check=True, timeout=600,
+            cwd=build_dir,
+            extra_env={"CFLAGS": cflags, "LDFLAGS": ldflags},
+            timeout=600,
         )
         if run_target:
             # Exercise the CLI binary with a workload broad enough that
@@ -114,7 +123,7 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             # live_set is forced empty when live_set is empty).
             #
             # The workload now spans: 5 input files of different sizes
-            # and entropy classes; 6 compression levels (fast/normal/
+            # and entropy classes; 5 compression levels (fast/normal/
             # high); long-range mode; multi-threaded mode; dictionary
             # training + use; decompression of every produced artefact.
             # Combined ground-truth coverage of zstd's hot paths is
@@ -138,17 +147,16 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             inputs.append(build_dir / "lib" / "decompress" / "zstd_decompress.c")
             inputs.append(build_dir / "lib" / "common" / "fse_decompress.c")
 
-            def _z(*argv: str) -> None:
-                # writable_paths includes build_dir because gcov
-                # instrumentation writes .gcda files alongside the
-                # .o files (under ``build_dir/obj/...``). Without
-                # the explicit allow, the sandbox blocks those
-                # writes and the live_set comes back empty —
-                # making absent_precision mathematically vacuous.
+            def _z(
+                *argv: str,
+                _zstd_bin=zstd_bin,
+                _build_dir=build_dir,
+                _tmp=tmp,
+            ) -> None:
                 _sandbox_run(
-                    [str(zstd_bin), *argv],
-                    target=str(build_dir), output=str(tmp),
-                    writable_paths=[str(build_dir)],
+                    [str(_zstd_bin), *argv],
+                    target=str(_build_dir), output=str(_tmp),
+                    writable_paths=[str(_build_dir)],
                     block_network=True, check=True, timeout=120,
                 )
 
@@ -158,12 +166,11 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
             # outer source-tree dir; Python's for-loop variable
             # persists after the loop and would silently shadow it,
             # breaking the second build_o2 iteration's cp command.
-            for lvl in ("-1", "-3", "-9", "-19", "--ultra", "-22"):
+            for lvl in (("-1",), ("-3",), ("-9",), ("-19",), ("--ultra", "-22")):
                 for input_file in inputs:
-                    out = tmp / (
-                        f"{input_file.name}.{lvl.lstrip('-') or 'u'}.zst"
-                    )
-                    _z(lvl, "-f", "-o", str(out), str(input_file))
+                    tag = "_".join(a.lstrip("-") or "u" for a in lvl)
+                    out = tmp / f"{input_file.name}.{tag}.zst"
+                    _z(*lvl, "-f", "-o", str(out), str(input_file))
             # Long-range mode (different code path)
             _z("--long", "-3", "-f", "-o",
                str(tmp / "long.zst"), str(inputs[0]))
@@ -197,7 +204,7 @@ _GCOV_FN_RE = re.compile(r"^Function '([^']+)'")
 _GCOV_LINES_RE = re.compile(r"^Lines executed:([\d.]+)% of \d+")
 
 
-def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
+def _collect_gcov_liveness(build_dir: Path) -> set[str]:
     """Walk the build tree for .gcda files and harvest live function
     names from ``gcov -f``. zstd's Makefile statically links the lib
     sources into the CLI binary's object dir
@@ -208,12 +215,12 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
         logger.warning("zstd_holdout: %s missing", build_dir)
         return set()
 
-    live: Set[str] = set()
+    live: set[str] = set()
     for gcda in build_dir.rglob("*.gcda"):
         gcda_dir = gcda.parent
-        out = subprocess.run(
+        out = run_tool(
             ["gcov", "-f", gcda.name], cwd=gcda_dir,
-            capture_output=True, text=True, check=False, timeout=60,
+            check=False, timeout=60,
         ).stdout
         current = None
         for line in out.splitlines():
@@ -230,7 +237,7 @@ def _collect_gcov_liveness(build_dir: Path) -> Set[str]:
     return live
 
 
-def _enumerate_candidates(build_o0: Path) -> List[str]:
+def _enumerate_candidates(build_o0: Path) -> list[str]:
     """nm on libzstd.a — candidates are every defined symbol in the
     O0 archive. The O0 build doesn't DCE, so this is the source-side
     surface (modulo macros that produce no symbol)."""
@@ -239,11 +246,10 @@ def _enumerate_candidates(build_o0: Path) -> List[str]:
     if not archive.exists():
         logger.warning("zstd_holdout: %s missing", archive)
         return []
-    out = subprocess.run(
-        ["nm", str(archive)], capture_output=True, text=True,
-        check=False, timeout=30,
+    out = run_tool(
+        ["nm", str(archive)], check=False, timeout=30,
     ).stdout
-    fns: Set[str] = set()
+    fns: set[str] = set()
     for line in out.splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[-2] in ("T", "t", "W", "w"):

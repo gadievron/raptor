@@ -16,18 +16,20 @@ import ``packages/``. Run scripts (``raptor_fuzzing``,
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 def render_run_eligibility(
-    output_dir: Optional[Path],
+    output_dir: Path | None,
     *,
-    project_root: Optional[Path] = None,
+    project_root: Path | None = None,
     indent: str = "   ",
-) -> Optional[str]:
+) -> str | None:
     """Discover witnesses visible to a run and render the free
     ZKPoX-eligibility summary block.
 

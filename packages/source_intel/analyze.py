@@ -26,7 +26,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any
 
 from core.build.build_flags import BuildFlagsContext, extract_flags
 from core.function_taxonomy import (
@@ -64,7 +64,7 @@ KIND_MALLOC = "malloc"
 KIND_NO_STACK_PROTECTOR = "no_stack_protector"
 KIND_ACCESS = "access"
 
-ALL_KINDS: Tuple[str, ...] = (
+ALL_KINDS: tuple[str, ...] = (
     KIND_WUR,
     KIND_NONNULL,
     KIND_ALLOC_SIZE,
@@ -82,7 +82,7 @@ GRADE_SAME_FUNCTION = "same_function"
 GRADE_SAME_PATH = "same_path"
 GRADE_DOMINATES = "dominates"
 
-ALL_GRADES: Tuple[str, ...] = (
+ALL_GRADES: tuple[str, ...] = (
     GRADE_SAME_FUNCTION,
     GRADE_SAME_PATH,
     GRADE_DOMINATES,
@@ -94,19 +94,19 @@ ALL_GRADES: Tuple[str, ...] = (
 # as read/fread, so this scanner adds those back only for source-code call-site
 # evidence. argv/envp/environ stay scanner-local because they are identifiers,
 # not function names.
-_SOURCE_SIDE_FD_READ_FUNCS: FrozenSet[str] = frozenset({
+_SOURCE_SIDE_FD_READ_FUNCS: frozenset[str] = frozenset({
     "read",
     "fread",
 })
 
 # The shared taxonomy sets are intentionally broader for binary fingerprinting.
 # Keep only call sites that directly ingest bytes for L1 source evidence.
-_SOURCE_SIDE_SOCKET_INPUT_FUNCS: FrozenSet[str] = NETWORK_INGEST_FUNCS - frozenset({
+_SOURCE_SIDE_SOCKET_INPUT_FUNCS: frozenset[str] = NETWORK_INGEST_FUNCS - frozenset({
     "accept",
     "bind",
     "listen",
 })
-_SOURCE_SIDE_STREAM_INPUT_FUNCS: FrozenSet[str] = (
+_SOURCE_SIDE_STREAM_INPUT_FUNCS: frozenset[str] = (
     STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS
 ) - frozenset({
     "sscanf",
@@ -114,14 +114,14 @@ _SOURCE_SIDE_STREAM_INPUT_FUNCS: FrozenSet[str] = (
     "swscanf",
 })
 
-_C_L1_SOURCE_CALLS: Dict[str, str] = {
-    **{name: "fd" for name in sorted(_SOURCE_SIDE_FD_READ_FUNCS)},
-    **{name: "socket" for name in sorted(_SOURCE_SIDE_SOCKET_INPUT_FUNCS)},
-    **{name: "stream" for name in sorted(_SOURCE_SIDE_STREAM_INPUT_FUNCS)},
-    **{name: "env" for name in sorted(PROCESS_BOUNDARY_FUNCS)},
-    **{name: "kernel_user" for name in sorted(KERNEL_USERSPACE_FUNCS)},
-    **{name: "ipc" for name in sorted(IPC_FUNCS)},
-    **{name: "device_control" for name in sorted(DEVICE_CONTROL_FUNCS)},
+_C_L1_SOURCE_CALLS: dict[str, str] = {
+    **dict.fromkeys(sorted(_SOURCE_SIDE_FD_READ_FUNCS), "fd"),
+    **dict.fromkeys(sorted(_SOURCE_SIDE_SOCKET_INPUT_FUNCS), "socket"),
+    **dict.fromkeys(sorted(_SOURCE_SIDE_STREAM_INPUT_FUNCS), "stream"),
+    **dict.fromkeys(sorted(PROCESS_BOUNDARY_FUNCS), "env"),
+    **dict.fromkeys(sorted(KERNEL_USERSPACE_FUNCS), "kernel_user"),
+    **dict.fromkeys(sorted(IPC_FUNCS), "ipc"),
+    **dict.fromkeys(sorted(DEVICE_CONTROL_FUNCS), "device_control"),
 }
 
 
@@ -145,11 +145,11 @@ class AllocationEvidence:
     """
 
     allocator: str  # which allocator (kstrdup, kmalloc, etc.)
-    location: Tuple[str, int]  # (file_path, line)
+    location: tuple[str, int]  # (file_path, line)
     shape: str  # "field" | "local" | "nested_field" (Phase 6a: only "field")
-    target_field: Optional[str] = None  # struct field name for "field" shape
-    enclosing_function: Optional[str] = None
-    conditional_on: Optional[str] = None
+    target_field: str | None = None  # struct field name for "field" shape
+    enclosing_function: str | None = None
+    conditional_on: str | None = None
     #: Axis-3 size-source classification (Tier 2.3). One of:
     #:   "literal" — kmalloc(8, ...)
     #:   "sizeof" — kmalloc(sizeof(struct foo), ...)
@@ -157,7 +157,7 @@ class AllocationEvidence:
     #:   "multiplied" — kmalloc(n * sizeof(*p), ...)
     #:   "user_controlled" — multiplied with user-input-shaped var
     #:   None — not classified / parser failed
-    size_source: Optional[str] = None
+    size_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,10 +174,10 @@ class AbortEvidence:
     """
 
     macro: str  # which macro fired (BUG_ON, panic, …)
-    location: Tuple[str, int]  # (file_path, line)
+    location: tuple[str, int]  # (file_path, line)
     grade: str  # one of ``ALL_GRADES``
-    enclosing_function: Optional[str] = None  # function name when known
-    conditional_on: Optional[str] = None  # surrounding #ifdef condition
+    enclosing_function: str | None = None  # function name when known
+    conditional_on: str | None = None  # surrounding #ifdef condition
 
 
 @dataclass(frozen=True)
@@ -200,8 +200,8 @@ class PairedFreeEvidence:
 
     allocator: str  # kmalloc / kzalloc / vmalloc / ...
     free_fn: str    # kfree / vfree / kvfree / free
-    location: Tuple[str, int]  # at the alloc site
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]  # at the alloc site
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,8 +220,8 @@ class DoubleFreeEvidence:
 
     role: str  # "first" | "second"
     free_fn: str  # kfree / kvfree / vfree / free
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -238,8 +238,8 @@ class BoundaryEvidence:
     """
 
     boundary_fn: str  # "copy_from_user", "copy_to_user", etc.
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -255,8 +255,8 @@ class CLevelSourceEvidence:
 
     source_kind: str  # "argv" | "env" | "stream" | "socket" | "fd"
     source_name: str  # argv/envp/getenv/read/recv/fgets/etc.
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -268,8 +268,8 @@ class LsmEvidence:
     """
 
     hook_name: str
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -285,8 +285,8 @@ class LockSiteEvidence:
     kind: str                                     # "spin" | "mutex" | "rw" | "pthread_mutex"
     fn: str                                       # concrete function name (e.g. "spin_lock_irqsave")
     lock_var: str                                 # first-arg expression, normalised
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -302,8 +302,8 @@ class CryptoCallEvidence:
     kind: str                                     # "primitive_call" | "rng_source"
     api: str                                      # "openssl" | "kernel" | "libsodium" | "libc"
     fn: str                                       # concrete function name (e.g. "EVP_EncryptInit_ex")
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -317,8 +317,8 @@ class WarnEvidence:
     """
 
     warn_fn: str
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -338,8 +338,8 @@ class NullGuardEvidence:
     """
 
     kind: str  # "bang" | "eq_null" | "is_err"
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -365,8 +365,8 @@ class HazardEvidence:
 
     kind: str  # "deprecated_func" | "signed_alloc"
     detail: str
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -382,8 +382,8 @@ class CheckedAllocationEvidence:
     """
 
     allocator: str
-    location: Tuple[str, int]
-    enclosing_function: Optional[str] = None
+    location: tuple[str, int]
+    enclosing_function: str | None = None
 
 
 @dataclass(frozen=True)
@@ -407,10 +407,10 @@ class CapabilityEvidence:
     """
 
     cap_function: str  # "capable", "ns_capable", "perfmon_capable", etc.
-    location: Tuple[str, int]  # (file_path, line)
+    location: tuple[str, int]  # (file_path, line)
     grade: str  # one of ``ALL_GRADES``
-    enclosing_function: Optional[str] = None
-    conditional_on: Optional[str] = None
+    enclosing_function: str | None = None
+    conditional_on: str | None = None
 
 
 @dataclass(frozen=True)
@@ -444,8 +444,8 @@ class PrivilegeBackWalkEvidence:
 
     finding_function: str
     all_paths_gated: bool
-    gating_examples: Tuple[Tuple[str, str, str, int], ...] = ()
-    ungated_caller: Optional[str] = None
+    gating_examples: tuple[tuple[str, str, str, int], ...] = ()
+    ungated_caller: str | None = None
     depth_used: int = 0
     no_callers: bool = False
 
@@ -467,18 +467,18 @@ class AttributeEvidence:
 
     kind: str  # one of ``ALL_KINDS``
     function_name: str
-    location: Tuple[str, int]  # (file_path, line)
+    location: tuple[str, int]  # (file_path, line)
     match_source: str  # "literal" | "known_alias" | "project_alias"
     raw_match: str  # actual spelling for provenance
-    conditional_on: Optional[str] = None  # innermost enclosing #if* condition
+    conditional_on: str | None = None  # innermost enclosing #if* condition
 
 
-def WurEvidence(  # noqa: N802 — back-compat factory for Phase 2 callers
+def WurEvidence(
     function_name: str,
-    location: Tuple[str, int],
+    location: tuple[str, int],
     match_source: str,
     raw_match: str,
-    conditional_on: Optional[str] = None,
+    conditional_on: str | None = None,
 ) -> AttributeEvidence:
     """Back-compat factory: returns an :class:`AttributeEvidence` with
     ``kind="wur"``. Phase 2 callers (tests, downstream code) used the
@@ -507,90 +507,90 @@ class SourceIntelResult:
 
     schema_version: int = SCHEMA_VERSION
     target: str = ""
-    rules_executed: Tuple[str, ...] = ()
-    rules_failed: Tuple[Tuple[str, str], ...] = ()
-    skipped_reason: Optional[str] = None
-    spatch_version: Optional[str] = None
+    rules_executed: tuple[str, ...] = ()
+    rules_failed: tuple[tuple[str, str], ...] = ()
+    skipped_reason: str | None = None
+    spatch_version: str | None = None
 
     #: All attribute observations across all kinds.
-    attributes: Tuple[AttributeEvidence, ...] = ()
+    attributes: tuple[AttributeEvidence, ...] = ()
 
     #: Project-specific alias macros discovered in the target's
     #: headers, keyed by kind. Empty when discovery skipped (target
     #: had no headers or only the curated table was used).
-    discovered_aliases: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    discovered_aliases: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     #: Axis 2: abort-class call sites (BUG_ON, panic, abort, etc.)
     #: with grading. Empty in Phase 2-4; Phase 5a populates from
     #: abort_proximate.cocci output.
-    aborts: Tuple[AbortEvidence, ...] = ()
+    aborts: tuple[AbortEvidence, ...] = ()
 
     #: Axis 3: unchecked allocator call sites. Empty before Phase 6a;
     #: Phase 6a populates from unchecked_alloc.cocci output. Each entry
     #: indicates an allocator return value that wasn't NULL-checked
     #: before the function continued (see AllocationEvidence).
-    allocations: Tuple[AllocationEvidence, ...] = ()
+    allocations: tuple[AllocationEvidence, ...] = ()
 
     #: Axis 4: capability-check call sites (capable, ns_capable, …).
     #: Empty before Phase 8; Phase 8 populates from
     #: capability_check.cocci. Each entry records a privilege check
     #: site whose dominance over the finding is graded by the
     #: aggregator (see CapabilityEvidence).
-    capabilities: Tuple[CapabilityEvidence, ...] = ()
+    capabilities: tuple[CapabilityEvidence, ...] = ()
 
     #: Axis 5: CHECKED allocator call sites — complement to
     #: ``allocations`` (which is unchecked-only). Ratio of checked
     #: to total is exposed via ``variant_ratio()``.
-    checked_allocations: Tuple[CheckedAllocationEvidence, ...] = ()
+    checked_allocations: tuple[CheckedAllocationEvidence, ...] = ()
 
     #: Axis 7: hazardous code patterns (deprecated functions,
     #: signed-into-allocator). Empty before axis-7 ships; populated
     #: from engine/coccinelle/source_intel/hazards/ output.
-    hazards: Tuple[HazardEvidence, ...] = ()
+    hazards: tuple[HazardEvidence, ...] = ()
 
     #: Axis 2 sub-class: warn-class call sites (informational).
-    warns: Tuple[WarnEvidence, ...] = ()
+    warns: tuple[WarnEvidence, ...] = ()
 
     #: Axis 2 sub-class: explicit NULL-check sites (informational).
-    null_guards: Tuple[NullGuardEvidence, ...] = ()
+    null_guards: tuple[NullGuardEvidence, ...] = ()
 
     #: Axis 4 expansion: kernel/user trust-boundary crossings
     #: (copy_from_user, copy_to_user, get_user, put_user, etc.).
     #: Informational; feeds Stage D LLM privilege/data-flow context.
-    boundary_crossings: Tuple[BoundaryEvidence, ...] = ()
+    boundary_crossings: tuple[BoundaryEvidence, ...] = ()
 
     #: L1 source table expansion: C/C++ user-controlled inputs
     #: (read/recv/fgets/argv/env/getenv, etc.). Informational; feeds
     #: Stage D LLM source/taint context for /understand + /validate.
-    c_level_sources: Tuple[CLevelSourceEvidence, ...] = ()
+    c_level_sources: tuple[CLevelSourceEvidence, ...] = ()
 
     #: Axis 4 expansion: LSM (Linux Security Module) hook calls.
     #: Informational; indicates policy-enforcement points.
-    lsm_hooks: Tuple[LsmEvidence, ...] = ()
+    lsm_hooks: tuple[LsmEvidence, ...] = ()
 
     #: Axis 3 expansion: double-free call sites
     #: (`kfree(X); ... kfree(X);` shape with no intervening
     #: reassignment). Verdict-active for cpp/double-free.
-    double_frees: Tuple[DoubleFreeEvidence, ...] = ()
+    double_frees: tuple[DoubleFreeEvidence, ...] = ()
 
     #: Axis 3 expansion: alloc sites whose return is freed in-
     #: function (`local = alloc(...); ... free(local);` shape).
     #: Informational — feeds Stage D LLM as memory-leak corroboration.
-    paired_frees: Tuple[PairedFreeEvidence, ...] = ()
+    paired_frees: tuple[PairedFreeEvidence, ...] = ()
 
     #: Phase B (concurrency axis): lock acquire/release sites
     #: enumerated by lock_sites.cocci. Informational; feeds the
     #: shared_state /understand --map section + per-function
     #: annotations. No verdict policy attached — pairing/imbalance
     #: detection is lock_imbalance.cocci's job.
-    lock_sites: Tuple[LockSiteEvidence, ...] = ()
+    lock_sites: tuple[LockSiteEvidence, ...] = ()
 
     #: Phase B (crypto axis): cryptographic primitive call + RNG-source
     #: sites enumerated by crypto_calls.cocci. Informational; feeds the
     #: crypto_inventory /understand --map section + per-function
     #: annotations. No verdict policy attached — broken-RNG-in-crypto
     #: reasoning is a separate finding-style rule.
-    crypto_calls: Tuple[CryptoCallEvidence, ...] = ()
+    crypto_calls: tuple[CryptoCallEvidence, ...] = ()
 
     #: Axis 6 consumer: build-hardening flags observed in the target's
     #: build configuration. Populated from core.build.build_flags when
@@ -598,28 +598,24 @@ class SourceIntelResult:
     #: source="absent"). The verdict policy reads this to attenuate
     #: certain claims (FORTIFY_SOURCE intercepts unbounded-write,
     #: stack canaries gate stack BOF exploitation, etc.).
-    build_flags: Optional[BuildFlagsContext] = None
+    build_flags: BuildFlagsContext | None = None
 
     @property
     def is_skipped(self) -> bool:
         return self.skipped_reason is not None
 
     @property
-    def wur_functions(self) -> Tuple[AttributeEvidence, ...]:
+    def wur_functions(self) -> tuple[AttributeEvidence, ...]:
         """Back-compat: WUR-only subset. Phase 2 callers / tests used
         this accessor; preserved by filtering ``attributes`` on kind.
         """
         return tuple(a for a in self.attributes if a.kind == KIND_WUR)
 
-    def attrs_of_kind(self, kind: str) -> Tuple[AttributeEvidence, ...]:
+    def attrs_of_kind(self, kind: str) -> tuple[AttributeEvidence, ...]:
         """Filter observations by attribute kind."""
         return tuple(a for a in self.attributes if a.kind == kind)
 
-    def function_attrs(self, name: str) -> Tuple[AttributeEvidence, ...]:
-        """All attribute observations for a given function name."""
-        return tuple(a for a in self.attributes if a.function_name == name)
-
-    def function_has_wur(self, name: str) -> Optional[AttributeEvidence]:
+    def function_has_wur(self, name: str) -> AttributeEvidence | None:
         """Lookup: is function ``name`` annotated WUR? Returns first
         observation or None. Back-compat from Phase 2."""
         for a in self.attributes:
@@ -627,18 +623,8 @@ class SourceIntelResult:
                 return a
         return None
 
-    def function_has_kind(
-        self, name: str, kind: str,
-    ) -> Optional[AttributeEvidence]:
-        """Generalised lookup — returns first observation of ``kind``
-        on function ``name``, or None."""
-        for a in self.attributes:
-            if a.kind == kind and a.function_name == name:
-                return a
-        return None
-
     def function_intel_status(
-        self, function_name: str, target: Optional[Path] = None,
+        self, function_name: str, target: Path | None = None,
     ) -> str:
         """Return the source_intel status for ``function_name`` —
         per design strict invariant: never fabricate; explicitly
@@ -677,7 +663,7 @@ class SourceIntelResult:
             return "prereqs_skipped"
         return "in_tree" if facts.function_exists(function_name) else "name_not_in_tree"
 
-    def variant_ratio(self, allocator: str) -> Tuple[int, int]:
+    def variant_ratio(self, allocator: str) -> tuple[int, int]:
         """Return (checked_count, unchecked_count) for ``allocator``
         across the analyzed target. Used by axis-5 to assess whether
         an unchecked site is anomalous within the project's idiom.
@@ -711,7 +697,7 @@ class SourceIntelResult:
 # =====================================================================
 
 
-def _shipped_rules_root() -> Optional[Path]:
+def _shipped_rules_root() -> Path | None:
     """Return the in-tree shipped rules root, or None if absent
     (minimal install / packaging strip).
 
@@ -731,15 +717,77 @@ def _shipped_rules_root() -> Optional[Path]:
 _shipped_rules_dir = _shipped_rules_root
 
 
-def _axis_dirs(rules_root: Path) -> List[Path]:
+# =====================================================================
+# API-pack rendering (crypto axis; any axis may opt in via the marker)
+# =====================================================================
+
+
+_API_PACK_MARKER = "// @api-packs:"
+
+
+def _materialize_rules_dir(axis_dir: Path) -> tuple[Path, Any]:
+    """Render ``@api-packs`` slots for an axis, when any rule carries one.
+
+    Returns ``(effective_dir, tempdir_handle)``. When no rule in
+    ``axis_dir`` has a pack slot the axis dir is returned unchanged
+    (``handle`` is None). Otherwise a TemporaryDirectory is populated
+    with every ``.cocci`` (rendered where slotted, verbatim copies
+    elsewhere) so rule names / execution order are preserved; the
+    caller keeps ``handle`` alive for the spatch run. Render failures
+    degrade to the unrendered rule text (still-valid cocci — the marker
+    is a comment) rather than skipping the axis.
+    """
+    rule_paths = sorted(axis_dir.glob("*.cocci"))
+    slotted: dict[Path, str] = {}
+    for rule_path in rule_paths:
+        try:
+            text = rule_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _API_PACK_MARKER not in text:
+            continue
+        try:
+            from engine.coccinelle.api_pack_renderer import render_text
+            rendered = render_text(rule_path)
+        except Exception:  # sidecar renderer must never kill the axis
+            logger.warning(
+                "api-pack render failed for %s; running unrendered",
+                rule_path, exc_info=True,
+            )
+            rendered = None
+        slotted[rule_path] = rendered if rendered is not None else text
+
+    if not slotted:
+        return axis_dir, None
+
+    import shutil
+    import tempfile
+    handle = tempfile.TemporaryDirectory(prefix="source_intel_rules_")
+    tmp_dir = Path(handle.name)
+    for rule_path in rule_paths:
+        if rule_path in slotted:
+            (tmp_dir / rule_path.name).write_text(
+                slotted[rule_path], encoding="utf-8",
+            )
+        else:
+            shutil.copyfile(rule_path, tmp_dir / rule_path.name)
+    return tmp_dir, handle
+
+
+def _axis_dirs(rules_root: Path) -> list[Path]:
     """List of per-axis subdirectories under the rules root.
 
     Phase 2 ships ``attrs/`` only. Axes 2-7 add sibling dirs; this
     function picks all of them up automatically so adding an axis
     means dropping rules into a new subdir without touching analyze.
-    Order is deterministic (sorted by name).
+    Order is deterministic (sorted by name). Subdirs without any
+    ``.cocci`` file are not axes — data directories (e.g. an axis's
+    ``packs/`` API packs) live beside the rules that consume them.
     """
-    return sorted(d for d in rules_root.iterdir() if d.is_dir())
+    return sorted(
+        d for d in rules_root.iterdir()
+        if d.is_dir() and any(d.glob("*.cocci"))
+    )
 
 
 # =====================================================================
@@ -747,7 +795,7 @@ def _axis_dirs(rules_root: Path) -> List[Path]:
 # =====================================================================
 
 
-_C_CPP_EXTS: Tuple[str, ...] = (
+_C_CPP_EXTS: tuple[str, ...] = (
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
 )
 
@@ -777,10 +825,60 @@ def _has_c_cpp_source(target: Path, max_files: int = 200) -> bool:
 # =====================================================================
 
 
+# Per-run signature memo. `_lookup_cached_inventory` recomputes the
+# target signature on every call so stale inventories auto-invalidate
+# across runs — but within a single analyze() run the evidence parsers
+# call `_enclosing_function` once per match (thousands on large
+# targets), and each call paid a full stat-walk of the source tree.
+# The tree is treated as stable for the dynamic extent of one
+# analyze() run: the signature is computed once per target and reused.
+# Scope-gated — the memo is inactive (depth 0, empty) outside
+# analyze(), so cross-run staleness detection is untouched.
+_SIG_MEMO: dict[str, str] = {}
+_SIG_MEMO_DEPTH = 0
+
+
+def _with_signature_memo(fn):
+    """Activate the per-run signature memo for the dynamic extent of
+    ``fn``. Re-entrant (nested analyze() on subdirectories); the memo
+    clears when the outermost scope exits."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _SIG_MEMO_DEPTH
+        with _INVENTORY_LOCK:
+            _SIG_MEMO_DEPTH += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with _INVENTORY_LOCK:
+                _SIG_MEMO_DEPTH -= 1
+                if _SIG_MEMO_DEPTH <= 0:
+                    _SIG_MEMO.clear()
+    return wrapper
+
+
+def _target_signature(target: str) -> str:
+    """``compute_target_signature`` with the per-run memo applied."""
+    from packages.source_intel.cache import compute_target_signature
+    with _INVENTORY_LOCK:
+        if _SIG_MEMO_DEPTH and target in _SIG_MEMO:
+            return _SIG_MEMO[target]
+    sig = compute_target_signature(Path(target))
+    with _INVENTORY_LOCK:
+        if _SIG_MEMO_DEPTH:
+            _SIG_MEMO[target] = sig
+    return sig
+
+
+@_with_signature_memo
 def analyze(
     target: Path,
-    rules_dir: Optional[Path] = None,
+    rules_dir: Path | None = None,
     timeout_per_rule: int = 180,
+    checklist: dict[str, Any] | None = None,
+    progress: Any | None = None,
 ) -> SourceIntelResult:
     """Run shipped source_intel cocci rules against ``target``.
 
@@ -788,6 +886,13 @@ def analyze(
       * spatch not on PATH → ``skipped_reason="spatch_not_available"``
       * target has no C/C++ source → ``skipped_reason="no_c_cpp_source"``
       * shipped rules dir missing → ``skipped_reason="rules_dir_missing"``
+
+    ``progress`` is an optional callback invoked as each rule STARTS:
+    ``progress(done, total, rule_name)`` where ``done`` counts rules
+    already started across ALL axes and ``total`` is the run's full
+    rule count. Each spatch invocation can take minutes on a large C
+    target — without the callback the whole analyze() run is silent.
+    Callback failures are swallowed by the runner.
 
     Returns a :class:`SourceIntelResult` with parsed evidence. Never
     raises — failures collapse to per-rule entries in ``rules_failed``
@@ -800,7 +905,11 @@ def analyze(
     try:
         from packages.coccinelle.runner import (
             is_available as spatch_available,
+        )
+        from packages.coccinelle.runner import (
             run_rules as spatch_run_rules,
+        )
+        from packages.coccinelle.runner import (
             version as spatch_version,
         )
     except ImportError:
@@ -821,7 +930,7 @@ def analyze(
         )
 
     effective_rules_root = (
-        rules_dir if rules_dir else _shipped_rules_root()
+        rules_dir or _shipped_rules_root()
     )
     if effective_rules_root is None:
         return SourceIntelResult(
@@ -833,43 +942,66 @@ def analyze(
     # caller hands us a flat rules_dir (e.g. tests), accept that too —
     # if no subdirs are present, run rules from the dir directly.
     axis_dirs = _axis_dirs(effective_rules_root)
-    rule_dirs = axis_dirs if axis_dirs else [effective_rules_root]
+    rule_dirs = axis_dirs or [effective_rules_root]
 
     # Build + register the inventory for the target so the parser
     # path's `_enclosing_function` lookups go through tree-sitter
     # instead of the regex fallback. Best-effort — when inventory
     # build raises, evidence parsing continues with the regex
     # fallback path.
-    _maybe_register_inventory(target)
+    _maybe_register_inventory(target, checklist=checklist)
 
-    rules_executed: List[str] = []
-    rules_failed: List[Tuple[str, str]] = []
-    observations: List[AttributeEvidence] = []
-    abort_observations: List[AbortEvidence] = []
-    allocation_observations: List[AllocationEvidence] = []
-    capability_observations: List[CapabilityEvidence] = []
-    checked_allocation_observations: List[CheckedAllocationEvidence] = []
-    hazard_observations: List[HazardEvidence] = []
-    warn_observations: List[WarnEvidence] = []
-    null_guard_observations: List[NullGuardEvidence] = []
-    boundary_observations: List[BoundaryEvidence] = []
-    lsm_observations: List[LsmEvidence] = []
-    c_level_source_observations: List[CLevelSourceEvidence] = []
-    double_free_observations: List[DoubleFreeEvidence] = []
-    paired_free_observations: List[PairedFreeEvidence] = []
-    lock_site_observations: List[LockSiteEvidence] = []
-    crypto_call_observations: List[CryptoCallEvidence] = []
+    rules_executed: list[str] = []
+    rules_failed: list[tuple[str, str]] = []
+    observations: list[AttributeEvidence] = []
+    abort_observations: list[AbortEvidence] = []
+    allocation_observations: list[AllocationEvidence] = []
+    capability_observations: list[CapabilityEvidence] = []
+    checked_allocation_observations: list[CheckedAllocationEvidence] = []
+    hazard_observations: list[HazardEvidence] = []
+    warn_observations: list[WarnEvidence] = []
+    null_guard_observations: list[NullGuardEvidence] = []
+    boundary_observations: list[BoundaryEvidence] = []
+    lsm_observations: list[LsmEvidence] = []
+    c_level_source_observations: list[CLevelSourceEvidence] = []
+    double_free_observations: list[DoubleFreeEvidence] = []
+    paired_free_observations: list[PairedFreeEvidence] = []
+    lock_site_observations: list[LockSiteEvidence] = []
+    crypto_call_observations: list[CryptoCallEvidence] = []
+
+    # Global rule count across all axes so the progress callback can
+    # report ``done/total`` for the whole run, not per-directory.
+    total_rules = sum(len(list(d.glob("*.cocci"))) for d in rule_dirs)
+    rules_started = 0
 
     # spatch invocation per axis. ``no_includes=True`` matches the
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
     # trusted-mode opt-in is a future operator flag.
     for axis_dir in rule_dirs:
-        spatch_results = spatch_run_rules(
-            target=target,
-            rules_dir=axis_dir,
-            timeout_per_rule=timeout_per_rule,
-            no_includes=True,
-        )
+        effective_dir, _rules_tmp = _materialize_rules_dir(axis_dir)
+
+        on_rule = None
+        if progress is not None:
+            axis_base = rules_started
+
+            def on_rule(idx, _dir_total, rule_name, _base=axis_base) -> None:
+                progress(_base + idx, total_rules, rule_name)
+
+        try:
+            spatch_results = spatch_run_rules(
+                target=target,
+                rules_dir=effective_dir,
+                timeout_per_rule=timeout_per_rule,
+                no_includes=True,
+                # In-repo shipped source_intel rules (code trust) — their
+                # @script:python reporting blocks are trusted.
+                allow_scripting=True,
+                on_rule=on_rule,
+            )
+        finally:
+            if _rules_tmp is not None:
+                _rules_tmp.cleanup()
+        rules_started += len(list(axis_dir.glob("*.cocci")))
         for result in spatch_results:
             rules_executed.append(result.rule)
             if result.errors:
@@ -981,7 +1113,7 @@ def analyze(
 #: → canonical provenance string once. (Per-spelling provenance lands
 #: with axis-1-expansion's alias-discovery pass — projects that use
 #: __must_check / __wur etc. would benefit from the exact spelling.)
-_KIND_TO_RAW_MATCH: Dict[str, str] = {
+_KIND_TO_RAW_MATCH: dict[str, str] = {
     KIND_WUR: "__attribute__((warn_unused_result))",
     KIND_NONNULL: "__attribute__((nonnull))",
     KIND_ALLOC_SIZE: "__attribute__((alloc_size(...)))",
@@ -993,7 +1125,7 @@ _KIND_TO_RAW_MATCH: Dict[str, str] = {
 }
 
 
-def _parse_match_to_allocation(match: Any) -> List[AllocationEvidence]:
+def _parse_match_to_allocation(match: Any) -> list[AllocationEvidence]:
     """Convert a cocci :class:`SpatchMatch` from an allocation rule
     into an :class:`AllocationEvidence` record.
 
@@ -1008,9 +1140,9 @@ def _parse_match_to_allocation(match: Any) -> List[AllocationEvidence]:
     file_path = getattr(match, "file", "")
     line_no = int(getattr(match, "line", 0))
 
-    shape: Optional[str] = None
+    shape: str | None = None
     allocator = ""
-    target_field: Optional[str] = None
+    target_field: str | None = None
 
     if msg.startswith("unchecked_alloc_field:"):
         payload = msg[len("unchecked_alloc_field:"):].strip()
@@ -1051,7 +1183,7 @@ def _parse_match_to_allocation(match: Any) -> List[AllocationEvidence]:
 # Conservative — operators routinely use these names for kernel-side
 # computations too, but in the presence of a CWE-190/CWE-122 finding
 # the "user_controlled" label is a useful Stage D LLM hint.
-_USER_INPUT_VAR_NAMES: FrozenSet[str] = frozenset({
+_USER_INPUT_VAR_NAMES: frozenset[str] = frozenset({
     "n", "len", "length", "size", "count", "nr", "num",
     "user_size", "user_len", "input_len", "input_size",
     "msg_len", "data_len", "payload_len", "buf_len",
@@ -1063,7 +1195,7 @@ def _classify_size_source(
     file_path: str,
     line_no: int,
     allocator: str,
-) -> Optional[str]:
+) -> str | None:
     """Read the source line and classify the first argument shape of
     the allocator call.
 
@@ -1083,7 +1215,7 @@ def _classify_size_source(
     if not file_path or not line_no:
         return None
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return None
@@ -1129,6 +1261,23 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 _MUL_RE = re.compile(r"\*")
 
 
+def _split_outside_parens(s: str, sep: str) -> list[str]:
+    """Split *s* on *sep* only when outside balanced parentheses."""
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(s):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+        elif ch == sep and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+    parts.append(s[start:])
+    return parts
+
+
 def _is_pure_sizeof(arg: str) -> bool:
     """Return True iff ``arg`` is exactly `sizeof(...)` with balanced
     parens and nothing after. `sizeof(*p)` qualifies (the `*` is
@@ -1153,7 +1302,7 @@ def _is_pure_sizeof(arg: str) -> bool:
     return False
 
 
-def _classify_arg_shape(arg: str) -> Optional[str]:
+def _classify_arg_shape(arg: str) -> str | None:
     """Classify a single allocator argument string."""
     arg = arg.strip()
     if not arg:
@@ -1167,9 +1316,10 @@ def _classify_arg_shape(arg: str) -> Optional[str]:
     if _is_pure_sizeof(arg):
         return "sizeof"
     # Multiplication present — could be sizeof*var or var*sizeof.
+    # Split only on `*` outside balanced parens so dereference inside
+    # sizeof(*ptr) is not mistaken for multiplication.
     if "*" in arg:
-        # Look for a known user-input var name in the operands.
-        operands = [op.strip() for op in arg.split("*")]
+        operands = [op.strip() for op in _split_outside_parens(arg, "*")]
         for op in operands:
             # Strip sizeof(...) wrappers.
             if op.startswith("sizeof"):
@@ -1187,7 +1337,7 @@ def _classify_arg_shape(arg: str) -> Optional[str]:
     return None
 
 
-def _parse_match_to_abort(match: Any) -> List[AbortEvidence]:
+def _parse_match_to_abort(match: Any) -> list[AbortEvidence]:
     """Convert a cocci :class:`SpatchMatch` from abort_proximate.cocci
     into an :class:`AbortEvidence` record.
 
@@ -1257,7 +1407,7 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
     if not file_path or not call_line:
         return GRADE_SAME_FUNCTION
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return GRADE_SAME_FUNCTION
@@ -1269,15 +1419,17 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
     # call line, measured relative to the enclosing function's
     # opening brace.
     depth = 0
-    function_open_at: Optional[int] = None
+    function_open_at: int | None = None
     saw_early_exit_at_depth_1 = False
     bypass_re = re.compile(r"\b(?:return\b|goto\b)")
 
-    for i in range(0, call_idx + 1):
+    for i in range(call_idx + 1):
         line = lines[i]
-        # Strip comments (rough — same approach as adapter.py)
+        # Strip comments and string literals (rough)
         stripped = re.sub(r"/\*.*?\*/", "", line, flags=re.DOTALL)
         stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
+        stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
+        stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", stripped)
 
         # Look for `return` / `goto` BEFORE the call line at depth 1
         # (function body), which would mean a normal exit path
@@ -1288,12 +1440,12 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
         for ch in stripped:
             if ch == "{":
                 depth += 1
-                if function_open_at is None and depth == 1:
+                if depth == 1:
                     function_open_at = i
+                    saw_early_exit_at_depth_1 = False
             elif ch == "}":
                 depth -= 1
-                if depth < 0:
-                    depth = 0
+                depth = max(depth, 0)
 
     # If we never saw an opening brace, we're outside a function —
     # default grade.
@@ -1312,7 +1464,7 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
 _classify_abort_grade = _classify_call_site_grade
 
 
-def _parse_match_to_capability(match: Any) -> List[CapabilityEvidence]:
+def _parse_match_to_capability(match: Any) -> list[CapabilityEvidence]:
     """Convert a cocci :class:`SpatchMatch` from
     capability_check.cocci into a :class:`CapabilityEvidence` record.
 
@@ -1359,7 +1511,7 @@ def _parse_match_to_capability(match: Any) -> List[CapabilityEvidence]:
 
 def _parse_match_to_paired_free(
     match: Any,
-) -> List[PairedFreeEvidence]:
+) -> list[PairedFreeEvidence]:
     """Convert a cocci SpatchMatch from paired_free.cocci into a
     PairedFreeEvidence record.
 
@@ -1391,7 +1543,7 @@ def _parse_match_to_paired_free(
 
 def _parse_match_to_double_free(
     match: Any,
-) -> List[DoubleFreeEvidence]:
+) -> list[DoubleFreeEvidence]:
     """Convert a cocci SpatchMatch from double_free.cocci into a
     DoubleFreeEvidence record.
 
@@ -1422,7 +1574,7 @@ def _parse_match_to_double_free(
     )]
 
 
-def _parse_match_to_boundary(match: Any) -> List[BoundaryEvidence]:
+def _parse_match_to_boundary(match: Any) -> list[BoundaryEvidence]:
     """Convert a cocci SpatchMatch from user_boundary.cocci into a
     BoundaryEvidence record. Message: ``boundary:<fn>``."""
     msg = (getattr(match, "message", "") or "").strip()
@@ -1443,7 +1595,7 @@ def _parse_match_to_boundary(match: Any) -> List[BoundaryEvidence]:
     )]
 
 
-def _parse_match_to_lsm(match: Any) -> List[LsmEvidence]:
+def _parse_match_to_lsm(match: Any) -> list[LsmEvidence]:
     """Convert a cocci SpatchMatch from lsm_hooks.cocci into an
     LsmEvidence record. Message: ``lsm:<hook_name>``."""
     msg = (getattr(match, "message", "") or "").strip()
@@ -1468,7 +1620,7 @@ _LOCK_SITE_KINDS = frozenset({"spin", "mutex", "rw", "pthread_mutex"})
 _LOCK_SITE_OPS = frozenset({"acquire", "release"})
 
 
-def _parse_match_to_lock_site(match: Any) -> List[LockSiteEvidence]:
+def _parse_match_to_lock_site(match: Any) -> list[LockSiteEvidence]:
     """Convert a cocci SpatchMatch from lock_sites.cocci into a
     LockSiteEvidence record. Message: ``lock_site:<op>:<kind>:<fn>:<lock_var>``.
     The lock_var segment can contain ``:`` if the expression uses scope
@@ -1504,10 +1656,44 @@ def _parse_match_to_lock_site(match: Any) -> List[LockSiteEvidence]:
 
 
 _CRYPTO_CALL_KINDS = frozenset({"primitive_call", "rng_source"})
-_CRYPTO_CALL_APIS = frozenset({"openssl", "kernel", "libsodium", "libc"})
+# libc RNG is the only api tag hardcoded in crypto_calls.cocci; every
+# other tag comes from the shipped per-library API packs — a new
+# library pack extends the accepted set with no code edit here.
+_CRYPTO_STATIC_APIS = frozenset({"libc"})
+# Pre-pack tag set, used only when the pack dir is unreadable so the
+# parser keeps accepting the historical rules' output.
+_CRYPTO_FALLBACK_APIS = frozenset({"openssl", "kernel", "libsodium"})
+
+_crypto_apis_cache: frozenset[str] | None = None
+_crypto_apis_lock = threading.Lock()
 
 
-def _parse_match_to_crypto_call(match: Any) -> List[CryptoCallEvidence]:
+def _crypto_call_apis() -> frozenset[str]:
+    """Accepted ``api`` tags: libc + the shipped crypto packs' tags."""
+    global _crypto_apis_cache
+    with _crypto_apis_lock:
+        if _crypto_apis_cache is not None:
+            return _crypto_apis_cache
+        apis = _CRYPTO_STATIC_APIS
+        try:
+            from engine.coccinelle.api_pack_renderer import pack_apis
+            root = _shipped_rules_root()
+            packed = (
+                pack_apis(root / "crypto" / "packs")
+                if root is not None else frozenset()
+            )
+            apis |= packed or _CRYPTO_FALLBACK_APIS
+        except Exception:  # parser must keep working without packs
+            logger.warning(
+                "crypto api packs unavailable; using fallback tag set",
+                exc_info=True,
+            )
+            apis |= _CRYPTO_FALLBACK_APIS
+        _crypto_apis_cache = apis
+        return apis
+
+
+def _parse_match_to_crypto_call(match: Any) -> list[CryptoCallEvidence]:
     """Convert a cocci SpatchMatch from crypto_calls.cocci into a
     CryptoCallEvidence record. Message: ``crypto:<kind>:<api>:<fn>``.
     Function names from this rule set don't contain ``:`` so a 4-way
@@ -1519,7 +1705,7 @@ def _parse_match_to_crypto_call(match: Any) -> List[CryptoCallEvidence]:
     if len(parts) < 4:
         return []
     _prefix, kind, api, fn = parts
-    if kind not in _CRYPTO_CALL_KINDS or api not in _CRYPTO_CALL_APIS:
+    if kind not in _CRYPTO_CALL_KINDS or api not in _crypto_call_apis():
         return []
     fn = fn.strip()
     if not fn:
@@ -1538,7 +1724,7 @@ def _parse_match_to_crypto_call(match: Any) -> List[CryptoCallEvidence]:
     )]
 
 
-def _parse_match_to_warn(match: Any) -> List[WarnEvidence]:
+def _parse_match_to_warn(match: Any) -> list[WarnEvidence]:
     """Convert a cocci SpatchMatch from warn_class.cocci into a
     WarnEvidence record. Message: ``warn:<fn>``."""
     msg = (getattr(match, "message", "") or "").strip()
@@ -1559,7 +1745,7 @@ def _parse_match_to_warn(match: Any) -> List[WarnEvidence]:
     )]
 
 
-def _parse_match_to_null_guard(match: Any) -> List[NullGuardEvidence]:
+def _parse_match_to_null_guard(match: Any) -> list[NullGuardEvidence]:
     """Convert a cocci SpatchMatch from null_guards.cocci into a
     NullGuardEvidence record. Message: ``null_guard:<kind>``."""
     msg = (getattr(match, "message", "") or "").strip()
@@ -1580,7 +1766,7 @@ def _parse_match_to_null_guard(match: Any) -> List[NullGuardEvidence]:
     )]
 
 
-def _parse_match_to_hazard(match: Any) -> List[HazardEvidence]:
+def _parse_match_to_hazard(match: Any) -> list[HazardEvidence]:
     """Convert a cocci :class:`SpatchMatch` from
     engine/coccinelle/source_intel/hazards/ into a
     :class:`HazardEvidence` record.
@@ -1616,7 +1802,7 @@ def _parse_match_to_hazard(match: Any) -> List[HazardEvidence]:
 
 def _parse_match_to_checked_allocation(
     match: Any,
-) -> List[CheckedAllocationEvidence]:
+) -> list[CheckedAllocationEvidence]:
     """Convert a cocci :class:`SpatchMatch` from
     checked_alloc.cocci into a :class:`CheckedAllocationEvidence`
     record. Cocci emits ``checked_alloc:<allocator>``.
@@ -1676,7 +1862,7 @@ _FUNC_DEF_PREFIX_RE = re.compile(
 #: be cleaner but the regex allows zero type prefixes for K&R-style
 #: defs (rare) — keep the regex permissive, reject these keywords
 #: post-hoc.
-_C_KEYWORDS: FrozenSet[str] = frozenset({
+_C_KEYWORDS: frozenset[str] = frozenset({
     "if", "else", "while", "for", "switch", "case", "do", "return",
     "goto", "break", "continue", "sizeof", "typeof", "static_assert",
     "_Static_assert", "__builtin_expect", "likely", "unlikely",
@@ -1719,7 +1905,7 @@ _C_KEYWORDS: FrozenSet[str] = frozenset({
 # concurrent register or another lookup's pop. The lock is taken
 # only around the dict ops themselves, not while computing the
 # signature (which walks the filesystem and could take ms).
-_INVENTORY_BY_TARGET: Dict[str, Tuple[str, Any]] = {}
+_INVENTORY_BY_TARGET: dict[str, tuple[str, Any]] = {}
 _INVENTORY_LOCK = threading.RLock()
 
 
@@ -1736,6 +1922,11 @@ def _register_inventory(target: Path, inventory: Any) -> None:
         return
     with _INVENTORY_LOCK:
         _INVENTORY_BY_TARGET[resolved] = (sig, inventory)
+        # Seed the per-run memo (active only inside analyze()) so the
+        # first `_lookup_cached_inventory` call doesn't re-walk the
+        # tree we just hashed.
+        if _SIG_MEMO_DEPTH:
+            _SIG_MEMO[resolved] = sig
 
 
 def clear_inventory_cache() -> None:
@@ -1749,13 +1940,19 @@ def clear_inventory_cache() -> None:
     """
     with _INVENTORY_LOCK:
         _INVENTORY_BY_TARGET.clear()
+        _SIG_MEMO.clear()
 
 
-def _maybe_register_inventory(target: Path) -> None:
+def _maybe_register_inventory(
+    target: Path, *, checklist: dict[str, Any] | None = None,
+) -> None:
     """Best-effort: build the inventory for ``target`` and stash it
     in the module-global cache so subsequent ``_enclosing_function``
     queries route through tree-sitter (real C/C++ AST) instead of
     the regex fallback.
+
+    When ``checklist`` is provided (a pre-built inventory dict from
+    the scan phase), it is registered directly — no rebuild needed.
 
     Failure modes silently fall through (no inventory cached → regex
     fallback handles the queries):
@@ -1766,6 +1963,9 @@ def _maybe_register_inventory(target: Path) -> None:
       * ``build_inventory`` raises (permission errors, malformed
         files) — log at debug level, continue without inventory
     """
+    if checklist is not None:
+        _register_inventory(target, checklist)
+        return
     try:
         from core.inventory import build_inventory
     except ImportError:
@@ -1782,7 +1982,7 @@ def _maybe_register_inventory(target: Path) -> None:
     _register_inventory(target, inv)
 
 
-def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[str]]:
+def _lookup_cached_inventory(file_path: str) -> tuple[Any | None, str | None]:
     """Return ``(inventory, target_dir)`` for the deepest cached
     target containing ``file_path``, or ``(None, None)`` if no
     cached target is an ancestor.
@@ -1807,7 +2007,7 @@ def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[st
             fp = Path(file_path).resolve()
         except (OSError, ValueError):
             return None, None
-        best_target: Optional[str] = None
+        best_target: str | None = None
         best_depth = -1
         fp_str = str(fp)
         for target in _INVENTORY_BY_TARGET:
@@ -1825,9 +2025,10 @@ def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[st
 
     # Validate freshness outside the lock — signature compute walks
     # the filesystem and would otherwise serialise concurrent
-    # lookups for unrelated targets.
-    from packages.source_intel.cache import compute_target_signature
-    current_sig = compute_target_signature(Path(best_target))
+    # lookups for unrelated targets. Routed through the per-run memo:
+    # inside an analyze() run this is O(1) after the first call
+    # instead of a full stat-walk per `_enclosing_function` query.
+    current_sig = _target_signature(best_target)
     if stored_sig != current_sig:
         # Re-check under the lock that the entry we're popping is
         # the same one we read above. A concurrent register may
@@ -1842,7 +2043,7 @@ def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[st
 
 def _enclosing_function_via_inventory(
     file_path: str, line: int,
-) -> Optional[str]:
+) -> str | None:
     """Tree-sitter-backed enclosing-function lookup via the cached
     inventory built in :func:`analyze`. Returns ``None`` when no
     cached inventory covers ``file_path`` — caller falls back to
@@ -1852,7 +2053,7 @@ def _enclosing_function_via_inventory(
     if inv is None:
         return None
     try:
-        from core.inventory.reachability import enclosing_function as _inv_enc
+        from core.analysis.reachability import enclosing_function as _inv_enc
     except ImportError:
         return None
     # Inventory keys files by the relative path from the target dir.
@@ -1870,8 +2071,8 @@ def _enclosing_function_via_inventory(
     return result.name if result is not None else None
 
 
-def _enclosing_function(file_path: str, line: int) -> Optional[str]:
-    """Find the C function definition enclosing ``line`` in ``file_path``.
+def _enclosing_function(file_path: str, line: int) -> str | None:
+    r"""Find the C function definition enclosing ``line`` in ``file_path``.
 
     Resolution order:
       1. Tree-sitter inventory cache (preferred — real AST parse via
@@ -1895,7 +2096,7 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
          matches the full ``_FUNC_DEF_RE`` (``name(args)[{``) and the
          name isn't a C control keyword, return it.
       3. Multi-line definitions like
-         ``static CURLcode do_sendmsg(\\n    struct Curl_cfilter *cf,\\n    ...)``
+         ``static CURLcode do_sendmsg(\n    struct Curl_cfilter *cf,\n    ...)``
          are matched once paren balance is reached on a later line.
 
     NOT a full C parser — still misses (in fallback mode only):
@@ -1910,9 +2111,9 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
         return via_inv
     # 2. Regex fallback (only path when no inventory is cached).
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-    except (OSError, IOError):
+    except OSError:
         return None
     if line < 1 or line > len(lines):
         return None
@@ -1946,7 +2147,7 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
         # Build the balanced statement by joining forward lines until
         # the open-paren count reaches zero. Bounded to 50 forward
         # lines so a pathological run-on doesn't burn time.
-        joined, paren_terminator_line = _join_until_paren_balanced(
+        joined, _paren_terminator_line = _join_until_paren_balanced(
             lines, start=i, max_forward=50,
         )
         if joined is None:
@@ -1978,14 +2179,15 @@ def _enclosing_function(file_path: str, line: int) -> Optional[str]:
 
 def _strip_trailing_comments(s: str) -> str:
     """Trim ``// …`` and ``/* … */`` trailing comments + whitespace."""
+    s = re.sub(r"/\*.*?\*/", "", s)
     s = re.sub(r"/\*.*$", "", s)
     s = re.sub(r"//.*$", "", s)
     return s.rstrip()
 
 
 def _join_until_paren_balanced(
-    lines: List[str], *, start: int, max_forward: int,
-) -> Tuple[Optional[str], Optional[int]]:
+    lines: list[str], *, start: int, max_forward: int,
+) -> tuple[str | None, int | None]:
     """Concatenate ``lines[start:]`` forward until the open-paren
     count reaches zero.
 
@@ -2001,7 +2203,7 @@ def _join_until_paren_balanced(
     literal inside a function prototype is near zero.
     """
     depth = 0
-    pieces: List[str] = []
+    pieces: list[str] = []
     for j in range(start, min(len(lines), start + max_forward)):
         text = lines[j].rstrip("\n")
         # Strip inline block comments AND line comments; this is the
@@ -2027,7 +2229,7 @@ def _join_until_paren_balanced(
     return None, None
 
 
-def _parse_match_to_attribute(match: Any) -> List[AttributeEvidence]:
+def _parse_match_to_attribute(match: Any) -> list[AttributeEvidence]:
     """Convert a cocci :class:`SpatchMatch` into ``AttributeEvidence``
     records.
 
@@ -2074,7 +2276,7 @@ def _parse_match_to_attribute(match: Any) -> List[AttributeEvidence]:
 _parse_match_to_wur = _parse_match_to_attribute
 
 
-def _scan_alias_observations(target: Path) -> List[AttributeEvidence]:
+def _scan_alias_observations(target: Path) -> list[AttributeEvidence]:
     """Curated-alias substring scan. Looks for known macro spellings
     in C/H files under ``target`` and emits one observation per file
     where any alias is seen.
@@ -2090,7 +2292,7 @@ def _scan_alias_observations(target: Path) -> List[AttributeEvidence]:
     primary evidence source — the alias scan is supplementary, not
     substitutive.
     """
-    observations: List[AttributeEvidence] = []
+    observations: list[AttributeEvidence] = []
     if not target.is_dir():
         # Single-file target — scan that file directly.
         if target.is_file() and target.suffix.lower() in _C_CPP_EXTS:
@@ -2111,7 +2313,7 @@ def _scan_alias_observations(target: Path) -> List[AttributeEvidence]:
     return observations
 
 
-def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
+def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
     """Best-effort C/C++ L1 source table scanner.
 
     Coccinelle rules handle many structural axes, but L1 inputs include
@@ -2120,7 +2322,7 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
     prioritisation. This bounded source scan records them as prompt
     context without changing verdict policy.
     """
-    files: List[Path] = []
+    files: list[Path] = []
     if target.is_file() and target.suffix.lower() in _C_CPP_EXTS:
         files = [target]
     elif target.is_dir():
@@ -2130,16 +2332,19 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
             if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS:
                 files.append(entry)
 
-    observations: List[CLevelSourceEvidence] = []
-    seen: set[Tuple[str, int, str, str]] = set()
+    observations: list[CLevelSourceEvidence] = []
+    seen: set[tuple[str, int, str, str]] = set()
     for path in files:
         try:
-            lines = path.read_text(errors="replace").splitlines()
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         in_block_comment = False
         for line_no, line in enumerate(lines, start=1):
             if _PREPROC_LINE_RE.match(line):
+                _, in_block_comment = _strip_c_source_comments_and_literals(
+                    line, in_block_comment=in_block_comment,
+                )
                 continue
             stripped, in_block_comment = _strip_c_source_comments_and_literals(
                 line, in_block_comment=in_block_comment,
@@ -2184,7 +2389,7 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
 
 def _strip_c_source_comments_and_literals(
     line: str, *, in_block_comment: bool = False,
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """Remove C/C++ comments and string/char literals from one line.
 
     The C-level source pass is intentionally lightweight, but it should
@@ -2192,9 +2397,9 @@ def _strip_c_source_comments_and_literals(
     Keep non-literal code characters so word-boundary call/use regexes can
     still match the surrounding statement.
     """
-    out: List[str] = []
+    out: list[str] = []
     i = 0
-    quote: Optional[str] = None
+    quote: str | None = None
     while i < len(line):
         ch = line[i]
         nxt = line[i + 1] if i + 1 < len(line) else ""
@@ -2275,8 +2480,8 @@ def _line_mentions_env_source(line: str) -> bool:
 
 def _scan_project_alias_observations(
     target: Path,
-    discovered_alias_tuple: Tuple[Tuple[str, Tuple[str, ...]], ...],
-) -> List[AttributeEvidence]:
+    discovered_alias_tuple: tuple[tuple[str, tuple[str, ...]], ...],
+) -> list[AttributeEvidence]:
     """For each discovered project-specific alias macro, scan source
     files for occurrences and emit ``match_source="project_alias"``
     evidence.
@@ -2286,15 +2491,14 @@ def _scan_project_alias_observations(
     future axes will bind aliases to functions; this pass just records
     that the macro appears in a C source file.
     """
-    observations: List[AttributeEvidence] = []
+    observations: list[AttributeEvidence] = []
     if not target.is_dir():
         return observations
 
     # Build a flat list of (kind, alias_name) tuples for the scan.
-    alias_pairs: List[Tuple[str, str]] = []
+    alias_pairs: list[tuple[str, str]] = []
     for family, names in discovered_alias_tuple:
-        for name in names:
-            alias_pairs.append((family, name))
+        alias_pairs.extend((family, name) for name in names)
     if not alias_pairs:
         return observations
 
@@ -2308,7 +2512,7 @@ def _scan_project_alias_observations(
             continue
         seen_files += 1
         try:
-            text = entry.read_text(errors="replace")
+            text = entry.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         file_lines = text.split("\n")
@@ -2342,14 +2546,14 @@ def _scan_project_alias_observations(
 
 
 def _is_word_present(text: str, word: str) -> bool:
-    """Word-boundary substring check. Avoids false positives where
+    r"""Word-boundary substring check. Avoids false positives where
     one macro name is a prefix of another (e.g. ``CHECK`` matching in
     ``CHECK_RETURN``).
 
     Aliases that contain non-word characters (e.g.
     ``__attribute__((warn_unused_result))``) can't be safely
-    bounded by ``\\b`` — both ends are non-word chars and
-    ``\\b`` requires a word-on-one-side transition. For those,
+    bounded by ``\b`` — both ends are non-word chars and
+    ``\b`` requires a word-on-one-side transition. For those,
     fall back to plain substring containment; prefix-overlap risk
     is negligible for any alias containing parens.
     """
@@ -2360,7 +2564,7 @@ def _is_word_present(text: str, word: str) -> bool:
     return bool(re.search(r"\b" + re.escape(word) + r"\b", text))
 
 
-def _scan_alias_in_file(path: Path) -> List[AttributeEvidence]:
+def _scan_alias_in_file(path: Path) -> list[AttributeEvidence]:
     """Best-effort: detect WUR alias spellings in a single C/H file.
 
     One observation per (file, alias_spelling, line) tuple — every
@@ -2373,11 +2577,11 @@ def _scan_alias_in_file(path: Path) -> List[AttributeEvidence]:
     renders the file-level observation either way).
     """
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
 
-    observations: List[AttributeEvidence] = []
+    observations: list[AttributeEvidence] = []
     file_lines = text.split("\n")
     for spelling in ALL_WUR_ALIASES:
         if spelling not in text:
@@ -2419,7 +2623,7 @@ _PREPROC_LINE_RE = re.compile(r"^\s*#")
 # real codebases sprinkle BEFORE the actual function name. Excluded
 # from the alias-near function-name extractor — they look like
 # function calls (`CURL_EXTERN`, `__declspec`) but aren't.
-_DECORATION_PREFIXES: FrozenSet[str] = frozenset({
+_DECORATION_PREFIXES: frozenset[str] = frozenset({
     "CURL_EXTERN", "ALLOC_FUNC",
     "__declspec", "__attribute__", "__cdecl", "__stdcall",
     "__fastcall", "__thiscall",
@@ -2428,11 +2632,11 @@ _DECORATION_PREFIXES: FrozenSet[str] = frozenset({
 
 
 def _extract_function_name_near_alias(
-    file_lines: List[str],
+    file_lines: list[str],
     *,
     line_idx_one_based: int,
     alias: str,
-) -> Optional[str]:
+) -> str | None:
     """Best-effort: extract the function name a WUR alias applies to.
 
     Strategy: inspect a small window (1 line before, line itself,
@@ -2475,7 +2679,7 @@ def _extract_function_name_near_alias(
     #   1. The first non-decoration, non-uppercase-macro name.
     #   2. Failing that, the last candidate (best guess at the
     #      actual function name even if it looked macro-ish).
-    candidates: List[str] = []
+    candidates: list[str] = []
     for m in _FUNC_NAME_CALL_RE.finditer(cleaned):
         name = m.group(1)
         if name in _C_KEYWORDS:
@@ -2513,7 +2717,7 @@ def _extract_function_name_near_alias(
 # imported) because adapter imports from analyze; importing back
 # would create a cycle. Keep both lists in sync — see adapter.py's
 # `_PRIVILEGED_CAP_CONSTANTS` for the canonical commentary.
-_PRIVILEGED_CAP_CONSTANTS_FOR_EVIDENCE: FrozenSet[str] = frozenset({
+_PRIVILEGED_CAP_CONSTANTS_FOR_EVIDENCE: frozenset[str] = frozenset({
     "CAP_SYS_ADMIN",
     "CAP_SYS_MODULE",
     "CAP_SYS_RAWIO",
@@ -2524,7 +2728,7 @@ _PRIVILEGED_CAP_CONSTANTS_FOR_EVIDENCE: FrozenSet[str] = frozenset({
 
 # Capability functions that grade the same way (cap_function set must
 # match adapter.py's `_PRIVILEGED_CAP_FUNCTIONS`).
-_PRIVILEGED_CAP_FUNCTIONS_FOR_EVIDENCE: FrozenSet[str] = frozenset({
+_PRIVILEGED_CAP_FUNCTIONS_FOR_EVIDENCE: frozenset[str] = frozenset({
     "capable",
 })
 
@@ -2532,10 +2736,10 @@ _PRIVILEGED_CAP_FUNCTIONS_FOR_EVIDENCE: FrozenSet[str] = frozenset({
 def compute_privilege_back_walk_evidence(
     finding_function: str,
     target: Path,
-    result: "SourceIntelResult",
+    result: SourceIntelResult,
     *,
     max_depth: int = 3,
-) -> Optional["PrivilegeBackWalkEvidence"]:
+) -> PrivilegeBackWalkEvidence | None:
     """Run the multi-hop privilege back-walk from ``finding_function``
     up through the inverted callgraph and return prose-renderable
     evidence (not just a boolean verdict signal).
@@ -2578,8 +2782,8 @@ def compute_privilege_back_walk_evidence(
 
     effective_depth = max(1, min(max_depth, 5))
     visited = {finding_function}
-    gating_examples: List[Tuple[str, str, str, int]] = []
-    ungated_caller: Optional[str] = None
+    gating_examples: list[tuple[str, str, str, int]] = []
+    ungated_caller: str | None = None
     all_gated = True
 
     for call_file, call_line in callers:
@@ -2616,11 +2820,11 @@ def compute_privilege_back_walk_evidence(
 def _path_is_gated_with_examples(
     fn_name: str,
     facts: Any,
-    result: "SourceIntelResult",
+    result: SourceIntelResult,
     *,
     remaining_depth: int,
     visited: set,
-) -> Tuple[bool, List[Tuple[str, str, str, int]]]:
+) -> tuple[bool, list[tuple[str, str, str, int]]]:
     """Recursive walker — same logic as adapter.py's
     ``_path_is_gated`` but additionally records the concrete gating
     sites along the way for prose evidence.
@@ -2640,7 +2844,7 @@ def _path_is_gated_with_examples(
     if not callers:
         return False, []
     next_visited = visited | {fn_name}
-    collected: List[Tuple[str, str, str, int]] = []
+    collected: list[tuple[str, str, str, int]] = []
     for call_file, call_line in callers:
         caller_fn = _enclosing_function(call_file, call_line)
         if not caller_fn:
@@ -2658,8 +2862,8 @@ def _path_is_gated_with_examples(
 
 def _function_privileged_cap_site(
     fn_name: str,
-    result: "SourceIntelResult",
-) -> Optional[Tuple[str, str, str, int]]:
+    result: SourceIntelResult,
+) -> tuple[str, str, str, int] | None:
     """If ``fn_name`` body contains a privileged ``capable(CAP_X)``
     call site, return ``(fn_name, cap_function, file_path, line)``
     for the first one found. Else ``None``.
@@ -2672,7 +2876,7 @@ def _function_privileged_cap_site(
     try:
         from packages.source_intel.adapter import _line_uses_privileged_cap
     except ImportError:
-        _line_uses_privileged_cap = _local_line_uses_privileged_cap  # noqa: F811
+        _line_uses_privileged_cap = _local_line_uses_privileged_cap
     for cap in result.capabilities:
         if cap.enclosing_function != fn_name:
             continue
@@ -2690,7 +2894,7 @@ def _local_line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     constant. Functionally equivalent to adapter's helper but
     duplicated here to break the import cycle in minimal installs."""
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return False

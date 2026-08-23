@@ -35,12 +35,16 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, TYPE_CHECKING
 
 from ._atomic import atomic_write_text
-from .models import Dependency
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from .models import Dependency
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +60,14 @@ def write_sbom_spdx_json(
     *,
     deps: Iterable[Dependency],
     target_name: str,
-    namespace_uri: Optional[str] = None,
+    namespace_uri: str | None = None,
+    project_license: str | None = None,
 ) -> None:
     """Render an SPDX 2.3 JSON SBOM and write it atomically."""
     doc = render_sbom_spdx(
         deps=deps, target_name=target_name,
         namespace_uri=namespace_uri,
+        project_license=project_license,
     )
     atomic_write_text(path, _json.dumps(doc, indent=2) + "\n")
 
@@ -70,9 +76,16 @@ def render_sbom_spdx(
     *,
     deps: Iterable[Dependency],
     target_name: str,
-    namespace_uri: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Build the SPDX 2.3 document dict (does not write to disk)."""
+    namespace_uri: str | None = None,
+    project_license: str | None = None,
+) -> dict[str, Any]:
+    """Build the SPDX 2.3 document dict (does not write to disk).
+
+    ``project_license`` — the scanned project's own manifest-declared
+    license. When known, a root ``SPDXRef-Project`` package carries it
+    as ``licenseDeclared``; dep packages never do — a dep's license
+    only ever comes from data that describes that dep.
+    """
     deps_list = list(deps)
     spdx_doc_id = "SPDXRef-DOCUMENT"
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -82,15 +95,36 @@ def render_sbom_spdx(
     if namespace_uri is None:
         namespace_uri = (
             f"https://raptor-sca.local/spdxdocs/"
-            f"{target_name}-{created.replace(':', '').replace('-', '')}"
+            f"{target_name}-{uuid.uuid4()}"
         )
 
-    packages: List[Dict[str, Any]] = []
-    relationships: List[Dict[str, str]] = [
+    packages: list[dict[str, Any]] = []
+    relationships: list[dict[str, str]] = [
         # SPDX requires a DESCRIBES relationship from the document
         # to its top-level package(s). Without a single "root"
         # package we DESCRIBE every dep — equivalent semantically.
     ]
+    if project_license:
+        # Root package for the scanned project itself — the only
+        # place its manifest-declared license belongs. Emitted only
+        # when the license is known; a bare root package with all
+        # NOASSERTION fields adds nothing for consumers.
+        root_id = "SPDXRef-Project"
+        packages.append({
+            "SPDXID": root_id,
+            "name": target_name,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseDeclared": _spdx_license_value(project_license),
+            "licenseConcluded": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+            "supplier": "NOASSERTION",
+        })
+        relationships.append({
+            "spdxElementId": spdx_doc_id,
+            "relatedSpdxElement": root_id,
+            "relationshipType": "DESCRIBES",
+        })
     seen_refs: set = set()
     for d in deps_list:
         spdx_id = _spdx_id_for(d, seen_refs)
@@ -118,9 +152,9 @@ def render_sbom_spdx(
     }
 
 
-def _package_block(dep: Dependency, spdx_id: str) -> Dict[str, Any]:
+def _package_block(dep: Dependency, spdx_id: str) -> dict[str, Any]:
     """Render one Dependency as an SPDX ``packages[]`` entry."""
-    pkg: Dict[str, Any] = {
+    pkg: dict[str, Any] = {
         "SPDXID": spdx_id,
         "name": dep.name,
         # SPDX requires either ``downloadLocation`` (URL) OR
@@ -189,12 +223,15 @@ def _spdx_license_value(declared: str) -> str:
     # "MIT OR Apache-2.0" passes because "mit" is too short, "or" is
     # a keyword, "apache-2.0" isn't all-alphabetic.
     keywords = {"and", "or", "with"}
+    prose_count = 0
     for tok in text.split():
         low = tok.lower()
         if (tok.islower() and tok.isalpha()
                 and low not in keywords
                 and len(tok) >= 3):
-            return "NOASSERTION"
+            prose_count += 1
+    if prose_count >= 2:
+        return "NOASSERTION"
     return text
 
 

@@ -15,10 +15,15 @@ shown alongside.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, TYPE_CHECKING
+
+from core.json import loads
 
 from .registry import DEPTH_SCANNED, category_of, depth_of
 from .store import CoverageStore, iter_inventory_functions
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 _CATEGORIES = ("static", "llm", "runtime")
 # Kinds an LLM reviews unit-by-unit. The LLM-review gap is scoped to these:
@@ -27,7 +32,27 @@ _CATEGORIES = ("static", "llm", "runtime")
 _REVIEWABLE_KINDS = ("function", "top_level")
 
 
-def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
+def _workflow_step_files(checklist: dict[str, Any]) -> set[str]:
+    """File paths whose inventory items are CI-workflow units.
+
+    The GitHub-workflow extractor is the only YAML extractor with
+    reviewable output (jobs/steps named ``job:<id>`` /
+    ``job:<id>.step-<n>``, kinded ``function``) — a yaml-language file
+    entry with items IS a workflow. The path check covers legacy
+    checklists written before the per-file ``language`` field.
+    """
+    out: set[str] = set()
+    for fe in checklist.get("files", []):
+        path = fe.get("path")
+        if not path:
+            continue
+        if (fe.get("language") == "yaml"
+                or ".github/workflows/" in path.replace("\\", "/")):
+            out.add(path)
+    return out
+
+
+def file_level_view(run_dirs: Iterable[Path]) -> dict[str, Any]:
     """File-level coverage for the no-inventory case: per-tool files-examined
     from the coverage records, plus run provenance from each ``.raptor-run.json``.
 
@@ -44,8 +69,8 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
 
     from .record import load_records
 
-    tools: Dict[str, Dict[str, Any]] = {}
-    runs: List[Dict[str, Any]] = []
+    tools: dict[str, dict[str, Any]] = {}
+    runs: list[dict[str, Any]] = []
     for rd in run_dirs:
         rd = Path(rd)
         md = load_run_metadata(rd)
@@ -56,6 +81,9 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
                 "status": md.get("status"),
                 "timestamp": run_timestamp(md),
                 "target": run_target(md),
+                # The resolved path — the acquisition stamp above only
+                # says HOW the code arrived ({"source": "directory"}…).
+                "target_path": md.get("target_path"),
             })
         for rec in load_records(rd):
             tool = rec.get("tool")
@@ -85,9 +113,101 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
     }
 
 
+def read_tracking_status(run_dirs) -> dict[str, Any]:
+    """Health of the LLM read-tracking leg across these runs.
+
+    The capture chain has several silent failure points (plugin loads
+    only via the launcher, needs an active project AND a running run,
+    only Read-tool reads fire the hook) — when it never engages, the
+    summary's llm numbers quietly understate and nothing says why.
+    Mechanical check: does ANY run carry a ``coverage-read.json``
+    record or a raw ``.reads-manifest``?
+    """
+    latest_record = None
+    pending_manifests = 0
+    for rd in run_dirs:
+        rd = Path(rd)
+        rec = rd / "coverage-read.json"
+        if rec.is_file():
+            try:
+                ts = rec.stat().st_mtime
+            except OSError:
+                continue
+            if latest_record is None or ts > latest_record:
+                latest_record = ts
+        if (rd / ".reads-manifest").is_file():
+            pending_manifests += 1
+    return {
+        "runs": len(list(run_dirs)),
+        "latest_record_mtime": latest_record,
+        "pending_manifests": pending_manifests,
+    }
+
+
+def format_read_tracking(status: dict[str, Any]) -> str | None:
+    """One operator-facing line; None when there is nothing to say."""
+    if not status.get("runs"):
+        return None
+    if status.get("latest_record_mtime") is not None:
+        from datetime import datetime, timezone
+        stamp = datetime.fromtimestamp(
+            status["latest_record_mtime"], tz=timezone.utc,
+        ).isoformat(timespec="seconds")
+        extra = (f"; {status['pending_manifests']} manifest(s) pending"
+                 if status.get("pending_manifests") else "")
+        return f"  Read tracking: active (last record {stamp}{extra})"
+    if status.get("pending_manifests"):
+        return ("  Read tracking: manifests captured but not yet converted "
+                f"({status['pending_manifests']} run(s))")
+    return ("  Read tracking: no LLM reads recorded in any run — reads are "
+            "captured only in launcher sessions with an active project and "
+            "a running run")
+
+
+def format_progress_trend(store_path) -> str | None:
+    """Reviewed-count movement across the last completed runs.
+
+    Reads the sibling ``coverage-progress.jsonl`` the run lifecycle
+    appends at completion. One line — the operator-facing answer to
+    "is the gap actually shrinking?". None when there is no history.
+    """
+    if not store_path:
+        return None
+    progress = Path(store_path).parent / "coverage-progress.jsonl"
+    if not progress.is_file():
+        return None
+    rows = []
+    try:
+        with Path(progress).open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return None
+    if not rows:
+        return None
+    last = rows[-1]
+    reviewed = last.get("llm_reviewed", 0)
+    reviewable = last.get("llm_reviewable", 0)
+    if len(rows) == 1:
+        return (f"  Progress: {reviewed}/{reviewable} reviewed "
+                f"after {last.get('run', '?')} (1 run recorded)")
+    prev = rows[-2]
+    delta = reviewed - prev.get("llm_reviewed", 0)
+    sign = "+" if delta >= 0 else ""
+    return (f"  Progress: {reviewed}/{reviewable} reviewed "
+            f"({sign}{delta} in {last.get('run', '?')}; "
+            f"{len(rows)} runs recorded)")
+
+
 def render_coverage(
-    run_dirs, checklist, store_path, annotations_base=None, detailed=False,
-) -> "str | None":
+    run_dirs, checklist, store_path, annotations_base=None, detailed: bool=False,
+) -> str | None:
     """The unified coverage report — the single rendering path for every
     surface (/project coverage, standalone /scan, /agentic, raptor-coverage-summary).
 
@@ -116,23 +236,46 @@ def render_coverage(
         exec_section = format_execution_detail(execution_detail(run_dirs, checklist))
         if exec_section:
             parts.append(exec_section)
+        health = format_read_tracking(read_tracking_status(run_dirs))
+        if health:
+            parts.append(health)
+        trend = format_progress_trend(store_path)
+        if trend:
+            parts.append(trend)
         return "\n".join(parts)
 
     fv = file_level_view(run_dirs)
     if fv.get("tools") or fv.get("runs"):
-        return format_file_level_view(fv)
+        out = [format_file_level_view(fv)]
+        health = format_read_tracking(read_tracking_status(run_dirs))
+        if health:
+            out.append(health)
+        return "\n".join(out)
     return None
 
 
 def _build_store(run_dirs, checklist, store_path, annotations_base=None):
     """Construct the store on-demand: load the durable ``coverage.json`` (if
     any) then re-import the current records + /understand + annotations.
-    Idempotent and read-only (never saves). The single store-construction path."""
+    Idempotent and read-only (never saves). The single store-construction path.
+
+    ``project_dir`` is derived from ``store_path.parent`` — the coverage
+    store lives at ``<project>/coverage.json`` in project runs, so the
+    review-journal index lives at ``<project>/review-journal-index.json``
+    in the same directory. Passing this in lets ``backfill`` read LLM
+    review existence from the post-migration source of truth (the
+    journal) rather than legacy ``checked_by`` on the checklist.
+    """
     from .importer import backfill
     from .store import CoverageStore
 
     store = CoverageStore(Path(store_path))
-    backfill(store, list(run_dirs), checklist, annotations_base=annotations_base)
+    project_dir = Path(store_path).parent if store_path else None
+    backfill(
+        store, list(run_dirs), checklist,
+        annotations_base=annotations_base,
+        project_dir=project_dir,
+    )
     return store
 
 
@@ -145,11 +288,11 @@ def coverage_view(run_dirs, checklist, store_path, annotations_base=None):
         _build_store(run_dirs, checklist, store_path, annotations_base), checklist)
 
 
-def file_breakdown(store: CoverageStore, checklist: Dict[str, Any]) -> List[Dict[str, Any]]:
+def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict[str, Any]]:
     """Per-file rollup for the ``--detailed`` view: item count, llm-reviewed
     reviewable units, examined items, findings, and file coverage %. Sorted
     worst-first by LLM-review ratio so files needing attention surface first."""
-    files: Dict[str, Dict[str, Any]] = {}
+    files: dict[str, dict[str, Any]] = {}
     for f, _name, lo, hi, kind in iter_inventory_functions(checklist):
         high = hi if hi is not None else lo
         row = files.setdefault(f, {
@@ -173,7 +316,7 @@ def file_breakdown(store: CoverageStore, checklist: Dict[str, Any]) -> List[Dict
                        r["path"]))
 
 
-def format_file_breakdown(rows: List[Dict[str, Any]], max_files: int = 40) -> str:
+def format_file_breakdown(rows: list[dict[str, Any]], max_files: int = 40) -> str:
     """Render :func:`file_breakdown` as a per-file table ('' if empty)."""
     if not rows:
         return ""
@@ -194,7 +337,7 @@ def format_file_breakdown(rows: List[Dict[str, Any]], max_files: int = 40) -> st
     return "\n".join(lines)
 
 
-def render_run_coverage(run_dir) -> "str | None":
+def render_run_coverage(run_dir) -> str | None:
     """Single-run convenience wrapper over :func:`render_coverage` (used by
     /agentic and standalone /scan end-of-run printing). Read-only."""
     from core.json import load_json
@@ -206,7 +349,7 @@ def render_run_coverage(run_dir) -> "str | None":
     )
 
 
-def store_llm_coverage_percent(view: Dict[str, Any]) -> float:
+def store_llm_coverage_percent(view: dict[str, Any]) -> float:
     """Percent of REVIEWABLE units (function/top_level) with LLM coverage."""
     total = view.get("llm_reviewable", 0)
     if not total:
@@ -215,11 +358,11 @@ def store_llm_coverage_percent(view: Dict[str, Any]) -> float:
     return max(0.0, min(100.0, reviewed / total * 100))
 
 
-def store_coverage_threshold_met(view: Dict[str, Any], fail_under: float) -> bool:
+def store_coverage_threshold_met(view: dict[str, Any], fail_under: float) -> bool:
     return store_llm_coverage_percent(view) >= fail_under
 
 
-def format_store_threshold_result(view: Dict[str, Any], fail_under: float) -> str:
+def format_store_threshold_result(view: dict[str, Any], fail_under: float) -> str:
     pct = store_llm_coverage_percent(view)
     status = "PASS" if pct >= fail_under else "FAIL"
     return (
@@ -228,14 +371,17 @@ def format_store_threshold_result(view: Dict[str, Any], fail_under: float) -> st
     )
 
 
-def format_file_level_view(view: Dict[str, Any], max_files: int = 20) -> str:
+def format_file_level_view(view: dict[str, Any], max_files: int = 20) -> str:
     """Render :func:`file_level_view` as an operator-facing section."""
     lines = ["Coverage (file-level — no function inventory)"]
     runs = view.get("runs") or []
     if runs:
         lines.append(f"  Runs: {len(runs)}")
         for r in runs:
-            tgt = r.get("target")
+            # Prefer the resolved path; the acquisition stamp's "source"
+            # is the acquisition KIND ("directory", "git"…), which read
+            # as a nonsense target in the listing.
+            tgt = r.get("target_path") or r.get("target")
             tgt = tgt.get("source") if isinstance(tgt, dict) else tgt
             lines.append(
                 f"    {r.get('command')} / {r.get('status')} / "
@@ -248,14 +394,13 @@ def format_file_level_view(view: Dict[str, Any], max_files: int = 20) -> str:
         ver = ", ".join(info["versions"]) or "?"
         rules = f"  (rules: {', '.join(info['rules'])})" if info["rules"] else ""
         lines.append(f"  {tool} {ver}: {len(info['files'])} file(s) examined{rules}")
-        for f in info["files"][:max_files]:
-            lines.append(f"    {f}")
+        lines.extend(f"    {f}" for f in info["files"][:max_files])
         if len(info["files"]) > max_files:
             lines.append(f"    … (+{len(info['files']) - max_files} more)")
     return "\n".join(lines)
 
 
-def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any]:
+def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any]:
     """Function-level coverage rollup from the store, against the inventory.
 
     One store query per inventory function. Returns a JSON-friendly dict.
@@ -264,12 +409,14 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
     covered_any = 0
     reviewable_total = 0
     reviewed_count = 0
-    by_category = {c: 0 for c in _CATEGORIES}
-    by_kind: Dict[str, int] = {}
-    llm_gap: List[Dict[str, Any]] = []
+    by_category = dict.fromkeys(_CATEGORIES, 0)
+    by_kind: dict[str, int] = {}
+    llm_gap: list[dict[str, Any]] = []
     total_gap = 0
     verdicts = {"clean": 0, "open": 0, "found_then_lost": 0, "unexamined": 0}
-    review_gap: List[Dict[str, Any]] = []
+    review_gap: list[dict[str, Any]] = []
+    workflow_files = _workflow_step_files(checklist)
+    workflow_excluded = 0
 
     for file, name, lo, hi, kind in iter_inventory_functions(checklist):
         total += 1
@@ -306,12 +453,22 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         # (Completeness counts above — total/by_kind/examined/verdicts — still
         # include every kind.)
         if kind in _REVIEWABLE_KINDS:
-            reviewable_total += 1
-            if reviewed:
+            # CI workflow jobs/steps carry kind "function" but are not
+            # units an LLM reviews one-by-one — scanners own them.
+            # Leading the gap with `.github/workflows/...:job:ci.step-N`
+            # entries misstates the review debt, so they are excluded
+            # from the reviewable denominator AND the gap (counted so
+            # the summary can state the exclusion). Total inventory
+            # counts above still include them.
+            if file in workflow_files and (name or "").startswith("job:"):
+                workflow_excluded += 1
+            elif reviewed:
+                reviewable_total += 1
                 reviewed_count += 1
             else:
                 # not reviewed — even if the LLM merely READ the file, it lands
                 # here (that's the point: read ≠ reviewed).
+                reviewable_total += 1
                 llm_gap.append({"file": file, "function": name, "line": lo})
 
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
@@ -335,6 +492,7 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         "gap_no_tool": total_gap,
         "gap_no_llm": len(llm_gap),
         "llm_gap_functions": llm_gap,
+        "llm_gap_workflow_excluded": workflow_excluded,
         "verdicts": verdicts,
         "review_gap": review_gap,
         "provenance": store.provenance_summary(),
@@ -345,7 +503,7 @@ def _pct(n: int, total: int) -> float:
     return (n / total * 100.0) if total else 0.0
 
 
-def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
+def format_store_view(view: dict[str, Any], max_gap: int = 15) -> str:
     """Render :func:`store_view` output as an operator-facing section."""
     total = view["total_functions"]
     target_label = view.get("target") or view.get("content_id") or "unknown"
@@ -370,14 +528,26 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
     v = view.get("verdicts")
     if v:
         lines.append("  Verdict:")
-        lines.append(f"    clean:           {v.get('clean', 0)}")
-        lines.append(f"    open findings:   {v.get('open', 0)}")
-        lines.append(f"    found-then-lost: {v.get('found_then_lost', 0)}  (re-examine)")
-        lines.append(f"    unexamined:      {v.get('unexamined', 0)}")
+        # "clean" the enum value = examined by SOME tool with no finding
+        # linked — a semgrep parse counts. Label it for what it is
+        # rather than implying a completed review.
+        lines.append(
+            f"    examined, no findings: {v.get('clean', 0)}")
+        lines.append(f"    open findings:         {v.get('open', 0)}")
+        lines.append(
+            f"    found-then-lost:       {v.get('found_then_lost', 0)}"
+            "  (re-examine)")
+        lines.append(f"    unexamined:            {v.get('unexamined', 0)}")
 
     lines.append("  Gaps:")
     lines.append(f"    no tool at all: {view['gap_no_tool']}")
-    lines.append(f"    no LLM review:  {view['gap_no_llm']}")
+    wf_excluded = view.get("llm_gap_workflow_excluded", 0)
+    wf_note = (
+        f"  ({wf_excluded} workflow-step item"
+        f"{'s' if wf_excluded != 1 else ''} excluded)"
+        if wf_excluded else ""
+    )
+    lines.append(f"    no LLM review:  {view['gap_no_llm']}{wf_note}")
 
     # Found-then-lost is the one to flag loudly: a prior finding's detail was
     # discarded, so re-examine rather than trust "covered".
@@ -386,25 +556,12 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
         shown = ftl[:max_gap]
         lines.append(f"  Found-then-lost — detail discarded, re-examine "
                      f"(first {len(shown)} of {len(ftl)}):")
-        for g in shown:
-            lines.append(f"    {g['file']}:{g['function']} @ {g['line']}")
+        lines.extend(f"    {g['file']}:{g['function']} @ {g['line']}" for g in shown)
 
     gap = view["llm_gap_functions"]
     if gap:
         shown = gap[:max_gap]
         lines.append(f"  LLM-review gap (first {len(shown)} of {len(gap)}):")
-        for g in shown:
-            lines.append(f"    {g['file']}:{g['function']} @ {g['line']}")
+        lines.extend(f"    {g['file']}:{g['function']} @ {g['line']}" for g in shown)
 
-    prov = view.get("provenance") or {}
-    tools = {t: vs for t, vs in (prov.get("tools") or {}).items()}
-    if tools or prov.get("models") or prov.get("newest"):
-        lines.append("  Provenance:")
-        for tool, versions in tools.items():
-            ver = ", ".join(versions) if versions else "(version unrecorded)"
-            lines.append(f"    {tool}: {ver}")
-        if prov.get("models"):
-            lines.append(f"    llm models: {', '.join(prov['models'])}")
-        if prov.get("newest"):
-            lines.append(f"    newest run: {prov['newest']}")
     return "\n".join(lines)

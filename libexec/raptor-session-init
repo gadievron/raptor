@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """SessionStart hook: env file setup and startup banner.
 
 Called automatically by Claude Code on session start (via .claude/settings.json).
 Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
 the startup banner in .startup-output.
 
+The banner is also printed to stdout on purpose: Claude Code attaches
+SessionStart stdout to the conversation before the first user message, so the
+assistant can render the banner directly without spending a second turn
+reading .startup-output back from disk. The file remains as a fallback for
+older Claude Code versions and direct/manual callers.
+
 No project env vars are set — the .active symlink is the only source of truth.
 """
-import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
 # ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -21,13 +31,26 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(REPO_ROOT))
+import core.startup.process_init  # noqa: E402,F401
 
 
 def write_env_file():
-    """Write the env file with static vars. Overwrites to ensure clean state."""
+    """Write the env file with static vars. Overwrites to ensure clean state.
+
+    The env file is *sourced* by the session shell, so the checkout
+    path must be written shell-safe: an unescaped path containing
+    ``$(``, a backtick, or ``"`` would execute inside every session
+    shell. ``shlex.quote`` single-quotes anything outside the safe
+    character set (typical paths stay bare). The ``$PATH`` reference
+    stays in its own double quotes, outside the quoted path, so it
+    still expands.
+    """
+    import shlex
+
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if not env_file:
         return
@@ -36,14 +59,17 @@ def write_env_file():
     bin_dir = str(REPO_ROOT / "bin")
 
     content = (
-        f'export RAPTOR_DIR="{repo_root}"\n'
-        f'export PATH="$PATH:{bin_dir}"\n'
+        f'export RAPTOR_DIR={shlex.quote(repo_root)}\n'
+        f'export PATH="$PATH":{shlex.quote(bin_dir)}\n'
     )
 
     try:
-        Path(env_file).write_text(content)
+        Path(env_file).write_text(content, encoding="utf-8")
     except OSError:
         pass
+
+    # Set in current process so the doctor check doesn't false-alarm.
+    os.environ["RAPTOR_DIR"] = repo_root
 
 
 def generate_banner():
@@ -55,11 +81,40 @@ def generate_banner():
         # Non-fatal — write a minimal banner
         output_file = REPO_ROOT / ".startup-output"
         try:
-            output_file.write_text(f"RAPTOR startup error: {e}\n")
+            output_file.write_text(f"RAPTOR startup error: {e}\n", encoding="utf-8")
         except OSError:
             pass
+
+
+def warm_sage_embeddings():
+    """Fire one embed call in a background process to warm the Ollama model."""
+    try:
+        from core.sage.config import SageConfig
+        cfg = SageConfig.from_env()
+        if not cfg.enabled:
+            return
+        import subprocess
+        # Child snippet uses the mandated os.environ["RAPTOR_DIR"]
+        # sys.path pattern; identity-linted — keep the line shape.
+        # fmt: off
+        subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys,os;sys.path.insert(0,os.environ['RAPTOR_DIR']);"
+             "from core.sage.client import SageClient;"
+             "from core.sage.config import SageConfig;"
+             "c=SageClient(SageConfig.from_env());"
+             "c.embed('warmup')"],
+            env={**os.environ, "RAPTOR_DIR": str(REPO_ROOT)},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # fmt: on
+    except Exception as e:  # noqa: BLE001
+        print(f"SAGE warmup launch failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
     write_env_file()
     generate_banner()
+    warm_sage_embeddings()

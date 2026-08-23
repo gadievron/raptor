@@ -33,15 +33,13 @@ suppressed or not.
 from __future__ import annotations
 
 import json
+
+from core.json import loads
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
-    Dict,
-    List,
-    Optional,
-    Union,
 )
 
 
@@ -49,13 +47,20 @@ from typing import (
 LABEL_SHOULD_SUPPRESS = "should_suppress"
 LABEL_SHOULD_NOT_SUPPRESS = "should_not_suppress"
 
-# Value-bound verdict surface (mirrors core.inventory.sanitizer_cut),
+# Value-bound verdict surface (mirrors core.analysis.sanitizer_cut),
 # duplicated as string constants so this module doesn't import the
 # inventory package at import time.
 VERDICT_SUPPRESS = "suppress"
 VERDICT_CANDIDATE_ONLY = "candidate_only"
 VERDICT_NO_SUPPRESS = "no_suppress"
 VERDICT_UNRESOLVED = "unresolved"
+
+
+def _safe_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -86,14 +91,14 @@ class ParityRecord:
     lexical_suppressed: bool
     value_bound_verdict: str
     value_bound_suppressed: bool
-    label: Optional[str] = None
-    timestamp: Optional[str] = None
+    label: str | None = None
+    timestamp: str | None = None
 
     @property
     def agree(self) -> bool:
         return self.lexical_suppressed == self.value_bound_suppressed
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self) -> dict[str, Any]:
         return {
             "finding_id": self.finding_id,
             "file": self.file,
@@ -110,18 +115,24 @@ class ParityRecord:
         }
 
     @classmethod
-    def from_json(cls, d: Dict[str, Any]) -> "ParityRecord":
+    def from_json(cls, d: dict[str, Any]) -> ParityRecord:
+        verdict = d.get("value_bound_verdict", VERDICT_UNRESOLVED)
         return cls(
             finding_id=d["finding_id"],
             file=d.get("file", ""),
             cwe=d.get("cwe", ""),
             language=d.get("language", ""),
-            source_line=int(d.get("source_line", 0)),
-            sink_line=int(d.get("sink_line", 0)),
+            source_line=_safe_int(d.get("source_line", 0)),
+            sink_line=_safe_int(d.get("sink_line", 0)),
             kind=d.get("kind", ""),
             lexical_suppressed=bool(d["lexical_suppressed"]),
-            value_bound_verdict=d.get("value_bound_verdict", VERDICT_UNRESOLVED),
-            value_bound_suppressed=bool(d["value_bound_suppressed"]),
+            value_bound_verdict=verdict,
+            # Re-derived from the verdict, never read from the stored
+            # field: ``value_bound_suppressed`` must not drift from
+            # ``value_bound_verdict`` (build_parity_record guarantees
+            # this at emission; an externally edited record must not
+            # smuggle a contradictory boolean past the invariant).
+            value_bound_suppressed=(verdict == VERDICT_SUPPRESS),
             label=d.get("label"),
             timestamp=d.get("timestamp"),
         )
@@ -138,8 +149,8 @@ def build_parity_record(
     kind: str,
     lexical_suppressed: bool,
     value_bound_verdict: str,
-    label: Optional[str] = None,
-    timestamp: Optional[str] = None,
+    label: str | None = None,
+    timestamp: str | None = None,
 ) -> ParityRecord:
     """Assemble a :class:`ParityRecord`. ``value_bound_suppressed`` is
     derived from ``value_bound_verdict`` so the two never drift."""
@@ -164,7 +175,7 @@ def build_parity_record(
 # ---------------------------------------------------------------------------
 
 
-def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
+def value_bound_verdict_for(finding: dict[str, Any]) -> str:
     """Run the value-bound gate for one finding dict and return its
     verdict string. ``"unresolved"`` when the resolver can't normalise
     the finding (missing file, syntax error, unsupported language, …).
@@ -173,16 +184,26 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
     to import for callers that only aggregate existing records.
     """
     try:
-        from core.inventory.finding_resolver import (
+        from core.analysis.finding_resolver import (
             ResolvedFinding,
             resolve_finding,
         )
-        from core.inventory.sanitizer_cut import evaluate_finding
+        from core.analysis.sanitizer_cut import evaluate_finding
     except ImportError:                                     # pragma: no cover
         return VERDICT_UNRESOLVED
     resolved = resolve_finding(finding)
     if not isinstance(resolved, ResolvedFinding):
         return VERDICT_UNRESOLVED
+    java_text = None
+    if resolved.language == "java":
+        # The constant-definers pre-check folds over the file's AST;
+        # unreadable file just skips that check, never the gate.
+        try:
+            java_text = Path(str(finding.get("file_path", ""))).read_text(
+                encoding="utf-8", errors="replace",
+            )
+        except OSError:
+            java_text = None
     result = evaluate_finding(
         resolved.cfg,
         [resolved.source_node],
@@ -192,6 +213,9 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
         source_symbols=resolved.source_symbols,
         sink_arg=resolved.sink_arg,
         extra_bindings=resolved.inter_proc_bindings,
+        java_source_text=java_text,
+        java_file_path=str(finding.get("file_path") or "") or None,
+        repo_root=str(finding.get("repo_root") or "") or None,
     )
     return result.verdict
 
@@ -201,7 +225,7 @@ def value_bound_verdict_for(finding: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def append_parity_record(path: Union[str, Path], record: ParityRecord) -> None:
+def append_parity_record(path: str | Path, record: ParityRecord) -> None:
     """Append one record as a JSON line. Creates the file (and parent
     dirs) if absent. Best-effort: never raises on a write failure —
     telemetry must not break a real run."""
@@ -214,20 +238,20 @@ def append_parity_record(path: Union[str, Path], record: ParityRecord) -> None:
         pass
 
 
-def read_parity_records(path: Union[str, Path]) -> List[ParityRecord]:
+def read_parity_records(path: str | Path) -> list[ParityRecord]:
     """Read all records from a JSONL file. Skips malformed lines.
     Returns ``[]`` if the file doesn't exist."""
     p = Path(path)
     if not p.exists():
         return []
-    out: List[ParityRecord] = []
+    out: list[ParityRecord] = []
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            out.append(ParityRecord.from_json(json.loads(line)))
-        except (ValueError, KeyError):
+            out.append(ParityRecord.from_json(loads(line)))
+        except (ValueError, KeyError, TypeError):
             continue
     return out
 
@@ -320,7 +344,7 @@ class ParitySummary:
     no_lexical_regression: bool
     # Per-kind breakdown of the agreement matrix for slicing the
     # window by the shape the lexical check targets.
-    by_kind: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    by_kind: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _rate(successes: int, total: int) -> RateWithCI:
@@ -331,7 +355,7 @@ def _rate(successes: int, total: int) -> RateWithCI:
     )
 
 
-def _dedup_by_finding_id(records: List[ParityRecord]) -> List[ParityRecord]:
+def _dedup_by_finding_id(records: list[ParityRecord]) -> list[ParityRecord]:
     """Collapse repeated ``finding_id``s to their LAST record.
 
     Review #3 on PR #794: the parity log is append-only, and agentic
@@ -342,8 +366,8 @@ def _dedup_by_finding_id(records: List[ParityRecord]) -> List[ParityRecord]:
     removal. Keep the latest verdict per finding (the most recent run
     wins), preserving first-seen order for determinism. Records with no
     ``finding_id`` can't be keyed and are kept as-is."""
-    deduped: Dict[str, ParityRecord] = {}
-    unkeyed: List[ParityRecord] = []
+    deduped: dict[str, ParityRecord] = {}
+    unkeyed: list[ParityRecord] = []
     for r in records:
         if r.finding_id:
             # Reassigning an existing key keeps its insertion position
@@ -354,7 +378,7 @@ def _dedup_by_finding_id(records: List[ParityRecord]) -> List[ParityRecord]:
     return list(deduped.values()) + unkeyed
 
 
-def aggregate_parity(records: List[ParityRecord]) -> ParitySummary:
+def aggregate_parity(records: list[ParityRecord]) -> ParitySummary:
     """Aggregate a window of records into a :class:`ParitySummary`.
 
     Records are de-duplicated by ``finding_id`` first (keeping the last
@@ -366,7 +390,7 @@ def aggregate_parity(records: List[ParityRecord]) -> ParitySummary:
     windows before Phase 16 ships)."""
     records = _dedup_by_finding_id(records)
     both = lex_only = vb_only = neither = 0
-    by_kind: Dict[str, Dict[str, int]] = {}
+    by_kind: dict[str, dict[str, int]] = {}
     # Labelled tallies.
     ss_total = sns_total = 0
     lex_ss_supp = lex_sns_supp = 0
@@ -417,7 +441,7 @@ def aggregate_parity(records: List[ParityRecord]) -> ParitySummary:
         noise_suppression=_rate(vb_ss_supp, ss_total),
         bug_hiding=_rate(vb_sns_supp, sns_total),
     )
-    summary = ParitySummary(
+    return ParitySummary(
         total=len(records),
         labelled_total=ss_total + sns_total,
         should_suppress_total=ss_total,
@@ -432,7 +456,6 @@ def aggregate_parity(records: List[ParityRecord]) -> ParitySummary:
         no_lexical_regression=(lex_only == 0),
         by_kind=by_kind,
     )
-    return summary
 
 
 def _rate_criterion(lexical: MethodRates, value_bound: MethodRates) -> bool:
@@ -488,7 +511,7 @@ def render_parity_report(
     produce the committed first parity report and any subsequent
     window reports."""
     met = parity_criterion_met(summary)
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"# {title}")
     lines.append("")
     lines.append(
@@ -559,22 +582,22 @@ def render_parity_report(
 
 
 __all__ = [
-    "LABEL_SHOULD_SUPPRESS",
     "LABEL_SHOULD_NOT_SUPPRESS",
-    "VERDICT_SUPPRESS",
+    "LABEL_SHOULD_SUPPRESS",
     "VERDICT_CANDIDATE_ONLY",
     "VERDICT_NO_SUPPRESS",
+    "VERDICT_SUPPRESS",
     "VERDICT_UNRESOLVED",
-    "ParityRecord",
-    "build_parity_record",
-    "value_bound_verdict_for",
-    "append_parity_record",
-    "read_parity_records",
-    "wilson_interval",
-    "RateWithCI",
     "MethodRates",
+    "ParityRecord",
     "ParitySummary",
+    "RateWithCI",
     "aggregate_parity",
+    "append_parity_record",
+    "build_parity_record",
     "parity_criterion_met",
+    "read_parity_records",
     "render_parity_report",
+    "value_bound_verdict_for",
+    "wilson_interval",
 ]

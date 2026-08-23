@@ -14,7 +14,6 @@ is lexicographically ordered by spec.
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
 
 
 # v-prefixed (Go), or plain semver, with optional pre-release and build.
@@ -36,7 +35,7 @@ _SEMVER_RE = re.compile(
 )
 
 
-def parse(version: str) -> Tuple[int, int, int, Optional[List[str]]]:
+def parse(version: str) -> tuple[int, int, int, list[str] | None]:
     """Parse version into (major, minor, patch, pre).
 
     Missing minor / patch default to 0. pre is a list of dot-separated
@@ -45,7 +44,8 @@ def parse(version: str) -> Tuple[int, int, int, Optional[List[str]]]:
     """
     m = _SEMVER_RE.match(version.strip())
     if not m:
-        raise ValueError(f"not a semver version: {version!r}")
+        msg = f"not a semver version: {version!r}"
+        raise ValueError(msg)
     pre = m.group("pre")
     return (
         int(m.group("major")),
@@ -62,7 +62,7 @@ def compare(a: str, b: str) -> int:
     pa = parse(a)
     pb = parse(b)
     # Compare major.minor.patch numerically.
-    for x, y in zip(pa[:3], pb[:3]):
+    for x, y in zip(pa[:3], pb[:3], strict=True):
         if x != y:
             return -1 if x < y else 1
     # Pre-release: a version with pre is < the same version without.
@@ -74,7 +74,7 @@ def compare(a: str, b: str) -> int:
     if b_pre is None:
         return -1
     # Both pre — compare identifier by identifier.
-    for ai, bi in zip(a_pre, b_pre):
+    for ai, bi in zip(a_pre, b_pre, strict=False):
         c = _compare_identifier(ai, bi)
         if c != 0:
             return c
@@ -110,14 +110,14 @@ def _compare_identifier(a: str, b: str) -> int:
 # Range bounds extraction (SCA bounded-pinning: corridor floor/ceiling)
 # ---------------------------------------------------------------------------
 
-def _loose_components(operand: str) -> Optional[Tuple[int, int, int, int]]:
+def _loose_components(operand: str) -> tuple[int, int, int, int] | None:
     """Parse a possibly-partial version into ``(major, minor, patch,
     ncomp)`` where ``ncomp`` is the count of leading concrete numeric
     components. ``x`` / ``X`` / ``*`` and missing trailing components are
     treated as absent (default 0). Returns None for a bare wildcard or
     anything non-numeric (caller treats as 'no bound')."""
     core = re.split(r"[-+]", operand.strip().lstrip("v"), maxsplit=1)[0]
-    nums: List[int] = []
+    nums: list[int] = []
     for part in core.split("."):
         if part in ("x", "X", "*", ""):
             break
@@ -132,11 +132,11 @@ def _loose_components(operand: str) -> Optional[Tuple[int, int, int, int]]:
             len(nums))
 
 
-def _join(c: Tuple[int, int, int, int]) -> str:
+def _join(c: tuple[int, int, int, int]) -> str:
     return f"{c[0]}.{c[1]}.{c[2]}"
 
 
-def _caret_ceiling(c: Tuple[int, int, int, int]) -> str:
+def _caret_ceiling(c: tuple[int, int, int, int]) -> str:
     """Exclusive upper bound for ``^`` per node-semver (allow changes that
     don't modify the left-most non-zero element)."""
     major, minor, patch, ncomp = c
@@ -147,7 +147,7 @@ def _caret_ceiling(c: Tuple[int, int, int, int]) -> str:
     return f"0.0.{patch + 1}"          # ^0.0.3 -> <0.0.4
 
 
-def _tilde_ceiling(c: Tuple[int, int, int, int]) -> str:
+def _tilde_ceiling(c: tuple[int, int, int, int]) -> str:
     """Exclusive upper bound for ``~``."""
     major, minor, _patch, ncomp = c
     if ncomp >= 2:                     # ~1.2.3 / ~1.2 -> <1.(minor+1).0
@@ -155,7 +155,7 @@ def _tilde_ceiling(c: Tuple[int, int, int, int]) -> str:
     return f"{major + 1}.0.0"          # ~1 -> <2.0.0
 
 
-def _tightest(versions: List[str], want_max: bool) -> str:
+def _tightest(versions: list[str], want_max: bool) -> str:
     best = versions[0]
     for v in versions[1:]:
         c = compare(v, best)
@@ -164,7 +164,7 @@ def _tightest(versions: List[str], want_max: bool) -> str:
     return best
 
 
-def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
+def bounds(spec: str) -> tuple[str | None, str | None]:
     """Best-effort ``(floor, ceiling)`` for an npm/Cargo semver range.
 
     ``floor`` = tightest inclusive lower bound; ``ceiling`` = tightest
@@ -183,13 +183,35 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
     spec = spec.strip()
     if not spec or "||" in spec:
         return None, None
-    if " - " in spec:                  # hyphen range: capture floor, skip ceiling
-        c = _loose_components(spec.split(" - ", 1)[0])
-        return (_join(c) if c else None), None
+    if " - " in spec:
+        left, right = spec.split(" - ", 1)
+        c_lo = _loose_components(left)
+        c_hi = _loose_components(right)
+        floor = _join(c_lo) if c_lo else None
+        if c_hi is None:
+            ceiling = None
+        elif c_hi[3] >= 3:
+            ceiling = f"{c_hi[0]}.{c_hi[1]}.{c_hi[2] + 1}"
+        elif c_hi[3] == 2:
+            ceiling = f"{c_hi[0]}.{c_hi[1] + 1}.0"
+        else:
+            ceiling = f"{c_hi[0] + 1}.0.0"
+        return floor, ceiling
 
-    lowers: List[str] = []
-    uppers: List[str] = []
-    for tok in spec.split():
+    lowers: list[str] = []
+    uppers: list[str] = []
+    raw_toks = spec.split()
+    toks: list[str] = []
+    i = 0
+    while i < len(raw_toks):
+        t = raw_toks[i]
+        if t in (">=", "<=", ">", "<", "=", "^", "~") and i + 1 < len(raw_toks):
+            toks.append(t + raw_toks[i + 1])
+            i += 2
+        else:
+            toks.append(t)
+            i += 1
+    for tok in toks:
         m = re.match(r"^(>=|<=|>|<|=|\^|~)?\s*(.*)$", tok)
         if m is None:
             continue
@@ -206,14 +228,32 @@ def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
             if c:
                 lowers.append(_join(c))
                 uppers.append(_tilde_ceiling(c))
-        elif op in (">=", ">"):
+        elif op == ">=":
             c = _loose_components(operand)
             if c:
                 lowers.append(_join(c))
-        elif op in ("<", "<="):
+        elif op == ">":
+            c = _loose_components(operand)
+            if c:
+                if c[3] == 1:
+                    lowers.append(f"{c[0] + 1}.0.0")
+                elif c[3] == 2:
+                    lowers.append(f"{c[0]}.{c[1] + 1}.0")
+                else:
+                    lowers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+        elif op == "<":
             c = _loose_components(operand)
             if c:
                 uppers.append(_join(c))
+        elif op == "<=":
+            c = _loose_components(operand)
+            if c:
+                if c[3] >= 3:
+                    uppers.append(f"{c[0]}.{c[1]}.{c[2] + 1}")
+                elif c[3] == 2:
+                    uppers.append(f"{c[0]}.{c[1] + 1}.0")
+                else:
+                    uppers.append(f"{c[0] + 1}.0.0")
         else:                          # ``=`` or bare: exact OR x-range
             c = _loose_components(operand)
             if c is None:

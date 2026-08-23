@@ -38,7 +38,10 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -58,54 +61,54 @@ _OVERRIDE_CONFIG_PATH = (
 # during metadata-only resolution. Unchanged from the historical
 # class-tuple values; this module is a layered wrapper, not a policy
 # change.
-_DEFAULT_PIP_HOSTS: Tuple[str, ...] = (
+_DEFAULT_PIP_HOSTS: tuple[str, ...] = (
     "pypi.org",
     "files.pythonhosted.org",
 )
-_DEFAULT_NPM_HOSTS: Tuple[str, ...] = (
+_DEFAULT_NPM_HOSTS: tuple[str, ...] = (
     "registry.npmjs.org",
 )
-_DEFAULT_CARGO_HOSTS: Tuple[str, ...] = (
+_DEFAULT_CARGO_HOSTS: tuple[str, ...] = (
     "crates.io",
     "index.crates.io",
     "static.crates.io",
 )
-_DEFAULT_GOMOD_HOSTS: Tuple[str, ...] = (
+_DEFAULT_GOMOD_HOSTS: tuple[str, ...] = (
     "proxy.golang.org",
     "sum.golang.org",
 )
 
 # Secondary resolvers — same shape, different registries.
-_DEFAULT_BUNDLER_HOSTS: Tuple[str, ...] = (
+_DEFAULT_BUNDLER_HOSTS: tuple[str, ...] = (
     "rubygems.org",
     "index.rubygems.org",
 )
-_DEFAULT_COMPOSER_HOSTS: Tuple[str, ...] = (
+_DEFAULT_COMPOSER_HOSTS: tuple[str, ...] = (
     "repo.packagist.org",
     "packagist.org",
 )
-_DEFAULT_GRADLE_HOSTS: Tuple[str, ...] = (
+_DEFAULT_GRADLE_HOSTS: tuple[str, ...] = (
     "repo.maven.apache.org",
     "repo1.maven.org",
     "plugins.gradle.org",
     "services.gradle.org",
 )
-_DEFAULT_MAVEN_HOSTS: Tuple[str, ...] = (
+_DEFAULT_MAVEN_HOSTS: tuple[str, ...] = (
     "repo.maven.apache.org",
     "repo1.maven.org",
 )
-_DEFAULT_NUGET_HOSTS: Tuple[str, ...] = (
+_DEFAULT_NUGET_HOSTS: tuple[str, ...] = (
     "api.nuget.org",
     "nuget.org",
 )
-_DEFAULT_PNPM_HOSTS: Tuple[str, ...] = (
+_DEFAULT_PNPM_HOSTS: tuple[str, ...] = (
     "registry.npmjs.org",
 )
-_DEFAULT_POETRY_HOSTS: Tuple[str, ...] = (
+_DEFAULT_POETRY_HOSTS: tuple[str, ...] = (
     "pypi.org",
     "files.pythonhosted.org",
 )
-_DEFAULT_YARN_HOSTS: Tuple[str, ...] = (
+_DEFAULT_YARN_HOSTS: tuple[str, ...] = (
     "registry.yarnpkg.com",
     "registry.npmjs.org",
 )
@@ -114,19 +117,19 @@ _DEFAULT_YARN_HOSTS: Tuple[str, ...] = (
 # Per-tool env-key sets for calibrate cache disambiguation. A binary
 # used with two registry configs gets two distinct cache entries; the
 # resolved env signature is part of the cache fingerprint.
-_PIP_ENV_KEYS: Tuple[str, ...] = (
+_PIP_ENV_KEYS: tuple[str, ...] = (
     "PIP_INDEX_URL",
     "PIP_EXTRA_INDEX_URL",
 )
-_NPM_ENV_KEYS: Tuple[str, ...] = (
+_NPM_ENV_KEYS: tuple[str, ...] = (
     "NPM_CONFIG_REGISTRY",
     "npm_config_registry",  # lowercase variant accepted by npm
 )
-_CARGO_ENV_KEYS: Tuple[str, ...] = (
+_CARGO_ENV_KEYS: tuple[str, ...] = (
     "CARGO_HTTP_REGISTRY",  # legacy override
     "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
 )
-_GOMOD_ENV_KEYS: Tuple[str, ...] = (
+_GOMOD_ENV_KEYS: tuple[str, ...] = (
     "GOPROXY",
     "GOSUMDB",
     "GOPRIVATE",
@@ -138,35 +141,35 @@ _GOMOD_ENV_KEYS: Tuple[str, ...] = (
 # below are the *user-overridable* knobs that can shift the
 # registry without editing the repo. A binary used with two
 # different env values gets two cache entries.
-_BUNDLER_ENV_KEYS: Tuple[str, ...] = (
+_BUNDLER_ENV_KEYS: tuple[str, ...] = (
     "BUNDLE_MIRROR_OF",   # e.g. ``bundle config mirror.https://...``
     "BUNDLE_GEMFILE",     # selects which Gemfile (and thus source URL)
 )
-_COMPOSER_ENV_KEYS: Tuple[str, ...] = (
+_COMPOSER_ENV_KEYS: tuple[str, ...] = (
     "COMPOSER",           # selects composer.json path
     "COMPOSER_HOME",      # config dir (auth.json with custom repos)
 )
-_GRADLE_ENV_KEYS: Tuple[str, ...] = (
+_GRADLE_ENV_KEYS: tuple[str, ...] = (
     "GRADLE_USER_HOME",   # init.gradle / repos config lives here
 )
-_MAVEN_ENV_KEYS: Tuple[str, ...] = (
+_MAVEN_ENV_KEYS: tuple[str, ...] = (
     "MAVEN_OPTS",         # may inject -Dmaven.repo.remote=...
     "M2_HOME",
 )
-_NUGET_ENV_KEYS: Tuple[str, ...] = (
+_NUGET_ENV_KEYS: tuple[str, ...] = (
     "NUGET_PACKAGES",
     "DOTNET_NUGET_SIGNATURE_VERIFICATION",
 )
-_PNPM_ENV_KEYS: Tuple[str, ...] = (
+_PNPM_ENV_KEYS: tuple[str, ...] = (
     # pnpm reads npm_config_* like npm; same discriminators.
     "NPM_CONFIG_REGISTRY",
     "npm_config_registry",
 )
-_POETRY_ENV_KEYS: Tuple[str, ...] = (
+_POETRY_ENV_KEYS: tuple[str, ...] = (
     "POETRY_REPOSITORIES_PRIMARY_URL",
     "PIP_INDEX_URL",  # poetry honours pip's index when configured
 )
-_YARN_ENV_KEYS: Tuple[str, ...] = (
+_YARN_ENV_KEYS: tuple[str, ...] = (
     "YARN_REGISTRY",       # yarn 1
     "YARN_NPM_REGISTRY_SERVER",  # yarn 2+
 )
@@ -176,10 +179,10 @@ _YARN_ENV_KEYS: Tuple[str, ...] = (
 # this in-memory layer, every resolver subprocess in a scan would
 # stat the cache file independently. Keyed on the resolved binary
 # path.
-_CALIBRATED_CACHE: "dict[str, Optional[object]]" = {}
+_CALIBRATED_CACHE: dict[str, object | None] = {}
 
 
-def _load_override(tool: str) -> Optional[list]:
+def _load_override(tool: str) -> list | None:
     """Return the operator override list for ``tool`` or None when
     no override is configured for it. Tolerant: malformed JSON or
     unexpected types degrade silently to None (calibrate / default
@@ -213,14 +216,14 @@ def _load_override(tool: str) -> Optional[list]:
     return result or None
 
 
-def _resolve_bin(name: str) -> Optional[str]:
+def _resolve_bin(name: str) -> str | None:
     """Resolve a tool name to its absolute binary path via PATH.
     Returns None when the binary isn't installed; calibration is
     impossible in that case so we fall through to defaults."""
     return shutil.which(name)
 
 
-def _calibrated_profile(bin_path: Optional[str],
+def _calibrated_profile(bin_path: str | None,
                         env_keys: Iterable[str]):
     """Load (or trigger calibration of) the SandboxProfile for
     ``bin_path``. Returns None on any failure — calibration is
@@ -274,9 +277,9 @@ def _calibrated_profile(bin_path: Optional[str],
 
 
 def _calibrated_proxy_hosts(
-    bin_path: Optional[str],
+    bin_path: str | None,
     env_keys: Iterable[str],
-) -> Optional[list]:
+) -> list | None:
     """Calibrated layer of proxy_hosts resolution. Returns None when
     no profile exists OR the profile carries an empty ``proxy_hosts``
     list (the common case for ``--version`` probes — they don't
@@ -291,7 +294,7 @@ def _resolve(
     tool: str,
     bin_name: str,
     env_keys: Iterable[str],
-    default: Tuple[str, ...],
+    default: tuple[str, ...],
 ) -> list:
     """Generic three-layer resolution: override → calibrate → default.
 

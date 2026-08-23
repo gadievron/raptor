@@ -22,7 +22,6 @@ stands at its original severity.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
 from core.llm.task_types import TaskType
 from ..models import Confidence, SupplyChainFinding
@@ -42,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 def review_install_hooks(
     client,
-    findings: List[SupplyChainFinding],
-) -> List[SupplyChainFinding]:
+    findings: list[SupplyChainFinding],
+) -> list[SupplyChainFinding]:
     """Enrich install-hook findings with LLM behavioural analysis.
 
     For each ``install_hook_suspicious`` finding that carries a script
@@ -84,7 +83,7 @@ def _review_one(
     script_key: str,
     pkg_name: str,
     ecosystem: str,
-) -> Optional[InstallHookVerdict]:
+) -> InstallHookVerdict | None:
     """Run the LLM on a single install script."""
     blocks: list[UntrustedBlock] = [
         UntrustedBlock(
@@ -130,7 +129,7 @@ def _review_one(
         task_type=TaskType.ANALYSE,
     )
 
-    verdict: Optional[InstallHookVerdict] = result.model  # type: ignore[assignment]
+    verdict: InstallHookVerdict | None = result.model  # type: ignore[assignment]
     if verdict is None:
         return None
 

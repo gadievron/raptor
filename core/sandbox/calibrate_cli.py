@@ -30,7 +30,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 _USAGE_EX = 64       # EX_USAGE
@@ -121,13 +124,12 @@ def _format_human(profile, *, cached: bool) -> str:
     lines.append(f"  source:        {'cache' if cached else 'fresh probe'}")
     lines.append(f"  probe argv:    {profile.probe_args}")
 
-    def _section(label, items, sample=SAMPLE):
+    def _section(label, items, sample=SAMPLE) -> None:
         lines.append(f"\n{label} ({len(items)}):")
         if not items:
             lines.append("  (empty)")
             return
-        for x in items[:sample]:
-            lines.append(f"  {x}")
+        lines.extend(f"  {x}" for x in items[:sample])
         if len(items) > sample:
             lines.append(f"  ... (+{len(items) - sample} more)")
 
@@ -137,8 +139,7 @@ def _format_human(profile, *, cached: bool) -> str:
     _section("proxy hosts", profile.proxy_hosts)
     if profile.connect_targets:
         lines.append(f"\nconnect targets ({len(profile.connect_targets)}):")
-        for t in profile.connect_targets[:SAMPLE]:
-            lines.append(f"  {t.ip}:{t.port} ({t.family})")
+        lines.extend(f"  {t.ip}:{t.port} ({t.family})" for t in profile.connect_targets[:SAMPLE])
         if len(profile.connect_targets) > SAMPLE:
             lines.append(
                 f"  ... (+{len(profile.connect_targets) - SAMPLE} more)"
@@ -151,7 +152,7 @@ def _profile_to_json(profile) -> str:
     return profile.to_json()
 
 
-def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
+def _cli_main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -166,7 +167,6 @@ def _cli_main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not args.bin:
         parser.error("--bin is required (except with --clear-all)")
-        return _USAGE_EX
 
     bin_path = Path(args.bin).expanduser()
     if not bin_path.exists():

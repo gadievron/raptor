@@ -75,7 +75,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +88,10 @@ _DEFINITION_RE = re.compile(r"^(.+):(\d+)$")
 
 
 def enrich_with_ast_view(
-    trace: Dict[str, Any],
+    trace: dict[str, Any],
     target_path: Path,
     *,
-    inventory: Optional[Dict[str, Any]] = None,
+    inventory: dict[str, Any] | None = None,
 ) -> int:
     """Walk ``trace["steps"]`` and attach an ``ast_view`` field to
     each step whose ``definition`` resolves to an in-inventory
@@ -125,7 +125,7 @@ def enrich_with_ast_view(
 
     try:
         from core.ast import view
-        from core.inventory.reachability import enclosing_function
+        from core.analysis.reachability import enclosing_function
     except ImportError:
         return 0
 
@@ -170,6 +170,7 @@ def enrich_with_ast_view(
         try:
             fv = view(abs_path, host.name, at_line=line)
         except Exception:                                   # noqa: BLE001
+            logger.debug("ast view failed for %s:%s", abs_path, line, exc_info=True)
             continue
         if fv is None:
             continue
@@ -185,13 +186,13 @@ def enrich_with_ast_view(
     return enriched
 
 
-def _parse_definition(definition: str) -> Optional[Tuple[str, int]]:
+def _parse_definition(definition: str) -> tuple[str, int] | None:
     """Parse a step's ``definition`` field into ``(file_path, line)``.
 
     Returns None for unparseable input — module-level entries (no
     line), external references (no file:line), or malformed strings.
     The line must be a positive integer; zero is rejected because
-    ``core.inventory.reachability.enclosing_function`` requires
+    ``core.analysis.reachability.enclosing_function`` requires
     ``line >= 1``.
     """
     m = _DEFINITION_RE.match(definition.strip())

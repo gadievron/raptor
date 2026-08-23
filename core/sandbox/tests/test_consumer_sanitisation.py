@@ -79,12 +79,12 @@ def test_query_runner_does_NOT_sanitise():
 
 
 def test_build_detector_target_repo_sites_unchanged():
-    """packages/codeql/build_detector.py has two sandbox.run sites:
+    """core/build/build_detector.py has two sandbox.run sites:
     one runs an LLM-emitted Python script for build-system detection
     (doesn't exec target binaries directly), one runs Claude Code.
     Neither needs sanitisation today. Pinned here so adding
     sanitisation later is a deliberate change, not accidental."""
-    f = REPO_ROOT / "packages/codeql/build_detector.py"
+    f = REPO_ROOT / "core/build/build_detector.py"
     text = f.read_text()
     assert "sanitise_host_fingerprint=True" not in text, (
         "build_detector.py started sanitising — confirm this is "

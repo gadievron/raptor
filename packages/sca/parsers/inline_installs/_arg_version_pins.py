@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from ...models import Confidence, Dependency, PinStyle
 
@@ -57,7 +56,8 @@ from ...models import Confidence, Dependency, PinStyle
 # scope tight and excludes generic ARGs that aren't version pins
 # (``ARG BUILD_TARGET=runtime``, ``ARG USER=raptor``).
 _ARG_RE = re.compile(
-    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.+?)\s*)?$"
+    r"^\s*ARG\s+(\w+_VERSION)\s*=\s*(\S+?)\s*(?:#\s*(.+?)\s*)?$",
+    re.IGNORECASE,
 )
 
 # Operator override inside the comment:
@@ -78,7 +78,7 @@ _OVERRIDE_RE = re.compile(
 # vendor-specific (``MYCO_FOO_VERSION``) belongs in the inline-
 # comment override path so we don't accumulate operator-specific
 # noise here.
-_BUILTIN_ARG_MAP: Dict[str, Optional[Tuple[str, str]]] = {
+_BUILTIN_ARG_MAP: dict[str, tuple[str, str] | None] = {
     # Static-analysis tools shipped via pip
     "SEMGREP_VERSION": ("PyPI", "semgrep"),
     "BANDIT_VERSION":  ("PyPI", "bandit"),
@@ -116,7 +116,7 @@ _BUILTIN_ARG_MAP: Dict[str, Optional[Tuple[str, str]]] = {
 }
 
 
-def extract(text: str, path: Path) -> List[Dependency]:
+def extract(text: str, path: Path) -> list[Dependency]:
     """Walk a Dockerfile's ARG version pins, emit Dependency rows
     for those we can map to an SCA ecosystem.
 
@@ -124,7 +124,7 @@ def extract(text: str, path: Path) -> List[Dependency]:
     are silently skipped — they'd just clutter findings with deps
     we can't query.
     """
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for line_no, raw in enumerate(text.splitlines(), start=1):
         match = _ARG_RE.match(raw)
         if match is None:
@@ -157,8 +157,8 @@ def extract(text: str, path: Path) -> List[Dependency]:
 
 
 def _resolve_mapping(
-    arg_name: str, comment: Optional[str],
-) -> Optional[Tuple[str, str]]:
+    arg_name: str, comment: str | None,
+) -> tuple[str, str] | None:
     """Inline ``# raptor-sca: ...`` takes precedence over the built-in
     map. ``raptor-sca: skip`` forces a skip even if the ARG is in
     the built-in map.
@@ -171,11 +171,17 @@ def _resolve_mapping(
                 return None
             eco, _, name = spec.partition(":")
             if eco and name:
-                return (eco.strip(), name.strip())
+                eco_raw = eco.strip()
+                canonical = {
+                    "pypi": "PyPI", "npm": "npm", "maven": "Maven",
+                    "cargo": "Cargo", "go": "Go", "rubygems": "RubyGems",
+                    "nuget": "NuGet", "packagist": "Packagist",
+                }.get(eco_raw.lower(), eco_raw)
+                return (canonical, name.strip())
     # No override → built-in map. ``None`` value = "known boilerplate
     # ARG with no SCA ecosystem"; missing key = "unknown ARG, skip".
-    if arg_name in _BUILTIN_ARG_MAP:
-        return _BUILTIN_ARG_MAP[arg_name]
+    if arg_name.upper() in _BUILTIN_ARG_MAP:
+        return _BUILTIN_ARG_MAP[arg_name.upper()]
     return None
 
 
@@ -197,7 +203,7 @@ _VERSION_RE = re.compile(
 )
 
 
-def _normalise_version(value: str) -> Optional[str]:
+def _normalise_version(value: str) -> str | None:
     """Strip a leading ``v`` if the value otherwise looks like a
     bare semver. Returns ``None`` for values that don't look like
     version pins at all.
@@ -230,7 +236,7 @@ def _make_dep(
         "Cargo": "cargo", "Go": "golang", "RubyGems": "gem",
         "NuGet": "nuget", "Packagist": "composer",
     }.get(ecosystem, eco_lc)
-    purl_namespace: Optional[str] = None
+    purl_namespace: str | None = None
     purl_name = name
     if ecosystem == "npm" and name.startswith("@") and "/" in name:
         ns, _, n = name.partition("/")

@@ -23,10 +23,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
 
 from .models import Confidence, Reachability
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +38,17 @@ logger = logging.getLogger(__name__)
 class ContextMap:
     """Normalised view of ``context-map.json`` keyed for fast lookup."""
 
-    entry_point_files: Set[str]      # file paths
-    sink_files: Set[str]
-    boundary_files: Set[str]
+    entry_point_files: set[str]      # file paths
+    sink_files: set[str]
+    boundary_files: set[str]
     raw: dict                         # original JSON for ad-hoc inspection
 
 
 def load_context_map(
-    target: Path, *, run_dir: Optional[Path] = None,
-) -> Optional[ContextMap]:
+    target: Path, *, run_dir: Path | None = None,
+) -> ContextMap | None:
     """Try to load a context-map for the project; return ``None`` on miss."""
-    candidates: List[Path] = []
+    candidates: list[Path] = []
     if run_dir is not None:
         candidates.append(run_dir / "context-map.json")
     # Search ``<target>/out/understand_*`` newest-first.
@@ -56,8 +59,7 @@ def load_context_map(
               if p.is_dir() and p.name.startswith("understand_")),
             reverse=True,
         )
-        for ur in understand_runs:
-            candidates.append(ur / "context-map.json")
+        candidates.extend(ur / "context-map.json" for ur in understand_runs)
     for c in candidates:
         if c.is_file():
             try:
@@ -87,8 +89,8 @@ def annotate(
         "imported", "likely_called", "called_in_dead_code",
     ):
         return reach
-    matched_kinds: List[str] = []
-    matched_paths: List[str] = []
+    matched_kinds: list[str] = []
+    matched_paths: list[str] = []
     for ev in reach.evidence:
         # Evidence shape: ``"path/to/file.py:42"`` (file:line). Strip
         # the line number for the match.
@@ -111,9 +113,7 @@ def annotate(
     #     the call as ``called_in_dead_code`` — operator's
     #     /understand pass identified the host as a real entry,
     #     so the static "no callers" claim was wrong.
-    if "sink" in matched_kinds:
-        new_verdict = "likely_called"
-    elif (reach.verdict == "called_in_dead_code"
+    if "sink" in matched_kinds or (reach.verdict == "called_in_dead_code"
             and "entry_point" in matched_kinds):
         new_verdict = "likely_called"
     else:
@@ -123,8 +123,9 @@ def annotate(
         f"{reach.confidence.reason}; context-map: dep "
         f"imported in {', '.join(kinds_uniq)} site(s)"
     )
+    promoted = new_verdict != reach.verdict
     new_confidence = Confidence(
-        level="high",
+        level="high" if promoted else reach.confidence.level,
         reason=reason,
     )
     return Reachability(
@@ -137,8 +138,8 @@ def annotate(
 
 
 def annotate_all(
-    reachability: Dict[str, Reachability], ctx: ContextMap,
-) -> Dict[str, Reachability]:
+    reachability: dict[str, Reachability], ctx: ContextMap,
+) -> dict[str, Reachability]:
     """Apply ``annotate`` to every entry in a reachability map."""
     return {k: annotate(v, ctx) for k, v in reachability.items()}
 
@@ -150,7 +151,8 @@ def annotate_all(
 def _parse(path: Path) -> ContextMap:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise json.JSONDecodeError("expected dict at top level", "", 0)
+        msg = "expected dict at top level"
+        raise json.JSONDecodeError(msg, "", 0)
     entry_point_files = _extract_files(raw.get("entry_points", []))
     sink_files = _extract_files(raw.get("sink_details", []))
     boundary_files = _extract_files(raw.get("boundary_details", []))
@@ -165,9 +167,11 @@ def _parse(path: Path) -> ContextMap:
     )
 
 
-def _extract_files(items: Iterable) -> Set[str]:
-    out: Set[str] = set()
-    for item in items or []:
+def _extract_files(items: Iterable) -> set[str]:
+    if not isinstance(items, list):
+        return set()
+    out: set[str] = set()
+    for item in items:
         if isinstance(item, dict):
             f = item.get("file") or item.get("path")
             if isinstance(f, str):

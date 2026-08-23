@@ -78,10 +78,11 @@ def truncate(bv: Any, to_width: int) -> Any:
     """
     src_width = bv.size()
     if to_width <= 0 or to_width > src_width:
-        raise ValueError(
+        msg = (
             f"truncate: to_width={to_width} out of range for "
             f"{src_width}-bit operand (must be 1..{src_width})"
         )
+        raise ValueError(msg)
     return z3.Extract(to_width - 1, 0, bv)
 
 
@@ -96,10 +97,11 @@ def sign_extend(bv: Any, to_width: int) -> Any:
     """
     src_width = bv.size()
     if to_width < src_width:
-        raise ValueError(
+        msg = (
             f"sign_extend: to_width={to_width} narrower than "
             f"source {src_width}-bit operand (use truncate() to narrow)"
         )
+        raise ValueError(msg)
     return z3.SignExt(to_width - src_width, bv)
 
 
@@ -113,10 +115,11 @@ def zero_extend(bv: Any, to_width: int) -> Any:
     """
     src_width = bv.size()
     if to_width < src_width:
-        raise ValueError(
+        msg = (
             f"zero_extend: to_width={to_width} narrower than "
             f"source {src_width}-bit operand (use truncate() to narrow)"
         )
+        raise ValueError(msg)
     return z3.ZeroExt(to_width - src_width, bv)
 
 

@@ -37,8 +37,8 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 from pathlib import Path
-from typing import Optional
 
 
 logger = logging.getLogger(__name__)
@@ -82,17 +82,18 @@ _DEFAULT_PACK_DOWNLOAD_HOSTS: tuple[str, ...] = (
 # missing packs in a single ``codeql analyze`` run trigger several
 # back-to-back ``pack download`` invocations); re-loading the
 # calibrated profile from disk on each is wasted effort.
-_CALIBRATED_CACHE: dict[str, "object"] = {}
+_CALIBRATED_CACHE: dict[str, object] = {}
+_CALIBRATED_CACHE_LOCK = threading.Lock()
 
 
-def _resolve_codeql_bin() -> Optional[str]:
+def _resolve_codeql_bin() -> str | None:
     """Locate the CodeQL CLI on PATH. Returns None when not found
     (calibration disabled for that run; static fallback layers
     still apply)."""
     return shutil.which("codeql")
 
 
-def _calibrated_profile(codeql_bin: Optional[str] = None):
+def _calibrated_profile(codeql_bin: str | None = None):
     """Load (or trigger calibration of) a SandboxProfile for the
     target CodeQL binary + env. Returns None when calibration is
     unavailable (binary missing, observe-mode prerequisites
@@ -114,41 +115,41 @@ def _calibrated_profile(codeql_bin: Optional[str] = None):
         codeql_bin = _resolve_codeql_bin()
     if codeql_bin is None:
         return None
-    if codeql_bin in _CALIBRATED_CACHE:
-        return _CALIBRATED_CACHE[codeql_bin]
+    # Hold the lock across the entire miss path to prevent a
+    # cache stampede where N threads all see a miss and each
+    # independently run the (expensive) calibration probe.
+    with _CALIBRATED_CACHE_LOCK:
+        if codeql_bin in _CALIBRATED_CACHE:
+            return _CALIBRATED_CACHE[codeql_bin]
 
-    try:
-        from core.sandbox.calibrate import load_or_calibrate
-    except ImportError:
-        _CALIBRATED_CACHE[codeql_bin] = None
-        return None
+        try:
+            from core.sandbox.calibrate import load_or_calibrate
+        except ImportError:
+            _CALIBRATED_CACHE[codeql_bin] = None
+            return None
 
-    try:
-        profile = load_or_calibrate(
-            codeql_bin,
-            probe_args=("--version",),
-            env_keys=_CODEQL_ENV_KEYS,
-            timeout=20,
-        )
-    except (FileNotFoundError, RuntimeError, OSError,
-            subprocess.TimeoutExpired) as exc:
-        # TimeoutExpired: a sandboxed `codeql --version` exceeding
-        # 20s (rare but observable on cold systems / large CodeQL
-        # bundles) shouldn't break the resolver — fall through to
-        # the static default like every other failure mode.
-        logger.debug(
-            "codeql_proxy_hosts: calibration of %s failed (%s); "
-            "falling back to static policy",
-            codeql_bin, exc,
-        )
-        _CALIBRATED_CACHE[codeql_bin] = None
-        return None
+        try:
+            profile = load_or_calibrate(
+                codeql_bin,
+                probe_args=("--version",),
+                env_keys=_CODEQL_ENV_KEYS,
+                timeout=20,
+            )
+        except (FileNotFoundError, RuntimeError, OSError,
+                subprocess.TimeoutExpired) as exc:
+            logger.debug(
+                "codeql_proxy_hosts: calibration of %s failed "
+                "(%s); falling back to static policy",
+                codeql_bin, exc,
+            )
+            _CALIBRATED_CACHE[codeql_bin] = None
+            return None
 
-    _CALIBRATED_CACHE[codeql_bin] = profile
-    return profile
+        _CALIBRATED_CACHE[codeql_bin] = profile
+        return profile
 
 
-def _load_override_config() -> Optional[list[str]]:
+def _load_override_config() -> list[str] | None:
     """Load the operator's override list, or None if not configured.
 
     Schema mirrors cc_proxy_hosts:
@@ -178,8 +179,8 @@ def _load_override_config() -> Optional[list[str]]:
 
 
 def _calibrated_proxy_hosts(
-    codeql_bin: Optional[str] = None,
-) -> Optional[list[str]]:
+    codeql_bin: str | None = None,
+) -> list[str] | None:
     """Calibrated layer of proxy_hosts_for_codeql's resolution
     chain. Returns None when no profile exists OR proxy_hosts is
     empty. Default ``codeql --version`` probe doesn't network, so
@@ -192,8 +193,8 @@ def _calibrated_proxy_hosts(
 
 
 def _calibrated_readable_paths(
-    codeql_bin: Optional[str] = None,
-) -> Optional[list[str]]:
+    codeql_bin: str | None = None,
+) -> list[str] | None:
     """Calibrated layer of readable_paths_for_codeql's resolution
     chain. Returns the union of paths_read + paths_stat — both
     require Landlock read access (the kernel doesn't distinguish
@@ -230,7 +231,7 @@ def _default_readable_paths() -> list[str]:
 
 
 def proxy_hosts_for_codeql(
-    codeql_bin: Optional[str] = None,
+    codeql_bin: str | None = None,
 ) -> list[str]:
     """Return the egress proxy hostname allowlist for a
     ``codeql pack download`` invocation.
@@ -257,7 +258,7 @@ def proxy_hosts_for_codeql(
 
 
 def readable_paths_for_codeql(
-    codeql_bin: Optional[str] = None,
+    codeql_bin: str | None = None,
 ) -> list[str]:
     """Return the Landlock readable-paths set for CodeQL.
 

@@ -23,8 +23,10 @@ Per-language call extraction reuses the AST/tree-sitter machinery
 already in :mod:`core.inventory.call_graph` — gracefully degrades to
 an empty annotation when:
 
-* the language isn't supported (e.g. C/C++, where we have no
-  call-graph extractor today),
+* the language isn't wired into this module's ``_EXTRACTORS`` table
+  (e.g. C/C++ — :mod:`core.inventory.call_graph` ships extractors for
+  more languages than are mapped here, and unmapped ones fall back to
+  an empty annotation),
 * the language module isn't installed (tree-sitter grammars are
   optional dependencies),
 * the snippet doesn't parse cleanly.
@@ -37,16 +39,7 @@ evidence accordingly.
 from __future__ import annotations
 
 import re
-from typing import (
-    Callable,
-    Dict,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-)
 
-from core.dataflow.finding import Finding, Step
 from core.dataflow.sanitizer_evidence import (
     CandidateValidator,
     StepAnnotation,
@@ -61,11 +54,16 @@ from core.inventory.call_graph import (
     extract_call_graph_rust,
 )
 from core.inventory.languages import detect_language
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.dataflow.finding import Finding, Step
+    from collections.abc import Callable, Sequence
 
 
 # Tree-sitter / AST extractor by language. Keys match
 # ``LANGUAGE_MAP``'s values in ``core.inventory.languages``.
-_EXTRACTORS: Dict[str, Callable[[str], FileCallGraph]] = {
+_EXTRACTORS: dict[str, Callable[[str], FileCallGraph]] = {
     "python": extract_call_graph_python,
     "javascript": extract_call_graph_javascript,
     "typescript": extract_call_graph_javascript,
@@ -83,7 +81,7 @@ _EXTRACTORS: Dict[str, Callable[[str], FileCallGraph]] = {
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z_0-9]*\b")
 
 
-def _extract_call_chains(snippet: str, language: Optional[str]) -> Tuple[Tuple[str, ...], ...]:
+def _extract_call_chains(snippet: str, language: str | None) -> tuple[tuple[str, ...], ...]:
     extractor = _EXTRACTORS.get(language) if language else None
     if extractor is None:
         return ()
@@ -94,7 +92,7 @@ def _extract_call_chains(snippet: str, language: Optional[str]) -> Tuple[Tuple[s
     return tuple(tuple(c.chain) for c in graph.calls if c.chain)
 
 
-def _extract_identifiers(snippet: str) -> Tuple[str, ...]:
+def _extract_identifiers(snippet: str) -> tuple[str, ...]:
     return tuple(_IDENTIFIER_RE.findall(snippet))
 
 
@@ -137,9 +135,9 @@ def _annotate_step(
     language = detect_language(step.file_path)
     chains = _extract_call_chains(step.snippet, language)
 
-    on_path: Set[str] = set()
-    helpers: Set[str] = set()
-    callee_tokens: Set[str] = set()
+    on_path: set[str] = set()
+    helpers: set[str] = set()
+    callee_tokens: set[str] = set()
 
     for chain in chains:
         callee_tokens.update(chain)
@@ -153,7 +151,7 @@ def _annotate_step(
             helpers.add(_join_chain(chain))
 
     identifiers = _extract_identifiers(step.snippet)
-    variables: Set[str] = set()
+    variables: set[str] = set()
     for token in identifiers:
         if token in callee_tokens:
             continue
@@ -175,7 +173,7 @@ def _annotate_step(
 # realistic snippet — keeps the variables_referenced field readable
 # without language-specific keyword tables. The set is deliberately
 # small; aggressive filtering would hide real signal.
-_COMMON_NOISE: Set[str] = {
+_COMMON_NOISE: set[str] = {
     "if", "else", "for", "while", "return", "true", "false", "null",
     "None", "True", "False", "import", "from", "let", "const", "var",
     "function", "def", "class", "public", "private", "static",
@@ -186,7 +184,7 @@ _COMMON_NOISE: Set[str] = {
 def annotate_finding(
     finding: Finding,
     candidates: Sequence[CandidateValidator],
-) -> Tuple[StepAnnotation, ...]:
+) -> tuple[StepAnnotation, ...]:
     """Annotate every step of ``finding`` (source, intermediate, sink).
 
     Step indices: ``0`` = source, ``len(intermediate_steps) + 1`` = sink.

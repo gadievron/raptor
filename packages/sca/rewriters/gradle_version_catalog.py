@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
-from typing import List, Tuple
 
-from . import RewriteEdit, RewriteResult, register
+from . import RewriteEdit, RewriteResult, register, rewrite_file_with
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ def _is_libs_versions_toml(path: Path) -> bool:
     return path.name == "libs.versions.toml"
 
 
-def _version_key_pattern(key: str) -> "re.Pattern":
+def _version_key_pattern(key: str) -> re.Pattern:
     """Match a ``[versions]`` table entry: ``key = "value"`` or
     ``key = 'value'``. The ``key`` is the TOML literal name from
     the catalog (e.g. ``spring-boot`` or ``junit``).
@@ -76,7 +78,7 @@ def _version_key_pattern(key: str) -> "re.Pattern":
     )
 
 
-def _inline_library_version_pattern(alias: str) -> "re.Pattern":
+def _inline_library_version_pattern(alias: str) -> re.Pattern:
     """Match ``alias = { ... version = "OLD" ... }`` in
     ``[libraries]``. Handles both single-line and (somewhat)
     multi-line inline-table forms.
@@ -103,7 +105,7 @@ def _inline_library_version_pattern(alias: str) -> "re.Pattern":
     )
 
 
-def _inline_library_string_pattern(alias: str) -> "re.Pattern":
+def _inline_library_string_pattern(alias: str) -> re.Pattern:
     """Match the string-shorthand library form:
     ``alias = "group:artifact:VERSION"``. Update only the
     version segment."""
@@ -118,7 +120,7 @@ def _inline_library_string_pattern(alias: str) -> "re.Pattern":
     )
 
 
-def _inline_plugin_version_pattern(alias: str) -> "re.Pattern":
+def _inline_plugin_version_pattern(alias: str) -> re.Pattern:
     """Match ``alias = { id = "...", version = "OLD" }`` in
     ``[plugins]``. Same brace-escape note as
     ``_inline_library_version_pattern``."""
@@ -133,10 +135,25 @@ def _inline_plugin_version_pattern(alias: str) -> "re.Pattern":
     )
 
 
+def _inline_plugin_string_pattern(alias: str) -> re.Pattern:
+    """Match the string-shorthand plugin form:
+    ``alias = "plugin.id:VERSION"``. Update only the
+    version segment."""
+    a = re.escape(alias)
+    return re.compile(
+        r"(?P<hdr>^\s*\[plugins\]\s*$)"
+        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
+        rf"(?P<lead>^\s*{a}\s*=\s*['\"][^'\":]+:)"
+        r"(?P<version>[^'\"]+)"
+        r"(?P<tail>['\"])",
+        re.MULTILINE,
+    )
+
+
 @register(predicate=_is_libs_versions_toml)
 def rewrite_libs_versions_toml(
-    path: Path, edits: List[RewriteEdit],
-) -> List[RewriteResult]:
+    path: Path, edits: list[RewriteEdit],
+) -> list[RewriteResult]:
     """Apply ``[versions]`` / ``[libraries]`` / ``[plugins]``
     version edits to a Gradle version catalog.
 
@@ -144,31 +161,10 @@ def rewrite_libs_versions_toml(
     section: ``"version:<key>"``, ``"library:<alias>"``, or
     ``"plugin:<alias>"``.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        return [RewriteResult(edit=ed, applied=False,
-                              reason=f"error: read failed: {e}")
-                for ed in edits]
-
-    new_text = text
-    results: List[RewriteResult] = []
-    for edit in edits:
-        new_text, result = _apply_one(new_text, edit)
-        results.append(result)
-
-    if any(r.applied for r in results):
-        try:
-            _atomic_write(path, new_text)
-        except OSError as e:
-            return [RewriteResult(
-                edit=r.edit, applied=False,
-                reason=f"error: write failed: {e}",
-            ) for r in results]
-    return results
+    return rewrite_file_with(path, edits, _apply_one)
 
 
-def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
+def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
     section, _, key = edit.locator.partition(":")
     if not key:
         return text, RewriteResult(
@@ -187,7 +183,7 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
             _inline_library_string_pattern,
         ]
     elif section == "plugin":
-        candidates = [_inline_plugin_version_pattern]
+        candidates = [_inline_plugin_version_pattern, _inline_plugin_string_pattern]
     else:
         return text, RewriteResult(
             edit=edit, applied=False,
@@ -220,10 +216,6 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
         edit=edit, applied=False, reason="not_found",
     )
 
-
-def _atomic_write(path: Path, content: str) -> None:
-    from packages.sca._atomic import atomic_write_text
-    atomic_write_text(path, content)
 
 
 __all__ = ["rewrite_libs_versions_toml"]

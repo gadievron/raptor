@@ -7,7 +7,7 @@ alongside annotations and so picker tests have predictable equality.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -40,11 +40,11 @@ class Signals:
     Matching is case-insensitive throughout.
     """
 
-    paths: Tuple[str, ...] = ()  # path substrings (e.g. "net/", "crypto/")
-    includes: Tuple[str, ...] = ()  # header file names
-    function_keywords: Tuple[str, ...] = ()  # tokens in function name
-    function_calls: Tuple[str, ...] = ()  # function names called by target
-    cwes: Tuple[str, ...] = ()  # exact CWE ids (e.g. "CWE-78")
+    paths: tuple[str, ...] = ()  # path substrings (e.g. "net/", "crypto/")
+    includes: tuple[str, ...] = ()  # header file names
+    function_keywords: tuple[str, ...] = ()  # tokens in function name
+    function_calls: tuple[str, ...] = ()  # function names called by target
+    cwes: tuple[str, ...] = ()  # exact CWE ids (e.g. "CWE-78")
 
 
 @dataclass(frozen=True)
@@ -76,11 +76,11 @@ class Strategy:
     name: str
     description: str
     signals: Signals = field(default_factory=Signals)
-    key_questions: Tuple[str, ...] = ()
+    key_questions: tuple[str, ...] = ()
     prompt_addendum: str = ""
-    exemplars: Tuple[Exemplar, ...] = ()
+    exemplars: tuple[Exemplar, ...] = ()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,

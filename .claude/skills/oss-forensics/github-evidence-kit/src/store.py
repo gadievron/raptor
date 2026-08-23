@@ -7,12 +7,15 @@ Provides save/load/query functionality for evidence objects.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
 
-from .schema import AnyEvidence, AnyEvent, AnyObservation
 from .schema.common import EvidenceSource
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .schema import AnyEvidence, AnyEvent, AnyObservation
+    from collections.abc import Callable, Iterator, Sequence
+    from datetime import datetime
 
 
 class EvidenceStore:
@@ -28,7 +31,7 @@ class EvidenceStore:
         commits = store.filter(observation_type="commit")
     """
 
-    def __init__(self, evidence: Sequence[AnyEvidence] | None = None):
+    def __init__(self, evidence: Sequence[AnyEvidence] | None = None) -> None:
         self._evidence: list[AnyEvidence] = list(evidence) if evidence else []
         self._by_id: dict[str, AnyEvidence] = {e.evidence_id: e for e in self._evidence}
 
@@ -112,9 +115,7 @@ class EvidenceStore:
                     return False
                 if before and ts > before:
                     return False
-            if predicate and not predicate(e):
-                return False
-            return True
+            return not (predicate and not predicate(e))
 
         return [e for e in self._evidence if matches(e)]
 
@@ -177,20 +178,21 @@ class EvidenceStore:
     _FROM_JSON_MAX_BYTES = 100 * 1024 * 1024
 
     @classmethod
-    def from_json(cls, json_str: str) -> "EvidenceStore":
+    def from_json(cls, json_str: str) -> EvidenceStore:
         """Create store from JSON string."""
         if len(json_str) > cls._FROM_JSON_MAX_BYTES:
-            raise ValueError(
+            msg = (
                 f"EvidenceStore.from_json: input exceeds "
                 f"{cls._FROM_JSON_MAX_BYTES} bytes — refusing to load "
                 f"(pathological input bounds enforced)"
             )
+            raise ValueError(msg)
         from . import load_evidence_from_json
         data = json.loads(json_str)
         return cls([load_evidence_from_json(item) for item in data])
 
     @classmethod
-    def load(cls, path: str | Path) -> "EvidenceStore":
+    def load(cls, path: str | Path) -> EvidenceStore:
         """Load store from JSON file.
 
         Explicit `encoding="utf-8-sig"` so:
@@ -210,7 +212,7 @@ class EvidenceStore:
         """
         return cls.from_json(Path(path).read_text(encoding="utf-8-sig"))
 
-    def merge(self, other: "EvidenceStore") -> None:
+    def merge(self, other: EvidenceStore) -> None:
         """Merge another store into this one."""
         self.add_all(list(other))
 

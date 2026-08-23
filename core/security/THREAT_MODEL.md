@@ -68,6 +68,56 @@ LLM-driven sub-agents on hostile source must set it explicitly.
 `run_untrusted()` and `run_untrusted_networked()` set `restrict_reads=True`
 by default for this reason; ad-hoc `sandbox_run()` callers do not.
 
+**Accepted residual — inbound TCP in Landlock-only mode.** When
+`block_network=True` degrades to Landlock-only, outbound TCP is denied
+by the Landlock connect fallback (`degraded_net_deny`, ABI v4+), but a
+sandboxed child can still **bind and listen** on any port, and — with
+no network namespace to isolate it — that listener is reachable from
+the host (and from wherever the host's firewall admits). This is a
+deliberate design decision, not a gap in the fallback: Landlock's
+`BIND_TCP` right is intentionally unhandled everywhere because
+sandboxed tools and targets routinely bind sockets they never need
+reachable (JVM tooling, test harnesses, target binaries whose startup
+opens a listener), and on every non-degraded host the netns makes
+those binds harmless — restricting bind would buy nothing there and
+break workloads. The residual channel requires an external party to
+connect IN (a far weaker primitive than egress exfiltration, which
+stays closed), exists only on hosts where user namespaces are
+unavailable, and is bounded by the host firewall. Landlock ≤ ABI 8
+offers no inbound/accept right that could close it without
+restricting bind.
+
+**Accepted residual — pre-planted symlink bind steering.** Bind-mount
+sources and Landlock grant paths are pinned against
+post-canonicalisation symlink swaps (realpath, then a
+symlink-refusing component walk, then a `/proc/self/fd` mount — see
+`core/sandbox/_pathpin.py`). This narrows the classic
+validate-then-mount race window; it does NOT close the pre-planted
+class: a symlink already in place before canonicalisation resolves
+like a benign operator symlink and steers the bind exactly as the
+pathname mounts it replaced did. Operators sharing a writable
+output ancestor with concurrently-running hostile code should treat
+that sharing itself as the boundary violation; full closure needs
+validation-time inode pinning (carrying the O_PATH fd from the
+caller's original validation through to the mount), tracked as
+follow-up work.
+
+**Accepted residuals — no-pid-namespace teardown.** On the same
+degraded (namespace-less, operator-opt-in) posture, teardown
+containment comes from the in-band `PR_SET_CHILD_SUBREAPER` sweeper
+plus the parent-side `_RAPTOR_SBX_RUN` environ-marker backstop instead
+of a pid-namespace cascade. A run timeout now tears down
+sweeper-first (the death pipe is closed before any kill, so the
+sweeper reaps by pid tracking even for env-scrubbed daemons). Two
+arms remain open by kernel limitation and are accepted as the
+degraded envelope: (1) a descendant that re-execs with a scrubbed
+environment is invisible to the marker backstop — pid tracking by the
+live sweeper is the only in-band cover; (2) on Landlock ABI < 6 there
+is no signal scoping, so a hostile target can SIGKILL the same-UID
+sweeper before spawning daemons, leaving only the (scrub-able) marker
+backstop. Every namespace-capable host uses the pid-ns cascade and is
+unaffected.
+
 #### I2-(b). Downstream consumers treat LLM-derived artefacts as adversarial.
 
 A prompt-injected LLM can produce a structurally-valid JSON output that
@@ -137,5 +187,19 @@ prompt injection is bounded by sandbox + output-handling per I2.
 
 Tracked separately, not blocking I1/I2/I3:
 - Per-call-site `restrict_reads=True` migration for ad-hoc `sandbox_run` consumers (per-toolchain audits required for build-tool callers).
-- Per-consumer output-handling hardening to satisfy I2-(b).
-- /validate Bash discipline (typed validation-helper enum instead of generic Bash).
+- /validate Bash discipline for the lifecycle/inventory stages (typed
+  validation-helper enum instead of generic Bash); the build/PoC stages
+  inherently need Bash and are bounded by the sandbox.
+- Promotion-alarm blocking mode: `promotion-alarms.jsonl` is currently
+  alarm-only by design; flip to demote-on-alarm only after an
+  observation period of provably-empty legitimate runs.
+
+Closed by the 2026-08 hardening batches (kept here so the list reflects
+reality):
+- Per-consumer output-handling hardening for I2-(b) — superseded by the
+  provenance chokepoint: LLM-derived artifacts carry a
+  `provenance.untrusted` stamp enforced at `raptor-validate-schema`
+  (presence, shape, free-text sanitiser-idempotence), and report
+  writers are lint-enforced sanitised (`report_writer_audit`). The
+  semantic residual (poisoned content in valid structure) remains and
+  is documented in docs/security.md.

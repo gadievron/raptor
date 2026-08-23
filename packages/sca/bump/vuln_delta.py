@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
 
 from ..findings import build_vuln_findings
 from ..models import Confidence, Dependency, PinStyle, VulnFinding
@@ -50,7 +49,7 @@ def evaluate_bump_vulns(
     osv_client: OsvClient,
     kev_client=None,
     epss_client=None,
-) -> List[VulnFinding]:
+) -> list[VulnFinding]:
     """Return the vuln findings for advisories introduced by
     bumping from ``current_version`` to ``target_version``.
 
@@ -75,6 +74,8 @@ def evaluate_bump_vulns(
     # ``query_batch`` returns ``OsvResult`` per dep, in input
     # order. We always pass [current, target] so we know which is
     # which.
+    if len(results) < 2:
+        return []
     current_result, target_result = results[0], results[1]
     new_advisories = _advisory_delta(
         target_advisories=target_result.advisories,
@@ -85,12 +86,11 @@ def evaluate_bump_vulns(
     # Build VulnFindings for the new advisories. The target_dep
     # is what we're proposing TO, so the findings are tagged
     # against it.
-    findings = build_vuln_findings(
+    return build_vuln_findings(
         [target_dep],
         [OsvResult(target_dep.key(), new_advisories)],
         kev=kev_client, epss=epss_client,
     )
-    return findings
 
 
 def _advisory_delta(

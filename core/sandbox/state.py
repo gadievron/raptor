@@ -40,9 +40,13 @@ _mount_ns_available_cache = None
 # cache records whether the ACTUAL flag-set engages, decided by running
 # it against `true`. Dict (not a single slot) because different calls
 # use different flag-sets (block_network on/off, mount on/off).
-_unshare_engage_cache = {}
+_unshare_engage_cache: dict[tuple[str, ...], tuple[bool | None, str]] = {}
 # Landlock cache uses -1 for "unavailable", >0 for ABI version, None for unchecked.
 _landlock_cache = None
+# _unix_scope_cache: True when the AF_UNIX connect-scoping supervisor
+# can run on this host (seccomp user-notify + pidfd_getfd + openat2 —
+# see core/sandbox/_unix_scope.py). None = not probed.
+_unix_scope_cache = None
 # Seccomp cache: None = unchecked, 0 = unavailable, CDLL handle = available.
 _libseccomp_cache = None
 # ptrace cache: None = unchecked, True/False = probed result. Used by
@@ -54,16 +58,21 @@ _ptrace_available_cache = None
 # under (allow default) baseline succeeds. Set by check_seatbelt_
 # available() in probes.py. Linux hosts always cache False.
 _seatbelt_available_cache = None
+# raptor-gidmap-allow helper: None = unchecked, False = not available,
+# str = resolved absolute path to the binary (with CAP_SETGID confirmed).
+_gidmap_allow_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 # `_user_limits_cache_decided_at` carries the wall-clock when the
-# cache was last populated FROM THE FAILURE PATH (parse error,
-# missing file, non-regular file). Pre-fix that path stored `{}` and
+# cache decision was made. FAILURE paths (parse error, missing file,
+# non-regular file) stamp time.time(): pre-fix they stored `{}` and
 # never re-read — operators correcting a malformed sandbox.json had
 # to restart every RAPTOR process to pick up the fix. `_FAIL_TTL_S`
-# bounds the negative cache so a corrected file is honoured within a
-# reasonable window. Successful loads keep no TTL; the assumption is
-# that the operator who edits the config will accept restarting (or
-# clearing the cache via tests / `state._user_limits_cache = None`).
+# bounds that negative cache so a corrected file is honoured within a
+# reasonable window. SUCCESSFUL parses stamp +inf — no TTL (session
+# cache; the operator who edits the config accepts restarting, or
+# clearing the cache via tests / `state._user_limits_cache = None`) —
+# which also keeps a valid config that yields no recognised keys
+# (empty dict) distinguishable from the empty-dict failure sentinel.
 _user_limits_cache = None
 _user_limits_cache_decided_at = 0.0
 # Resolved absolute paths to sandbox-setup binaries. We use absolute paths
@@ -78,6 +87,12 @@ _unshare_path_cache = None
 _prlimit_path_cache = None
 _mount_path_cache = None
 _mkdir_path_cache = None
+# newuidmap/newgidmap gate the mount-ns tier and are EXECUTED (setuid)
+# in the unsandboxed parent; getcap vouches for the raptor-gidmap-allow
+# helper. Same trusted-dirs resolution as the util-linux binaries above.
+_newuidmap_path_cache = None
+_newgidmap_path_cache = None
+_getcap_path_cache = None
 
 # CLI overrides — set ONLY from entry-point argparse, never from env vars
 # or config files. A malicious .envrc or target repo must not be able to
@@ -96,6 +111,16 @@ _cli_sandbox_audit_verbose = False
 # default; positive integer = override. Per-category and per-PID
 # sub-caps scale proportionally inside AuditBudget.__init__.
 _cli_sandbox_audit_budget = None
+# Operator allowlist extensions — the self-service recovery levers for
+# read denials under read-restricting profiles. `--sandbox-readable-path`
+# extends readable_paths on every sandbox() in the process;
+# `--sandbox-tool-path` does the same for tool_paths (read allowlist +
+# mount-ns bind). These LOOSEN isolation, so the same prompt-injection
+# rule applies with extra force: only entry-point argparse sets them,
+# never env/config/repo content. None = no extension; list[str] of
+# validated absolute paths otherwise.
+_cli_sandbox_readable_paths = None
+_cli_sandbox_tool_paths = None
 
 # Degradation warnings are logged once per process, not once per sandbox()
 # context — kernel capability doesn't change at runtime and scan loops
@@ -105,12 +130,23 @@ _landlock_warned_abi_v4 = False
 _landlock_warned_abi_v3 = False  # TRUNCATE coverage missing (kernel <6.2)
 _landlock_warned_abi_v2 = False  # REFER coverage missing (kernel <5.19)
 _sandbox_unavailable_warned = False
+# AF_UNIX connect scoping unavailable (seccomp user-notify /
+# pidfd_getfd / openat2 missing) — allow_unix downgraded fail-closed.
+_unix_scope_unavailable_warned = False
 # Mount-ns unavailable but Landlock did engage — see THREAT_MODEL.md I2-(a).
 # Distinguished from `_mount_unavailable_warned` (which is set by the lower-
 # level mount probe); this flag is for the user-facing warning emitted from
 # the public sandbox() path that names the practical posture and remediation.
 _sandbox_landlock_only_warned = False
 _net_and_tcp_allowlist_warned = False
+# Degraded-mode Landlock TCP-connect deny (block_network without a
+# namespace backend): engaged / cannot-engage one-shot warnings.
+_degraded_tcp_deny_warned = False
+_degraded_tcp_deny_unavailable_warned = False
+# Egress-proxy tier 2 engaged (Landlock TCP port pin, no netns bridge):
+# the pin is port-scoped, not (host, port)-scoped — weaker guarantee
+# than the netns tier; warned once per process at engagement.
+_proxy_tier2_port_pin_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
 _ptrace_unavailable_warned = False
@@ -118,6 +154,7 @@ _ptrace_unavailable_warned = False
 # transient load) and the gate proceeds leniently instead of failing loud.
 _engage_probe_indeterminate_warned = False
 _audit_warned_no_spawn = False
+_gidmap_allow_warned_missing = False
 # NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
 # flag needed — workflow proceeds correctly at Landlock-only, same
 # posture as Ubuntu defaults). The speculative-C retry uses the
@@ -139,6 +176,23 @@ _audit_warned_no_spawn = False
 _speculative_failure_cache: dict = {}
 
 
+def _require_warn_flag(mod, flag_name: str) -> None:
+    """AttributeError-on-typo defense: if a caller passes a flag name
+    that doesn't exist on this module (typo, refactor missed an
+    update), the bare getattr would raise an opaque AttributeError
+    from inside state.py. Surface a clearer error that names the
+    offending flag so the caller can find their typo immediately."""
+    if not hasattr(mod, flag_name):
+        msg = (
+            f"warn_once: unknown flag {flag_name!r}. Add to "
+            f"core/sandbox/state.py module-level globals before "
+            f"using. (Likely a typo — flag names embed 'warned', "
+            f"most as `_<feature>_<reason>_warned`, some as "
+            f"`_<feature>_warned_<reason>`.)"
+        )
+        raise AttributeError(msg)
+
+
 def warn_once(flag_name: str) -> bool:
     """Atomic test-and-set for a module-level warn-once flag.
 
@@ -153,20 +207,28 @@ def warn_once(flag_name: str) -> bool:
     import sys
     mod = sys.modules[__name__]
     with _cache_lock:
-        # AttributeError-on-typo defense: if a caller passes a flag
-        # name that doesn't exist on this module (typo, refactor
-        # missed an update), the bare getattr would raise an opaque
-        # AttributeError from inside state.py. Surface a clearer
-        # error that names the offending flag so the caller can
-        # find their typo immediately.
-        if not hasattr(mod, flag_name):
-            raise AttributeError(
-                f"warn_once: unknown flag {flag_name!r}. Add to "
-                f"core/sandbox/state.py module-level globals before "
-                f"using. (Likely a typo — most flag names follow "
-                f"the `_<feature>_warned_<reason>` pattern.)"
-            )
+        _require_warn_flag(mod, flag_name)
         if getattr(mod, flag_name):
             return False
         setattr(mod, flag_name, True)
         return True
+
+
+def reset_warn_once(flag_name: str) -> None:
+    """Reset a warn-once latch to its unfired state.
+
+    Test-support API. The latches are once-per-PROCESS by design
+    (kernel capability and tier engagement don't change at runtime),
+    which makes any test that asserts on the warning itself
+    order-dependent: an earlier consumer anywhere in the same process
+    — including test directories whose conftest doesn't snapshot this
+    module's flags — eats the once. A test asserting warn-once
+    behaviour calls this first so it controls its own latch state
+    regardless of suite order. Same typo defense and locking as
+    :func:`warn_once`.
+    """
+    import sys
+    mod = sys.modules[__name__]
+    with _cache_lock:
+        _require_warn_flag(mod, flag_name)
+        setattr(mod, flag_name, False)

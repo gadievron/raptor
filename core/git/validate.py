@@ -43,10 +43,10 @@ _ALLOWED_PATTERNS = [
 
 
 def validate_repo_url(url: str) -> bool:
-    """Return True if ``url`` matches one of the allowlist patterns.
+    r"""Return True if ``url`` matches one of the allowlist patterns.
 
     Uses ``re.fullmatch`` so a trailing newline (or any other char) is
-    rejected — ``re.match`` + ``$`` would accept ``"...repo/\\n"``.
+    rejected — ``re.match`` + ``$`` would accept ``"...repo/\n"``.
     """
     if len(url) > 2048:
         return False

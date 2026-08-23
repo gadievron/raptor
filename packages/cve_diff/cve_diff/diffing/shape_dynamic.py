@@ -24,11 +24,12 @@ Behaviour:
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 from cve_diff.diffing import shape as static_shape
 
-LanguagesFetcher = Callable[[str], Optional[dict[str, Any]]]
+LanguagesFetcher = Callable[[str], dict[str, Any] | None]
 
 _EXT_TO_LANGUAGE: dict[str, str] = {
     ".py": "python",
@@ -94,7 +95,7 @@ def classify(
         # form, not raw user input.
         payload = fetch(slug)
         if payload:
-            repo_langs = frozenset(str(k).lower() for k in payload.keys())
+            repo_langs = frozenset(str(k).lower() for k in payload)
             for path in files:
                 ext = _ext(path)
                 lang = _EXT_TO_LANGUAGE.get(ext)

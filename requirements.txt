@@ -14,26 +14,59 @@ urllib3==2.7.0
 pydantic==2.13.4
 typer==0.25.1
 
+# semgrep imports `mcp` unconditionally at startup (its MCP-server
+# feature is not optional at import time), but declares a pin (1.23.3)
+# that predates the decorator-API cleanup. 1.29.0 is the newest 1.x
+# semgrep runs against (verified by scan smoke test); 2.x removes the
+# low-level server decorator API some consumers still use.
+mcp==1.29.0
+
 # Structured output (works with both OpenAI and Anthropic SDKs).
 # 1.15.1+ moves ``diskcache`` from an unconditional runtime dep
 # to the ``[diskcache]`` extra — this bump drops diskcache from
 # raptor's install set, which is exactly what we want
 # (CVE-2025-69872 was the trigger; raptor doesn't use the cache
 # layer).
-instructor==1.15.1
+instructor==1.15.4
 
-# Optional: LLM provider SDKs (install for external LLM support)
-# pip install openai        # OpenAI, Gemini (via shim), Mistral, Ollama
-# pip install anthropic     # Anthropic Claude (native structured output)
-# pip install google-genai  # Google Gemini (native SDK, accurate thinking token costs)
+# Optional: LLM provider SDKs (uncomment to install)
+# openai==2.30.0            # OpenAI, Gemini (via shim), Mistral, Ollama
+# anthropic==0.103.1        # Anthropic Claude (native structured output)
+# google-genai==2.4.0       # Google Gemini (native SDK, accurate thinking token costs)
 # AWS Bedrock: botocore is PARENT-ONLY — imported only by the credential-
 # isolation dispatcher (core/llm/dispatcher) to SigV4-sign Bedrock requests on
 # the worker's behalf. NOT needed for Bedrock API-key (AWS_BEARER_TOKEN_BEDROCK)
 # auth, only for SigV4. Workers use the stock anthropic SDK, never boto3/botocore.
-# pip install botocore
+# botocore==1.43.16
+
+# HTTP/2 for the pooled LLM transports: only read when the operator opts in
+# with RAPTOR_HTTP2=1 (see docs/llm.md "HTTP Transport Tuning"). Without the
+# package the opt-in warns once and stays on HTTP/1.1 — nothing breaks, so it
+# ships commented out rather than as a hard dep. Multiplexes all concurrent
+# LLM calls over one connection; biggest win behind chained proxies.
+# h2==4.4.1
 
 # Optional: Rich inventory metadata (decorators, annotations, visibility, typed params)
-# pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript tree-sitter-c tree-sitter-go
+# Without a grammar a language falls back to the regex extractor, which finds
+# fewer functions and no line_end — so anything that slices source by span
+# degrades silently. Install the grammars for the languages you scan
+# (requirements-grammars.txt carries this exact pinned set).
+# tree-sitter==0.25.2
+# tree-sitter-c==0.24.2
+# tree-sitter-c-sharp==0.23.5
+# tree-sitter-cpp==0.23.4
+# tree-sitter-go==0.25.0
+# tree-sitter-java==0.23.5
+# tree-sitter-javascript==0.25.0
+# tree-sitter-kotlin==1.1.0
+# tree-sitter-lua==0.5.0
+# tree-sitter-php==0.24.1
+# tree-sitter-python==0.25.0
+# tree-sitter-ruby==0.23.1
+# tree-sitter-rust==0.24.2
+# tree-sitter-scala==0.26.0
+# tree-sitter-swift==0.7.3
+# tree-sitter-typescript==0.23.2
 
 # Optional: For enhanced dataflow visualization (recommended)
 tabulate==0.10.0
@@ -59,21 +92,42 @@ defusedxml==0.7.1
 # compromise-detection corpus). Pin alongside the SCA hard deps.
 packaging==25.0
 
+# Optional: Faster JSON parse/serialise (transparent fallback to stdlib json)
+# orjson==3.11.9
+
+# ELF metadata without angr: core/symbolic's load_binary falls back to
+# pyelftools when angr is absent — the fallback must not depend on the
+# heavyweight optional it exists to replace. Tiny, pure-Python.
+pyelftools==0.33
+
+# Optional: For binary symbolic execution (core/symbolic — overflow
+# witnesses, path constraints, format-string slot analysis backing
+# binary audit verification). Heavy (~1 GB installed). NOTE: claripy
+# exact-pins z3-solver (4.13.0.0 at this angr version) — when angr is
+# installed its pin owns the interpreter's z3; do not uncomment the
+# standalone z3-solver pin below at a different version (RAPTOR's SMT
+# consumers are verified against claripy's pin).
+# angr==9.3.3
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 
-# Optional: For web scanning package
-# beautifulsoup4>=4.12.0
-# playwright>=1.40.0
+# needed for binary decompilation
+# r2pipe==1.9.8
+
+# Optional: For web scanning package (uncomment to install)
+# beautifulsoup4==4.15.0
+# playwright==1.60.0
 
 # Note: For local LLM support via Ollama, install the openai package
 # (Ollama exposes an OpenAI-compatible endpoint) and Ollama itself:
 # https://ollama.ai
 
 # SAGE persistent memory (consensus-validated knowledge)
-# pip install sage-agent-sdk==8.4.2 httpx==0.28.1
+# sage-agent-sdk==11.17.11
+# httpx==0.28.1
 
 # SCA hard deps (defusedxml, packaging, pyyaml) are pinned above. The
 # only remaining optional one:
 #   - tomli      : TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+)
-# pip install "tomli; python_version<'3.11'"
+# tomli==2.4.1; python_version<"3.11"

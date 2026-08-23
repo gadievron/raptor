@@ -15,15 +15,13 @@ current didn't have:
 The verdict ladder then:
   * high alone → Block
   * two mediums → Block (compound red flag)
-
-Co-Authored-By: Natalie Somersall <natalie.somersall@gmail.com>
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.binary import diff_binary_capabilities
 from ..models import (
@@ -45,7 +43,7 @@ def binary_capability_delta_finding(
     target_version: str,
     current_binary: Path,
     target_binary: Path,
-) -> Optional[SupplyChainFinding]:
+) -> SupplyChainFinding | None:
     """Run the capability diff via :mod:`core.binary` and wrap a
     finding when target adds dangerous capabilities. Returns
     ``None`` when:
@@ -60,7 +58,7 @@ def binary_capability_delta_finding(
 
     severity: Severity = "high" if delta.high_severity() else "medium"
     buckets_added = delta.added_buckets()
-    detail_parts: List[str] = []
+    detail_parts: list[str] = []
     if buckets_added:
         detail_parts.append(
             "new dangerous-import buckets: "
@@ -90,7 +88,7 @@ def binary_capability_delta_finding(
     # bump-specific context (versions) and the fingerprint
     # identifiers for each side so downstream tooling can correlate
     # against the SBOM ``raptor:cap_fp:*`` properties.
-    evidence: Dict[str, Any] = {
+    evidence: dict[str, Any] = {
         "current_version": current_version,
         "target_version": target_version,
         "current_binary": str(current_binary),

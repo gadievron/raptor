@@ -39,29 +39,60 @@ _OPENERS = {
 }
 
 
+# Read granularity for the streaming decompressor. Bounded single
+# allocations: the retired ``fh.read(max_bytes + 1)`` asked the lazy
+# reader for up to 1 GiB + 1 in ONE call, so a bomb (or merely a big
+# legitimate stream) was materialised wholesale before the cap check.
+_CHUNK_BYTES = 1 << 20
+
+
+def iter_decompressed(path, fmt: str,
+                      max_bytes: int = DEFAULT_MAX_DECOMPRESSED_BYTES):
+    """Yield decompressed chunks of a single-file stream, capped.
+
+    Incremental budget accounting: raises ``DecompressionLimitExceeded``
+    as soon as the running decompressed total passes ``max_bytes`` — at
+    most one chunk (1 MiB) is ever read beyond the cap, and nothing is
+    retained here, so consumers can stream a capped decompression to
+    disk without the output ever being resident in memory. Raises
+    ``UnsupportedArchive`` for an unknown ``fmt`` and ``ArchiveError``
+    for a corrupt/truncated stream (possibly mid-iteration — corruption
+    may only surface after valid leading chunks).
+    """
+    opener = _OPENERS.get(fmt)
+    if opener is None:
+        msg = f"no single-file decompressor for {fmt!r}"
+        raise UnsupportedArchive(msg)
+    total = 0
+    try:
+        with opener(Path(path), "rb") as fh:
+            while True:
+                chunk = fh.read(_CHUNK_BYTES)
+                if not chunk:
+                    return
+                total += len(chunk)
+                if total > max_bytes:
+                    raise DecompressionLimitExceeded(
+                        f"{fmt} stream exceeds {max_bytes} bytes "
+                        f"decompressed — refusing as bomb")
+                yield chunk
+    except (DecompressionLimitExceeded, UnsupportedArchive):
+        raise
+    except Exception as e:  # malformed/truncated stream, decompress error
+        msg = f"{fmt} decompression failed: {e}"
+        raise ArchiveError(msg) from e
+
+
 def decompress_single(path, fmt: str,
                       max_bytes: int = DEFAULT_MAX_DECOMPRESSED_BYTES) -> bytes:
     """Decompress a single-file ``gz``/``bz2``/``xz``/``zst`` to bytes, capped.
 
-    Raises ``DecompressionLimitExceeded`` if output would exceed ``max_bytes``
-    (bomb defense), ``UnsupportedArchive`` for an unknown ``fmt``, and
-    ``ArchiveError`` if the stream is corrupt/truncated.
+    Buffered convenience wrapper over :func:`iter_decompressed` — same
+    cap semantics and error types; the output is held in memory, so
+    consumers that only need to relay the bytes (to disk, to a tar
+    reader) should iterate the streaming variant instead.
     """
-    opener = _OPENERS.get(fmt)
-    if opener is None:
-        raise UnsupportedArchive(f"no single-file decompressor for {fmt!r}")
-    try:
-        with opener(Path(path), "rb") as fh:
-            data = fh.read(max_bytes + 1)
-    except DecompressionLimitExceeded:
-        raise
-    except Exception as e:  # malformed/truncated stream, decompress error
-        raise ArchiveError(f"{fmt} decompression failed: {e}") from e
-    if len(data) > max_bytes:
-        raise DecompressionLimitExceeded(
-            f"{fmt} stream exceeds {max_bytes} bytes decompressed — refusing as bomb"
-        )
-    return data
+    return b"".join(iter_decompressed(path, fmt, max_bytes=max_bytes))
 
 
 def looks_like_tar(data: bytes) -> bool:

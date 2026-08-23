@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from packages.sca import SCA_ALLOWED_HOSTS
 from packages.sca.agent import _find_sca_agent, run_sca_subprocess
 
-
 # ---------------------------------------------------------------------------
 # SCA_ALLOWED_HOSTS completeness
 # ---------------------------------------------------------------------------
@@ -169,16 +168,18 @@ class TestRunScaSubprocess:
             mock_result.stderr = ""
             return mock_result
 
-        with patch("packages.sca.agent.sandbox_run", fake_sandbox_run, create=True):
-            # Patch the import inside run_sca_subprocess
-            with patch("core.sandbox.run", fake_sandbox_run):
-                rc, stdout, stderr = run_sca_subprocess(
-                    agent, tmp_path, tmp_path / "out",
-                )
+        # Patch both the module alias and the import inside
+        # run_sca_subprocess.
+        with patch("packages.sca.agent.sandbox_run", fake_sandbox_run,
+                   create=True), \
+             patch("core.sandbox.run", fake_sandbox_run):
+            _rc, _stdout, _stderr = run_sca_subprocess(
+                agent, tmp_path, tmp_path / "out",
+            )
 
         assert captured_kwargs.get("use_egress_proxy") is True
         proxy_hosts = captured_kwargs.get("proxy_hosts", [])
-        assert set(proxy_hosts) == set(SCA_ALLOWED_HOSTS)
+        assert set(SCA_ALLOWED_HOSTS) <= set(proxy_hosts)
         assert captured_kwargs.get("caller_label") == "sca-agent"
 
     def test_passes_sandbox_args(self, tmp_path):
@@ -205,3 +206,128 @@ class TestRunScaSubprocess:
         assert "--sandbox" in captured_cmd
         assert "full" in captured_cmd
         assert "--audit" in captured_cmd
+
+
+# ---------------------------------------------------------------------------
+# compose_proxy_hosts — repo-derived host validation + logging
+# ---------------------------------------------------------------------------
+
+class TestComposeProxyHostsRepoDerived:
+    """Repo manifests are untrusted input: every image-ref / chart-dep
+    host must pass hostname-shape validation before landing on the
+    egress allowlist, and the additions must be logged once per run."""
+
+    @pytest.fixture()
+    def _stub_sources(self, monkeypatch):
+        """Route both repo-derived sources through test-controlled
+        lists; the LLM / private-registry sections stay live (they
+        are operator-level, not repo-derived)."""
+        import packages.sca.dockerfile_from as dfrom
+        import packages.sca.parsers.helm_chart as helm
+
+        def set_hosts(image_hosts=(), chart_hosts=()):
+            monkeypatch.setattr(
+                dfrom, "image_source_registry_hosts",
+                lambda target: list(image_hosts),
+            )
+            monkeypatch.setattr(
+                helm, "chart_repository_hosts",
+                lambda target: list(chart_hosts),
+            )
+        return set_hosts
+
+    def test_valid_hosts_added_and_logged(
+        self, tmp_path, caplog, _stub_sources,
+    ):
+        from packages.sca import compose_proxy_hosts
+        _stub_sources(image_hosts=["ghcr.io", "quay.io"],
+                      chart_hosts=["charts.bitnami.com"])
+        with caplog.at_level("WARNING", logger="packages.sca"):
+            hosts = compose_proxy_hosts(tmp_path)
+        assert "ghcr.io" in hosts
+        assert "quay.io" in hosts
+        assert "charts.bitnami.com" in hosts
+        added_lines = [r.getMessage() for r in caplog.records
+                       if "repo-derived hosts added" in r.getMessage()]
+        assert len(added_lines) == 1        # one line per run
+        assert "image refs: ghcr.io, quay.io" in added_lines[0]
+        assert "chart deps: charts.bitnami.com" in added_lines[0]
+
+    def test_malformed_hosts_rejected_and_logged(
+        self, tmp_path, caplog, _stub_sources,
+    ):
+        from packages.sca import compose_proxy_hosts
+        bad = [
+            "evil.example.com/path",         # path-carrying
+            "http://evil.example.com",       # scheme-carrying
+            "evil host.example.com",         # whitespace
+            " evil.example.com",             # padded
+            "evil.example.com:5000",         # non-standard port
+            "a@evil.example.com",            # userinfo
+            "evil.example.com,other.io",     # separator smuggling
+            "",                              # empty
+        ]
+        _stub_sources(image_hosts=bad + ["good.example.com"])
+        with caplog.at_level("WARNING", logger="packages.sca"):
+            hosts = compose_proxy_hosts(tmp_path)
+        assert "good.example.com" in hosts
+        for raw in bad:
+            assert raw not in hosts
+        rejected_lines = [r.getMessage() for r in caplog.records
+                          if "rejected malformed" in r.getMessage()]
+        assert len(rejected_lines) == 1
+        assert "evil.example.com/path" in rejected_lines[0]
+
+    def test_standard_port_stripped_to_hostname(
+        self, tmp_path, caplog, _stub_sources,
+    ):
+        """The proxy allowlist is hostname-keyed — a :443 / :80
+        suffix is tolerated and stripped; other ports are rejected
+        (see test above)."""
+        from packages.sca import compose_proxy_hosts
+        _stub_sources(image_hosts=["reg.example.com:443",
+                                    "alt.example.com:80"])
+        with caplog.at_level("WARNING", logger="packages.sca"):
+            hosts = compose_proxy_hosts(tmp_path)
+        assert "reg.example.com" in hosts
+        assert "alt.example.com" in hosts
+        assert "reg.example.com:443" not in hosts
+
+    def test_operator_registry_port_env_admits_host(
+        self, tmp_path, monkeypatch, _stub_sources,
+    ):
+        """RAPTOR_SCA_REGISTRY_PORTS (operator config, never repo-
+        derived) widens the tolerated port set so self-hosted
+        registries like reg.corp:5000 keep their base-image SBOM
+        fetches. The port is still stripped for the hostname-keyed
+        allowlist."""
+        from packages.sca import compose_proxy_hosts
+        monkeypatch.setenv("RAPTOR_SCA_REGISTRY_PORTS", "5000, 8081")
+        _stub_sources(image_hosts=["reg.corp:5000",
+                                    "mirror.corp:8081",
+                                    "evil.example.com:9999"])
+        hosts = compose_proxy_hosts(tmp_path)
+        assert "reg.corp" in hosts
+        assert "mirror.corp" in hosts
+        assert "evil.example.com" not in hosts   # port not declared
+
+    def test_operator_registry_port_env_rejects_garbage(
+        self, tmp_path, monkeypatch, _stub_sources, caplog,
+    ):
+        """Invalid env entries are ignored (warned), never widen."""
+        from packages.sca import compose_proxy_hosts
+        monkeypatch.setenv("RAPTOR_SCA_REGISTRY_PORTS",
+                           "0, 70000, abc, -1")
+        _stub_sources(image_hosts=["reg.corp:5000"])
+        with caplog.at_level("WARNING", logger="packages.sca"):
+            hosts = compose_proxy_hosts(tmp_path)
+        assert "reg.corp" not in hosts
+
+    def test_no_target_no_repo_derived_section(self, caplog):
+        """``target=None`` short-circuits before the repo-derived
+        section — no added/rejected log lines."""
+        from packages.sca import compose_proxy_hosts
+        with caplog.at_level("WARNING", logger="packages.sca"):
+            compose_proxy_hosts(None)
+        assert not [r for r in caplog.records
+                    if "repo-derived hosts added" in r.getMessage()]

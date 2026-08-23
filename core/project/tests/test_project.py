@@ -46,7 +46,8 @@ class TestProject(unittest.TestCase):
             "target": self.target_code,
             "output_dir": "out/legacy",
         })
-        self.assertEqual(p.version, 3)
+        from core.project.project import _PROJECT_SCHEMA_VERSION
+        self.assertEqual(p.version, _PROJECT_SCHEMA_VERSION)
         self.assertEqual(p.threat_model_path, "")
         self.assertEqual(p.threat_model_updated, "")
 
@@ -94,8 +95,8 @@ class TestProject(unittest.TestCase):
 
     def test_sweep_marks_stale_running_as_failed(self):
         """sweep_stale_runs marks 'running' dirs with dead session_pid as failed."""
-        from core.run.metadata import RUN_METADATA_FILE
         from core.json import load_json, save_json
+        from core.run.metadata import RUN_METADATA_FILE
         with TemporaryDirectory() as d:
             # Simulate runs from a dead session (PID 99999999)
             for name in ["scan-20260401", "scan-20260402"]:
@@ -115,9 +116,10 @@ class TestProject(unittest.TestCase):
 
     def test_sweep_skips_alive_session(self):
         """sweep skips runs whose session PID is still alive."""
-        from core.run.metadata import RUN_METADATA_FILE
-        from core.json import load_json, save_json
         import os
+
+        from core.json import load_json, save_json
+        from core.run.metadata import RUN_METADATA_FILE
         with TemporaryDirectory() as d:
             run = Path(d) / "scan-20260401"
             run.mkdir()
@@ -143,8 +145,8 @@ class TestProject(unittest.TestCase):
 
     def test_sweep_keep_latest_legacy_runs(self):
         """sweep with keep_latest=True skips newest legacy run (no session_pid)."""
-        from core.run.metadata import RUN_METADATA_FILE
         from core.json import load_json, save_json
+        from core.run.metadata import RUN_METADATA_FILE
         with TemporaryDirectory() as d:
             for name, ts in [("scan-20260401", "2026-04-01"), ("scan-20260402", "2026-04-02")]:
                 run = Path(d) / name
@@ -162,8 +164,8 @@ class TestProject(unittest.TestCase):
 
     def test_sweep_ignores_completed(self):
         """sweep doesn't touch completed/failed dirs."""
-        from core.run.metadata import start_run, complete_run, RUN_METADATA_FILE
         from core.json import load_json
+        from core.run.metadata import RUN_METADATA_FILE, complete_run, start_run
         with TemporaryDirectory() as d:
             run1 = Path(d) / "scan-20260401"
             run1.mkdir()
@@ -354,11 +356,6 @@ class TestProjectManager(unittest.TestCase):
         # Verify persisted
         p2 = self.mgr.load("myapp")
         self.assertEqual(p2.notes, "new notes")
-
-    def test_update_description(self):
-        self.mgr.create("myapp", self.target_code)
-        p = self.mgr.update_description("myapp", "new desc")
-        self.assertEqual(p.description, "new desc")
 
     def test_find_project_for_target(self):
         self.mgr.create("myapp", self.target_code)

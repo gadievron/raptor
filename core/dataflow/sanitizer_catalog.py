@@ -10,7 +10,7 @@ sanitizers; this module adds two things on top:
    identifier (the shape every static analyser emits) can be matched
    against the catalogue's sink-class keys.
 2. A recognizer :func:`match_sanitizers_in_cfg` that walks a CFG
-   produced by :mod:`core.inventory.cfg_builder` and returns the set
+   produced by :mod:`core.analysis.cfg_builder` and returns the set
    of nodes whose statement-level calls (or, for the C/C++ call
    graph, whose own function name) are catalogue sanitizers for the
    given CWE + language.
@@ -29,17 +29,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import (
     Any,
-    FrozenSet,
-    Iterable,
-    List,
-    Mapping,
-    Set,
     TypeVar,
+TYPE_CHECKING,
 )
 
 from core.dataflow.known_safe_calls import (
     all_entries,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 
 N = TypeVar("N")
@@ -78,12 +77,12 @@ class SanitizerBinding:
     """
     node: Any
     callable: str
-    input_symbols: FrozenSet[str]
-    output_symbols: FrozenSet[str]
+    input_symbols: frozenset[str]
+    output_symbols: frozenset[str]
     lineno: int
 
 
-def nodes_of(bindings: Iterable[SanitizerBinding]) -> Set[Any]:
+def nodes_of(bindings: Iterable[SanitizerBinding]) -> set[Any]:
     """Project a binding set down to its underlying CFG nodes.
 
     Helper for Phase 7's vertex-cut consumer (which works on nodes,
@@ -137,12 +136,25 @@ def _normalize_cwe(cwe: str) -> str:
     """Accept ``"CWE-79"``, ``"cwe-79"``, ``"79"``, ``"CWE-079"`` and
     return the canonical ``"CWE-79"`` form. Returns the input
     unchanged when it doesn't look like a CWE id so unknown lookups
-    return a clean empty set rather than raising."""
-    raw = cwe.strip().upper()
-    if raw.startswith("CWE-"):
-        raw = raw[4:]
+    return a clean empty set rather than raising.
+
+    Delegates to :func:`core.cwe.canonicalize_cwe` with a
+    bare-number fallback (the shared canonicaliser rejects plain
+    ``"79"`` since it isn't prefixed) and preserves the
+    return-raw-on-unknown semantics the catalog's lookup depends on.
+    """
+    from core.cve.cwe import canonicalize_cwe, format_cwe
+    canon = canonicalize_cwe(cwe)
+    if canon is not None:
+        # canonicalize_cwe preserves leading zeros in the number
+        # group; re-run through format_cwe to strip them (CWE-079 →
+        # CWE-79 for consistent catalog keys).
+        return format_cwe(canon.split("-", 1)[1]) or canon
+    # Bare number (``"79"``) is not accepted by the shared
+    # canonicaliser but the sanitizer catalog historically has.
+    raw = cwe.strip()
     if raw.isdigit():
-        return f"CWE-{int(raw)}"
+        return format_cwe(raw) or cwe
     return cwe
 
 
@@ -162,7 +174,7 @@ def sink_classes_for_cwe(cwe: str) -> frozenset:
 
 def sanitizer_callables_for_cwe(
     cwe: str, language: str,
-) -> Set[str]:
+) -> set[str]:
     """Return the set of ``library_call`` identifiers from the
     known-safe catalog that neutralize ``cwe`` for ``language``.
 
@@ -173,14 +185,14 @@ def sanitizer_callables_for_cwe(
     sink_classes = sink_classes_for_cwe(cwe)
     if not sink_classes:
         return set()
-    out: Set[str] = set()
+    out: set[str] = set()
     for entry in all_entries():
         if entry.sink_class in sink_classes and language in entry.languages:
             out.add(entry.library_call)
     return out
 
 
-def all_sanitizer_callables(language: str) -> Set[str]:
+def all_sanitizer_callables(language: str) -> set[str]:
     """Every catalog entry for ``language``, irrespective of sink class.
     Useful for callers that haven't tagged the finding with a CWE
     (they get over-broad suppression rather than none)."""
@@ -201,7 +213,7 @@ def _node_calls(node: N) -> Iterable[str]:
     legacy projection used when the node has no Phase-1 ``call_sites``.
 
     Duck-typed for both producers from
-    :mod:`core.inventory.cfg_builder`:
+    :mod:`core.analysis.cfg_builder`:
 
     * :class:`PyCFGNode` — ``calls`` field, frozen set of statement-
       level call names.
@@ -218,12 +230,12 @@ def _node_calls(node: N) -> Iterable[str]:
 
 def match_sanitizers_in_cfg(
     graph, cwe: str, language: str,
-) -> FrozenSet[SanitizerBinding]:
+) -> frozenset[SanitizerBinding]:
     """Return the set of :class:`SanitizerBinding` records that
     correspond to catalog-matched sanitizer calls in ``graph`` for
     ``cwe`` + ``language``.
 
-    The graph must satisfy :class:`core.inventory.dominators.Graph`
+    The graph must satisfy :class:`core.analysis.dominators.Graph`
     (``nodes()`` available). Each binding carries the node, the
     matched callable, the call's input/output symbols (from Phase
     1's :class:`CallSite`), and the call's line number. Multiple
@@ -250,39 +262,36 @@ def match_sanitizers_in_cfg(
     sanitizer_names = sanitizer_callables_for_cwe(cwe, language)
     if not sanitizer_names:
         return frozenset()
-    bindings: List[SanitizerBinding] = []
+    bindings: list[SanitizerBinding] = []
     for node in graph.nodes():
         call_sites = getattr(node, "call_sites", ()) or ()
         if call_sites:
-            for cs in call_sites:
-                if cs.name in sanitizer_names:
-                    bindings.append(SanitizerBinding(
+            bindings.extend(SanitizerBinding(
                         node=node,
                         callable=cs.name,
                         input_symbols=cs.arg_names,
                         output_symbols=cs.assigned_names,
                         lineno=cs.lineno,
-                    ))
+                    ) for cs in call_sites if cs.name in sanitizer_names)
             continue
         # Legacy / call-graph fallback: matched names with empty
         # symbol layer. Phase 4 downgrades these to candidate_only.
         node_calls = set(_node_calls(node))
-        for matched_name in node_calls & sanitizer_names:
-            bindings.append(SanitizerBinding(
+        bindings.extend(SanitizerBinding(
                 node=node,
                 callable=matched_name,
                 input_symbols=frozenset(),
                 output_symbols=frozenset(),
                 lineno=getattr(node, "lineno", 0),
-            ))
+            ) for matched_name in node_calls & sanitizer_names)
     return frozenset(bindings)
 
 
 __all__ = [
     "SanitizerBinding",
-    "nodes_of",
-    "sink_classes_for_cwe",
-    "sanitizer_callables_for_cwe",
     "all_sanitizer_callables",
     "match_sanitizers_in_cfg",
+    "nodes_of",
+    "sanitizer_callables_for_cwe",
+    "sink_classes_for_cwe",
 ]

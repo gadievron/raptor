@@ -31,28 +31,30 @@ from __future__ import annotations
 import json as _json
 import logging
 import re
-from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from . import register
+from . import _safe_read, register
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 ECOSYSTEM = "PyPI"
 
 # section name → scope value
-_SECTIONS: Tuple[Tuple[str, str], ...] = (
+_SECTIONS: tuple[tuple[str, str], ...] = (
     ("default", "main"),
     ("develop", "dev"),
 )
 
 
-def parse(path: Path) -> List[Dependency]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.warning("sca.parsers.pipfile_lock: read failed for %s: %s", path, e)
+def parse(path: Path) -> list[Dependency]:
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already logged the underlying reason
+        # (oversize, unreadable, symlink escape, non-regular file).
         return []
 
     try:
@@ -65,7 +67,7 @@ def parse(path: Path) -> List[Dependency]:
     if not isinstance(data, dict):
         return []
 
-    deps: List[Dependency] = []
+    deps: list[Dependency] = []
     for section, scope in _SECTIONS:
         block = data.get(section)
         if not isinstance(block, dict):
@@ -83,12 +85,12 @@ def parse(path: Path) -> List[Dependency]:
 
 def _build_dep(
     name: str, entry: Any, scope: str, path: Path,
-) -> Optional[Dependency]:
+) -> Dependency | None:
     if not isinstance(name, str) or not isinstance(entry, dict):
         return None
 
     pin_style: PinStyle
-    version: Optional[str]
+    version: str | None
 
     if "git" in entry:
         # Resolved git source: use ref/branch/tag as the version handle.
@@ -123,7 +125,7 @@ def _build_dep(
     )
 
 
-def _strip_eq(value: Any) -> Optional[str]:
+def _strip_eq(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     v = value.strip()
@@ -136,14 +138,14 @@ def _normalise_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _build_purl(name: str, version: Optional[str]) -> str:
+def _build_purl(name: str, version: str | None) -> str:
     base = f"pkg:pypi/{_normalise_name(name)}"
     if version:
         return f"{base}@{version}"
     return base
 
 
-def _confidence(pin_style: PinStyle, version: Optional[str]) -> Confidence:
+def _confidence(pin_style: PinStyle, version: str | None) -> Confidence:
     if pin_style is PinStyle.GIT:
         return Confidence(
             "medium",

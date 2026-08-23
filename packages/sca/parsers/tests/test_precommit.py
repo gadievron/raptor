@@ -372,10 +372,10 @@ repos:
     assert addl[0].pin_style == PinStyle.EXACT
 
 
-def test_additional_dependencies_local_hook_skipped(tmp_path):
-    """``repo: local`` hooks shouldn't surface their additional_deps
-    — local hook shells out to a script with whatever's already
-    installed."""
+def test_additional_dependencies_local_hook_extracted(tmp_path):
+    """``repo: local`` hooks use additional_dependencies as their
+    only carrier for third-party packages — these must be surfaced
+    for CVE/OSV matching."""
     p = _write(tmp_path, """\
 repos:
   - repo: local
@@ -385,7 +385,11 @@ repos:
         additional_dependencies: ["foo==1.0"]
 """)
     deps = parse(p)
-    assert deps == []
+    addl = [d for d in deps if d.source_kind == "precommit_additional"]
+    assert len(addl) == 1
+    assert addl[0].name == "foo"
+    assert addl[0].version == "1.0"
+    assert addl[0].ecosystem == "PyPI"
 
 
 def test_pep508_extras_stripped(tmp_path):

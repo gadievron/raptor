@@ -25,23 +25,26 @@ Operator-facing flow:
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-import re
-from typing import List, Optional, Tuple
 
-from ..models import SupplyChainFinding, VulnFinding
 from ..parsers.inline_installs._arg_version_pins import (
-    _BUILTIN_ARG_MAP,
     _ARG_RE,
+    _BUILTIN_ARG_MAP,
 )
-from ..registries.npm import NpmClient
-from ..registries.pypi import PyPIClient
 from ..rewriters import RewriteEdit, RewriteResult, rewrite
 from .evaluator import evaluate_bump_supply_chain
 from .upstream_map import UpstreamSource, lookup_upstream
 from .vuln_delta import evaluate_bump_vulns
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..registries.pypi import PyPIClient
+    from ..registries.npm import NpmClient
+    from ..models import SupplyChainFinding, VulnFinding
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +81,11 @@ class BumpCandidate:
     file: Path
     current_version: str
     target_version: str
-    upstream: Optional[UpstreamSource] = None
+    upstream: UpstreamSource | None = None
     # Kind-specific metadata (e.g. SHA pair for SHA-pinned GHA
     # uses lines). The apply path forwards this to
     # ``RewriteEdit.extra`` so rewriters can read it.
-    extra: Optional[dict] = None
+    extra: dict | None = None
 
     @property
     def arg_name(self) -> str:
@@ -100,10 +103,10 @@ class BumpResult:
     candidate: BumpCandidate
     verdict: int
     verdict_label: str
-    bump_supply_chain_findings: List[SupplyChainFinding]
-    bump_vuln_findings: List[VulnFinding] = field(default_factory=list)
-    error: Optional[str] = None
-    rewrite_result: Optional[RewriteResult] = None
+    bump_supply_chain_findings: list[SupplyChainFinding]
+    bump_vuln_findings: list[VulnFinding] = field(default_factory=list)
+    error: str | None = None
+    rewrite_result: RewriteResult | None = None
 
 
 @dataclass
@@ -111,30 +114,75 @@ class BumpReport:
     """Aggregate report from a ``run_bump`` call."""
 
     target: Path
-    candidates: List[BumpCandidate]
-    results: List[BumpResult]
-    skipped: List[Tuple[str, Path, str]] = field(default_factory=list)
+    candidates: list[BumpCandidate]
+    results: list[BumpResult]
+    skipped: list[tuple[str, Path, str]] = field(default_factory=list)
     # ``(arg_name, file, reason)`` for ARGs we couldn't bump
     # (no upstream mapping, current version not parseable, etc.)
+    excluded_by_pattern: list[Path] = field(default_factory=list)
+    # Distinct files whose bump surfaces were excluded from the
+    # write path by the operator's ``--exclude`` globs (typical use:
+    # test-fixture trees whose deliberately-old pins are test
+    # assertions). Reported, never silently truncated.
+
+
+def _resolve_repo_trust() -> bool:
+    """Effective repo-trust for a bump run when the caller didn't
+    decide: the process-wide ``cc_trust`` override (set by the bump
+    CLI's ``--trust-repo``) as the per-run positive flag, then the
+    active project's ``config`` trust marker, else off. There is no
+    negative flag on this surface. A banner line is printed when the
+    marker (not the flag) decides — trust state must never be
+    invisible."""
+    overridden = False
+    try:
+        from core.security.cc_trust import is_trust_overridden
+        overridden = is_trust_overridden()
+    except ImportError:
+        pass
+    try:
+        from core.project.trust import (
+            active_project_trust,
+            emit_trust_banner,
+            resolve_trust_flag,
+        )
+    except ImportError:
+        return overridden
+    markers, _name = active_project_trust()
+    marker_set = "config" in markers
+    if marker_set and not overridden:
+        emit_trust_banner(["config"])
+    return resolve_trust_flag(False, overridden, marker_set)
 
 
 def run_bump(
     target: Path,
     *,
     http,
-    pypi_client: Optional[PyPIClient] = None,
-    npm_client: Optional[NpmClient] = None,
+    pypi_client: PyPIClient | None = None,
+    npm_client: NpmClient | None = None,
     osv_client=None,
     kev_client=None,
     epss_client=None,
     apply: bool = False,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     cache=None,
-    github_token: Optional[str] = None,
+    github_token: str | None = None,
     policy=None,
+    trust_repo: bool | None = None,
+    exclude: Sequence[str] | None = None,
 ) -> BumpReport:
     """Walk Dockerfiles under ``target``, propose ARG bumps,
     compute verdicts, optionally apply.
+
+    ``exclude`` — operator ``--exclude`` globs (see the ``_exclude``
+    module for matching semantics). Surfaces in matching files are
+    dropped from the candidate set, so ``--apply`` never edits them
+    and no verdict traffic is spent on them. The tool applies no
+    default exclusion — policy lives with the caller (typical use:
+    CI jobs protecting test-fixture trees whose deliberately-old
+    pins are test assertions). Excluded files are surfaced in
+    ``BumpReport.excluded_by_pattern``, never silently dropped.
 
     ``apply=False`` is dry-run: candidates + verdicts only, no
     file writes. ``apply=True`` rewrites in place via the
@@ -143,23 +191,33 @@ def run_bump(
     but don't auto-apply, per the project's "suggest-only"
     posture documented in
     project_sca_dependabot_plus_plus.md).
+
+    ``trust_repo`` gates the operator-only keys in the repo's
+    ``.raptor-sca-bump.yml`` (see ``policy.load_policy``). ``None``
+    (the default) resolves it from the process-wide ``cc_trust``
+    override (set by ``--trust-repo``) and the active project's
+    ``config`` trust marker.
     """
     now = now or datetime.now(timezone.utc)
     # Load operator policy from .raptor-sca-bump.yml (or use
     # default). The walker emits all candidates; policy-skips
     # are applied AFTER enumeration so the report can still
     # surface "N candidates skipped by policy" for audit.
-    from .policy import load_policy
-    policy = policy or load_policy(target)
-    candidates, skipped = _enumerate_candidates(
+    if policy is None:
+        from .policy import load_policy
+        if trust_repo is None:
+            trust_repo = _resolve_repo_trust()
+        policy = load_policy(target, trust_repo=trust_repo)
+    candidates, skipped, excluded_by_pattern = _enumerate_candidates(
         target, http=http, cache=cache, github_token=github_token,
         pypi_client=pypi_client,
+        exclude=exclude,
     )
     # Apply policy ``skip:`` rules — these move candidates from
     # the candidates list into the skipped list with the
     # operator's stated reason.
     if policy.skip:
-        kept: List[BumpCandidate] = []
+        kept: list[BumpCandidate] = []
         for cand in candidates:
             # Target-relative POSIX path for ``skip: - path:`` rules. The
             # walker enumerates absolute paths under the resolved target;
@@ -208,7 +266,7 @@ def run_bump(
                 e,
             )
 
-    results: List[BumpResult] = []
+    results: list[BumpResult] = []
     for cand in candidates:
         result = _evaluate_one(
             cand,
@@ -281,6 +339,7 @@ def run_bump(
         candidates=candidates,
         results=results,
         skipped=skipped,
+        excluded_by_pattern=excluded_by_pattern,
     )
 
 
@@ -289,24 +348,40 @@ def _enumerate_candidates(
     *,
     http,
     cache,
-    github_token: Optional[str],
-    pypi_client: Optional[PyPIClient] = None,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+    github_token: str | None,
+    pypi_client: PyPIClient | None = None,
+    exclude: Sequence[str] | None = None,
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]], list[Path]]:
     """Find every (Dockerfile, ARG) pair under ``target`` with a
     built-in upstream-source mapping, query the upstream, and
-    build a candidate list."""
+    build a candidate list.
+
+    Returns ``(candidates, skipped, excluded_by_pattern)`` —
+    ``excluded_by_pattern`` is the distinct files dropped by the
+    operator's ``--exclude`` globs. File-list surfaces (Dockerfiles,
+    GHA workflows) are filtered BEFORE any upstream lookup; the
+    manifest-walker surfaces are filtered at the candidate choke
+    point below, which also acts as the safety net for every
+    future walker."""
     from core.upstream_latest.github_releases import (
         NoStableVersionsFound,
         UpstreamLookupError,
         latest_release,
         latest_tag,
     )
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    from .._exclude import matches_exclude, partition_excluded
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
+    excluded_files: dict[Path, None] = {}   # ordered de-dupe
     target = target.resolve()
     if not target.exists():
-        return candidates, skipped
+        return candidates, skipped, []
     dockerfiles = _find_dockerfiles(target)
+    if exclude:
+        dockerfiles, dropped = partition_excluded(
+            dockerfiles, exclude, root=target,
+        )
+        excluded_files.update((p, None) for p in dropped)
     # Cache upstream lookups per (kind, coordinate) — multiple
     # Dockerfiles may pin the same tool.
     latest_cache: dict = {}
@@ -445,6 +520,11 @@ def _enumerate_candidates(
     # pinned support only; SHA-pinned refs (raptor's convention)
     # need a tag→SHA resolver and ship in 3.b.2.
     workflow_files = _find_gha_workflows(target)
+    if exclude:
+        workflow_files, dropped = partition_excluded(
+            workflow_files, exclude, root=target,
+        )
+        excluded_files.update((p, None) for p in dropped)
     for wf in workflow_files:
         try:
             text = wf.read_text(encoding="utf-8")
@@ -458,7 +538,21 @@ def _enumerate_candidates(
         )
         candidates.extend(gha_candidates)
         skipped.extend(gha_skipped)
-    return candidates, skipped
+
+    # Candidate choke point for the --exclude globs: the manifest-
+    # based walkers above (yaml image / Helm / submodule) enumerate
+    # their own files, so their candidates are filtered here — one
+    # place every current and future surface flows through before
+    # verdict evaluation and ``--apply``.
+    if exclude:
+        kept: list[BumpCandidate] = []
+        for cand in candidates:
+            if matches_exclude(cand.file, exclude, root=target):
+                excluded_files.setdefault(cand.file, None)
+                continue
+            kept.append(cand)
+        candidates = kept
+    return candidates, skipped, list(excluded_files)
 
 
 def _enumerate_inline_install_candidates(
@@ -466,7 +560,7 @@ def _enumerate_inline_install_candidates(
     dockerfile: Path,
     pypi_client: PyPIClient,
     inline_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``RUN pip install <name>==<version>`` pins in a
     Dockerfile and emit candidates whose PyPI-latest stable
     version is higher than the pinned one.
@@ -493,12 +587,13 @@ def _enumerate_inline_install_candidates(
       * Upstream lookup failed (network / 404)
     """
     from core.upstream_latest._version_filter import (
-        highest_stable, parse_stable,
+        highest_stable,
+        parse_stable,
     )
     from packages.sca.parsers.inline_installs import parse_dockerfile
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
 
     try:
         deps = parse_dockerfile(dockerfile)
@@ -567,7 +662,7 @@ def _enumerate_from_image_candidates(
     http,
     cache,
     from_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``FROM`` instructions in ``text``; emit candidates
     for image refs with bumpable stable-semver tags.
 
@@ -593,11 +688,11 @@ def _enumerate_from_image_candidates(
     )
     from core.upstream_latest.oci_tags import latest_tag as oci_latest_tag
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
     try:
         instructions = parse_dockerfile(text)
-    except Exception:                # noqa: BLE001 — parsers must not crash
+    except Exception:
         logger.warning("sca.bump: Dockerfile parse failed for %s",
                         dockerfile, exc_info=True)
         return candidates, skipped
@@ -683,8 +778,8 @@ def _enumerate_from_image_candidates(
 def _evaluate_one(
     cand: BumpCandidate,
     *,
-    pypi_client: Optional[PyPIClient],
-    npm_client: Optional[NpmClient],
+    pypi_client: PyPIClient | None,
+    npm_client: NpmClient | None,
     osv_client=None,
     kev_client=None,
     epss_client=None,
@@ -715,8 +810,8 @@ def _evaluate_one(
         eco_map = _BUILTIN_ARG_MAP.get(cand.locator)
     elif cand.kind == "inline_install_pip":
         eco_map = ("PyPI", cand.locator)
-    findings: List[SupplyChainFinding] = []
-    new_vulns: List = []
+    findings: list[SupplyChainFinding] = []
+    new_vulns: list = []
     if eco_map is not None:
         ecosystem, package_name = eco_map
         try:
@@ -792,7 +887,7 @@ def _evaluate_one(
 
 def _binary_capability_delta_for_candidate(
     cand: BumpCandidate, *, oci_client, http=None,
-) -> Optional[SupplyChainFinding]:
+) -> SupplyChainFinding | None:
     """Pull current + target main binaries from the candidate's
     image refs, run capability diff. Returns ``None`` on any
     routine failure (image unresolvable, binary not extractable,
@@ -862,7 +957,7 @@ def _binary_capability_delta_for_candidate(
 
 def _resolve_gha_image_refs(
     cand: BumpCandidate, *, http,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Resolve current + target image refs for a ``gha_uses``
     candidate. Returns (None, None) for non-Docker actions or
     fetch failures."""
@@ -897,7 +992,7 @@ def _enumerate_yaml_image_candidates(
     http,
     cache,
     from_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk YAML ``image:`` refs in compose / gitlab-ci / k8s
     files via the existing SCA parsers. Each parser already
     extracts OCI ``Dependency`` rows with ``ecosystem="OCI"``;
@@ -908,8 +1003,6 @@ def _enumerate_yaml_image_candidates(
     (immutable), skip non-stable-semver tags (variants /
     aliases), skip at-latest.
     """
-    from ..discovery import find_manifests
-    from ..parsers import parse_manifest
     from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
         NoStableVersionsFound,
@@ -917,13 +1010,20 @@ def _enumerate_yaml_image_candidates(
     )
     from core.upstream_latest.oci_tags import latest_tag as oci_latest_tag
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    from ..discovery import find_manifests
+    from ..parsers import parse_manifest
+
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
     # Reuse the parser dispatch to find OCI deps in YAML files.
     # ``find_manifests`` walks the target; ``parse_manifest``
     # dispatches per file shape.
     try:
-        manifests = find_manifests(target)
+        # Fully inclusive walk: write-path policy (which trees not to
+        # edit) is the operator's ``--exclude`` globs, applied at the
+        # candidate choke point in ``_enumerate_candidates`` — not the
+        # scan walker's test-path default.
+        manifests = find_manifests(target, include_test_paths=True)
     except Exception:                       # noqa: BLE001
         return candidates, skipped
     for manifest in manifests:
@@ -942,7 +1042,9 @@ def _enumerate_yaml_image_candidates(
             continue
         try:
             deps = parse_manifest(manifest)
-        except Exception:                # noqa: BLE001
+        except Exception as e:           # noqa: BLE001
+            logger.debug("bump: parse failed for %s: %s",
+                         manifest.path, e)
             continue
         for dep in deps:
             if dep.ecosystem != "OCI":
@@ -963,7 +1065,9 @@ def _enumerate_yaml_image_candidates(
             from core.oci.image_ref import parse_image_ref
             try:
                 ref = parse_image_ref(f"{dep.name}:{current_tag}")
-            except Exception:        # noqa: BLE001
+            except Exception as e:   # noqa: BLE001
+                logger.debug("bump: unparseable image ref %s:%s: %s",
+                             dep.name, current_tag, e)
                 continue
             locator = f"{ref.registry}/{ref.repository}"
             cache_key = ("oci_tag", locator)
@@ -1001,7 +1105,7 @@ def _enumerate_helm_chart_candidates(
     http,
     cache,
     helm_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``Chart.yaml`` dependencies via the existing Helm
     parser. Each dep carries a Helm repo URL in
     ``source_extra['repository']``; we query that repo's
@@ -1018,18 +1122,24 @@ def _enumerate_helm_chart_candidates(
       * Helm index fetch failures
       * Chart name not present in the repo's index
     """
-    from ..discovery import find_manifests
-    from ..parsers import parse_manifest
     from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
-        NoStableVersionsFound, UpstreamLookupError,
+        NoStableVersionsFound,
+        UpstreamLookupError,
     )
     from core.upstream_latest.helm_index import latest_chart_version
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    from ..discovery import find_manifests
+    from ..parsers import parse_manifest
+
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
     try:
-        manifests = find_manifests(target)
+        # Fully inclusive walk: write-path policy (which trees not to
+        # edit) is the operator's ``--exclude`` globs, applied at the
+        # candidate choke point in ``_enumerate_candidates`` — not the
+        # scan walker's test-path default.
+        manifests = find_manifests(target, include_test_paths=True)
     except Exception:                       # noqa: BLE001
         return candidates, skipped
     for manifest in manifests:
@@ -1037,7 +1147,9 @@ def _enumerate_helm_chart_candidates(
             continue
         try:
             deps = parse_manifest(manifest)
-        except Exception:                  # noqa: BLE001
+        except Exception as e:             # noqa: BLE001
+            logger.debug("bump: parse failed for %s: %s",
+                         manifest.path, e)
             continue
         for dep in deps:
             if dep.ecosystem != "Helm":
@@ -1086,9 +1198,9 @@ def _enumerate_git_submodule_candidates(
     *,
     http,
     cache,
-    github_token: Optional[str],
+    github_token: str | None,
     sub_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``.gitmodules`` submodules via the existing parser.
     For each GitHub-shaped submodule with a recorded current SHA,
     look up upstream-latest tag and resolve to a target SHA.
@@ -1099,17 +1211,25 @@ def _enumerate_git_submodule_candidates(
     and the manual ``git submodule update --remote --
     <path>`` instruction.
     """
-    from ..discovery import find_manifests
-    from ..parsers import parse_manifest
     from core.upstream_latest.github_releases import (
-        NoStableVersionsFound, UpstreamLookupError,
-        latest_release, latest_tag, resolve_tag_to_sha,
+        NoStableVersionsFound,
+        UpstreamLookupError,
+        latest_release,
+        latest_tag,
+        resolve_tag_to_sha,
     )
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    from ..discovery import find_manifests
+    from ..parsers import parse_manifest
+
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
     try:
-        manifests = find_manifests(target)
+        # Fully inclusive walk: write-path policy (which trees not to
+        # edit) is the operator's ``--exclude`` globs, applied at the
+        # candidate choke point in ``_enumerate_candidates`` — not the
+        # scan walker's test-path default.
+        manifests = find_manifests(target, include_test_paths=True)
     except Exception:                       # noqa: BLE001
         return candidates, skipped
     for manifest in manifests:
@@ -1117,7 +1237,9 @@ def _enumerate_git_submodule_candidates(
             continue
         try:
             deps = parse_manifest(manifest)
-        except Exception:                  # noqa: BLE001
+        except Exception as e:             # noqa: BLE001
+            logger.debug("bump: parse failed for %s: %s",
+                         manifest.path, e)
             continue
         for dep in deps:
             # We only handle GitHub-hosted submodules in Phase 3.e
@@ -1131,7 +1253,7 @@ def _enumerate_git_submodule_candidates(
                 # without a current anchor.
                 continue
             repo = dep.name      # ``owner/repo`` for GitHub URLs
-            cache_key = ("gha_uses", repo)
+            cache_key = ("git_submodule", repo)
             if cache_key in sub_cache:
                 target_tag = sub_cache[cache_key]
             else:
@@ -1222,9 +1344,9 @@ def _enumerate_gha_uses_candidates(
     workflow: Path,
     http,
     cache,
-    github_token: Optional[str],
+    github_token: str | None,
     uses_cache: dict,
-) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+) -> tuple[list[BumpCandidate], list[tuple[str, Path, str]]]:
     """Walk ``uses:`` lines in a GHA workflow file; emit
     candidates for tag-pinned refs whose upstream has a newer
     stable tag.
@@ -1246,8 +1368,8 @@ def _enumerate_gha_uses_candidates(
         resolve_tag_to_sha,
     )
 
-    candidates: List[BumpCandidate] = []
-    skipped: List[Tuple[str, Path, str]] = []
+    candidates: list[BumpCandidate] = []
+    skipped: list[tuple[str, Path, str]] = []
     for line in text.splitlines():
         # Phase 3.b.2: SHA-pinned with ``# was vX`` comment.
         # Detect first; if matched, propose new tag + new SHA.
@@ -1367,11 +1489,11 @@ def _lookup_latest_release_or_tag(
     *,
     http,
     cache,
-    github_token: Optional[str],
+    github_token: str | None,
     uses_cache: dict,
-    skipped: List[Tuple[str, Path, str]],
+    skipped: list[tuple[str, Path, str]],
     workflow: Path,
-) -> Optional[str]:
+) -> str | None:
     """Look up the latest stable upstream version for a GitHub
     repo. Tries ``/releases/latest`` first (proper GitHub
     Releases); falls back to ``/tags`` (projects that tag without
@@ -1391,8 +1513,10 @@ def _lookup_latest_release_or_tag(
     """
     from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
-        NoStableVersionsFound, UpstreamLookupError,
-        latest_release, latest_tag,
+        NoStableVersionsFound,
+        UpstreamLookupError,
+        latest_release,
+        latest_tag,
     )
     cache_key = ("gha_uses", repo)
     if cache_key in uses_cache:
@@ -1532,29 +1656,27 @@ def _same_major_pin(current: str, target: str) -> bool:
     return cur[0] == tgt[0]
 
 
-def _find_gha_workflows(target: Path) -> List[Path]:
-    """Walk ``target/.github/workflows/`` for YAML files."""
-    workflows_dir = target / ".github" / "workflows"
-    if not workflows_dir.is_dir():
-        return []
-    out: List[Path] = []
-    for path in workflows_dir.iterdir():
-        if path.is_file() and path.suffix in (".yml", ".yaml"):
-            out.append(path)
+def _find_gha_workflows(target: Path) -> list[Path]:
+    """Walk ``target`` for GitHub Actions workflow YAML files."""
+    out: list[Path] = []
+    for gh_dir in target.rglob(".github"):
+        if not gh_dir.is_dir():
+            continue
+        wf_dir = gh_dir / "workflows"
+        if not wf_dir.is_dir():
+            continue
+        out.extend(path for path in wf_dir.iterdir() if path.is_file() and path.suffix in (".yml", ".yaml"))
     return sorted(out)
 
 
-def _find_dockerfiles(target: Path) -> List[Path]:
+def _find_dockerfiles(target: Path) -> list[Path]:
     """Walk ``target`` for files the Dockerfile-ARG rewriter
     knows how to handle. Mirrors the inline-installs parser's
     discovery predicate so the bumper sees every ARG-bearing
     file that the rest of SCA does."""
     if target.is_file():
         return [target] if _is_dockerfile(target) else []
-    out: List[Path] = []
-    for path in target.rglob("*"):
-        if path.is_file() and _is_dockerfile(path):
-            out.append(path)
+    out: list[Path] = [path for path in target.rglob("*") if path.is_file() and _is_dockerfile(path)]
     return sorted(out)
 
 
@@ -1564,9 +1686,7 @@ def _is_dockerfile(path: Path) -> bool:
         return True
     if name.startswith("Dockerfile.") or name.endswith(".Dockerfile"):
         return True
-    if path.suffix == ".dockerfile":
-        return True
-    return False
+    return path.suffix == ".dockerfile"
 
 
 def render_report(report: BumpReport) -> str:
@@ -1576,8 +1696,32 @@ def render_report(report: BumpReport) -> str:
     it to stdout. PR-comment rendering is a separate codepath
     (the existing ``diff --pr-comment`` machinery, when wired in
     a future commit)."""
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(f"raptor-sca bump: target {report.target}")
+    if report.excluded_by_pattern:
+        n = len(report.excluded_by_pattern)
+        lines.append(
+            f"  {n} surface(s) excluded from write by --exclude patterns"
+        )
+    else:
+        # Informational guardrail (NOT a skip): fixture files in test
+        # trees often pin deliberately-old versions as test assertions.
+        # When no --exclude policy was given and edits land in such
+        # paths, say so once.
+        from .._test_paths import is_test_resident
+        root = report.target.resolve(strict=False)
+        flagged = {
+            r.candidate.file for r in report.results
+            if r.rewrite_result is not None and r.rewrite_result.applied
+            and is_test_resident(r.candidate.file, root)
+        }
+        if flagged:
+            lines.append(
+                f"  note: {len(flagged)} edited file(s) under "
+                f"test/fixture paths (tests/, testdata/, fixtures/, "
+                f"...); if those pins are test assertions, protect "
+                f"them with --exclude"
+            )
     if not report.candidates and not report.skipped:
         lines.append("  no bump candidates found")
         return "\n".join(lines) + "\n"
@@ -1594,8 +1738,8 @@ def render_report(report: BumpReport) -> str:
         # into one row with a file-count suffix. Pre-fix on
         # raptor: 8 CODEQL_VERSION rows + 3 github/codeql-action
         # rows (one per file each); operators read it as noise.
-        groups: "dict[tuple, List[BumpResult]]" = {}
-        order: List[tuple] = []
+        groups: dict[tuple, list[BumpResult]] = {}
+        order: list[tuple] = []
         for r in report.results:
             key = (
                 r.candidate.kind, r.candidate.locator,
@@ -1643,8 +1787,7 @@ def render_report(report: BumpReport) -> str:
             # Surface the supply-chain findings inline so operators
             # know WHY a verdict isn't Clean. (One copy per group;
             # identical proposals would emit identical findings.)
-            for sf in head.bump_supply_chain_findings:
-                lines.append(f"      [{sf.severity}] {sf.kind}: {sf.detail}")
+            lines.extend(f"      [{sf.severity}] {sf.kind}: {sf.detail}" for sf in head.bump_supply_chain_findings)
             # Surface newly-introduced CVEs (OSV vuln-delta) —
             # the strongest "do not auto-bump" signal we have.
             for vf in head.bump_vuln_findings:

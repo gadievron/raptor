@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-
 # packages/zkpox/tests/test_libexec_raptor_zkpox.py → parents[3] = repo root
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
@@ -42,7 +41,7 @@ def _run(args, env=None):
     return subprocess.run(
         [str(SCRIPT), *args],
         env=env or _trusted_env(),
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, check=False,
     )
 
 
@@ -103,6 +102,45 @@ def test_reproduce_incomplete_manifest(tmp_path):
     assert "Traceback" not in r.stderr
 
 
+def test_reproduce_witness_hash_mismatch(tmp_path):
+    """witness.bin doesn't hash to the manifest's witness_hash →
+    rc=2, no reproduction attempted."""
+    from core.witness.types import compute_bytes_hash
+    d = tmp_path / "b"
+    d.mkdir()
+    (d / "manifest.json").write_text(json.dumps({
+        "witness_hash": compute_bytes_hash(b"original witness"),
+        "witness_len": len(b"original witness"),
+        "source": "fuzz",
+        "observed_outcome": "exit_signal",
+    }))
+    (d / "witness.bin").write_bytes(b"tampered witness")
+    r = _run(["reproduce", str(d)])
+    assert r.returncode == 2
+    assert "hash mismatch" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
+def test_reproduce_witness_len_mismatch(tmp_path):
+    """Matching hash but wrong witness_len (inconsistent manifest) →
+    rc=2. Belt-and-braces alongside the hash check."""
+    from core.witness.types import compute_bytes_hash
+    data = b"witness bytes"
+    d = tmp_path / "b"
+    d.mkdir()
+    (d / "manifest.json").write_text(json.dumps({
+        "witness_hash": compute_bytes_hash(data),
+        "witness_len": len(data) + 1,
+        "source": "fuzz",
+        "observed_outcome": "exit_signal",
+    }))
+    (d / "witness.bin").write_bytes(data)
+    r = _run(["reproduce", str(d)])
+    assert r.returncode == 2
+    assert "length mismatch" in r.stderr
+    assert "Traceback" not in r.stderr
+
+
 # ----------------------------------------------------------------------
 # bundle error paths
 # ----------------------------------------------------------------------
@@ -119,7 +157,10 @@ def test_bundle_witness_not_in_store(tmp_path):
     """Store exists but the hash isn't present."""
     from core.witness.store import WitnessStore
     from core.witness.types import (
-        Witness, WitnessOutcome, WitnessSource, compute_bytes_hash,
+        Witness,
+        WitnessOutcome,
+        WitnessSource,
+        compute_bytes_hash,
     )
     store = WitnessStore(tmp_path / "w")
     d = b"present"
@@ -153,7 +194,10 @@ def test_bundle_then_reproduce_happy_path(tmp_path):
     from core.hash import sha256_file
     from core.witness.store import WitnessStore
     from core.witness.types import (
-        Witness, WitnessOutcome, WitnessSource, compute_bytes_hash,
+        Witness,
+        WitnessOutcome,
+        WitnessSource,
+        compute_bytes_hash,
     )
 
     cc = shutil.which("cc") or shutil.which("gcc")

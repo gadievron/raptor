@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Dict, FrozenSet, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from ..models import Confidence, Dependency
 
@@ -115,7 +115,7 @@ _GENERIC_WORDS = frozenset({
 # suffix (``-py`` to an npm package, ``-js`` to a PyPI package).
 # Weaker signal than generic words — many legitimate packages
 # use language suffixes correctly (``boto3-py-typed`` is real).
-_LANGUAGE_SUFFIXES_BY_ECO: Dict[str, FrozenSet[str]] = {
+_LANGUAGE_SUFFIXES_BY_ECO: dict[str, frozenset[str]] = {
     "npm": frozenset({"py", "python", "rust", "go", "rb", "ruby"}),
     "PyPI": frozenset({"js", "ts", "node", "rust", "go", "rb"}),
     "Cargo": frozenset({"js", "ts", "py", "python", "rb"}),
@@ -173,13 +173,13 @@ class SlopsquatFinding:
 
     dependency: Dependency
     score: float                       # 0.0–1.0, sum of reason weights
-    reasons: Tuple[str, ...]           # reason tags
-    suspected_root: Optional[str]      # nearest popular package
+    reasons: tuple[str, ...]           # reason tags
+    suspected_root: str | None      # nearest popular package
     severity: str                      # "info" / "low" / "medium" / "high"
     confidence: Confidence
 
 
-def scan_deps(deps: Iterable[Dependency]) -> List[SlopsquatFinding]:
+def scan_deps(deps: Iterable[Dependency]) -> list[SlopsquatFinding]:
     """Run the heuristic on every direct dep.
 
     Like the typosquat detector, the verdict is a pure function of
@@ -188,8 +188,8 @@ def scan_deps(deps: Iterable[Dependency]) -> List[SlopsquatFinding]:
     repeats a dep across N manifests pays one ``check_dep`` instead
     of N. Output is unchanged (each dep keeps its own ``declared_in``
     in the downstream finding id)."""
-    out: List[SlopsquatFinding] = []
-    memo: Dict[Tuple[str, str], Optional[SlopsquatFinding]] = {}
+    out: list[SlopsquatFinding] = []
+    memo: dict[tuple[str, str], SlopsquatFinding | None] = {}
     for d in deps:
         if not d.direct:
             continue
@@ -206,7 +206,7 @@ def scan_deps(deps: Iterable[Dependency]) -> List[SlopsquatFinding]:
     return out
 
 
-def check_dep(dep: Dependency) -> Optional[SlopsquatFinding]:
+def check_dep(dep: Dependency) -> SlopsquatFinding | None:
     """Run the slopsquat heuristic against a single dependency.
 
     Returns the :class:`SlopsquatFinding` when at least one reason
@@ -228,7 +228,7 @@ def check_dep(dep: Dependency) -> Optional[SlopsquatFinding]:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
+def _check_one(dep: Dependency) -> SlopsquatFinding | None:
     name = dep.name.lower()
     eco = dep.ecosystem
     popular_list = _load_popular(eco)
@@ -239,8 +239,8 @@ def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
     if name in popular:
         return None
 
-    reasons: List[str] = []
-    suspected_root: Optional[str] = None
+    reasons: list[str] = []
+    suspected_root: str | None = None
 
     # --- 1. Lookalike-character collapse against popular names.
     collapsed = _collapse_lookalikes(name)
@@ -258,11 +258,10 @@ def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
 
     # --- 2. Generic suffix on a popular prefix.
     prefix, suffix = _split_suffix(name)
-    if prefix and suffix:
-        if prefix in popular and suffix in _GENERIC_WORDS:
-            reasons.append("popular_prefix_generic_suffix")
-            if suspected_root is None:
-                suspected_root = prefix
+    if prefix and suffix and prefix in popular and suffix in _GENERIC_WORDS:
+        reasons.append("popular_prefix_generic_suffix")
+        if suspected_root is None:
+            suspected_root = prefix
 
     # --- 3. Language-suffix on a popular prefix.
     if prefix and suffix:
@@ -300,16 +299,16 @@ def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
 
 # Per-ecosystem ``{collapsed_form: first_popular_name}`` index, built
 # lazily from the popular list. Re-used across every dep in a scan.
-_COLLAPSED_INDEX: Dict[str, Dict[str, str]] = {}
+_COLLAPSED_INDEX: dict[str, dict[str, str]] = {}
 
 
-def _collapsed_index(ecosystem: str) -> Dict[str, str]:
+def _collapsed_index(ecosystem: str) -> dict[str, str]:
     """Map each popular name's lookalike-collapsed form to the first
     popular name that produces it (list order = first-hit-wins)."""
     cached = _COLLAPSED_INDEX.get(ecosystem)
     if cached is not None:
         return cached
-    index: Dict[str, str] = {}
+    index: dict[str, str] = {}
     for pop in _load_popular(ecosystem):
         index.setdefault(_collapse_lookalikes(pop), pop)
     _COLLAPSED_INDEX[ecosystem] = index
@@ -332,7 +331,7 @@ def _collapse_lookalikes(s: str) -> str:
     return s.translate(_LOOKALIKE_TABLE)
 
 
-def _split_suffix(name: str) -> Tuple[Optional[str], Optional[str]]:
+def _split_suffix(name: str) -> tuple[str | None, str | None]:
     """Split ``<prefix>-<suffix>`` or ``<prefix>_<suffix>``.
 
     Splits on the LAST separator so multi-word prefixes stay
@@ -355,7 +354,7 @@ def _split_suffix(name: str) -> Tuple[Optional[str], Optional[str]]:
     return work[:sep_idx], work[sep_idx + 1:]
 
 
-def _severity(score: float) -> Optional[str]:
+def _severity(score: float) -> str | None:
     """Map score to severity. Below ``_INFO_THRESHOLD`` produces
     no finding (the untrusted-scope-alone case)."""
     if score >= 0.7:
@@ -367,7 +366,7 @@ def _severity(score: float) -> Optional[str]:
     return None
 
 
-def _confidence(reasons: List[str], score: float) -> Confidence:
+def _confidence(reasons: list[str], score: float) -> Confidence:
     """Confidence reflects the strength of the heuristic match, not
     the certainty that the dep is malicious — even a high-score
     finding requires registry metadata to ROUTE to actionable."""

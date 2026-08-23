@@ -280,7 +280,7 @@ def _build(tmp_path, **kw):
 
 
 def _verdict(inv, name):
-    from core.inventory.reach_audit import classify_reachability
+    from core.analysis.reach_audit import classify_reachability
     for f in inv["files"]:
         mod = ".".join(f["path"].rsplit(".", 1)[0].split("/"))
         for it in f["items"]:

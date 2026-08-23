@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: '3.12'
+  PYTHON_VERSION: '3.14'
   VENV_PATH: .venv
   # CI-only hang net: dump every worker's Python stack if any single
   # test runs >120s, then let it continue (the dump is the signal, not
@@ -44,6 +44,10 @@ env:
   # nightly.yml — its `-m "slow or integration"` tests are legitimately
   # slow. A genuinely-heavy new test should be marked @pytest.mark.slow.
   RAPTOR_MAX_TEST_SECONDS: "10"
+  # Randomise test execution order per CI run so order-dependent
+  # failures surface early. The run_id is numeric and unique, so
+  # each run shuffles differently but is reproducible from the ID.
+  RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
   # Opt the runner into Node.js 24 for JavaScript actions.
   # GitHub deprecated Node.js 20 on 2025-09-19; runners enforce
   # Node 24 by default from 2026-06-02 and remove Node 20 on
@@ -98,6 +102,8 @@ jobs:
           # an authoritative pass.
           if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
              && "$EVENT" != "merge_group" ]]; then
+            # 1. Exact-SHA match — covers fast-forward merges and
+            #    explicit re-runs where the SHA is identical.
             dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
                     -f "head_sha=${SHA}" -f "status=success" \
                     --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
@@ -106,33 +112,69 @@ jobs:
               should_skip=true
               echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
             fi
+            # 2. Squash-merge fallback — the push-to-main SHA is brand
+            #    new, but GitHub links it to the source PR. Look up the
+            #    PR's head SHA and check whether *that* already passed.
+            if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
+              pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+                          --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)
+              if [[ -n "${pr_head:-}" ]]; then
+                dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                        -f "head_sha=${pr_head}" -f "status=success" \
+                        --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                      | head -n1 || true)
+                if [[ -n "${dup:-}" ]]; then
+                  should_skip=true
+                  echo "Skipping: source PR head ${pr_head} already passed in run ${dup}"
+                fi
+              fi
+            fi
           fi
           echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
-  # Path-filter equivalent of dorny/paths-filter, implemented with the
-  # GitHub API for changed-file enumeration and a small in-tree Python
-  # script (``.github/scripts/compute_filters.py``) for glob matching.
-  # The script's FILTERS dict is the single source of truth, also
-  # imported by ``.github/tests/test_filter_coverage.py``.
+  # Changed-file enumeration via GitHub API, then import-graph-based
+  # test dispatch via test_scope.py.  CodeQL per-language filters
+  # (codeql_python, codeql_cpp, codeql_actions) live in codeql.yml's
+  # own changes job — this job handles test tiers only.
+  #
+  # The scope step always runs (even on force_full / schedule /
+  # merge_group) so that downstream jobs receive file lists and
+  # matrices.  Without --changed-files, test_scope.py falls back to
+  # full dispatch internally — every gate is set to true and every
+  # file list is populated from disk.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
-      python: ${{ steps.filter.outputs.python }}
-      sandbox: ${{ steps.filter.outputs.sandbox }}
-      exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
-      prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
-      ci_lint: ${{ steps.filter.outputs.ci_lint }}
-      codeql: ${{ steps.filter.outputs.codeql }}
-      llm_analysis: ${{ steps.filter.outputs.llm_analysis }}
-      cve_diff: ${{ steps.filter.outputs.cve_diff }}
-      fuzzing: ${{ steps.filter.outputs.fuzzing }}
-      sage: ${{ steps.filter.outputs.sage }}
-      orchestration: ${{ steps.filter.outputs.orchestration }}
-      sca: ${{ steps.filter.outputs.sca }}
-      force_full: ${{ steps.force.outputs.force_full }}
+      # Per-tier gates (true/false).
+      python: ${{ steps.scope.outputs.python }}
+      sandbox: ${{ steps.scope.outputs.sandbox }}
+      exploit_feasibility: ${{ steps.scope.outputs.exploit_feasibility }}
+      prompt_audit: ${{ steps.scope.outputs.prompt_audit }}
+      ci_lint: ${{ steps.scope.outputs.ci_lint }}
+      codeql: ${{ steps.scope.outputs.codeql }}
+      llm_analysis: ${{ steps.scope.outputs.llm_analysis }}
+      cve_diff: ${{ steps.scope.outputs.cve_diff }}
+      fuzzing: ${{ steps.scope.outputs.fuzzing }}
+      sage: ${{ steps.scope.outputs.sage }}
+      orchestration: ${{ steps.scope.outputs.orchestration }}
+      sca: ${{ steps.scope.outputs.sca }}
+      source_intel: ${{ steps.scope.outputs.source_intel }}
+      # Dynamic batch matrix for the fast tier (JSON for fromJSON()).
+      python_matrix: ${{ steps.scope.outputs.python_matrix }}
+      # Per-tier affected file lists (space-separated paths).
+      sandbox_files: ${{ steps.scope.outputs.sandbox_files }}
+      exploit_feasibility_files: ${{ steps.scope.outputs.exploit_feasibility_files }}
+      codeql_files: ${{ steps.scope.outputs.codeql_files }}
+      llm_analysis_files: ${{ steps.scope.outputs.llm_analysis_files }}
+      cve_diff_files: ${{ steps.scope.outputs.cve_diff_files }}
+      fuzzing_files: ${{ steps.scope.outputs.fuzzing_files }}
+      sage_files: ${{ steps.scope.outputs.sage_files }}
+      orchestration_files: ${{ steps.scope.outputs.orchestration_files }}
+      sca_files: ${{ steps.scope.outputs.sca_files }}
+      source_intel_files: ${{ steps.scope.outputs.source_intel_files }}
     steps:
-      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -199,43 +241,50 @@ jobs:
             cat "$out"
           fi
 
-      - id: filter
+      # Import-graph-based test dispatch. Builds the reverse import
+      # graph with stdlib ast, walks outward from changed files, and
+      # maps affected test files to their CI tier. Falls back to full
+      # dispatch (all gates true, all file lists populated) when no
+      # changed-file list is available — covers force_full, first
+      # push to a new branch, and API truncation.
+      - id: scope
+        run: |
+          python3 .github/scripts/test_scope.py \
+            ${CHANGED_FILES_LIST:+--changed-files "$CHANGED_FILES_LIST"} \
+            --repo .
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
-        run: |
-          python3 .github/scripts/compute_filters.py
 
   deps:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.python == 'true' ||
+      (needs.changes.outputs.python == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
-       needs.changes.outputs.exploit_feasibility == 'true' ||
-       needs.changes.outputs.source_intel == 'true')
+       needs.changes.outputs.sca == 'true' ||
+       needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
 
       - name: Restore venv from cache
         id: venv-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -252,7 +301,7 @@ jobs:
 
       - name: Save venv to cache
         if: steps.venv-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -265,34 +314,32 @@ jobs:
   # max(group1, group2) wallclock is still well below the unsplit total
   # even when unbalanced, so the saving is meaningful from day one.
   python-unit-tests-fast:
+    name: python-unit-tests-fast (${{ matrix.batch }})
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.python == 'true')
+      needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      # Dynamic batching: test_scope.py partitions affected test files
+      # into 1-8 balanced batches based on count. A single-file PR
+      # gets 1 runner; a broad refactor gets up to 8.
       matrix:
-        # 4-way split: ~2x parallelism uplift over the 2-way split for
-        # the same per-runner setup cost (venv download + compileall).
-        # Sweet spot before per-runner overhead dominates the wall-clock
-        # win — a 5th group would mostly buy queueing + setup, not test
-        # parallelism.
-        group: [1, 2, 3, 4]
+        include: ${{ fromJSON(needs.changes.outputs.python_matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -313,7 +360,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -327,7 +374,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -336,7 +383,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -345,11 +392,19 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Cache Python bytecode
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           # __pycache__ contents are deterministic per (Python version,
           # source contents). Caching by source-tree hash recovers the
@@ -367,30 +422,16 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m compileall -q core packages *.py
 
-      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
+      - name: Run unit tests (batch ${{ matrix.batch }})
+        env:
+          TEST_FILES: ${{ matrix.files }}
         run: |
           source $VENV_PATH/bin/activate
-          # The prompt-envelope audit runs in its own narrowly-scoped
-          # job (python-prompt-audit) so it doesn't fire on unrelated
-          # Python changes. Exclude it here to avoid duplicate runs.
-          # The .github/tests filter-coverage suite has its own job so
-          # we don't pull it into the fast tier either.
-          # Heavy subsystems carved into their own gated jobs are
-          # ignored here too — see the dedicated `python-unit-tests-*`
-          # jobs further down.
-          pytest -n auto --splits 4 --group ${{ matrix.group }} core packages \
-            --ignore=core/sandbox/tests \
-            --ignore=packages/exploit_feasibility/tests \
-            --ignore=packages/codeql/tests \
-            --ignore=packages/llm_analysis/tests \
-            --ignore=packages/cve_diff/tests \
-            --ignore=packages/fuzzing/tests \
-            --ignore=packages/oss_forensics/tests \
-            --ignore=packages/source_intel/tests \
-            --ignore=packages/sca \
-            --ignore=core/sage/tests \
-            --ignore=core/orchestration/tests \
-            --ignore=core/security/tests/test_prompt_envelope_audit.py
+          # File list comes from test_scope.py's import-graph analysis.
+          # No --ignore or --splits needed — the list is already the
+          # precise set of affected test files for this batch.
+          set -f  # word-split $TEST_FILES without glob expansion
+          pytest -n auto $TEST_FILES
 
       # Note: the CLI smoke tests for raptor.py used to live at
       # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
@@ -415,8 +456,7 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sca == 'true')
+      needs.changes.outputs.sca == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -425,16 +465,16 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -455,7 +495,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -469,7 +509,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -478,7 +518,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -487,19 +527,31 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run SCA tests (group ${{ matrix.group }} of 4)
+        env:
+          SCA_FILES: ${{ needs.changes.outputs.sca_files }}
         run: |
           source $VENV_PATH/bin/activate
-          # --durations-path: pytest-split reads the committed
-          # timings to balance shards by wall-clock instead of test
-          # count. Refresh via:
-          #   python -m pytest packages/sca --store-durations \
-          #     --durations-path packages/sca/test-durations.json
+          set -f  # word-split $SCA_FILES without glob expansion
+          rc=0
           python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
-            --durations-path packages/sca/test-durations.json packages/sca
+            --durations-path packages/sca/test-durations.json $SCA_FILES \
+            || rc=$?
+          # Exit 5 = "no tests collected" — legitimate when path filtering
+          # narrows SCA_FILES to fewer files than split groups.
+          if [ "$rc" -eq 5 ]; then exit 0; fi
+          exit "$rc"
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
@@ -507,22 +559,21 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sandbox == 'true')
+      needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -543,7 +594,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -557,7 +608,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -566,7 +617,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -575,8 +626,16 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run sandbox tests
         run: |
@@ -585,7 +644,69 @@ jobs:
           # root on sys.path so `from core.security.redaction import ...`
           # in sandbox sources resolves. Bare pytest only works when
           # `core` is included in the args (e.g. `pytest core packages`).
-          python -m pytest core/sandbox/tests
+          set -f
+          python -m pytest $SANDBOX_FILES
+        env:
+          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
+
+  # macOS sandbox tier: runs the same core/sandbox/tests on a real Darwin
+  # host so the darwin_only enforcement tests (sandbox-exec write-blocking,
+  # network-blocking, audit JSONL, Seatbelt profile enforcement) actually
+  # execute. The Linux sandbox job above only runs the cross-platform
+  # subset; the skipif(sys.platform != "darwin") tests are invisible there.
+  # Free on public repos — no runner-minute cost.
+  python-unit-tests-sandbox-macos:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      needs.changes.outputs.sandbox == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Restore venv from cache
+        id: venv-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+
+      - name: Create venv and install deps
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+
+      - name: Save venv to cache
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+
+      - name: Run sandbox tests (macOS)
+        env:
+          SANDBOX_FILES: ${{ needs.changes.outputs.sandbox_files }}
+        run: |
+          source $VENV_PATH/bin/activate
+          set -f
+          python -m pytest $SANDBOX_FILES -v
 
   # Exploit-feasibility integration tier: 11 × ~15 s tests calling
   # analyze_binary against real binaries. Gated on the package's real
@@ -594,22 +715,21 @@ jobs:
     needs: [pre_check, changes, deps]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.exploit_feasibility == 'true')
+      needs.changes.outputs.exploit_feasibility == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # actions/cache@v6.1.x does not retry 429s from the cache backend
       # (see v5.0.2 changelog: "429s returned from the cache service
       # will not be retried"); under matrix-parallel restore load some
       # jobs intermittently see "Failed to restore cache entry" even
@@ -630,7 +750,7 @@ jobs:
       - name: Restore venv from cache (attempt 1, exact key)
         id: cache-1
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -644,7 +764,7 @@ jobs:
         id: cache-2
         if: steps.cache-1.outcome == 'failure'
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
@@ -653,7 +773,7 @@ jobs:
 
       - name: Install uv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
@@ -662,112 +782,51 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Restore venv permissions and fix symlinks
+        run: |
+          # Re-point python symlinks at the current setup-python binary
+          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Run exploit_feasibility integration tests
+        env:
+          EXPLOIT_FILES: ${{ needs.changes.outputs.exploit_feasibility_files }}
         run: |
           source $VENV_PATH/bin/activate
-          # See sandbox tests above for why `python -m pytest` is needed
-          # rather than bare `pytest`.
-          python -m pytest packages/exploit_feasibility/tests
+          set -f
+          python -m pytest $EXPLOIT_FILES
 
   # source_intel tier: Coccinelle-driven memory-corruption evidence.
   # The real-spatch E2E (test_e2e_real_spatch_* etc.) are
   # `skipif(not shutil.which("spatch"))`, and the broad ``python`` fast
-  # tier installs no spatch — so before this job they NEVER ran in CI;
-  # source_intel's detection correctness was only ever verified on dev
-  # boxes that happen to have coccinelle. This job apt-installs
-  # coccinelle (ships /usr/bin/spatch) so those E2E actually execute.
-  # Gated on the ``source_intel`` filter (its real import surface,
-  # validated by .github/tests/test_filter_coverage.py).
+  # tier installs no spatch — so before this job they NEVER ran in CI.
+  # The CI deps image bakes in coccinelle so the container path gets
+  # real spatch coverage; the runner fallback (fork PRs) skips those
+  # tests via the skipif guard.
+  #
+  # Known: when a PR that changes the Dockerfile merges, ci-deps-image.yml
+  # and tests.yml fire concurrently — tests pull the old image (no new
+  # packages yet). The skipif guards degrade gracefully; the next push
+  # uses the rebuilt image. One-time per Dockerfile change, self-healing.
   python-unit-tests-source-intel:
-    needs: [pre_check, changes, deps]
+    needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.source_intel == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install coccinelle (spatch) for the real-spatch E2E
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends coccinelle
-          spatch --version
-
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
-
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
-
-      - name: Run source_intel tests (real spatch present)
-        run: |
-          source $VENV_PATH/bin/activate
-          # See sandbox tests above for why `python -m pytest` is needed
-          # rather than bare `pytest`.
-          python -m pytest packages/source_intel/tests
+      needs.changes.outputs.source_intel == 'true'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: source_intel
+      test_path: ${{ needs.changes.outputs.source_intel_files }}
+      pytest_args: ""
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # Prompt-envelope audit: AST-based heuristic over the registered
   # prompt-construction files. The test only needs stdlib + pytest
@@ -779,18 +838,17 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.prompt_audit == 'true')
+      needs.changes.outputs.prompt_audit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -810,18 +868,17 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.ci_lint == 'true')
+      needs.changes.outputs.ci_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -829,7 +886,11 @@ jobs:
         run: pip install pytest==9.0.3
 
       - name: Run CI filter-coverage tests
-        run: pytest .github/tests
+        # Both dirs: filter-coverage tests AND the checker-script
+        # detector tests (check_vocab_lists, check_env_docs,
+        # check_miswiring_detector, check_optional_dep_imports) —
+        # stdlib+pytest only, ~20s.
+        run: pytest .github/tests .github/scripts/tests
 
   # Heavy-subdir Python tiers — each gated on its own filter so a PR
   # touching only one package skips the others. Filters live in
@@ -838,15 +899,14 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.codeql == 'true')
+      needs.changes.outputs.codeql == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: codeql
-      test_path: packages/codeql/tests
+      test_path: ${{ needs.changes.outputs.codeql_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
@@ -854,112 +914,49 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.llm_analysis == 'true')
+      needs.changes.outputs.llm_analysis == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: llm_analysis
-      test_path: packages/llm_analysis/tests
+      test_path: ${{ needs.changes.outputs.llm_analysis_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-cve-diff:
-    needs: [pre_check, changes, deps]
+    needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.cve_diff == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      # actions/cache@v5.0.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
-      - name: Run cve_diff tests
-        run: |
-          source $VENV_PATH/bin/activate
-          python -m pytest packages/cve_diff/tests -n auto
+      needs.changes.outputs.cve_diff == 'true'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: cve_diff
+      test_path: ${{ needs.changes.outputs.cve_diff_files }}
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-fuzzing:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.fuzzing == 'true')
+      needs.changes.outputs.fuzzing == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: fuzzing
-      test_path: packages/fuzzing/tests
+      test_path: ${{ needs.changes.outputs.fuzzing_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
-  # fix). sage is the proving ground: zero subprocess usage in
-  # core/sage/tests, so if this goes green the container approach is
+  # fix). sage is the proving ground (NOTE: the tier now spawns
+  # subprocesses — the guard/capture tests run python, bash and jq
+  # pipelines, so the image must carry bash+jq): if green, the
   # sound and the remaining pure-Python tiers can follow. It runs
   # INSIDE ghcr.io/<owner>/raptor-ci-deps (deps baked in) instead of
   # `needs: deps` + downloading the venv artifact — removing one
@@ -975,30 +972,28 @@ jobs:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.sage == 'true')
+      needs.changes.outputs.sage == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: sage
-      test_path: core/sage/tests
+      test_path: ${{ needs.changes.outputs.sage_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-orchestration:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.orchestration == 'true')
+      needs.changes.outputs.orchestration == 'true'
     permissions:
       contents: read
       packages: read              # pull the private GHCR deps image (image path)
     uses: ./.github/workflows/_tier.yml
     with:
       tier: orchestration
-      test_path: core/orchestration/tests
+      test_path: ${{ needs.changes.outputs.orchestration_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # Single aggregate gate over the whole suite. `needs:` every job and
@@ -1018,12 +1013,14 @@ jobs:
       - python-unit-tests-fast
       - python-unit-tests-sca
       - python-unit-tests-sandbox
+      - python-unit-tests-sandbox-macos
       - python-unit-tests-exploit-feasibility
       - python-prompt-audit
       - ci-lint-tests
       - python-unit-tests-codeql
       - python-unit-tests-llm-analysis
       - python-unit-tests-cve-diff
+      - python-unit-tests-source-intel
       - python-unit-tests-fuzzing
       - python-unit-tests-sage
       - python-unit-tests-orchestration

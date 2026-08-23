@@ -16,8 +16,10 @@ Reference: https://getcomposer.org/doc/articles/versions.md
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 _STABILITY_RANK = {
@@ -48,7 +50,7 @@ def compare(a: str, b: str) -> int:
         nums_a.append(0)
     while len(nums_b) < max_len:
         nums_b.append(0)
-    for x, y in zip(nums_a, nums_b):
+    for x, y in zip(nums_a, nums_b, strict=True):
         if x != y:
             return -1 if x < y else 1
     if stab_a != stab_b:
@@ -64,23 +66,25 @@ def _is_dev(v: str) -> bool:
 
 _STAB_RE = re.compile(
     r"^(?P<base>v?\d[\d.]*)(?:[-.]?(?P<stab>"
-    r"alpha|beta|rc|pre|stable|release|dev|a|b)(?P<idx>\d*))?",
+    r"alpha|beta|rc|pre|stable|release|dev|a|b)\.?(?P<idx>\d*))?",
     re.IGNORECASE,
 )
 
 
-def _split(version: str) -> Tuple[List[int], int, int]:
+def _split(version: str) -> tuple[list[int], int, int]:
     """Return (numeric segments, stability rank, stability index)."""
     s = version.strip()
     m = _STAB_RE.match(s)
     if not m:
-        return [0], _STABILITY_RANK["stable"], 0
+        msg = f"unparseable Composer version: {version!r}"
+        raise ValueError(msg)
     base = m.group("base").lstrip("v")
-    nums: List[int] = []
+    nums: list[int] = []
     for piece in base.split("."):
         try:
             nums.append(int(piece))
         except ValueError:
+            logger.debug("composer: non-numeric segment %r in %r, treating as 0", piece, version)
             nums.append(0)
     stab_word = (m.group("stab") or "").lower()
     rank = _STABILITY_RANK.get(stab_word, _STABILITY_RANK["stable"])

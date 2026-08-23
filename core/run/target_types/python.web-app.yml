@@ -93,8 +93,6 @@ pipeline:
     - scan-with-codeql
     - agentic-with-validate
     - sca
-  estimated_cost_usd: [15, 35]
-  estimated_time_min: [30, 60]
 
 budget_defaults:
   typical_findings_count: 20

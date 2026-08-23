@@ -1,12 +1,11 @@
 """Convert Semgrep results to RAPTOR findings format."""
 
 from collections import defaultdict
-from typing import Dict, List
 
 from .models import SemgrepResult
 
 
-def to_findings(results: List[SemgrepResult]) -> List[Dict]:
+def to_findings(results: list[SemgrepResult]) -> list[dict]:
     """Convert Semgrep results to RAPTOR findings.json entries.
 
     Each Semgrep finding becomes a finding with origin "semgrep". The vuln_type
@@ -14,7 +13,7 @@ def to_findings(results: List[SemgrepResult]) -> List[Dict]:
     rule_id to a CWE/vuln_type via core/sarif normalisation.
     """
     findings = []
-    counters: Dict[str, int] = defaultdict(int)
+    counters: dict[str, int] = defaultdict(int)
     for result in results:
         run_label = result.name or "semgrep"
         for f in result.findings:

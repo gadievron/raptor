@@ -19,7 +19,6 @@ propagates everywhere.  Operator CLI flags override per-run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -36,16 +35,30 @@ class CodeQLTunables:
                                  analyze path rejects it as unknown.
     """
     threads: int = 0
-    ram_mb: Optional[int] = None
-    max_disk_cache_mb: Optional[int] = None
+    ram_mb: int | None = None
+    max_disk_cache_mb: int | None = None
 
     @classmethod
-    def from_tuning(cls, *, overrides: Optional[dict] = None) -> "CodeQLTunables":
+    def from_tuning(
+        cls, *,
+        overrides: dict | None = None,
+        concurrent_workers: int = 1,
+    ) -> CodeQLTunables:
         """Build from RAPTOR's central tuning config.
 
         ``overrides`` is an operator-CLI-arg-shaped dict; any non-None
         value overrides the tuning-resolved default for that field.
         Recognised keys: ``threads``, ``ram_mb``, ``max_disk_cache_mb``.
+
+        ``concurrent_workers``: how many CodeQL invocations run at the
+        same time as this one (parallel multi-language DB builds /
+        analyses). When the resolved thread count is the ``0`` =
+        all-cores auto value and more than one invocation runs, the
+        cores are divided between them — N concurrent ``-j 0``
+        processes would otherwise each claim every core,
+        oversubscribing the host N-fold. An explicit numeric
+        ``codeql_threads`` (or a ``threads`` override) is always
+        respected as-is: the operator pinned it.
         """
         # Lazy import: callers that build CodeQLTunables() directly with
         # explicit values (tests, small one-offs) shouldn't pay the
@@ -65,6 +78,10 @@ class CodeQLTunables:
             # 0 in tuning means "leave codeql's unbounded default".
             v = t.codeql_max_disk_cache_mb
             max_disk_cache_mb = v if v > 0 else None
+        if (threads == 0 and overrides.get("threads") is None
+                and concurrent_workers > 1):
+            import os
+            threads = max(1, (os.cpu_count() or 4) // concurrent_workers)
         return cls(threads=threads, ram_mb=ram_mb,
                    max_disk_cache_mb=max_disk_cache_mb)
 

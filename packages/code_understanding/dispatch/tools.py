@@ -40,12 +40,16 @@ What gets scanned:
 from __future__ import annotations
 
 import fnmatch
-import json
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, TYPE_CHECKING
+
+from core.json import dumps_display
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 # Output caps — generous but bounded. A hunt that exceeds these is
@@ -75,13 +79,15 @@ class SandboxedTools:
     repo_root: Path
 
     @classmethod
-    def for_repo(cls, repo_path: str | Path) -> "SandboxedTools":
+    def for_repo(cls, repo_path: str | Path) -> SandboxedTools:
         # Symmetric with _resolve_inside: NUL byte → clean error.
         if isinstance(repo_path, str) and "\x00" in repo_path:
-            raise ValueError("repo_path contains NUL byte")
+            msg = "repo_path contains NUL byte"
+            raise ValueError(msg)
         root = Path(repo_path).expanduser().resolve(strict=True)
         if not root.is_dir():
-            raise ValueError(f"repo_path is not a directory: {root}")
+            msg = f"repo_path is not a directory: {root}"
+            raise ValueError(msg)
         return cls(repo_root=root)
 
     # ----- handlers -----
@@ -101,20 +107,20 @@ class SandboxedTools:
         if max_lines is not None and (
             isinstance(max_lines, bool) or not isinstance(max_lines, int)
         ):
-            return json.dumps({"error": "max_lines must be int or None"})
+            return dumps_display({"error": "max_lines must be int or None"}, indent=None)
 
         # Detect repo_root disappearing (mirror of grep / glob_files).
         # Without this, _resolve_inside surfaces "path not found" for
         # every call, misleading the model into trying alternate paths.
         if not self.repo_root.is_dir():
-            return json.dumps({"error": "repo_root no longer exists or is not a directory"})
+            return dumps_display({"error": "repo_root no longer exists or is not a directory"}, indent=None)
 
         try:
             target = self._resolve_inside(path)
         except _SandboxError as e:
-            return json.dumps({"error": str(e)})
+            return dumps_display({"error": str(e)}, indent=None)
         if not target.is_file():
-            return json.dumps({"error": f"not a file: {path}"})
+            return dumps_display({"error": f"not a file: {path}"}, indent=None)
 
         # Read with a size cap so a giant file doesn't allocate gigabytes
         # of memory just to be sliced down. Read _MAX_FILE_BYTES + 1 to
@@ -123,7 +129,7 @@ class SandboxedTools:
             with target.open("rb") as fh:
                 data = fh.read(_MAX_FILE_BYTES + 1)
         except OSError as e:
-            return json.dumps({"error": f"read failed: {e}"})
+            return dumps_display({"error": f"read failed: {e}"}, indent=None)
 
         truncated = False
         if len(data) > _MAX_FILE_BYTES:
@@ -140,12 +146,12 @@ class SandboxedTools:
                 text = "".join(lines[:max_lines])
                 truncated = True
 
-        return json.dumps({
+        return dumps_display({
             "path": str(target.relative_to(self.repo_root)),
             "content": text,
             "truncated": truncated,
             "byte_cap": _MAX_FILE_BYTES,
-        })
+        }, indent=None)
 
     def grep(
         self, pattern: str, *,
@@ -162,38 +168,38 @@ class SandboxedTools:
             case_sensitive: default True; toggle for case-insensitive.
         """
         if not isinstance(pattern, str) or not pattern:
-            return json.dumps({"error": "pattern must be a non-empty string"})
+            return dumps_display({"error": "pattern must be a non-empty string"}, indent=None)
 
         # Detect repo_root having gone missing since for_repo(). Without
         # this, os.walk silently yields nothing and the operator gets
         # an empty matches list indistinguishable from a real "no matches"
         # result.
         if not self.repo_root.is_dir():
-            return json.dumps({"error": "repo_root no longer exists or is not a directory"})
+            return dumps_display({"error": "repo_root no longer exists or is not a directory"}, indent=None)
 
         try:
             search_root = self._resolve_inside(path) if path else self.repo_root
         except _SandboxError as e:
-            return json.dumps({"error": str(e)})
+            return dumps_display({"error": str(e)}, indent=None)
         if not search_root.exists():
-            return json.dumps({"error": f"path not found: {path}"})
+            return dumps_display({"error": f"path not found: {path}"}, indent=None)
         # path scoping is directory-narrowing. A file path here would walk
         # nothing and silently return empty matches; surface clearly so
         # the model can read_file() the path instead.
         if not search_root.is_dir():
-            return json.dumps({
+            return dumps_display({
                 "error": f"path is a file, not a directory: {path}. "
                          f"Use read_file() to inspect a single file."
-            })
+            }, indent=None)
 
         try:
             matcher = self._compile_matcher(pattern, regex, case_sensitive)
         except re.error as e:
-            return json.dumps({"error": f"invalid regex: {e}"})
+            return dumps_display({"error": f"invalid regex: {e}"}, indent=None)
 
-        matches: List[Dict[str, Any]] = []
+        matches: list[dict[str, Any]] = []
         scanned = 0
-        skipped_large: List[str] = []
+        skipped_large: list[str] = []
         truncated = False
 
         for f in self._walk_files(search_root):
@@ -241,14 +247,14 @@ class SandboxedTools:
         # two greps on the same repo could return different match orders.
         matches.sort(key=lambda m: (m["file"], m["line"]))
 
-        return json.dumps({
+        return dumps_display({
             "pattern": pattern,
             "regex": regex,
             "matches": matches,
             "truncated": truncated,
             "match_cap": _MAX_GREP_MATCHES,
             "skipped_large_files": sorted(skipped_large[:20]),  # cap + sort
-        })
+        }, indent=None)
 
     def glob_files(self, pattern: str) -> str:
         """List files matching a glob pattern, relative to repo_root.
@@ -267,13 +273,13 @@ class SandboxedTools:
           ``path=`` on grep instead.
         """
         if not isinstance(pattern, str) or not pattern:
-            return json.dumps({"error": "pattern must be a non-empty string"})
+            return dumps_display({"error": "pattern must be a non-empty string"}, indent=None)
 
         # Detect repo_root having gone missing (mirror of grep). Without
         # this, os.walk silently yields nothing and the operator gets
         # an empty matches list indistinguishable from "no files matched."
         if not self.repo_root.is_dir():
-            return json.dumps({"error": "repo_root no longer exists or is not a directory"})
+            return dumps_display({"error": "repo_root no longer exists or is not a directory"}, indent=None)
 
         # Normalize pattern: drop a leading "/" and "./" (in that order).
         # Use removeprefix throughout — str.lstrip() takes a character
@@ -281,7 +287,7 @@ class SandboxedTools:
         # avoid (matches the convention in code_understanding.adapters).
         pat = pattern.removeprefix("/").removeprefix("./")
 
-        results: List[str] = []
+        results: list[str] = []
         scanned = 0
         truncated = False
         for f in self._walk_files(self.repo_root):
@@ -296,12 +302,12 @@ class SandboxedTools:
                     truncated = True
                     break
 
-        return json.dumps({
+        return dumps_display({
             "pattern": pattern,
             "matches": sorted(results),
             "truncated": truncated,
             "match_cap": _MAX_GLOB_MATCHES,
-        })
+        }, indent=None)
 
     # ----- internals -----
 
@@ -311,18 +317,21 @@ class SandboxedTools:
         Raises _SandboxError if path traversal or symlink escape detected.
         """
         if not isinstance(path, str) or not path:
-            raise _SandboxError("path must be a non-empty string")
+            msg = "path must be a non-empty string"
+            raise _SandboxError(msg)
 
         # NUL byte in path crashes Path.resolve on some systems with a
         # bare ValueError. Catch upfront for a clean error.
         if "\x00" in path:
-            raise _SandboxError("path contains NUL byte")
+            msg = "path contains NUL byte"
+            raise _SandboxError(msg)
 
         # Reject absolute paths outright — model should always be working
         # in repo-relative terms.
         p = Path(path)
         if p.is_absolute():
-            raise _SandboxError(f"absolute paths not allowed: {path}")
+            msg = f"absolute paths not allowed: {path}"
+            raise _SandboxError(msg)
 
         candidate = (self.repo_root / p)
         try:
@@ -332,15 +341,17 @@ class SandboxedTools:
             # then surface as not-found so the model can react.
             resolved = candidate.resolve()
             if not _is_inside(resolved, self.repo_root):
-                raise _SandboxError(
-                    f"path escapes repo_root: {path}"
-                ) from None
-            raise _SandboxError(f"path not found: {path}") from None
+                msg = f"path escapes repo_root: {path}"
+                raise _SandboxError(msg) from None
+            msg = f"path not found: {path}"
+            raise _SandboxError(msg) from None
         except OSError as e:
-            raise _SandboxError(f"resolve failed: {e}") from None
+            msg = f"resolve failed: {e}"
+            raise _SandboxError(msg) from None
 
         if not _is_inside(resolved, self.repo_root):
-            raise _SandboxError(f"path escapes repo_root: {path}")
+            msg = f"path escapes repo_root: {path}"
+            raise _SandboxError(msg)
         return resolved
 
     def _walk_files(self, root: Path):

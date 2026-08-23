@@ -17,24 +17,23 @@ Public entry: ``run_sca(target, output_dir, options)`` returns a
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, TYPE_CHECKING
 
-from core.binary import CapabilityFingerprint
+from core.cve import EpssClient, KevClient
 from core.json import JsonCache
 from core.progress import HackerProgressBar
-from . import SCA_CACHE_ROOT
+
+from . import SCA_CACHE_ROOT, default_client
+from . import suppressions as _suppressions
 from .discovery import find_manifests
-from core.cve import EpssClient
 from .findings import build_vuln_findings, write_findings_json
 from .hygiene import evaluate as evaluate_hygiene
-from core.http import HttpClient
-from . import default_client
 from .join import join as join_deps
-from core.cve import KevClient
 from .models import (
     Dependency,
     Manifest,
@@ -47,7 +46,11 @@ from .report import render_markdown_report, write_markdown_report
 from .sarif import write_sarif
 from .sbom import write_sbom_json
 from .supply_chain import evaluate as evaluate_supply_chain
-from . import suppressions as _suppressions
+
+if TYPE_CHECKING:
+    from core.http import HttpClient
+    from core.binary import CapabilityFingerprint
+    from collections.abc import Iterable, Sequence
 
 try:                                       # pragma: no cover — env-dependent
     from core.coverage.record import write_record as _coverage_write_record
@@ -56,6 +59,11 @@ except ImportError:
     _HAS_COVERAGE = False
 
 logger = logging.getLogger(__name__)
+
+# Repo-shipped license policy file (see ``packages.sca.license.
+# load_policy``). Named here so the trust gate can detect its
+# presence without loading it.
+_LICENSE_POLICY_FILENAME = ".raptor-sca-license-policy.yml"
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +81,7 @@ class RunOptions:
 
     offline: bool = False
     no_cache: bool = False
-    cache_root: Optional[Path] = None
+    cache_root: Path | None = None
     enable_kev: bool = True
     enable_epss: bool = True
     enable_license_policy: bool = True   # license enrichment + policy
@@ -93,6 +101,17 @@ class RunOptions:
     enable_reachability: bool = True
     enable_supply_chain: bool = True
     enable_suppressions: bool = True
+    trust_repo: bool = False             # honour repo-shipped config
+                                          # (suppression overlay, license
+                                          # policy file). Resolved at the
+                                          # CLI layer: --no-trust-repo >
+                                          # --trust-repo > the project
+                                          # ``config`` trust marker > off.
+                                          # Off means files shipped in the
+                                          # scanned tree are reported but
+                                          # not applied — an untrusted
+                                          # target must not be able to
+                                          # suppress its own findings.
     include_commented: bool = False     # surface commented `# pkg==X`
                                          # lines as info-severity findings
     enable_inline_installs: bool = True  # extract pip/apt/yum/dnf/apk
@@ -119,7 +138,7 @@ class RunOptions:
                                          # ``--offline``.
     use_offline_db: bool = False         # route ``--offline`` lookups
                                          # through OsvOfflineDB when set
-    offline_db_path: Optional[Path] = None  # location of the sqlite3 DB;
+    offline_db_path: Path | None = None  # location of the sqlite3 DB;
                                          # defaults to ``<cache>/osv.sqlite``
     enable_transitive_expansion: bool = False  # cascade resolver for
                                                 # manifests without a
@@ -136,6 +155,15 @@ class RunOptions:
                                                 # in cli.py via the
                                                 # inverted ``--no-resolve-
                                                 # transitive`` flag.
+    allow_sdist_builds: bool = False            # escape hatch for the pip
+                                                # resolver's metadata-only
+                                                # policy: skip
+                                                # ``PIP_ONLY_BINARY=:all:``
+                                                # so sdist-only manifests
+                                                # resolve at the cost of
+                                                # running package build
+                                                # backends in the sandbox.
+                                                # ``--allow-sdist-builds``.
     fallback_registry_metadata: bool = False   # mode (c) — when (b)
                                                 # can't run, optionally
                                                 # walk registry metadata
@@ -181,7 +209,7 @@ class RunOptions:
                                                 # logs / file redirect).
                                                 # ``--no-progress``
                                                 # forces off explicitly.
-    sbom_input: Optional[Path] = None            # CycloneDX SBOM to
+    sbom_input: Path | None = None            # CycloneDX SBOM to
                                                 # import as the dep list
                                                 # in place of discovery
                                                 # + parser dispatch.
@@ -210,7 +238,7 @@ class RunResult:
     # Empty when expansion was disabled or no manifests qualified.
     # The summary prints a one-line digest; the report's report.md
     # gets the full breakdown.
-    transitive_statuses: List = field(default_factory=list)
+    transitive_statuses: list = field(default_factory=list)
     transitive_added: int = 0
     llm_reviews_run: int = 0
     llm_reviews_failed: int = 0
@@ -221,7 +249,18 @@ class RunResult:
     # truncated, etc. Surfaced in report.md so operators don't
     # mistake an empty result for a clean project. Empty when no
     # parser failed.
-    parse_failures: List = field(default_factory=list)
+    parse_failures: list = field(default_factory=list)
+
+
+def _suppression_entry_label(entry: _suppressions.SuppressionEntry) -> str:
+    """Human-readable identity of a suppression entry for the per-run
+    hit-count log line — the most specific match key the entry set."""
+    if entry.finding_id:
+        return entry.finding_id
+    if entry.advisory_id:
+        return entry.advisory_id
+    return (f"{entry.ecosystem or '*'}:{entry.name or '*'}"
+            f"@{entry.version or '*'}")
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +270,10 @@ class RunResult:
 def run_sca(
     target: Path,
     output_dir: Path,
-    options: Optional[RunOptions] = None,
+    options: RunOptions | None = None,
     *,
-    http: Optional[HttpClient] = None,
-    cache: Optional[JsonCache] = None,
+    http: HttpClient | None = None,
+    cache: JsonCache | None = None,
 ) -> RunResult:
     """Execute the mechanical SCA pipeline end-to-end.
 
@@ -278,6 +317,12 @@ def run_sca(
     from .parsers import requirements as _req_parser
     _req_parser.set_include_commented(options.include_commented)
 
+    # Pip-resolver sdist escape hatch — module-level setter for the
+    # same reason as the parser opts above (the resolver registry
+    # holds an import-time singleton).
+    from .resolvers import pip as _pip_resolver
+    _pip_resolver.set_allow_sdist_builds(options.allow_sdist_builds)
+
     # Install the Maven POM inheritance resolver. Closes the Spring
     # Boot / multi-module-monorepo gap: child POMs with versions
     # only declared in a parent (or BOM-import) would otherwise
@@ -315,15 +360,21 @@ def run_sca(
             for w in sbom_warnings:
                 logger.warning("sca.pipeline: SBOM: %s", w)
             manifests = []   # no manifests when SBOM-imported
-            parse_failures: List = []
+            parse_failures: list = []
         else:
             manifests = find_manifests(target)
             if not options.enable_inline_installs:
                 manifests = [
                     m for m in manifests if m.ecosystem != "Inline"
                 ]
-            raw_deps: List[Dependency] = []
-            with capture_parse_failures() as parse_failures:
+            raw_deps: list[Dependency] = []
+            # scan_root_context: lets bounded parser reads accept
+            # symlinked manifests whose resolved target stays inside
+            # the target tree (monorepo shared-manifest layouts)
+            # while still refusing links that escape it.
+            from .parsers._safe_read import scan_root_context
+            with capture_parse_failures() as parse_failures, \
+                    scan_root_context(target):
                 for m in manifests:
                     raw_deps.extend(parse_manifest(m))
     finally:
@@ -349,7 +400,7 @@ def run_sca(
     #     approximation) when b can't run. The new transitives merge
     #     into raw_deps before join so they get OSV-queried alongside
     #     direct deps.
-    transitive_statuses: List = []
+    transitive_statuses: list = []
     if (options.enable_transitive_expansion
             or options.fallback_registry_metadata) and not options.offline:
         # Cascade expansion spawns sandbox subprocesses running
@@ -407,8 +458,9 @@ def run_sca(
     #     pipeline as the rest. Skipped under ``--offline`` because
     #     it requires network access to the registry.
     if options.enable_dockerfile_from and not options.offline:
-        from .dockerfile_from import scan_image_sources
         from core.oci.client import OciRegistryClient
+
+        from .dockerfile_from import scan_image_sources
         oci_client = OciRegistryClient(http=http)
         # Cross-run cache for base-image SBOMs. Per-digest entries
         # are stored ``TTL_FOREVER`` since digests are content-
@@ -424,7 +476,7 @@ def run_sca(
             base_image_deps = scan_image_sources(
                 target, client=oci_client, cache=dockerfile_cache,
             )
-        except Exception:                           # noqa: BLE001
+        except Exception:
             logger.warning(
                 "sca.pipeline: image-source SBOM scanning failed",
                 exc_info=True,
@@ -445,7 +497,7 @@ def run_sca(
         # The findings get folded into ``supply_chain_findings``
         # below alongside the other supply-chain heuristics.
         image_drift_findings = []
-        image_fingerprints: Dict[str, CapabilityFingerprint] = {}
+        image_fingerprints: dict[str, CapabilityFingerprint] = {}
         if options.enable_image_drift:
             try:
                 from .image_drift import detect_image_drift
@@ -464,7 +516,7 @@ def run_sca(
                         "detected on %d ref(s)",
                         len(image_drift_findings),
                     )
-            except Exception:                          # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "sca.pipeline: image-drift detection failed",
                     exc_info=True,
@@ -490,9 +542,9 @@ def run_sca(
         # Construct registry clients for the metadata-driven detectors
         # (recent_publish / maintainer_change / maintainer_account_change /
         # gha_action_outdated). Same offline + cache config as the OSV path.
+        from .registries.github_actions import GitHubActionsClient
         from .registries.npm import NpmClient
         from .registries.pypi import PyPIClient
-        from .registries.github_actions import GitHubActionsClient
         sc_pypi = PyPIClient(http, cache, offline=options.offline)
         sc_npm = NpmClient(http, cache, offline=options.offline)
         sc_gha = GitHubActionsClient(http, cache, offline=options.offline)
@@ -519,9 +571,9 @@ def run_sca(
         # exact-pinned deps whose registry marks them yanked.
         from .supply_chain.yanked_versions import scan_pinned_versions
         progress.stage("yanked-versions")
-        from .registries.pypi import PyPIClient as _PypiYC
-        from .registries.npm import NpmClient as _NpmYC
         from .registries.crates import CratesClient as _CratesYC
+        from .registries.npm import NpmClient as _NpmYC
+        from .registries.pypi import PyPIClient as _PypiYC
         from .registries.rubygems import RubyGemsClient as _GemYC
         yanked_findings = scan_pinned_versions(
             joined,
@@ -560,21 +612,38 @@ def run_sca(
     #     Enrichment respects ``--offline`` (no network). Evaluation
     #     always runs — it operates on whatever declared_license
     #     values exist (manifest-supplied + cache-backed).
-    license_findings: List = []
+    license_findings: list = []
     if options.enable_license_policy:
         progress.stage("license")
         from .license import (
-            DEFAULT_POLICY, enrich_licenses, evaluate as evaluate_license,
+            DEFAULT_POLICY,
+            enrich_licenses,
             load_policy,
         )
-        try:
-            policy = load_policy(target)
-        except Exception:                              # noqa: BLE001
+        from .license import (
+            evaluate as evaluate_license,
+        )
+        # The policy file ships in the scanned tree, so it is only
+        # honoured on repo-trusted runs — otherwise a hostile target
+        # could relax the operator's license gate for itself.
+        license_policy_file = target / _LICENSE_POLICY_FILENAME
+        if license_policy_file.is_file() and not options.trust_repo:
             logger.warning(
-                "sca.pipeline: license policy load failed, using default",
-                exc_info=True,
+                "sca.pipeline: license policy file present but not "
+                "trusted — %s ignored; set the project `config` trust "
+                "marker or pass --trust-repo",
+                _LICENSE_POLICY_FILENAME,
             )
             policy = DEFAULT_POLICY
+        else:
+            try:
+                policy = load_policy(target)
+            except Exception:
+                logger.warning(
+                    "sca.pipeline: license policy load failed, using default",
+                    exc_info=True,
+                )
+                policy = DEFAULT_POLICY
         # Enrichment fetches from PyPI / npm registries. Skipped
         # offline (cache may still populate via prior runs).
         if not options.offline:
@@ -588,7 +657,7 @@ def run_sca(
                         "sca.pipeline: license enrichment populated %d dep(s)",
                         enriched,
                     )
-            except Exception:                              # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "sca.pipeline: license enrichment failed; "
                     "evaluation will rely on existing declared_license",
@@ -625,11 +694,45 @@ def run_sca(
     osv_results = osv_client.query_batch(canonical)
     progress.tick(done=len(canonical))
     affected = sum(1 for r in osv_results if r.advisories)
-    progress.done(f"{affected}/{len(canonical)} deps with advisories")
+    scan_health: list[dict] = []
+    if osv_client.degraded:
+        # Transient OSV failures — those slots returned no advisories
+        # and were deliberately left uncached (a retry next run gets a
+        # fresh answer). Surface the degradation: operator warning now,
+        # plus a machine-readable scan-health row in findings.json so
+        # CI consumers can see the scan's advisory coverage was
+        # incomplete. No new exit-code path: the thresholds gate acts
+        # on specific finding classes, and inventing a failure exit for
+        # a degraded-but-completed scan would break existing gate
+        # semantics — pipelines that want to hard-fail on degradation
+        # can key on the ``sca:scan_health:osv_lookup_degraded`` row.
+        sample = ", ".join(osv_client.failed_dep_keys[:5])
+        detail = (
+            f"OSV lookups failed transiently for "
+            f"{osv_client.failed_lookups} query slot(s) out of "
+            f"{len(canonical)} deps; advisories for those deps may be "
+            f"missing from this run. Failed lookups were not cached "
+            f"and will retry on the next run. Sample: {sample}"
+        )
+        logger.warning("sca.pipeline: %s", detail)
+        scan_health.append({
+            "kind": "osv_lookup_degraded",
+            "detail": detail,
+            "evidence": {
+                "failed_lookups": osv_client.failed_lookups,
+                "total_deps": len(canonical),
+                "failed_dep_keys_sample": list(osv_client.failed_dep_keys),
+            },
+        })
+    progress.done(
+        f"{affected}/{len(canonical)} deps with advisories"
+        + (f" · {osv_client.failed_lookups} lookup(s) failed"
+           if osv_client.degraded else "")
+    )
 
     # 5. KEV / EPSS / Vulnrichment enrichment (best-effort; degrades on failure).
-    kev: Optional[KevClient] = None
-    epss: Optional[EpssClient] = None
+    kev: KevClient | None = None
+    epss: EpssClient | None = None
     if options.enable_kev:
         kev = KevClient(http, cache, offline=options.offline,
                         ttl_seconds=kev_ttl)
@@ -645,7 +748,7 @@ def run_sca(
     # is not surfaced yet — wired here for now, can expose if an
     # operator needs the off-switch.
     from core.cve.vulnrichment import VulnrichmentClient
-    vulnrichment: Optional[VulnrichmentClient] = None
+    vulnrichment: VulnrichmentClient | None = None
     if options.enable_kev:
         vulnrichment = VulnrichmentClient(
             http, cache, offline=options.offline,
@@ -723,7 +826,7 @@ def run_sca(
                 "sca.pipeline: exploit-evidence corpus matched %d "
                 "finding(s)", evidence_count,
             )
-    except Exception:                                  # noqa: BLE001
+    except Exception:
         logger.warning(
             "sca.pipeline: exploit-evidence annotation failed; "
             "findings won't carry EDB / MSF references",
@@ -760,13 +863,13 @@ def run_sca(
     # Surface as supply-chain findings so the bump suggestion
     # rides alongside the underlying CVE.
     if (options.enable_supply_chain and not options.offline):
-        from .registries.pypi import PyPIClient as _PypiC
-        from .registries.npm import NpmClient as _NpmC
         from .registries.crates import CratesClient as _CratesC
-        from .registries.packagist import PackagistClient as _PackC
-        from .registries.rubygems import RubyGemsClient as _GemC
         from .registries.maven import MavenClient as _MvnC
+        from .registries.npm import NpmClient as _NpmC
         from .registries.nuget import NugetClient as _NgC
+        from .registries.packagist import PackagistClient as _PackC
+        from .registries.pypi import PyPIClient as _PypiC
+        from .registries.rubygems import RubyGemsClient as _GemC
         from .transitive_drop import detect_droppable_transitives
         progress.stage("transitive-drop")
         drop_findings = detect_droppable_transitives(
@@ -790,15 +893,38 @@ def run_sca(
         )
 
     # 7a. Apply operator suppression overlay (`.raptor-sca-suppress.yml`).
+    #     The overlay ships in the scanned tree, so it is only honoured
+    #     on repo-trusted runs — otherwise a hostile target could ship
+    #     an overlay that suppresses its own findings.
     suppressed_total = 0
     if options.enable_suppressions:
         entries = _suppressions.load(target / _suppressions.SUPPRESS_FILENAME)
-        if entries:
-            suppressed_total = (
-                _suppressions.apply_to_findings(vuln_findings, entries)
-                + _suppressions.apply_to_findings(hygiene_findings, entries)
-                + _suppressions.apply_to_findings(supply_chain_findings, entries)
+        if entries and not options.trust_repo:
+            logger.warning(
+                "sca.pipeline: suppression overlay present but not "
+                "trusted — %d entries ignored; set the project `config` "
+                "trust marker or pass --trust-repo", len(entries),
             )
+            progress.flash(
+                "SUPPRESS",
+                f"{len(entries)} untrusted overlay entries ignored",
+            )
+            entries = []
+        if entries:
+            finding_sets = (vuln_findings, hygiene_findings,
+                             supply_chain_findings, license_findings)
+            # Apply entry-by-entry so the per-entry hit count is
+            # loggable. ``apply_to_findings`` skips already-suppressed
+            # findings, so iterating preserves the first-match-wins
+            # semantics of the single batched call.
+            for entry in entries:
+                hit = sum(_suppressions.apply_to_findings(fs, [entry])
+                          for fs in finding_sets)
+                suppressed_total += hit
+                logger.info(
+                    "sca.pipeline: suppression entry %s suppressed "
+                    "%d finding(s)", _suppression_entry_label(entry), hit,
+                )
             logger.info(
                 "sca.pipeline: %d finding(s) suppressed by %s",
                 suppressed_total, _suppressions.SUPPRESS_FILENAME,
@@ -855,6 +981,12 @@ def run_sca(
 
     # 9. Write artefacts.
     progress.stage("emit")
+    # Project-level license: what the root manifest declares for the
+    # scanned project itself. Belongs on the SBOM metadata/root
+    # component and the report header — never on dep rows (those get
+    # registry-enriched licenses or stay None).
+    from .license import detect_project_license
+    project_license = detect_project_license(target)
     findings_path = output_dir / "findings.json"
     report_path = output_dir / "report.md"
     write_findings_json(
@@ -863,6 +995,7 @@ def run_sca(
         hygiene_findings=hygiene_findings,
         supply_chain_findings=supply_chain_findings,
         license_findings=license_findings,
+        scan_health=scan_health,
     )
     md = render_markdown_report(
         target=target,
@@ -875,6 +1008,7 @@ def run_sca(
         cache_misses=cache.misses,
         cache_evictions=cache.memo_evictions,
         parse_failures=parse_failures,
+        project_license=project_license,
     )
     write_markdown_report(report_path, md)
 
@@ -904,6 +1038,7 @@ def run_sca(
         vuln_findings=vuln_findings,
         target_name=target.name,
         image_fingerprints=image_fingerprints or None,
+        project_license=project_license,
     )
 
     # Optional SPDX 2.3 SBOM alongside CycloneDX. Some compliance
@@ -917,6 +1052,7 @@ def run_sca(
             output_dir / "sbom.spdx.json",
             deps=joined,
             target_name=target.name,
+            project_license=project_license,
         )
 
     # Re-read the rows we just wrote — SARIF emission consumes the
@@ -943,6 +1079,9 @@ def run_sca(
     progress.end(f"{len(vuln_findings)} vuln · {kev_count} KEV "
                   f"· {total} findings total "
                   f"· cache {cache.hits} hit/{cache.misses} miss")
+
+    if offline_db is not None:
+        offline_db.close()
 
     return RunResult(
         target=target,
@@ -1010,7 +1149,7 @@ def _run_llm_stages(
         reviews_run += enriched
         logger.info("sca.pipeline: LLM install-hook review enriched %d finding(s)",
                      enriched)
-    except Exception:  # noqa: BLE001
+    except Exception:
         reviews_failed += 1
         logger.warning("sca.pipeline: install-hook LLM review failed",
                         exc_info=True)
@@ -1021,7 +1160,7 @@ def _run_llm_stages(
         _run_maintainer_review(
             client, supply_chain_findings, canonical, http, options,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         reviews_failed += 1
         logger.warning("sca.pipeline: maintainer-trust LLM review failed",
                         exc_info=True)
@@ -1034,8 +1173,9 @@ def _run_llm_stages(
         try:
             _run_slopsquat_review(
                 client, supply_chain_findings, canonical, http, options,
+                target=target,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             reviews_failed += 1
             logger.warning("sca.pipeline: slopsquat LLM review failed",
                             exc_info=True)
@@ -1054,7 +1194,7 @@ def _run_llm_stages(
             "sca.pipeline: version-diff stage skipped — couldn't "
             "scan output_dir parent for prior runs: %s", e,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         reviews_failed += 1
         logger.warning("sca.pipeline: version-diff LLM review failed",
                         exc_info=True)
@@ -1068,7 +1208,7 @@ def _run_llm_stages(
         bin_after = len([f for f in supply_chain_findings
                          if f.evidence.get("llm_binary_verdict")])
         reviews_run += (bin_after - bin_before)
-    except Exception:  # noqa: BLE001
+    except Exception:
         reviews_failed += 1
         logger.warning("sca.pipeline: binary-in-tests LLM review failed",
                         exc_info=True)
@@ -1076,13 +1216,47 @@ def _run_llm_stages(
     # Cost accounting from the client.
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
+
+    # SAGE: store supply-chain outcomes for cross-run learning
+    try:
+        from core.sage.hooks import store_sca_outcomes
+
+        sca_outcomes = []
+        for f in supply_chain_findings:
+            if not f.evidence.get("llm_verdict"):
+                continue
+            if f.evidence.get("sage_short_circuit"):
+                # This verdict came FROM SAGE recall, not from a fresh
+                # review — re-storing it as a new malicious_confirmed
+                # fact would corroborate the row with itself, making
+                # the recalled verdict durable and self-reinforcing.
+                # The originating row already exists; skip the re-store.
+                continue
+            sca_outcomes.append({
+                "package_name": f.dependency.name,
+                "ecosystem": f.dependency.ecosystem,
+                "version": f.dependency.version or "",
+                "kind": f.kind,
+                "verdict": (
+                    "malicious_confirmed"
+                    if f.evidence.get("llm_verdict") == "malicious"
+                    else "suspect"
+                ),
+                "severity": str(getattr(f.severity, "value", f.severity)),
+                "detail": f.detail[:200],
+                "llm_summary": f.evidence.get("llm_summary", ""),
+            })
+        if sca_outcomes:
+            store_sca_outcomes(repo_path=str(target), outcomes=sca_outcomes)
+    except Exception:
+        logger.debug("sca.pipeline: SAGE store skipped", exc_info=True)
 
     return (reviews_run, reviews_failed, cost)
 
 
-def _run_maintainer_review(client, supply_chain_findings, canonical, http, options):
+def _run_maintainer_review(client, supply_chain_findings, canonical, http, options) -> None:
     """Run maintainer-trust LLM review on flagged deps."""
     from .llm.maintainer_trust import assess_maintainer_trust
 
@@ -1098,20 +1272,18 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
         return
 
     # When --review-maintainers, review all direct deps.
-    deps_to_review = []
-    for dep in canonical:
-        if dep.direct and (options.review_maintainers
-                            or dep.key() in flagged_keys):
-            deps_to_review.append(dep)
+    deps_to_review = [dep for dep in canonical if dep.direct and (options.review_maintainers
+                            or dep.key() in flagged_keys)]
 
     if not deps_to_review:
         return
 
     # Build metadata from registry clients.
-    from .registries.pypi import PyPIClient
-    from .registries.npm import NpmClient
     from core.json import JsonCache
+
     from . import SCA_CACHE_ROOT
+    from .registries.npm import NpmClient
+    from .registries.pypi import PyPIClient
 
     # ``options.offline`` propagates to every client so the
     # maintainer-review path stops at the cache without falling
@@ -1135,7 +1307,8 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
                 meta = npm.get_metadata(dep.name) or {}
             else:
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug("registry metadata fetch failed for %s: %s", dep.name, e)
             continue
 
         verdict = assess_maintainer_trust(client, dep, meta)
@@ -1154,8 +1327,8 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
 
 
 def _run_slopsquat_review(
-    client, supply_chain_findings, canonical, http, options,
-):
+    client, supply_chain_findings, _canonical, http, options, target=None,
+) -> None:
     """Run LLM slopsquat verdict on every ``slopsquat_suspect``
     finding. Attaches the verdict to the finding's evidence;
     severity is left alone (the mechanical heuristic +
@@ -1169,13 +1342,63 @@ def _run_slopsquat_review(
     if not suspect_findings:
         return
 
+    # SAGE: recall prior SCA verdicts — short-circuit confirmed packages
+    sage_confirmed = set()
+    if target:
+        # Best-effort recall — SAGE being absent must never block the
+        # slopsquat review. recall_context_for_sca self-catches all
+        # transport/service failures (returns []), so only a partial
+        # install's import can legitimately fail here; anything else
+        # is a wiring bug and must propagate.
+        with contextlib.suppress(ImportError):
+            from core.sage.hooks import (
+                parse_verified_sca_fields,
+                recall_context_for_sca,
+            )
+            dep_names = [f.dependency.name for f in suspect_findings[:10]]
+            ecosystems = list({f.dependency.ecosystem for f in suspect_findings
+                              if f.dependency.ecosystem})
+            prior = recall_context_for_sca(
+                repo_path=str(target),
+                ecosystems=ecosystems,
+                dep_names=dep_names,
+            )
+            # Short-circuit on the AUTHENTICATED decision fields only —
+            # never on substring matches over the row prose. The prose
+            # carries LLM summary text (prompt-injectable via hostile
+            # package metadata) and detail strings that legitimately
+            # name the imitated package: a validly MAC'd suspect row
+            # whose summary says "malicious_confirmed <victim>" must
+            # not mint a 0.98 confirmed verdict for the victim.
+            confirmed_keys = set()
+            for row in prior:
+                fields = parse_verified_sca_fields(row)
+                if fields and fields.get("verdict") == "malicious_confirmed":
+                    confirmed_keys.add(
+                        (fields.get("eco", ""), fields.get("name", "")),
+                    )
+            for f in suspect_findings:
+                dep = f.dependency
+                # Mirror store-time _sanitise_delim ('|' stripped) so
+                # equality compares like with like.
+                key = (
+                    str(dep.ecosystem or "").replace("|", ""),
+                    str(dep.name or "").replace("|", ""),
+                )
+                if key in confirmed_keys:
+                    # Keyed on (ecosystem, name): two same-named
+                    # suspects in different ecosystems must not share
+                    # a confirmation.
+                    sage_confirmed.add(key)
+
     # Build registry-client lookups for the deps we want to
     # review. Same offline-honouring pattern as
     # ``_run_maintainer_review``.
-    from .registries.pypi import PyPIClient
-    from .registries.npm import NpmClient
     from core.json import JsonCache
+
     from . import SCA_CACHE_ROOT
+    from .registries.npm import NpmClient
+    from .registries.pypi import PyPIClient
 
     cache = JsonCache(
         root=options.cache_root or SCA_CACHE_ROOT,
@@ -1188,9 +1411,31 @@ def _run_slopsquat_review(
     # slopsquat suspects has bigger problems than getting the
     # LLM verdict on the trailing rows.
     reviewed = 0
+    sage_short_circuited = 0
     for f in suspect_findings[:20]:
         dep = f.dependency
-        meta: Dict[str, Any] = {}
+
+        # SAGE short-circuit: skip LLM if this package is already
+        # confirmed malicious from a prior run. Same (eco, name) key
+        # shape (and '|' strip) as the recall stage above.
+        _sc_key = (
+            str(dep.ecosystem or "").replace("|", ""),
+            str(dep.name or "").replace("|", ""),
+        )
+        if _sc_key in sage_confirmed:
+            existing_evidence = dict(f.evidence)
+            existing_evidence["llm_verdict"] = "malicious"
+            existing_evidence["llm_confidence"] = 0.98
+            existing_evidence["llm_summary"] = (
+                "Previously confirmed malicious (recalled from SAGE memory)."
+            )
+            existing_evidence["sage_short_circuit"] = True
+            f.evidence = existing_evidence
+            reviewed += 1
+            sage_short_circuited += 1
+            continue
+
+        meta: dict[str, Any] = {}
         try:
             if dep.ecosystem == "PyPI":
                 meta = pypi.get_metadata(dep.name) or {}
@@ -1201,11 +1446,12 @@ def _run_slopsquat_review(
                 # wired today — skip the LLM call rather than
                 # invoke without registry context.
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.debug("registry metadata fetch failed for %s: %s", dep.name, e)
             continue
 
-        reasons = list(f.evidence.get("reasons", []))
-        score = float(f.evidence.get("score", 0.0))
+        reasons = list(f.evidence.get("reasons") or [])
+        score = float(f.evidence.get("score") or 0.0)
         suspected_root = f.evidence.get("suspected_root")
         verdict = assess_slopsquat(
             client, dep, reasons, score, suspected_root, meta,
@@ -1226,6 +1472,11 @@ def _run_slopsquat_review(
         f.evidence = existing_evidence
         reviewed += 1
 
+    if sage_short_circuited:
+        logger.info(
+            "sca.pipeline: SAGE short-circuited %d suspect(s) from prior memory",
+            sage_short_circuited,
+        )
     logger.info(
         "sca.pipeline: LLM slopsquat-verdict reviewed %d suspect(s)",
         reviewed,
@@ -1239,6 +1490,7 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
     (project-aware) or skips gracefully.  Returns count of enriched findings.
     """
     import json as _json_mod
+
     from .llm.version_diff_review import review_version_diff
 
     prev_path = _find_previous_deps(output_dir)
@@ -1246,13 +1498,13 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
         logger.debug("sca.pipeline: no previous deps found — skipping version-diff review")
         return 0
 
-    prev_deps: Dict = {}
+    prev_deps: dict = {}
     try:
         rows = _json_mod.loads(prev_path.read_text(encoding="utf-8"))
         for row in rows:
             key = (row.get("ecosystem", ""), row.get("name", ""))
             prev_deps[key] = row.get("version", "")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("sca.pipeline: failed to parse previous deps", exc_info=True)
         return 0
 
@@ -1270,13 +1522,20 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
             name=dep.name,
             ecosystem=dep.ecosystem,
             version=old_version,
-            source=dep.source,
-            manifest_path=dep.manifest_path,
+            declared_in=dep.declared_in,
+            scope=dep.scope,
+            is_lockfile=dep.is_lockfile,
+            pin_style=dep.pin_style,
+            direct=dep.direct,
+            purl=dep.purl,
+            parser_confidence=dep.parser_confidence,
+            source_kind=dep.source_kind,
         )
 
-        verdict = review_version_diff(client, old_dep, dep, http)
-        if verdict is None:
+        reviewed = review_version_diff(client, old_dep, dep, http)
+        if reviewed is None:
             continue
+        verdict, sink_changes = reviewed
 
         for f in supply_chain_findings:
             if f.dependency.key() == dep.key():
@@ -1286,13 +1545,15 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
                     f.evidence["llm_version_diff_anomalies"] = [
                         a.model_dump() for a in verdict.anomalies
                     ]
+                if sink_changes:
+                    f.evidence["version_diff_sink_changes"] = sink_changes
         count += 1
 
     logger.info("sca.pipeline: LLM version-diff reviewed %d dep(s)", count)
     return count
 
 
-def _find_previous_deps(output_dir: Path) -> Optional[Path]:
+def _find_previous_deps(output_dir: Path) -> Path | None:
     """Locate the most recent sibling run's findings.json to extract
     dep versions.
 
@@ -1351,9 +1612,10 @@ def _run_triage(
     output_dir,
 ) -> tuple:
     """Run LLM triage.  Returns (ran: bool, cost: float)."""
+    import json as _json_mod
+
     from .llm import get_llm_client
     from .llm.triage import triage_findings
-    import json as _json_mod
 
     all_findings = vuln_findings + hygiene_findings + supply_chain_findings
     if not all_findings:
@@ -1363,12 +1625,14 @@ def _run_triage(
     if client is None:
         return (False, 0.0)
 
-    # Convert findings to dicts for the triage stage.
-    findings_path = output_dir / "findings.json"
-    if findings_path.exists():
-        rows = _json_mod.loads(findings_path.read_text(encoding="utf-8"))
-    else:
-        rows = []
+    from .findings import (
+        _hygiene_finding_to_row,
+        _supply_chain_finding_to_row,
+        _vuln_finding_to_row,
+    )
+    rows = [_vuln_finding_to_row(f) for f in vuln_findings]
+    rows.extend(_hygiene_finding_to_row(f) for f in hygiene_findings)
+    rows.extend(_supply_chain_finding_to_row(f) for f in supply_chain_findings)
 
     rows = [r for r in rows if isinstance(r, dict)]
     sca_rows = [r for r in rows if r.get("vuln_type", "").startswith("sca:")]
@@ -1379,10 +1643,11 @@ def _run_triage(
         return (False, 0.0)
 
     # Write triage output.
+    from ._atomic import atomic_write_text
     triage_path = output_dir / "triage.json"
-    triage_path.write_text(
+    atomic_write_text(
+        triage_path,
         _json_mod.dumps(result.model_dump(), indent=2, default=str),
-        encoding="utf-8",
     )
     logger.info("sca.pipeline: LLM triage ranked %d finding(s) → %s",
                  len(result.items), triage_path)
@@ -1390,8 +1655,8 @@ def _run_triage(
     cost = 0.0
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
 
     return (True, cost)
 
@@ -1405,10 +1670,10 @@ _INLINE_SOURCE_KINDS = {"dockerfile", "devcontainer", "shell_script", "gha_workf
 
 def _run_llm_inline_review(
     *,
-    manifests: List[Manifest],
-    raw_deps: List[Dependency],
+    manifests: list[Manifest],
+    raw_deps: list[Dependency],
     target: Path,
-) -> List[Dependency]:
+) -> list[Dependency]:
     """Ask the LLM to find deps the mechanical parser missed in inline files.
 
     Returns new deps (``parser_confidence="low"``, ``source_kind="llm_inline_review"``).
@@ -1425,16 +1690,18 @@ def _run_llm_inline_review(
     if not inline_manifests:
         return []
 
-    deps_by_file: Dict[Path, List[Dependency]] = defaultdict(list)
+    deps_by_file: dict[Path, list[Dependency]] = defaultdict(list)
     for d in raw_deps:
         if d.source_kind in _INLINE_SOURCE_KINDS:
             deps_by_file[d.declared_in].append(d)
 
-    all_new: List[Dependency] = []
+    all_new: list[Dependency] = []
     for m in inline_manifests[:30]:
         try:
             content = m.path.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
+        except Exception:
+            logger.debug("sca.pipeline: inline-install manifest read "
+                         "failed for %s; skipping", m.path, exc_info=True)
             continue
         if not content.strip():
             continue
@@ -1455,8 +1722,8 @@ def _run_llm_inline_review(
 
 def _run_upgrade_impact(
     *,
-    vuln_findings: List[VulnFinding],
-    canonical: List[Dependency],
+    vuln_findings: list[VulnFinding],
+    canonical: list[Dependency],
     target: Path,
     output_dir: Path,
 ) -> float:
@@ -1466,6 +1733,7 @@ def _run_upgrade_impact(
     Returns LLM cost.
     """
     import json as _json_mod
+
     from .llm import get_llm_client
     from .llm.upgrade_impact_review import assess_upgrade_impact
 
@@ -1502,9 +1770,10 @@ def _run_upgrade_impact(
         })
 
     if results:
-        (output_dir / "upgrade-impact.json").write_text(
+        from ._atomic import atomic_write_text
+        atomic_write_text(
+            output_dir / "upgrade-impact.json",
             _json_mod.dumps(results, indent=2),
-            encoding="utf-8",
         )
         logger.info("sca.pipeline: LLM upgrade-impact assessed %d dep(s)",
                      len(results))
@@ -1512,8 +1781,8 @@ def _run_upgrade_impact(
     cost = 0.0
     try:
         cost = client.total_cost
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("cost tracking failed: %s", e)
     return cost
 
 
@@ -1531,6 +1800,8 @@ def _classify_inline_source(path: Path) -> str:
         for j in range(len(parts) - 2):
             if parts[j] == ".github" and parts[j + 1] == "workflows":
                 return "gha_workflow"
+        if name in ("action.yml", "action.yaml"):
+            return "gha_workflow"
     return "shell_script"
 
 
@@ -1541,11 +1812,11 @@ def _classify_inline_source(path: Path) -> str:
 def _maybe_write_coverage(
     output_dir: Path,
     target: Path,
-    manifests: List[Manifest],
+    manifests: list[Manifest],
     *,
-    vuln_findings: List[VulnFinding],
+    vuln_findings: list[VulnFinding],
     supply_chain_findings: Sequence = (),
-    options: Optional[RunOptions] = None,
+    options: RunOptions | None = None,
 ) -> None:
     """Emit ``coverage-sca.json`` listing every file that materially
     influenced the run. Best-effort: missing core.coverage module is fine.
@@ -1571,7 +1842,7 @@ def _maybe_write_coverage(
     if not files:
         return
 
-    rules: List[str] = ["osv", "hygiene"]
+    rules: list[str] = ["osv", "hygiene"]
     if options:
         if options.enable_kev:
             rules.append("kev")
@@ -1586,7 +1857,7 @@ def _maybe_write_coverage(
         if options.enable_triage:
             rules.append("llm_triage")
 
-    record: Dict[str, Any] = {
+    record: dict[str, Any] = {
         "tool": "sca",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": sorted(files),
@@ -1594,7 +1865,7 @@ def _maybe_write_coverage(
     }
     try:
         _coverage_write_record(output_dir, record, tool_name="sca")
-    except Exception:                      # noqa: BLE001
+    except Exception:
         logger.debug(
             "sca.pipeline: coverage record write failed", exc_info=True,
         )
@@ -1609,7 +1880,7 @@ def _relpath(path: Path, target: Path) -> str:
 
 def select_canonical_for_osv(
     deps: Iterable[Dependency],
-) -> List[Dependency]:
+) -> list[Dependency]:
     """Pick the most authoritative dep row per ``(ecosystem, name, version)``.
 
     Rules:
@@ -1626,15 +1897,15 @@ def select_canonical_for_osv(
 
     Output preserves first-seen order for stable test output.
     """
-    by_name: dict[tuple[str, str], List[Dependency]] = defaultdict(list)
-    order: List[tuple[str, str]] = []
+    by_name: dict[tuple[str, str], list[Dependency]] = defaultdict(list)
+    order: list[tuple[str, str]] = []
     for d in deps:
         key = (d.ecosystem, d.name)
         if key not in by_name:
             order.append(key)
         by_name[key].append(d)
 
-    out: List[Dependency] = []
+    out: list[Dependency] = []
     seen_versions: set[tuple[str, str, str]] = set()
     for key in order:
         rows = by_name[key]

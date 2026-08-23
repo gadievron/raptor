@@ -15,7 +15,6 @@ import pytest
 
 from core.dataflow import smt_barrier as sb
 
-
 # ---------------------------------------------------------------------------
 # Validator extractor.
 # ---------------------------------------------------------------------------
@@ -179,11 +178,49 @@ def test_find_validator_line_none_when_absent():
 # ---------------------------------------------------------------------------
 
 def test_prove_unsat_for_whoogle_charset_vs_pathtrav():
-    spec = sb.ValidatorSpec("charset", "name", "A-Za-z0-9_.+-", "+...", 0)
+    # Soundness: '.' is now in the pathtrav danger model ('..' segments
+    # escape via multi-component joins the charset model cannot see),
+    # so the sound charset excludes it.
+    spec = sb.ValidatorSpec("charset", "name", "A-Za-z0-9_+-", "+...", 0)
     v = sb.prove_neutralizes(spec, "pathtrav")
     assert v.sound is True
     assert v.counterexample is None
     assert "UNSAT" in v.reasoning
+
+
+def test_prove_sat_for_dot_admitting_charset_vs_pathtrav():
+    """Regression (danger-model completeness): a '.'-admitting charset
+    can build '..' segments; whether that traverses depends on the
+    join shape downstream, which the charset model cannot see — the
+    verdict must decline rather than suppress."""
+    spec = sb.ValidatorSpec("charset", "name", "A-Za-z0-9_.+-", "+...", 0)
+    v = sb.prove_neutralizes(spec, "pathtrav")
+    assert v.sound is False
+    assert v.counterexample == "."
+
+
+def test_prove_sat_for_digits_and_space_charset_vs_sqli():
+    """Regression: digits-and-space charsets are NOT sound for sqli —
+    in an unquoted numeric context ``1 OR 1`` needs no quote chars."""
+    spec = sb.ValidatorSpec("charset", "id_", "0-9 ", "+...", 0)
+    v = sb.prove_neutralizes(spec, "sqli")
+    assert v.sound is False
+
+
+def test_prove_digits_only_charset_still_sound_for_sqli():
+    """Boost value preserved: a pure numeric charset is provably safe
+    in both quoted and unquoted SQL contexts."""
+    spec = sb.ValidatorSpec("charset", "id_", "0-9", "+...", 0)
+    v = sb.prove_neutralizes(spec, "sqli")
+    assert v.sound is True
+
+
+def test_prove_sat_for_redirect_admitting_charset_vs_cmdi():
+    """Regression: '>' needs no separator to redirect (``foo>x``)."""
+    spec = sb.ValidatorSpec("charset", "arg", "A-Za-z0-9>", "+...", 0)
+    v = sb.prove_neutralizes(spec, "cmdi")
+    assert v.sound is False
+    assert v.counterexample == ">"
 
 
 def test_prove_sat_for_weak_validator():
@@ -192,7 +229,7 @@ def test_prove_sat_for_weak_validator():
     spec = sb.ValidatorSpec("charset", "name", "A-Za-z0-9_./+-", "+...", 0)
     v = sb.prove_neutralizes(spec, "pathtrav")
     assert v.sound is False
-    assert v.counterexample == "/"
+    assert v.counterexample in {"/", "."}
     assert "SAT" in v.reasoning
 
 
@@ -223,8 +260,10 @@ def test_extract_charset_sub_rebind():
     assert spec is not None
     assert spec.kind == "charset_sub"
     assert spec.var_name == "x"
-    # `\\` in the pattern unescapes to `\`; `/` stays as-is.
-    assert spec.forbidden == "/\\"
+    # The RAW class body is stored; _expand_charset_body interprets
+    # the `\\` escape exactly once, at proof time.
+    assert spec.forbidden == "/\\\\"
+    assert sb._expand_charset_body(spec.forbidden) == {"/", "\\"}
 
 
 def test_extract_charset_sub_handles_escaped_quotes_in_pattern():
@@ -243,20 +282,23 @@ def test_extract_charset_sub_handles_escaped_quotes_in_pattern():
     assert spec is not None, "Bug B regression: pattern with escaped quotes must extract"
     assert spec.kind == "charset_sub"
     assert spec.var_name == "project_name"
-    # After unescape, the forbidden set should include all stripped chars
-    assert "!" in spec.forbidden
-    assert ";" in spec.forbidden       # in cmdi danger
-    assert "$" in spec.forbidden       # in cmdi danger
+    # The expanded forbidden set should include all stripped chars
+    expanded = sb._expand_charset_body(spec.forbidden)
+    assert "!" in expanded
+    assert ";" in expanded             # in cmdi danger
+    assert "$" in expanded             # in cmdi danger
 
 
-def test_extract_charset_sub_unescapes_unnecessary_escapes():
+def test_extract_charset_sub_keeps_raw_over_escaped_body():
     """Author over-escapes inside the char class (Gerapy-style); the
-    unescape pass returns the true literal char set."""
+    raw body is stored and expansion yields the true literal char
+    set (``\\X`` -> ``X`` for non-shorthand escapes)."""
     diff = "+    x = re.sub('[\\!\\@\\#\\$\\;]+', '', x)\n"
     spec = sb.extract_validator(diff)
     assert spec is not None
     assert spec.kind == "charset_sub"
-    assert spec.forbidden == "!@#$;"
+    assert spec.forbidden == "\\!\\@\\#\\$\\;"
+    assert sb._expand_charset_body(spec.forbidden) == set("!@#$;")
 
 
 def test_extract_charset_sub_requires_same_var_rebind():
@@ -276,9 +318,10 @@ def test_extract_charset_sub_requires_empty_replacement():
 
 
 def test_prove_charset_sub_sound_when_danger_subset_of_forbidden():
-    """Path-traversal danger is just ['/', '\\\\']. If the substitution
-    strips both, every danger char is removed -> SOUND."""
-    spec = sb.ValidatorSpec("charset_sub", "x", source_line="+...", forbidden="/\\")
+    """Path-traversal danger is ['/', '\\\\', '.'].  If the substitution
+    strips all of them, every danger char is removed -> SOUND."""
+    spec = sb.ValidatorSpec(
+        "charset_sub", "x", source_line="+...", forbidden="/\\\\.")
     v = sb.prove_neutralizes(spec, "pathtrav")
     assert v.sound is True
     assert v.counterexample is None
@@ -294,6 +337,49 @@ def test_prove_charset_sub_declines_when_danger_char_survives():
     assert v.sound is False
     # `|` is the smallest-codepoint surviving danger char in our model.
     assert v.counterexample in {"|", "`", "\n"}
+
+
+# ---------------------------------------------------------------------------
+# Bounded charset-range expansion.
+# ---------------------------------------------------------------------------
+
+def test_expand_charset_normal_ascii_ranges_still_expand():
+    assert sb._expand_charset_body("a-c") == {"a", "b", "c"}
+    assert len(sb._expand_charset_body("A-Za-z0-9")) == 62
+
+
+def test_expand_charset_huge_unicode_range_not_materialized():
+    body = " -" + chr(0x10FFFF)
+    out = sb._expand_charset_body(body)
+    # Over-cap range degrades to its three literal chars.
+    assert out == {" ", "-", chr(0x10FFFF)}
+
+
+def test_expand_charset_range_at_cap_still_expands():
+    lo, hi = chr(0), chr(sb._RANGE_EXPANSION_CAP)
+    out = sb._expand_charset_body(f"{lo}-{hi}")
+    assert len(out) == sb._RANGE_EXPANSION_CAP + 1
+
+
+def test_expand_charset_range_just_over_cap_degrades_to_literals():
+    lo, hi = chr(0), chr(sb._RANGE_EXPANSION_CAP + 1)
+    out = sb._expand_charset_body(f"{lo}-{hi}")
+    assert out == {lo, "-", hi}
+
+
+def test_expand_charset_over_cap_range_declines_not_sound():
+    # Under-approximating the forbidden set must push the verdict
+    # toward DECLINED (sound direction), never toward SOUND.
+    spec = sb.ValidatorSpec(
+        kind="charset_sub", var_name="x",
+        forbidden=" -" + chr(0x10FFFF),
+    )
+    verdict = sb._prove_charset_sub(spec, "pathtrav", ["/", "\\"])
+    assert not verdict.sound
+
+
+def test_expand_charset_descending_range_still_literal():
+    assert sb._expand_charset_body("z-a") == {"z", "-", "a"}
 
 
 def test_substitution_dominance_clean_path():
@@ -353,14 +439,14 @@ def test_try_tier0_sound_on_charset_sub_archetype(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "def f():\n"                            # line 1
         "    x = req()\n"                       # line 2
-        "    x = re.sub('[/\\\\]+', '', x)\n"   # line 3 — substitution
+        "    x = re.sub('[/\\\\\\\\.]+', '', x)\n"   # line 3 — substitution
         "    return open(x)\n"                  # line 4 — sink
     )
     diff = (
         "@@ -1,3 +1,4 @@\n"
         " def f():\n"
         "     x = req()\n"
-        "+    x = re.sub('[/\\\\]+', '', x)\n"
+        "+    x = re.sub('[/\\\\\\\\.]+', '', x)\n"
         "     return open(x)\n"
     )
     r = sb.try_tier0(
@@ -368,7 +454,8 @@ def test_try_tier0_sound_on_charset_sub_archetype(tmp_path: Path):
         sink_uri="app.py", sink_line=4, sink_class="pathtrav",
     )
     assert r.status is sb.Tier0Status.SOUND
-    assert r.artifact == "smt:charset_sub:[/\\]@app.py:3"
+    # Artifact carries the RAW class body as spelled in the source.
+    assert r.artifact == "smt:charset_sub:[/\\\\\\\\.]@app.py:3"
     assert "set inclusion" in r.reasoning
 
 
@@ -439,9 +526,9 @@ def test_extract_java_with_throw():
 
 
 @pytest.mark.parametrize("line,expected_charset,expected_var", [
-    ("+return error unless name =~ /^[A-Za-z0-9_.+-]+$/", "A-Za-z0-9_.+-", "name"),
-    ("+raise ArgumentError unless slug =~ /^[a-z0-9]+$/", "a-z0-9", "slug"),
-    ("+raise 'bad' if name !~ /^[A-Za-z0-9]+$/", "A-Za-z0-9", "name"),
+    (r"+return error unless name =~ /\A[A-Za-z0-9_.+-]+\z/", "A-Za-z0-9_.+-", "name"),
+    (r"+raise ArgumentError unless slug =~ /\A[a-z0-9]+\z/", "a-z0-9", "slug"),
+    (r"+raise 'bad' if name !~ /\A[A-Za-z0-9]+\z/", "A-Za-z0-9", "name"),
 ])
 def test_extract_ruby_guard_and_exit(line, expected_charset, expected_var):
     diff = line + "\n"
@@ -449,6 +536,32 @@ def test_extract_ruby_guard_and_exit(line, expected_charset, expected_var):
     assert spec is not None and spec.kind == "charset"
     assert spec.charset == expected_charset
     assert spec.var_name == expected_var
+
+
+@pytest.mark.parametrize("line", [
+    "+return error unless name =~ /^[A-Za-z0-9_.+-]+$/",
+    "+raise ArgumentError unless slug =~ /^[a-z0-9]+$/",
+    "+raise 'bad' if name !~ /^[A-Za-z0-9]+$/",
+    # \Z admits one trailing newline — same hazard class, must not lift.
+    r"+raise 'bad' unless name =~ /\A[A-Za-z0-9]+\Z/",
+])
+def test_extract_ruby_line_anchored_guard_refused(line):
+    """Ruby ^/$ are ALWAYS line anchors: /^[chars]+$/ passes any string
+    containing one conforming line, so the guard does not bound the
+    whole string and must never lift as a charset validator.
+
+    Bypass witness (Ruby semantics; Python re.MULTILINE has identical
+    anchor behaviour and serves as the executable demonstration since
+    no ruby interpreter is assumed on test hosts):
+    "safe\\n../../../etc/passwd" satisfies /^[A-Za-z0-9_.+-]+$/ via its
+    first line while carrying path traversal on the second.
+    """
+    import re as _re
+    # The executable form of the docstring claim: line anchors match a
+    # conforming line inside a hostile multi-line string.
+    assert _re.search(r"^[A-Za-z0-9_.+-]+$", "safe\n../../../etc/passwd", _re.M)
+    diff = line + "\n"
+    assert sb.extract_validator(diff, language="ruby") is None
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +814,7 @@ def test_try_tier0_sound_when_validated_var_threads_through_assignment(tmp_path:
     rejected this — the most common real-world Tier 0 case."""
     (tmp_path / "app.py").write_text(
         "def f(name):\n"                                                # line 1
-        '    if not re.match(r"^[A-Za-z0-9_.+-]+$", name):\n'           # line 2
+        '    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'           # line 2
         "        return error()\n"                                       # line 3
         "    cfg = os.path.join(BASE, name)\n"                           # line 4 — derive cfg from name
         "    return open(cfg)\n"                                         # line 5 = sink, references cfg
@@ -709,7 +822,7 @@ def test_try_tier0_sound_when_validated_var_threads_through_assignment(tmp_path:
     diff = (
         "@@ -1,3 +1,5 @@\n"
         " def f(name):\n"
-        '+    if not re.match(r"^[A-Za-z0-9_.+-]+$", name):\n'
+        '+    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'
         "+        return error()\n"
         "     cfg = os.path.join(BASE, name)\n"
         "     return open(cfg)\n"
@@ -751,6 +864,93 @@ def test_chain_does_not_grow_through_unrelated_assignment():
     assert sb._python_chain_reaches_sink(
         tree, "x", 2, 4, "    return open(y)",
     ) is False
+
+
+def test_chain_kills_rebound_variable():
+    """Rebind kill (verdict soundness): a chain member reassigned from
+    a non-chain RHS carries FRESH data — leaving it 'validated' let a
+    Tier 0 SOUND verdict suppress a live flow
+    (``y = name; y = request.args.get('raw'); open(join(base, y))``)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
+        "        return 'bad'\n"
+        "    y = name\n"
+        "    y = request.args.get('raw')\n"
+        "    return open(os.path.join('/data', y))\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 7, "    return open(os.path.join('/data', y))",
+    ) is False
+
+
+def test_chain_kills_start_var_on_rebind():
+    """Even the validated variable itself loses its status when
+    rebound to fresh taint after the validator."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
+        "        return 'bad'\n"
+        "    name = request.args.get('raw')\n"
+        "    return open(os.path.join('/data', name))\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 6, "    return open(os.path.join('/data', name))",
+    ) is False
+
+
+def test_chain_augassign_with_taint_kills():
+    """``name += tainted`` mixes unvalidated data into the chain
+    member — the charset constraint no longer holds."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
+        "        return 'bad'\n"
+        "    name += request.args.get('suffix')\n"
+        "    return open(os.path.join('/data', name))\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 6, "    return open(os.path.join('/data', name))",
+    ) is False
+
+
+def test_chain_rebind_from_chain_member_survives():
+    """Boost value preserved: rebinding from ANOTHER chain member is
+    still the validated value."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
+        "        return 'bad'\n"
+        "    y = name\n"
+        "    y = y.lower()\n"
+        "    return open(os.path.join('/data', y))\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 3, 7, "    return open(os.path.join('/data', y))",
+    ) is True
+
+
+def test_chain_validator_line_binding_not_killed():
+    """The validator line's own assignment binds the validated value
+    (``abs_path = safe_join(BASE, path)``) — it is a binding, not a
+    rebind."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(path):\n"
+        "    abs_path = safe_join(BASE, path)\n"
+        "    return open(abs_path)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "abs_path", 2, 3, "    return open(abs_path)",
+    ) is True
 
 
 def test_try_tier0_variable_match_uses_word_boundary(tmp_path: Path):
@@ -886,7 +1086,7 @@ def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Pa
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
         "    try:\n"
-        '        if not re.match(r"^[A-Za-z0-9_.+-]+$", x):\n'
+        '        if not re.match(r"^[A-Za-z0-9_+-]+$", x):\n'
         "            raise ValueError\n"
         "    except OSError:\n"                                        # different exception class
         "        pass\n"
@@ -896,7 +1096,7 @@ def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Pa
         "@@ -1,3 +1,7 @@\n"
         " def f(x):\n"
         "+    try:\n"
-        '+        if not re.match(r"^[A-Za-z0-9_.+-]+$", x):\n'
+        '+        if not re.match(r"^[A-Za-z0-9_+-]+$", x):\n'
         "+            raise ValueError\n"
         "+    except OSError:\n"
         "+        pass\n"
@@ -915,7 +1115,7 @@ def test_validator_with_return_inside_try_still_dominates(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
         "    try:\n"
-        '        if not re.match(r"^[A-Za-z0-9_.+-]+$", x):\n'
+        '        if not re.match(r"^[A-Za-z0-9_+-]+$", x):\n'
         "            return error()\n"                                 # return, not raise
         "    except Exception:\n"
         "        pass\n"
@@ -925,7 +1125,7 @@ def test_validator_with_return_inside_try_still_dominates(tmp_path: Path):
         "@@ -1,3 +1,7 @@\n"
         " def f(x):\n"
         "+    try:\n"
-        '+        if not re.match(r"^[A-Za-z0-9_.+-]+$", x):\n'
+        '+        if not re.match(r"^[A-Za-z0-9_+-]+$", x):\n'
         "+            return error()\n"
         "+    except Exception:\n"
         "+        pass\n"
@@ -981,14 +1181,14 @@ def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
     """End-to-end JS: guard-and-exit + path-traversal sink -> SOUND."""
     (tmp_path / "app.js").write_text(
         "function get_config(name) {\n"                                    # line 1
-        "  if (!/^[A-Za-z0-9_.+-]+$/.test(name)) return error();\n"        # line 2
+        "  if (!/^[A-Za-z0-9_+-]+$/.test(name)) return error();\n"        # line 2
         "  return fs.readFile(path.join(BASE, name));\n"                   # line 3
         "}\n"
     )
     diff = (
         "@@ -1,2 +1,3 @@\n"
         " function get_config(name) {\n"
-        "+  if (!/^[A-Za-z0-9_.+-]+$/.test(name)) return error();\n"
+        "+  if (!/^[A-Za-z0-9_+-]+$/.test(name)) return error();\n"
         "   return fs.readFile(path.join(BASE, name));\n"
     )
     r = sb.try_tier0(
@@ -1003,14 +1203,14 @@ def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
 def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
     (tmp_path / "App.java").write_text(
         "void load(String name) {\n"                                                       # line 1
-        '    if (!name.matches("^[A-Za-z0-9_.+-]+$")) throw new IllegalArgumentException();\n'  # line 2
+        '    if (!name.matches("^[A-Za-z0-9_+-]+$")) throw new IllegalArgumentException();\n'  # line 2
         "    Files.readAllBytes(Paths.get(BASE, name));\n"                                 # line 3
         "}\n"
     )
     diff = (
         "@@ -1,2 +1,3 @@\n"
         " void load(String name) {\n"
-        '+    if (!name.matches("^[A-Za-z0-9_.+-]+$")) throw new IllegalArgumentException();\n'
+        '+    if (!name.matches("^[A-Za-z0-9_+-]+$")) throw new IllegalArgumentException();\n'
         "     Files.readAllBytes(Paths.get(BASE, name));\n"
     )
     r = sb.try_tier0(
@@ -1023,9 +1223,32 @@ def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
 
 def test_try_tier0_sound_on_ruby_archetype(tmp_path: Path):
     (tmp_path / "app.rb").write_text(
-        "def get_config(name)\n"                                          # line 1
-        "  raise ArgumentError unless name =~ /^[A-Za-z0-9_.+-]+$/\n"     # line 2
-        "  File.open(File.join(BASE, name))\n"                            # line 3
+        "def get_config(name)\n"                                           # line 1
+        "  raise ArgumentError unless name =~ /\\A[A-Za-z0-9_+-]+\\z/\n"   # line 2
+        "  File.open(File.join(BASE, name))\n"                             # line 3
+        "end\n"
+    )
+    diff = (
+        "@@ -1,2 +1,3 @@\n"
+        " def get_config(name)\n"
+        "+  raise ArgumentError unless name =~ /\\A[A-Za-z0-9_+-]+\\z/\n"
+        "   File.open(File.join(BASE, name))\n"
+    )
+    r = sb.try_tier0(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.rb", sink_line=3, sink_class="pathtrav",
+        language="ruby",
+    )
+    assert r.status is sb.Tier0Status.SOUND
+
+
+def test_try_tier0_declines_line_anchored_ruby_guard(tmp_path: Path):
+    """The pre-fix behaviour claimed SOUND here — unsoundly: Ruby ^/$
+    line anchors admit "safe\\n../../etc/passwd" through the guard."""
+    (tmp_path / "app.rb").write_text(
+        "def get_config(name)\n"
+        "  raise ArgumentError unless name =~ /^[A-Za-z0-9_.+-]+$/\n"
+        "  File.open(File.join(BASE, name))\n"
         "end\n"
     )
     diff = (
@@ -1039,7 +1262,7 @@ def test_try_tier0_sound_on_ruby_archetype(tmp_path: Path):
         sink_uri="app.rb", sink_line=3, sink_class="pathtrav",
         language="ruby",
     )
-    assert r.status is sb.Tier0Status.SOUND
+    assert r.status is not sb.Tier0Status.SOUND
 
 
 def test_try_tier0_not_applicable_when_substitution_var_reassigned(tmp_path: Path):
@@ -1076,7 +1299,7 @@ _WHOOGLE_DIFF = (
     "@@ -1,4 +1,6 @@\n"
     " def get_config():\n"
     "     name = os.path.normpath(request.args.get('name'))\n"
-    '+    if not re.match(r"^[A-Za-z0-9_.+-]+$", name):\n'
+    '+    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'
     "+        return error()\n"
     "     return open(os.path.join(CONFIG_PATH, name))\n"
 )
@@ -1090,7 +1313,7 @@ def _write_post_fix_repo(tmp_path: Path) -> Path:
     src.write_text(
         "def get_config():\n"                                                  # line 1
         "    name = os.path.normpath(request.args.get('name'))\n"              # line 2
-        '    if not re.match(r"^[A-Za-z0-9_.+-]+$", name):\n'                  # line 3
+        '    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'                  # line 3
         "        return error()\n"                                             # line 4
         "    return open(os.path.join(CONFIG_PATH, name))\n"                   # line 5
     )
@@ -1105,7 +1328,7 @@ def test_try_tier0_sound_on_whoogle_archetype(tmp_path: Path):
         fix_diff=_WHOOGLE_DIFF, repo_root=repo,
         sink_uri="app/routes.py", sink_line=5, sink_class="pathtrav")
     assert r.status is sb.Tier0Status.SOUND
-    assert r.artifact == "smt:charset:[A-Za-z0-9_.+-]+@app/routes.py:3"
+    assert r.artifact == "smt:charset:[A-Za-z0-9_+-]+@app/routes.py:3"
     assert r.extras == {"validator_line": 3, "var_name": "name"}
     assert "UNSAT" in r.reasoning
 
@@ -1131,7 +1354,7 @@ def test_try_tier0_declined_when_validator_allows_danger(tmp_path: Path):
         fix_diff=diff, repo_root=tmp_path,
         sink_uri="app.py", sink_line=5, sink_class="pathtrav")
     assert r.status is sb.Tier0Status.DECLINED
-    assert r.counterexample == "/"
+    assert r.counterexample in {"/", "."}
 
 
 def test_try_tier0_not_applicable_when_no_validator(tmp_path: Path):
@@ -1202,7 +1425,8 @@ def test_try_tier0_z3_unavailable_degrades(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.parametrize("sink_class,charset,expect_sound", [
-    ("pathtrav", "A-Za-z0-9_.+-", True),   # whoogle archetype
+    ("pathtrav", "A-Za-z0-9_+-", True),    # whoogle archetype (dotless)
+    ("pathtrav", "A-Za-z0-9_.+-", False),  # '.' builds '..' segments
     ("cmdi",     "A-Za-z0-9_.-",  True),   # excludes shell metachars
     ("pathtrav", "A-Za-z0-9_./",  False),  # permits '/'
     ("cmdi",     "A-Za-z0-9; ",   False),  # permits ';'
@@ -1211,3 +1435,348 @@ def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)
     v = sb.prove_neutralizes(spec, sink_class)
     assert v.sound is expect_sound
+
+
+def test_prove_empty_charset_is_sound():
+    """An empty character class rejects all input — trivially sound."""
+    spec = sb.ValidatorSpec("charset", "x", "", "+...", 0)
+    v = sb.prove_neutralizes(spec, "cmdi")
+    assert v.sound is True
+
+
+# ---------------------------------------------------------------------------
+# Value-bound gate: extra_bindings agreement with the parity shadow path.
+# ---------------------------------------------------------------------------
+
+def test_value_bound_gate_passes_inter_proc_bindings(monkeypatch):
+    """The production evaluate_finding call must pass the resolver's
+    inter_proc_bindings — same as the parity shadow path — so
+    production and telemetry evaluate the same bindings."""
+    from core.analysis import finding_resolver as fr_mod
+    from core.analysis import sanitizer_cut as sc_mod
+
+    sentinel_bindings = frozenset({"SENTINEL_BINDING"})
+    resolved = fr_mod.ResolvedFinding(
+        file="x.py", enclosing_function="f",
+        source_lineno=1, source_symbols=frozenset({"x"}),
+        sink_lineno=2, sink_arg="x", cwe="CWE-22",
+        language="python", cfg=object(), source_node=object(),
+        sink_node=object(), inter_proc_bindings=sentinel_bindings,
+    )
+    captured = {}
+
+    def fake_resolve(finding):
+        return resolved
+
+    class _Result:
+        verdict = sc_mod.VERDICT_SUPPRESS
+
+    def fake_evaluate(graph, sources, sink, **kwargs):
+        captured.update(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(fr_mod, "resolve_finding", fake_resolve)
+    monkeypatch.setattr(sc_mod, "evaluate_finding", fake_evaluate)
+    monkeypatch.setattr(
+        sb._sc_config, "value_bound_enabled", lambda: True,
+    )
+
+    out = sb._value_bound_dominates(
+        file_path="x.py", validator_line=1, sink_line=2,
+        cwe="CWE-22", language="python",
+    )
+    assert out is True
+    assert captured["extra_bindings"] == sentinel_bindings
+
+
+# ---------------------------------------------------------------------------
+# Escaped range endpoints (shared charclass tokenizer).
+# ---------------------------------------------------------------------------
+
+def test_charclass_escaped_left_endpoint_is_a_range():
+    """``[\\--z]`` is the RANGE 0x2D..0x7A in Python — pre-fix the
+    escape branch consumed ``\\-`` as a literal and the trailing
+    ``-z`` read as two more literals, so the modeled language was
+    ``{'-','z'}`` and Z3 proved a permissive guard SOUND for
+    pathtrav/cmdi/xss while the real validator accepted
+    ``../../etc/passwd`` (attacker-controlled self-suppression)."""
+    assert sb._expand_charset_body("\\--z") == {
+        chr(c) for c in range(0x2D, 0x7B)
+    }
+
+
+def test_charclass_escaped_right_endpoint_is_a_range():
+    """Symmetric misparse: ``[a-\\}]`` is the range 0x61..0x7D."""
+    assert sb._expand_charset_body("a-\\}") == {
+        chr(c) for c in range(0x61, 0x7E)
+    }
+
+
+def test_charclass_both_endpoints_escaped():
+    assert sb._expand_charset_body("\\--\\}") == {
+        chr(c) for c in range(0x2D, 0x7E)
+    }
+
+
+def test_charclass_escaped_hyphen_is_not_a_range_operator():
+    """``[a\\-z]`` is three literals — the escaped hyphen never acts
+    as the range operator."""
+    assert sb._expand_charset_body("a\\-z") == {"a", "-", "z"}
+
+
+def test_charclass_descending_escaped_range_degrades_to_literals():
+    """``[a-\\-]`` is descending (0x61 > 0x2D): a compile-time
+    ``re.error`` in Python; treated as three literals."""
+    assert sb._expand_charset_body("a-\\-") == {"a", "-"}
+
+
+def test_prove_charset_escaped_left_endpoint_not_sound():
+    """The F301 PoC guard: ``^[\\--z]+$`` accepts every pathtrav /
+    cmdi / xss danger char (``/ ; <`` are all inside 0x2D..0x7A) —
+    the proof must never read SOUND."""
+    spec = sb.ValidatorSpec(kind="charset", var_name="name", charset="\\--z")
+    for sink_class, danger in (
+        ("pathtrav", ["/", "\\", "."]),
+        ("cmdi", [";", "|", "&", "$", "`"]),
+        ("xss", ["<", ">", '"', "'"]),
+    ):
+        verdict = sb._prove_charset(spec, sink_class, danger)
+        assert not verdict.sound, sink_class
+
+
+def test_try_tier0_escaped_left_endpoint_guard_not_sound(tmp_path: Path):
+    """End-to-end: the innocuous-looking hostile guard from the F301
+    failure scenario must not earn a Tier 0 SOUND verdict."""
+    (tmp_path / "app.py").write_text(
+        "def f(name):\n"                                            # 1
+        "    if not re.match(r'^[\\--z]+$', name):\n"               # 2
+        "        return error()\n"                                   # 3
+        "    return os.system('cat ' + name)\n"                      # 4
+    )
+    diff = (
+        "@@ -1,2 +1,4 @@\n"
+        " def f(name):\n"
+        "+    if not re.match(r'^[\\--z]+$', name):\n"
+        "+        return error()\n"
+        "     return os.system('cat ' + name)\n"
+    )
+    r = sb.try_tier0(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=4, sink_class="cmdi",
+    )
+    assert r.status is not sb.Tier0Status.SOUND
+
+
+def test_charset_body_rejects_octal_escapes():
+    """``\\2`` inside a class is an OCTAL escape (chr(2)) in Python —
+    the literal-char extractor would misread it as the character '2',
+    so the body-safety gate refuses it (same doctrine as ``\\d``)."""
+    assert not sb._charset_body_is_safe("\\2-z")
+    assert not sb._charset_body_is_safe("a\\1b")
+    assert sb._charset_body_is_safe("a-z0-9\\-\\]")
+
+
+# ---------------------------------------------------------------------------
+# Extractor suffix blindness (flags / extra arguments).
+# ---------------------------------------------------------------------------
+
+def test_extract_refuses_re_match_with_flags_argument():
+    """``re.match(p, var, re.MULTILINE)`` makes ``$`` a LINE anchor —
+    the real validator passes ``'abc\\n; rm -rf /'`` while the Z3
+    model still proves a whole-string charset.  Pre-fix the extractor
+    matched an open prefix and silently accepted the third argument;
+    any suffix after the var must refuse the spec-lift."""
+    for flags in ("re.MULTILINE", "re.M", "re.IGNORECASE", "re.X", "0"):
+        diff = (
+            f"+    if not re.match(r'^[a-z0-9]+$', name, {flags}): return\n"
+        )
+        assert sb.extract_validator(diff) is None, flags
+
+
+def test_extract_refuses_fullmatch_with_flags_argument():
+    diff = "+    if not re.fullmatch(r'[a-z]+', x, re.I): raise X\n"
+    assert sb.extract_validator(diff) is None
+
+
+def test_extract_refuses_re_match_on_method_call_suffix():
+    """``re.match(p, name.strip())`` validates a DIFFERENT value than
+    the one the chain check tracks to the sink — refuse."""
+    diff = "+    if not re.match(r'^[a-z]+$', name.strip()): return\n"
+    assert sb.extract_validator(diff) is None
+
+
+def test_extract_plain_re_match_still_lifts():
+    """The closing-paren requirement must not cost the standard form."""
+    diff = '+    if not re.match(r"^[A-Za-z0-9_]+$", name): return error()\n'
+    spec = sb.extract_validator(diff)
+    assert spec is not None
+    assert spec.kind == "charset"
+    assert spec.var_name == "name"
+
+
+def test_extract_re_match_whitespace_before_close_still_lifts():
+    diff = '+    if not re.match(r"^[a-z]+$", name ): return\n'
+    spec = sb.extract_validator(diff)
+    assert spec is not None
+    assert spec.var_name == "name"
+
+
+def test_extract_refuses_re_sub_with_count_argument():
+    """``re.sub(p, '', x, 1)`` strips only the FIRST occurrence — the
+    'every forbidden char removed' claim breaks.  Pre-fix the rebind
+    extractor ignored everything after the input argument."""
+    diff = "+    x = re.sub('[/\\\\]+', '', x, 1)\n"
+    assert sb.extract_validator(diff) is None
+
+
+def test_extract_refuses_re_sub_with_flags_argument():
+    diff = "+    x = re.sub('[a-z]+', '', x, flags=re.I)\n"
+    assert sb.extract_validator(diff) is None
+
+
+def test_extract_plain_re_sub_rebind_still_lifts():
+    diff = "+    x = re.sub('[/\\\\]+', '', x)\n"
+    spec = sb.extract_validator(diff)
+    assert spec is not None
+    assert spec.kind == "charset_sub"
+
+
+def test_extract_refuses_ruby_guard_with_regex_flags():
+    """``/\\A[a-z]+\\z/i`` accepts uppercase — outside the modeled
+    set; flagged Ruby literals decline the lift."""
+    lifted = sb.extract_validator(
+        '+    raise ArgumentError unless name =~ /\\A[a-z0-9]+\\z/\n',
+        language="ruby",
+    )
+    assert lifted is not None            # flagless form still lifts
+    for flag in ("i", "x", "m", "o"):
+        diff = (
+            f'+    raise ArgumentError unless name =~ /\\A[a-z0-9]+\\z/{flag}\n'
+        )
+        assert sb.extract_validator(diff, language="ruby") is None, flag
+
+
+# ---------------------------------------------------------------------------
+# Taint mixing on plain Assign (F303) + the lexical += analogue.
+# ---------------------------------------------------------------------------
+
+def test_chain_assign_mixing_never_grows_chain():
+    """``cmd = name + raw`` mixes validated ``name`` with unvalidated
+    ``raw`` — ``cmd`` must NOT join the chain.  Pre-fix any RHS
+    referencing at least one chain member added the target as fully
+    validated, and the Tier 0 SOUND verdict suppressed the live
+    ``raw``→sink flow (natural benign-but-vulnerable shape, not only
+    adversarial repos)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    raw = request.args.get('extra')\n"
+        "    if not re.match(r'^[a-z0-9]+$', name):\n"
+        "        return 'bad'\n"
+        "    cmd = name + raw\n"
+        "    return os.system(cmd)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 4, 7, "    return os.system(cmd)",
+    ) is False
+
+
+def test_chain_assign_mixing_kills_chain_member_target():
+    """A chain member REBOUND to a mixed expression stops being
+    validated (``y = name; y = name + raw``)."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    raw = request.args.get('extra')\n"
+        "    if not re.match(r'^[a-z0-9]+$', name):\n"
+        "        return 'bad'\n"
+        "    y = name\n"
+        "    y = name + raw\n"
+        "    return os.system(y)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 4, 8, "    return os.system(y)",
+    ) is False
+
+
+def test_chain_fstring_mixing_never_grows_chain():
+    """f-string interpolation is operator mixing too:
+    ``cmd = f'{name} {raw}'``."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def serve(request):\n"
+        "    name = request.args.get('name')\n"
+        "    raw = request.args.get('extra')\n"
+        "    if not re.match(r'^[a-z0-9]+$', name):\n"
+        "        return 'bad'\n"
+        "    cmd = f'{name} {raw}'\n"
+        "    return os.system(cmd)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 4, 7, "    return os.system(cmd)",
+    ) is False
+
+
+def test_chain_concat_with_constant_still_grows():
+    """``safe_path = cfg + '.cfg'`` has no non-chain Name in the
+    operator expression — the pinned multi-step derivation keeps
+    working."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(name):\n"
+        '    if not re.match(r"^[a-z]+$", name): return\n'
+        "    cfg = os.path.join(BASE, name)\n"
+        "    safe_path = cfg + '.cfg'\n"
+        "    return open(safe_path)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 2, 5, "    return open(safe_path)",
+    ) is True
+
+
+def test_chain_mix_of_two_chain_members_still_grows():
+    """Concatenating two CHAIN members is not mixing —
+    ``full = stem + ext`` where both derive from the validated var."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def f(name):\n"
+        '    if not re.match(r"^[a-z]+$", name): return\n'
+        "    stem = name\n"
+        "    ext = name\n"
+        "    full = stem + ext\n"
+        "    return open(full)\n"
+    )
+    assert sb._python_chain_reaches_sink(
+        tree, "name", 2, 6, "    return open(full)",
+    ) is True
+
+
+def test_try_tier0_assign_mixing_not_sound(tmp_path: Path):
+    """End-to-end F303 PoC: the CodeQL-flagged ``raw``→sink flow must
+    not be demoted by a SOUND verdict earned via the mixed ``cmd``."""
+    (tmp_path / "app.py").write_text(
+        "def serve(request):\n"                                     # 1
+        "    name = request.args.get('name')\n"                      # 2
+        "    raw = request.args.get('extra')\n"                      # 3
+        "    if not re.match(r'^[a-z0-9]+$', name):\n"               # 4
+        "        return 'bad'\n"                                      # 5
+        "    cmd = name + raw\n"                                      # 6
+        "    return os.system(cmd)\n"                                 # 7
+    )
+    diff = (
+        "@@ -1,5 +1,7 @@\n"
+        " def serve(request):\n"
+        "     name = request.args.get('name')\n"
+        "     raw = request.args.get('extra')\n"
+        "+    if not re.match(r'^[a-z0-9]+$', name):\n"
+        "+        return 'bad'\n"
+        "     cmd = name + raw\n"
+        "     return os.system(cmd)\n"
+    )
+    r = sb.try_tier0(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="cmdi",
+    )
+    assert r.status is not sb.Tier0Status.SOUND

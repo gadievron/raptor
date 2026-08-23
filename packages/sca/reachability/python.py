@@ -27,7 +27,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Reachability
 
@@ -45,7 +45,10 @@ logger = logging.getLogger(__name__)
 # project's test corpus classifies the same way regardless of which
 # layer is asking.
 from .._test_paths import TEST_DIR_NAMES as _TEST_DIR_NAMES  # noqa: E402,F401
-from .._test_paths import is_test_path as _is_test_file       # noqa: E402,F401
+from .._test_paths import is_test_path as _is_test_file       # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 _DEFAULT_MAX_DEPTH = 12
 
@@ -66,7 +69,7 @@ _MODULE_MAP_FILE = (
 )
 
 
-def _load_dist_to_modules() -> Dict[str, Tuple[str, ...]]:
+def _load_dist_to_modules() -> dict[str, tuple[str, ...]]:
     try:
         raw = json.loads(_MODULE_MAP_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -82,7 +85,7 @@ def _load_dist_to_modules() -> Dict[str, Tuple[str, ...]]:
             _MODULE_MAP_FILE,
         )
         return {}
-    out: Dict[str, Tuple[str, ...]] = {}
+    out: dict[str, tuple[str, ...]] = {}
     for k, v in raw.items():
         if not isinstance(k, str) or not isinstance(v, list):
             continue
@@ -90,14 +93,14 @@ def _load_dist_to_modules() -> Dict[str, Tuple[str, ...]]:
     return out
 
 
-_DIST_TO_MODULES: Dict[str, Tuple[str, ...]] = _load_dist_to_modules()
+_DIST_TO_MODULES: dict[str, tuple[str, ...]] = _load_dist_to_modules()
 
 
 def scan_imports(
     target: Path, *,
     max_depth: int = _DEFAULT_MAX_DEPTH,
     cache=None,
-) -> Dict[str, List[Tuple[Path, int, bool]]]:
+) -> dict[str, list[tuple[Path, int, bool]]]:
     """Return ``{module_name: [(file, line, is_test_code), ...]}``.
 
     The boolean third tuple element marks whether the import lives in
@@ -110,7 +113,7 @@ def scan_imports(
     parse entirely. Pass ``None`` for the legacy uncached behaviour.
     """
     target = target.resolve()
-    out: Dict[str, List[Tuple[Path, int, bool]]] = {}
+    out: dict[str, list[tuple[Path, int, bool]]] = {}
     from .._file_scan_cache import cached_per_file
     for py_file in _walk_python_sources(target, max_depth=max_depth):
         is_test = _is_test_file(py_file, target)
@@ -137,7 +140,7 @@ def scan_imports(
                     py_file, e,
                 )
                 return []
-            pairs: List[Tuple[str, int]] = []
+            pairs: list[tuple[str, int]] = []
             for node in ast.walk(tree):
                 for top_module, line in _modules_from_node(node):
                     pairs.append((top_module, line))
@@ -153,12 +156,12 @@ def scan_imports(
 
 def resolve_dep(
     dep_name: str,
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
+    scan: dict[str, list[tuple[Path, int, bool]]],
     *,
-    target: Optional[Path] = None,
-    version: Optional[str] = None,
-    http: Optional[Any] = None,
-    cache: Optional[Any] = None,
+    target: Path | None = None,
+    version: str | None = None,
+    http: Any | None = None,
+    cache: Any | None = None,
 ) -> Reachability:
     """Map a dep distribution name through three tiers of resolution
     (curated map → PEP 503 / 8 fallback → on-demand wheel-metadata
@@ -190,8 +193,8 @@ def resolve_dep(
             logger.debug("python_modules.resolve_modules raised: %s", e)
             wheel_modules = None
         if wheel_modules:
-            candidates = list(wheel_modules)
-            hits = _hits_for_modules(candidates, scan)
+            candidates = candidates + list(wheel_modules)
+            hits = _hits_for_modules(wheel_modules, scan)
 
     if not hits:
         return Reachability(
@@ -237,8 +240,8 @@ def resolve_dep(
 
 def _hits_for_modules(
     candidates: Iterable[str],
-    scan: Dict[str, List[Tuple[Path, int, bool]]],
-) -> List[Tuple[Path, int, bool]]:
+    scan: dict[str, list[tuple[Path, int, bool]]],
+) -> list[tuple[Path, int, bool]]:
     """Walk the scan and return every (file, line, is_test) hit whose
     module is one of ``candidates`` or a sub-module thereof.
 
@@ -247,15 +250,19 @@ def _hits_for_modules(
     we resolved), so a candidate of ``google`` matches it too via
     the ``startswith(candidate + ".")`` check.
     """
-    hits: List[Tuple[Path, int, bool]] = []
+    hits: list[tuple[Path, int, bool]] = []
+    seen: set = set()
     for mod in candidates:
-        for known in scan.keys():
+        for known in scan:
             if known == mod or known.startswith(mod + "."):
-                hits.extend(scan[known])
+                for h in scan[known]:
+                    if h not in seen:
+                        seen.add(h)
+                        hits.append(h)
     return hits
 
 
-def _candidate_modules(dep_name: str) -> List[str]:
+def _candidate_modules(dep_name: str) -> list[str]:
     """Distribution → module candidates."""
     norm = dep_name.lower()
     explicit = _DIST_TO_MODULES.get(norm)
@@ -266,8 +273,8 @@ def _candidate_modules(dep_name: str) -> List[str]:
     # (e.g., ``foo-bar`` import as ``foo_bar`` *and* sometimes ``foo``).
     norm_underscore = norm.replace("-", "_")
     norm_dot = norm.replace("-", ".")
-    cands: List[str] = [norm, norm_underscore]
-    if norm_dot != norm and norm_dot != norm_underscore:
+    cands: list[str] = [norm, norm_underscore]
+    if norm_dot not in (norm, norm_underscore):
         cands.append(norm_dot)
     # Strip a leading ``python-`` prefix that's purely cosmetic on PyPI
     # (``python-dateutil``, ``python-magic``).
@@ -275,8 +282,8 @@ def _candidate_modules(dep_name: str) -> List[str]:
         cands.append(norm[len("python-"):])
         cands.append(norm[len("python-"):].replace("-", "_"))
     # De-dup while preserving order.
-    seen: Set[str] = set()
-    out: List[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for c in cands:
         if c and c not in seen:
             seen.add(c)
@@ -284,7 +291,7 @@ def _candidate_modules(dep_name: str) -> List[str]:
     return out
 
 
-def _modules_from_node(node: ast.AST) -> Iterable[Tuple[str, int]]:
+def _modules_from_node(node: ast.AST) -> Iterable[tuple[str, int]]:
     """Yield ``(module_name, line)`` for every dotted prefix of an import.
 
     For ``from google.protobuf import descriptor`` we yield both
@@ -325,13 +332,13 @@ def _walk_python_sources(target: Path, *, max_depth: int) -> Iterable[Path]:
 
 
 def _format_evidence(
-    hits: List[Tuple[Path, int, bool]],
+    hits: list[tuple[Path, int, bool]],
     *,
-    target: Optional[Path] = None,
+    target: Path | None = None,
     max_lines: int = 5,
-) -> List[str]:
+) -> list[str]:
     """Compact ``file:line`` lines, capped to keep findings.json small."""
-    out: List[str] = []
+    out: list[str] = []
     for path, line, is_test in hits[:max_lines]:
         try:
             shown = path.relative_to(target) if target else path
@@ -344,4 +351,4 @@ def _format_evidence(
     return out
 
 
-__all__ = ["scan_imports", "resolve_dep"]
+__all__ = ["resolve_dep", "scan_imports"]

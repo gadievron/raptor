@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 # packages/llm_analysis/tests/test_llm_callbacks.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
+import core.llm.client as _client_mod
 from core.llm.client import (
     LLMClient,
     _is_auth_error,
@@ -22,10 +23,18 @@ from core.llm.client import (
 from core.llm.config import LLMConfig, ModelConfig
 
 
+@pytest.fixture(autouse=True)
+def _reset_banner_flag():
+    """Reset once-per-process banner flag so tests are order-independent."""
+    _client_mod._MODEL_BANNER_SHOWN = False
+    yield
+    _client_mod._MODEL_BANNER_SHOWN = False
+
+
 class TestLLMClientInit:
     """Verify LLMClient initializes correctly without litellm."""
 
-    @patch("core.llm.config.detect_llm_availability")
+    @patch("core.llm.detection.detect_llm_availability")
     def test_init_works_without_litellm(self, mock_detect):
         """LLMClient should initialize without importing litellm."""
         mock_detect.return_value = MagicMock(
@@ -48,7 +57,7 @@ class TestLLMClientInit:
         assert client.total_cost == 0.0
         assert client.request_count == 0
 
-    @patch("core.llm.config.detect_llm_availability")
+    @patch("core.llm.detection.detect_llm_availability")
     def test_init_warns_when_no_llm_available(self, mock_detect):
         """LLMClient warns when no external LLM is available."""
         mock_detect.return_value = MagicMock(

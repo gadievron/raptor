@@ -1,0 +1,186 @@
+# Target-kind profile pack: Linux-kernel signal supplements for the
+# bundled CWE strategies.
+#
+# Loaded ONLY when the target is detected as a kernel tree / module
+# (core.audit.vocab_packs.is_kernel_tree — the same markers that gate
+# the checker vocab packs) and merged ADDITIVELY into the bundled
+# strategies by the picker. These names used to be hardcoded in the
+# generic strategy YAMLs for every target; the generic YAMLs now carry
+# universal (libc/POSIX/classic) signals only. Project-specific signal
+# vocabulary should come from the study loop's domain model
+# (picker consumes DomainVocabulary), not from growing this file.
+name: linux_kernel
+description: Linux-kernel signal supplements for the bundled strategies
+
+strategies:
+  auth_privilege:
+    paths:
+      - security/
+      - kernel/cred.c
+      - kernel/capability.c
+      - kernel/user_namespace.c
+      - fs/namespace.c
+      - net/socket.c
+    includes:
+      - linux/capability.h
+      - linux/cred.h
+      - linux/security.h
+    function_calls:
+      - capable
+      - ns_capable
+      - capable_setid
+      - inode_permission
+      - file_permission
+      - generic_permission
+      - security_capable
+      - cred_alive
+      - override_creds
+      - revert_creds
+
+  concurrency:
+    paths:
+      - kernel/locking/
+      - mm/
+      - fs/
+      - kernel/rcu/
+      - kernel/sched/
+      - kernel/futex/
+    includes:
+      - linux/mutex.h
+      - linux/spinlock.h
+      - linux/rwsem.h
+      - linux/rcupdate.h
+      - linux/refcount.h
+    function_keywords:
+      - rcu
+    function_calls:
+      - mutex_lock
+      - mutex_unlock
+      - spin_lock
+      - spin_unlock
+      - read_lock
+      - write_lock
+      - rcu_read_lock
+      - rcu_read_unlock
+      - rcu_dereference
+      - synchronize_rcu
+      - refcount_inc
+      - refcount_dec
+      - refcount_dec_and_test
+      - atomic_inc
+      - atomic_dec
+
+  cryptography:
+    paths:
+      - lib/crypto/
+      - net/tls/
+      - drivers/crypto/
+    includes:
+      - linux/crypto.h
+      - crypto/aes.h
+      - crypto/hash.h
+      - crypto/skcipher.h
+    function_calls:
+      - crypto_memneq
+      - crypto_alloc_skcipher
+      - crypto_alloc_aead
+      - crypto_alloc_shash
+      - crypto_aead_encrypt
+      - crypto_aead_decrypt
+      - skcipher_walk_first
+      - shash_update
+      - get_random_bytes
+
+  input_handling:
+    paths:
+      - net/
+      - drivers/input/
+      - drivers/usb/
+      - drivers/net/
+      - fs/
+      - sound/
+    includes:
+      - linux/skbuff.h
+      - linux/netlink.h
+      - linux/usb.h
+    function_calls:
+      - copy_from_user
+      - get_user
+      - skb_pull
+      - skb_push
+      - skb_copy_bits
+      - nla_get_u32
+      - nla_get_u64
+      - kmemdup_array
+
+  lifecycle_drift:
+    # The whole strategy signal set is kernel lifecycle vocabulary
+    # (mm-conditional accessors); without the kernel profile the
+    # strategy is reachable only through an explicit operator pick.
+    paths:
+      - kernel/ptrace.c
+    includes:
+      - linux/ptrace.h
+      - linux/sched/mm.h
+    function_keywords:
+      - dumpable
+    function_calls:
+      - get_dumpable
+      - __get_dumpable
+      - set_dumpable
+      - ptrace_may_access
+      - __ptrace_may_access
+
+  memory_aliasing:
+    paths:
+      - mm/
+      - fs/splice.c
+      - fs/pipe.c
+      - fs/iomap/
+      - crypto/algif_aead.c
+      - lib/iov_iter.c
+    includes:
+      - linux/splice.h
+      - linux/pipe_fs_i.h
+      - linux/iov_iter.h
+    function_calls:
+      - splice_to_pipe
+      - generic_splice_sendpage
+      - sg_chain
+      - sg_init_table
+      - iov_iter_init
+      - iov_iter_pipe
+      - copy_page_to_iter
+      - get_pages
+      - get_user_pages
+      - copy_page
+
+  memory_management:
+    paths:
+      - mm/
+      - mm/slab/
+      - kernel/cred.c
+      - kernel/exit.c
+    includes:
+      - linux/slab.h
+      - linux/refcount.h
+      - linux/kref.h
+      - linux/percpu-refcount.h
+    function_keywords:
+      - kref
+    function_calls:
+      - kmalloc
+      - kzalloc
+      - kfree
+      - kvfree
+      - vmalloc
+      - vfree
+      - kmem_cache_alloc
+      - kmem_cache_free
+      - kref_get
+      - kref_put
+      - refcount_inc
+      - refcount_dec
+      - refcount_dec_and_test
+      - put_device
+      - get_device

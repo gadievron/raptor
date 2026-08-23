@@ -20,19 +20,18 @@ location preserves identity *across* test-suite-induced reloads too.
 
 from __future__ import annotations
 
-from typing import Optional
 
 
 class _MissingType:
-    _instance: Optional["_MissingType"] = None
+    _instance: _MissingType | None = None
 
-    def __new__(cls) -> "_MissingType":
+    def __new__(cls) -> _MissingType:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
     def __repr__(self) -> str:
-        return "<JsonCache._MISSING>"
+        return "<core.sentinels.MISSING>"
 
     def __bool__(self) -> bool:
         return False

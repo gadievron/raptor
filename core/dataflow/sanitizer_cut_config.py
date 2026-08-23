@@ -41,7 +41,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
 
 VALID_MODES = ("off", "on", "strict", "shadow")
 
@@ -57,6 +57,7 @@ _TRUTHY = ("1", "true", "on", "yes")
 _ENV_MODE = "RAPTOR_SANITIZER_CUT"
 _ENV_NO_LEXICAL = "RAPTOR_SANITIZER_CUT_NO_LEXICAL"
 _ENV_PARITY_LOG = "RAPTOR_SANITIZER_CUT_PARITY_LOG"
+_ENV_AUDIT_DIR = "RAPTOR_SANITIZER_CUT_AUDIT_DIR"
 
 
 @dataclass(frozen=True)
@@ -67,17 +68,23 @@ class SanitizerCutConfig:
     ``lexical_fallback_enabled`` — fall back to the lexical heuristic
     when the gate can't decide. False only in ``strict``.
     ``parity_log_path`` — where to append shadow telemetry, or None.
+    ``audit_dir`` — run directory for the record-only
+    ``suppressions.jsonl`` audit records the value-bound gate writes
+    (``dropped: false`` — evidence, never a drop; the sanitizer-cut
+    witness has not earned suppression). Set when the gate is enabled
+    and the run dir is known; None disables the audit write.
     ``mode`` — the originating mode name, for introspection / audit.
     """
 
     mode: str
     value_bound_enabled: bool
     lexical_fallback_enabled: bool
-    parity_log_path: Optional[str]
+    parity_log_path: str | None
+    audit_dir: str | None = None
 
 
 # Module-level explicit configuration. None means "fall back to env".
-_active: Optional[SanitizerCutConfig] = None
+_active: SanitizerCutConfig | None = None
 
 
 def _truthy(value: str) -> bool:
@@ -85,8 +92,8 @@ def _truthy(value: str) -> bool:
 
 
 def _resolve_parity_log(
-    raw: Optional[str], run_dir: Optional[str], *, want_default: bool,
-) -> Optional[str]:
+    raw: str | None, run_dir: str | None, *, want_default: bool,
+) -> str | None:
     """Resolve a parity-log path.
 
     A boolean-style value (``1`` / ``true`` / ``on`` / ``yes``) or
@@ -103,15 +110,15 @@ def _resolve_parity_log(
             return raw
     if not want_default:
         return None
-    base = run_dir if run_dir else "."
+    base = run_dir or "."
     return os.path.join(base, DEFAULT_PARITY_LOG_NAME)
 
 
 def config_for_mode(
     mode: str,
     *,
-    parity_log: Optional[str] = None,
-    run_dir: Optional[str] = None,
+    parity_log: str | None = None,
+    run_dir: str | None = None,
 ) -> SanitizerCutConfig:
     """Build a :class:`SanitizerCutConfig` for ``mode``.
 
@@ -121,10 +128,11 @@ def config_for_mode(
     """
     mode = (mode or "off").strip().lower()
     if mode not in VALID_MODES:
-        raise ValueError(
+        msg = (
             f"invalid sanitizer-cut mode {mode!r}; "
             f"expected one of {', '.join(VALID_MODES)}"
         )
+        raise ValueError(msg)
     value_bound = mode in ("on", "strict")
     lexical = mode != "strict"
     parity_path = _resolve_parity_log(
@@ -135,6 +143,7 @@ def config_for_mode(
         value_bound_enabled=value_bound,
         lexical_fallback_enabled=lexical,
         parity_log_path=parity_path,
+        audit_dir=(run_dir if (value_bound and run_dir) else None),
     )
 
 
@@ -168,6 +177,7 @@ def _resolve_from_env() -> SanitizerCutConfig:
         mode = "off"
 
     parity_path = _resolve_parity_log(parity_raw, None, want_default=False)
+    audit_raw = os.environ.get(_ENV_AUDIT_DIR, "").strip() or None
     # An env parity log with the gate off is telemetry-only — the env
     # equivalent of shadow mode. Keep the resolved suppression mode but
     # carry the log path.
@@ -177,6 +187,7 @@ def _resolve_from_env() -> SanitizerCutConfig:
         value_bound_enabled=base.value_bound_enabled,
         lexical_fallback_enabled=base.lexical_fallback_enabled,
         parity_log_path=parity_path,
+        audit_dir=(audit_raw if base.value_bound_enabled else None),
     )
 
 
@@ -199,13 +210,17 @@ def _export_to_env(c: SanitizerCutConfig) -> None:
         os.environ["RAPTOR_SANITIZER_CUT_PARITY_LOG"] = c.parity_log_path
     else:
         os.environ.pop("RAPTOR_SANITIZER_CUT_PARITY_LOG", None)
+    if c.audit_dir:
+        os.environ[_ENV_AUDIT_DIR] = c.audit_dir
+    else:
+        os.environ.pop(_ENV_AUDIT_DIR, None)
 
 
 def configure(
     mode: str,
     *,
-    parity_log: Optional[str] = None,
-    run_dir: Optional[str] = None,
+    parity_log: str | None = None,
+    run_dir: str | None = None,
     export_env: bool = False,
 ) -> SanitizerCutConfig:
     """Install an explicit configuration (from a CLI flag). Returns the
@@ -245,14 +260,18 @@ def lexical_fallback_enabled() -> bool:
     return current().lexical_fallback_enabled
 
 
-def parity_log_path() -> Optional[str]:
+def parity_log_path() -> str | None:
     return current().parity_log_path
+
+
+def audit_dir() -> str | None:
+    return current().audit_dir
 
 
 _PERSIST_NAME = "sanitizer-cut-config.json"
 
 
-def persist(run_dir: str) -> Optional[str]:
+def persist(run_dir: str) -> str | None:
     """Write the active config to ``<run_dir>/sanitizer-cut-config.json``
     so a multi-process pipeline (``/validate`` runs each stage as its
     own process) can reload it. Returns the path written, or None if
@@ -265,19 +284,26 @@ def persist(run_dir: str) -> Optional[str]:
         "mode": _active.mode,
         "parity_log_path": _active.parity_log_path,
     }
-    # Per-run internal artifact — no other UID needs to read it. Create
-    # 0o600 rather than the umask default (0o644) so it isn't
-    # world-readable (review #4 on PR #794). O_TRUNC mirrors the
-    # overwrite semantics of "w".
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    import tempfile
+    dir_name = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 
 def load_persisted(
     run_dir: str, *, export_env: bool = True,
-) -> Optional[SanitizerCutConfig]:
+) -> SanitizerCutConfig | None:
     """Reload a config persisted by :func:`persist` and install it
     (with env export by default). No-op returning None when the file is
     absent or unreadable — the env fallback stays active."""
@@ -286,16 +312,25 @@ def load_persisted(
     if not os.path.isfile(path):
         return None
     try:
-        with open(path, encoding="utf-8") as fh:
+        with Path(path).open(encoding="utf-8") as fh:
             payload = json.load(fh)
     except (OSError, ValueError):
         return None
-    return configure(
-        payload.get("mode", "off"),
-        parity_log=payload.get("parity_log_path"),
-        run_dir=run_dir,
-        export_env=export_env,
-    )
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return configure(
+            payload.get("mode", "off"),
+            parity_log=payload.get("parity_log_path"),
+            run_dir=run_dir,
+            export_env=export_env,
+        )
+    except (ValueError, TypeError, AttributeError):
+        # Version-skewed or hand-edited persist: an unknown mode string
+        # raises ValueError, a non-string mode / parity_log raises
+        # TypeError / AttributeError inside config_for_mode. Same
+        # degradation as an unreadable file — env fallback stays active.
+        return None
 
 
 def add_cli_arguments(parser) -> None:
@@ -326,8 +361,8 @@ def add_cli_arguments(parser) -> None:
 
 
 def configure_from_args(
-    args, *, run_dir: Optional[str] = None, export_env: bool = False,
-) -> Optional[SanitizerCutConfig]:
+    args, *, run_dir: str | None = None, export_env: bool = False,
+) -> SanitizerCutConfig | None:
     """Apply parsed argparse values. No-op (returns None, leaving the
     env fallback active) when ``--sanitizer-cut`` was not passed.
 
@@ -346,15 +381,16 @@ def configure_from_args(
 __all__ = [
     "VALID_MODES",
     "SanitizerCutConfig",
+    "add_cli_arguments",
+    "audit_dir",
     "config_for_mode",
     "configure",
     "configure_from_args",
-    "persist",
-    "load_persisted",
-    "add_cli_arguments",
     "current",
+    "lexical_fallback_enabled",
+    "load_persisted",
+    "parity_log_path",
+    "persist",
     "reset",
     "value_bound_enabled",
-    "lexical_fallback_enabled",
-    "parity_log_path",
 ]
