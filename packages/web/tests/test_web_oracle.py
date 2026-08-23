@@ -1,9 +1,12 @@
+"""Three-gate web oracle behavior of the fuzzer (no network)."""
+
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 from packages.web.client import WebClient
 from packages.web.fuzzer import WebFuzzer
-from packages.web.models import WebFinding
-from packages.web.verified_outcomes import from_web_finding
+from packages.web.markers import find_marker, marker_present
 
 
 def _response(status, text):
@@ -31,9 +34,11 @@ def test_fuzzer_requires_attack_diff_for_confirmation():
     )
 
     assert finding is not None
+    assert finding["confirmed"] is True
     assert finding["baseline_evidence"].startswith("HTTP 200")
     assert "attack HTTP 500" in finding["diff_summary"]
     assert finding["attack_evidence"] == finding["response_evidence"]
+    assert finding["oracle_signal"].startswith("sqli_error:")
 
 
 def test_fuzzer_rejects_signal_already_present_in_baseline():
@@ -106,85 +111,92 @@ def test_command_like_payloads_try_direct_id_with_inert_baseline():
     assert fuzzer._baseline_value("cmd") == "raptor-baseline"
 
 
-def test_web_finding_maps_to_verified_outcome():
-    finding = WebFinding(
-        id="WEB-0001",
-        title="SQL Injection",
-        severity="high",
-        confidence="medium",
-        status="needs_review",
-        url="https://example.test/search",
-        evidence="confirmed",
-        description="SQLi",
-        recommendation="Use parameterised queries",
-        vuln_type="injection",
-        asvs_category="V5",
-        check_id="V5.2.1",
-        cwe_id="CWE-89",
-        confirmed=True,
-        target_url="https://example.test/search",
-        confirmation_payload="' OR 1=1--",
-        response_evidence="SQL syntax",
-        baseline_evidence="HTTP 200, 10 bytes",
-        attack_evidence="SQL syntax",
-        diff_summary="baseline HTTP 200/10 bytes; attack HTTP 500/50 bytes",
-        attack_vector="query_param",
-        oracle_signal="sqli_error:sql syntax",
-        method="GET",
+def test_xss_requires_unescaped_reflection():
+    client = WebClient("https://example.test")
+    fuzzer = WebFuzzer(client)
+    payload = "<script>alert(1)</script>"
+
+    escaped_only = _response(
+        200, "you searched for &lt;script&gt;alert(1)&lt;/script&gt;"
+    )
+    assert fuzzer._analyze_response(escaped_only, payload, "xss") is None
+
+    both = _response(
+        200,
+        f"raw {payload} and escaped &lt;script&gt;alert(1)&lt;/script&gt;",
+    )
+    assert fuzzer._analyze_response(both, payload, "xss") is None
+
+    raw_only = _response(200, f"hello {payload} world")
+    confirmation = fuzzer._analyze_response(raw_only, payload, "xss")
+    assert confirmation is not None
+    assert confirmation["signal"] == "xss_reflected_unescaped"
+
+
+def test_ssti_marker_requires_baseline_diff():
+    """'49' in a response means nothing on its own — the three-gate
+    baseline veto is what makes the ssti marker usable."""
+    client = WebClient("https://example.test")
+    fuzzer = WebFuzzer(client)
+
+    # Page that always contains 49: vetoed.
+    responses = iter([
+        _response(200, "products found: 49"),
+        _response(200, "products found: 49"),
+    ])
+    client.get = lambda url, params=None: next(responses)
+    assert (
+        fuzzer._test_payload("https://example.test/s", "q", "{{7*7}}", "ssti")
+        is None
     )
 
-    outcome = from_web_finding(finding)
+    # Evaluated template only in the attack leg: confirmed.
+    responses = iter([
+        _response(200, "you searched for raptor-baseline"),
+        _response(200, "you searched for 49"),
+    ])
+    client.get = lambda url, params=None: next(responses)
+    finding = fuzzer._test_payload("https://example.test/s", "q", "{{7*7}}", "ssti")
+    assert finding is not None
+    assert finding["oracle_signal"] == "ssti_evaluated:49"
 
-    assert outcome is not None
-    data = outcome.to_dict()
-    assert data["oracle"] == "web"
-    assert data["status"] == "verified"
-    assert data["reproducible"] is False
-    assert data["evidence"]["payload"] == "' OR 1=1--"
-    assert data["evidence"]["diff_summary"].startswith("baseline HTTP")
-    assert data["evidence"]["oracle_signal"] == "sqli_error:sql syntax"
+
+def test_no_llm_fuzzer_uses_static_payloads():
+    client = WebClient("https://example.test")
+    fuzzer = WebFuzzer(client)  # no LLM
+
+    payloads = fuzzer._generate_payloads("q", "text", "sqli")
+
+    assert payloads == fuzzer._get_basic_payloads("sqli", param_name="q")
+    assert fuzzer.payload_cache_stats == (0, 0)
 
 
-def test_passive_confirmed_web_finding_does_not_become_verified_outcome():
-    finding = WebFinding(
-        id="WEB-0002",
-        title="Missing Content-Security-Policy",
-        severity="medium",
-        confidence="high",
-        status="confirmed",
-        url="https://example.test/",
-        evidence="CSP header missing",
-        description="No CSP header was observed",
-        recommendation="Set a CSP header",
-        vuln_type="missing_security_header",
-        asvs_category="V14.4",
-        check_id="V14.4.1",
-        confirmed=True,
-        target_url="https://example.test/",
+def test_fuzz_parameter_stops_after_first_confirmed_hit_per_class(monkeypatch):
+    client = WebClient("https://example.test")
+    fuzzer = WebFuzzer(client)
+    tested: list[str] = []
+
+    def fake_test(url, param, payload, vuln_type, method="GET"):
+        tested.append(payload)
+        return {"payload": payload, "vulnerability_type": vuln_type}
+
+    monkeypatch.setattr(fuzzer, "_test_payload", fake_test)
+
+    findings = fuzzer.fuzz_parameter(
+        "https://example.test/s", "q", vulnerability_types=["sqli"]
     )
 
-    assert from_web_finding(finding) is None
+    assert len(findings) == 1
+    assert len(tested) == 1  # first confirmed hit ends the class
 
 
-def test_confirmed_web_finding_without_oracle_signal_does_not_become_verified_outcome():
-    finding = WebFinding(
-        id="WEB-0003",
-        title="SQL Injection",
-        severity="high",
-        confidence="medium",
-        status="needs_review",
-        url="https://example.test/search",
-        evidence="confirmed",
-        description="SQLi",
-        recommendation="Use parameterised queries",
-        vuln_type="injection",
-        asvs_category="V5",
-        check_id="V5.2.1",
-        cwe_id="CWE-89",
-        confirmed=True,
-        target_url="https://example.test/search",
-        confirmation_payload="' OR 1=1--",
-        response_evidence="SQL syntax",
-    )
+def test_markers_shared_between_fuzzer_and_oracle_tiers():
+    """find_marker feeds the fuzzer's signals; marker_present drives the
+    verification oracle's replay legs — same patterns by construction."""
+    body = "boom: uid=1000(web) gid=1000(web)"
+    assert marker_present("command_injection", body)
+    assert find_marker("command_injection", body) == "uid=1000(web)"
 
-    assert from_web_finding(finding) is None
+    assert marker_present("ssti", "result 49 here")
+    assert not marker_present("ssti", "result 50 here")
+    assert not marker_present("nosuchclass", body)

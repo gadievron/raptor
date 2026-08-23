@@ -176,6 +176,6 @@ class TestUnknownClass:
     def test_unknown_vuln_type_inconclusive_no_requests(self):
         client = _ScriptedClient()
         oracle = VerificationOracle(client)
-        result = oracle.verify("http://t/", "q", "x", "ssti")
+        result = oracle.verify("http://t/", "q", "x", "nosuchclass")
         assert result.status == INCONCLUSIVE
         assert oracle.requests_used == 0

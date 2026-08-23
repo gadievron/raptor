@@ -58,7 +58,7 @@ _EXCERPT_LEN = 400
 
 # Marker-differential classes get 3 extra requests (payload replay,
 # control, control replay); xss gets 2 (canary probe, payload replay).
-_MARKER_CLASSES = frozenset({"sqli", "command_injection", "path_traversal"})
+_MARKER_CLASSES = frozenset({"sqli", "command_injection", "path_traversal", "ssti"})
 
 
 def mint_canary() -> str:
@@ -88,6 +88,10 @@ _EVIDENCE_TYPES = {
     "xss": "xss_reflection",
     "command_injection": "cmdi_output",
     "path_traversal": "path_traversal",
+    # ssti's bare marker (evaluated 7*7) is meaningless without the
+    # control legs this oracle runs — which is exactly why it belongs
+    # in the marker-differential scheme rather than a naive grep.
+    "ssti": "ssti_evaluated",
 }
 
 
