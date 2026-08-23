@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs
 
-from packages.web.checks.base import Check, CheckCategory, registry
+from packages.web.checks.base import PROBE_HOST, Check, CheckCategory, registry
 
 if TYPE_CHECKING:
     pass
@@ -44,7 +44,7 @@ class OAuthOpenRedirectCheck(Check):
                     params={
                         "response_type": "code",
                         "client_id": "test",
-                        "redirect_uri": "https://evil-raptor-probe.example.com/callback",
+                        "redirect_uri": f"https://{PROBE_HOST}/callback",
                         "scope": "openid",
                         "state": "raptor_probe",
                     },
@@ -53,10 +53,15 @@ class OAuthOpenRedirectCheck(Check):
                 location = resp.headers.get("Location", "")
 
                 if resp.status_code in (301, 302, 307, 308):
-                    if "evil-raptor-probe.example.com" in location:
+                    # Hostname-exact: substring matching would fire on
+                    # the probe value merely REFLECTED into a benign
+                    # redirect's query string, and could be dodged by
+                    # prefix/suffix host tricks. Only an actual
+                    # redirect TO the probe host counts.
+                    if urlparse(location).hostname == PROBE_HOST:
                         return [self._result(
                             passed=False, url=target_url.rstrip("/") + path,
-                            evidence=f"redirect_uri=evil-raptor-probe.example.com -> Location: {location}",
+                            evidence=f"redirect_uri={PROBE_HOST} -> Location: {location}",
                             detail=(
                                 "The OAuth authorization endpoint accepted an external redirect_uri "
                                 "pointing to an attacker-controlled domain. An attacker can craft "

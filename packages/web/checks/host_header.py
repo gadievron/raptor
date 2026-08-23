@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from packages.web.checks.base import Check, CheckCategory, registry
+from packages.web.checks.base import PROBE_HOST, Check, CheckCategory, registry
 
 if TYPE_CHECKING:
     pass
 
-_ATTACKER_HOST = "evil-raptor-probe.example.com"
+_ATTACKER_HOST = PROBE_HOST
 _OVERRIDE_HEADERS = [
     "X-Forwarded-Host",
     "X-Host",

@@ -44,8 +44,10 @@ class TestOobListener(unittest.TestCase):
     def test_mint_hit_correlate(self):
         context = OobContext(url="https://t/api", param="target")
         canary = self.listener.mint(context)
-        self.assertTrue(
-            canary.startswith(f"http://127.0.0.1:{self.listener.port}/"),
+        parsed = urlparse(canary)
+        self.assertEqual(
+            (parsed.scheme, parsed.netloc),
+            ("http", f"127.0.0.1:{self.listener.port}"),
         )
 
         self.assertEqual(_fetch(canary), 200)
@@ -79,8 +81,10 @@ class TestOobListener(unittest.TestCase):
         listener.start()
         self.addCleanup(listener.stop)
         canary = listener.mint(OobContext(url="https://t", param="p"))
-        self.assertTrue(
-            canary.startswith("http://oob.operator.example:8443/"),
+        parsed = urlparse(canary)
+        self.assertEqual(
+            (parsed.scheme, parsed.netloc),
+            ("http", "oob.operator.example:8443"),
         )
 
     def test_token_budget_is_enforced(self):
@@ -184,43 +188,48 @@ class TestListenerHardening(unittest.TestCase):
     def test_idle_connection_flood_stays_bounded_and_responsive(self):
         import socket
         import threading
+        import time
 
-        baseline = threading.active_count()
-        idlers = []
-        try:
-            for _ in range(120):
-                sock = socket.create_connection(
-                    ("127.0.0.1", self.listener.port), timeout=5,
+        # Compressed clock: cap and reap semantics are what's under
+        # test, not the production constants' literal values.
+        with patch("packages.web.oob._MAX_LIVE_CONNECTIONS", 16), \
+                patch("packages.web.oob._CONNECTION_TIMEOUT_S", 2):
+            listener = OobListener(bind_host="127.0.0.1", port=0)
+            listener.start()
+            self.addCleanup(listener.stop)
+            baseline = threading.active_count()
+            idlers = []
+            try:
+                for _ in range(48):
+                    sock = socket.create_connection(
+                        ("127.0.0.1", listener.port), timeout=5,
+                    )
+                    idlers.append(sock)  # held open, never written to
+                # Over-cap connections are dropped, in-cap ones pin at
+                # most the live-connection cap of handler threads.
+                self.assertLessEqual(
+                    threading.active_count() - baseline, 16 + 8,
                 )
-                idlers.append(sock)  # held open, never written to
-            # Over-cap connections are dropped, in-cap ones pin at most
-            # _MAX_LIVE_CONNECTIONS handler threads.
-            from packages.web.oob import _MAX_LIVE_CONNECTIONS
-            self.assertLessEqual(
-                threading.active_count() - baseline,
-                _MAX_LIVE_CONNECTIONS + 8,
-            )
-            # And once flood connections drop off, their slots free up
-            # and a real callback gets through — the flood degrades
-            # service while it holds slots, it must not wedge the
-            # listener permanently.
-            import time
-            for sock in idlers[:16]:
-                sock.close()
-            canary = self.listener.mint(
-                OobContext(url="https://t", param="p"),
-            )
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                try:
-                    if _fetch(canary) == 200:
-                        break
-                except OSError:
-                    time.sleep(0.2)
-            self.assertTrue(self.listener.hits_for(token_of(canary)))
-        finally:
-            for sock in idlers:
-                sock.close()
+                # And once flood connections drop off, their slots free
+                # up and a real callback gets through — the flood
+                # degrades service while it holds slots, it must not
+                # wedge the listener permanently.
+                for sock in idlers[:8]:
+                    sock.close()
+                canary = listener.mint(
+                    OobContext(url="https://t", param="p"),
+                )
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    try:
+                        if _fetch(canary) == 200:
+                            break
+                    except OSError:
+                        time.sleep(0.1)
+                self.assertTrue(listener.hits_for(token_of(canary)))
+            finally:
+                for sock in idlers:
+                    sock.close()
 
     def test_folded_header_cannot_smuggle_crlf_into_evidence(self):
         """Python's header parser preserves obs-fold continuations —

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from packages.web.checks.base import Check, CheckCategory, registry
+from packages.web.checks.base import PROBE_HOST, Check, CheckCategory, registry
 
 if TYPE_CHECKING:
     pass
@@ -33,7 +33,7 @@ _CACHE_INDICATORS = {
     "Age", "Via", "X-Drupal-Cache", "X-Proxy-Cache",
 }
 
-_PROBE_VALUE = "evil-raptor-probe.example.com"
+_PROBE_VALUE = PROBE_HOST
 
 
 def _is_cached(headers: dict) -> bool:
@@ -192,6 +192,15 @@ class RequestSmugglingCheck(Check):
             sock = socket.create_connection((host, port), timeout=5)
             if use_tls:
                 ctx = ssl.create_default_context()
+                # Scanner semantics, not client semantics: this raw
+                # probe exists to elicit a parsing differential from
+                # whatever stack the TARGET runs, legacy included —
+                # transport privacy is not a goal and there is nothing
+                # of ours to protect. Pin the floor explicitly instead
+                # of inheriting build defaults; TLS 1.0 is deliberate
+                # (distro OpenSSL policy may still refuse below 1.2 at
+                # handshake time, which only narrows reach).
+                ctx.minimum_version = ssl.TLSVersion.TLSv1
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
                 sock = ctx.wrap_socket(sock, server_hostname=host)

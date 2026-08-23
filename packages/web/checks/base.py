@@ -13,6 +13,17 @@ if TYPE_CHECKING:
     from core.llm.client import LLMClient
 
 
+# The hostname attack-shaped checks inject into probe values. Reserved
+# under RFC 2606/6761 (example.com), so it can NEVER resolve: even a
+# target that dereferences the value sends traffic nowhere. Deliberately
+# a constant, not operator configuration — a configurable value here
+# would aim target-triggered requests at whatever domain was typo'd or
+# planted (the third-party-OAST hazard by another door). Probing that
+# needs a REAL callback belongs to the OOB listener, which mints its
+# own URLs from operator-asserted infrastructure.
+PROBE_HOST = "evil-raptor-probe.example.com"
+
+
 class CheckCategory(str, Enum):
     AUTHN       = "V2"    # Authentication
     SESSION     = "V3"    # Session Management
