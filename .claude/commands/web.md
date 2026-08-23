@@ -89,6 +89,14 @@ python3 raptor.py web --url https://target --ffuf-wordlist sleep-payloads.txt \
 python3 raptor.py web --url https://target --ffuf-wordlist dirs.txt \
   --ffuf-match-regex 'AKIA[0-9A-Z]{16}'
 
+# Headless-browser phases (needs `python3 -m playwright install
+# chromium`; on distros newer than the pinned playwright recognizes,
+# prefix PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64). Rendered
+# crawl sees the post-JS DOM (SPA routes, dynamic forms); XSS is graded
+# by actual JavaScript execution, not reflection; fragment probes catch
+# DOM sinks the server never sees. Page requests are origin-gated.
+python3 raptor.py web --url https://target --browser
+
 # Blind SSRF via out-of-band callbacks: the listener runs INSIDE the
 # scanner process (trusted code, never sandboxed — callbacks are
 # inbound from the target). One callback proves nothing; findings are

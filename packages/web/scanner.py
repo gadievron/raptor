@@ -158,6 +158,7 @@ class WebScanner:
         oob_listen: str | None = None,
         oob_callback_host: str | None = None,
         oob_grace: float = 10.0,
+        browser: bool = False,
     ) -> None:
         import time
 
@@ -186,6 +187,7 @@ class WebScanner:
         self.access_control = access_control
         self.ffuf_wordlist_dir = ffuf_wordlist_dir
         self.ffuf_api_wordlist = ffuf_api_wordlist
+        self.use_browser = browser
         self.oob_grace = oob_grace
         self.oob_listener = None
         if oob_listen:
@@ -268,6 +270,9 @@ class WebScanner:
                 self._phase_access_control(discovery, crawl_data)
             )
 
+        if self.use_browser:
+            self._phase_browser_crawl(crawl_data)
+
         context_map = None
         if self.run_understand:
             context_map = self._phase_understand(crawl_data, discovery)
@@ -288,6 +293,11 @@ class WebScanner:
             )
             self._phases_completed.append("verification")
             self._annotate_findings_with_verification(injection_findings)
+
+        if self.use_browser:
+            all_findings.extend(
+                self._phase_browser_xss(injection_findings, crawl_data),
+            )
 
         all_findings.extend(self._phase_oob())
 
@@ -1260,6 +1270,217 @@ class WebScanner:
             oracle_signal=(
                 "oob_callback_replayed" if verified else "oob_callback_once"
             ),
+        )
+
+    def _browser_engine(self):
+        """A configured BrowserEngine carrying the live session's auth."""
+        from packages.web.browser import BrowserEngine
+
+        cookies: dict[str, str] = {}
+        headers: dict[str, str] = {}
+        if self.session and self.session.authenticated:
+            if self.session.mode == "bearer" and self.session.token:
+                headers["Authorization"] = f"Bearer {self.session.token}"
+            elif self.session.mode in ("form", "cookie"):
+                cookies = dict(self.client.get_cookies() or {})
+        screenshots = self.out_dir / "screenshots"
+        screenshots.mkdir(exist_ok=True)
+        return BrowserEngine(
+            self.base_url,
+            cookies=cookies,
+            extra_headers=headers,
+            screenshots_dir=screenshots,
+        )
+
+    def _phase_browser_crawl(self, crawl_data: dict) -> None:
+        """Phase 3b: rendered crawl — the DOM JavaScript builds.
+
+        Supplements the static crawl with post-JS links and forms (SPA
+        routes, dynamically inserted markup). Additive only: nothing
+        the static crawler found is removed or rewritten.
+        """
+        from packages.web.browser import browser_available
+
+        logger.info("Phase 3b: Rendered crawl (headless browser)")
+        try:
+            self.execution_policy.authorize(
+                tool_id="browser",
+                url=self.base_url,
+                risk="active",
+                action="rendered_crawl",
+            )
+        except WebPolicyError as e:
+            logger.warning("Rendered crawl skipped: %s", self._redact(str(e)))
+            return
+        if not browser_available():
+            logger.warning(
+                "Rendered crawl skipped: no launchable Chromium "
+                "(python3 -m playwright install chromium)",
+            )
+            return
+        urls = list(dict.fromkeys(
+            [self.base_url] + (crawl_data.get("discovered_urls") or []),
+        ))
+        new_urls = 0
+        new_forms = 0
+        try:
+            with self._browser_engine() as engine:
+                for rendered in engine.rendered_crawl(urls, max_pages=10):
+                    known = set(crawl_data.setdefault("discovered_urls", []))
+                    for link in rendered.links:
+                        if link not in known:
+                            crawl_data["discovered_urls"].append(link)
+                            known.add(link)
+                            new_urls += 1
+                    known_actions = {
+                        form.get("action")
+                        for form in crawl_data.setdefault(
+                            "discovered_forms", [],
+                        )
+                    }
+                    for form in rendered.forms:
+                        if form["action"] not in known_actions:
+                            crawl_data["discovered_forms"].append(form)
+                            new_forms += 1
+                            for name in form.get("inputs", {}):
+                                params = crawl_data.setdefault(
+                                    "discovered_parameters", [],
+                                )
+                                if name not in params:
+                                    params.append(name)
+                blocked = engine.blocked_requests
+        except Exception as e:
+            logger.warning(
+                "Rendered crawl failed: %s", self._redact(str(e)),
+            )
+            return
+        logger.info(
+            "Phase 3b complete: +%d URL(s), +%d form(s) from the rendered "
+            "DOM (%d off-origin request(s) blocked)",
+            new_urls, new_forms, blocked,
+        )
+        self._phases_completed.append("browser_crawl")
+
+    def _phase_browser_xss(
+        self, injection_findings: list[WebFinding], crawl_data: dict,
+    ) -> list[WebFinding]:
+        """Phase 6b: execution-proof XSS.
+
+        Two probes, both graded by actual JavaScript execution (a
+        canary side-channel write), never by reflection matching:
+
+        * every reflected-xss finding gets its parameter re-probed in
+          the browser — proof upgrades the finding to confirmed with
+          a screenshot;
+        * crawled pages get a fragment-canary probe (the fragment
+          never reaches the server, so a hit is a client-side DOM
+          sink) — a NEW finding class the HTTP-only pipeline cannot
+          see.
+        """
+        from packages.web.browser import browser_available
+
+        try:
+            self.execution_policy.authorize(
+                tool_id="browser",
+                url=self.base_url,
+                risk="active",
+                action="xss_execution_proof",
+            )
+        except WebPolicyError as e:
+            logger.warning("Browser XSS phase skipped: %s",
+                           self._redact(str(e)))
+            return []
+        if not browser_available():
+            return []
+        logger.info("Phase 6b: Execution-proof XSS (headless browser)")
+        new_findings: list[WebFinding] = []
+        xss_findings = [
+            finding for finding in injection_findings
+            if finding.vuln_type == "xss"
+        ]
+        probe_urls = list(dict.fromkeys(
+            [self.base_url] + (crawl_data.get("discovered_urls") or []),
+        ))[:10]
+        try:
+            with self._browser_engine() as engine:
+                for finding in xss_findings:
+                    for param in finding.affected_parameters[:3]:
+                        proof = engine.prove_xss(
+                            finding.target_url or finding.url, param,
+                        )
+                        if proof is None:
+                            continue
+                        finding.status = "confirmed"
+                        finding.confidence = "high"
+                        finding.confirmed = True
+                        finding.oracle_signal = "xss_executed_in_dom"
+                        finding.evidence += (
+                            f"\nExecution proof: canary JavaScript ran in "
+                            f"the rendered page (parameter '{param}')."
+                            + (f" Screenshot: {proof.screenshot}"
+                               if proof.screenshot else "")
+                        )
+                        break
+                for url in probe_urls:
+                    proof = engine.prove_xss(url, None)
+                    if proof is not None:
+                        new_findings.append(
+                            self._dom_xss_finding(proof),
+                        )
+        except Exception as e:
+            logger.warning(
+                "Browser XSS phase failed: %s", self._redact(str(e)),
+            )
+            return new_findings
+        logger.info(
+            "Phase 6b complete: %d execution upgrade(s), %d DOM sink "
+            "finding(s)",
+            sum(1 for f in xss_findings
+                if f.oracle_signal == "xss_executed_in_dom"),
+            len(new_findings),
+        )
+        self._phases_completed.append("browser_xss")
+        return new_findings
+
+    def _dom_xss_finding(self, proof) -> WebFinding:
+        auth_ctx = "authenticated" if self.session else "unauthenticated"
+        self._finding_counter += 1
+        return WebFinding(
+            id=f"WEB-{self._finding_counter:04d}",
+            title="DOM-based XSS -- fragment payload executed client-side",
+            severity="high",
+            confidence="high",
+            status="confirmed",
+            url=proof.url,
+            evidence=(
+                f"A canary payload placed in the URL fragment executed as "
+                f"JavaScript in the rendered page: {proof.payload}. The "
+                "fragment never reaches the server, so the sink is "
+                "client-side."
+                + (f" Screenshot: {proof.screenshot}"
+                   if proof.screenshot else "")
+            ),
+            description=(
+                "Client-side script writes location-derived data into an "
+                "execution sink (DOM-based cross-site scripting)."
+            ),
+            recommendation=(
+                "Never pass location.hash/search into innerHTML, "
+                "document.write, or eval-family sinks; use textContent "
+                "or sanitize with a vetted library."
+            ),
+            vuln_type="xss",
+            asvs_category="V5", check_id="V5.3.3",
+            auth_context=auth_ctx,
+            cwe_id="CWE-79",
+            confirmed=True,
+            target_url=proof.url,
+            confirmation_payload=proof.payload,
+            response_evidence="canary executed in rendered DOM",
+            attack_vector="dom_fragment",
+            method="GET",
+            affected_parameters=[proof.parameter],
+            oracle_signal="xss_executed_in_dom",
         )
 
     def _sage_attach_priors(self) -> None:
@@ -2247,6 +2468,16 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--browser",
+        action="store_true",
+        help=(
+            "Headless-browser phases (Playwright Chromium): rendered "
+            "crawl of the post-JS DOM, execution-proof XSS upgrades, "
+            "and fragment-based DOM XSS probes; all page requests are "
+            "origin-gated"
+        ),
+    )
+    parser.add_argument(
         "--oob-listen",
         help=(
             "Start the in-process out-of-band callback listener on "
@@ -2692,6 +2923,7 @@ def main():
         oob_listen=args.oob_listen,
         oob_callback_host=args.oob_callback_host,
         oob_grace=args.oob_grace,
+        browser=bool(args.browser),
     )
 
     try:

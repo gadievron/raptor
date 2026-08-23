@@ -381,6 +381,7 @@ Web application security scanner (alpha).
 | `--ffuf-stop-on-all-errors` | Stop on all error cases (`-sa`) |
 | `--ffuf-header <header>` | Custom HTTP header (repeatable) |
 | `--ffuf-cookie <cookie>` | Cookie to include in requests (repeatable) |
+| `--browser` | Headless-browser phases: rendered crawl (post-JS DOM), execution-proof XSS, fragment DOM-XSS probes |
 | `--oob-listen <[host:]port>` | In-process out-of-band callback listener; injects blind-SSRF canaries (0 = ephemeral port) |
 | `--oob-callback-host <host[:port]>` | Externally reachable callback address when it differs from the bind (NAT/container) |
 | `--oob-grace <seconds>` | Wait for out-of-band callbacks after fuzzing (default 10) |
