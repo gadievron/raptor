@@ -4,6 +4,7 @@
 Requires bs4 and requests — skipped if missing.
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -476,3 +477,58 @@ class TestFfufReportKey(unittest.TestCase):
             ffuf_instance.run.assert_called_once()
             self.assertEqual(result["ffuf"]["tool"], "ffuf")
             self.assertEqual(result["ffuf"]["result_count"], 1)
+
+
+class TestProjectFindingsCitizenship(unittest.TestCase):
+    """Web runs emit core-schema findings.json so /project merge sees them."""
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_report_writes_core_schema_findings_json(
+        self, mock_client_cls, mock_crawler_cls,
+    ):
+        from core.project.merge import merge_findings
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner("http://example.com", None, Path(tmpdir))
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = [{
+                "url": "http://example.com/search",
+                "parameter": "q",
+                "payload": "' OR 1=1--",
+                "vulnerability_type": "sqli",
+                "method": "GET",
+                "status_code": 500,
+                "response_length": 10,
+                "confirmed": True,
+                "response_evidence": "SQL syntax",
+                "attack_evidence": "SQL syntax",
+                "baseline_evidence": "HTTP 200, 5 bytes",
+                "diff_summary": "baseline HTTP 200/5; attack HTTP 500/10; oracle=sqli_error:x",
+                "oracle_signal": "sqli_error:sql syntax",
+            }]
+            scanner.verify_findings = False
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 1},
+                "discovered_parameters": ["q"],
+                "pages": [],
+            }
+
+            scanner.scan()
+
+            artifact = Path(tmpdir) / "findings.json"
+            self.assertTrue(artifact.exists())
+            data = json.loads(artifact.read_text(encoding="utf-8"))
+            self.assertGreaterEqual(len(data["findings"]), 1)
+            injection = next(
+                f for f in data["findings"] if f["vuln_type"] == "sqli"
+            )
+            self.assertEqual(injection["function"], "q")
+            self.assertEqual(injection["line"], 0)
+            self.assertEqual(injection["file"], "http://example.com/search")
+
+            # The project merge layer accepts the run dir as-is.
+            merged = merge_findings([Path(tmpdir)])
+            self.assertTrue(
+                any(f.get("vuln_type") == "sqli" for f in merged)
+            )

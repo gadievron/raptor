@@ -1000,6 +1000,22 @@ class WebScanner:
         logger.info("Phase 7: Report")
         findings_dicts = [f.to_dict() for f in findings]
         save_json(self.out_dir / "web_findings.json", {"findings": findings_dicts})
+        # Core-schema findings.json: this is what /project findings, diff,
+        # correlate, and the merged report read (dedup key: file, function,
+        # line, vuln_type). WebFinding.to_dict already aliases file=url;
+        # the function analog for web is the check id (posture findings)
+        # or the primary affected parameter (injection findings).
+        save_json(self.out_dir / "findings.json", {"findings": [
+            {
+                **d,
+                "function": (
+                    (d.get("affected_parameters") or [None])[0]
+                    or d.get("check_id") or ""
+                ),
+                "line": 0,
+            }
+            for d in findings_dicts
+        ]})
         research_landscape = assess_research_landscape(
             discovery=discovery,
             crawl_data=crawl_data,
