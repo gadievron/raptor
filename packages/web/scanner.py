@@ -1104,6 +1104,14 @@ class WebScanner:
         if not self.verify_findings:
             self._write_finding_attempts(findings)
 
+        # Portable PoC artifacts: curl reproducer + nuclei replay template
+        # per oracle-proven finding (soft; 0600 — payloads may carry
+        # credentials).
+        from packages.web.poc import write_web_pocs
+        poc_paths = write_web_pocs(
+            findings, self.out_dir, reveal_secrets=self.reveal_secrets,
+        )
+
         execution_policy = self.execution_policy.report()
         save_json(self.out_dir / "scope-receipt.json", execution_policy["scope_receipt"])
         save_json(self.out_dir / "web-execution-policy.json", execution_policy)
@@ -1229,6 +1237,11 @@ class WebScanner:
             "context_guard": {
                 "artifact": str(self.out_dir / "context-guard-report.json"),
                 "target_content_is_untrusted": True,
+            },
+            "pocs": {
+                "count": len(poc_paths),
+                "dir": str(self.out_dir / "pocs"),
+                "note": "Live-target replay requires fresh operator authorisation.",
             },
         }
         # Back-compat report key: the first ffuf run's compact summary.

@@ -257,3 +257,48 @@ def test_live_no_match_is_reported_not_silent(
     assert len(results) == 1
     assert results[0]["status"] == "no_match"
     assert "not a refutation" in results[0]["note"]
+
+
+def test_live_generated_replay_template_confirms_finding(
+    tmp_path: Path, fixture_server, direct_nuclei
+):
+    """The roadmap's independent-replay loop, on the wire: a RAPTOR
+    finding generates a nuclei template whose marker-derived matcher
+    re-confirms the finding via a second implementation."""
+    from packages.web.poc import build_nuclei_template
+
+    base_url, _records = fixture_server
+    finding = WebFinding(
+        id="WEB-0042",
+        title="SQL Injection -- 1 parameter(s) affected",
+        severity="high",
+        confidence="medium",
+        status="needs_review",
+        url=f"{base_url}/search",
+        evidence="e",
+        description="d",
+        recommendation="r",
+        vuln_type="sqli",
+        asvs_category="V5",
+        check_id="V5.2.1",
+        cwe_id="CWE-89",
+        confirmed=True,
+        target_url=f"{base_url}/search",
+        confirmation_payload="'",
+        response_evidence="SQL syntax",
+        oracle_signal="sqli_error:SQL syntax",
+        method="GET",
+        affected_parameters=["q"],
+    )
+    replay_dir = tmp_path / "replay-templates"
+    replay_dir.mkdir()
+    template = build_nuclei_template(finding)
+    assert template is not None
+    (replay_dir / "replay.yaml").write_text(template, encoding="utf-8")
+
+    results = _runner(base_url, tmp_path, replay_dir).run(
+        [finding], ["nuclei"]
+    )
+
+    assert results[0]["status"] == "matched", results[0]
+    assert results[0]["matches"][0]["template_id"] == "raptor-replay-web-0042"
