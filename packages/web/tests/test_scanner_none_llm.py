@@ -433,3 +433,46 @@ class TestWebScannerNoneLlm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFfufReportKey(unittest.TestCase):
+    """The compact ffuf summary stays at report['ffuf'] (back-compat)."""
+
+    @patch("packages.web.scanner.FfufRunner")
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_scan_runs_ffuf_only_when_configured(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+        mock_ffuf_cls,
+    ):
+        from packages.web.ffuf import FfufConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wordlist = Path(tmpdir) / "words.txt"
+            wordlist.write_text("admin\n", encoding="utf-8")
+            ffuf_instance = mock_ffuf_cls.return_value
+            ffuf_instance.run.return_value = {
+                "tool": "ffuf",
+                "returncode": 0,
+                "result_count": 1,
+                "results": [{"url": "http://example.com/admin", "status": 200}],
+            }
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                ffuf_config=FfufConfig(wordlist=wordlist),
+            )
+            scanner.crawler.crawl.return_value = {
+                "stats": {"total_pages": 1, "total_parameters": 0},
+                "discovered_parameters": [],
+                "pages": [],
+            }
+
+            result = scanner.scan()
+
+            ffuf_instance.run.assert_called_once()
+            self.assertEqual(result["ffuf"]["tool"], "ffuf")
+            self.assertEqual(result["ffuf"]["result_count"], 1)

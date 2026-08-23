@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
-"""
-Autonomous Web Security Scanner
+"""Autonomous Web Application Security Scanner.
 
-Combines crawling, fuzzing, and LLM analysis for complete web app testing.
+Runs a phased pipeline against a target web application:
+
+  Phase 0   Preflight        -- reachability, telemetry reset
+  Phase 1   Authentication   -- optional; form/bearer/cookie/basic
+  Phase 2   Discovery        -- robots, sitemap, common paths, JS routes,
+                                API specs, fingerprint
+  Phase 2a  External discovery -- opt-in ffuf, seeds the crawl
+  Phase 3   Crawl            -- BFS HTML crawl integrated with discovery
+  Phase 4   Passive checks   -- ASVS-mapped checks without auth
+  Phase 5   Auth checks      -- ASVS-mapped checks with a live session
+  Phase 6a  Understand       -- optional URL-native context map
+  Phase 6   Injection        -- three-gate oracle fuzzing of parameters/forms
+  Phase 6v  Verification     -- mechanical replay/control verification of hits
+  Phase 7a  Validate         -- optional /validate post-pass
+  Phase 7b  External validation -- opt-in second-opinion validators (nuclei)
+  Phase 7   Report           -- artifacts, evidence ledger, console summary
 """
 
 from __future__ import annotations
@@ -10,8 +24,9 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 from types import TracebackType
+from urllib.parse import parse_qsl, urlparse
 
 if __name__ == "__main__":
     # Direct script invocation only — module imports rely on the
@@ -21,22 +36,72 @@ if __name__ == "__main__":
     # fall back to a positional walk.
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.context_guard import build_web_context_guard_report
 from core.json import save_json
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from packages.web.auth import AuthenticationError, make_auth_manager
+from packages.web.checks import registry
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
+from packages.web.discovery import Discoverer, DiscoveryResult
+from packages.web.evidence import build_web_evidence_ledger
+from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
+from packages.web.external_validators import ExternalValidatorRunner, NucleiConfig
 from packages.web.ffuf import FfufConfig, FfufRunner, parse_wordlist_args
 from packages.web.fuzzer import WebFuzzer
-from typing import TYPE_CHECKING
+from packages.web.models import WebFinding
+from packages.web.research_landscape import (
+    assess_research_landscape,
+    high_priority_theme_ids,
+)
+from packages.web.session_context import build_web_session_context
+from packages.web.tool_adapters import web_tool_adapter_report
+from packages.web.verified_outcomes import verified_outcomes_for_findings
 
 if TYPE_CHECKING:
     import argparse
 
     from core.llm.client import LLMClient
+    from packages.web.auth import AuthManager, AuthSession
+    from packages.web.checks.base import CheckResult
 
 logger = get_logger()
+
+HIGH_RISK_WEB_PARAMS = {
+    "cmd", "command", "exec", "execute", "code", "input", "template",
+    "host", "ip", "addr", "target", "server", "url", "uri", "path", "file",
+    "next", "redirect", "redirect_uri", "return_url", "q", "query", "search",
+    "filter", "id", "uuid",
+}
+
+HIGH_RISK_PATH_TOKENS = {
+    "eval", "exec", "command", "cmd", "ping", "diagnostic", "template",
+    "search", "redirect", "proxy", "fetch", "upload", "debug", "admin",
+}
+
+WEB_INJECTION_CWE = {
+    "sqli": "CWE-89",
+    "xss": "CWE-79",
+    "ssti": "CWE-1336",
+    "command_injection": "CWE-78",
+    "path_traversal": "CWE-22",
+}
+
+_FINDING_VULN_MAP = {
+    "V2":    "authn_bypass",
+    "V3":    "session_management",
+    "V4":    "access_control",
+    "V5":    "injection",
+    "V7":    "information_disclosure",
+    "V9":    "insecure_transport",
+    "V13":   "api_security",
+    "V14.4": "missing_security_header",
+    "V14.5": "cors_misconfiguration",
+}
+
+_INJECTION_VULN_TYPES = ["sqli", "xss", "ssti", "command_injection", "path_traversal"]
 
 
 class WebScanner:
@@ -45,204 +110,547 @@ class WebScanner:
     def __init__(
         self,
         base_url: str,
-        llm: LLMClient | None,
-        out_dir: Path,
+        llm: LLMClient | None = None,
+        out_dir: Path | None = None,
+        *,
+        auth_manager: AuthManager | None = None,
         verify_ssl: bool = True,
         reveal_secrets: bool = False,
+        block_private_ips: bool = True,
+        rate_limit: float = 0.5,
         max_depth: int = 3,
         max_pages: int = 100,
+        max_fuzz_urls: int = 5,
+        max_fuzz_params: int = 12,
+        max_fuzz_forms: int = 5,
+        run_understand: bool = False,
+        run_validate: bool = False,
         ffuf_config: FfufConfig | None = None,
-        block_private_ips: bool = True,
+        external_validators: list[str] | None = None,
+        nuclei_config: NucleiConfig | None = None,
+        approval_level: str = "active",
+        approved_tools: list[str] | None = None,
         verify_findings: bool = True,
         max_verifications: int = 25,
     ) -> None:
-        self.base_url = base_url
+        import time
+
+        self.base_url = base_url.rstrip("/")
         self.llm = llm
-        self.out_dir = out_dir
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.out_dir = out_dir or Path("out") / f"web_scan_{int(time.time())}"
+        self.out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(self.out_dir)
+        self.auth_manager = auth_manager
+        self.reveal_secrets = reveal_secrets
+        self.max_depth = max_depth
+        self.max_pages = max_pages
+        self.max_fuzz_urls = max_fuzz_urls
+        self.max_fuzz_params = max_fuzz_params
+        self.max_fuzz_forms = max_fuzz_forms
+        self.run_understand = run_understand
+        self.run_validate = run_validate
         self.ffuf_config = ffuf_config
+        self.external_validators = list(external_validators or [])
+        self.nuclei_config = nuclei_config
         self.verify_findings = verify_findings
         self.max_verifications = max_verifications
-        self.reveal_secrets = reveal_secrets
 
-        # Initialize components
+        self.execution_policy = WebExecutionPolicy.for_target(
+            self.base_url,
+            approval_level=approval_level,
+            approved_tools=approved_tools or [],
+        )
+
         self.client = WebClient(
             base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets,
             block_private_ips=block_private_ips,
         )
+        # Set after construction so test doubles that pin the WebClient
+        # constructor signature stay valid; the client treats a missing
+        # policy as "origin checks only".
+        self.client.execution_policy = self.execution_policy
+        self.client.rate_limit = rate_limit
         self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
-        self.fuzzer = WebFuzzer(self.client, llm) if llm else None
-        self.ffuf = FfufRunner(base_url, out_dir, reveal_secrets=reveal_secrets) if ffuf_config else None
+        # The fuzzer is always constructed: without an LLM it fuzzes with
+        # static payloads, and the three-gate oracle keeps the false
+        # positives out either way.
+        self.fuzzer = WebFuzzer(self.client, llm)
+
+        self.session: AuthSession | None = None
+        self._phases_completed: list[str] = []
+        self._finding_counter = 0
+        self._external_tool_results: list[dict] = []
+        self._external_validation_results: list[dict] = []
+        self._raw_injection_hits: list[dict] = []
 
         logger.info(
-            "Web scanner initialized for %s (verify_ssl=%s, max_depth=%s, max_pages=%s)", base_url, verify_ssl, max_depth, max_pages
+            "Web scanner initialized for %s (verify_ssl=%s, max_depth=%s, max_pages=%s)",
+            base_url, verify_ssl, max_depth, max_pages,
         )
 
-    def scan(self) -> dict[str, Any]:
-        """
-        Run complete autonomous web security scan.
+    # ------------------------------------------------------------------
+    # Pipeline
+    # ------------------------------------------------------------------
 
-        Returns:
-            Scan results with findings
-        """
+    def scan(self) -> dict[str, Any]:
+        """Run the complete autonomous web security scan."""
         logger.info("Starting autonomous web security scan")
 
-        # Phase 1: Discovery
-        logger.info("Phase 1: Web Discovery and Crawling")
-        crawl_results = self.crawler.crawl(self.base_url)
+        all_findings: list[WebFinding] = []
 
-        # Save crawl results
-        crawl_file = self.out_dir / "crawl_results.json"
-        save_json(crawl_file, crawl_results)
+        if not self._phase_preflight():
+            return self._empty_result("Preflight failed -- target unreachable")
 
-        logger.info("Discovery complete: %s", crawl_results['stats'])
+        self._phase_auth()
+        discovery = self._phase_discovery()
+        self._phase_external_discovery(discovery)
+        crawl_data = self._phase_crawl(discovery)
+        all_findings.extend(self._phase_passive_checks(discovery, crawl_data))
 
-        # Phase 2: Intelligent Fuzzing
-        fuzzing_findings = []
-        probe_contexts: list[tuple[Any, str, str, str]] = []
+        if self.session and self.session.authenticated:
+            all_findings.extend(self._phase_auth_checks(discovery, crawl_data))
 
-        if self.fuzzer:
-            logger.info("Phase 2: Intelligent Fuzzing")
-            # Fuzz each parameter only at the URLs where the crawler
-            # actually discovered it. Pre-fix this was a full
-            # URL × parameter cross-product — every discovered
-            # parameter probed against every discovered URL, each
-            # cell paying LLM payload generation plus probe requests
-            # even for endpoints that never take the parameter. The
-            # crawler's `parameter_urls` mapping scopes the loop;
-            # form input names keep their own dedicated loop below
-            # (they are fuzzed against their form action, not query
-            # strings).
-            discovered_params = crawl_results['discovered_parameters']
-            target_urls = sorted(self.crawler.discovered_urls) or [self.base_url]
-            param_urls = getattr(self.crawler, "parameter_urls", None)
-            if not isinstance(param_urls, dict):
-                param_urls = {}
-            if param_urls:
-                fuzz_cells = [
-                    (url, param)
-                    for param in sorted(param_urls)
-                    for url in sorted(param_urls[param])
-                ]
-            else:
-                # No mapping (legacy crawler double, or parameters
-                # discovered without URL context) — fall back to the
-                # cross-product rather than silently skipping.
-                fuzz_cells = [
-                    (url, param)
-                    for url in target_urls
-                    for param in discovered_params
-                ]
-            full_product = len(target_urls) * len(discovered_params)
-            if full_product > len(fuzz_cells):
-                logger.info(
-                    "Phase 2: fuzzing %d URL x parameter pair(s); "
-                    "param-to-URL mapping pruned %d of %d "
-                    "cross-product cells",
-                    len(fuzz_cells), full_product - len(fuzz_cells),
-                    full_product,
-                )
-            for target_url, param in fuzz_cells:
-                findings = self.fuzzer.fuzz_parameter(
-                    target_url,
-                    param,
-                    vulnerability_types=['sqli', 'xss', 'command_injection']
-                )
-                fuzzing_findings.extend(findings)
+        context_map = None
+        if self.run_understand:
+            context_map = self._phase_understand(crawl_data, discovery)
 
-            for form in self.crawler.discovered_forms:
-                method = form.get("method", "GET").upper()
-                action = form.get("action", "")
-                if not action:
-                    continue
-                for param_name, param_info in form.get("inputs", {}).items():
-                    findings = self.fuzzer.fuzz_parameter(
-                        action,
-                        param_name,
-                        param_type=param_info.get("type", "text"),
-                        vulnerability_types=['sqli', 'xss', 'command_injection'],
-                        method=method,
-                    )
-                    fuzzing_findings.extend(findings)
-                    probe_contexts.extend(
-                        (f, action, param_name, method) for f in findings
-                    )
+        injection_findings = self._phase_injection(crawl_data, context_map=context_map)
+        all_findings.extend(injection_findings)
 
-            # Surface the memoisation win so operators can see the
-            # redundant-probe reduction in the run log. Defensive
-            # against fuzzer doubles without the stats property.
-            try:
-                cache_hits, cache_keys = self.fuzzer.payload_cache_stats
-            except (TypeError, ValueError, AttributeError):
-                cache_hits, cache_keys = 0, 0
-            if cache_hits:
-                logger.info(
-                    "Phase 2: payload generation memoised — %d LLM "
-                    "call(s) saved across %d unique "
-                    "(param, type, vuln) key(s)",
-                    cache_hits, cache_keys,
-                )
-        else:
-            logger.warning("Phase 2: Skipping fuzzing (no LLM available)")
-
-        # Phase 2.5: mechanical verification of heuristic hits —
-        # replay + control differentials through the same scoped,
-        # rate-limited client. Findings are never dropped here;
-        # verification adds an evidence tier and LabeledAttempt
-        # records for raptor-verified-outcomes.
         verification_summary = None
-        if self.verify_findings and probe_contexts:
-            verification_summary = self._verify_findings(probe_contexts)
+        if self.verify_findings and self._raw_injection_hits:
+            verification_summary = self._verify_findings(
+                [
+                    (hit, hit.get("endpoint", ""), hit.get("parameter", ""),
+                     hit.get("method", "GET"))
+                    for hit in self._raw_injection_hits
+                ],
+            )
+            self._phases_completed.append("verification")
+            self._annotate_findings_with_verification(injection_findings)
 
-        # Optional Phase 2b: explicit ffuf content discovery.
-        ffuf_results = None
-        if self.ffuf and self.ffuf_config:
-            logger.info("Phase 2b: ffuf content discovery")
-            try:
-                ffuf_results = self.ffuf.run(self.ffuf_config)
-            except (ValueError, OSError) as e:
-                # A late failure (wordlist deleted or re-pointed since the
-                # CLI preflight, sandbox setup error) must not discard the
-                # crawl/fuzz/verification phases' report with it.
-                logger.warning("Phase 2b: ffuf content discovery failed: %s", e)
-                ffuf_results = {"tool": "ffuf", "status": "error", "reason": str(e)}
+        if self.run_validate:
+            all_findings = self._phase_validate(all_findings)
 
-        # Phase 3: Generate Report
-        logger.info("Phase 3: Generating Security Report")
-        report = {
-            'target': self.base_url,
-            'discovery': crawl_results['stats'],
-            'findings': fuzzing_findings,
-            'total_vulnerabilities': len(fuzzing_findings),
-        }
+        self._phase_external_validation(all_findings)
+        report = self._phase_report(all_findings, discovery, crawl_data)
         if verification_summary is not None:
-            report['verification'] = verification_summary
-        if ffuf_results is not None:
-            report['ffuf'] = ffuf_results
-
-        # Save report
-        report_file = self.out_dir / "web_scan_report.json"
-        save_json(report_file, report)
-
-        logger.info("Web scan complete. Found %d potential vulnerabilities", len(fuzzing_findings))
-        logger.info("Report saved to %s", report_file)
-
+            report["verification"] = verification_summary
+            save_json(self.out_dir / "web_scan_report.json", report)
         return report
 
-    def _verify_findings(self, probe_contexts: list) -> dict[str, Any]:
-        """Phase 2.5 — replay/control verification of heuristic hits.
+    def _phase_preflight(self) -> bool:
+        logger.info("Phase 0: Preflight")
+        try:
+            from core.security.prompt_telemetry import defense_telemetry
+            defense_telemetry.reset()
+        except Exception:
+            logger.debug("defense telemetry unavailable", exc_info=True)
+        try:
+            resp = self.client.get("/")
+            logger.info(
+                "Target reachable: HTTP %s (%d bytes)",
+                resp.status_code, len(resp.content),
+            )
+            self._phases_completed.append("preflight")
+            return True
+        except Exception as e:
+            logger.error("Preflight failed: %s", self._redact(str(e)))
+            return False
 
-        Annotates each finding dict in place with a ``verification``
+    def _phase_auth(self) -> None:
+        if not self.auth_manager:
+            logger.info("Phase 1: Authentication -- skipped (unauthenticated scan)")
+            return
+        logger.info("Phase 1: Authentication")
+        try:
+            self.session = self.auth_manager.authenticate(self.client)
+            logger.info("Authentication succeeded (mode: %s)", self.session.mode)
+            self._phases_completed.append("authentication")
+        except AuthenticationError as e:
+            logger.warning(
+                "Authentication failed -- continuing as unauthenticated: %s",
+                self._redact(str(e)),
+            )
+            self.session = None
+
+    def _phase_discovery(self) -> DiscoveryResult:
+        logger.info("Phase 2: Discovery")
+        result = Discoverer(self.client).discover(self.base_url)
+        self._write_discovery_artifact(result)
+        logger.info("Discovery stats: %s", result.stats())
+        self._phases_completed.append("discovery")
+        return result
+
+    def _write_discovery_artifact(self, result: DiscoveryResult) -> None:
+        """Persist the current discovery view, including external seeds."""
+        save_json(self.out_dir / "discovery.json", {
+            "stats": result.stats(),
+            "urls": result.urls[:200],
+            "fingerprint": result.fingerprint,
+            "common_paths_found": result.common_paths_found,
+            "robots_disallow": result.robots_disallow,
+            "has_openapi": result.openapi_spec is not None,
+            "has_graphql": result.graphql_schema is not None,
+        })
+
+    def _phase_external_discovery(self, discovery: DiscoveryResult) -> None:
+        """Run opt-in external discovery tools and seed the crawl."""
+        if not self.ffuf_config:
+            return
+        logger.info("Phase 2a: External content discovery (ffuf)")
+        try:
+            self.execution_policy.authorize(
+                tool_id="ffuf",
+                url=self.base_url,
+                risk="active",
+                action="external_discovery",
+            )
+            result = FfufRunner(
+                self.base_url,
+                self.out_dir,
+                reveal_secrets=self.reveal_secrets,
+            ).run(self.ffuf_config)
+            self._external_tool_results.append(result)
+            for entry in result.get("results", []):
+                url = entry.get("url")
+                if url and url not in discovery.urls:
+                    discovery.urls.append(url)
+            self._write_discovery_artifact(discovery)
+            self._phases_completed.append("external_discovery")
+        except (ValueError, OSError, WebPolicyError) as e:
+            # A late ffuf failure must not discard the rest of the scan.
+            logger.warning("External discovery skipped: %s", self._redact(str(e)))
+            self._external_tool_results.append({
+                "tool": "ffuf",
+                "status": "error",
+                "reason": str(e),
+            })
+
+    def _phase_crawl(self, discovery: DiscoveryResult) -> dict:
+        logger.info("Phase 3: Crawl")
+        for url in discovery.urls[:50]:
+            self.crawler.discovered_urls.add(url)
+        crawl_results = self.crawler.crawl(self.base_url)
+        save_json(self.out_dir / "crawl_results.json", crawl_results)
+        logger.info("Crawl stats: %s", crawl_results.get('stats', {}))
+        self._phases_completed.append("crawl")
+        return crawl_results
+
+    def _merged_discovery_ctx(
+        self, discovery: DiscoveryResult, crawl_data: dict | None,
+    ) -> dict:
+        """Discovery view merged with crawl results, for check context."""
+        discovery_ctx = dict(discovery.__dict__)
+        if crawl_data:
+            discovery_ctx["parameters"] = list(set(
+                list(discovery_ctx.get("parameters", []))
+                + list(crawl_data.get("discovered_parameters", []))
+            ))
+            discovery_ctx["urls"] = list(set(
+                list(discovery_ctx.get("urls", []))
+                + list(crawl_data.get("visited_urls", []))
+            ))
+            discovery_ctx["forms"] = (
+                list(discovery_ctx.get("forms", []))
+                + list(crawl_data.get("discovered_forms", []))
+            )
+        return discovery_ctx
+
+    def _phase_passive_checks(
+        self, discovery: DiscoveryResult, crawl_data: dict | None = None,
+    ) -> list[WebFinding]:
+        logger.info("Phase 4: Passive security checks (unauthenticated)")
+        findings = []
+        check_classes = registry.unauthenticated()
+        logger.info("Running %d unauthenticated checks", len(check_classes))
+        discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
+
+        for cls in check_classes:
+            try:
+                results = cls(llm=self.llm).run(
+                    self.client, self.base_url, session=None, discovery=discovery_ctx,
+                )
+                for r in results:
+                    if not r.passed:
+                        findings.append(self._to_finding(r, "unauthenticated"))
+            except Exception as e:
+                logger.debug("Check %s failed: %s", cls.__name__, self._redact(str(e)))
+        logger.info("Phase 4 complete: %d findings", len(findings))
+        self._phases_completed.append("passive_checks")
+        return findings
+
+    def _phase_auth_checks(
+        self, discovery: DiscoveryResult, crawl_data: dict | None = None,
+    ) -> list[WebFinding]:
+        logger.info("Phase 5: Authenticated checks")
+        if not self.session:
+            return []
+        if self.auth_manager and not self.auth_manager.verify(self.client, self.session):
+            logger.warning("Session expired before authenticated checks -- skipping")
+            return []
+        findings = []
+        check_classes = registry.authenticated()
+        logger.info("Running %d authenticated checks", len(check_classes))
+        discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
+
+        for cls in check_classes:
+            try:
+                results = cls(llm=self.llm).run(
+                    self.client, self.base_url,
+                    session=self.session, discovery=discovery_ctx,
+                )
+                for r in results:
+                    if not r.passed:
+                        findings.append(self._to_finding(r, "authenticated"))
+            except Exception as e:
+                logger.debug(
+                    "Auth check %s failed: %s", cls.__name__, self._redact(str(e)),
+                )
+        logger.info("Phase 5 complete: %d findings", len(findings))
+        self._phases_completed.append("auth_checks")
+        return findings
+
+    # ------------------------------------------------------------------
+    # Injection
+    # ------------------------------------------------------------------
+
+    def _phase_injection(
+        self,
+        crawl_data: dict,
+        context_map: dict | None = None,
+    ) -> list[WebFinding]:
+        logger.info("Phase 6: Injection and fuzzing")
+        try:
+            self.execution_policy.authorize(
+                tool_id="raptor-web-oracle",
+                url=self.base_url,
+                risk="active",
+                action="injection_fuzzing",
+            )
+        except WebPolicyError as e:
+            logger.info("Phase 6: skipped by execution policy -- %s", e)
+            self._phases_completed.append("injection_skipped")
+            return []
+        if not self.llm:
+            logger.info("Phase 6: Running static fallback payloads -- no LLM available")
+        auth_ctx = "authenticated" if self.session else "unauthenticated"
+
+        # Collect raw hits keyed by (endpoint_url, vuln_type) so multiple
+        # vulnerable parameters on the same endpoint collapse into one
+        # finding. Values carry structured proof so the VerifiedOutcome
+        # adapters consume findings without scraping prose.
+        grouped: dict[tuple, dict] = {}
+
+        def _record(endpoint: str, param: str, raw: dict, attack_vector: str) -> None:
+            self._raw_injection_hits.append({
+                **raw,
+                "endpoint": endpoint,
+                "parameter": param,
+                "attack_vector": attack_vector,
+            })
+            vuln_type = raw.get("vulnerability_type", "injection")
+            key = (endpoint, vuln_type)
+            if key not in grouped:
+                grouped[key] = {
+                    "vuln_type": vuln_type,
+                    "endpoint": endpoint,
+                    "params": [],
+                    "payloads": [],
+                    "response_evidence": [],
+                    "baseline_evidence": [],
+                    "attack_evidence": [],
+                    "diff_summaries": [],
+                    "oracle_signals": [],
+                    "status_codes": [],
+                    "methods": [],
+                    "attack_vectors": [],
+                }
+            grouped[key]["params"].append(param)
+            grouped[key]["payloads"].append(raw.get("payload", "")[:200])
+            for src, dst in (
+                ("response_evidence", "response_evidence"),
+                ("baseline_evidence", "baseline_evidence"),
+                ("attack_evidence", "attack_evidence"),
+                ("diff_summary", "diff_summaries"),
+                ("oracle_signal", "oracle_signals"),
+                ("method", "methods"),
+            ):
+                if raw.get(src):
+                    grouped[key][dst].append(raw[src])
+            if raw.get("status_code") is not None:
+                grouped[key]["status_codes"].append(raw["status_code"])
+            grouped[key]["attack_vectors"].append(attack_vector)
+
+        # Build fuzz cells. Parameters are fuzzed at the URLs where the
+        # crawler actually discovered them (`parameter_urls`); the
+        # cross-product of prioritised URLs x global parameters is the
+        # fallback when no mapping exists. Budgets bound both shapes.
+        target_urls = list(dict.fromkeys(
+            crawl_data.get("discovered_urls")
+            or crawl_data.get("visited_urls")
+            or [self.base_url]
+        ))
+        if self.base_url not in target_urls:
+            target_urls.insert(0, self.base_url)
+
+        global_params = self._prioritise_parameters(
+            crawl_data.get("discovered_parameters", []),
+            context_map=context_map,
+        )[:self.max_fuzz_params]
+        target_urls = self._prioritise_urls(target_urls, global_params)
+        selected_urls = target_urls[:self.max_fuzz_urls]
+
+        param_urls = crawl_data.get("parameter_urls")
+        if not isinstance(param_urls, dict):
+            param_urls = {}
+
+        cells: list[tuple[str, str]] = []
+        seen_cells: set[tuple[str, str]] = set()
+        for target_url in selected_urls:
+            own = self._query_parameters(target_url)
+            candidates = self._prioritise_parameters(
+                own + global_params, context_map=context_map,
+            )[:self.max_fuzz_params]
+            for param in candidates:
+                mapped = param_urls.get(param)
+                if mapped and target_url not in mapped and param not in own:
+                    # The crawler knows where this parameter lives, and it
+                    # is not here — skip the cell instead of spraying it.
+                    continue
+                cell = (target_url, param)
+                if cell not in seen_cells:
+                    seen_cells.add(cell)
+                    cells.append(cell)
+
+        forms = crawl_data.get("discovered_forms", [])[:self.max_fuzz_forms]
+        logger.info(
+            "Phase 6 budget: fuzzing %d URL(s), %d cell(s), %d form(s)",
+            len(selected_urls), len(cells), len(forms),
+        )
+
+        for target_url, param in cells:
+            for raw in self.fuzzer.fuzz_parameter(
+                target_url, param, vulnerability_types=list(_INJECTION_VULN_TYPES),
+            ):
+                _record(raw.get("url", target_url), param, raw, "query_param")
+
+        for form in forms:
+            endpoint = form.get("action", self.base_url)
+            method = form.get("method", "GET")
+            attack_vector = (
+                "request_body" if str(method).upper() == "POST" else "query_param"
+            )
+            for field_name, field_info in form.get("inputs", {}).items():
+                if field_info.get("type") in ("hidden", "submit", "button"):
+                    continue
+                for raw in self.fuzzer.fuzz_parameter(
+                    endpoint, field_name,
+                    param_type=field_info.get("type", "text"),
+                    vulnerability_types=["sqli", "xss"], method=method,
+                ):
+                    _record(endpoint, field_name, raw, attack_vector)
+
+        # Surface the memoisation win so operators can see the
+        # redundant-probe reduction in the run log.
+        try:
+            cache_hits, cache_keys = self.fuzzer.payload_cache_stats
+        except (TypeError, ValueError, AttributeError):
+            cache_hits, cache_keys = 0, 0
+        if cache_hits:
+            logger.info(
+                "Phase 6: payload generation memoised — %d LLM call(s) saved "
+                "across %d unique (param, type, vuln) key(s)",
+                cache_hits, cache_keys,
+            )
+
+        findings = [
+            self._grouped_hit_to_finding(endpoint, vuln_type, hit, auth_ctx)
+            for (endpoint, vuln_type), hit in grouped.items()
+        ]
+        logger.info(
+            "Phase 6 complete: %d injection findings (%d total hits grouped)",
+            len(findings), sum(len(h["params"]) for h in grouped.values()),
+        )
+        self._phases_completed.append("injection")
+        return findings
+
+    def _grouped_hit_to_finding(
+        self, endpoint: str, vuln_type: str, hit: dict, auth_ctx: str,
+    ) -> WebFinding:
+        params = hit["params"]
+        payloads = hit["payloads"]
+        response_evidence = hit.get("response_evidence") or []
+        baseline_evidence = hit.get("baseline_evidence") or []
+        attack_evidence = hit.get("attack_evidence") or response_evidence
+        diff_summaries = hit.get("diff_summaries") or []
+        oracle_signals = hit.get("oracle_signals") or []
+        attack_vectors = hit.get("attack_vectors") or []
+        methods = hit.get("methods") or []
+        param_list = ", ".join(f"'{p}'" for p in params)
+        evidence_snippet = response_evidence[0] if response_evidence else ""
+        diff_summary = diff_summaries[0] if diff_summaries else ""
+        oracle_signal = oracle_signals[0] if oracle_signals else "web_oracle"
+        self._finding_counter += 1
+        return WebFinding(
+            id=f"WEB-{self._finding_counter:04d}",
+            title=(
+                f"{vuln_type.replace('_', ' ').title()} -- "
+                f"{len(params)} parameter(s) affected"
+            ),
+            severity="high", confidence="medium", status="needs_review",
+            url=endpoint,
+            evidence=(
+                f"Affected parameters: {param_list}\n"
+                f"Example payload: {payloads[0]}\n"
+                f"Response evidence: {evidence_snippet}\n"
+                f"Baseline/attack diff: {diff_summary}\n"
+                f"Oracle signal: {oracle_signal}"
+            ),
+            description=(
+                f"{len(params)} parameter(s) on this endpoint may be vulnerable "
+                f"to {vuln_type.replace('_', ' ')}: {param_list}."
+            ),
+            recommendation=(
+                "Validate and sanitise all user-supplied input server-side. "
+                "Use parameterised queries for database access, "
+                "context-appropriate output encoding for XSS, "
+                "and allowlists for file/command parameters."
+            ),
+            vuln_type=vuln_type, asvs_category="V5", check_id="V5.2.1",
+            auth_context=auth_ctx,
+            cwe_id=WEB_INJECTION_CWE.get(vuln_type),
+            confirmed=True,
+            target_url=endpoint,
+            confirmation_payload=payloads[0] if payloads else None,
+            response_evidence=evidence_snippet,
+            baseline_evidence=baseline_evidence[0] if baseline_evidence else None,
+            attack_evidence=attack_evidence[0] if attack_evidence else None,
+            diff_summary=diff_summary or None,
+            attack_vector=attack_vectors[0] if attack_vectors else None,
+            method=methods[0] if methods else None,
+            affected_parameters=list(dict.fromkeys(params)),
+            oracle_signal=oracle_signal,
+            reproducible=False,
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 6v — mechanical verification (replay + control differential)
+    # ------------------------------------------------------------------
+
+    def _verify_findings(self, probe_contexts: list) -> dict[str, Any]:
+        """Replay/control verification of injection hits.
+
+        Annotates each raw hit dict in place with a ``verification``
         block, writes LabeledAttempt records for the run, and returns
         the summary for the report. Soft by design: nothing is
-        dropped, and any per-finding failure degrades to
-        ``inconclusive``.
+        dropped, and any per-hit failure degrades to ``inconclusive``.
         """
         from packages.web.attempts import build_web_attempt, write_web_attempts
         from packages.web.oracle import VerificationOracle
 
         logger.info(
-            "Phase 2.5: Verifying %d heuristic finding(s) (cap %d)",
+            "Phase 6v: Verifying %d injection hit(s) (cap %d)",
             len(probe_contexts), self.max_verifications,
         )
         oracle = VerificationOracle(self.client)
@@ -290,7 +698,7 @@ class WebScanner:
             # as oracle-checked.
             logger.warning(
                 "Verification degraded: %d transport error(s); "
-                "%d finding(s) remain inconclusive/heuristic-tier",
+                "%d hit(s) remain inconclusive/heuristic-tier",
                 oracle.errors, counts["inconclusive"],
             )
         logger.info(
@@ -302,6 +710,513 @@ class WebScanner:
         )
         return summary
 
+    def _annotate_findings_with_verification(
+        self, findings: list[WebFinding],
+    ) -> None:
+        """Fold per-hit replay verdicts into the grouped findings.
+
+        A replay-verified hit upgrades the finding's confidence; a
+        refuted-by-control verdict downgrades it. Findings are never
+        dropped here — the verification block on the raw hits and the
+        labeled-attempt records carry the mechanical verdicts.
+        """
+        by_endpoint: dict[tuple, list[dict]] = {}
+        for hit in self._raw_injection_hits:
+            key = (hit.get("endpoint"), hit.get("vulnerability_type"))
+            by_endpoint.setdefault(key, []).append(hit)
+        for finding in findings:
+            hits = by_endpoint.get((finding.target_url, finding.vuln_type), [])
+            statuses = {
+                (h.get("verification") or {}).get("status") for h in hits
+            } - {None}
+            if not statuses:
+                continue
+            if "verified" in statuses:
+                finding.confidence = "high"
+            elif statuses == {"refuted"}:
+                finding.confidence = "low"
+
+    # ------------------------------------------------------------------
+    # Optional phases
+    # ------------------------------------------------------------------
+
+    def _phase_understand(
+        self, crawl_data: dict, discovery: DiscoveryResult,
+    ) -> dict | None:
+        """Build a URL-native context map for the discovered attack surface."""
+        logger.info("Phase 6a: Building web context map")
+        context_map = self._build_web_context_map(crawl_data, discovery)
+        save_json(self.out_dir / "context-map.json", context_map)
+        save_json(self.out_dir / "web-context-map.json", context_map)
+        self._phases_completed.append("understand")
+        return context_map
+
+    def _phase_validate(self, findings: list[WebFinding]) -> list[WebFinding]:
+        """Optional Phase 7a: run /validate on needs_review findings."""
+        needs_review = [f for f in findings if f.status == "needs_review"]
+        if not needs_review:
+            return findings
+
+        try:
+            from core.security.rule_of_two import is_interactive
+            if not is_interactive():
+                logger.info(
+                    "Phase 7a: /validate skipped -- non-interactive mode (Rule of Two)"
+                )
+                return findings
+        except ImportError:
+            return findings
+
+        logger.info("Phase 7a: Validating %d needs_review findings", len(needs_review))
+        try:
+            import shutil
+
+            findings_for_validate = [
+                self._web_finding_to_agentic_result(f) for f in needs_review
+            ]
+            findings_input = self.out_dir / "web_findings_for_validation.json"
+            save_json(findings_input, {"results": findings_for_validate})
+
+            claude_bin = shutil.which("claude")
+            if not claude_bin:
+                logger.info("Phase 7a: claude not on PATH -- skipping /validate")
+                return findings
+
+            from core.orchestration.agentic_passes import run_validate_postpass
+            result = run_validate_postpass(
+                target=Path(self.base_url),
+                agentic_out_dir=self.out_dir,
+                analysis_report=findings_input,
+                claude_bin=claude_bin,
+            )
+            if result.ran:
+                logger.info("Phase 7a: /validate complete")
+                self._phases_completed.append("validate")
+        except Exception as e:
+            logger.debug("Phase 7a: /validate failed: %s", self._redact(str(e)))
+
+        return findings
+
+    def _phase_external_validation(self, findings: list[WebFinding]) -> None:
+        """Run selected second-opinion validators against existing findings."""
+        if not self.external_validators:
+            return
+        logger.info(
+            "Phase 7b: External validation oracles (%s)",
+            ", ".join(self.external_validators),
+        )
+        runner = ExternalValidatorRunner(
+            base_url=self.base_url,
+            out_dir=self.out_dir,
+            policy=self.execution_policy,
+            reveal_secrets=self.reveal_secrets,
+            nuclei_config=self.nuclei_config,
+        )
+        self._external_validation_results = runner.run(
+            findings, self.external_validators,
+        )
+        save_json(self.out_dir / "external-validator-results.json", {
+            "results": self._external_validation_results,
+            "note": "External validator no-match results are not refutations.",
+        })
+        self._phases_completed.append("external_validation")
+
+    # ------------------------------------------------------------------
+    # Context map + prioritisation
+    # ------------------------------------------------------------------
+
+    def _build_web_context_map(
+        self, crawl_data: dict, discovery: DiscoveryResult,
+    ) -> dict:
+        research_landscape = assess_research_landscape(
+            discovery=discovery,
+            crawl_data=crawl_data,
+            registered_check_ids=(check.check_id for check in registry.all()),
+        )
+        urls = list(dict.fromkeys(
+            crawl_data.get("discovered_urls")
+            or crawl_data.get("visited_urls")
+            or discovery.urls
+            or [self.base_url]
+        ))
+        forms = crawl_data.get("discovered_forms", [])
+        parameters = crawl_data.get("discovered_parameters", [])
+
+        entry_points: list[dict[str, Any]] = [
+            {"type": "url", "url": url} for url in urls[:100]
+        ]
+        entry_points.extend({
+            "type": "form",
+            "url": form.get("action", self.base_url),
+            "method": form.get("method", "GET"),
+            "fields": list((form.get("inputs") or {}).keys()),
+        } for form in forms[:50])
+
+        sinks = []
+        for param in parameters:
+            lower = str(param).lower()
+            if any(token in lower for token in ("id", "query", "q", "search", "filter")):
+                sinks.append({"type": "injection_candidate", "parameter": param})
+            if any(token in lower for token in ("url", "uri", "path", "file", "next", "redirect")):
+                sinks.append({"type": "ssrf_or_redirect_candidate", "parameter": param})
+
+        return {
+            "target": self.base_url,
+            "kind": "web_application",
+            "entry_points": entry_points,
+            "sources": [{"type": "http_parameter", "name": p} for p in parameters],
+            "sinks": sinks,
+            "trust_boundaries": [
+                {"name": "browser_to_server", "source": "client", "destination": "web_app"},
+                {"name": "unauthenticated_to_authenticated", "source": "anonymous", "destination": "session"},
+            ],
+            "metadata": {
+                "fingerprint": discovery.fingerprint,
+                "stats": discovery.stats(),
+                "forms": len(forms),
+                "parameters": len(parameters),
+                "research_priority_themes": high_priority_theme_ids(research_landscape),
+            },
+            "research_landscape": research_landscape,
+        }
+
+    def _prioritise_parameters(
+        self,
+        parameters: list[str],
+        context_map: dict | None = None,
+    ) -> list[str]:
+        if not context_map:
+            return self._rank_parameters(list(parameters))
+
+        sink_params = [
+            sink["parameter"]
+            for sink in context_map.get("sinks", [])
+            if sink.get("parameter")
+        ]
+        ordered = []
+        for param in sink_params + self._rank_parameters(list(parameters)):
+            if param not in ordered:
+                ordered.append(param)
+        return ordered
+
+    def _rank_parameters(self, parameters: list[str]) -> list[str]:
+        indexed = list(dict.fromkeys(parameters))
+        return sorted(
+            indexed,
+            key=lambda param: (
+                self._parameter_score(param),
+                -indexed.index(param),
+            ),
+            reverse=True,
+        )
+
+    def _parameter_score(self, param: str) -> int:
+        lower = str(param).lower()
+        score = 0
+        if lower in HIGH_RISK_WEB_PARAMS:
+            score += 100
+        if any(token in lower for token in ("cmd", "command", "exec", "code")):
+            score += 80
+        if any(token in lower for token in ("host", "ip", "target", "url", "uri")):
+            score += 60
+        if any(token in lower for token in ("file", "path", "template", "redirect")):
+            score += 50
+        return score
+
+    def _prioritise_urls(self, urls: list[str], parameters: list[str]) -> list[str]:
+        indexed = list(dict.fromkeys(urls))
+        known_params = set(parameters)
+        return sorted(
+            indexed,
+            key=lambda url: (
+                self._url_score(url, known_params),
+                -indexed.index(url),
+            ),
+            reverse=True,
+        )
+
+    def _url_score(self, url: str, known_params: set[str]) -> int:
+        parsed = urlparse(url)
+        query_params = [name for name, _ in parse_qsl(parsed.query, keep_blank_values=True)]
+        path_tokens = {
+            token
+            for chunk in parsed.path.lower().replace("-", "_").split("/")
+            for token in chunk.split("_")
+            if token
+        }
+        score = 0
+        if query_params:
+            score += 50
+            if len(query_params) <= 3:
+                score += 120
+            elif len(query_params) > 5:
+                score -= (len(query_params) - 5) * 100
+        param_scores = sorted(
+            (self._parameter_score(param) for param in query_params),
+            reverse=True,
+        )[:3]
+        score += sum(param_scores)
+        for param in query_params:
+            if param in known_params:
+                score += 20
+        if path_tokens & HIGH_RISK_PATH_TOKENS:
+            score += 40
+        if parsed.path.endswith((".js", ".css", ".png", ".jpg", ".gif", ".ico")):
+            score -= 100
+        if any(token in parsed.path.lower() for token in ("/.git", "/actuator/health")):
+            score -= 30
+        return score
+
+    def _query_parameters(self, url: str) -> list[str]:
+        return [
+            name
+            for name, _value in parse_qsl(urlparse(url).query, keep_blank_values=True)
+            if name
+        ]
+
+    def _web_finding_to_agentic_result(self, finding: WebFinding) -> dict[str, Any]:
+        data = finding.to_dict()
+        return {
+            "id": data.get("id"),
+            "title": data.get("title"),
+            "vuln_type": data.get("vuln_type"),
+            "confidence": data.get("confidence", "medium"),
+            "severity": data.get("severity"),
+            "is_exploitable": data.get("status") == "needs_review",
+            "exploitable": data.get("status") == "needs_review",
+            "file": data.get("url"),
+            "line": 1,
+            "url": data.get("url"),
+            "evidence": data.get("evidence"),
+            "description": data.get("description"),
+            "recommendation": data.get("recommendation"),
+        }
+
+    # ------------------------------------------------------------------
+    # Report
+    # ------------------------------------------------------------------
+
+    def _phase_report(self, findings, discovery, crawl_data) -> dict[str, Any]:
+        logger.info("Phase 7: Report")
+        findings_dicts = [f.to_dict() for f in findings]
+        save_json(self.out_dir / "web_findings.json", {"findings": findings_dicts})
+        research_landscape = assess_research_landscape(
+            discovery=discovery,
+            crawl_data=crawl_data,
+            registered_check_ids=(check.check_id for check in registry.all()),
+        )
+        save_json(self.out_dir / "research_landscape.json", research_landscape)
+
+        session_context = build_web_session_context(
+            base_url=self.base_url,
+            discovery=discovery,
+            crawl_data=crawl_data,
+            client=self.client,
+            session=self.session,
+            findings=findings,
+        )
+        save_json(self.out_dir / "web-session-context.json", session_context)
+
+        verified_outcomes = verified_outcomes_for_findings(findings)
+        save_json(self.out_dir / "verified-outcomes.json", {
+            "count": len(verified_outcomes),
+            "outcomes": [outcome.to_dict() for outcome in verified_outcomes],
+        })
+        # Confirmed oracle-proven findings also enter the labeled-attempts
+        # pool when the replay pass did not already write attempt records
+        # for the run (verify_findings off).
+        if not self.verify_findings:
+            self._write_finding_attempts(findings)
+
+        execution_policy = self.execution_policy.report()
+        save_json(self.out_dir / "scope-receipt.json", execution_policy["scope_receipt"])
+        save_json(self.out_dir / "web-execution-policy.json", execution_policy)
+        selected_adapters = ["raptor-http", "raptor-crawler", "raptor-web-oracle"]
+        if self.ffuf_config:
+            selected_adapters.append("ffuf")
+        selected_adapters.extend(self.external_validators)
+        adapter_report = web_tool_adapter_report(selected_adapters)
+        save_json(self.out_dir / "web-tool-adapters.json", {"adapters": adapter_report})
+        save_json(self.out_dir / "external-tool-results.json", {
+            "discovery": self._external_tool_results,
+            "validators": self._external_validation_results,
+        })
+
+        evidence_ledger = build_web_evidence_ledger(
+            findings=findings,
+            request_history=list(getattr(self.client, "request_history", []) or []),
+            external_validation=self._external_validation_results,
+            execution_policy=execution_policy,
+        )
+        save_json(self.out_dir / "web-evidence-ledger.json", evidence_ledger)
+
+        context_guard = build_web_context_guard_report(
+            target=self.base_url,
+            llm_enabled=self.llm is not None,
+            auth_context=(
+                "authenticated"
+                if (self.session and self.session.authenticated)
+                else "unauthenticated"
+            ),
+            reveal_secrets=self.reveal_secrets,
+            artifacts={
+                "web_findings": str(self.out_dir / "web_findings.json"),
+                "web_session_context": str(self.out_dir / "web-session-context.json"),
+                "verified_outcomes": str(self.out_dir / "verified-outcomes.json"),
+                "research_landscape": str(self.out_dir / "research_landscape.json"),
+                "scope_receipt": str(self.out_dir / "scope-receipt.json"),
+                "execution_policy": str(self.out_dir / "web-execution-policy.json"),
+                "tool_adapters": str(self.out_dir / "web-tool-adapters.json"),
+                "external_tool_results": str(self.out_dir / "external-tool-results.json"),
+                "evidence_ledger": str(self.out_dir / "web-evidence-ledger.json"),
+            },
+        )
+        save_json(self.out_dir / "context-guard-report.json", context_guard)
+
+        try:
+            from core.security.prompt_telemetry import defense_telemetry
+            defense_telemetry.write_summary(self.out_dir)
+        except Exception:
+            logger.debug("defense telemetry summary unavailable", exc_info=True)
+        self._phases_completed.append("report")
+
+        by_sev: dict[str, int] = {}
+        for f in findings:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        discovery_summary = dict(discovery.stats())
+        discovery_summary.setdefault(
+            "total_pages",
+            crawl_data.get("stats", {}).get("total_pages", 0),
+        )
+        discovery_summary.setdefault(
+            "total_parameters",
+            crawl_data.get("stats", {}).get("total_parameters", 0),
+        )
+
+        result = {
+            "target": self.base_url,
+            "findings": findings_dicts,
+            "total_findings": len(findings),
+            "total_vulnerabilities": len(findings),
+            "auth_context": (
+                "authenticated"
+                if (self.session and self.session.authenticated)
+                else "unauthenticated"
+            ),
+            "discovery": discovery_summary,
+            "crawl": crawl_data.get("stats", {}),
+            "findings_by_severity": by_sev,
+            "phases_completed": self._phases_completed,
+            "research_landscape": {
+                "source_archive": research_landscape["source_archive"],
+                "archive_years_reviewed": research_landscape["archive_years_reviewed"],
+                "curation_mode": research_landscape["curation_mode"],
+                "high_priority_themes": high_priority_theme_ids(research_landscape),
+                "coverage": {
+                    theme["id"]: theme["coverage"]
+                    for theme in research_landscape["themes"]
+                },
+            },
+            "web_session_context": {
+                "url_count": session_context["surface"]["url_count"],
+                "form_count": session_context["surface"]["form_count"],
+                "parameter_count": session_context["surface"]["parameter_count"],
+                "auth": session_context["auth"],
+            },
+            "verified_outcomes": {
+                "count": len(verified_outcomes),
+                "oracle": "web",
+                "reproducible": False,
+            },
+            "execution_policy": {
+                "scope_receipt": str(self.out_dir / "scope-receipt.json"),
+                "approval_level": execution_policy["scope_receipt"]["approval_level"],
+                "allowed_origins": execution_policy["scope_receipt"]["allowed_origins"],
+                "allowed_actions": execution_policy["summary"]["allowed_actions"],
+                "denied_actions": execution_policy["summary"]["denied_actions"],
+            },
+            "tool_adapters": {
+                "artifact": str(self.out_dir / "web-tool-adapters.json"),
+                "selected": selected_adapters,
+            },
+            "external_tools": {
+                "discovery": self._external_tool_results,
+                "validators": self._external_validation_results,
+            },
+            "evidence_ledger": {
+                "artifact": str(self.out_dir / "web-evidence-ledger.json"),
+                "confirmed_web_oracle_findings":
+                    evidence_ledger["summary"]["confirmed_web_oracle_findings"],
+                "external_validator_runs":
+                    evidence_ledger["summary"]["external_validator_runs"],
+            },
+            "context_guard": {
+                "artifact": str(self.out_dir / "context-guard-report.json"),
+                "target_content_is_untrusted": True,
+            },
+        }
+        # Back-compat report key: the first ffuf run's compact summary.
+        for tool_result in self._external_tool_results:
+            if tool_result.get("tool") == "ffuf":
+                result["ffuf"] = tool_result
+                break
+        save_json(self.out_dir / "web_scan_report.json", result)
+        logger.info(
+            "Scan complete. %d findings. Report: %s", len(findings), self.out_dir,
+        )
+        return result
+
+    def _write_finding_attempts(self, findings: list[WebFinding]) -> None:
+        """Oracle-proven findings -> labeled-attempt records (soft)."""
+        from packages.web.attempts import (
+            build_attempt_from_confirmed_finding,
+            write_web_attempts,
+        )
+
+        attempts = []
+        for finding in findings:
+            try:
+                attempt = build_attempt_from_confirmed_finding(
+                    finding, reveal_secrets=self.reveal_secrets,
+                )
+            except Exception:
+                logger.debug("finding attempt build failed", exc_info=True)
+                continue
+            if attempt is not None:
+                attempts.append(attempt)
+        if attempts:
+            write_web_attempts(attempts, self.out_dir)
+
+    def _to_finding(self, result: CheckResult, auth_context: str) -> WebFinding:
+        self._finding_counter += 1
+        return WebFinding(
+            id=f"WEB-{self._finding_counter:04d}",
+            title=result.check_name,
+            severity=result.severity,
+            confidence=result.confidence,
+            status="confirmed",
+            url=result.url,
+            evidence=result.evidence,
+            description=result.detail,
+            recommendation=result.recommendation,
+            vuln_type=_FINDING_VULN_MAP.get(result.category.value, "other"),
+            asvs_category=result.category.value,
+            check_id=result.check_id,
+            auth_context=auth_context,
+        )
+
+    def _empty_result(self, reason: str) -> dict[str, Any]:
+        return {
+            "target": self.base_url, "findings": [], "total_findings": 0,
+            "total_vulnerabilities": 0, "auth_context": "unauthenticated",
+            "discovery": {}, "crawl": {}, "findings_by_severity": {},
+            "phases_completed": self._phases_completed, "error": reason,
+        }
+
+    def _redact(self, value: str) -> str:
+        from core.security.redaction import redact_secrets
+        return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
     def close(self) -> None:
         """Release the underlying HTTP client resources."""
         self.client.close()
@@ -309,7 +1224,12 @@ class WebScanner:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()
 
 
@@ -551,13 +1471,105 @@ Examples:
     parser.add_argument(
         "--no-verify",
         action="store_true",
-        help="Skip the replay/control verification pass on heuristic findings",
+        help="Skip the replay/control verification pass on injection hits",
     )
     parser.add_argument(
         "--max-verifications",
         type=int,
         default=25,
-        help="Maximum findings to verify per run; the rest are marked skipped (default: 25)",
+        help="Maximum hits to verify per run; the rest are marked skipped (default: 25)",
+    )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM payload generation; the fuzzer uses static payloads",
+    )
+    parser.add_argument(
+        "--rate-limit",
+        type=float,
+        default=0.5,
+        help="Seconds between client requests (default: 0.5)",
+    )
+    parser.add_argument(
+        "--max-fuzz-urls", type=int, default=5,
+        help="Phase 6 budget: URLs to fuzz (default: 5)",
+    )
+    parser.add_argument(
+        "--max-fuzz-params", type=int, default=12,
+        help="Phase 6 budget: parameters per URL (default: 12)",
+    )
+    parser.add_argument(
+        "--max-fuzz-forms", type=int, default=5,
+        help="Phase 6 budget: forms to fuzz (default: 5)",
+    )
+    parser.add_argument(
+        "--approval-level",
+        choices=("passive", "active", "intrusive"),
+        default="active",
+        help="Scope-receipt approval level for live actions (default: active)",
+    )
+    parser.add_argument(
+        "--approve-tool",
+        action="append",
+        default=[],
+        help="Explicitly approve a tool above the approval level (repeatable)",
+    )
+    parser.add_argument(
+        "--validator",
+        action="append",
+        default=[],
+        choices=["nuclei"],
+        help="Second-opinion external validator to run on findings (repeatable)",
+    )
+
+    ag = parser.add_argument_group("authentication")
+    ag.add_argument(
+        "--auth-mode",
+        default="none",
+        choices=("none", "form", "bearer", "cookie", "basic"),
+        help="Authentication mode for the scan session",
+    )
+    ag.add_argument("--login-url", help="Login form URL (form mode)")
+    ag.add_argument("--logout-url", help="Logout URL used to detect session loss")
+    ag.add_argument("--username", help="Username (form/basic modes)")
+    ag.add_argument("--password", help="Password (form/basic modes)")
+    ag.add_argument("--token", help="Bearer token (bearer mode)")
+    ag.add_argument("--cookies", help="Cookie string 'a=1; b=2' (cookie mode)")
+    ag.add_argument("--username-field", default="username",
+                    help="Login form username field name (default: username)")
+    ag.add_argument("--password-field", default="password",
+                    help="Login form password field name (default: password)")
+
+    adv = parser.add_argument_group("advanced pipeline")
+    adv.add_argument(
+        "--understand", action="store_true",
+        help="Build a URL-native context map before injection fuzzing",
+    )
+    adv.add_argument(
+        "--validate", action="store_true",
+        help="Run the /validate post-pass on needs_review findings",
+    )
+
+    ng = parser.add_argument_group("nuclei validator")
+    ng.add_argument(
+        "--nuclei-templates",
+        type=Path,
+        help=(
+            "Pinned nuclei templates directory (REQUIRED for --validator "
+            "nuclei; templates are never fetched or auto-updated)"
+        ),
+    )
+    ng.add_argument(
+        "--nuclei-rate-limit", type=int, default=50,
+        help="nuclei requests/second (-rl; default: 50)",
+    )
+    ng.add_argument(
+        "--nuclei-severity", default="medium,high,critical",
+        help="nuclei -severity filter (default: medium,high,critical)",
+    )
+    ng.add_argument(
+        "--nuclei-max-runtime", type=int, default=600,
+        help="Maximum sandboxed nuclei runtime in seconds (default: 600)",
     )
     return parser
 
@@ -641,6 +1653,37 @@ def main():
     except (ValueError, FileNotFoundError) as exc:
         parser.error(f"ffuf: {exc}")
 
+    # Auth manager + nuclei knobs fail at parse time too, for the same
+    # reason as the ffuf preflight: a bad flag combination must not cost
+    # a crawl.
+    try:
+        auth_manager = make_auth_manager(
+            args.auth_mode,
+            username=args.username,
+            password=args.password,
+            token=args.token,
+            cookies=args.cookies,
+            login_url=args.login_url,
+            logout_url=args.logout_url,
+            username_field=args.username_field,
+            password_field=args.password_field,
+        )
+    except ValueError as exc:
+        parser.error(f"auth: {exc}")
+    nuclei_config = None
+    if "nuclei" in (args.validator or []):
+        if not args.nuclei_templates or not Path(args.nuclei_templates).is_dir():
+            parser.error(
+                "nuclei: --nuclei-templates must name a pinned templates "
+                "directory (templates are never fetched or auto-updated)"
+            )
+        nuclei_config = NucleiConfig(
+            templates_dir=args.nuclei_templates,
+            rate_limit=args.nuclei_rate_limit,
+            severity=args.nuclei_severity,
+            max_runtime=args.nuclei_max_runtime,
+        )
+
     # Determine output directory
     if args.out:
         out_dir = Path(args.out)
@@ -667,13 +1710,15 @@ def main():
     logger.info("Output: %s", out_dir)
 
     # Initialize LLM client with multi-model support, fallback, and retry
-    from core.llm.factory import get_client
-    llm = get_client()
+    llm = None
+    if not args.no_llm:
+        from core.llm.factory import get_client
+        llm = get_client()
     if llm:
         logger.info("LLM client initialized")
     else:
-        print("\n⚠️  Warning: Could not initialize LLM client", file=sys.stderr)
-        print("    Web scanning will work but fuzzing will be limited", file=sys.stderr)
+        print("\n⚠️  Warning: no LLM client", file=sys.stderr)
+        print("    Fuzzing runs with static payloads", file=sys.stderr)
 
     # Run scan
     verify_ssl = not args.insecure
@@ -682,11 +1727,22 @@ def main():
         args.url,
         llm,
         out_dir,
+        auth_manager=auth_manager,
         verify_ssl=verify_ssl,
         reveal_secrets=bool(args.reveal_secrets),
+        rate_limit=args.rate_limit,
         max_depth=args.max_depth,
         max_pages=args.max_pages,
+        max_fuzz_urls=args.max_fuzz_urls,
+        max_fuzz_params=args.max_fuzz_params,
+        max_fuzz_forms=args.max_fuzz_forms,
+        run_understand=bool(args.understand),
+        run_validate=bool(args.validate),
         ffuf_config=ffuf_config,
+        external_validators=list(args.validator or []),
+        nuclei_config=nuclei_config,
+        approval_level=args.approval_level,
+        approved_tools=list(args.approve_tool or []),
         verify_findings=not args.no_verify,
         max_verifications=args.max_verifications,
     )
@@ -722,8 +1778,9 @@ def main():
         # it found — the findings live in web_scan_report.json. The raptor.py
         # lifecycle wrapper treats any non-zero exit as a failed run, so
         # exiting 1 on findings would record every successful vuln-finding
-        # scan as status=failed.
-        return 0
+        # scan as status=failed. A scan that never got past preflight is a
+        # failed run, though.
+        return 1 if results.get("error") else 0
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Scan interrupted by user", file=sys.stderr)

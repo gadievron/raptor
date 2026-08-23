@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Type
 if TYPE_CHECKING:
     from packages.web.client import WebClient
     from packages.web.auth import AuthSession
-    from core.llm.providers import LLMProvider
+    from core.llm.client import LLMClient
 
 
 class CheckCategory(str, Enum):
@@ -60,7 +60,7 @@ class Check(abc.ABC):
     category: CheckCategory = CheckCategory.HEADERS
     requires_auth: bool = False
 
-    def __init__(self, llm: Optional["LLMProvider"] = None) -> None:
+    def __init__(self, llm: "LLMClient | None" = None) -> None:
         self.llm = llm
 
     @abc.abstractmethod
