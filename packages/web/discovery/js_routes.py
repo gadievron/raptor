@@ -62,7 +62,7 @@ def extract_js_routes(client: "WebClient", base_url: str) -> List[str]:
         return []
 
     # Inline scripts
-    inline_re = re.compile(r"<script(?![^>]*\bsrc\b)[^>]*>(.*?)</script\s*>", re.I | re.DOTALL)
+    inline_re = re.compile(r"<script(?![^>]*\bsrc\b)[^>]*>(.*?)</script(?:\s[^>]*)?>", re.I | re.DOTALL)
     for m in inline_re.finditer(html):
         for route in _extract_routes(m.group(1)):
             _add(route)

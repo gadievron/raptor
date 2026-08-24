@@ -62,6 +62,10 @@ class TestInlineScriptEndTag(unittest.TestCase):
         resp.text = (
             "<script>fetch('/api/one')</script >"
             "<script type='text/javascript'>fetch('/api/two')</script\t>"
+            # Per the HTML spec, junk after the end-tag name is ignored
+            # by browsers — the tag still terminates the script.
+            "<script>fetch('/api/three')</script\t\n bar>"
+            "<script>fetch('/api/four')</script>"
         )
         resp.content = resp.text.encode()
         client.get.return_value = resp
@@ -69,6 +73,8 @@ class TestInlineScriptEndTag(unittest.TestCase):
         urls = extract_js_routes(client, "https://t.example")
         self.assertIn("https://t.example/api/one", urls)
         self.assertIn("https://t.example/api/two", urls)
+        self.assertIn("https://t.example/api/three", urls)
+        self.assertIn("https://t.example/api/four", urls)
 
 
 class TestProbeHostSingleSource(unittest.TestCase):
