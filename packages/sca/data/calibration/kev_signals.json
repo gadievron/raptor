@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-18T06:24:32Z",
+    "fetched_at": "2026-08-25T06:27:37Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -452,7 +452,7 @@
       "date_added": "2021-11-03",
       "kev": true,
       "product": "MSCOMCTL.OCX",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2012-0391": {
@@ -4624,7 +4624,7 @@
       "date_added": "2022-03-15",
       "kev": true,
       "product": "SonicOS",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "SonicWall"
     },
     "CVE-2020-5410": {
@@ -6311,7 +6311,7 @@
       "date_added": "2025-10-06",
       "kev": true,
       "product": "Windows",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2021-43798": {
@@ -11186,6 +11186,13 @@
       "ransomware_use": false,
       "vendor": "Fortinet"
     },
+    "CVE-2026-21962": {
+      "date_added": "2026-08-24",
+      "kev": true,
+      "product": "HTTP Server and Oracle Weblogic Server Proxy Plug-in",
+      "ransomware_use": false,
+      "vendor": "Oracle"
+    },
     "CVE-2026-22719": {
       "date_added": "2026-03-03",
       "kev": true,
@@ -11297,6 +11304,13 @@
       "product": "Trivy",
       "ransomware_use": false,
       "vendor": "Aquasecurity"
+    },
+    "CVE-2026-33824": {
+      "date_added": "2026-08-18",
+      "kev": true,
+      "product": "Internet Key Exchange (IKE) Service Extensions",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     },
     "CVE-2026-33825": {
       "date_added": "2026-04-22",
@@ -11550,6 +11564,13 @@
       "ransomware_use": false,
       "vendor": "LiteSpeed"
     },
+    "CVE-2026-55040": {
+      "date_added": "2026-08-18",
+      "kev": true,
+      "product": "SharePoint",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-55255": {
       "date_added": "2026-07-07",
       "kev": true,
@@ -11592,6 +11613,13 @@
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
+    "CVE-2026-59310": {
+      "date_added": "2026-08-18",
+      "kev": true,
+      "product": "VMware vCenter",
+      "ransomware_use": false,
+      "vendor": "Broadcom"
+    },
     "CVE-2026-60137": {
       "date_added": "2026-07-21",
       "kev": true,
@@ -11613,6 +11641,20 @@
       "ransomware_use": false,
       "vendor": "JetBrains"
     },
+    "CVE-2026-64849": {
+      "date_added": "2026-08-19",
+      "kev": true,
+      "product": "MLflow",
+      "ransomware_use": false,
+      "vendor": "MLflow"
+    },
+    "CVE-2026-65400": {
+      "date_added": "2026-08-18",
+      "kev": true,
+      "product": "macOS",
+      "ransomware_use": false,
+      "vendor": "Apple"
+    },
     "CVE-2026-68820": {
       "date_added": "2026-08-11",
       "kev": true,
@@ -11627,12 +11669,33 @@
       "ransomware_use": false,
       "vendor": "Ivanti"
     },
+    "CVE-2026-72529": {
+      "date_added": "2026-08-20",
+      "kev": true,
+      "product": "Server",
+      "ransomware_use": false,
+      "vendor": "TrueConf"
+    },
+    "CVE-2026-72530": {
+      "date_added": "2026-08-20",
+      "kev": true,
+      "product": "Server",
+      "ransomware_use": false,
+      "vendor": "TrueConf"
+    },
     "CVE-2026-72898": {
       "date_added": "2026-08-11",
       "kev": true,
       "product": "Metabase",
       "ransomware_use": false,
       "vendor": "Metabase"
+    },
+    "CVE-2026-73570": {
+      "date_added": "2026-08-21",
+      "kev": true,
+      "product": "Zimbra Collaboration Suite (ZCS)",
+      "ransomware_use": false,
+      "vendor": "Synacor"
     },
     "CVE-2026-7473": {
       "date_added": "2026-06-09",

@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-08-18T06:24:33Z",
+    "fetched_at": "2026-08-25T06:27:38Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7138,
+    "modules_scanned": 7148,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -19223,6 +19223,18 @@
         "exploit_multi/http/gogs_rebase_rce"
       ]
     },
+    "CVE-2026-56274": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/flowise_mcp_rce"
+      ]
+    },
+    "CVE-2026-59774": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/forgejo_orgmode_fileread_cve_2026_59774"
+      ]
+    },
     "CVE-2026-60137": {
       "has_msf_module": true,
       "module_paths": [
@@ -19233,6 +19245,24 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/wp_batch_desync_rce"
+      ]
+    },
+    "CVE-2026-6826": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/concrete_cms_file_usage_disclosure"
+      ]
+    },
+    "CVE-2026-77647": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/spip_x_spip_filtre_rce"
+      ]
+    },
+    "CVE-2026-9198": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/langflow_unauth_rce_cve_2026_9198"
       ]
     }
   }
