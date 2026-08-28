@@ -18,6 +18,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
+from core.security.redaction import redact_secrets
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -426,21 +427,29 @@ def blank_for_project(project: Any) -> ThreatModel:
     )
 
 
-def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
+def from_context_map(
+    project: Any,
+    context_map: dict[str, Any],
+    *,
+    reveal_secrets: bool = False,
+) -> ThreatModel:
     """Build a starter model from an ``/understand`` context-map."""
     model = blank_for_project(project)
     model.source = "context-map"
     model.entry_points = _summaries_from_entries(
         context_map["entry_points"] if "entry_points" in context_map else context_map.get("sources") or [],
         default_label="entry",
+        reveal_secrets=reveal_secrets,
     )
     model.trust_boundaries = _summaries_from_entries(
         context_map.get("trust_boundaries") or [],
         default_label="boundary",
+        reveal_secrets=reveal_secrets,
     )
     sinks = _summaries_from_entries(
         context_map["sink_details"] if "sink_details" in context_map else context_map.get("sinks") or [],
         default_label="sink",
+        reveal_secrets=reveal_secrets,
     )
     model.domain_packs = _derive_domain_packs(context_map)
     derived_classes = _vuln_classes_for_packs(model.domain_packs)
@@ -455,6 +464,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     secrets = _summaries_from_entries(
         context_map.get("hardcoded_secrets") or [],
         default_label="secret",
+        reveal_secrets=reveal_secrets,
     )
     model.focus_areas = _dedup(unchecked_flows + model.focus_areas + secrets)
     model.known_bug_shapes.extend(unchecked_flows)
@@ -1289,13 +1299,18 @@ def _evidence_from_context_map(context_map: dict[str, Any]) -> list[dict[str, An
     return evidence
 
 
-def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
+def _summaries_from_entries(
+    entries: Any,
+    *,
+    default_label: str,
+    reveal_secrets: bool = False,
+) -> list[str]:
     out: list[str] = []
     if not isinstance(entries, list):
         return out
     for i, entry in enumerate(entries[:_MAX_LIST_ENTRIES]):
         if isinstance(entry, str):
-            out.append(_clip_str(entry))
+            out.append(_clip_str(redact_secrets(entry, reveal_secrets=reveal_secrets)))
             continue
         if not isinstance(entry, dict):
             continue
@@ -1307,6 +1322,11 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
             or entry.get("operation")
             or f"{default_label}-{i}"
         )
+        # Redact the name/identifier field — scanners (gitleaks, trufflehog,
+        # Semgrep) commonly populate this with the matched credential value,
+        # not just a variable name. File path and line number are safe metadata
+        # and are kept verbatim so operators can locate the finding.
+        name = redact_secrets(name, reveal_secrets=reveal_secrets)
         location = entry.get("file") or entry.get("path") or entry.get("location")
         line = entry.get("line")
         trust = entry.get("trust") or entry.get("trust_level")

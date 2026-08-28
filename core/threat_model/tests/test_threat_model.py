@@ -72,6 +72,80 @@ def test_context_map_seeds_focus_areas_and_bug_shapes(tmp_path):
     assert any(c["id"] == "CTRL-004" for c in model.controls)
 
 
+def test_hardcoded_secret_token_values_are_redacted_in_threat_model(tmp_path):
+    """Secret token values from scanners must be redacted in known_bug_shapes.
+
+    Scanners like gitleaks and trufflehog populate the ``name`` field of
+    hardcoded_secrets entries with the actual matched credential token, not
+    just the variable name.  That value must not propagate verbatim into the
+    threat model document (CWE-312 / CWE-532).
+
+    The file path and line number are safe metadata and must be preserved so
+    operators can locate the finding for remediation.
+    """
+    project = _project(tmp_path)
+    # Assembled at runtime so static secret-scanners don't flag this test file.
+    # The Stripe live-key pattern is ``sk_live_`` + ≥24 alnum chars; the
+    # redaction regex in core/security/redaction.py matches the assembled value.
+    stripe_token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+    model = from_context_map(project, {
+        "hardcoded_secrets": [{
+            "name": stripe_token,
+            "file": "config.py",
+            "line": 42,
+        }],
+    })
+
+    bug_shapes = model.known_bug_shapes
+    # The token value must not appear anywhere in the threat model.
+    assert not any(stripe_token in s for s in bug_shapes), (
+        "Live secret token must be redacted, but was found verbatim in known_bug_shapes"
+    )
+    # [REDACTED] must be present in the matching entry.
+    assert any("[REDACTED]" in s for s in bug_shapes), (
+        "Expected [REDACTED] placeholder in known_bug_shapes"
+    )
+    # The file path and line number must still be present for actionable remediation.
+    assert any("config.py" in s and "42" in s for s in bug_shapes), (
+        "File path and line number must be preserved in known_bug_shapes"
+    )
+
+
+def test_reveal_secrets_bypasses_redaction(tmp_path):
+    """reveal_secrets=True must pass the raw token through for local debugging."""
+    project = _project(tmp_path)
+    # Assembled at runtime to avoid static secret-scanner false positives.
+    stripe_token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+    model = from_context_map(project, {
+        "hardcoded_secrets": [{
+            "name": stripe_token,
+            "file": "config.py",
+            "line": 42,
+        }],
+    }, reveal_secrets=True)
+
+    assert any(stripe_token in s for s in model.known_bug_shapes), (
+        "reveal_secrets=True must preserve the raw token value"
+    )
+
+
+def test_benign_variable_name_is_not_redacted(tmp_path):
+    """A variable name like STRIPE_SECRET_KEY must not be redacted — only actual
+    token values matching vendor credential patterns are redacted."""
+    project = _project(tmp_path)
+    model = from_context_map(project, {
+        "hardcoded_secrets": [{
+            "name": "STRIPE_SECRET_KEY",
+            "file": "config.py",
+            "line": 1,
+        }],
+    })
+
+    assert any("STRIPE_SECRET_KEY" in s for s in model.known_bug_shapes), (
+        "Benign variable name must not be redacted"
+    )
+
+
 def test_prompt_context_escapes_control_characters(tmp_path):
     project = _project(tmp_path)
     model = blank_for_project(project)

@@ -378,6 +378,18 @@ def main() -> None:
         "--context-map", default=None, metavar="<path>",
         help="Fresh /understand context-map.json for diff/report")
     p_tm.add_argument("--json", dest="json_out", action="store_true", help="Print JSON")
+    p_tm.add_argument(
+        "--reveal-secrets",
+        dest="reveal_secrets",
+        action="store_true",
+        default=False,
+        help=(
+            "Include raw secret values in export/sync/report output. "
+            "By default secret token values detected by scanners are redacted to [REDACTED]; "
+            "file paths and line numbers are always preserved. "
+            "Use only for local debugging — never in CI or shared outputs."
+        ),
+    )
 
     # use
     p_use = sub.add_parser("use", help="Set the active project (no arg = show current)",
@@ -1915,7 +1927,7 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
             if not isinstance(context_map, dict):
                 print(_red(f"Not a context-map JSON object: {args.from_context_map}"))
                 return
-        model = from_context_map(project, context_map) if context_map else blank_for_project(project)
+        model = from_context_map(project, context_map, reveal_secrets=args.reveal_secrets) if context_map else blank_for_project(project)
         save_model(model, json_path, markdown_path)
         project.threat_model_path = str(json_path)
         project.threat_model_updated = model.updated_at
