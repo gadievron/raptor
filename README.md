@@ -102,19 +102,19 @@ Running plain `claude` from inside the repo directory also works -- Claude Code 
 Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
 
 You can pull down a pre-built image:
-```
+```bash
 docker pull danielcuthbert/raptor:latest
 ```
 
 or build it locally using the included `Dockerfile`:
-```
+```bash
 docker build -f .devcontainer/Dockerfile -t raptor:latest .
 ```
 
 The image expects the RAPTOR framework (this repo) to be mounted into `/workspaces/raptor` on startup. You can optionally mount a target-folder for local analysis, if that's how you're planning to work (examples shown below).
 
 To start the container run the following (`--privileged` required if using the `rr` deterministic debugger):
-```
+```bash
 docker run --privileged -it \
   -v "$(pwd):/workspaces/raptor" \
   # optional target-folder mount
@@ -123,7 +123,7 @@ docker run --privileged -it \
 ```
 
 VSCode Devcontainers are also supported. To mount a target-folder, add it to the `mounts` section of `.devcontainer/devcontainer.json`:
-```
+```bash
 "mounts": [
   // ...existing entries...
   "source=/path/to/target-folder,target=/workspaces/target,type=bind,consistency=cached"
@@ -131,7 +131,7 @@ VSCode Devcontainers are also supported. To mount a target-folder, add it to the
 ```
 
 Then from a terminal run:
-```
+```bash
 cd /path/to/raptor
 code .
 ```
