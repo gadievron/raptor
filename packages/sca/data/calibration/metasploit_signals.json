@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-08-25T06:27:38Z",
+    "fetched_at": "2026-08-28T20:29:42Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7148,
+    "modules_scanned": 7161,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -18102,6 +18102,12 @@
         "exploit_linux/http/wazuh_auth_rce_cve_2025_24016"
       ]
     },
+    "CVE-2025-24293": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/rails_activestorage_vips_rce"
+      ]
+    },
     "CVE-2025-24367": {
       "has_msf_module": true,
       "module_paths": [
@@ -18941,6 +18947,12 @@
         "auxiliary_scanner/http/nable_ncentral_auth_bypass_xxe"
       ]
     },
+    "CVE-2026-0265": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/panos_cve_2026_0265"
+      ]
+    },
     "CVE-2026-0826": {
       "has_msf_module": true,
       "module_paths": [
@@ -18965,10 +18977,28 @@
         "exploit_linux/http/sonicwall_sma1000_wsproxy_rce"
       ]
     },
+    "CVE-2026-16232": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/misc/checkpoint_smartconsole_cve_2026_16232_rce"
+      ]
+    },
     "CVE-2026-1731": {
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/http/beyondtrust_pra_rs_command_injection"
+      ]
+    },
+    "CVE-2026-19626": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/tenable_sc_report_charting_rce_cve_2026_19626"
+      ]
+    },
+    "CVE-2026-19681": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/tenable_sc_auditfile_cmdinject_cve_2026_19681"
       ]
     },
     "CVE-2026-20127": {
@@ -19139,6 +19169,12 @@
         "exploit_multi/http/xerte_unauthenticated_mediaupload"
       ]
     },
+    "CVE-2026-3576": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/wp_planyo_lfi_cve_2026_3576"
+      ]
+    },
     "CVE-2026-3891": {
       "has_msf_module": true,
       "module_paths": [
@@ -19238,13 +19274,27 @@
     "CVE-2026-60137": {
       "has_msf_module": true,
       "module_paths": [
+        "auxiliary_scanner/http/wordpress_wp2shell_sqli",
         "exploit_multi/http/wp_batch_desync_rce"
       ]
     },
     "CVE-2026-63030": {
       "has_msf_module": true,
       "module_paths": [
+        "auxiliary_scanner/http/wordpress_wp2shell_sqli",
         "exploit_multi/http/wp_batch_desync_rce"
+      ]
+    },
+    "CVE-2026-63077": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/jetbrains_teamcity_rce_cve_2026_63077"
+      ]
+    },
+    "CVE-2026-66066": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/rails_activestorage_vips_rce"
       ]
     },
     "CVE-2026-6826": {
@@ -19257,6 +19307,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/spip_x_spip_filtre_rce"
+      ]
+    },
+    "CVE-2026-9082": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/drupal_pgsql_entityquery_sqli"
       ]
     },
     "CVE-2026-9198": {

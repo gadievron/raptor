@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-25T06:27:37Z",
+    "fetched_at": "2026-08-28T20:29:42Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -1316,6 +1316,13 @@
       "ransomware_use": false,
       "vendor": "Adobe"
     },
+    "CVE-2015-3246": {
+      "date_added": "2026-08-26",
+      "kev": true,
+      "product": "Libuser",
+      "ransomware_use": false,
+      "vendor": "Red Hat"
+    },
     "CVE-2015-4068": {
       "date_added": "2022-03-25",
       "kev": true,
@@ -1364,6 +1371,13 @@
       "product": "Flash Player",
       "ransomware_use": false,
       "vendor": "Adobe"
+    },
+    "CVE-2015-5287": {
+      "date_added": "2026-08-26",
+      "kev": true,
+      "product": "Automatic Bug Reporting Tool",
+      "ransomware_use": false,
+      "vendor": "Red Hat"
     },
     "CVE-2015-5317": {
       "date_added": "2023-05-12",
@@ -3204,6 +3218,13 @@
       "kev": true,
       "product": "Windows",
       "ransomware_use": true,
+      "vendor": "Microsoft"
+    },
+    "CVE-2019-1068": {
+      "date_added": "2026-08-26",
+      "kev": true,
+      "product": "SQL Server",
+      "ransomware_use": false,
       "vendor": "Microsoft"
     },
     "CVE-2019-1069": {
@@ -5285,6 +5306,13 @@
       "ransomware_use": false,
       "vendor": "F5"
     },
+    "CVE-2021-23758": {
+      "date_added": "2026-08-26",
+      "kev": true,
+      "product": "Ajax.NET Professional",
+      "ransomware_use": false,
+      "vendor": "Ajax.NET Professional"
+    },
     "CVE-2021-23874": {
       "date_added": "2021-11-03",
       "kev": true,
@@ -6428,6 +6456,13 @@
     },
     "CVE-2022-0847": {
       "date_added": "2022-04-25",
+      "kev": true,
+      "product": "Kernel",
+      "ransomware_use": false,
+      "vendor": "Linux"
+    },
+    "CVE-2022-0995": {
+      "date_added": "2026-08-26",
       "kev": true,
       "product": "Kernel",
       "ransomware_use": false,
@@ -8355,6 +8390,13 @@
       "date_added": "2023-11-30",
       "kev": true,
       "product": "ownCloud graphapi",
+      "ransomware_use": false,
+      "vendor": "ownCloud"
+    },
+    "CVE-2023-49105": {
+      "date_added": "2026-08-27",
+      "kev": true,
+      "product": "ownCloud",
       "ransomware_use": false,
       "vendor": "ownCloud"
     },
@@ -11557,6 +11599,13 @@
       "ransomware_use": false,
       "vendor": "Google"
     },
+    "CVE-2026-53362": {
+      "date_added": "2026-08-27",
+      "kev": true,
+      "product": "Kernel",
+      "ransomware_use": false,
+      "vendor": "Linux"
+    },
     "CVE-2026-54420": {
       "date_added": "2026-06-15",
       "kev": true,
@@ -11620,6 +11669,13 @@
       "ransomware_use": false,
       "vendor": "Broadcom"
     },
+    "CVE-2026-60004": {
+      "date_added": "2026-08-25",
+      "kev": true,
+      "product": "Gitea",
+      "ransomware_use": false,
+      "vendor": "Gitea"
+    },
     "CVE-2026-60137": {
       "date_added": "2026-07-21",
       "kev": true,
@@ -11654,6 +11710,13 @@
       "product": "macOS",
       "ransomware_use": false,
       "vendor": "Apple"
+    },
+    "CVE-2026-66384": {
+      "date_added": "2026-08-27",
+      "kev": true,
+      "product": "Artifactory",
+      "ransomware_use": false,
+      "vendor": "JFrog"
     },
     "CVE-2026-68820": {
       "date_added": "2026-08-11",
@@ -11717,6 +11780,13 @@
       "product": "Daemon Tools Lite",
       "ransomware_use": false,
       "vendor": "Daemon"
+    },
+    "CVE-2026-8452": {
+      "date_added": "2026-08-26",
+      "kev": true,
+      "product": "NetScaler ADC and NetScaler Gateway",
+      "ransomware_use": false,
+      "vendor": "Citrix"
     },
     "CVE-2026-9082": {
       "date_added": "2026-05-22",
