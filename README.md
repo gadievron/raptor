@@ -97,25 +97,46 @@ Running plain `claude` from inside the repo directory also works -- Claude Code 
 
 **Important:** RAPTOR loads its configuration from the repo directory. If you run `claude` from any other directory, you get plain Claude Code, not RAPTOR. The `raptor` launcher avoids this failure mode entirely.
 
-### Option 2: Devcontainer (recommended)
+### Option 2: Run in a container (recommended)
 
-Everything pre-installed. Open in VS Code with **Dev Containers: Open Folder in Container**, or pull the prebuilt image:
+Using containers is a common security practice to restrict agents from accessing areas of your filesystem you don't want them to, as well as limiting the blast radius of any malicious code that may execute (e.g via supply-chain attack). The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
 
-```bash
+You can pull down a pre-built image:
+```
 docker pull danielcuthbert/raptor:latest
-docker run --privileged -it -v "$(pwd):/workspaces/raptor" danielcuthbert/raptor:latest
 ```
 
-Or build it yourself instead of pulling:
-
-```bash
+or build it locally using the included `Dockerfile`:
+```
 docker build -f .devcontainer/Dockerfile -t raptor:latest .
-docker run --privileged -it -v "$(pwd):/workspaces/raptor" raptor:latest
 ```
 
-The `--privileged` flag is required for the `rr` deterministic debugger. The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
+The image expects the RAPTOR framework (this repo) to be mounted into `/workspaces/raptor` on startup. You can optionally mount a target-folder for local analysis, if that's how you're planning to work (examples shown below).
 
-Once inside, just say "hi" to get started, or jump straight to a command.
+To start the container run the following (`--privileged` required if using the `rr` deterministic debugger):
+```
+docker run --privileged -it \
+  -v "$(pwd):/workspaces/raptor" \
+  # optional target-folder mount
+  -v "/path/to/target-folder:/workspaces/target" \
+  raptor:latest
+```
+
+VSCode Devcontainers are also supported. To mount a target-folder, add it to the `mounts` section of `.devcontainer/devcontainer.json`:
+```
+"mounts": [
+  // ...existing entries...
+  "source=/path/to/target-folder,target=/workspaces/target,type=bind,consistency=cached"
+]
+```
+
+Then from a terminal run:
+```
+cd /path/to/raptor
+code .
+```
+
+Either way once you're inside the container, run `raptor` to get started.
 
 ---
 

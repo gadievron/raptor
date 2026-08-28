@@ -153,7 +153,7 @@ RUN npm install -g yarn@1.22.22 pnpm@11.8.0
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
 
-ENV PATH="/opt/codeql:${PATH}"
+ENV PATH="/opt/codeql:/workspaces/raptor/bin:${PATH}"
 ENV GIT_TERMINAL_PROMPT=0
 ENV PYTHONUNBUFFERED=1
 # Ensure python can import repo packages when container runs
@@ -163,7 +163,6 @@ ENV PYTHONPATH="/workspaces/raptor:/workspaces/raptor/packages"
 # ============================================================================
 # WORKSPACE
 # ============================================================================
-
 WORKDIR /workspaces/raptor
 
 # ============================================================================
@@ -173,3 +172,5 @@ WORKDIR /workspaces/raptor
 # vscode has passwordless sudo for tools that genuinely need root (e.g. rr in
 # --privileged containers). All build steps above run as root by inheritance.
 USER vscode
+
+CMD ["bash"]
