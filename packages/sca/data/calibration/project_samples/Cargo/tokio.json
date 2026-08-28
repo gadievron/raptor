@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:17Z",
+    "fetched_at": "2026-08-28T20:30:25Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -57,11 +57,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio-util/tests/compat.rs:6",
-          "tokio-util/tests/io_sink_writer.rs:4",
-          "tokio-util/src/task/spawn_pinned.rs:1",
+          "tokio/tests/tcp_connect.rs:177",
           "tokio-test/tests/stream_mock.rs:1",
-          "tokio/tests/tcp_connect.rs:177"
+          "tokio-util/src/task/spawn_pinned.rs:1",
+          "tokio-util/tests/compat.rs:6",
+          "tokio-util/tests/io_sink_writer.rs:4"
         ],
         "verdict": "imported"
       },
@@ -89,6 +89,10 @@
         "aliases": [
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
+        ],
+        "cwe_ids": [
+          "CWE-416",
+          "CWE-672"
         ],
         "fixed_versions": [
           "0.8.11"
@@ -133,11 +137,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio/tests/tcp_connect.rs:175",
-          "tokio/src/io/async_fd.rs:5",
-          "tokio/src/io/poll_evented.rs:5",
-          "tokio/src/io/bsd/poll_aio.rs:6",
-          "tokio/src/io/bsd/poll_aio.rs:7",
+          "tokio/src/signal/unix.rs:15",
+          "tokio/src/process/unix/mod.rs:36",
+          "tokio/src/process/unix/mod.rs:37",
+          "tokio/src/net/unix/pipe.rs:6",
+          "tokio/src/runtime/signal/mod.rs:8",
           "... (+8 more)"
         ],
         "verdict": "imported"
@@ -166,6 +170,9 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2026-0097"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "0.9.3",
@@ -206,9 +213,9 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
           "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
+          "tokio/tests/time_pause.rs:5",
+          "tokio/tests/sync_broadcast.rs:568"
         ],
         "verdict": "imported"
       },
@@ -276,9 +283,9 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio/tests/sync_broadcast.rs:568",
           "tokio/tests/time_pause.rs:4",
-          "tokio/tests/time_pause.rs:5"
+          "tokio/tests/time_pause.rs:5",
+          "tokio/tests/sync_broadcast.rs:568"
         ],
         "verdict": "imported"
       },
@@ -306,6 +313,10 @@
         "aliases": [
           "CVE-2021-38191",
           "RUSTSEC-2021-0072"
+        ],
+        "cwe_ids": [
+          "CWE-362",
+          "CWE-366"
         ],
         "fixed_versions": [
           "1.8.1",
@@ -353,11 +364,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
@@ -425,11 +436,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
@@ -458,6 +469,9 @@
         "aliases": [
           "CVE-2021-45710",
           "RUSTSEC-2021-0124"
+        ],
+        "cwe_ids": [
+          "CWE-362"
         ],
         "fixed_versions": [
           "1.8.4",
@@ -503,11 +517,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
@@ -536,6 +550,9 @@
         "aliases": [
           "RUSTSEC-2025-0023"
         ],
+        "cwe_ids": [
+          "CWE-664"
+        ],
         "fixed_versions": [
           "1.44.2",
           "1.38.2",
@@ -550,6 +567,7 @@
           "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
       },
       "cvss_score": null,
@@ -567,7 +585,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.5.0:GHSA-rr8g-9fpq-6wmg",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.5.0",
-      "raptor_risk_estimate": 11.812822499999998,
+      "raptor_risk_estimate": 0.2953205625,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -575,31 +593,31 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.812822499999998,
+        "final": 0.2953205625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -648,11 +666,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
@@ -722,11 +740,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tests-integration/tests/rt_yield.rs:1",
-          "tests-integration/tests/rt_yield.rs:2",
-          "tests-integration/tests/process_stdio.rs:4",
-          "tests-integration/tests/process_stdio.rs:5",
-          "tests-integration/tests/process_stdio.rs:6",
+          "tokio/tests/fs_remove_dir_all.rs:5",
+          "tokio/tests/signal_drop_signal.rs:10",
+          "tokio/tests/net_unix_pipe.rs:4",
+          "tokio/tests/net_unix_pipe.rs:5",
+          "tokio/tests/process_issue_42.rs:7",
           "... (+366 more)"
         ],
         "verdict": "imported"
@@ -754,22 +772,21 @@
       "advisory": {
         "aliases": [
           "CVE-2025-58160",
-          "RUSTSEC-2025-0055"
+          "GHSA-xwfj-jgwm-7wp5"
         ],
         "fixed_versions": [
           "0.3.20"
         ],
-        "id": "GHSA-xwfj-jgwm-7wp5",
-        "modified": "2026-02-04T02:43:59.643308+00:00",
-        "published": "2025-08-29T20:33:56+00:00",
+        "id": "RUSTSEC-2025-0055",
+        "modified": "2025-09-02T11:42:15.974613+00:00",
+        "published": "2025-08-29T12:00:00+00:00",
         "references": [
-          "https://github.com/tokio-rs/tracing/security/advisories/GHSA-xwfj-jgwm-7wp5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-58160",
-          "https://github.com/tokio-rs/tracing",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0055.html"
+          "https://crates.io/crates/tracing-subscriber",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0055.html",
+          "https://github.com/advisories/GHSA-xwfj-jgwm-7wp5"
         ],
         "severity": null,
-        "summary": " Tracing logging user input may result in poisoning logs with ANSI escape sequences"
+        "summary": "Logging user input may result in poisoning logs with ANSI escape sequences"
       },
       "cvss_score": null,
       "dep_name": "tracing-subscriber",
@@ -783,7 +800,7 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:Cargo:tracing-subscriber:0.3.1:GHSA-xwfj-jgwm-7wp5",
+      "finding_id": "sca:vuln:Cargo:tracing-subscriber:0.3.1:RUSTSEC-2025-0055",
       "in_kev": false,
       "purl": "pkg:cargo/tracing-subscriber@0.3.1",
       "raptor_risk_estimate": 4.910435998434638,

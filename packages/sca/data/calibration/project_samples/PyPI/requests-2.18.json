@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:51Z",
+    "fetched_at": "2026-08-28T20:30:53Z",
     "git_ref": "v2.18.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests-2.18",
@@ -14,6 +14,9 @@
         "aliases": [
           "CVE-2025-71176",
           "PYSEC-2026-1845"
+        ],
+        "cwe_ids": [
+          "CWE-379"
         ],
         "fixed_versions": [
           "9.0.3"
@@ -39,7 +42,7 @@
       "dep_name": "pytest",
       "dep_version": "2.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.0014,
+      "epss": 0.00143,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -50,7 +53,7 @@
       "finding_id": "sca:vuln:PyPI:pytest:2.8.0:GHSA-6w46-j5rx-g56g",
       "in_kev": false,
       "purl": "pkg:pypi/pytest@2.8.0",
-      "raptor_risk_estimate": 12.274442477699997,
+      "raptor_risk_estimate": 12.274912234364999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -67,10 +70,10 @@
         "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40001442,
+        "epss_multiplier": 0.400029729,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.274442477699997,
+        "final": 12.274912234364999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -88,6 +91,9 @@
           "CVE-2025-47273",
           "PYSEC-2025-49"
         ],
+        "cwe_ids": [
+          "CWE-22"
+        ],
         "fixed_versions": [
           "78.1.1"
         ],
@@ -102,13 +108,14 @@
           "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
         ],
         "severity": null,
+        "severity_fallback": "high",
         "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
       },
       "cvss_score": null,
       "dep_name": "setuptools",
       "dep_version": "18.5",
       "ecosystem": "PyPI",
-      "epss": 0.01454,
+      "epss": 0.01503,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -119,7 +126,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@18.5",
-      "raptor_risk_estimate": 28.09002868492044,
+      "raptor_risk_estimate": 28.107298136908806,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -134,13 +141,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 70.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406719762,
+        "epss_multiplier": 0.406969809,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 28.09002868492044,
+        "final": 28.107298136908806,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -148,7 +155,7 @@
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -158,6 +165,9 @@
           "BIT-setuptools-2024-6345",
           "CVE-2024-6345",
           "PYSEC-2026-1918"
+        ],
+        "cwe_ids": [
+          "CWE-94"
         ],
         "fixed_versions": [
           "70.0.0"
@@ -234,6 +244,10 @@
           "CVE-2026-59890",
           "PYSEC-2026-3447"
         ],
+        "cwe_ids": [
+          "CWE-176",
+          "CWE-697"
+        ],
         "fixed_versions": [
           "83.0.0"
         ],
@@ -309,11 +323,14 @@
           "CVE-2022-40897",
           "PYSEC-2022-43012"
         ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
         "fixed_versions": [
           "65.5.1"
         ],
         "id": "GHSA-r9hx-vwmv-q579",
-        "modified": "2026-02-04T03:03:25.892107+00:00",
+        "modified": "2026-08-07T08:12:25.181519+00:00",
         "published": "2022-12-23T00:30:23+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-40897",

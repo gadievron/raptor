@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:26:33Z",
+    "fetched_at": "2026-08-28T20:34:20Z",
     "git_ref": "v0.13.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.13",
@@ -202,6 +202,9 @@
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
         ],
+        "cwe_ids": [
+          "CWE-680"
+        ],
         "fixed_versions": [
           "1.11.1"
         ],
@@ -216,13 +219,14 @@
           "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "bytes has integer overflow in BytesMut::reserve"
       },
       "cvss_score": null,
       "dep_name": "bytes",
       "dep_version": "1.5.0",
       "ecosystem": "Cargo",
-      "epss": 0.00552,
+      "epss": 0.00537,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -233,7 +237,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.5.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.5.0",
-      "raptor_risk_estimate": 9.909976439052972,
+      "raptor_risk_estimate": 9.908090024357321,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -248,10 +252,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40211685599999997,
+        "epss_multiplier": 0.402040311,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.909976439052972,
+        "final": 9.908090024357321,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -331,6 +335,10 @@
         "aliases": [
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
+        ],
+        "cwe_ids": [
+          "CWE-416",
+          "CWE-672"
         ],
         "fixed_versions": [
           "0.8.11"

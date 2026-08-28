@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:27:43Z",
+    "fetched_at": "2026-08-28T20:35:06Z",
     "git_ref": "v1.30.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of deno-1.30",
@@ -74,6 +74,9 @@
         "aliases": [
           "CVE-2023-42811",
           "RUSTSEC-2023-0096"
+        ],
+        "cwe_ids": [
+          "CWE-347"
         ],
         "fixed_versions": [
           "0.10.3"
@@ -188,11 +191,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/lib.rs:4",
+          "test_util/src/temp_dir.rs:11",
           "test_util/src/lsp.rs:9",
           "test_util/src/npm.rs:6",
           "test_util/src/npm.rs:7",
-          "test_util/src/temp_dir.rs:11",
+          "test_util/src/lib.rs:4",
           "... (+18 more)"
         ],
         "verdict": "imported"
@@ -414,6 +417,9 @@
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
         ],
+        "cwe_ids": [
+          "CWE-680"
+        ],
         "fixed_versions": [
           "1.11.1"
         ],
@@ -428,13 +434,14 @@
           "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "bytes has integer overflow in BytesMut::reserve"
       },
       "cvss_score": null,
       "dep_name": "bytes",
       "dep_version": "1.2.1",
       "ecosystem": "Cargo",
-      "epss": 0.00552,
+      "epss": 0.00537,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -445,7 +452,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.2.1:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.2.1",
-      "raptor_risk_estimate": 14.605928516342129,
+      "raptor_risk_estimate": 14.603148203153062,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -464,10 +471,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40211685599999997,
+        "epss_multiplier": 0.402040311,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.605928516342129,
+        "final": 14.603148203153062,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -483,29 +490,23 @@
       "advisory": {
         "aliases": [
           "CVE-2024-58262",
-          "RUSTSEC-2024-0344"
+          "GHSA-x4gp-pqpj-f43q"
         ],
         "fixed_versions": [
           "4.1.3"
         ],
-        "id": "GHSA-x4gp-pqpj-f43q",
-        "modified": "2026-02-17T20:15:54.813533+00:00",
-        "published": "2024-06-18T21:56:24+00:00",
+        "id": "RUSTSEC-2024-0344",
+        "modified": "2025-10-28T06:29:09.774018+00:00",
+        "published": "2024-06-18T12:00:00+00:00",
         "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-58262",
-          "https://github.com/dalek-cryptography/curve25519-dalek/pull/659",
-          "https://github.com/dalek-cryptography/curve25519-dalek/commit/415892acf1cdf9161bd6a4c99bc2f4cb8fae5e6a",
-          "https://github.com/dalek-cryptography/curve25519-dalek",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0344.html"
+          "https://crates.io/crates/curve25519-dalek",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0344.html",
+          "https://github.com/dalek-cryptography/curve25519-dalek/pull/659"
         ],
-        "severity": {
-          "score": 2.9,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "curve25519-dalek has timing variability in `curve25519-dalek`'s `Scalar29::sub`/`Scalar52::sub`"
+        "severity": null,
+        "summary": "Timing variability in `curve25519-dalek`'s `Scalar29::sub`/`Scalar52::sub`"
       },
-      "cvss_score": 2.9,
+      "cvss_score": null,
       "dep_name": "curve25519-dalek",
       "dep_version": "2.1.3",
       "ecosystem": "Cargo",
@@ -517,10 +518,10 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:Cargo:curve25519-dalek:2.1.3:GHSA-x4gp-pqpj-f43q",
+      "finding_id": "sca:vuln:Cargo:curve25519-dalek:2.1.3:RUSTSEC-2024-0344",
       "in_kev": false,
       "purl": "pkg:cargo/curve25519-dalek@2.1.3",
-      "raptor_risk_estimate": 3.6648430373309995,
+      "raptor_risk_estimate": 5.05495591356,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -534,20 +535,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 28.999999999999996,
-        "cvss_source": "numeric",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400075656,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.6648430373309995,
+        "final": 5.05495591356,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "low",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -555,29 +556,23 @@
       "advisory": {
         "aliases": [
           "CVE-2024-58262",
-          "RUSTSEC-2024-0344"
+          "GHSA-x4gp-pqpj-f43q"
         ],
         "fixed_versions": [
           "4.1.3"
         ],
-        "id": "GHSA-x4gp-pqpj-f43q",
-        "modified": "2026-02-17T20:15:54.813533+00:00",
-        "published": "2024-06-18T21:56:24+00:00",
+        "id": "RUSTSEC-2024-0344",
+        "modified": "2025-10-28T06:29:09.774018+00:00",
+        "published": "2024-06-18T12:00:00+00:00",
         "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-58262",
-          "https://github.com/dalek-cryptography/curve25519-dalek/pull/659",
-          "https://github.com/dalek-cryptography/curve25519-dalek/commit/415892acf1cdf9161bd6a4c99bc2f4cb8fae5e6a",
-          "https://github.com/dalek-cryptography/curve25519-dalek",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0344.html"
+          "https://crates.io/crates/curve25519-dalek",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0344.html",
+          "https://github.com/dalek-cryptography/curve25519-dalek/pull/659"
         ],
-        "severity": {
-          "score": 2.9,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "curve25519-dalek has timing variability in `curve25519-dalek`'s `Scalar29::sub`/`Scalar52::sub`"
+        "severity": null,
+        "summary": "Timing variability in `curve25519-dalek`'s `Scalar29::sub`/`Scalar52::sub`"
       },
-      "cvss_score": 2.9,
+      "cvss_score": null,
       "dep_name": "curve25519-dalek",
       "dep_version": "3.2.0",
       "ecosystem": "Cargo",
@@ -589,10 +584,10 @@
         "kev_listed": false,
         "msf_modules": []
       },
-      "finding_id": "sca:vuln:Cargo:curve25519-dalek:3.2.0:GHSA-x4gp-pqpj-f43q",
+      "finding_id": "sca:vuln:Cargo:curve25519-dalek:3.2.0:RUSTSEC-2024-0344",
       "in_kev": false,
       "purl": "pkg:cargo/curve25519-dalek@3.2.0",
-      "raptor_risk_estimate": 3.6648430373309995,
+      "raptor_risk_estimate": 5.05495591356,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -606,20 +601,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 28.999999999999996,
-        "cvss_source": "numeric",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.400075656,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.6648430373309995,
+        "final": 5.05495591356,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "low",
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -627,6 +622,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-34346"
+        ],
+        "cwe_ids": [
+          "CWE-863"
         ],
         "fixed_versions": [
           "1.43.1"
@@ -695,6 +693,9 @@
         "aliases": [
           "CVE-2026-49983"
         ],
+        "cwe_ids": [
+          "CWE-863"
+        ],
         "fixed_versions": [
           "2.8.1"
         ],
@@ -717,7 +718,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00098,
+      "epss": 0.0014,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -728,7 +729,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-4c8g-jvcx-v4hv",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 4.455587138087524,
+      "raptor_risk_estimate": 4.457975702230677,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -743,10 +744,10 @@
         "cvss_base": 52.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399800094,
+        "epss_multiplier": 0.40001442,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.455587138087524,
+        "final": 4.457975702230677,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -762,6 +763,9 @@
         "aliases": [
           "CVE-2026-22863"
         ],
+        "cwe_ids": [
+          "CWE-325"
+        ],
         "fixed_versions": [
           "2.6.0"
         ],
@@ -775,13 +779,14 @@
           "https://github.com/denoland/deno/releases/tag/v2.6.0"
         ],
         "severity": null,
+        "severity_fallback": "critical",
         "summary": "Deno node:crypto doesn't finalize cipher"
       },
       "cvss_score": null,
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00195,
+      "epss": 0.00199,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -792,7 +797,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-5379-f5hf-w38v",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 3.4316181414205467,
+      "raptor_risk_estimate": 7.721534537560487,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -804,20 +809,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 90.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400295085,
+        "epss_multiplier": 0.40031549699999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4316181414205467,
+        "final": 7.721534537560487,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -825,6 +830,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-27932"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "1.40.4"
@@ -896,6 +904,9 @@
         "aliases": [
           "CVE-2025-48934"
         ],
+        "cwe_ids": [
+          "CWE-201"
+        ],
         "fixed_versions": [
           "2.1.13",
           "2.2.13",
@@ -922,7 +933,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00359,
+      "epss": 0.00396,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -933,7 +944,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-7w8p-chxq-2789",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 13.157872782628646,
+      "raptor_risk_estimate": 13.164066133596426,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -948,10 +959,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401131977,
+        "epss_multiplier": 0.401320788,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.157872782628646,
+        "final": 13.164066133596426,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -967,6 +978,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49402"
+        ],
+        "cwe_ids": [
+          "CWE-78"
         ],
         "fixed_versions": [
           "2.7.10"
@@ -990,7 +1004,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00335,
+      "epss": 0.00445,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1001,7 +1015,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-7xh3-mhg9-jcw8",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 10.023761467855335,
+      "raptor_risk_estimate": 10.037792651541995,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1016,10 +1030,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401009505,
+        "epss_multiplier": 0.401570835,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.023761467855335,
+        "final": 10.037792651541995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1035,6 +1049,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49860"
+        ],
+        "cwe_ids": [
+          "CWE-918"
         ],
         "fixed_versions": [
           "2.8.1"
@@ -1058,7 +1075,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00101,
+      "epss": 0.00141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1069,7 +1086,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-83pc-3rw9-qpwj",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 4.455757749812035,
+      "raptor_risk_estimate": 4.4580325728055135,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1084,10 +1101,10 @@
         "cvss_base": 52.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399815403,
+        "epss_multiplier": 0.400019523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.455757749812035,
+        "final": 4.4580325728055135,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1102,6 +1119,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49401"
+        ],
+        "cwe_ids": [
+          "CWE-176",
+          "CWE-41"
         ],
         "fixed_versions": [
           "2.7.14"
@@ -1125,7 +1146,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00187,
+      "epss": 0.00197,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1136,7 +1157,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-8xpq-cjcf-3wh9",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 6.262064407790484,
+      "raptor_risk_estimate": 6.262862783168003,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1151,10 +1172,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400254261,
+        "epss_multiplier": 0.400305291,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.262064407790484,
+        "final": 6.262862783168003,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1169,6 +1190,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49406"
+        ],
+        "cwe_ids": [
+          "CWE-22"
         ],
         "fixed_versions": [
           "2.7.12"
@@ -1192,7 +1216,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00171,
+      "epss": 0.00176,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1203,7 +1227,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-968w-xfqw-vp9q",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 9.862061505783442,
+      "raptor_risk_estimate": 9.862690310681991,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1218,10 +1242,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400172613,
+        "epss_multiplier": 0.400198128,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.862061505783442,
+        "final": 9.862690310681991,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1237,6 +1261,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49440"
+        ],
+        "cwe_ids": [
+          "CWE-325"
         ],
         "fixed_versions": [
           "2.8.1"
@@ -1260,7 +1287,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00149,
+      "epss": 0.00237,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1271,7 +1298,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-9xg4-qhm4-g43w",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 6.344770726305991,
+      "raptor_risk_estimate": 6.351892672139423,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1286,10 +1313,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400060347,
+        "epss_multiplier": 0.400509411,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.344770726305991,
+        "final": 6.351892672139423,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1304,6 +1331,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49859"
+        ],
+        "cwe_ids": [
+          "CWE-693",
+          "CWE-918"
         ],
         "fixed_versions": [
           "2.8.1"
@@ -1327,7 +1358,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00101,
+      "epss": 0.00141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1338,7 +1369,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-cpgj-f7g3-2pp2",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 4.455757749812035,
+      "raptor_risk_estimate": 4.4580325728055135,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1353,10 +1384,10 @@
         "cvss_base": 52.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399815403,
+        "epss_multiplier": 0.400019523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.455757749812035,
+        "final": 4.4580325728055135,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1371,6 +1402,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-21620"
+        ],
+        "cwe_ids": [
+          "CWE-200"
         ],
         "fixed_versions": [
           "0.204.0",
@@ -1395,7 +1429,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00504,
+      "epss": 0.00514,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1406,7 +1440,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-f27p-cmv8-xhm6",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 9.903939912026889,
+      "raptor_risk_estimate": 9.90519752182399,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1421,10 +1455,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401871912,
+        "epss_multiplier": 0.401922942,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.903939912026889,
+        "final": 9.90519752182399,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1440,6 +1474,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-27190"
+        ],
+        "cwe_ids": [
+          "CWE-78"
         ],
         "fixed_versions": [
           "2.6.8"
@@ -1511,6 +1548,9 @@
         "aliases": [
           "CVE-2024-27931"
         ],
+        "cwe_ids": [
+          "CWE-20"
+        ],
         "fixed_versions": [
           "1.41.1"
         ],
@@ -1577,6 +1617,9 @@
       "advisory": {
         "aliases": [
           "CVE-2023-26103"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
         ],
         "fixed_versions": [
           "1.31.0"
@@ -1648,6 +1691,9 @@
         "aliases": [
           "CVE-2024-21486"
         ],
+        "cwe_ids": [
+          "CWE-200"
+        ],
         "fixed_versions": [
           "2.0.0"
         ],
@@ -1713,6 +1759,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-61787"
+        ],
+        "cwe_ids": [
+          "CWE-77"
         ],
         "fixed_versions": [
           "2.5.2"
@@ -1784,6 +1833,9 @@
         "aliases": [
           "CVE-2026-22864"
         ],
+        "cwe_ids": [
+          "CWE-77"
+        ],
         "fixed_versions": [
           "2.5.6"
         ],
@@ -1801,13 +1853,13 @@
           "severity": "high",
           "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
         },
-        "summary": "Deno has an incomplete fix for command-injection prevention on Windows \u2014 case-insensitive extension bypass"
+        "summary": "Deno has an incomplete fix for command-injection prevention on Windows — case-insensitive extension bypass"
       },
       "cvss_score": 8.1,
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00619,
+      "epss": 0.0063,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1818,7 +1870,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-m3c4-prhw-mrx6",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 6.986587563726637,
+      "raptor_risk_estimate": 6.987562019153169,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1833,10 +1885,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402458757,
+        "epss_multiplier": 0.40251489,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.986587563726637,
+        "final": 6.987562019153169,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1851,6 +1903,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-61786"
+        ],
+        "cwe_ids": [
+          "CWE-269"
         ],
         "fixed_versions": [
           "2.5.3"
@@ -1921,6 +1976,9 @@
         "aliases": [
           "CVE-2026-49411"
         ],
+        "cwe_ids": [
+          "CWE-284"
+        ],
         "fixed_versions": [
           "2.8.0"
         ],
@@ -1943,7 +2001,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00144,
+      "epss": 0.00158,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1954,7 +2012,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-v8fw-85r8-5m23",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 9.858665959331269,
+      "raptor_risk_estimate": 9.86042661304721,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1969,10 +2027,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400034832,
+        "epss_multiplier": 0.400106274,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.858665959331269,
+        "final": 9.86042661304721,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1988,6 +2046,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-61785"
+        ],
+        "cwe_ids": [
+          "CWE-266"
         ],
         "fixed_versions": [
           "2.5.3"
@@ -2059,6 +2120,9 @@
         "aliases": [
           "CVE-2023-28446"
         ],
+        "cwe_ids": [
+          "CWE-150"
+        ],
         "fixed_versions": [
           "1.31.2"
         ],
@@ -2129,6 +2193,9 @@
         "aliases": [
           "CVE-2026-55517"
         ],
+        "cwe_ids": [
+          "CWE-248"
+        ],
         "fixed_versions": [
           "2.7.5"
         ],
@@ -2150,7 +2217,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00183,
+      "epss": 0.00315,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2161,7 +2228,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-x2qc-cmh9-f4hf",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 3.688425170938321,
+      "raptor_risk_estimate": 3.694632812914759,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2176,10 +2243,10 @@
         "cvss_base": 43.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400233849,
+        "epss_multiplier": 0.400907445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.688425170938321,
+        "final": 3.694632812914759,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2194,6 +2261,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-32468"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "0.119.0"
@@ -2266,6 +2336,9 @@
         "aliases": [
           "CVE-2025-21620"
         ],
+        "cwe_ids": [
+          "CWE-200"
+        ],
         "fixed_versions": [
           "0.204.0",
           "2.1.2"
@@ -2289,7 +2362,7 @@
       "dep_name": "deno_fetch",
       "dep_version": "0.110.0",
       "ecosystem": "Cargo",
-      "epss": 0.00504,
+      "epss": 0.00514,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2300,7 +2373,7 @@
       "finding_id": "sca:vuln:Cargo:deno_fetch:0.110.0:GHSA-f27p-cmv8-xhm6",
       "in_kev": false,
       "purl": "pkg:cargo/deno_fetch@0.110.0",
-      "raptor_risk_estimate": 14.597031514137113,
+      "raptor_risk_estimate": 14.598885056263155,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2308,8 +2381,8 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "runtime/lib.rs:8",
           "runtime/errors.rs:16",
+          "runtime/lib.rs:8",
           "runtime/ops/web_worker/sync_fetch.rs:10",
           "runtime/ops/web_worker/sync_fetch.rs:11"
         ],
@@ -2320,10 +2393,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401871912,
+        "epss_multiplier": 0.401922942,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.597031514137113,
+        "final": 14.598885056263155,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2339,6 +2412,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-48934"
+        ],
+        "cwe_ids": [
+          "CWE-201"
         ],
         "fixed_versions": [
           "2.1.13",
@@ -2366,7 +2442,7 @@
       "dep_name": "deno_runtime",
       "dep_version": "0.94.0",
       "ecosystem": "Cargo",
-      "epss": 0.00359,
+      "epss": 0.00396,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2377,7 +2453,7 @@
       "finding_id": "sca:vuln:Cargo:deno_runtime:0.94.0:GHSA-7w8p-chxq-2789",
       "in_kev": false,
       "purl": "pkg:cargo/deno_runtime@0.94.0",
-      "raptor_risk_estimate": 19.39287650905488,
+      "raptor_risk_estimate": 19.402004647963015,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2385,11 +2461,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/file_fetcher.rs:28",
-          "cli/file_fetcher.rs:29",
-          "cli/file_fetcher.rs:30",
-          "cli/file_fetcher.rs:31",
-          "cli/file_fetcher.rs:32",
+          "runtime/examples/hello_runtime.rs:5",
+          "runtime/examples/hello_runtime.rs:6",
+          "runtime/examples/hello_runtime.rs:7",
+          "runtime/examples/hello_runtime.rs:8",
+          "runtime/examples/hello_runtime.rs:9",
           "... (+170 more)"
         ],
         "verdict": "imported"
@@ -2399,10 +2475,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401131977,
+        "epss_multiplier": 0.401320788,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.39287650905488,
+        "final": 19.402004647963015,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2666,6 +2742,9 @@
           "CVE-2023-26964",
           "RUSTSEC-2023-0034"
         ],
+        "cwe_ids": [
+          "CWE-770"
+        ],
         "fixed_versions": [
           "0.3.17"
         ],
@@ -2731,6 +2810,10 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2024-0332"
+        ],
+        "cwe_ids": [
+          "CWE-400",
+          "CWE-770"
         ],
         "fixed_versions": [
           "0.3.26",
@@ -2927,8 +3010,75 @@
     {
       "advisory": {
         "aliases": [
+          "GHSA-q83h-524g-xf6h"
+        ],
+        "fixed_versions": [
+          "0.4.16"
+        ],
+        "id": "RUSTSEC-2026-0258",
+        "modified": "2026-08-18T08:30:03.308019+00:00",
+        "published": "2026-08-17T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0258.html",
+          "https://github.com/hyperium/hyper/security/advisories/GHSA-q83h-524g-xf6h"
+        ],
+        "severity": null,
+        "summary": "h2 unbounded empty DATA frames"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.14",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.14:RUSTSEC-2026-0258",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.14",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2024-12224",
           "RUSTSEC-2024-0421"
+        ],
+        "cwe_ids": [
+          "CWE-1289",
+          "CWE-697"
         ],
         "fixed_versions": [
           "1.0.0"
@@ -2943,13 +3093,14 @@
           "https://rustsec.org/advisories/RUSTSEC-2024-0421.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded"
       },
       "cvss_score": null,
       "dep_name": "idna",
       "dep_version": "0.2.3",
       "ecosystem": "Cargo",
-      "epss": 0.00201,
+      "epss": 0.00213,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2960,7 +3111,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.2.3:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.2.3",
-      "raptor_risk_estimate": 9.86583433517474,
+      "raptor_risk_estimate": 9.867343466931263,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2975,10 +3126,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400325703,
+        "epss_multiplier": 0.400386939,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.86583433517474,
+        "final": 9.867343466931263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2996,6 +3147,10 @@
           "CVE-2024-12224",
           "RUSTSEC-2024-0421"
         ],
+        "cwe_ids": [
+          "CWE-1289",
+          "CWE-697"
+        ],
         "fixed_versions": [
           "1.0.0"
         ],
@@ -3009,13 +3164,14 @@
           "https://rustsec.org/advisories/RUSTSEC-2024-0421.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded"
       },
       "cvss_score": null,
       "dep_name": "idna",
       "dep_version": "0.3.0",
       "ecosystem": "Cargo",
-      "epss": 0.00201,
+      "epss": 0.00213,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3026,7 +3182,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.3.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.3.0",
-      "raptor_risk_estimate": 9.86583433517474,
+      "raptor_risk_estimate": 9.867343466931263,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3041,10 +3197,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400325703,
+        "epss_multiplier": 0.400386939,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.86583433517474,
+        "final": 9.867343466931263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3445,6 +3601,10 @@
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
         ],
+        "cwe_ids": [
+          "CWE-416",
+          "CWE-672"
+        ],
         "fixed_versions": [
           "0.8.11"
         ],
@@ -3488,11 +3648,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "ext/flash/socket.rs:12",
           "ext/flash/lib.rs:33",
           "ext/flash/lib.rs:34",
           "ext/flash/lib.rs:35",
           "ext/flash/lib.rs:36",
-          "ext/flash/lib.rs:37",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3582,6 +3742,9 @@
         "aliases": [
           "RUSTSEC-2026-0097"
         ],
+        "cwe_ids": [
+          "CWE-20"
+        ],
         "fixed_versions": [
           "0.9.3",
           "0.10.1",
@@ -3621,11 +3784,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/tools/test.rs:42",
-          "cli/tools/test.rs:43",
-          "cli/tools/test.rs:44",
+          "ext/crypto/ed25519.rs:7",
+          "ext/crypto/ed25519.rs:8",
+          "ext/crypto/x25519.rs:9",
+          "ext/crypto/x25519.rs:10",
           "ext/crypto/lib.rs:22",
-          "ext/crypto/lib.rs:23",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -3694,11 +3857,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/tools/test.rs:42",
-          "cli/tools/test.rs:43",
-          "cli/tools/test.rs:44",
+          "ext/crypto/ed25519.rs:7",
+          "ext/crypto/ed25519.rs:8",
+          "ext/crypto/x25519.rs:9",
+          "ext/crypto/x25519.rs:10",
           "ext/crypto/lib.rs:22",
-          "ext/crypto/lib.rs:23",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -3726,6 +3889,10 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2023-0018"
+        ],
+        "cwe_ids": [
+          "CWE-366",
+          "CWE-367"
         ],
         "fixed_versions": [
           "0.8.0"
@@ -3858,11 +4025,14 @@
           "GO-2025-3678",
           "RUSTSEC-2025-0009"
         ],
+        "cwe_ids": [
+          "CWE-770"
+        ],
         "fixed_versions": [
           "0.17.12"
         ],
         "id": "GHSA-4p46-pwfr-66x6",
-        "modified": "2026-05-29T20:59:15.779360+00:00",
+        "modified": "2026-08-07T08:11:55.561771+00:00",
         "published": "2025-03-07T16:23:50+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
@@ -3872,13 +4042,14 @@
           "https://bugzilla.redhat.com/show_bug.cgi?id=2350655"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Some AES functions may panic when overflow checking is enabled in ring"
       },
       "cvss_score": null,
       "dep_name": "ring",
       "dep_version": "0.16.20",
       "ecosystem": "Cargo",
-      "epss": 0.00918,
+      "epss": 0.00986,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3889,7 +4060,7 @@
       "finding_id": "sca:vuln:Cargo:ring:0.16.20:GHSA-4p46-pwfr-66x6",
       "in_kev": false,
       "purl": "pkg:cargo/ring@0.16.20",
-      "raptor_risk_estimate": 5.1043448397899995,
+      "raptor_risk_estimate": 5.108729235329999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3897,11 +4068,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/npm.rs:65",
-          "test_util/src/npm.rs:66",
-          "lockfile/lib.rs:9",
-          "cli/npm/tarball.rs:36",
-          "cli/util/checksum.rs:3",
+          "ext/crypto/ed25519.rs:9",
+          "ext/crypto/ed25519.rs:10",
+          "ext/crypto/key.rs:3",
+          "ext/crypto/key.rs:4",
+          "ext/crypto/key.rs:5",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -3911,10 +4082,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403984554,
+        "epss_multiplier": 0.404331558,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.1043448397899995,
+        "final": 5.108729235329999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3966,11 +4137,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/npm.rs:65",
-          "test_util/src/npm.rs:66",
-          "lockfile/lib.rs:9",
-          "cli/npm/tarball.rs:36",
-          "cli/util/checksum.rs:3",
+          "ext/crypto/ed25519.rs:9",
+          "ext/crypto/ed25519.rs:10",
+          "ext/crypto/key.rs:3",
+          "ext/crypto/key.rs:4",
+          "ext/crypto/key.rs:5",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -4000,6 +4171,9 @@
           "CVE-2023-49092",
           "GHSA-c38w-74pg-36hr",
           "RUSTSEC-2023-0071"
+        ],
+        "cwe_ids": [
+          "CWE-385"
         ],
         "fixed_versions": [],
         "id": "GHSA-4grx-2x9w-596c",
@@ -4042,11 +4216,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "ext/crypto/import_key.rs:9",
           "ext/crypto/generate_key.rs:11",
           "ext/crypto/generate_key.rs:12",
           "ext/crypto/generate_key.rs:13",
-          "ext/crypto/decrypt.rs:24",
-          "ext/crypto/decrypt.rs:25",
+          "ext/crypto/export_key.rs:11",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -4075,6 +4249,9 @@
         "aliases": [
           "CVE-2026-21895"
         ],
+        "cwe_ids": [
+          "CWE-703"
+        ],
         "fixed_versions": [
           "0.9.10"
         ],
@@ -4088,13 +4265,14 @@
           "https://github.com/RustCrypto/RSA"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "rsa crate has potential panic on a prime being equal to 1"
       },
       "cvss_score": null,
       "dep_name": "rsa",
       "dep_version": "0.7.0",
       "ecosystem": "Cargo",
-      "epss": 0.00405,
+      "epss": 0.00421,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4105,7 +4283,7 @@
       "finding_id": "sca:vuln:Cargo:rsa:0.7.0:GHSA-9c48-w39g-hm26",
       "in_kev": false,
       "purl": "pkg:cargo/rsa@0.7.0",
-      "raptor_risk_estimate": 5.071268444025,
+      "raptor_risk_estimate": 0.12680750166262497,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4113,31 +4291,31 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "ext/crypto/import_key.rs:9",
           "ext/crypto/generate_key.rs:11",
           "ext/crypto/generate_key.rs:12",
           "ext/crypto/generate_key.rs:13",
-          "ext/crypto/decrypt.rs:24",
-          "ext/crypto/decrypt.rs:25",
+          "ext/crypto/export_key.rs:11",
           "... (+19 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401366715,
+        "epss_multiplier": 0.401448363,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.071268444025,
+        "final": 0.12680750166262497,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4255,11 +4433,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/lib.rs:21",
-          "test_util/src/lib.rs:22",
           "ext/tls/lib.rs:3",
           "ext/tls/lib.rs:15",
           "ext/tls/lib.rs:16",
+          "ext/tls/lib.rs:17",
+          "ext/tls/lib.rs:18",
           "... (+10 more)"
         ],
         "verdict": "imported"
@@ -4286,6 +4464,10 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-843"
+        ],
         "fixed_versions": [
           "0.4.46"
         ],
@@ -4355,6 +4537,9 @@
         "aliases": [
           "CVE-2026-33055",
           "RUSTSEC-2026-0068"
+        ],
+        "cwe_ids": [
+          "CWE-843"
         ],
         "fixed_versions": [
           "0.4.45"
@@ -4431,6 +4616,9 @@
           "CVE-2026-33056",
           "RUSTSEC-2026-0067"
         ],
+        "cwe_ids": [
+          "CWE-61"
+        ],
         "fixed_versions": [
           "0.4.45"
         ],
@@ -4505,6 +4693,9 @@
           "CVE-2026-25727",
           "RUSTSEC-2026-0009"
         ],
+        "cwe_ids": [
+          "CWE-121"
+        ],
         "fixed_versions": [
           "0.3.47"
         ],
@@ -4519,6 +4710,7 @@
           "https://github.com/time-rs/time/blob/main/CHANGELOG.md#0347-2026-02-05"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "time vulnerable to stack exhaustion Denial of Service attack"
       },
       "cvss_score": null,
@@ -4570,6 +4762,9 @@
         "aliases": [
           "RUSTSEC-2025-0023"
         ],
+        "cwe_ids": [
+          "CWE-664"
+        ],
         "fixed_versions": [
           "1.44.2",
           "1.38.2",
@@ -4584,6 +4779,7 @@
           "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
       },
       "cvss_score": null,
@@ -4601,7 +4797,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.2:GHSA-rr8g-9fpq-6wmg",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.2",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 0.20672439374999996,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4609,31 +4805,31 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/lib.rs:46",
-          "test_util/src/lib.rs:47",
-          "test_util/src/lib.rs:48",
-          "cli/ops/bench.rs:18",
-          "cli/npm/resolvers/local.rs:25",
+          "ext/web/message_port.rs:20",
+          "ext/web/message_port.rs:21",
+          "ext/web/message_port.rs:22",
+          "ext/http/reader_stream.rs:13",
+          "ext/http/reader_stream.rs:72",
           "... (+97 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 0.20672439374999996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4683,11 +4879,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/lib.rs:46",
-          "test_util/src/lib.rs:47",
-          "test_util/src/lib.rs:48",
-          "cli/ops/bench.rs:18",
-          "cli/npm/resolvers/local.rs:25",
+          "ext/web/message_port.rs:20",
+          "ext/web/message_port.rs:21",
+          "ext/web/message_port.rs:22",
+          "ext/http/reader_stream.rs:13",
+          "ext/http/reader_stream.rs:72",
           "... (+97 more)"
         ],
         "verdict": "imported"
@@ -4856,6 +5052,9 @@
         "aliases": [
           "CVE-2023-43669",
           "RUSTSEC-2023-0065"
+        ],
+        "cwe_ids": [
+          "CWE-400"
         ],
         "fixed_versions": [
           "0.20.1"
@@ -5226,6 +5425,9 @@
         "aliases": [
           "RUSTSEC-2023-0052"
         ],
+        "cwe_ids": [
+          "CWE-400"
+        ],
         "fixed_versions": [
           "0.22.2"
         ],
@@ -5365,6 +5567,11 @@
         "aliases": [
           "CVE-2023-46233"
         ],
+        "cwe_ids": [
+          "CWE-327",
+          "CWE-328",
+          "CWE-916"
+        ],
         "fixed_versions": [
           "4.2.0"
         ],
@@ -5434,6 +5641,9 @@
         "aliases": [
           "CVE-2025-7783"
         ],
+        "cwe_ids": [
+          "CWE-330"
+        ],
         "fixed_versions": [
           "2.5.4",
           "3.0.4",
@@ -5450,13 +5660,14 @@
           "https://github.com/form-data/form-data"
         ],
         "severity": null,
+        "severity_fallback": "critical",
         "summary": "form-data uses unsafe random function in form-data for choosing boundary"
       },
       "cvss_score": null,
       "dep_name": "form-data",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.01735,
+      "epss": 0.01686,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5467,7 +5678,7 @@
       "finding_id": "sca:vuln:npm:form-data:4.0.0:GHSA-fjxv-7rqg-78g4",
       "in_kev": false,
       "purl": "pkg:npm/form-data@4.0.0",
-      "raptor_risk_estimate": 14.369645254357097,
+      "raptor_risk_estimate": 16.184269705985045,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5479,13 +5690,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 90.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408153705,
+        "epss_multiplier": 0.407903658,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.369645254357097,
+        "final": 16.184269705985045,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5493,7 +5704,7 @@
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -5501,6 +5712,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-12143"
+        ],
+        "cwe_ids": [
+          "CWE-93"
         ],
         "fixed_versions": [
           "2.5.6",

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:27:19Z",
+    "fetched_at": "2026-08-28T20:34:48Z",
     "git_ref": "v0.7.19",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-0.7",
@@ -12,6 +12,11 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-150",
+          "CWE-20",
+          "CWE-74"
+        ],
         "fixed_versions": [
           "3.371.4"
         ],
@@ -25,6 +30,7 @@
           "https://github.com/aws/aws-sdk-php/releases/tag/3.371.4"
         ],
         "severity": null,
+        "severity_fallback": "high",
         "summary": "AWS SDK for PHP has CloudFront Policy Document Injection via Special Characters"
       },
       "cvss_score": null,
@@ -42,7 +48,7 @@
       "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-27qh-8cxx-2cr5",
       "in_kev": false,
       "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 14.026043391543748,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -54,20 +60,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 70.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 14.026043391543748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -78,6 +84,9 @@
           "CVE-2025-69820",
           "GHSA-73jg-4qh6-3f4g",
           "GO-2026-4390"
+        ],
+        "cwe_ids": [
+          "CWE-22"
         ],
         "fixed_versions": [
           "3.288.1"
@@ -103,7 +112,7 @@
       "dep_name": "aws/aws-sdk-php",
       "dep_version": "3.74.1",
       "ecosystem": "Packagist",
-      "epss": 0.00881,
+      "epss": 0.00916,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -114,7 +123,7 @@
       "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-557v-xcg6-rm5m",
       "in_kev": false,
       "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
-      "raptor_risk_estimate": 14.216216859110828,
+      "raptor_risk_estimate": 14.222504908096335,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -129,10 +138,10 @@
         "cvss_base": 60.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403795743,
+        "epss_multiplier": 0.403974348,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.216216859110828,
+        "final": 14.222504908096335,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -148,6 +157,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-14761"
+        ],
+        "cwe_ids": [
+          "CWE-327"
         ],
         "fixed_versions": [
           "3.368.0"
@@ -173,7 +185,7 @@
       "dep_name": "aws/aws-sdk-php",
       "dep_version": "3.74.1",
       "ecosystem": "Packagist",
-      "epss": 0.00183,
+      "epss": 0.00206,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -184,7 +196,7 @@
       "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-x8cp-jf6f-r4xh",
       "in_kev": false,
       "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
-      "raptor_risk_estimate": 6.49456923786482,
+      "raptor_risk_estimate": 6.496473777170486,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -199,10 +211,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400233849,
+        "epss_multiplier": 0.400351218,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.49456923786482,
+        "final": 6.496473777170486,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -218,6 +230,10 @@
         "aliases": [
           "BIT-composer-2026-59948",
           "CVE-2026-59948"
+        ],
+        "cwe_ids": [
+          "CWE-22",
+          "CWE-787"
         ],
         "fixed_versions": [
           "2.10.2",
@@ -244,7 +260,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.00138,
+      "epss": 0.00164,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -255,7 +271,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-499r-g7pc-vmp9",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 6.000968024532121,
+      "raptor_risk_estimate": 6.002958494651415,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -270,10 +286,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40000421399999997,
+        "epss_multiplier": 0.40013689199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.000968024532121,
+        "final": 6.002958494651415,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -289,6 +305,9 @@
         "aliases": [
           "BIT-composer-2026-45793",
           "CVE-2026-45793"
+        ],
+        "cwe_ids": [
+          "CWE-200"
         ],
         "fixed_versions": [
           "2.9.8",
@@ -316,7 +335,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.00797,
+      "epss": 0.01021,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -327,7 +346,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-f9f8-rm49-7jv2",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 6.48366298543064,
+      "raptor_risk_estimate": 6.502036555762588,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -342,10 +361,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403367091,
+        "epss_multiplier": 0.404510163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.48366298543064,
+        "final": 6.502036555762588,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -361,6 +380,9 @@
         "aliases": [
           "BIT-composer-2021-41116",
           "CVE-2021-41116"
+        ],
+        "cwe_ids": [
+          "CWE-77"
         ],
         "fixed_versions": [
           "1.10.23",
@@ -433,6 +455,9 @@
           "BIT-composer-2026-59947",
           "CVE-2026-59947"
         ],
+        "cwe_ids": [
+          "CWE-532"
+        ],
         "fixed_versions": [
           "2.10.2",
           "2.2.29"
@@ -458,7 +483,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.0012,
+      "epss": 0.00144,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -469,7 +494,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-g6xq-892h-64w3",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 4.028296147394135,
+      "raptor_risk_estimate": 4.029529801402139,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -484,10 +509,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39991235999999997,
+        "epss_multiplier": 0.400034832,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.028296147394135,
+        "final": 4.029529801402139,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -503,6 +528,10 @@
         "aliases": [
           "BIT-composer-2026-59946",
           "CVE-2026-59946"
+        ],
+        "cwe_ids": [
+          "CWE-22",
+          "CWE-732"
         ],
         "fixed_versions": [
           "2.10.2",
@@ -529,7 +558,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.00142,
+      "epss": 0.00172,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -540,7 +569,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-gjfg-22fp-rrxx",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 5.229681847042335,
+      "raptor_risk_estimate": 5.231683253810637,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -555,10 +584,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400024626,
+        "epss_multiplier": 0.40017771599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.229681847042335,
+        "final": 5.231683253810637,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -574,6 +603,10 @@
         "aliases": [
           "BIT-composer-2026-40261",
           "CVE-2026-40261"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-78"
         ],
         "fixed_versions": [
           "2.9.6",
@@ -646,6 +679,10 @@
           "BIT-composer-2021-29472",
           "CVE-2021-29472"
         ],
+        "cwe_ids": [
+          "CWE-88",
+          "CWE-94"
+        ],
         "fixed_versions": [
           "1.10.22",
           "2.0.13"
@@ -716,6 +753,9 @@
         "aliases": [
           "BIT-composer-2023-43655",
           "CVE-2023-43655"
+        ],
+        "cwe_ids": [
+          "CWE-74"
         ],
         "fixed_versions": [
           "1.10.27",
@@ -789,6 +829,10 @@
           "BIT-composer-2026-40176",
           "CVE-2026-40176"
         ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-78"
+        ],
         "fixed_versions": [
           "2.9.6",
           "2.2.27"
@@ -859,6 +903,11 @@
         "aliases": [
           "BIT-composer-2022-24828",
           "CVE-2022-24828"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-88",
+          "CWE-94"
         ],
         "fixed_versions": [
           "1.10.26",
@@ -931,6 +980,9 @@
         "aliases": [
           "CVE-2019-10905"
         ],
+        "cwe_ids": [
+          "CWE-79"
+        ],
         "fixed_versions": [
           "1.7.2"
         ],
@@ -955,7 +1007,7 @@
       "dep_name": "erusev/parsedown",
       "dep_version": "1.7.1",
       "ecosystem": "Packagist",
-      "epss": 0.01469,
+      "epss": 0.01413,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -966,7 +1018,7 @@
       "finding_id": "sca:vuln:Packagist:erusev/parsedown:1.7.1:GHSA-62m3-fc7f-jpp8",
       "in_kev": false,
       "purl": "pkg:composer/erusev/parsedown@1.7.1",
-      "raptor_risk_estimate": 7.061886392140604,
+      "raptor_risk_estimate": 7.0569255281509795,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -981,10 +1033,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40679630699999997,
+        "epss_multiplier": 0.406510539,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.061886392140604,
+        "final": 7.0569255281509795,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -999,6 +1051,10 @@
       "advisory": {
         "aliases": [
           "CVE-2022-31090"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-212"
         ],
         "fixed_versions": [
           "6.5.8",
@@ -1025,7 +1081,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.01762,
+      "epss": 0.0188,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1036,7 +1092,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-25mq-v84q-4j7r",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 14.186598045427498,
+      "raptor_risk_estimate": 14.20752063885,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1044,11 +1100,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1058,10 +1114,10 @@
         "cvss_base": 77.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408291486,
+        "epss_multiplier": 0.40889364,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.186598045427498,
+        "final": 14.20752063885,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1074,19 +1130,26 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67339"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-201",
+          "CWE-522"
+        ],
         "fixed_versions": [
           "7.14.2"
         ],
         "id": "GHSA-94pj-82f3-465w",
-        "modified": "2026-07-21T20:59:33.278385+00:00",
+        "modified": "2026-08-07T08:11:56.728720+00:00",
         "published": "2026-07-20T21:46:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-94pj-82f3-465w",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67339",
           "https://github.com/guzzle/guzzle/pull/3876",
           "https://github.com/guzzle/guzzle/commit/9e4580d4b9981e903dc6323fe37f50a96e85b05e",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.14.2"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.3,
@@ -1099,7 +1162,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00233,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1110,7 +1173,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-94pj-82f3-465w",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 15.651989812499998,
+      "raptor_risk_estimate": 9.57819502233375,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1118,11 +1181,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1132,10 +1195,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400488999,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.651989812499998,
+        "final": 9.57819502233375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1152,6 +1215,10 @@
           "BIT-drupal-2022-29248",
           "CVE-2022-29248",
           "DRUPAL-CORE-2022-010"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-565"
         ],
         "fixed_versions": [
           "6.5.6",
@@ -1178,7 +1245,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.01266,
+      "epss": 0.01303,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1189,7 +1256,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-cwmx-hcrq-mhc3",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 14.647950367799998,
+      "raptor_risk_estimate": 14.6547664449,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1197,11 +1264,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1211,10 +1278,10 @@
         "cvss_base": 80.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40576039799999997,
+        "epss_multiplier": 0.405949209,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.647950367799998,
+        "final": 14.6547664449,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1230,15 +1297,22 @@
         "aliases": [
           "CVE-2026-55767"
         ],
+        "cwe_ids": [
+          "CWE-1286",
+          "CWE-346"
+        ],
         "fixed_versions": [
           "7.12.1"
         ],
         "id": "GHSA-cwxw-98qj-8qjx",
-        "modified": "2026-06-22T16:29:30.352672+00:00",
+        "modified": "2026-08-05T22:01:01.401314+00:00",
         "published": "2026-06-19T14:37:29+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx",
-          "https://github.com/guzzle/guzzle"
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-55767",
+          "https://github.com/guzzle/guzzle/pull/3653",
+          "https://github.com/guzzle/guzzle/commit/7f537cded1912349abf5081258d6db19106d774d",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2026-55767.yaml"
         ],
         "severity": {
           "score": 5.8,
@@ -1251,7 +1325,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00111,
+      "epss": 0.00211,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1262,7 +1336,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-cwxw-98qj-8qjx",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 10.465504217692496,
+      "raptor_risk_estimate": 10.478860044442499,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1270,11 +1344,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1284,10 +1358,10 @@
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39986643299999997,
+        "epss_multiplier": 0.400376733,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.465504217692496,
+        "final": 10.478860044442499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1300,19 +1374,25 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67353"
+        ],
+        "cwe_ids": [
+          "CWE-1325",
+          "CWE-770"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-f283-ghqc-fg79",
-        "modified": "2026-07-21T20:59:35.273136+00:00",
+        "modified": "2026-08-07T08:11:57.605659+00:00",
         "published": "2026-07-20T23:27:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-f283-ghqc-fg79",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67353",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.3,
@@ -1325,7 +1405,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00247,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1336,7 +1416,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-f283-ghqc-fg79",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 15.651989812499998,
+      "raptor_risk_estimate": 9.57990364706625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1344,11 +1424,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1358,10 +1438,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400560441,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.651989812499998,
+        "final": 9.57990364706625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1381,6 +1461,10 @@
           "CVE-2022-31043",
           "DRUPAL-CORE-2022-011",
           "GHSA-w248-ffj2-4v5q"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-212"
         ],
         "fixed_versions": [
           "6.5.7",
@@ -1407,7 +1491,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.0182,
+      "epss": 0.01914,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1418,7 +1502,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-f2wf-25xc-69c9",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 13.828131849375,
+      "raptor_risk_estimate": 13.844366087062498,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1426,11 +1510,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1440,10 +1524,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40858746,
+        "epss_multiplier": 0.409067142,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.828131849375,
+        "final": 13.844366087062498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1457,7 +1541,94 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-69245"
+        ],
+        "cwe_ids": [
+          "CWE-180",
+          "CWE-346",
+          "CWE-384"
+        ],
+        "fixed_versions": [
+          "7.15.2",
+          "8.0.1"
+        ],
+        "id": "GHSA-f7vp-7xgx-4w4r",
+        "modified": "2026-08-05T08:56:56.815076+00:00",
+        "published": "2026-08-03T21:05:26+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f7vp-7xgx-4w4r",
+          "https://github.com/guzzle/guzzle/pull/3907",
+          "https://github.com/guzzle/guzzle/pull/3908",
+          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
+          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Guzzle: Noncanonical cookie domain keeps subdomain scope"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00137,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-f7vp-7xgx-4w4r",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 11.732473924518747,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39999911099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.732473924518747,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-59883"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-346",
+          "CWE-384"
         ],
         "fixed_versions": [
           "7.12.3"
@@ -1483,7 +1654,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00118,
+      "epss": 0.00167,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1494,7 +1665,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-g446-98w2-8p5w",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 8.4814248086475,
+      "raptor_risk_estimate": 8.48672799295875,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1502,11 +1673,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1516,10 +1687,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399902154,
+        "epss_multiplier": 0.400152201,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.4814248086475,
+        "final": 8.48672799295875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1532,19 +1703,25 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67354"
+        ],
+        "cwe_ids": [
+          "CWE-201",
+          "CWE-212"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-h95v-h523-3mw8",
-        "modified": "2026-07-21T20:59:33.382070+00:00",
+        "modified": "2026-08-07T08:11:56.059105+00:00",
         "published": "2026-07-20T23:28:36+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-h95v-h523-3mw8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67354",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.9,
@@ -1557,7 +1734,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00252,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1568,7 +1745,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-h95v-h523-3mw8",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 17.423913187500002,
+      "raptor_risk_estimate": 10.665100346055,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1576,11 +1753,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1590,10 +1767,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40058595599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.423913187500002,
+        "final": 10.665100346055,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1608,6 +1785,9 @@
       "advisory": {
         "aliases": [
           "CVE-2022-31091"
+        ],
+        "cwe_ids": [
+          "CWE-200"
         ],
         "fixed_versions": [
           "6.5.8",
@@ -1634,7 +1814,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.01413,
+      "epss": 0.01444,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1645,7 +1825,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-q559-8m2m-g699",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 14.12471681572875,
+      "raptor_risk_estimate": 14.130213429254997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1653,11 +1833,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1667,10 +1847,10 @@
         "cvss_base": 77.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406510539,
+        "epss_multiplier": 0.406668732,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.12471681572875,
+        "final": 14.130213429254997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1683,19 +1863,108 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-69246"
+        ],
+        "cwe_ids": [
+          "CWE-180",
+          "CWE-436",
+          "CWE-918",
+          "CWE-941"
+        ],
+        "fixed_versions": [
+          "7.15.2",
+          "8.0.1"
+        ],
+        "id": "GHSA-v5mv-p594-2x33",
+        "modified": "2026-08-05T08:56:57.301561+00:00",
+        "published": "2026-08-03T21:07:26+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-v5mv-p594-2x33",
+          "https://github.com/guzzle/guzzle/pull/3907",
+          "https://github.com/guzzle/guzzle/pull/3908",
+          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
+          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
+        ],
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Guzzle: Noncanonical host can bypass host-based checks"
+      },
+      "cvss_score": 7.2,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00213,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-v5mv-p594-2x33",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 13.00857164811,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400386939,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.00857164811,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-67355"
+        ],
+        "cwe_ids": [
+          "CWE-201",
+          "CWE-941"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-wm3w-8rrp-j577",
-        "modified": "2026-07-21T20:59:35.466735+00:00",
+        "modified": "2026-08-07T08:11:59.668690+00:00",
         "published": "2026-07-20T23:27:49+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-wm3w-8rrp-j577",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67355",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.9,
@@ -1708,7 +1977,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00229,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1719,7 +1988,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-wm3w-8rrp-j577",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 17.423913187500002,
+      "raptor_risk_estimate": 10.66197554314125,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1727,11 +1996,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1741,10 +2010,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400468587,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.423913187500002,
+        "final": 10.66197554314125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1759,6 +2028,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-55568"
+        ],
+        "cwe_ids": [
+          "CWE-311",
+          "CWE-319",
+          "CWE-636"
         ],
         "fixed_versions": [
           "7.12.1"
@@ -1781,7 +2055,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00106,
+      "epss": 0.00148,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1792,7 +2066,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-wpwq-4j6v-78m3",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
-      "raptor_risk_estimate": 10.6452646406025,
+      "raptor_risk_estimate": 10.650970802445,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1800,11 +2074,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1814,10 +2088,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399840918,
+        "epss_multiplier": 0.400055244,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.6452646406025,
+        "final": 10.650970802445,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1832,6 +2106,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48998"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-918"
         ],
         "fixed_versions": [
           "2.10.2"
@@ -1875,11 +2153,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1908,6 +2186,10 @@
         "aliases": [
           "CVE-2026-59882"
         ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-436"
+        ],
         "fixed_versions": [
           "2.12.3"
         ],
@@ -1932,7 +2214,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "1.4.2",
       "ecosystem": "Packagist",
-      "epss": 0.00186,
+      "epss": 0.00317,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1943,7 +2225,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:1.4.2:GHSA-c2w2-prh8-qm98",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@1.4.2",
-      "raptor_risk_estimate": 5.310005516896499,
+      "raptor_risk_estimate": 5.31887424640425,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1951,11 +2233,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1965,10 +2247,10 @@
         "cvss_base": 42.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400249158,
+        "epss_multiplier": 0.400917651,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.310005516896499,
+        "final": 5.31887424640425,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1983,6 +2265,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49214"
+        ],
+        "cwe_ids": [
+          "CWE-113",
+          "CWE-20",
+          "CWE-93"
         ],
         "fixed_versions": [
           "2.10.2"
@@ -2026,11 +2313,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -2061,6 +2348,9 @@
           "CVE-2022-24775",
           "DRUPAL-CORE-2022-006"
         ],
+        "cwe_ids": [
+          "CWE-20"
+        ],
         "fixed_versions": [
           "1.8.4",
           "2.1.1"
@@ -2086,7 +2376,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "1.4.2",
       "ecosystem": "Packagist",
-      "epss": 0.02442,
+      "epss": 0.0248,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2097,7 +2387,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:1.4.2:GHSA-q7rv-6hp3-vh96",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@1.4.2",
-      "raptor_risk_estimate": 6.893454117338249,
+      "raptor_risk_estimate": 6.896700504329999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2105,11 +2395,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -2119,10 +2409,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.411761526,
+        "epss_multiplier": 0.41195544,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.893454117338249,
+        "final": 6.896700504329999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2137,6 +2427,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-55766"
+        ],
+        "cwe_ids": [
+          "CWE-113",
+          "CWE-93"
         ],
         "fixed_versions": [
           "2.12.1"
@@ -2159,7 +2453,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "1.4.2",
       "ecosystem": "Packagist",
-      "epss": 0.00158,
+      "epss": 0.00229,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2170,7 +2464,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:1.4.2:GHSA-vm85-hxw5-5432",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@1.4.2",
-      "raptor_risk_estimate": 6.066411326387998,
+      "raptor_risk_estimate": 6.071904716093998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2178,11 +2472,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -2192,10 +2486,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400106274,
+        "epss_multiplier": 0.400468587,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.066411326387998,
+        "final": 6.071904716093998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2210,6 +2504,9 @@
       "advisory": {
         "aliases": [
           "CVE-2023-29197"
+        ],
+        "cwe_ids": [
+          "CWE-436"
         ],
         "fixed_versions": [
           "1.9.1",
@@ -2255,11 +2552,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Services/Nodes/NodeUpdateService.php:6",
-          "app/Http/Controllers/Base/IndexController.php:8",
-          "app/Services/Nodes/NodeUpdateService.php:7",
-          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
-          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:11",
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Http/Controllers/Server/Files/FileActionsController.php:14",
+          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Http/Controllers/Base/IndexController.php:9",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -2286,6 +2583,9 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-89"
+        ],
         "fixed_versions": [
           "8.40.0",
           "6.20.26"
@@ -2349,6 +2649,9 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-93"
+        ],
         "fixed_versions": [
           "13.10.0",
           "12.60.0"
@@ -2415,6 +2718,10 @@
       "advisory": {
         "aliases": [
           "CVE-2021-43808"
+        ],
+        "cwe_ids": [
+          "CWE-327",
+          "CWE-79"
         ],
         "fixed_versions": [
           "6.20.42",
@@ -2488,6 +2795,9 @@
           "BIT-laravel-2025-27515",
           "CVE-2025-27515"
         ],
+        "cwe_ids": [
+          "CWE-155"
+        ],
         "fixed_versions": [
           "12.1.1",
           "11.44.1",
@@ -2504,13 +2814,14 @@
           "https://github.com/laravel/framework"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Laravel has a File Validation Bypass"
       },
       "cvss_score": null,
       "dep_name": "laravel/framework",
       "dep_version": "v5.7.14",
       "ecosystem": "Packagist",
-      "epss": 0.00691,
+      "epss": 0.00721,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2521,7 +2832,7 @@
       "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-78fx-h6xr-vch4",
       "in_kev": false,
       "purl": "pkg:composer/laravel/framework@v5.7.14",
-      "raptor_risk_estimate": 4.933309218643799,
+      "raptor_risk_estimate": 4.935184072759302,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2536,10 +2847,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402826173,
+        "epss_multiplier": 0.402979263,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.933309218643799,
+        "final": 4.935184072759302,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2553,6 +2864,9 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-116"
+        ],
         "fixed_versions": [
           "13.12.0",
           "12.61.1"
@@ -2624,6 +2938,9 @@
           "BIT-laravel-2024-52301",
           "CVE-2024-52301"
         ],
+        "cwe_ids": [
+          "CWE-88"
+        ],
         "fixed_versions": [
           "6.20.45",
           "7.30.7",
@@ -2653,7 +2970,7 @@
       "dep_name": "laravel/framework",
       "dep_version": "v5.7.14",
       "ecosystem": "Packagist",
-      "epss": 0.37981,
+      "epss": 0.44771,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2679,7 +2996,7 @@
         "cvss_base": 0.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.593117043,
+        "epss_multiplier": 0.627766413,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 0.0,
@@ -2697,6 +3014,9 @@
       "advisory": {
         "aliases": [
           "CVE-2019-9081"
+        ],
+        "cwe_ids": [
+          "CWE-502"
         ],
         "fixed_versions": [
           "6.20.44"
@@ -2833,6 +3153,9 @@
         "aliases": [
           "CVE-2020-19316"
         ],
+        "cwe_ids": [
+          "CWE-78"
+        ],
         "fixed_versions": [
           "5.8.17"
         ],
@@ -2902,6 +3225,9 @@
           "BIT-laravel-2020-24941",
           "CVE-2020-24941"
         ],
+        "cwe_ids": [
+          "CWE-863"
+        ],
         "fixed_versions": [
           "6.18.35",
           "7.24.0"
@@ -2968,6 +3294,9 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-74"
+        ],
         "fixed_versions": [
           "6.20.14",
           "7.30.4",
@@ -3038,6 +3367,9 @@
         "aliases": [
           "CVE-2021-32708"
         ],
+        "cwe_ids": [
+          "CWE-367"
+        ],
         "fixed_versions": [
           "1.1.4",
           "2.1.1"
@@ -3082,11 +3414,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:32",
           "app/Transformers/Api/Application/ServerDatabaseTransformer.php:7",
           "app/Transformers/Api/Application/BaseTransformer.php:9",
           "app/Transformers/Daemon/ApiKeyTransformer.php:8",
           "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
-          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
           "... (+2 more)"
         ],
         "verdict": "imported"
@@ -3117,6 +3449,10 @@
           "DRUPAL-CORE-2019-006",
           "PYSEC-2026-628",
           "SNYK-JS-JQUERY-174006"
+        ],
+        "cwe_ids": [
+          "CWE-1321",
+          "CWE-79"
         ],
         "fixed_versions": [
           "3.4.0",
@@ -3194,6 +3530,9 @@
           "BIT-drupal-2020-11022",
           "CVE-2020-11022"
         ],
+        "cwe_ids": [
+          "CWE-79"
+        ],
         "fixed_versions": [
           "3.5.0",
           "4.4.0",
@@ -3266,7 +3605,84 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-54133"
+        ],
+        "cwe_ids": [
+          "CWE-116",
+          "CWE-20",
+          "CWE-94"
+        ],
+        "fixed_versions": [
+          "2.9.1"
+        ],
+        "id": "GHSA-pcw8-m77r-2528",
+        "modified": "2026-08-18T20:30:07.369159+00:00",
+        "published": "2026-08-18T20:16:38+00:00",
+        "references": [
+          "https://github.com/jmespath/jmespath.php/security/advisories/GHSA-pcw8-m77r-2528",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-54133",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/mtdowling/jmespath.php/CVE-2026-54133.yaml",
+          "https://github.com/jmespath/jmespath.php"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "jmespath.php has CompilerRuntime code injection via unescaped function names"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "mtdowling/jmespath.php",
+      "dep_version": "2.4.0",
+      "ecosystem": "Packagist",
+      "epss": 0.00417,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:mtdowling/jmespath.php:2.4.0:GHSA-pcw8-m77r-2528",
+      "in_kev": false,
+      "purl": "pkg:composer/mtdowling/jmespath.php@2.4.0",
+      "raptor_risk_estimate": 16.158564554427127,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Mtdowling\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401427951,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 16.158564554427127,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-22145"
+        ],
+        "cwe_ids": [
+          "CWE-98"
         ],
         "fixed_versions": [
           "3.8.4",
@@ -3283,13 +3699,14 @@
           "https://lists.debian.org/debian-lts-announce/2025/02/msg00032.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Carbon has an arbitrary file include via unvalidated input passed to Carbon::setLocale"
       },
       "cvss_score": null,
       "dep_name": "nesbot/carbon",
       "dep_version": "1.36.1",
       "ecosystem": "Packagist",
-      "epss": 0.00708,
+      "epss": 0.00723,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3300,7 +3717,7 @@
       "finding_id": "sca:vuln:Packagist:nesbot/carbon:1.36.1:GHSA-j3f9-p6hm-5w6q",
       "in_kev": false,
       "purl": "pkg:composer/nesbot/carbon@1.36.1",
-      "raptor_risk_estimate": 4.934371635975917,
+      "raptor_risk_estimate": 4.93530906303367,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3315,10 +3732,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402912924,
+        "epss_multiplier": 0.402989469,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.934371635975917,
+        "final": 4.93530906303367,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3333,6 +3750,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-24765"
+        ],
+        "cwe_ids": [
+          "CWE-502"
         ],
         "fixed_versions": [
           "8.5.52",
@@ -3362,7 +3782,7 @@
       "dep_name": "phpunit/phpunit",
       "dep_version": "7.4.4",
       "ecosystem": "Packagist",
-      "epss": 0.00343,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3373,7 +3793,7 @@
       "finding_id": "sca:vuln:Packagist:phpunit/phpunit:7.4.4:GHSA-vvj3-c3rp-c85p",
       "in_kev": false,
       "purl": "pkg:composer/phpunit/phpunit@7.4.4",
-      "raptor_risk_estimate": 9.577543776262683,
+      "raptor_risk_estimate": 9.578153103850223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3381,11 +3801,11 @@
           "reason": "vendor referenced only by test code"
         },
         "evidence": [
+          "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:6",
           "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4",
           "tests/Assertions/ControllerAssertionsTrait.php:14",
-          "tests/Assertions/CommandAssertionsTrait.php:11",
           "tests/Assertions/NestedObjectAssertionsTrait.php:11",
-          "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:6"
+          "tests/Assertions/CommandAssertionsTrait.php:11"
         ],
         "verdict": "not_reachable"
       },
@@ -3394,10 +3814,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401050329,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.577543776262683,
+        "final": 9.578153103850223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3412,6 +3832,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-25129"
+        ],
+        "cwe_ids": [
+          "CWE-427"
         ],
         "fixed_versions": [
           "0.12.19",
@@ -3483,6 +3906,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-28859"
+        ],
+        "cwe_ids": [
+          "CWE-502"
         ],
         "fixed_versions": [
           "1.5.18",
@@ -3556,6 +3982,9 @@
         "aliases": [
           "CVE-2025-64500"
         ],
+        "cwe_ids": [
+          "CWE-647"
+        ],
         "fixed_versions": [
           "5.4.50",
           "6.4.29",
@@ -3582,7 +4011,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.01344,
+      "epss": 0.01325,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3593,7 +4022,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
-      "raptor_risk_estimate": 9.365556513683998,
+      "raptor_risk_estimate": 9.363320794340625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3602,10 +4031,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3615,10 +4044,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.406158432,
+        "epss_multiplier": 0.406061475,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.365556513683998,
+        "final": 9.363320794340625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3633,6 +4062,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-50345"
+        ],
+        "cwe_ids": [
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.46",
@@ -3660,7 +4092,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00565,
+      "epss": 0.00553,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3671,7 +4103,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-mrqx-rp3w-jpjp",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
-      "raptor_risk_estimate": 3.9382281183393744,
+      "raptor_risk_estimate": 3.9376284877728733,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3680,10 +4112,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3693,10 +4125,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402183195,
+        "epss_multiplier": 0.402121959,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.9382281183393744,
+        "final": 3.9376284877728733,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3711,6 +4143,10 @@
       "advisory": {
         "aliases": [
           "CVE-2019-10913"
+        ],
+        "cwe_ids": [
+          "CWE-79",
+          "CWE-89"
         ],
         "fixed_versions": [
           "2.7.51",
@@ -3740,7 +4176,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.01854,
+      "epss": 0.01667,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3751,7 +4187,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-x92h-wmg2-6hp7",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
-      "raptor_risk_estimate": 12.653502149431501,
+      "raptor_risk_estimate": 12.62396228448075,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3760,10 +4196,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3773,10 +4209,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.408760962,
+        "epss_multiplier": 0.407806701,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.653502149431501,
+        "final": 12.62396228448075,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3791,6 +4227,10 @@
       "advisory": {
         "aliases": [
           "CVE-2019-18888"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-88"
         ],
         "fixed_versions": [
           "2.8.52",
@@ -3839,10 +4279,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3871,6 +4311,9 @@
         "aliases": [
           "BIT-symfony-2022-24894",
           "CVE-2022-24894"
+        ],
+        "cwe_ids": [
+          "CWE-285"
         ],
         "fixed_versions": [
           "4.4.50",
@@ -3920,10 +4363,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3951,6 +4394,9 @@
       "advisory": {
         "aliases": [
           "CVE-2019-18887"
+        ],
+        "cwe_ids": [
+          "CWE-203"
         ],
         "fixed_versions": [
           "2.8.52",
@@ -3999,10 +4445,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -4031,6 +4477,9 @@
         "aliases": [
           "CVE-2024-51736"
         ],
+        "cwe_ids": [
+          "CWE-77"
+        ],
         "fixed_versions": [
           "5.4.46",
           "6.4.14",
@@ -4057,7 +4506,7 @@
       "dep_name": "symfony/process",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00426,
+      "epss": 0.00425,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4068,7 +4517,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/process:v4.1.7:GHSA-qq5c-677p-737q",
       "in_kev": false,
       "purl": "pkg:composer/symfony/process@v4.1.7",
-      "raptor_risk_estimate": 10.652507141913,
+      "raptor_risk_estimate": 10.6523717414625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4077,10 +4526,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -4090,10 +4539,10 @@
         "cvss_base": 84.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401473878,
+        "epss_multiplier": 0.401468775,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.652507141913,
+        "final": 10.6523717414625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4109,6 +4558,9 @@
         "aliases": [
           "CVE-2026-24739"
         ],
+        "cwe_ids": [
+          "CWE-88"
+        ],
         "fixed_versions": [
           "5.4.51",
           "6.4.33",
@@ -4117,7 +4569,7 @@
           "8.0.5"
         ],
         "id": "GHSA-r39x-jcww-82v6",
-        "modified": "2026-07-14T16:44:12.425073+00:00",
+        "modified": "2026-08-07T08:11:57.046835+00:00",
         "published": "2026-01-28T21:28:10+00:00",
         "references": [
           "https://github.com/symfony/symfony/security/advisories/GHSA-r39x-jcww-82v6",
@@ -4137,7 +4589,7 @@
       "dep_name": "symfony/process",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00201,
+      "epss": 0.00209,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4148,7 +4600,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/process:v4.1.7:GHSA-r39x-jcww-82v6",
       "in_kev": false,
       "purl": "pkg:composer/symfony/process@v4.1.7",
-      "raptor_risk_estimate": 7.9665315304128725,
+      "raptor_risk_estimate": 7.967343933115874,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4157,10 +4609,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -4170,10 +4622,10 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400325703,
+        "epss_multiplier": 0.40036652699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.9665315304128725,
+        "final": 7.967343933115874,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4188,6 +4640,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45065"
+        ],
+        "cwe_ids": [
+          "CWE-185",
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4206,13 +4662,13 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
-        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation \u2192 Off-Site //host URL Injection"
+        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation → Off-Site //host URL Injection"
       },
       "cvss_score": null,
       "dep_name": "symfony/routing",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00261,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4223,7 +4679,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v4.1.7:GHSA-72xp-p242-47p9",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v4.1.7",
-      "raptor_risk_estimate": 5.061983841704999,
+      "raptor_risk_estimate": 5.0675932889399995,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4232,10 +4688,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -4245,10 +4701,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40063188299999997,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.061983841704999,
+        "final": 5.0675932889399995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4263,6 +4719,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48784"
+        ],
+        "cwe_ids": [
+          "CWE-172",
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.53",
@@ -4281,13 +4741,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
-        "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` \u2192 Generated URL Collapses Off-Route Under RFC 3986 Normalization"
+        "severity_fallback": "medium",
+        "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization"
       },
       "cvss_score": null,
       "dep_name": "symfony/routing",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00267,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4298,7 +4759,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v4.1.7:GHSA-h5x3-xfc9-m39h",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v4.1.7",
-      "raptor_risk_estimate": 5.062370700135,
+      "raptor_risk_estimate": 5.0675932889399995,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4307,10 +4768,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -4320,10 +4781,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400662501,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.062370700135,
+        "final": 5.0675932889399995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4338,6 +4799,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45304"
+        ],
+        "cwe_ids": [
+          "CWE-776"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4356,13 +4820,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony's YAML Parser Vulnerable to Exponential Memory Allocation via Recursive Collection-Alias Expansion (\"Billion Laughs\")"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00804,
+      "epss": 0.00684,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4373,7 +4838,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-4qpc-3hr4-r2p4",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v4.1.7",
-      "raptor_risk_estimate": 5.09699452962,
+      "raptor_risk_estimate": 0.12723143402549997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4382,30 +4847,30 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403402812,
+        "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.09699452962,
+        "final": 0.12723143402549997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4413,6 +4878,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45305"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4431,13 +4899,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony's YAML Parser has a ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.00804,
+      "epss": 0.00684,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4448,7 +4917,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-9frc-8383-795m",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v4.1.7",
-      "raptor_risk_estimate": 5.09699452962,
+      "raptor_risk_estimate": 0.12723143402549997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4457,30 +4926,30 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403402812,
+        "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.09699452962,
+        "final": 0.12723143402549997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4488,6 +4957,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45133"
+        ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-674",
+          "CWE-776"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4506,13 +4980,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony hardened the parser when handling untrusted input"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.0074,
+      "epss": 0.0063,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4523,7 +4998,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-c2p3-7m5p-cv8x",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v4.1.7",
-      "raptor_risk_estimate": 5.0928680397,
+      "raptor_risk_estimate": 0.12714439087874999,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4532,30 +5007,30 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Exceptions/Handler.php:15",
-          "app/Http/Middleware/Api/AuthenticateKey.php:11",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
-          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:10",
+          "app/Http/Requests/Server/UpdateFileContentsFormRequest.php:15",
+          "app/Http/Controllers/Api/Remote/FileDownloadController.php:9",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:35",
           "... (+27 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40307622,
+        "epss_multiplier": 0.40251489,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0928680397,
+        "final": 0.12714439087874999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

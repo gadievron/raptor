@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:13Z",
+    "fetched_at": "2026-08-28T20:30:20Z",
     "git_ref": "v1.0.193",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of serde",

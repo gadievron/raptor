@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:27:26Z",
+    "fetched_at": "2026-08-28T20:34:55Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -11,12 +11,17 @@
   "findings": [
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-73051"
+        ],
+        "cwe_ids": [
+          "CWE-444"
+        ],
         "fixed_versions": [
           "3.12.1"
         ],
         "id": "GHSA-xhj4-vrgc-hr34",
-        "modified": "2026-04-23T22:14:14.585161+00:00",
+        "modified": "2026-08-15T05:19:25.242224+00:00",
         "published": "2026-04-22T14:37:30+00:00",
         "references": [
           "https://github.com/actix/actix-web/security/advisories/GHSA-xhj4-vrgc-hr34",
@@ -25,13 +30,14 @@
           "https://www.rfc-editor.org/rfc/rfc9112.html#name-message-body-length"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "actix-http has HTTP/1.1 CL.TE Request Smuggling "
       },
       "cvss_score": null,
       "dep_name": "actix-http",
       "dep_version": "3.2.2",
       "ecosystem": "Cargo",
-      "epss": null,
+      "epss": 0.00335,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -42,7 +48,7 @@
       "finding_id": "sca:vuln:Cargo:actix-http:3.2.2:GHSA-xhj4-vrgc-hr34",
       "in_kev": false,
       "purl": "pkg:cargo/actix-http@3.2.2",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.066755095675,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -50,11 +56,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/common/server.rs:6",
-          "meilisearch/tests/common/encoder.rs:3",
           "meilisearch/src/lib.rs:24",
           "meilisearch/src/extractors/query_parameters.rs:6",
-          "meilisearch/src/extractors/payload.rs:4"
+          "meilisearch/src/extractors/payload.rs:4",
+          "meilisearch/tests/common/server.rs:6",
+          "meilisearch/tests/common/encoder.rs:3"
         ],
         "verdict": "imported"
       },
@@ -63,10 +69,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.401009505,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.066755095675,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -514,6 +520,9 @@
           "CVE-2026-25541",
           "RUSTSEC-2026-0007"
         ],
+        "cwe_ids": [
+          "CWE-680"
+        ],
         "fixed_versions": [
           "1.11.1"
         ],
@@ -528,13 +537,14 @@
           "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "bytes has integer overflow in BytesMut::reserve"
       },
       "cvss_score": null,
       "dep_name": "bytes",
       "dep_version": "1.3.0",
       "ecosystem": "Cargo",
-      "epss": 0.00552,
+      "epss": 0.00537,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -545,7 +555,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.3.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.3.0",
-      "raptor_risk_estimate": 14.605928516342129,
+      "raptor_risk_estimate": 14.603148203153062,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -562,10 +572,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40211685599999997,
+        "epss_multiplier": 0.402040311,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.605928516342129,
+        "final": 14.603148203153062,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -763,6 +773,9 @@
         "aliases": [
           "RUSTSEC-2026-0008"
         ],
+        "cwe_ids": [
+          "CWE-476"
+        ],
         "fixed_versions": [
           "0.20.4"
         ],
@@ -777,6 +790,7 @@
           "https://rustsec.org/advisories/RUSTSEC-2026-0008.html"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "git2 has potential undefined behavior when dereferencing Buf struct "
       },
       "cvss_score": null,
@@ -794,7 +808,7 @@
       "finding_id": "sca:vuln:Cargo:git2:0.15.0:GHSA-j39j-6gw9-jw6h",
       "in_kev": false,
       "purl": "pkg:cargo/git2@0.15.0",
-      "raptor_risk_estimate": 5.610417356617499,
+      "raptor_risk_estimate": 0.1402604339154375,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -806,20 +820,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
+        "final": 0.1402604339154375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -1156,6 +1170,9 @@
           "CVE-2023-26964",
           "RUSTSEC-2023-0034"
         ],
+        "cwe_ids": [
+          "CWE-770"
+        ],
         "fixed_versions": [
           "0.3.17"
         ],
@@ -1221,6 +1238,10 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2024-0332"
+        ],
+        "cwe_ids": [
+          "CWE-400",
+          "CWE-770"
         ],
         "fixed_versions": [
           "0.3.26",
@@ -1417,8 +1438,75 @@
     {
       "advisory": {
         "aliases": [
+          "GHSA-q83h-524g-xf6h"
+        ],
+        "fixed_versions": [
+          "0.4.16"
+        ],
+        "id": "RUSTSEC-2026-0258",
+        "modified": "2026-08-18T08:30:03.308019+00:00",
+        "published": "2026-08-17T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0258.html",
+          "https://github.com/hyperium/hyper/security/advisories/GHSA-q83h-524g-xf6h"
+        ],
+        "severity": null,
+        "summary": "h2 unbounded empty DATA frames"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:RUSTSEC-2026-0258",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2024-12224",
           "RUSTSEC-2024-0421"
+        ],
+        "cwe_ids": [
+          "CWE-1289",
+          "CWE-697"
         ],
         "fixed_versions": [
           "1.0.0"
@@ -1433,13 +1521,14 @@
           "https://rustsec.org/advisories/RUSTSEC-2024-0421.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded"
       },
       "cvss_score": null,
       "dep_name": "idna",
       "dep_version": "0.3.0",
       "ecosystem": "Cargo",
-      "epss": 0.00201,
+      "epss": 0.00213,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1450,7 +1539,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.3.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.3.0",
-      "raptor_risk_estimate": 9.86583433517474,
+      "raptor_risk_estimate": 9.867343466931263,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1465,10 +1554,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400325703,
+        "epss_multiplier": 0.400386939,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.86583433517474,
+        "final": 9.867343466931263,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1546,6 +1635,9 @@
         "aliases": [
           "CVE-2026-25537"
         ],
+        "cwe_ids": [
+          "CWE-843"
+        ],
         "fixed_versions": [
           "10.3.0"
         ],
@@ -1559,6 +1651,7 @@
           "https://github.com/Keats/jsonwebtoken"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "jsonwebtoken has Type Confusion that leads to potential authorization bypass"
       },
       "cvss_score": null,
@@ -1584,8 +1677,8 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/auth/tenant_token.rs:17",
-          "meilisearch/src/extractors/authentication/mod.rs:129"
+          "meilisearch/src/extractors/authentication/mod.rs:129",
+          "meilisearch/tests/auth/tenant_token.rs:17"
         ],
         "verdict": "imported"
       },
@@ -1900,6 +1993,7 @@
           "https://rustsec.org/advisories/RUSTSEC-2022-0094.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Mimalloc Can Allocate Memory with Bad Alignment"
       },
       "cvss_score": null,
@@ -2015,6 +2109,10 @@
         "aliases": [
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
+        ],
+        "cwe_ids": [
+          "CWE-416",
+          "CWE-672"
         ],
         "fixed_versions": [
           "0.8.11"
@@ -2207,6 +2305,10 @@
           "CVE-2025-53605",
           "RUSTSEC-2024-0437"
         ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-770"
+        ],
         "fixed_versions": [
           "3.7.2"
         ],
@@ -2221,13 +2323,14 @@
           "https://rustsec.org/advisories/RUSTSEC-2024-0437.html"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Crash due to uncontrolled recursion in protobuf crate"
       },
       "cvss_score": null,
       "dep_name": "protobuf",
       "dep_version": "2.28.0",
       "ecosystem": "Cargo",
-      "epss": 0.0038,
+      "epss": 0.00399,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2238,7 +2341,7 @@
       "finding_id": "sca:vuln:Cargo:protobuf:2.28.0:GHSA-2gh3-rmm4-6rq5",
       "in_kev": false,
       "purl": "pkg:cargo/protobuf@2.28.0",
-      "raptor_risk_estimate": 3.4397112616858108,
+      "raptor_risk_estimate": 3.440542447010351,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2253,10 +2356,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40123914,
+        "epss_multiplier": 0.401336097,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4397112616858108,
+        "final": 3.440542447010351,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2271,6 +2374,9 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2026-0097"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "0.9.3",
@@ -2409,6 +2515,10 @@
         "aliases": [
           "RUSTSEC-2023-0018"
         ],
+        "cwe_ids": [
+          "CWE-366",
+          "CWE-367"
+        ],
         "fixed_versions": [
           "0.8.0"
         ],
@@ -2540,11 +2650,14 @@
           "GO-2025-3678",
           "RUSTSEC-2025-0009"
         ],
+        "cwe_ids": [
+          "CWE-770"
+        ],
         "fixed_versions": [
           "0.17.12"
         ],
         "id": "GHSA-4p46-pwfr-66x6",
-        "modified": "2026-05-29T20:59:15.779360+00:00",
+        "modified": "2026-08-07T08:11:55.561771+00:00",
         "published": "2025-03-07T16:23:50+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
@@ -2554,13 +2667,14 @@
           "https://bugzilla.redhat.com/show_bug.cgi?id=2350655"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Some AES functions may panic when overflow checking is enabled in ring"
       },
       "cvss_score": null,
       "dep_name": "ring",
       "dep_version": "0.16.20",
       "ecosystem": "Cargo",
-      "epss": 0.00918,
+      "epss": 0.00986,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2571,7 +2685,7 @@
       "finding_id": "sca:vuln:Cargo:ring:0.16.20:GHSA-4p46-pwfr-66x6",
       "in_kev": false,
       "purl": "pkg:cargo/ring@0.16.20",
-      "raptor_risk_estimate": 3.4632469303491167,
+      "raptor_risk_estimate": 3.466221698879051,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2586,10 +2700,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403984554,
+        "epss_multiplier": 0.404331558,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4632469303491167,
+        "final": 3.466221698879051,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2667,6 +2781,9 @@
         "aliases": [
           "CVE-2024-43806"
         ],
+        "cwe_ids": [
+          "CWE-400"
+        ],
         "fixed_versions": [
           "0.35.15",
           "0.36.16",
@@ -2694,7 +2811,7 @@
       "dep_name": "rustix",
       "dep_version": "0.36.6",
       "ecosystem": "Cargo",
-      "epss": 0.0048,
+      "epss": 0.00476,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2705,7 +2822,7 @@
       "finding_id": "sca:vuln:Cargo:rustix:0.36.6:GHSA-c827-hfw6-qwvm",
       "in_kev": false,
       "purl": "pkg:cargo/rustix@0.36.6",
-      "raptor_risk_estimate": 9.900921648513851,
+      "raptor_risk_estimate": 9.900418604595007,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2720,10 +2837,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40174944,
+        "epss_multiplier": 0.401729028,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.900921648513851,
+        "final": 9.900418604595007,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2931,6 +3048,66 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2026-0249",
+        "informational": "unmaintained",
+        "modified": "2026-08-10T19:45:04.526670+00:00",
+        "published": "2026-05-03T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/smartstring",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0249.html",
+          "https://github.com/bodil/smartstring"
+        ],
+        "severity": null,
+        "summary": "smartstring is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "smartstring",
+      "dep_version": "1.0.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:smartstring:1.0.1:RUSTSEC-2026-0249",
+      "in_kev": false,
+      "purl": "pkg:cargo/smartstring@1.0.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use smartstring` / `extern crate smartstring` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "RUSTSEC-2023-0031"
         ],
@@ -3059,6 +3236,10 @@
     {
       "advisory": {
         "aliases": [],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-843"
+        ],
         "fixed_versions": [
           "0.4.46"
         ],
@@ -3126,6 +3307,9 @@
         "aliases": [
           "CVE-2026-33055",
           "RUSTSEC-2026-0068"
+        ],
+        "cwe_ids": [
+          "CWE-843"
         ],
         "fixed_versions": [
           "0.4.45"
@@ -3200,6 +3384,9 @@
           "CVE-2026-33056",
           "RUSTSEC-2026-0067"
         ],
+        "cwe_ids": [
+          "CWE-61"
+        ],
         "fixed_versions": [
           "0.4.45"
         ],
@@ -3272,6 +3459,9 @@
           "CVE-2026-25727",
           "RUSTSEC-2026-0009"
         ],
+        "cwe_ids": [
+          "CWE-121"
+        ],
         "fixed_versions": [
           "0.3.47"
         ],
@@ -3286,6 +3476,7 @@
           "https://github.com/time-rs/time/blob/main/CHANGELOG.md#0347-2026-02-05"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "time vulnerable to stack exhaustion Denial of Service attack"
       },
       "cvss_score": null,
@@ -3311,11 +3502,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/documents/add_documents.rs:4",
-          "meilisearch/tests/documents/add_documents.rs:5",
-          "meilisearch/tests/index/update_index.rs:2",
-          "meilisearch/tests/index/update_index.rs:3",
-          "meilisearch/tests/stats/mod.rs:2",
+          "meilisearch-types/src/tasks.rs:10",
+          "meilisearch-types/src/keys.rs:9",
+          "meilisearch-types/src/keys.rs:10",
+          "meilisearch-types/src/keys.rs:11",
+          "meilisearch/src/extractors/authentication/mod.rs:134",
           "... (+42 more)"
         ],
         "verdict": "imported"
@@ -3383,11 +3574,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/common/server.rs:16",
-          "meilisearch/tests/common/index.rs:7",
-          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
+          "meilisearch/src/analytics/segment_analytics.rs:23",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3416,6 +3607,9 @@
         "aliases": [
           "RUSTSEC-2025-0023"
         ],
+        "cwe_ids": [
+          "CWE-664"
+        ],
         "fixed_versions": [
           "1.44.2",
           "1.38.2",
@@ -3430,6 +3624,7 @@
           "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
       },
       "cvss_score": null,
@@ -3447,7 +3642,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.1:GHSA-rr8g-9fpq-6wmg",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.1",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 0.20672439374999996,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3455,31 +3650,31 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/common/server.rs:16",
-          "meilisearch/tests/common/index.rs:7",
-          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
+          "meilisearch/src/analytics/segment_analytics.rs:23",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
         "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 0.20672439374999996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3528,11 +3723,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/common/server.rs:16",
-          "meilisearch/tests/common/index.rs:7",
-          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
+          "meilisearch/src/analytics/segment_analytics.rs:23",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3602,11 +3797,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/tests/common/server.rs:16",
-          "meilisearch/tests/common/index.rs:7",
-          "meilisearch/tests/snapshot/mod.rs:5",
           "meilisearch/src/error.rs:7",
           "meilisearch/src/analytics/segment_analytics.rs:22",
+          "meilisearch/src/analytics/segment_analytics.rs:23",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3634,6 +3829,9 @@
       "advisory": {
         "aliases": [
           "RUSTSEC-2023-0052"
+        ],
+        "cwe_ids": [
+          "CWE-400"
         ],
         "fixed_versions": [
           "0.22.2"

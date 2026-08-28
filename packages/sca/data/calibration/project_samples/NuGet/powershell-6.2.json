@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:26:07Z",
+    "fetched_at": "2026-08-28T20:33:30Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.2",
@@ -13,6 +13,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-21907"
+        ],
+        "cwe_ids": [
+          "CWE-755"
         ],
         "fixed_versions": [
           "13.0.1"
@@ -117,7 +120,7 @@
       "dep_name": "System.Data.SqlClient",
       "dep_version": "4.6.0",
       "ecosystem": "NuGet",
-      "epss": 0.00747,
+      "epss": 0.00768,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -128,7 +131,7 @@
       "finding_id": "sca:vuln:NuGet:System.Data.SqlClient:4.6.0:GHSA-8g2p-5pqh-5jmc",
       "in_kev": false,
       "purl": "pkg:nuget/System.Data.SqlClient@4.6.0",
-      "raptor_risk_estimate": 7.158372972172805,
+      "raptor_risk_estimate": 7.160275949100045,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -143,10 +146,10 @@
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403111941,
+        "epss_multiplier": 0.403219104,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.158372972172805,
+        "final": 7.160275949100045,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -163,6 +166,9 @@
           "BIT-dotnet-2024-0056",
           "BIT-dotnet-sdk-2024-0056",
           "CVE-2024-0056"
+        ],
+        "cwe_ids": [
+          "CWE-319"
         ],
         "fixed_versions": [
           "2.1.7",
@@ -235,6 +241,9 @@
         "aliases": [
           "CVE-2017-0247"
         ],
+        "cwe_ids": [
+          "CWE-20"
+        ],
         "fixed_versions": [
           "1.0.4",
           "1.1.3",
@@ -265,7 +274,7 @@
       "dep_name": "System.Net.Http.WinHttpHandler",
       "dep_version": "4.5.2",
       "ecosystem": "NuGet",
-      "epss": 0.16911,
+      "epss": 0.16901,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -276,7 +285,7 @@
       "finding_id": "sca:vuln:NuGet:System.Net.Http.WinHttpHandler:4.5.2:GHSA-6xh7-4v2w-36q6",
       "in_kev": false,
       "purl": "pkg:nuget/System.Net.Http.WinHttpHandler@4.5.2",
-      "raptor_risk_estimate": 11.150588144550316,
+      "raptor_risk_estimate": 11.149416360728123,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -291,10 +300,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.485596833,
+        "epss_multiplier": 0.485545803,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.150588144550316,
+        "final": 11.149416360728123,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -338,7 +347,7 @@
       "dep_name": "System.Text.Encodings.Web",
       "dep_version": "4.5.0",
       "ecosystem": "NuGet",
-      "epss": 0.30315,
+      "epss": 0.30096,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -349,7 +358,7 @@
       "finding_id": "sca:vuln:NuGet:System.Text.Encodings.Web:4.5.0:GHSA-ghhp-997w-qr28",
       "in_kev": false,
       "purl": "pkg:nuget/System.Text.Encodings.Web@4.5.0",
-      "raptor_risk_estimate": 16.62242964829112,
+      "raptor_risk_estimate": 16.58889788243531,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -364,10 +373,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.553997445,
+        "epss_multiplier": 0.552879888,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 16.62242964829112,
+        "final": 16.58889788243531,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:42Z",
+    "fetched_at": "2026-08-28T20:30:45Z",
     "git_ref": "3.21.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express-3",
@@ -13,6 +13,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-47764"
+        ],
+        "cwe_ids": [
+          "CWE-74"
         ],
         "fixed_versions": [
           "0.7.0"
@@ -79,6 +82,9 @@
       "advisory": {
         "aliases": [
           "CVE-2017-20165"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
         ],
         "fixed_versions": [
           "3.1.0",
@@ -153,6 +159,9 @@
         "aliases": [
           "CVE-2017-16137"
         ],
+        "cwe_ids": [
+          "CWE-400"
+        ],
         "fixed_versions": [
           "2.6.9",
           "3.1.0",
@@ -180,7 +189,7 @@
       "dep_name": "debug",
       "dep_version": "2.2.0",
       "ecosystem": "npm",
-      "epss": 0.02798,
+      "epss": 0.02658,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -191,7 +200,7 @@
       "finding_id": "sca:vuln:npm:debug:2.2.0:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 6.9052049215724995,
+      "raptor_risk_estimate": 6.893276786647498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -209,10 +218,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413578194,
+        "epss_multiplier": 0.41286377399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.9052049215724995,
+        "final": 6.893276786647498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -227,6 +236,9 @@
       "advisory": {
         "aliases": [
           "CVE-2017-1000228"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "2.5.5"
@@ -251,7 +263,7 @@
       "dep_name": "ejs",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.06328,
+      "epss": 0.05661,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -262,7 +274,7 @@
       "finding_id": "sca:vuln:npm:ejs:2.3.3:GHSA-3w5v-p54c-f74x",
       "in_kev": false,
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 19.08606766794,
+      "raptor_risk_estimate": 18.9355475004675,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -270,8 +282,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
+          "examples/ejs/index.js:21",
           "lib/application.js:187"
         ],
         "verdict": "imported"
@@ -281,10 +293,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.431591784,
+        "epss_multiplier": 0.428188083,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.08606766794,
+        "final": 18.9355475004675,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -299,6 +311,9 @@
       "advisory": {
         "aliases": [
           "CVE-2017-1000189"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "2.5.5"
@@ -324,7 +339,7 @@
       "dep_name": "ejs",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.02267,
+      "epss": 0.02113,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -335,7 +350,7 @@
       "finding_id": "sca:vuln:npm:ejs:2.3.3:GHSA-6x77-rpqf-j6mw",
       "in_kev": false,
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 13.905330830718748,
+      "raptor_risk_estimate": 13.878734313656249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -343,8 +358,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
+          "examples/ejs/index.js:21",
           "lib/application.js:187"
         ],
         "verdict": "imported"
@@ -354,10 +369,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410868501,
+        "epss_multiplier": 0.41008263899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.905330830718748,
+        "final": 13.878734313656249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -372,6 +387,10 @@
       "advisory": {
         "aliases": [
           "CVE-2024-33883"
+        ],
+        "cwe_ids": [
+          "CWE-1321",
+          "CWE-693"
         ],
         "fixed_versions": [
           "3.1.10"
@@ -416,8 +435,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
+          "examples/ejs/index.js:21",
           "lib/application.js:187"
         ],
         "verdict": "imported"
@@ -446,6 +465,9 @@
         "aliases": [
           "CVE-2017-1000188"
         ],
+        "cwe_ids": [
+          "CWE-79"
+        ],
         "fixed_versions": [
           "2.5.5"
         ],
@@ -470,7 +492,7 @@
       "dep_name": "ejs",
       "dep_version": "2.3.3",
       "ecosystem": "npm",
-      "epss": 0.01233,
+      "epss": 0.01564,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -481,7 +503,7 @@
       "finding_id": "sca:vuln:npm:ejs:2.3.3:GHSA-hwcf-pp87-7x6p",
       "in_kev": false,
       "purl": "pkg:npm/ejs@2.3.3",
-      "raptor_risk_estimate": 11.164426762473749,
+      "raptor_risk_estimate": 11.210921158665,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -489,8 +511,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
+          "examples/ejs/index.js:21",
           "lib/application.js:187"
         ],
         "verdict": "imported"
@@ -500,10 +522,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405591999,
+        "epss_multiplier": 0.407281092,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.164426762473749,
+        "final": 11.210921158665,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -518,6 +540,9 @@
       "advisory": {
         "aliases": [
           "CVE-2022-29078"
+        ],
+        "cwe_ids": [
+          "CWE-74"
         ],
         "fixed_versions": [
           "3.1.7"
@@ -562,8 +587,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/ejs/index.js:21",
           "examples/mvc/index.js:8",
+          "examples/ejs/index.js:21",
           "lib/application.js:187"
         ],
         "verdict": "imported"
@@ -592,6 +617,9 @@
         "aliases": [
           "CVE-2017-16119"
         ],
+        "cwe_ids": [
+          "CWE-400"
+        ],
         "fixed_versions": [
           "0.5.2"
         ],
@@ -614,7 +642,7 @@
       "dep_name": "fresh",
       "dep_version": "0.3.0",
       "ecosystem": "npm",
-      "epss": 0.01584,
+      "epss": 0.01544,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -625,7 +653,7 @@
       "finding_id": "sca:vuln:npm:fresh:0.3.0:GHSA-9qj9-36jm-prpv",
       "in_kev": false,
       "purl": "pkg:npm/fresh@0.3.0",
-      "raptor_risk_estimate": 13.787373550499998,
+      "raptor_risk_estimate": 13.780465364249999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -642,10 +670,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40738315199999997,
+        "epss_multiplier": 0.407179032,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.787373550499998,
+        "final": 13.780465364249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -661,11 +689,14 @@
         "aliases": [
           "CVE-2022-21681"
         ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
         "fixed_versions": [
           "4.0.10"
         ],
         "id": "GHSA-5v2h-r2cx-5xgj",
-        "modified": "2023-11-08T04:08:07.532717+00:00",
+        "modified": "2026-08-03T21:44:57.222567+00:00",
         "published": "2022-01-14T21:04:46+00:00",
         "references": [
           "https://github.com/markedjs/marked/security/advisories/GHSA-5v2h-r2cx-5xgj",
@@ -704,8 +735,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -733,6 +764,9 @@
         "aliases": [
           "CVE-2017-1000427"
         ],
+        "cwe_ids": [
+          "CWE-79"
+        ],
         "fixed_versions": [
           "0.3.7"
         ],
@@ -757,7 +791,7 @@
       "dep_name": "marked",
       "dep_version": "0.3.5",
       "ecosystem": "npm",
-      "epss": 0.01512,
+      "epss": 0.01682,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -768,7 +802,7 @@
       "finding_id": "sca:vuln:npm:marked:0.3.5:GHSA-7px7-7xjx-hxm8",
       "in_kev": false,
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 11.203616903069998,
+      "raptor_risk_estimate": 11.227496200207499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -776,8 +810,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -786,10 +820,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40701573599999996,
+        "epss_multiplier": 0.407883246,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.203616903069998,
+        "final": 11.227496200207499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -805,6 +839,9 @@
         "aliases": [
           "CVE-2018-25110"
         ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
         "fixed_versions": [
           "0.3.17"
         ],
@@ -819,13 +856,14 @@
           "https://github.com/Checkmarx/Vulnerabilities-Proofs-of-Concept/tree/main/2018/CVE-2018-25110"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Marked allows Regular Expression Denial of Service (ReDoS) attacks"
       },
       "cvss_score": null,
       "dep_name": "marked",
       "dep_version": "0.3.5",
       "ecosystem": "npm",
-      "epss": 0.00513,
+      "epss": 0.00585,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -836,7 +874,7 @@
       "finding_id": "sca:vuln:npm:marked:0.3.5:GHSA-p9wx-2529-fp83",
       "in_kev": false,
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 27.758384719184697,
+      "raptor_risk_estimate": 27.783760240473722,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -844,8 +882,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -854,10 +892,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401917839,
+        "epss_multiplier": 0.402285255,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.758384719184697,
+        "final": 27.783760240473722,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -874,11 +912,15 @@
         "aliases": [
           "CVE-2022-21680"
         ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-400"
+        ],
         "fixed_versions": [
           "4.0.10"
         ],
         "id": "GHSA-rrrm-qjm4-v8hf",
-        "modified": "2023-11-08T04:08:07.472715+00:00",
+        "modified": "2026-08-03T21:44:57.494710+00:00",
         "published": "2022-01-14T21:04:41+00:00",
         "references": [
           "https://github.com/markedjs/marked/security/advisories/GHSA-rrrm-qjm4-v8hf",
@@ -917,8 +959,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -946,6 +988,9 @@
         "aliases": [
           "CVE-2016-10531"
         ],
+        "cwe_ids": [
+          "CWE-79"
+        ],
         "fixed_versions": [
           "0.3.6"
         ],
@@ -970,7 +1015,7 @@
       "dep_name": "marked",
       "dep_version": "0.3.5",
       "ecosystem": "npm",
-      "epss": 0.01463,
+      "epss": 0.01636,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -981,7 +1026,7 @@
       "finding_id": "sca:vuln:npm:marked:0.3.5:GHSA-vfvf-mqq8-rwqc",
       "in_kev": false,
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 11.196734046836248,
+      "raptor_risk_estimate": 11.221034743334998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -989,8 +1034,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -999,10 +1044,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406765689,
+        "epss_multiplier": 0.40764850799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.196734046836248,
+        "final": 11.221034743334998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1017,6 +1062,9 @@
       "advisory": {
         "aliases": [
           "CVE-2017-16114"
+        ],
+        "cwe_ids": [
+          "CWE-400"
         ],
         "fixed_versions": [
           "0.3.9"
@@ -1041,7 +1089,7 @@
       "dep_name": "marked",
       "dep_version": "0.3.5",
       "ecosystem": "npm",
-      "epss": 0.01758,
+      "epss": 0.01689,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1052,7 +1100,7 @@
       "finding_id": "sca:vuln:npm:marked:0.3.5:GHSA-x5pg-88wf-qq4p",
       "in_kev": false,
       "purl": "pkg:npm/marked@0.3.5",
-      "raptor_risk_estimate": 13.8174241606875,
+      "raptor_risk_estimate": 13.805507539406246,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1060,8 +1108,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "examples/view-constructor/index.js:9",
-          "examples/markdown/index.js:8"
+          "examples/markdown/index.js:8",
+          "examples/view-constructor/index.js:9"
         ],
         "verdict": "imported"
       },
@@ -1070,10 +1118,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408271074,
+        "epss_multiplier": 0.40791896699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.8174241606875,
+        "final": 13.805507539406246,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1088,6 +1136,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-43799"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "0.19.0"
@@ -1113,7 +1164,7 @@
       "dep_name": "send",
       "dep_version": "0.13.0",
       "ecosystem": "npm",
-      "epss": 0.00511,
+      "epss": 0.00541,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1124,7 +1175,7 @@
       "finding_id": "sca:vuln:npm:send:0.13.0:GHSA-m6fv-jmcg-4jfg",
       "in_kev": false,
       "purl": "pkg:npm/send@0.13.0",
-      "raptor_risk_estimate": 9.0680409695625,
+      "raptor_risk_estimate": 9.071495062687498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1141,10 +1192,10 @@
         "cvss_base": 50.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401907633,
+        "epss_multiplier": 0.402060723,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.0680409695625,
+        "final": 9.071495062687498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

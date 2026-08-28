@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:27:36Z",
+    "fetched_at": "2026-08-28T20:35:30Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -15,6 +15,9 @@
           "BIT-drupal-2024-55634",
           "CVE-2024-55634",
           "DRUPAL-CORE-2024-004"
+        ],
+        "cwe_ids": [
+          "CWE-178"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -31,6 +34,7 @@
           "https://www.drupal.org/sa-core-2024-004"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Drupal core Access bypass"
       },
       "cvss_score": null,
@@ -56,11 +60,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -90,6 +94,9 @@
           "BIT-drupal-2024-12393",
           "CVE-2024-12393",
           "DRUPAL-CORE-2024-003"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -135,11 +142,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -169,6 +176,10 @@
           "BIT-drupal-2024-55636",
           "CVE-2024-55636",
           "DRUPAL-CORE-2024-006"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -214,11 +225,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -248,6 +259,10 @@
           "BIT-drupal-2024-55638",
           "CVE-2024-55638",
           "DRUPAL-CORE-2024-008"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -292,11 +307,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -324,6 +339,10 @@
       "advisory": {
         "aliases": [
           "CVE-2024-45440"
+        ],
+        "cwe_ids": [
+          "CWE-209",
+          "CWE-497"
         ],
         "fixed_versions": [
           "10.3.6",
@@ -372,11 +391,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -406,6 +425,10 @@
           "BIT-drupal-2024-55637",
           "CVE-2024-55637",
           "DRUPAL-CORE-2024-007"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -451,11 +474,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+248 more)"
         ],
         "verdict": "imported"
@@ -476,6 +499,225 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13080",
+          "CVE-2025-13080",
+          "GHSA-83v7-c2cf-p9c2"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "DRUPAL-CORE-2025-005",
+        "modified": "2025-12-10T23:41:07.744028+00:00",
+        "published": "2025-11-12T18:33:05+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2025-005"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00324,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-005",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.066045855219999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400953372,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.066045855219999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13082",
+          "CVE-2025-13082",
+          "GHSA-h89p-5896-f4q8"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "DRUPAL-CORE-2025-007",
+        "modified": "2025-12-10T23:41:19.050806+00:00",
+        "published": "2025-11-12T20:16:21+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2025-007"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00227,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-007",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.059791643934999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400458381,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.059791643934999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13083",
+          "CVE-2025-13083",
+          "GHSA-mhpg-hpj5-73r2"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "DRUPAL-CORE-2025-008",
+        "modified": "2025-12-10T23:41:00.167393+00:00",
+        "published": "2025-11-12T20:16:22+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2025-008"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.0026,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2025-008",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.061919365299999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40062678,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.061919365299999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -506,7 +748,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00215,
+      "epss": 0.00353,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -517,7 +759,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-005",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.059017927074999,
+      "raptor_risk_estimate": 5.067915670964999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -525,11 +767,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -539,10 +781,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400397145,
+        "epss_multiplier": 0.401101359,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.059017927074999,
+        "final": 5.067915670964999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -580,7 +822,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00215,
+      "epss": 0.00353,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -591,7 +833,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-006",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.059017927074999,
+      "raptor_risk_estimate": 5.067915670964999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -599,11 +841,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -613,10 +855,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400397145,
+        "epss_multiplier": 0.401101359,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.059017927074999,
+        "final": 5.067915670964999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -654,7 +896,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00206,
+      "epss": 0.00339,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -665,7 +907,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-007",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.05843763943,
+      "raptor_risk_estimate": 5.067013001294998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -673,11 +915,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -687,10 +929,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400351218,
+        "epss_multiplier": 0.401029917,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.05843763943,
+        "final": 5.067013001294998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -728,7 +970,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.0014,
+      "epss": 0.00221,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -739,7 +981,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-008",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.054182196699998,
+      "raptor_risk_estimate": 5.0594047855049995,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -747,11 +989,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -761,10 +1003,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40001442,
+        "epss_multiplier": 0.400427763,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.054182196699998,
+        "final": 5.0594047855049995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -802,7 +1044,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00161,
+      "epss": 0.00273,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -813,7 +1055,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-009",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.0555362012049985,
+      "raptor_risk_estimate": 5.062757558564998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -821,11 +1063,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -835,10 +1077,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400121583,
+        "epss_multiplier": 0.400693119,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0555362012049985,
+        "final": 5.062757558564998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -875,7 +1117,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00122,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -886,7 +1128,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-010",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.053021621409999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -894,11 +1136,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -908,10 +1150,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.399922566,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.053021621409999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -948,7 +1190,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00133,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -959,7 +1201,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-012",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.268975749999997,
+      "raptor_risk_estimate": 5.053730861865,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -967,11 +1209,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -981,10 +1223,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.399978699,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
+        "final": 5.053730861865,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1002,6 +1244,10 @@
           "CVE-2025-31674",
           "DRUPAL-CORE-2025-003"
         ],
+        "cwe_ids": [
+          "CWE-913",
+          "CWE-915"
+        ],
         "fixed_versions": [
           "10.3.13",
           "10.4.3",
@@ -1017,13 +1263,14 @@
           "https://www.drupal.org/sa-core-2025-003"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Drupal Core Improperly Controlled Modification of Dynamically-Determined Object Attributes Vulnerability"
       },
       "cvss_score": null,
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00537,
+      "epss": 0.00574,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1034,7 +1281,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-2qph-q8xw-gv7q",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.0797793294849996,
+      "raptor_risk_estimate": 5.082164956469998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1042,11 +1289,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1056,10 +1303,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402040311,
+        "epss_multiplier": 0.402229122,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0797793294849996,
+        "final": 5.082164956469998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1076,6 +1323,9 @@
           "BIT-drupal-2025-3057",
           "CVE-2025-3057",
           "DRUPAL-CORE-2025-001"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "10.3.13",
@@ -1102,7 +1352,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00287,
+      "epss": 0.00299,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1113,7 +1363,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-39g6-x4x8-5jcm",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.722081848058374,
+      "raptor_risk_estimate": 7.723261766269874,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1121,11 +1371,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1135,10 +1385,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40076456099999996,
+        "epss_multiplier": 0.400825797,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.722081848058374,
+        "final": 7.723261766269874,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1155,6 +1405,9 @@
           "BIT-drupal-2024-11942",
           "CVE-2024-11942",
           "DRUPAL-CORE-2024-002"
+        ],
+        "cwe_ids": [
+          "CWE-390"
         ],
         "fixed_versions": [
           "10.2.10"
@@ -1197,11 +1450,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1268,11 +1521,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1303,6 +1556,9 @@
           "CVE-2024-55634",
           "DRUPAL-CORE-2024-004"
         ],
+        "cwe_ids": [
+          "CWE-178"
+        ],
         "fixed_versions": [
           "10.2.11",
           "10.3.9",
@@ -1318,6 +1574,7 @@
           "https://www.drupal.org/sa-core-2024-004"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Drupal core Access bypass"
       },
       "cvss_score": null,
@@ -1343,11 +1600,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1374,84 +1631,12 @@
     {
       "advisory": {
         "aliases": [
-          "BIT-drupal-2025-13080",
-          "CVE-2025-13080",
-          "DRUPAL-CORE-2025-005"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8"
-        ],
-        "id": "GHSA-83v7-c2cf-p9c2",
-        "modified": "2025-12-10T23:41:07.744028+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13080",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-005"
-        ],
-        "severity": null,
-        "summary": "Drupal core allows Forceful Browsing"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00316,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-83v7-c2cf-p9c2",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.065530043979999,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400912548,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.065530043979999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "BIT-drupal-2024-12393",
           "CVE-2024-12393",
           "DRUPAL-CORE-2024-003"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -1497,11 +1682,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1531,6 +1716,10 @@
           "BIT-drupal-2024-55636",
           "CVE-2024-55636",
           "DRUPAL-CORE-2024-006"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -1576,11 +1765,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1610,6 +1799,9 @@
           "BIT-drupal-2026-6365",
           "CVE-2026-6365",
           "DRUPAL-CORE-2026-001"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "10.5.9",
@@ -1655,11 +1847,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1690,6 +1882,9 @@
           "CVE-2026-9082",
           "DRUPAL-CORE-2026-004"
         ],
+        "cwe_ids": [
+          "CWE-89"
+        ],
         "fixed_versions": [
           "10.4.10",
           "10.5.10",
@@ -1717,7 +1912,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.88319,
+      "epss": 0.87892,
       "exploit_evidence": {
         "edb_ids": [
           52608
@@ -1730,7 +1925,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-ghwc-95x2-682j",
       "in_kev": true,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 46.227790732272126,
+      "raptor_risk_estimate": 46.109284329124776,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1738,11 +1933,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1752,10 +1947,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.849991857,
+        "epss_multiplier": 0.847812876,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 46.227790732272126,
+        "final": 46.109284329124776,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1772,6 +1967,10 @@
           "BIT-drupal-2024-55638",
           "CVE-2024-55638",
           "DRUPAL-CORE-2024-008"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -1816,11 +2015,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1847,84 +2046,12 @@
     {
       "advisory": {
         "aliases": [
-          "BIT-drupal-2025-13082",
-          "CVE-2025-13082",
-          "DRUPAL-CORE-2025-007"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8"
-        ],
-        "id": "GHSA-h89p-5896-f4q8",
-        "modified": "2025-12-10T23:41:19.050806+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13082",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-007"
-        ],
-        "severity": null,
-        "summary": "Drupal core allows Content Spoofing"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00222,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-h89p-5896-f4q8",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.059469261909999,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400432866,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.059469261909999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "BIT-drupal-2025-31675",
           "CVE-2025-31675",
           "DRUPAL-CORE-2025-004"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "10.3.14",
@@ -1953,7 +2080,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00456,
+      "epss": 0.00487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1964,7 +2091,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m4wj-hhwj-47qp",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 6.850651599917998,
+      "raptor_risk_estimate": 6.853349937467248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1972,11 +2099,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1986,10 +2113,10 @@
         "cvss_base": 54.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401626968,
+        "epss_multiplier": 0.401785161,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.850651599917998,
+        "final": 6.853349937467248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2006,6 +2133,10 @@
           "BIT-drupal-2025-13081",
           "CVE-2025-13081",
           "DRUPAL-CORE-2025-006"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.4.9",
@@ -2032,7 +2163,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00255,
+      "epss": 0.00261,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2043,7 +2174,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m6vv-vcj8-w8m7",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.465855550330625,
+      "raptor_risk_estimate": 7.466426166514874,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2051,11 +2182,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2065,10 +2196,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400601265,
+        "epss_multiplier": 0.40063188299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.465855550330625,
+        "final": 7.466426166514874,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2083,6 +2214,10 @@
       "advisory": {
         "aliases": [
           "CVE-2024-45440"
+        ],
+        "cwe_ids": [
+          "CWE-209",
+          "CWE-497"
         ],
         "fixed_versions": [
           "10.3.6",
@@ -2131,11 +2266,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2162,89 +2297,13 @@
     {
       "advisory": {
         "aliases": [
-          "BIT-drupal-2025-13083",
-          "CVE-2025-13083",
-          "DRUPAL-CORE-2025-008"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8",
-          "7.103"
-        ],
-        "id": "GHSA-mhpg-hpj5-73r2",
-        "modified": "2026-02-03T03:15:35.495869+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13083",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-008"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Drupal core allows Exploiting Incorrectly Configured Access Control Security Levels"
-      },
-      "cvss_score": 3.7,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00264,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mhpg-hpj5-73r2",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 4.682513975600998,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400647192,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.682513975600998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "BIT-drupal-2024-55637",
           "CVE-2024-55637",
           "DRUPAL-CORE-2024-007"
+        ],
+        "cwe_ids": [
+          "CWE-502",
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.2.11",
@@ -2290,11 +2349,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2325,6 +2384,9 @@
           "CVE-2025-31673",
           "DRUPAL-CORE-2025-002"
         ],
+        "cwe_ids": [
+          "CWE-863"
+        ],
         "fixed_versions": [
           "10.3.13",
           "10.4.3",
@@ -2350,7 +2412,7 @@
       "dep_name": "drupal/core",
       "dep_version": "10.1.4",
       "ecosystem": "Packagist",
-      "epss": 0.00293,
+      "epss": 0.00305,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2361,7 +2423,7 @@
       "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-wpp8-fjgf-pwc7",
       "in_kev": false,
       "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.8236541496647485,
+      "raptor_risk_estimate": 5.824543924053748,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2369,11 +2431,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2383,10 +2445,10 @@
         "cvss_base": 46.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400795179,
+        "epss_multiplier": 0.40085641499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.8236541496647485,
+        "final": 5.824543924053748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2403,6 +2465,9 @@
           "BIT-drupal-2026-6366",
           "CVE-2026-6366",
           "DRUPAL-CORE-2026-002"
+        ],
+        "cwe_ids": [
+          "CWE-915"
         ],
         "fixed_versions": [
           "10.5.9",
@@ -2448,11 +2513,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2482,6 +2547,9 @@
           "BIT-drupal-2024-11941",
           "CVE-2024-11941",
           "DRUPAL-CORE-2024-001"
+        ],
+        "cwe_ids": [
+          "CWE-835"
         ],
         "fixed_versions": [
           "10.1.8",
@@ -2525,11 +2593,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Commands/core/CacheRebuildCommands.php:13",
-          "src/Drupal/DrupalKernel.php:6",
-          "src/Boot/DrupalBoot8.php:11",
-          "sut/index.php:10",
-          "sut/drush/Commands/FixtureCommands.php:8",
+          "src/Boot/DrupalBoot8.php:6",
+          "src/Commands/core/TwigCommands.php:8",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2555,19 +2623,26 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67339"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-201",
+          "CWE-522"
+        ],
         "fixed_versions": [
           "7.14.2"
         ],
         "id": "GHSA-94pj-82f3-465w",
-        "modified": "2026-07-21T20:59:33.278385+00:00",
+        "modified": "2026-08-07T08:11:56.728720+00:00",
         "published": "2026-07-20T21:46:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-94pj-82f3-465w",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67339",
           "https://github.com/guzzle/guzzle/pull/3876",
           "https://github.com/guzzle/guzzle/commit/9e4580d4b9981e903dc6323fe37f50a96e85b05e",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.14.2"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.3,
@@ -2580,7 +2655,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00233,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2591,7 +2666,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-94pj-82f3-465w",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 15.651989812499998,
+      "raptor_risk_estimate": 9.57819502233375,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2610,10 +2685,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400488999,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.651989812499998,
+        "final": 9.57819502233375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2629,15 +2704,22 @@
         "aliases": [
           "CVE-2026-55767"
         ],
+        "cwe_ids": [
+          "CWE-1286",
+          "CWE-346"
+        ],
         "fixed_versions": [
           "7.12.1"
         ],
         "id": "GHSA-cwxw-98qj-8qjx",
-        "modified": "2026-06-22T16:29:30.352672+00:00",
+        "modified": "2026-08-05T22:01:01.401314+00:00",
         "published": "2026-06-19T14:37:29+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx",
-          "https://github.com/guzzle/guzzle"
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-55767",
+          "https://github.com/guzzle/guzzle/pull/3653",
+          "https://github.com/guzzle/guzzle/commit/7f537cded1912349abf5081258d6db19106d774d",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2026-55767.yaml"
         ],
         "severity": {
           "score": 5.8,
@@ -2650,7 +2732,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": 0.00111,
+      "epss": 0.00211,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2661,7 +2743,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-cwxw-98qj-8qjx",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.465504217692496,
+      "raptor_risk_estimate": 10.478860044442499,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2680,10 +2762,10 @@
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39986643299999997,
+        "epss_multiplier": 0.400376733,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.465504217692496,
+        "final": 10.478860044442499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2696,19 +2778,25 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67353"
+        ],
+        "cwe_ids": [
+          "CWE-1325",
+          "CWE-770"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-f283-ghqc-fg79",
-        "modified": "2026-07-21T20:59:35.273136+00:00",
+        "modified": "2026-08-07T08:11:57.605659+00:00",
         "published": "2026-07-20T23:27:02+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-f283-ghqc-fg79",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67353",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.3,
@@ -2721,7 +2809,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00247,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2732,7 +2820,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-f283-ghqc-fg79",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 15.651989812499998,
+      "raptor_risk_estimate": 9.57990364706625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2751,10 +2839,89 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400560441,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.651989812499998,
+        "final": 9.57990364706625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-69245"
+        ],
+        "cwe_ids": [
+          "CWE-180",
+          "CWE-346",
+          "CWE-384"
+        ],
+        "fixed_versions": [
+          "7.15.2",
+          "8.0.1"
+        ],
+        "id": "GHSA-f7vp-7xgx-4w4r",
+        "modified": "2026-08-05T08:56:56.815076+00:00",
+        "published": "2026-08-03T21:05:26+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f7vp-7xgx-4w4r",
+          "https://github.com/guzzle/guzzle/pull/3907",
+          "https://github.com/guzzle/guzzle/pull/3908",
+          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
+          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Guzzle: Noncanonical cookie domain keeps subdomain scope"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.7.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00137,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-f7vp-7xgx-4w4r",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
+      "raptor_risk_estimate": 11.732473924518747,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "src/Commands/DrushCommands.php:17",
+          "src/Commands/DrushCommands.php:18",
+          "src/Commands/DrushCommands.php:19"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39999911099999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.732473924518747,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2769,6 +2936,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-59883"
+        ],
+        "cwe_ids": [
+          "CWE-200",
+          "CWE-346",
+          "CWE-384"
         ],
         "fixed_versions": [
           "7.12.3"
@@ -2794,7 +2966,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": 0.00118,
+      "epss": 0.00167,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2805,7 +2977,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-g446-98w2-8p5w",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 8.4814248086475,
+      "raptor_risk_estimate": 8.48672799295875,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2824,10 +2996,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399902154,
+        "epss_multiplier": 0.400152201,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.4814248086475,
+        "final": 8.48672799295875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2840,19 +3012,25 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-67354"
+        ],
+        "cwe_ids": [
+          "CWE-201",
+          "CWE-212"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-h95v-h523-3mw8",
-        "modified": "2026-07-21T20:59:33.382070+00:00",
+        "modified": "2026-08-07T08:11:56.059105+00:00",
         "published": "2026-07-20T23:28:36+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-h95v-h523-3mw8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67354",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.9,
@@ -2865,7 +3043,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00252,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2876,7 +3054,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-h95v-h523-3mw8",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 17.423913187500002,
+      "raptor_risk_estimate": 10.665100346055,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2895,10 +3073,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.40058595599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.423913187500002,
+        "final": 10.665100346055,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2911,19 +3089,105 @@
     },
     {
       "advisory": {
-        "aliases": [],
+        "aliases": [
+          "CVE-2026-69246"
+        ],
+        "cwe_ids": [
+          "CWE-180",
+          "CWE-436",
+          "CWE-918",
+          "CWE-941"
+        ],
+        "fixed_versions": [
+          "7.15.2",
+          "8.0.1"
+        ],
+        "id": "GHSA-v5mv-p594-2x33",
+        "modified": "2026-08-05T08:56:57.301561+00:00",
+        "published": "2026-08-03T21:07:26+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-v5mv-p594-2x33",
+          "https://github.com/guzzle/guzzle/pull/3907",
+          "https://github.com/guzzle/guzzle/pull/3908",
+          "https://github.com/guzzle/guzzle/commit/3aeea0406aab88cbbd86531313d7cebf8ae149a4",
+          "https://github.com/guzzle/guzzle/commit/744101956d78b7c1384d0cbf379db13e859167bf"
+        ],
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Guzzle: Noncanonical host can bypass host-based checks"
+      },
+      "cvss_score": 7.2,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "7.7.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00213,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-v5mv-p594-2x33",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
+      "raptor_risk_estimate": 13.00857164811,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "src/Commands/DrushCommands.php:17",
+          "src/Commands/DrushCommands.php:18",
+          "src/Commands/DrushCommands.php:19"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 72.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400386939,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.00857164811,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-67355"
+        ],
+        "cwe_ids": [
+          "CWE-201",
+          "CWE-941"
+        ],
         "fixed_versions": [
           "7.15.1"
         ],
         "id": "GHSA-wm3w-8rrp-j577",
-        "modified": "2026-07-21T20:59:35.466735+00:00",
+        "modified": "2026-08-07T08:11:59.668690+00:00",
         "published": "2026-07-20T23:27:49+00:00",
         "references": [
           "https://github.com/guzzle/guzzle/security/advisories/GHSA-wm3w-8rrp-j577",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-67355",
           "https://github.com/guzzle/guzzle/pull/3901",
           "https://github.com/guzzle/guzzle/commit/7b68220d6543f6f80fe62e633361fc9d4ead14d4",
-          "https://github.com/guzzle/guzzle",
-          "https://github.com/guzzle/guzzle/releases/tag/7.15.1"
+          "https://github.com/guzzle/guzzle"
         ],
         "severity": {
           "score": 5.9,
@@ -2936,7 +3200,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": null,
+      "epss": 0.00229,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2947,7 +3211,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-wm3w-8rrp-j577",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 17.423913187500002,
+      "raptor_risk_estimate": 10.66197554314125,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2966,10 +3230,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.400468587,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.423913187500002,
+        "final": 10.66197554314125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2984,6 +3248,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-55568"
+        ],
+        "cwe_ids": [
+          "CWE-311",
+          "CWE-319",
+          "CWE-636"
         ],
         "fixed_versions": [
           "7.12.1"
@@ -3006,7 +3275,7 @@
       "dep_name": "guzzlehttp/guzzle",
       "dep_version": "7.7.1",
       "ecosystem": "Packagist",
-      "epss": 0.00106,
+      "epss": 0.00148,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3017,7 +3286,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:7.7.1:GHSA-wpwq-4j6v-78m3",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/guzzle@7.7.1",
-      "raptor_risk_estimate": 10.6452646406025,
+      "raptor_risk_estimate": 10.650970802445,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3036,10 +3305,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399840918,
+        "epss_multiplier": 0.400055244,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.6452646406025,
+        "final": 10.650970802445,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3054,6 +3323,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48998"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-918"
         ],
         "fixed_versions": [
           "2.10.2"
@@ -3127,6 +3400,10 @@
         "aliases": [
           "CVE-2026-59882"
         ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-436"
+        ],
         "fixed_versions": [
           "2.12.3"
         ],
@@ -3151,7 +3428,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
       "ecosystem": "Packagist",
-      "epss": 0.00186,
+      "epss": 0.00317,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3162,7 +3439,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-c2w2-prh8-qm98",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 5.310005516896499,
+      "raptor_risk_estimate": 5.31887424640425,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3181,10 +3458,10 @@
         "cvss_base": 42.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400249158,
+        "epss_multiplier": 0.400917651,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.310005516896499,
+        "final": 5.31887424640425,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3199,6 +3476,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49214"
+        ],
+        "cwe_ids": [
+          "CWE-113",
+          "CWE-20",
+          "CWE-93"
         ],
         "fixed_versions": [
           "2.10.2"
@@ -3272,6 +3554,10 @@
         "aliases": [
           "CVE-2026-55766"
         ],
+        "cwe_ids": [
+          "CWE-113",
+          "CWE-93"
+        ],
         "fixed_versions": [
           "2.12.1"
         ],
@@ -3293,7 +3579,7 @@
       "dep_name": "guzzlehttp/psr7",
       "dep_version": "2.5.1",
       "ecosystem": "Packagist",
-      "epss": 0.00158,
+      "epss": 0.00229,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3304,7 +3590,7 @@
       "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:2.5.1:GHSA-vm85-hxw5-5432",
       "in_kev": false,
       "purl": "pkg:composer/guzzlehttp/psr7@2.5.1",
-      "raptor_risk_estimate": 6.066411326387998,
+      "raptor_risk_estimate": 6.071904716093998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3323,10 +3609,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400106274,
+        "epss_multiplier": 0.400468587,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.066411326387998,
+        "final": 6.071904716093998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3341,6 +3627,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-24765"
+        ],
+        "cwe_ids": [
+          "CWE-502"
         ],
         "fixed_versions": [
           "8.5.52",
@@ -3370,7 +3659,7 @@
       "dep_name": "phpunit/phpunit",
       "dep_version": "9.6.13",
       "ecosystem": "Packagist",
-      "epss": 0.00343,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3381,7 +3670,7 @@
       "finding_id": "sca:vuln:Packagist:phpunit/phpunit:9.6.13:GHSA-vvj3-c3rp-c85p",
       "in_kev": false,
       "purl": "pkg:composer/phpunit/phpunit@9.6.13",
-      "raptor_risk_estimate": 9.577543776262683,
+      "raptor_risk_estimate": 9.578153103850223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3389,10 +3678,10 @@
           "reason": "vendor referenced only by test code"
         },
         "evidence": [
-          "tests/unish/UnishTestCase.php:10",
-          "tests/unit/SiteAliasNameTest.php:6",
+          "tests/unit/SiteSpecParserTest.php:8",
           "tests/unit/SiteAliasFileDiscoveryTest.php:6",
-          "tests/unit/ArgsRemapperTest.php:8",
+          "tests/unit/XhProfTest.php:9",
+          "tests/unit/UserAbortExceptionTest.php:8",
           "tests/unit/SiteAliasFileLoaderTest.php:9",
           "... (+9 more)"
         ],
@@ -3403,10 +3692,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401050329,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.577543776262683,
+        "final": 9.578153103850223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3421,6 +3710,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-25129"
+        ],
+        "cwe_ids": [
+          "CWE-427"
         ],
         "fixed_versions": [
           "0.12.19",
@@ -3466,8 +3758,8 @@
           "reason": "vendor `Psy\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Psysh/DrushHelpCommand.php:6",
           "src/Psysh/DrushCommand.php:10",
+          "src/Psysh/DrushHelpCommand.php:6",
           "src/Psysh/Shell.php:6",
           "src/Commands/core/CliCommands.php:16",
           "src/Commands/core/CliCommands.php:17"
@@ -3497,7 +3789,80 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-67434"
+        ],
+        "cwe_ids": [
+          "CWE-78"
+        ],
+        "fixed_versions": [
+          "3.13.6",
+          "4.0.2"
+        ],
+        "id": "GHSA-hmqg-cxww-wqhq",
+        "modified": "2026-08-06T21:45:58.159695+00:00",
+        "published": "2026-08-06T21:31:34+00:00",
+        "references": [
+          "https://github.com/PHPCSStandards/PHP_CodeSniffer/security/advisories/GHSA-hmqg-cxww-wqhq",
+          "https://github.com/PHPCSStandards/PHP_CodeSniffer/pull/1473",
+          "https://github.com/PHPCSStandards/PHP_CodeSniffer/commit/7a3a6bbf153a03fa3a9413afc60bded6b764e76b",
+          "https://github.com/PHPCSStandards/PHP_CodeSniffer/commit/f0e1ebb0563f0e5d7f190497a787bcaf8474f3fe",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/squizlabs/php_codesniffer/CVE-2026-67434.yaml"
+        ],
+        "severity": null,
+        "severity_fallback": "high",
+        "summary": "PHP_CodeSniffer gitblame report command injection via crafted filename"
+      },
+      "cvss_score": null,
+      "dep_name": "squizlabs/php_codesniffer",
+      "dep_version": "3.7.2",
+      "ecosystem": "Packagist",
+      "epss": 0.00701,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:squizlabs/php_codesniffer:3.7.2:GHSA-hmqg-cxww-wqhq",
+      "in_kev": false,
+      "purl": "pkg:composer/squizlabs/php_codesniffer@3.7.2",
+      "raptor_risk_estimate": 8.634384797527357,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Squizlabs\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40287720299999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.634384797527357,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-64500"
+        ],
+        "cwe_ids": [
+          "CWE-647"
         ],
         "fixed_versions": [
           "5.4.50",
@@ -3525,7 +3890,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.3.4",
       "ecosystem": "Packagist",
-      "epss": 0.01344,
+      "epss": 0.01325,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3536,7 +3901,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 9.365556513683998,
+      "raptor_risk_estimate": 9.363320794340625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3544,11 +3909,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -3558,10 +3923,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.406158432,
+        "epss_multiplier": 0.406061475,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.365556513683998,
+        "final": 9.363320794340625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3576,6 +3941,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-50345"
+        ],
+        "cwe_ids": [
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.46",
@@ -3603,7 +3971,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.3.4",
       "ecosystem": "Packagist",
-      "epss": 0.00565,
+      "epss": 0.00553,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3614,7 +3982,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-mrqx-rp3w-jpjp",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 3.9382281183393744,
+      "raptor_risk_estimate": 3.9376284877728733,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3622,11 +3990,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -3636,10 +4004,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402183195,
+        "epss_multiplier": 0.402121959,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.9382281183393744,
+        "final": 3.9376284877728733,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3654,6 +4022,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45067"
+        ],
+        "cwe_ids": [
+          "CWE-93"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -3672,13 +4043,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "high",
         "summary": "Symfony has Email Header / SMTP Command Injection via CRLF in Symfony\\Component\\Mime\\Address"
       },
       "cvss_score": null,
       "dep_name": "symfony/mime",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00619,
+      "epss": 0.00598,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3689,7 +4061,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.3.3:GHSA-qpmx-3rfj-7rhv",
       "in_kev": false,
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 5.085066394694998,
+      "raptor_risk_estimate": 8.896496682832499,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3697,31 +4069,31 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 70.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402458757,
+        "epss_multiplier": 0.402351594,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.085066394694998,
+        "final": 8.896496682832499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3729,6 +4101,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45070"
+        ],
+        "cwe_ids": [
+          "CWE-93"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -3747,13 +4122,14 @@
           "https://symfony.com/cve-2026-45070"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Symfony has Email Header Injection via Non-Token Characters in Mime Parameter Names"
       },
       "cvss_score": null,
       "dep_name": "symfony/mime",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00292,
+      "epss": 0.0039,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3764,7 +4140,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/mime:v6.3.3:GHSA-vqc8-7275-q272",
       "in_kev": false,
       "purl": "pkg:composer/symfony/mime@v6.3.3",
-      "raptor_risk_estimate": 5.063982610259999,
+      "raptor_risk_estimate": 5.0703012979499995,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3772,11 +4148,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -3786,10 +4162,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400790076,
+        "epss_multiplier": 0.40129017,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.063982610259999,
+        "final": 5.0703012979499995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3805,6 +4181,9 @@
         "aliases": [
           "CVE-2026-46644"
         ],
+        "cwe_ids": [
+          "CWE-1289"
+        ],
         "fixed_versions": [
           "1.38.1"
         ],
@@ -3819,13 +4198,14 @@
           "https://github.com/symfony/polyfill"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "symfony/polyfill-intl-idn: xn-- labels with ASCII-only Punycode payloads are treated as equivalent to their decoded form"
       },
       "cvss_score": null,
       "dep_name": "symfony/polyfill-intl-idn",
       "dep_version": "v1.27.0",
       "ecosystem": "Packagist",
-      "epss": 0.00394,
+      "epss": 0.00538,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3836,7 +4216,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/polyfill-intl-idn:v1.27.0:GHSA-2xf4-cg6j-vhgq",
       "in_kev": false,
       "purl": "pkg:composer/symfony/polyfill-intl-idn@v1.27.0",
-      "raptor_risk_estimate": 5.0705592035699985,
+      "raptor_risk_estimate": 0.12699609514724997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3844,31 +4224,31 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40131058199999997,
+        "epss_multiplier": 0.402045414,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.0705592035699985,
+        "final": 0.12699609514724997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3876,6 +4256,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-51736"
+        ],
+        "cwe_ids": [
+          "CWE-77"
         ],
         "fixed_versions": [
           "5.4.46",
@@ -3903,7 +4286,7 @@
       "dep_name": "symfony/process",
       "dep_version": "v6.3.4",
       "ecosystem": "Packagist",
-      "epss": 0.00426,
+      "epss": 0.00425,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3914,7 +4297,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/process:v6.3.4:GHSA-qq5c-677p-737q",
       "in_kev": false,
       "purl": "pkg:composer/symfony/process@v6.3.4",
-      "raptor_risk_estimate": 10.652507141913,
+      "raptor_risk_estimate": 10.6523717414625,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3922,11 +4305,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -3936,10 +4319,10 @@
         "cvss_base": 84.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401473878,
+        "epss_multiplier": 0.401468775,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.652507141913,
+        "final": 10.6523717414625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3954,6 +4337,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45065"
+        ],
+        "cwe_ids": [
+          "CWE-185",
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -3972,13 +4359,13 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
-        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation \u2192 Off-Site //host URL Injection"
+        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation → Off-Site //host URL Injection"
       },
       "cvss_score": null,
       "dep_name": "symfony/routing",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00261,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3989,7 +4376,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.3.3:GHSA-72xp-p242-47p9",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v6.3.3",
-      "raptor_risk_estimate": 5.061983841704999,
+      "raptor_risk_estimate": 5.0675932889399995,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3997,11 +4384,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4011,10 +4398,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40063188299999997,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.061983841704999,
+        "final": 5.0675932889399995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4029,6 +4416,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48784"
+        ],
+        "cwe_ids": [
+          "CWE-172",
+          "CWE-601"
         ],
         "fixed_versions": [
           "5.4.53",
@@ -4047,13 +4438,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
-        "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` \u2192 Generated URL Collapses Off-Route Under RFC 3986 Normalization"
+        "severity_fallback": "medium",
+        "summary": "Symfony: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization"
       },
       "cvss_score": null,
       "dep_name": "symfony/routing",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00267,
+      "epss": 0.00348,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4064,7 +4456,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/routing:v6.3.3:GHSA-h5x3-xfc9-m39h",
       "in_kev": false,
       "purl": "pkg:composer/symfony/routing@v6.3.3",
-      "raptor_risk_estimate": 5.062370700135,
+      "raptor_risk_estimate": 5.0675932889399995,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4072,11 +4464,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4086,10 +4478,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400662501,
+        "epss_multiplier": 0.401075844,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.062370700135,
+        "final": 5.0675932889399995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4104,6 +4496,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-50343"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "5.4.43",
@@ -4131,7 +4526,7 @@
       "dep_name": "symfony/validator",
       "dep_version": "v6.3.4",
       "ecosystem": "Packagist",
-      "epss": 0.00465,
+      "epss": 0.00455,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4142,7 +4537,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/validator:v6.3.4:GHSA-g3rh-rrhp-jhh9",
       "in_kev": false,
       "purl": "pkg:composer/symfony/validator@v6.3.4",
-      "raptor_risk_estimate": 3.933231196951874,
+      "raptor_risk_estimate": 3.9327315048131237,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4150,11 +4545,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -4164,10 +4559,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401672895,
+        "epss_multiplier": 0.40162186499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.933231196951874,
+        "final": 3.9327315048131237,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4182,6 +4577,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45304"
+        ],
+        "cwe_ids": [
+          "CWE-776"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4200,13 +4598,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony's YAML Parser Vulnerable to Exponential Memory Allocation via Recursive Collection-Alias Expansion (\"Billion Laughs\")"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00804,
+      "epss": 0.00684,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4217,7 +4616,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-4qpc-3hr4-r2p4",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 7.2814207566,
+      "raptor_risk_estimate": 0.18175919146499997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4225,31 +4624,31 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403402812,
+        "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2814207566,
+        "final": 0.18175919146499997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4257,6 +4656,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45305"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4275,13 +4677,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony's YAML Parser has a ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.00804,
+      "epss": 0.00684,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4292,7 +4695,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-9frc-8383-795m",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 7.2814207566,
+      "raptor_risk_estimate": 0.18175919146499997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4300,31 +4703,31 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403402812,
+        "epss_multiplier": 0.40279045199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2814207566,
+        "final": 0.18175919146499997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4332,6 +4735,11 @@
       "advisory": {
         "aliases": [
           "CVE-2026-45133"
+        ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-674",
+          "CWE-776"
         ],
         "fixed_versions": [
           "5.4.52",
@@ -4350,13 +4758,14 @@
           "https://github.com/symfony/symfony"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Symfony hardened the parser when handling untrusted input"
       },
       "cvss_score": null,
       "dep_name": "symfony/yaml",
       "dep_version": "v6.3.3",
       "ecosystem": "Packagist",
-      "epss": 0.0074,
+      "epss": 0.0063,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4367,7 +4776,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.3.3:GHSA-c2p3-7m5p-cv8x",
       "in_kev": false,
       "purl": "pkg:composer/symfony/yaml@v6.3.3",
-      "raptor_risk_estimate": 7.275525770999999,
+      "raptor_risk_estimate": 0.18163484411249997,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4375,31 +4784,31 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
-          "src/Preflight/RedispatchToSiteLocal.php:8",
-          "src/Preflight/LegacyPreflight.php:9",
-          "src/Preflight/Preflight.php:18",
+          "src/Boot/DrupalBoot8.php:18",
           "... (+261 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40307622,
+        "epss_multiplier": 0.40251489,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.275525770999999,
+        "final": 0.18163484411249997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4407,6 +4816,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-47730"
+        ],
+        "cwe_ids": [
+          "CWE-79"
         ],
         "fixed_versions": [
           "3.26.0"
@@ -4428,7 +4840,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00169,
+      "epss": 0.00295,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4439,7 +4851,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-2g2g-8p8h-fgwm",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.430480729923808,
+      "raptor_risk_estimate": 3.435992801023393,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4454,10 +4866,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400162407,
+        "epss_multiplier": 0.400805385,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.430480729923808,
+        "final": 3.435992801023393,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4473,6 +4885,9 @@
         "aliases": [
           "CVE-2026-46628"
         ],
+        "cwe_ids": [
+          "CWE-116"
+        ],
         "fixed_versions": [
           "3.26.0"
         ],
@@ -4486,13 +4901,14 @@
           "https://symfony.com/cve-2026-46628"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Twig: The `spaceless` filter implicitly marks its output as safe"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00169,
+      "epss": 0.00295,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4503,7 +4919,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-4j38-f5cw-54h7",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 9.86180998382402,
+      "raptor_risk_estimate": 9.877655867267489,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4515,13 +4931,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400162407,
+        "epss_multiplier": 0.400805385,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.86180998382402,
+        "final": 9.877655867267489,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4529,7 +4945,7 @@
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4537,6 +4953,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-49981"
+        ],
+        "cwe_ids": [
+          "CWE-693",
+          "CWE-863"
         ],
         "fixed_versions": [
           "3.27.0"
@@ -4550,13 +4970,14 @@
           "https://github.com/twigphp/Twig/releases/tag/v3.27.0"
         ],
         "severity": null,
+        "severity_fallback": "high",
         "summary": "Twig: Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders for a cached `Template`"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00212,
+      "epss": 0.00362,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4567,7 +4988,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-529h-vh3j-85hq",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4323618335530313,
+      "raptor_risk_estimate": 6.0181166901752725,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4579,20 +5000,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 70.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400381836,
+        "epss_multiplier": 0.401147286,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4323618335530313,
+        "final": 6.0181166901752725,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4600,6 +5021,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48806"
+        ],
+        "cwe_ids": [
+          "CWE-693",
+          "CWE-863"
         ],
         "fixed_versions": [
           "3.27.0"
@@ -4621,7 +5046,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00234,
+      "epss": 0.00418,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4632,7 +5057,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-5v5v-ww74-355v",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4333242586656563,
+      "raptor_risk_estimate": 3.4413736323348925,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4647,10 +5072,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40049410199999996,
+        "epss_multiplier": 0.401433054,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4333242586656563,
+        "final": 3.4413736323348925,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4665,6 +5090,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-51754"
+        ],
+        "cwe_ids": [
+          "CWE-668"
         ],
         "fixed_versions": [
           "3.11.2",
@@ -4691,7 +5119,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00444,
+      "epss": 0.00435,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4702,7 +5130,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-6377-hfv9-hqf6",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 1.8933810741073975,
+      "raptor_risk_estimate": 1.8931645284570568,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4717,10 +5145,10 @@
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401565732,
+        "epss_multiplier": 0.401519805,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 1.8933810741073975,
+        "final": 1.8931645284570568,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4735,6 +5163,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-45411"
+        ],
+        "cwe_ids": [
+          "CWE-693"
         ],
         "fixed_versions": [
           "1.44.8",
@@ -4808,6 +5239,9 @@
         "aliases": [
           "CVE-2026-46638"
         ],
+        "cwe_ids": [
+          "CWE-693"
+        ],
         "fixed_versions": [
           "3.26.0"
         ],
@@ -4822,13 +5256,14 @@
           "https://symfony.com/cve-2026-46638"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Twig: `{% sandbox %}{% include %}` skips checkSecurity() on cached templates (incomplete fix for CVE-2024-45411)"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00265,
+      "epss": 0.00473,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4839,7 +5274,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-7fxw-r6jv-74c8",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.434680403142539,
+      "raptor_risk_estimate": 3.443779695116456,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4854,10 +5289,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400652295,
+        "epss_multiplier": 0.40171371899999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.434680403142539,
+        "final": 3.443779695116456,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4873,6 +5308,9 @@
         "aliases": [
           "CVE-2026-46633"
         ],
+        "cwe_ids": [
+          "CWE-94"
+        ],
         "fixed_versions": [
           "3.26.0"
         ],
@@ -4886,13 +5324,14 @@
           "https://symfony.com/cve-2026-46633"
         ],
         "severity": null,
+        "severity_fallback": "critical",
         "summary": "Twig: PHP code injection via `{% use %}` template name"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00642,
+      "epss": 0.00688,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4903,7 +5342,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-7p85-w9px-jpjp",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.451172869845264,
+      "raptor_risk_estimate": 7.7696667298407895,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4915,20 +5354,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 90.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402576126,
+        "epss_multiplier": 0.402810864,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.451172869845264,
+        "final": 7.7696667298407895,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4936,6 +5375,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48807"
+        ],
+        "cwe_ids": [
+          "CWE-693",
+          "CWE-863"
         ],
         "fixed_versions": [
           "3.27.0"
@@ -4957,7 +5400,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00215,
+      "epss": 0.00367,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4968,7 +5411,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-8x9c-rmqh-456c",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4324930733411163,
+      "raptor_risk_estimate": 3.4391425559374404,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4983,10 +5426,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400397145,
+        "epss_multiplier": 0.40117280099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4324930733411163,
+        "final": 3.4391425559374404,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5001,6 +5444,10 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48808"
+        ],
+        "cwe_ids": [
+          "CWE-693",
+          "CWE-863"
         ],
         "fixed_versions": [
           "3.27.0"
@@ -5022,7 +5469,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00239,
+      "epss": 0.00407,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5033,7 +5480,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-h8vq-8gpg-mhcg",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.433542991645799,
+      "raptor_risk_estimate": 3.4408924197785784,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5048,10 +5495,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400519617,
+        "epss_multiplier": 0.401376921,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.433542991645799,
+        "final": 3.4408924197785784,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5066,6 +5513,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-51755"
+        ],
+        "cwe_ids": [
+          "CWE-668"
         ],
         "fixed_versions": [
           "3.11.2",
@@ -5092,7 +5542,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00418,
+      "epss": 0.00429,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5103,7 +5553,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-jjxq-ff2g-95vh",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 1.8927554977841905,
+      "raptor_risk_estimate": 1.893020164690163,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5118,10 +5568,10 @@
         "cvss_base": 22.000000000000004,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401433054,
+        "epss_multiplier": 0.40148918699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 1.8927554977841905,
+        "final": 1.893020164690163,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5136,6 +5586,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-48805"
+        ],
+        "cwe_ids": [
+          "CWE-693"
         ],
         "fixed_versions": [
           "3.27.0"
@@ -5157,7 +5610,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.0027,
+      "epss": 0.00483,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5168,7 +5621,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-p42q-9prx-q5wq",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.434899136122681,
+      "raptor_risk_estimate": 3.444217161076741,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5183,10 +5636,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40067780999999997,
+        "epss_multiplier": 0.401764749,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.434899136122681,
+        "final": 3.444217161076741,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5201,6 +5654,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-47732"
+        ],
+        "cwe_ids": [
+          "CWE-20"
         ],
         "fixed_versions": [
           "3.26.0"
@@ -5222,7 +5678,7 @@
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.0036,
+      "epss": 0.00402,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5233,7 +5689,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-pr2w-4gpj-cpq4",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.4388363297652416,
+      "raptor_risk_estimate": 3.440673686798436,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5248,10 +5704,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40113708,
+        "epss_multiplier": 0.40135140599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4388363297652416,
+        "final": 3.440673686798436,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5267,6 +5723,9 @@
         "aliases": [
           "CVE-2026-46635"
         ],
+        "cwe_ids": [
+          "CWE-863"
+        ],
         "fixed_versions": [
           "3.26.0"
         ],
@@ -5280,13 +5739,14 @@
           "https://symfony.com/cve-2026-46635"
         ],
         "severity": null,
+        "severity_fallback": "low",
         "summary": "Twig: Sandbox property allowlist bypass via the `column` filter (array_column on objects)"
       },
       "cvss_score": null,
       "dep_name": "twig/twig",
       "dep_version": "v3.6.1",
       "ecosystem": "Packagist",
-      "epss": 0.00297,
+      "epss": 0.00331,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5297,7 +5757,7 @@
       "finding_id": "sca:vuln:Packagist:twig/twig:v3.6.1:GHSA-vcc8-phrv-43wj",
       "in_kev": false,
       "purl": "pkg:composer/twig/twig@v3.6.1",
-      "raptor_risk_estimate": 3.436080294215449,
+      "raptor_risk_estimate": 0.0859391919620104,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5309,20 +5769,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 1.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40081559099999997,
+        "epss_multiplier": 0.40098909299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.436080294215449,
+        "final": 0.0859391919620104,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

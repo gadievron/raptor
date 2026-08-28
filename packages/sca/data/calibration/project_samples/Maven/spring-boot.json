@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:40Z",
+    "fetched_at": "2026-08-28T20:30:41Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -13,6 +13,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-34447"
+        ],
+        "cwe_ids": [
+          "CWE-297"
         ],
         "fixed_versions": [
           "1.78",
@@ -87,6 +90,9 @@
         "aliases": [
           "CVE-2025-14813"
         ],
+        "cwe_ids": [
+          "CWE-323"
+        ],
         "fixed_versions": [
           "1.80.2",
           "1.81.1",
@@ -103,6 +109,7 @@
           "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902025%E2%80%9014813"
         ],
         "severity": null,
+        "severity_fallback": "critical",
         "summary": "Bouncy Castle for Java GOST 28147 CTR mode reuses keystream after 255 blocks"
       },
       "cvss_score": null,
@@ -120,7 +127,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-574f-3g2m-x479",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.236195163949998,
+      "raptor_risk_estimate": 16.281439118887498,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -134,20 +141,20 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 90.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
         "epss_multiplier": 0.40089723899999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.236195163949998,
+        "final": 16.281439118887498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "critical",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -155,6 +162,9 @@
       "advisory": {
         "aliases": [
           "CVE-2025-8885"
+        ],
+        "cwe_ids": [
+          "CWE-770"
         ],
         "fixed_versions": [
           "1.78",
@@ -172,6 +182,7 @@
           "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902025%E2%80%908885"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Bouncy Castle for Java on All (API modules) allows Excessive Allocation"
       },
       "cvss_score": null,
@@ -224,6 +235,10 @@
       "advisory": {
         "aliases": [
           "CVE-2024-29857"
+        ],
+        "cwe_ids": [
+          "CWE-125",
+          "CWE-400"
         ],
         "fixed_versions": [
           "1.78",
@@ -298,6 +313,9 @@
         "aliases": [
           "CVE-2026-0636"
         ],
+        "cwe_ids": [
+          "CWE-90"
+        ],
         "fixed_versions": [
           "1.84"
         ],
@@ -311,6 +329,7 @@
           "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902026%E2%80%900636"
         ],
         "severity": null,
+        "severity_fallback": "medium",
         "summary": "Bouncy Castle has an LDAP injection"
       },
       "cvss_score": null,
@@ -363,6 +382,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-30172"
+        ],
+        "cwe_ids": [
+          "CWE-835"
         ],
         "fixed_versions": [
           "1.78",
@@ -435,6 +457,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-30171"
+        ],
+        "cwe_ids": [
+          "CWE-203"
         ],
         "fixed_versions": [
           "1.0.19",
@@ -509,6 +534,11 @@
         "aliases": [
           "CVE-2022-27772"
         ],
+        "cwe_ids": [
+          "CWE-377",
+          "CWE-379",
+          "CWE-668"
+        ],
         "fixed_versions": [
           "2.2.11.RELEASE"
         ],
@@ -532,7 +562,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 0.00583,
+      "epss": 0.00597,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -543,7 +573,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-cm59-pr5q-cw85",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 14.159076037177499,
+      "raptor_risk_estimate": 14.161590616972498,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -551,9 +581,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MyWebIntegrationTests.java:18",
-          "SampleCacheApplicationRedisTests.java:24",
-          "MyWebIntegrationTests.java:20"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -562,10 +592,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402275049,
+        "epss_multiplier": 0.402346491,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.159076037177499,
+        "final": 14.161590616972498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -580,6 +610,10 @@
       "advisory": {
         "aliases": [
           "CVE-2025-22235"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-862"
         ],
         "fixed_versions": [
           "3.3.11",
@@ -624,9 +658,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MyWebIntegrationTests.java:18",
-          "SampleCacheApplicationRedisTests.java:24",
-          "MyWebIntegrationTests.java:20"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -653,6 +687,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-40973"
+        ],
+        "cwe_ids": [
+          "CWE-377"
         ],
         "fixed_versions": [
           "4.0.6",
@@ -696,9 +733,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MyWebIntegrationTests.java:18",
-          "SampleCacheApplicationRedisTests.java:24",
-          "MyWebIntegrationTests.java:20"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -725,6 +762,9 @@
       "advisory": {
         "aliases": [
           "CVE-2024-38820"
+        ],
+        "cwe_ids": [
+          "CWE-178"
         ],
         "fixed_versions": [
           "6.1.14"
@@ -769,9 +809,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -799,6 +839,9 @@
         "aliases": [
           "CVE-2025-22233"
         ],
+        "cwe_ids": [
+          "CWE-20"
+        ],
         "fixed_versions": [
           "6.2.7",
           "6.1.20"
@@ -824,7 +867,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.00351,
+      "epss": 0.00407,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -835,7 +878,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4wp7-92pw-q264",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 5.61076386652875,
+      "raptor_risk_estimate": 5.614761403638749,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -843,9 +886,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -854,10 +897,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401091153,
+        "epss_multiplier": 0.401376921,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.61076386652875,
+        "final": 5.614761403638749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -872,6 +915,9 @@
       "advisory": {
         "aliases": [
           "CVE-2022-22968"
+        ],
+        "cwe_ids": [
+          "CWE-178"
         ],
         "fixed_versions": [
           "5.3.19",
@@ -917,9 +963,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -991,9 +1037,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1020,6 +1066,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-41848"
+        ],
+        "cwe_ids": [
+          "CWE-1333"
         ],
         "fixed_versions": [
           "7.0.8",
@@ -1065,9 +1114,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1120,7 +1169,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.02837,
+      "epss": 0.02732,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1131,7 +1180,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-8crv-49fr-2h6j",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 14.003772484781248,
+      "raptor_risk_estimate": 13.985638495874998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1139,9 +1188,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1150,10 +1199,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413777211,
+        "epss_multiplier": 0.413241396,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.003772484781248,
+        "final": 13.985638495874998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1168,6 +1217,9 @@
       "advisory": {
         "aliases": [
           "CVE-2018-1271"
+        ],
+        "cwe_ids": [
+          "CWE-22"
         ],
         "fixed_versions": [
           "5.0.5",
@@ -1194,7 +1246,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.35681,
+      "epss": 0.34505,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1205,7 +1257,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-g8hw-794c-4j9g",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 15.478519582196249,
+      "raptor_risk_estimate": 15.318747050606252,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1213,9 +1265,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1224,10 +1276,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.581380143,
+        "epss_multiplier": 0.575379015,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.478519582196249,
+        "final": 15.318747050606252,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1242,6 +1294,10 @@
       "advisory": {
         "aliases": [
           "CVE-2015-5211"
+        ],
+        "cwe_ids": [
+          "CWE-20",
+          "CWE-552"
         ],
         "fixed_versions": [
           "4.2.2",
@@ -1288,9 +1344,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1362,9 +1418,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },
@@ -1433,9 +1489,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedLdapAutoConfiguration.java:58",
-          "RemoteUrlPropertyExtractor.java:29",
-          "DevToolsPropertyDefaultsPostProcessor.java:38"
+          "ImportAutoConfigurationImportSelector.java:30",
+          "AutoConfigurationPackages.java:35",
+          "ImportAutoConfigurationImportSelector.java:32"
         ],
         "verdict": "imported"
       },

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:23:23Z",
+    "fetched_at": "2026-08-28T20:30:25Z",
     "git_ref": "4.2.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django",
@@ -12,74 +12,12 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-32274",
-          "PYSEC-2026-2121"
-        ],
-        "fixed_versions": [
-          "26.3.1"
-        ],
-        "id": "GHSA-3936-cmfr-pm3m",
-        "modified": "2026-07-13T07:26:40.139783+00:00",
-        "published": "2026-03-12T18:33:10+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-32274",
-          "https://github.com/psf/black/pull/5038",
-          "https://github.com/psf/black/commit/4937fe6cf241139ddbfc16b0bdbb5b422798909d",
-          "https://github.com/psf/black"
-        ],
-        "severity": null,
-        "summary": "Black: Arbitrary file writes from unsanitized user input in cache file name"
-      },
-      "cvss_score": null,
-      "dep_name": "black",
-      "dep_version": "23.3.0",
-      "ecosystem": "PyPI",
-      "epss": 0.00598,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-3936-cmfr-pm3m",
-      "in_kev": false,
-      "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 4.950809623417888,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
-        },
-        "evidence": [],
-        "verdict": "not_evaluated"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402351594,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.950809623417888,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6817,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "CVE-2024-21503",
           "PYSEC-2024-48"
+        ],
+        "cwe_ids": [
+          "CWE-1333",
+          "CWE-75"
         ],
         "fixed_versions": [
           "24.3.0"
@@ -105,7 +43,7 @@
       "dep_name": "black",
       "dep_version": "23.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00971,
+      "epss": 0.00979,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -116,7 +54,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 19.032928498222788,
+      "raptor_risk_estimate": 19.03485055298531,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -131,10 +69,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404255013,
+        "epss_multiplier": 0.404295837,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.032928498222788,
+        "final": 19.03485055298531,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -216,9 +154,82 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-32274",
+          "GHSA-3936-cmfr-pm3m"
+        ],
+        "fixed_versions": [
+          "26.3.1"
+        ],
+        "id": "PYSEC-2026-2121",
+        "modified": "2026-07-13T07:15:15.715288+00:00",
+        "published": "2026-03-12T20:16:06.350000+00:00",
+        "references": [
+          "https://access.redhat.com/security/cve/CVE-2026-32274",
+          "https://security.access.redhat.com/data/csaf/v2/vex/2026/cve-2026-32274.json",
+          "https://access.redhat.com/errata/RHSA-2026:10184",
+          "https://access.redhat.com/errata/RHSA-2026:13545",
+          "https://access.redhat.com/errata/RHSA-2026:13553"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": ""
+      },
+      "cvss_score": 7.5,
+      "dep_name": "black",
+      "dep_version": "23.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00621,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.3.0:PYSEC-2026-2121",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.3.0",
+      "raptor_risk_estimate": 9.285475897484353,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.402468963,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.285475897484353,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "BIT-setuptools-2025-47273",
           "CVE-2025-47273",
           "PYSEC-2025-49"
+        ],
+        "cwe_ids": [
+          "CWE-22"
         ],
         "fixed_versions": [
           "78.1.1"
@@ -234,13 +245,14 @@
           "https://github.com/pypa/advisory-database/tree/main/vulns/setuptools/PYSEC-2025-49.yaml"
         ],
         "severity": null,
+        "severity_fallback": "high",
         "summary": "setuptools has a path traversal vulnerability in PackageIndex.download that leads to Arbitrary File Write"
       },
       "cvss_score": null,
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.01454,
+      "epss": 0.01503,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -251,7 +263,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 28.09002868492044,
+      "raptor_risk_estimate": 28.107298136908806,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -266,13 +278,13 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
+        "cvss_base": 70.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406719762,
+        "epss_multiplier": 0.406969809,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 28.09002868492044,
+        "final": 28.107298136908806,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -280,7 +292,7 @@
         "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
-      "severity": "medium",
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -290,6 +302,9 @@
           "BIT-setuptools-2024-6345",
           "CVE-2024-6345",
           "PYSEC-2026-1918"
+        ],
+        "cwe_ids": [
+          "CWE-94"
         ],
         "fixed_versions": [
           "70.0.0"
@@ -366,6 +381,10 @@
           "CVE-2026-59890",
           "PYSEC-2026-3447"
         ],
+        "cwe_ids": [
+          "CWE-176",
+          "CWE-697"
+        ],
         "fixed_versions": [
           "83.0.0"
         ],
@@ -441,11 +460,14 @@
           "CVE-2022-40897",
           "PYSEC-2022-43012"
         ],
+        "cwe_ids": [
+          "CWE-1333"
+        ],
         "fixed_versions": [
           "65.5.1"
         ],
         "id": "GHSA-r9hx-vwmv-q579",
-        "modified": "2026-02-04T03:03:25.892107+00:00",
+        "modified": "2026-08-07T08:12:25.181519+00:00",
         "published": "2022-12-23T00:30:23+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2022-40897",

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-08-01T08:27:39Z",
+    "fetched_at": "2026-08-28T20:35:09Z",
     "git_ref": "3.1.9",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nodatime-3.1",
@@ -13,6 +13,9 @@
       "advisory": {
         "aliases": [
           "CVE-2026-44788"
+        ],
+        "cwe_ids": [
+          "CWE-22"
         ],
         "fixed_versions": [
           "0.48.0"
