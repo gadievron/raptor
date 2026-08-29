@@ -9,6 +9,10 @@
     "kind": "literal",
     "note": "serializer field manifest for the reachability adjacency cache JSON format (persistence schema keys, not a learned name vocabulary; must stay in lockstep with _index_from_jsonable)"
   },
+  "packages/static-analysis/scanner.py::main": {
+    "count": 13,
+    "kind": "literal"
+  },
   "core/analysis/binary_oracle.py::_BOILERPLATE_NAMES": {
     "count": 10,
     "kind": "literal"

@@ -1,6 +1,9 @@
 {
   "_comment": "Accepted miswiring-detector findings. Keys are class:kind:file:symbol (no line numbers). Add an entry ONLY with a note explaining why the finding is accepted; prefer fixing. check_miswiring.py fails CI on any finding not listed here and warns on stale entries.",
   "entries": {
+    "artifacts:write_only_artifact::firmware-inventory.json": {
+      "note": "operator/LLM-facing output: read by the /firmware command workflow and operator tooling, not by production code"
+    },
     "artifacts:orphan_reader::*-metadata.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
