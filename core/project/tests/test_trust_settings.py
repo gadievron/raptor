@@ -100,6 +100,19 @@ class TestSettingsRegistry(unittest.TestCase):
         with self.assertRaises(ValueError):
             p.set_setting("target-kind", "kernel")
 
+    def test_unknown_persisted_kind_dropped_loudly(self):
+        """A target-kind written by a newer RAPTOR must not vanish
+        silently on read — the drop is logged."""
+        # RaptorLogger is a singleton wrapper over the "raptor" logger.
+        with self.assertLogs("raptor", level="WARNING") as logs:
+            p = Project.from_dict({
+                "version": 4, "name": "x", "target": "./t",
+                "output_dir": "out/x",
+                "settings": {"target-kind": "quantum"},
+            })
+        self.assertNotIn("target-kind", p.settings)
+        self.assertTrue(any("quantum" in m for m in logs.output))
+
     def test_build_command_default_slot(self):
         p = _project()
         p.set_setting("build-command", "make -j4")
