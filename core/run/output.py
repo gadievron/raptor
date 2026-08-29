@@ -78,6 +78,18 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
     ``.active`` symlink). Returns (output_dir, name, target) or None.
     An invalid override is a hard error, never a fallback.
     """
+    full = _resolve_active_project_full()
+    if full is None:
+        return None
+    out, name, target, _settings = full
+    return out, name, target
+
+
+def _resolve_active_project_full() -> tuple[str, str, str, dict] | None:
+    """As :func:`_resolve_active_project`, plus the project's settings
+    dict in the same resolution pass — consumers that need both the
+    target AND a setting (firmware routing) must not run two
+    independent resolutions that can disagree mid-flight."""
     try:
         from core.run.pin import ARGV_NONE, get_process_project
         override = get_process_project()
@@ -95,12 +107,14 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
             if project is None:
                 msg = f"--project: project {override!r} does not exist"
                 raise ProjectArgvError(msg)
-            return project.output_dir, project.name, project.target
+            return (project.output_dir, project.name, project.target,
+                    dict(getattr(project, "settings", {}) or {}))
         active_name = mgr.get_active()
         if active_name:
             project = mgr.load(active_name)
             if project:
-                return project.output_dir, project.name, project.target
+                return (project.output_dir, project.name, project.target,
+                        dict(getattr(project, "settings", {}) or {}))
     except Exception as exc:  # noqa: BLE001 — fall back to the default out/ dir
         from core.run.pin import ProjectArgvError
         if isinstance(exc, ProjectArgvError):
@@ -108,6 +122,39 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
         logger.warning("active project resolution failed: %s", exc)
 
     return None
+
+
+def resolve_default_target_with_kind() -> tuple[str | None, str | None]:
+    """Default-target resolution PLUS the project's ``target-kind``,
+    from one resolution pass.
+
+    Same chain and volatile-target gate as
+    :func:`resolve_default_target`; the kind is non-None only when the
+    target actually came from a project (a ``RAPTOR_CALLER_DIR``
+    fallback never carries a kind) — the two values can therefore
+    never disagree about which project they describe.
+    """
+    active = _resolve_active_project_full()
+    if active is not None:
+        _out, project_name, project_target, settings = active
+        reason = volatile_target_reason(project_target)
+        if reason:
+            banner = (
+                f"REFUSING default target: active project "
+                f"'{project_name}' points at {project_target}, which "
+                f"{reason}. Not steering a no-path command at scratch "
+                f"space.\n"
+                f"  To proceed anyway: pass the target path explicitly.\n"
+                f"  To fix the session: /project use <real-project> "
+                f"or /project use none"
+            )
+            logger.warning("%s", banner)
+            print(banner, file=sys.stderr)
+            return None, None
+        kind = settings.get("target-kind")
+        return project_target, kind if isinstance(kind, str) else None
+    env = os.environ.get("RAPTOR_CALLER_DIR")
+    return (env or None), None
 
 
 def volatile_target_reason(target: str | None) -> str | None:

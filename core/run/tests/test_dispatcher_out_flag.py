@@ -73,7 +73,9 @@ class _LifecycleHarness:
         monkeypatch.setattr(
             "core.run.output._resolve_active_project", lambda: None,
         )
-        monkeypatch.setattr(raptor, "resolve_default_target", lambda: None)
+        monkeypatch.setattr(
+            "core.run.output.resolve_default_target_with_kind",
+            lambda: (None, None))
 
     def child_out_values(self):
         vals = []

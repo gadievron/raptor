@@ -100,6 +100,9 @@ Activate with `/project use <name>` in-session, or at launch with `-p <name>` (a
 /project ghidra list           # list attached Ghidra projects
 /project ghidra remove <path>  # detach one; `clear` detaches all
 /project trust                 # list trust assertions (markers + binaries count)
+/project set target-kind firmware   # target is an extracted firmware
+                               #   root: bare /scan and /agentic run in
+                               #   firmware mode; /codeql refuses
 /project trust <marker>        # set a trust marker: config | build | dynamic
 /project untrust <marker>      # remove a trust marker
 /project set                   # list settings
