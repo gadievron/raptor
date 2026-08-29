@@ -2548,5 +2548,17 @@
     "kind": "literal",
     "note": "Serialization schema keys of the reproduction-result dataclass record (report JSON field names), not a name vocabulary \u2014 same class as project.py::to_dict.",
     "reviewed": "2026-08-28"
+  },
+  "core/binary/firmware_inventory.py::_HIGH_VALUE_NAMES": {
+    "count": 18,
+    "kind": "literal"
+  },
+  "packages/static-analysis/scanner.py::main": {
+    "count": 13,
+    "kind": "literal"
+  },
+  "packages/hardware/enumerator.py::report": {
+    "count": 10,
+    "kind": "literal"
   }
 }
