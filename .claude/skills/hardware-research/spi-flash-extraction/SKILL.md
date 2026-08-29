@@ -1,6 +1,7 @@
 ---
 name: spi-flash-extraction
 description: SPI and QSPI NOR flash identification, in-circuit and out-of-circuit extraction, verification, differential analysis between firmware versions, and write-back for patching.
+user-invocable: false
 ---
 
 # SPI Flash Extraction Skill
@@ -47,7 +48,11 @@ SOIC-8 standard pinout:
 
 ```bash
 # Identify chip via JEDEC ID
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 identify
+# --io takes 4 comma-separated pins in order: copi (MOSI), cipo (MISO), wp, hold
+# Default Glasgow pinout (clockwise from pin 1 on SOIC-8):
+#   --cs A5  --sck A1  --io A2,A4,A3,A0   (copi=A2, cipo=A4, wp=A3, hold=A0)
+# Custom pinout example:
+glasgow run memory-25x --voltage 3.3 --cs A5 --sck A1 --io A2,A4,A3,A0 identify
 
 # Expected output:
 # W25Q128JV: 128 Mbit (16 MiB), 3.3V
@@ -66,9 +71,10 @@ The chip remains soldered. Glasgow connects directly to its pins.
 ```bash
 # Option A: Hold CPU in reset while reading
 # Connect a GPIO pin to the RESET# pin of the SoC
-glasgow run gpio --pins 4 set 4=0    # Assert reset (active low)
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware.bin
-glasgow run gpio --pins 4 set 4=1    # Release reset
+glasgow run control-gpio --voltage 3.3 --pins A4 A4=0    # Assert reset (active low)
+# read takes ADDRESS LENGTH (bytes) — get the capacity from identify first
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware.bin
+glasgow run control-gpio --voltage 3.3 --pins A4 A4=1    # Release reset
 
 # Option B: Power device down, connect chip power directly
 # Use Glasgow to power just the flash (without the SoC)
@@ -99,7 +105,7 @@ If in-circuit fails, remove the chip and read it standalone.
 # Connect via test socket or direct wiring
 
 # Same Glasgow command, but cleaner bus:
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware-oot.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-oot.bin
 ```
 
 ### SOIC-8 clip (Pomona 5250 or equivalent)
@@ -116,8 +122,8 @@ glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso
 
 ```bash
 # Always read twice and compare
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware-1.bin
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware-2.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-1.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-2.bin
 
 # Compare reads
 md5sum firmware-1.bin firmware-2.bin
@@ -250,14 +256,15 @@ with open('firmware-patched.bin', 'wb') as f:
 print('Patched firmware written')
 "
 
-# Erase flash before writing
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 erase-chip
+# Erase then program in one step (preferred)
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-program 0 -S 4096 -P 256 -f firmware-patched.bin
 
-# Write patched firmware
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 write firmware-patched.bin
+# Or erase chip first, then program separately
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-chip
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 program 0 -P 256 -f firmware-patched.bin
 
-# Verify write (read back and compare)
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware-verify.bin
+# Verify write
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 verify 0 -f firmware-patched.bin
 md5sum firmware-patched.bin firmware-verify.bin
 ```
 
@@ -268,9 +275,16 @@ md5sum firmware-patched.bin firmware-verify.bin
 Some devices use Quad SPI for higher throughput (4 data lines vs 1):
 
 ```bash
-# Glasgow QSPI applet
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-io0 2 --pins-io1 3 \
-  --pins-io2 4 --pins-io3 5 read firmware-qspi.bin
+# A QSPI-capable chip still answers single-I/O commands — memory-25x
+# reads it fine over one data line (--io wires all four pins so WP#
+# and HOLD# are held; fast-read is the single-I/O FAST READ command,
+# not quad mode):
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-qspi.bin
+
+# For true quad-mode transfers use the QSPI applets instead:
+#   glasgow run memory-25q ... / glasgow run qspi-controller ...
+# (memory-25x is marked deprecated upstream in favour of memory-25q —
+# note the different default pins before switching.)
 ```
 
 ---
@@ -297,5 +311,5 @@ spi-flash/
 | Reads all 0xFF | WP# or HOLD# floating | Pull both to VCC |
 | Inconsistent reads | SoC on bus | Hold SoC in reset |
 | JEDEC ID 0xFF 0xFF | CS not reaching chip | Check CS connection |
-| Wrong flash size | Wrong chip series | Check -25x vs -26x applet |
+| Wrong flash size | Chip not in database | Check JEDEC ID against the vendor datasheet |
 | Write verify fails | WP# still asserted | Ground WP# to VCC during write |

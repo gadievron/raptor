@@ -1,6 +1,7 @@
 ---
 name: i2c-enumeration
 description: I2C bus reconnaissance, device enumeration, EEPROM read/write, and attacks targeting I2C-connected security devices, configuration EEPROMs, and sensors.
+user-invocable: false
 ---
 
 # I2C Enumeration Skill
@@ -33,14 +34,14 @@ Special addresses:
 
 ```bash
 # Scan all I2C addresses
-glasgow run i2c-initiator -V 3.3 --pins-scl 0 --pins-sda 1 scan
+glasgow run i2c-controller --voltage 3.3 --scl A0 --sda A1 scan
 
-# Expected output:
-# device 0x50: present
-# device 0x68: present
+# Hits are logger output (stderr), e.g.:
+# I: g.applet.interface.i2c_controller: scan found address 0b1010000/0x50
+# I: g.applet.interface.i2c_controller: scan found address 0b1101000/0x68
 
 # At 1.8V
-glasgow run i2c-initiator -V 1.8 --pins-scl 0 --pins-sda 1 scan
+glasgow run i2c-controller --voltage 1.8 --scl A0 --sda A1 scan
 ```
 
 ### Python enumeration script
@@ -63,18 +64,19 @@ def i2c_enumerate(voltage: float = 3.3, pin_scl: int = 0, pin_sda: int = 1) -> l
     }
 
     cmd = [
-        "glasgow", "run", "i2c-initiator",
-        "-V", str(voltage),
-        "--pins-scl", str(pin_scl),
-        "--pins-sda", str(pin_sda),
+        "glasgow", "run", "i2c-controller",
+        "--voltage", str(voltage),
+        "--scl", f"A{pin_scl}",
+        "--sda", f"A{pin_sda}",
         "scan"
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     devices = []
-    for line in result.stdout.splitlines():
-        m = re.search(r'0x([0-9a-fA-F]{2})', line)
+    # Hits are logger output (stderr): "scan found address 0b1010000/0x50"
+    for line in (result.stdout + result.stderr).splitlines():
+        m = re.search(r'scan found address\s+\S*/0x([0-9a-fA-F]{2})', line)
         if m:
             addr = int(m.group(1), 16)
             device_type = "Unknown"
@@ -99,17 +101,17 @@ for d in devices:
 
 ```bash
 # Read full EEPROM (e.g. AT24C02 = 256 bytes at 0x50)
-glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 --i2c-address 0x50 read eeprom.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 read 0 256 -f eeprom.bin   # -W = address width; read ADDRESS LENGTH
 
 # AT24C16 (multiple address pages: 0x50-0x57)
 for addr in 50 51 52 53 54 55 56 57; do
-  glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 \
-    --i2c-address 0x$addr read eeprom-page-$addr.bin
+  glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 \
+    --i2c-address 0x$addr -W 1 read 0 256 -f eeprom-page-$addr.bin
 done
 cat eeprom-page-*.bin > eeprom-full.bin
 
 # Write EEPROM
-glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 --i2c-address 0x50 write new-eeprom.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 write 0 -f new-eeprom.bin
 ```
 
 ### Parse EEPROM contents
@@ -167,8 +169,9 @@ Secure elements store keys in tamper-resistant hardware. Common in:
 - Embedded TLS clients
 
 ```bash
-# Enumerate via I2C (default address 0x60)
-glasgow run i2c-initiator -V 3.3 --pins-scl 0 --pins-sda 1 read 0x60 4
+# Enumerate via I2C (default address 0x60) — use Python API for raw read
+# i2c-controller CLI only has 'scan' subcommand; use Python API for arbitrary reads
+# See Phase 4 for Python-based device interaction
 
 # The ATECC responds with 4-byte info:
 # First byte = chip revision
@@ -197,7 +200,7 @@ def read_atecc_config(pin_scl: int = 0, pin_sda: int = 1) -> bytes:
         return crc
 
     # Build Read command for config zone
-    # This requires raw I2C interaction — use glasgow i2c-initiator
+    # This requires raw I2C interaction — use glasgow i2c-controller
     # ATECC command format: count, opcode, param1, param2_lsb, param2_msb, CRC16
     read_config_cmd = bytes([
         0x07,     # count
@@ -240,15 +243,14 @@ def fuzz_i2c_device(address: int, voltage: float = 3.3,
 
     for i in range(256):
         payload = bytes([i])  # Single-byte register addresses
+        # i2c-controller CLI only has 'scan'. For write/read use the Python API:
+        # from glasgow.applet.interface.i2c_controller import I2CControllerInterface
+        # Use I2CControllerInterface.write() then .read() in a transaction() context
+        # For subprocess-based fuzzing, use smbus2 or i2ctransfer (Linux i2c-tools):
         cmd = [
-            "glasgow", "run", "i2c-initiator",
-            "-V", str(voltage),
-            "--pins-scl", str(pin_scl),
-            "--pins-sda", str(pin_sda),
-            "write-then-read",
-            hex(address),
-            payload.hex(),
-            "1"  # Read 1 byte response
+            "i2ctransfer", "-y", "1",
+            f"w1@{hex(address)}", hex(i),
+            f"r1@{hex(address)}"
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
@@ -276,7 +278,7 @@ data = bytearray(open('eeprom.bin','rb').read())
 data[0x10:0x16] = bytes.fromhex('deadbeefcafe')
 open('eeprom-patched.bin','wb').write(data)
 "
-glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 --i2c-address 0x50 write eeprom-patched.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 write 0 -f eeprom-patched.bin
 ```
 
 ### License/serial spoofing
