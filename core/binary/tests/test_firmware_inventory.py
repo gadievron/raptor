@@ -74,6 +74,28 @@ class TestInventory:
         assert inv["binaries"][0]["path"] == "usr/sbin/uhttpd"
         assert inv["binaries"][0]["arch"] == "mips"
 
+    def test_mips_endianness_variants(self, tmp_path):
+        """MIPS shares one e_machine across endiannesses; the inventory
+        names the variant the way firmware toolchains do."""
+        _write(tmp_path, "bin/be", _elf_bytes(_EM_MIPS, big_endian=True))
+        _write(tmp_path, "bin/le", _elf_bytes(_EM_MIPS, big_endian=False))
+        inv = inventory_firmware(tmp_path)
+        by_path = {b["path"]: (b["arch"], b["endianness"])
+                   for b in inv["binaries"]}
+        assert by_path == {
+            "bin/be": ("mips", "big"),
+            "bin/le": ("mipsel", "little"),
+        }
+
+    def test_arm_endianness_variants(self):
+        from core.binary.firmware_inventory import _arch_name
+        assert _arch_name("arm", 32, "big") == "armeb"
+        assert _arch_name("arm", 64, "big") == "aarch64_be"
+        assert _arch_name("arm", 32, "little") == "arm"
+        assert _arch_name("arm", 64, "little") == "aarch64"
+        assert _arch_name("mips", 64, "little") == "mips64el"
+        assert _arch_name("unknown", 32, "big") == "unknown"
+
     def test_arch_names_and_majority(self, tmp_path):
         _write(tmp_path, "bin/a", _elf_bytes(_EM_ARM))
         _write(tmp_path, "bin/b", _elf_bytes(_EM_ARM))
