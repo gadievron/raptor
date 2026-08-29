@@ -1,6 +1,7 @@
 ---
 name: hardware-recon
 description: Physical reconnaissance of hardware targets. Identify chips, debug interfaces, test points, and communication buses from PCB inspection before any active probing.
+user-invocable: false
 ---
 
 # Hardware Recon Skill
@@ -78,8 +79,9 @@ Most common — look for:
 # Confirm TX pin with multimeter / logic analyser:
 # - TX idles HIGH (~3.3V or 1.8V)
 # - When booting: shows pulses (data being sent)
-# Use logic analyser to find baud rate, or try:
-glasgow uart auto-baud --pins TX=<pin>
+# Use logic analyser to find baud rate, or let the uart applet
+# measure it (wire the target's TX to Glasgow's RX pin):
+glasgow run uart -V 3.3 --auto-baud --rx A<pin> tty
 ```
 
 ### JTAG / SWD hunting
@@ -148,11 +150,11 @@ Create `recon/target-map.md` with this structure:
 
 ```bash
 # Glasgow for active probing
-glasgow identify
+glasgow list
 
-# Logic analyser (to sniff before active probing)
-# PulseView / sigrok with Glasgow logic applet:
-glasgow logic --pins 0,1,2,3 --capture-size 10M --out logic-capture.vcd
+# Logic analyser (to sniff before active probing) — Glasgow's
+# analyzer applet captures to VCD until Ctrl-C; view in PulseView:
+glasgow run analyzer -V 3.3 --i A0,A1,A2,A3 logic-capture.vcd
 
 # Multimeter for:
 # - Continuity (find GND)

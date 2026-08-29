@@ -1,6 +1,7 @@
 ---
 name: chipwhisperer
 description: ChipWhisperer and ChipWhisperer-Lite setup, voltage glitching, clock glitching, power trace capture, and correlation power analysis (CPA). The recommended tool for hardware fault injection and side-channel attacks.
+user-invocable: false
 ---
 
 # ChipWhisperer Skill
@@ -213,7 +214,7 @@ for _ in range(2000):
         print(f"\n[!!!] SUCCESS: ext_offset={ext_offset} width={width}")
 
 # Save results
-with open(".out/hardware/glitch-campaign.json", "w") as f:
+with open(f"{out_dir}/glitch-campaign.json", "w") as f:
     json.dump(results_log, f, indent=2)
 
 # Plot results (if in Jupyter)

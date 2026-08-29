@@ -135,13 +135,13 @@ When you have a firmware image, you hand off to raptor's analysis pipeline:
 
 ```bash
 # Static analysis
-python3 raptor.py scan --path <extracted_firmware_root>/
+python3 raptor.py scan --firmware-root <extracted_firmware_root>/
 
 # LLM analysis for specific interesting binary
-python3 raptor.py analyze --path <binary>
+python3 raptor.py binary investigate <binary>
 
 # Web interface found in firmware
-python3 raptor.py web --url http://<device-ip>/ --output .out/web-$(date +%s)/
+python3 raptor.py web --url http://<device-ip>/
 ```
 
 You prioritise:
