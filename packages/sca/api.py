@@ -24,6 +24,7 @@ def analyse(
     offline: bool = False,
     no_cache: bool = False,
     sarif_dirs: list[Path] | None = None,
+    firmware_elf: bool = False,
 ) -> dict[str, Any]:
     """Run the full SCA pipeline and return a summary dict.
 
@@ -41,12 +42,19 @@ def analyse(
         Sibling SARIF directories from other tools (Semgrep, CodeQL).
         When provided, cross-tool ``related_findings`` linking is
         performed after the SCA run completes.
+    firmware_elf:
+        Treat ``target`` as an extracted firmware filesystem root and
+        scan its ELF binaries for component version strings (see
+        :mod:`packages.sca.firmware_elf`).
 
     Returns a dict with keys: ``status``, ``findings_path``,
     ``sarif_path``, ``vuln_findings``, ``hygiene_findings``,
     ``supply_chain_findings``, ``deps_analysed``, ``llm_cost``.
     """
-    options = RunOptions(offline=offline, no_cache=no_cache)
+    options = RunOptions(
+        offline=offline, no_cache=no_cache,
+        firmware_root=Path(target).resolve() if firmware_elf else None,
+    )
 
     try:
         result = run_sca(

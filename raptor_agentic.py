@@ -3206,6 +3206,10 @@ Examples:
                 original_repo_path,
                 sca_out,
                 sandbox_args=sandbox_passthrough,
+                # Firmware mode: no manifests to discover — the
+                # dependency inventory comes from the ELF binaries'
+                # component version strings.
+                firmware_elf=firmware_mode,
             )
             if rc == 0:
                 sca_sarif = sca_out / "findings.sarif"
@@ -3383,6 +3387,8 @@ Examples:
             sca_options = ScaRunOptions(
                 enable_llm_review=not args.skip_sca_review,
                 enable_triage=not args.skip_sca_triage,
+                firmware_root=(Path(original_repo_path)
+                               if firmware_mode else None),
             )
             sca_result = run_sca(
                 target=original_repo_path,
