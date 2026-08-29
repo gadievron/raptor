@@ -94,6 +94,14 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
         help="output directory (default: ./out/sca-<UTC timestamp>/)",
     )
     parser.add_argument(
+        "--firmware-elf", action="store_true", dest="firmware_elf",
+        help="treat TARGET as an extracted firmware filesystem root and "
+             "scan its ELF binaries for component version strings "
+             "(busybox, dropbear, openssl, ...); matches feed the OSV "
+             "pipeline as Debian-ecosystem rows, with madison-assisted "
+             "upstream-to-Debian version mapping when online",
+    )
+    parser.add_argument(
         "--sbom",
         help=(
             "import a CycloneDX SBOM as the dep list, bypassing "
@@ -409,5 +417,10 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         enable_impact_analysis=args.impact_analysis,
         enable_progress=not args.no_progress,
         sbom_input=Path(args.sbom).resolve() if args.sbom else None,
+        # ``target`` is added by each consumer, not by add_scan_arguments
+        # — guard for callers that build options without one.
+        firmware_root=(Path(args.target).resolve()
+                       if getattr(args, "firmware_elf", False)
+                       and getattr(args, "target", None) else None),
         trust_repo=bool(getattr(args, "trust_repo", False)),
     )

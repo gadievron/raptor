@@ -84,6 +84,13 @@ high-value targets prioritized):
 python3 raptor.py agentic --firmware-root <extracted_root>/
 ```
 
+For known-CVE exposure of the shipped components (busybox, dropbear,
+openssl, ... — versions extracted from the ELF binaries themselves and
+checked against OSV's Debian advisory shard):
+```bash
+python3 raptor.py sca <extracted_root>/ --firmware-elf
+```
+
 For each high-value finding:
 - Load `firmware-extraction` skill for manual binary triage
 - For identified CGI binaries and daemons: `/binary investigate <path>`

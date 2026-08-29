@@ -91,11 +91,34 @@ def test_add_scan_args_registers_expected_flags() -> None:
         "--skip-review", "--skip-triage",
         "--review-maintainers", "--llm-inline-installs",
         "--impact-analysis", "--cache-root",
+        "--firmware-elf",
     }
     missing = must_have - flags
     assert not missing, (
         f"add_scan_args dropped required flags: {sorted(missing)}"
     )
+
+
+def test_firmware_elf_flag_sets_firmware_root() -> None:
+    p = _parser_with_scan_args()
+    args = p.parse_args(["./target", "--firmware-elf"])
+    apply_no_llm_umbrella(args)
+    opts = options_from_args(args)
+    assert opts.firmware_root is not None
+    assert opts.firmware_root.name == "target"
+
+
+def test_firmware_elf_without_target_is_guarded() -> None:
+    """Callers that build options without a target positional must not
+    crash — firmware_root stays unset."""
+    p = _parser_with_scan_args()
+    # No target positional registered on this parser variant.
+    import argparse as _ap
+    bare = _ap.Namespace(**vars(p.parse_args(["./t", "--firmware-elf"])))
+    del bare.target
+    apply_no_llm_umbrella(bare)
+    opts = options_from_args(bare)
+    assert opts.firmware_root is None
 
 
 def test_options_from_args_round_trips_default_flags() -> None:

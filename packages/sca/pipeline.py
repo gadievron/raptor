@@ -209,6 +209,14 @@ class RunOptions:
                                                 # logs / file redirect).
                                                 # ``--no-progress``
                                                 # forces off explicitly.
+    firmware_root: Path | None = None         # extracted firmware
+                                               # filesystem root: scan its
+                                               # ELF binaries for component
+                                               # version strings (busybox,
+                                               # dropbear, openssl, ...) and
+                                               # feed them into the OSV
+                                               # pipeline as Debian-ecosystem
+                                               # rows (firmware_elf source).
     sbom_input: Path | None = None            # CycloneDX SBOM to
                                                 # import as the dep list
                                                 # in place of discovery
@@ -489,6 +497,7 @@ def run_sca(
             )
             raw_deps.extend(base_image_deps)
 
+
         # Capability-drift detection — opt-in. Fingerprints each
         # image ref's main binary, compares vs the per-cache-root
         # baseline. Emits a supply-chain finding when bytes
@@ -524,6 +533,48 @@ def run_sca(
     else:
         image_drift_findings = []
         image_fingerprints = {}
+
+    # 1d. Firmware ELF component scanning. Extract component version
+    #     strings from the ELF binaries of an extracted firmware root
+    #     and feed them into the same OSV pipeline as Debian-ecosystem
+    #     rows. Extraction is local (works offline); the madison
+    #     upstream→Debian version mapping is network enrichment and is
+    #     skipped under ``--offline`` (rows then carry the raw
+    #     upstream version).
+    if options.firmware_root is not None:
+        from .firmware_elf import (
+            firmware_components_to_dependencies,
+            scan_firmware_components,
+        )
+        try:
+            fw_hits = scan_firmware_components(options.firmware_root)
+        except Exception:
+            logger.warning(
+                "sca.pipeline: firmware ELF component scanning failed",
+                exc_info=True,
+            )
+            fw_hits = []
+        if fw_hits:
+            debian_client = None
+            if not options.offline:
+                from .registries.debian import DebianClient
+                debian_cache = None if options.no_cache else JsonCache(
+                    root=(options.cache_root or SCA_CACHE_ROOT) / "debian",
+                )
+                debian_client = DebianClient(
+                    http, debian_cache, offline=options.offline,
+                )
+            fw_deps = firmware_components_to_dependencies(
+                fw_hits,
+                firmware_root=options.firmware_root,
+                debian_client=debian_client,
+            )
+            logger.info(
+                "sca.pipeline: firmware ELF scanning found %d "
+                "component version(s) across %d hit(s)",
+                len(fw_deps), len(fw_hits),
+            )
+            raw_deps.extend(fw_deps)
 
     joined = join_deps(raw_deps)
     logger.info("sca.pipeline: %d manifests, %d deps after join",
