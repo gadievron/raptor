@@ -1,6 +1,7 @@
 ---
 name: glasgow-interaction
 description: Glasgow Interface Explorer Python API patterns. How to invoke applets, use the programmatic interface, build custom applets, and integrate Glasgow into automated hardware security workflows.
+user-invocable: false
 ---
 
 # Glasgow Interaction Skill
@@ -14,14 +15,17 @@ Documentation: https://glasgow-embedded.org/latest/intro.html
 ## Device setup and identification
 
 ```bash
-# Check Glasgow is attached and recognised
-glasgow identify
+# Check Glasgow is attached and recognised (prints one serial per line)
+glasgow list
 
 # List available applets
 glasgow run --help
 
-# Check firmware version and device state
-glasgow factory-test
+# Query I/O port voltage configuration and live measurements
+glasgow voltage
+
+# Safety: turn off all I/O port voltage regulators and drivers
+glasgow safe
 ```
 
 ---
@@ -31,69 +35,74 @@ glasgow factory-test
 ### UART
 
 ```bash
-# Basic UART at known baud
-glasgow run uart -V 3.3 --baud 115200 --pins-tx 0 --pins-rx 1 tty
+# Basic UART at known baud (pins are always port+number: A0, B3, ...)
+glasgow run uart -V 3.3 --baud 115200 --tx A0 --rx A1 tty
 
-# Auto-detect baud rate on TX pin
-glasgow run uart -V 3.3 --baud auto --pins-tx 0 tty
+# Hardware auto-baud: measures the rate and logs "switched to N baud"
+glasgow run uart -V 3.3 --auto-baud --rx A1 tty
 
 # Log all UART output to file
-glasgow run uart -V 3.3 --baud 115200 --pins-tx 0 --pins-rx 1 record uart-log.bin
+glasgow run uart -V 3.3 --baud 115200 --rx A1 tty --stream > uart-log.bin
 
-# Pipe into a terminal emulator
-glasgow run uart -V 3.3 --baud 115200 --pins-tx 0 --pins-rx 1 tty | picocom --nolock --logfile uart-session.log /dev/stdin
+# Interactive console (tty is bidirectional when --tx is wired)
+glasgow run uart -V 3.3 --baud 115200 --tx A0 --rx A1 tty
 ```
 
 ### SPI Flash
 
 ```bash
+# --io takes the four data lines in order: COPI(SI), CIPO(SO), WP#, HOLD#
+
 # Identify SPI flash chip
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 identify
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 identify
 
 # Read full flash to file
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware.bin   # ADDRESS LENGTH; get size from identify
 
-# Write firmware to flash
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 write patched-firmware.bin
+# Program firmware to flash (erase-program erases affected sectors first)
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-program 0 -S 4096 -P 256 -f patched-firmware.bin
 
 # Erase full chip
-glasgow run memory-25x -V 3.3 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 erase-chip
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-chip
 
 # Read at 1.8V (for low-voltage flash)
-glasgow run memory-25x -V 1.8 --pins-cs 0 --pins-sck 1 --pins-mosi 2 --pins-miso 3 read firmware-1v8.bin
+glasgow run memory-25x -V 1.8 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-1v8.bin
 ```
 
 ### I2C
 
 ```bash
-# Scan I2C bus for devices
-glasgow run i2c-initiator -V 3.3 --pins-scl 0 --pins-sda 1 scan
+# Scan I2C bus for devices (hits are logged as "scan found address ...")
+glasgow run i2c-controller -V 3.3 --scl A0 --sda A1 scan
 
-# Read I2C EEPROM (device at address 0x50)
-glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 --i2c-address 0x50 read eeprom.bin
+# Read I2C EEPROM (device at address 0x50; -W = address width in bytes)
+glasgow run memory-24x -V 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 read 0 256 -f eeprom.bin
 
 # Write I2C EEPROM
-glasgow run memory-24x -V 3.3 --pins-scl 0 --pins-sda 1 --i2c-address 0x50 write new-eeprom.bin
+glasgow run memory-24x -V 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 write 0 -f new-eeprom.bin
 ```
 
 ### JTAG
 
 ```bash
-# Scan JTAG chain and identify devices
-glasgow run jtag-probe -V 3.3 --pins-tck 0 --pins-tdi 1 --pins-tdo 2 --pins-tms 3 scan-dr
+# Discover the pin assignment first when it is unknown (4-16 candidates)
+glasgow run jtag-pinout -V 3.3 --pins A0,A1,A2,A3,A4,A5
 
-# Play SVF file (e.g. to unlock JTAG)
-glasgow run jtag-probe -V 3.3 --pins-tck 0 --pins-tdi 1 --pins-tdo 2 --pins-tms 3 run-svf unlock.svf
+# Scan JTAG chain and identify devices (IDCODEs)
+glasgow run jtag-probe -V 3.3 --tck A0 --tms A1 --tdi A2 --tdo A3 scan
 
-# Enumerate IR length
-glasgow run jtag-probe -V 3.3 --pins-tck 0 --pins-tdi 1 --pins-tdo 2 --pins-tms 3 scan-ir
+# Enumerate IR values per TAP
+glasgow run jtag-probe -V 3.3 --tck A0 --tms A1 --tdi A2 --tdo A3 enumerate-ir 0   # per-TAP index; upstream warns this can damage the DUT
+
+# Play SVF file (e.g. to unlock JTAG) — separate jtag-svf applet
+glasgow run jtag-svf -V 3.3 --tck A0 --tms A1 --tdi A2 --tdo A3 unlock.svf
 ```
 
 ### Logic analysis
 
 ```bash
-# Capture 8 channels, 10M samples
-glasgow run logic-analyzer --pins 0,1,2,3,4,5,6,7 --sample-rate 100e6 record capture.vcd
+# Capture 8 channels to VCD (runs until Ctrl-C; samples at system clock)
+glasgow run analyzer -V 3.3 --i A0:7 capture.vcd
 
 # View in PulseView
 pulseview capture.vcd
@@ -102,13 +111,13 @@ pulseview capture.vcd
 ### GPIO
 
 ```bash
-# Set pin 0 high, pin 1 low (for power cycling / reset)
-glasgow run gpio --pins 0,1 set 0=1 1=0
+# Set pin A0 high, pin A1 low (for power cycling / reset)
+glasgow run control-gpio -V 3.3 --pins A0,A1 A0=1 A1=0
 
 # Toggle reset line
-glasgow run gpio --pins 0 set 0=0  # assert reset
+glasgow run control-gpio -V 3.3 --pins A0 A0=0  # assert reset
 sleep 0.1
-glasgow run gpio --pins 0 set 0=1  # release reset
+glasgow run control-gpio -V 3.3 --pins A0 A0=1  # release reset
 ```
 
 ---
@@ -117,23 +126,12 @@ glasgow run gpio --pins 0 set 0=1  # release reset
 
 For automation and scripted workflows, use Glasgow's Python API directly.
 
-### Basic async applet invocation
+### In-process Python API
 
-```python
-import asyncio
-from glasgow.target.hardware import GlasgowHardwareTarget
-from glasgow.device.hardware import GlasgowHardwareDevice
-
-async def main():
-    device = GlasgowHardwareDevice()
-    await device.reset_alert()
-    await device.set_voltage("AB", 3.3)
-
-    # Use applets programmatically via the CLI API
-    # Most automation is done by shelling out or using the applet classes directly
-
-asyncio.run(main())
-```
+The in-process API (``glasgow.hardware.device.GlasgowDevice`` and the
+applet classes) is evolving upstream; for automation, shell out to the
+``glasgow`` CLI with list-based argv as the samples below do — the CLI
+is the stable contract this skill validates against.
 
 ### Scripted SPI flash read
 
@@ -142,7 +140,7 @@ import asyncio
 import subprocess
 import sys
 
-async def read_spi_flash(output_path: str, voltage: float = 3.3,
+async def read_spi_flash(output_path: str, length: int, voltage: float = 3.3,
                           pins: dict = None) -> bool:
     """
     Read SPI flash using Glasgow memory-25x applet.
@@ -150,16 +148,16 @@ async def read_spi_flash(output_path: str, voltage: float = 3.3,
     Returns True on success.
     """
     if pins is None:
-        pins = {"cs": 0, "sck": 1, "mosi": 2, "miso": 3}
+        # io = COPI, CIPO, WP#, HOLD#
+        pins = {"cs": "A0", "sck": "A1", "io": "A2,A3,A4,A5"}
 
     cmd = [
         "glasgow", "run", "memory-25x",
         "-V", str(voltage),
-        "--pins-cs", str(pins["cs"]),
-        "--pins-sck", str(pins["sck"]),
-        "--pins-mosi", str(pins["mosi"]),
-        "--pins-miso", str(pins["miso"]),
-        "read", output_path
+        "--cs", pins["cs"],
+        "--sck", pins["sck"],
+        "--io", pins["io"],
+        "read", "0", str(length), "-f", output_path
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -177,22 +175,22 @@ async def identify_spi_flash(voltage: float = 3.3, pins: dict = None) -> dict:
     Returns dict with manufacturer, device_id, capacity.
     """
     if pins is None:
-        pins = {"cs": 0, "sck": 1, "mosi": 2, "miso": 3}
+        # io = COPI, CIPO, WP#, HOLD#
+        pins = {"cs": "A0", "sck": "A1", "io": "A2,A3,A4,A5"}
 
     cmd = [
         "glasgow", "run", "memory-25x",
         "-V", str(voltage),
-        "--pins-cs", str(pins["cs"]),
-        "--pins-sck", str(pins["sck"]),
-        "--pins-mosi", str(pins["mosi"]),
-        "--pins-miso", str(pins["miso"]),
+        "--cs", pins["cs"],
+        "--sck", pins["sck"],
+        "--io", pins["io"],
         "identify"
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
-    # Parse Glasgow identify output
+    # Parse Glasgow identify output (logger output lands on stderr)
     info = {}
-    for line in result.stdout.splitlines():
+    for line in (result.stdout + result.stderr).splitlines():
         if "manufacturer" in line.lower():
             info["manufacturer"] = line.split(":", 1)[-1].strip()
         elif "device" in line.lower():
@@ -213,17 +211,18 @@ def i2c_bus_scan(voltage: float = 3.3, pin_scl: int = 0, pin_sda: int = 1) -> li
     Scan I2C bus and return list of responding device addresses.
     """
     cmd = [
-        "glasgow", "run", "i2c-initiator",
+        "glasgow", "run", "i2c-controller",
         "-V", str(voltage),
-        "--pins-scl", str(pin_scl),
-        "--pins-sda", str(pin_sda),
+        "--scl", f"A{pin_scl}",
+        "--sda", f"A{pin_sda}",
         "scan"
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     addresses = []
-    for line in result.stdout.splitlines():
-        match = re.search(r'0x([0-9a-fA-F]{2})', line)
+    # Hits are logger output (stderr): "scan found address 0b1010000/0x50"
+    for line in (result.stdout + result.stderr).splitlines():
+        match = re.search(r'scan found address\s+\S*/0x([0-9a-fA-F]{2})', line)
         if match:
             addresses.append(int(match.group(1), 16))
 
@@ -251,17 +250,18 @@ def capture_uart_boot(output_path: str, duration_sec: int = 30,
         "glasgow", "run", "uart",
         "-V", str(voltage),
         "--baud", str(baud),
-        "--pins-tx", str(pin_tx),
-        "--pins-rx", str(pin_rx),
-        "record", output_path
+        "--tx", f"A{pin_tx}",
+        "--rx", f"A{pin_rx}",
+        "tty", "--stream"
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        proc.wait(timeout=duration_sec)
-    except subprocess.TimeoutExpired:
-        proc.send_signal(signal.SIGINT)
-        proc.wait()
+    with open(output_path, "wb") as out:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE)
+        try:
+            proc.wait(timeout=duration_sec)
+        except subprocess.TimeoutExpired:
+            proc.send_signal(signal.SIGINT)
+            proc.wait()
 
     return output_path
 ```
@@ -273,16 +273,17 @@ def capture_uart_boot(output_path: str, duration_sec: int = 30,
 Use consistent pin numbering across sessions. Document in `recon/target-map.md`:
 
 ```
-Glasgow Port A (pins 0-7):  Primary interface
-Glasgow Port B (pins 8-15): Secondary / logic analysis
+Glasgow Port A (A0-A7): Primary interface
+Glasgow Port B (B0-B7): Secondary / logic analysis
+Pins are always written port+number (A0, B3); bare numbers are rejected.
 
 Recommended for typical session:
-  UART:  TX=0  RX=1
-  SPI:   CS=0  SCK=1  MOSI=2  MISO=3
-  I2C:   SCL=0 SDA=1
-  JTAG:  TCK=0 TDI=1  TDO=2   TMS=3
-  SWD:   SWDCLK=0  SWDIO=1
-  GPIO:  RESET=4   BOOT=5
+  UART:  TX=A0  RX=A1
+  SPI:   CS=A0  SCK=A1  IO=A2,A3,A4,A5 (COPI,CIPO,WP#,HOLD#)
+  I2C:   SCL=A0 SDA=A1
+  JTAG:  TCK=A0 TMS=A1  TDI=A2  TDO=A3
+  SWD:   SWCLK=A0  SWDIO=A1
+  GPIO:  RESET=A4  BOOT=A5
 ```
 
 ---
@@ -304,16 +305,11 @@ Recommended for typical session:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `No device found` | Glasgow not connected or needs udev rule | `sudo glasgow run ...` or fix udev |
+| `No device found` | Glasgow not connected or USB permissions | Install the udev rules from the Glasgow install guide (running via `sudo` works but is a workaround) |
 | `ALERT: voltage too high` | Target voltage doesn't match Glasgow setting | Measure target VCC, adjust `-V` flag |
 | `Timeout during identify` | CS/SCK not reaching chip, bad soldering, wrong pins | Check continuity, verify pin mapping |
 | `Short circuit detected` | Two signals shorted or voltage mismatch | Power off immediately, check wiring |
-| `Permission denied` | Missing udev rule for USB device | See Glasgow installation docs |
-
-```bash
-# Fix udev on Linux
-sudo glasgow -h  # shows udev rule to add
-```
+| `Permission denied` | Missing udev rule for USB device | See the install guide's udev section: https://glasgow-embedded.org/latest/install.html |
 
 ---
 
@@ -321,5 +317,5 @@ sudo glasgow -h  # shows udev rule to add
 
 When hardware skills produce firmware blobs, hand off to:
 - `firmware-extraction` skill for unpacking and analysis kickoff
-- `raptor.py analyze` for LLM-assisted firmware analysis
-- `raptor.py scan` against extracted filesystem/source
+- `python3 raptor.py scan --firmware-root <extracted_root>` for the firmware scan
+- `python3 raptor.py binary investigate <elf>` for per-binary black-box analysis
