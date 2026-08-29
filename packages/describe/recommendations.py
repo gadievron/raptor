@@ -47,6 +47,17 @@ def recommend_next(shape: TargetShape) -> list[Recommendation]:
     """
     out: list[Recommendation] = []
 
+    # /firmware — extracted-firmware shape. Highest-signal pick:
+    # everything below assumes a source tree, and this tree isn't one.
+    if getattr(shape, "firmware_like", False):
+        out.append(Recommendation(
+            command="/firmware",
+            reason=(f"{shape.elf_count}+ ELF binaries and no build "
+                    "manifests — looks like an extracted firmware root "
+                    "(also: /agentic --firmware-root, "
+                    "sca <root> --firmware-elf)"),
+        ))
+
     # /sca — dep counts present. The strongest signal for "you
     # have a dep tree worth scanning".
     if shape.deps is not None and shape.deps.by_ecosystem:

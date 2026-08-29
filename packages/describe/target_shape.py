@@ -101,6 +101,14 @@ class TargetShape:
     # transitive). Sourced from packages.sca substrate; empty
     # when no manifests / parser failure / /sca unavailable.
     deps: DependencyCounts | None = None
+    # ELF binaries observed in a bounded probe of extensionless
+    # files (the language walk never sees them — extracted
+    # firmware roots describe as near-empty without this).
+    elf_count: int = 0
+    # True when the tree looks like an extracted firmware root:
+    # several ELF binaries and no recognised build system. Drives
+    # the /firmware recommendation.
+    firmware_like: bool = False
 
 
 def infer_target_shape(target_path: Path) -> TargetShape:
@@ -134,6 +142,12 @@ def infer_target_shape(target_path: Path) -> TargetShape:
     license_obj = _detect_license(target_path)
     deps = detect_dependency_counts(target_path)
 
+    elf_count = _probe_elf_count(target_path)
+    # Firmware-root shape: multiple shipped ELF binaries and nothing
+    # to build them with. A source tree with committed binaries still
+    # carries manifests/build files, so this stays quiet there.
+    firmware_like = elf_count >= 5 and not build_systems
+
     return TargetShape(
         target_path=target_path,
         languages=languages,
@@ -148,7 +162,74 @@ def infer_target_shape(target_path: Path) -> TargetShape:
         git=git,
         license=license_obj,
         deps=deps,
+        elf_count=elf_count,
+        firmware_like=firmware_like,
     )
+
+
+# Bounds for the ELF probe: 4-byte magic reads only, and a hard cap
+# on file-opens — a firmware root can hold tens of thousands of
+# extensionless files and /describe must stay read-only-cheap.
+_ELF_PROBE_MAX_OPENS = 2000
+
+
+def _probe_elf_count(target_path: Path) -> int:
+    """Count ELF binaries among extensionless regular files, bounded.
+
+    Same walk discipline as ``_scan_inventory``: followlinks=False,
+    hidden/build dirs skipped, symlinks and non-regular files refused
+    (a 4-byte read through a hostile symlink is still a host-fs
+    probe). Stops at ``_ELF_PROBE_MAX_OPENS`` file-opens — the signal
+    saturates long before then.
+    """
+    import os
+    import stat as _stat
+
+    elf_count = 0
+    opens = 0
+    try:
+        for root, dirs, files in os.walk(target_path, followlinks=False):
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith(".")
+                and d not in {
+                    "node_modules", "vendor", "build", "dist",
+                    "target", "__pycache__", "out",
+                }
+            ]
+            for f in files:
+                if "." in f:
+                    continue
+                fp = Path(root) / f
+                try:
+                    st = fp.lstat()
+                except OSError:
+                    continue
+                if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode):
+                    continue
+                if opens >= _ELF_PROBE_MAX_OPENS:
+                    return elf_count
+                opens += 1
+                # O_NOFOLLOW + O_NONBLOCK: the lstat above is advisory
+                # only — a hostile tree can swap the file for a symlink
+                # or FIFO between lstat and open (probe-through-link /
+                # blocking-open primitives).
+                flags = (os.O_RDONLY
+                         | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0))
+                try:
+                    fd = os.open(fp, flags)
+                except OSError:
+                    continue
+                try:
+                    magic = os.read(fd, 4)
+                finally:
+                    os.close(fd)
+                if magic == b"\x7fELF":
+                    elf_count += 1
+    except OSError:
+        pass
+    return elf_count
 
 
 def _per_language_counts(ext_amounts: dict[str, int]) -> dict[str, int]:
