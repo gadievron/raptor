@@ -1,3 +1,8 @@
+---
+description: Hardware security research — recon, interface enumeration, firmware extraction, analysis
+dispatch: skill
+---
+
 # /hardware - RAPTOR Hardware Security Workflow
 
 Hardware security research mode. Physical access to firmware — enumerate
@@ -14,8 +19,9 @@ Follow these steps in order:
 ### Step 2 — Check Glasgow
 Run:
 ```bash
-glasgow identify
+glasgow list
 ```
+(Prints one device serial per line; empty output = no device.)
 
 **If glasgow is not found or returns an error:**
 - Tell the user: `glasgow` binary not found or device not detected.
@@ -35,10 +41,12 @@ Ask the user two questions (can be answered together):
 Also ask: do you have a target description? (optional, for context)
 
 ### Step 4 — Run enumeration
-Set `TIMESTAMP=$(date +%s)` and run:
+Run:
 ```bash
-python3 raptor.py hardware --voltage <V> --pins <PINS> --out .out/hardware-$TIMESTAMP/
+python3 raptor.py hardware --voltage <V> --pins <PINS>
 ```
+The enumerator creates its own output directory under `out/hardware_<run>/`
+and prints the report path at the end.
 
 Before running, tell the user:
 > "Starting passive capture in Stage 1 — **please power-cycle your target now** when prompted."
@@ -47,14 +55,14 @@ Add `--jtag` if the user wants JTAG scanning (warn it takes 5-10 minutes).
 Add `--skip-passive` if the target cannot be power-cycled.
 
 ### Step 5 — Read and present the report
-Read `.out/hardware-<TIMESTAMP>/hardware-report.json`.
+Read `hardware-report.json` from the output directory the run printed.
 
 Present findings in a clean table:
 
 | Protocol | Confidence | Pins | Notes |
 |----------|------------|------|-------|
 | uart     | High       | rx=1 | U-Boot @ 115200 |
-| spi_flash | Confirmed | cs=0 sck=1 mosi=2 miso=3 | W25Q128JV (16MB) |
+| jtag     | Confirmed  | tck=A0 tms=A1 tdi=A2 tdo=A3 | identified by jtag-pinout |
 
 Show `active_pins` and `duration_seconds`.
 
@@ -63,9 +71,9 @@ Show `active_pins` and `duration_seconds`.
 **SPI flash found:**
 - Offer to extract immediately:
   ```bash
-  glasgow run memory-25x -V3.3 --pins-cs <C> --pins-sck <K> --pins-mosi <O> --pins-miso <I> read flash.bin
+  glasgow run memory-25x -V 3.3 --cs <CS> --sck <SCK> --io <COPI>,<CIPO>,<WP>,<HOLD> read 0 <LENGTH> -f flash.bin
   ```
-- After extraction, run: `python3 raptor.py scan --path <extracted_root>`
+- After extraction, run: `python3 raptor.py scan --firmware-root <extracted_root>`
 - Load `spi-flash-extraction` skill for full workflow
 
 **UART found:**
@@ -73,7 +81,7 @@ Show `active_pins` and `duration_seconds`.
 - Guide interactive session: boot log analysis, U-Boot interrupt, shell escape
 - If U-Boot detected, offer to attempt console:
   ```bash
-  glasgow run uart -V3.3 --baud <BAUD> --pins-rx <PIN> --pins-tx <TX_PIN> console
+  glasgow run uart -V 3.3 --baud <BAUD> --rx <RX_PIN> --tx <TX_PIN> tty
   ```
 
 **I2C found:**
@@ -85,17 +93,14 @@ Show `active_pins` and `duration_seconds`.
 - Guide through debug access, CPU halt, memory extraction
 
 **JTAG not scanned:**
-- Ask: "JTAG was not scanned. Run JTAG brute-force? (adds ~5-10 minutes)"
+- Ask: "JTAG was not scanned. Run jtag-pinout pin discovery? (adds a few minutes)"
 - If yes, re-run with `--jtag` flag
 
 ### Step 7 — Firmware analysis (if extracted)
 After any firmware extraction, unpack and hand off to raptor:
 ```bash
 binwalk -Me flash.bin
-python3 raptor.py scan \
-  --firmware-root _flash.bin.extracted/ \
-  --arch mips \
-  --output .out/firmware-$TIMESTAMP/
+python3 raptor.py scan --firmware-root _flash.bin.extracted/ --arch mips
 ```
 This runs firmware-aware Semgrep rules (dangerous C functions, CGI injection, hardcoded creds)
 and writes `firmware-inventory.json` listing all ELF binaries sorted by interest.
@@ -118,14 +123,14 @@ Then load `firmware-extraction` skill for manual triage and deeper binary analys
 
 ## Prerequisites
 
-- Glasgow Interface Explorer connected and detected (`glasgow identify`)
+- Glasgow Interface Explorer connected and detected (`glasgow list`)
 - Install from source — NOT via pip: https://glasgow-embedded.org/latest/install.html
 - Physical access to target hardware
 - Pin mapping from hardware-recon phase (or probe 0-7 to discover)
 
 ## Output
 
-All output goes to `.out/hardware-<timestamp>/`
+All output goes to `out/hardware_<run>/` (or the directory passed via `--out`)
 - `passive.vcd` — logic capture from power-cycle
 - `uart-<pin>-<baud>.bin` — UART captures per pin/baud
 - `hardware-report.json` — structured findings report

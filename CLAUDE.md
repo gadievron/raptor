@@ -8,42 +8,205 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 ## SESSION START
 
 **On first message:**
-VERY IMPORTANT: follow these instructions one by one, in-order.
-1. Read `raptor-offset` as-is with no fixes or changes, display in code block
-2. Read `hackers-8ball`, display random line
-3. Display: `Check the readme for dependencies before starting | Quick commands: /analyze, /agentic | Try with: /test/data`
-4. Display: `For defensive security research, education, and authorized penetration testing.`
-5. Display: `raptor:~$` followed by the selected quote
-6. **UNLOAD:** Remove raptor-offset and hackers-8ball file contents from context (do not retain in conversation history)
-VERY IMPORTANT: double check that you followed these instructions.
+VERY IMPORTANT: follow these steps in order.
+1. The SessionStart hook has already attached the RAPTOR startup banner to the conversation before the first user message. Output that banner verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase, reformat, or call the Read tool just to fetch `.startup-output`. Only fall back to reading `.startup-output` if the SessionStart hook content is genuinely absent.
+2. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
+3. If the `sage_inception` tool is present in your available MCP tools, load `core/sage/CLAUDE.md` (persistent-memory workflow). If absent, SAGE is not installed — skip silently and do not mention it.
+
+---
+
+## EXECUTION RULES
+
+When a skill, command file, or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), `cd` prefixes, or env-var prefixes (`VAR=x cmd`). Environment variables like `CLAUDECODE` are already set by the launcher; prepending them changes the command string and breaks permission grants.
+RAPTOR pipelines emit progress lines, real-time cost tracking, and the `OUTPUT_DIR=<path>` sentinel that downstream lifecycle steps parse. Truncating or filtering that stream breaks both operator visibility and orchestration.
+
+Exception: when the skill itself shows the modification (e.g. a documented `| tee logfile` pattern), follow what the skill prints.
+
+---
+
+## SLASH-COMMAND DISPATCH
+
+When a `/command` fires:
+
+1. Read `.claude/commands/<name>.md` frontmatter.
+2. If `dispatch: <command-line>`: substitute placeholders (operator arguments verbatim; `$OUTPUT_DIR` from RUN LIFECYCLE; `$TARGET_PATH` from DEFAULT TARGET DIRECTORY), then run the substituted command. EXECUTION RULES apply — no pipes / flags / wrappers added.
+3. If `dispatch: skill`: this is a multi-step workflow. **Read the full body of the .md** — it contains the execution steps, mode detection, and the actual libexec commands to run. The body is the source of truth; do not guess CLI commands or libexec script names from training memory.
+4. Operator arguments pass through **verbatim**. If a subcommand isn't in the .md's documented surface, run it anyway and let the dispatch's own error surface. Do NOT silently rewrite to a similar subcommand.
+5. Never infer the dispatch from the description or from training-memory. The .md is authoritative; CI (`.github/scripts/check_command_metadata.py`) enforces every command has a parseable `dispatch:` field whose target exists on disk.
+6. When unsure which libexec script exists, check `ls libexec/raptor-<name>*` — do not guess names.
+7. When a skill body references another `/command` (e.g. `/understand --map` inside `/audit`), resolve it through the same dispatch lookup: read `.claude/commands/<name>.md` to find the actual CLI and its flag syntax. Do not invent flags — if unsure, run the dispatch target with `--help`.
 
 ---
 
 ## COMMANDS
 
-/scan /fuzz /web /agentic /codeql /analyze - Security testing
-/exploit /patch - Generate PoCs and fixes (beta)
-/validate - Exploitability validation pipeline (see below)
-/hardware - Hardware security: recon → interface enum → firmware extraction → analysis (see below)
+/project - Project management — `libexec/raptor-project-manager <subcommand> [args]`
+/scan /fuzz /web /codeql /analyze - Security testing — `python3 raptor.py <command>`
+/agentic - Scan → dedup → analysis pipeline — `libexec/raptor-agentic --repo <path>`
+/exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
+/validate - Exploitability validation pipeline — `dispatch: skill`, see below
+/understand - Code understanding — `dispatch: skill` (mode-routed: binary --map and multi-model --hunt/--trace go to `libexec/raptor-understand`; binary --study goes to `libexec/raptor-binary-study`; source-tree modes run in-session)
+/diagram - Mermaid visual maps — `libexec/raptor-render-diagrams <out-dir> [args]`
+/audit - Hypothesis-driven code audit — `dispatch: skill`, see below
+/review - Navigate audit results — `libexec/raptor-review $ARGUMENTS`
+/annotate - Per-function prose annotations (human notes get authority; agent notes are hint-tier) — `libexec/raptor-annotate <subcommand> [args]`
+/hardware - Hardware security: recon → interface enum → firmware extraction → analysis — `dispatch: skill`, see below
+/firmware - Firmware scan of an extracted root (ELF inventory + firmware rules) — `dispatch: skill`, see below
 
-**Note:** `/agentic` now automatically runs exploitability validation (Phase 2) between scanning and analysis. Use `--skip-validation` to bypass.
+**Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
+
+**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, `--validate` to run the full validation pipeline on exploitable findings afterwards, and `--gap-audit` to run the /audit orchestrator over the coverage residual (functions no phase reviewed; uses the external LLM, or the claudecode transport when only Claude Code is available; NOT `--audit`, which is the sandbox audit mode). All three flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus`, `--judge`, and `--aggregate` add optional review/synthesis models.
+/sage - SAGE persistent memory: status, recall, browse, store, manage
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
+/scorecard - Inspect per-model reliability across decision classes; ask natural-language questions about which model is good at what (see below)
+/ask - Send a prompt to any configured LLM model (see below)
 /create-skill - Save approaches (alpha)
+
+**Ask:** `libexec/raptor-llm-ask --model <name> "prompt"` sends a free-form prompt to any configured model and prints the response. Use for cross-model diagnosis, debugging model reasoning, or comparing verdicts. Supports `--system`, `--file` (prepend file as context), `--json-schema` (structured output), `--debug` (show cost and metadata), `--show-primary` (print the default primary model a run without `--model` resolves — provider/model — and exit without sending a prompt; use it to verify the run's transport before launch). When the user says "ask gemini...", "ask claude...", "ask gpt..." or similar, route through this tool. Example: `libexec/raptor-llm-ask --model gemini-2.5-pro --file context.txt "Why did you classify this function as suspicious?"`.
+
+**SAGE:** `libexec/raptor-sage` is the mechanical CLI for SAGE persistent memory (status, recall, list, remember, forget, domains, timeline, backlog, task, link, corroborate, get). When asked about SAGE memories, what SAGE knows, or to store/recall knowledge, route to this. If SAGE is not installed, run `libexec/raptor-sage-setup` to install the Docker sidecar and embedding model.
+
+**Verified outcomes:** When asked what RAPTOR has confirmed, proven, or verified, run `libexec/raptor-verified-outcomes <output_dir>` (or `--project-root <dir>` for cross-run view). Surfaces oracle-verified confirmations from `/fuzz`, `/agentic`, `/crash-analysis`, `/validate` in one place.
+
+---
+
+## PROJECTS
+
+Projects are opt-in named workspaces that corral analysis runs into a shared directory. Project state is TWO-LAYERED so concurrent sessions never steer each other:
+
+- **Session binding** (authoritative): each launcher session carries its own project in `~/.local/share/raptor/sessions.d/`, seeded at launch and changed only by THIS session's `/project use <name>` / `/project none` / `/project create`. Bound-to-none is authoritative — a cleared session does not follow the default.
+- **Last-activated default** (the `.active` symlink): a bookmark that seeds NEW sessions and serves bare shells. `use`/`create`/`-p` bump it; auto-detect and `/project none` do not.
+
+Activate with `/project use <name>` in-session, or at launch with `-p <name>` (auto-detect activates for the session only). While a project is active, analysis commands write output to the project directory, and every RUN is pinned to its project at start — a mid-run project switch never moves an in-flight run's output, trust markers, or stores. Analysis commands also accept `--project <name>` to pin a single run explicitly (`--project -` = explicitly projectless); invalid values are a hard error, never a fallback. Without a project, commands behave as before (timestamped dirs under `out/`). `/project sessions` shows which live sessions are bound to what.
+
+```
+/project create myapp --target /path/to/code -d "Description"
+/project use myapp
+/scan                          # output goes to project dir
+/project status                # shows all runs
+/project findings              # shows merged findings across runs
+/project coverage              # shows tool coverage summary
+/project report                # merged view across all runs
+/project correlate             # cross-run finding correlation
+/project adopt <name> <run>    # retro-create a project around existing
+                               #   project-less run(s); target inferred,
+                               #   journal/coverage projections re-run
+/project binary add <path>     # persist a debug binary for binary-oracle enrichment
+/project binary list           # list persisted binaries on the active project
+/project binary remove <path>  # remove one
+/project binary clear          # clear all
+/project ghidra add <path.gpr> # register a Ghidra project (then `raptor-ghidra attach` imports the cache that context injection + finding sync read)
+/project ghidra list           # list attached Ghidra projects
+/project ghidra remove <path>  # detach one; `clear` detaches all
+/project trust                 # list trust assertions (markers + binaries count)
+/project trust <marker>        # set a trust marker: config | build | dynamic
+/project untrust <marker>      # remove a trust marker
+/project set                   # list settings
+/project set <key> <value>     # registry-validated setting (description, notes,
+                               #   threat-model, target-kind, build-command[.<lang>])
+/project unset <key>           # remove a setting
+/project get <key>             # bare value on stdout; exit 1 if unset
+/project clean --keep 3        # delete old runs
+/project sessions              # live sessions and their bindings
+/project none                  # clear THIS SESSION's project (the
+                               #   last-activated default is untouched)
+```
+
+**Trust markers** are operator assertions persisted on the project (never auto-set, never read from the scanned repo): `config` = the `--trust-repo` umbrella (cc_trust + codeql_trust), `build` = traced-build CodeQL extraction (`--traced-build`), `dynamic` = dynamic validation (`config.dynamic_validation`). `/agentic` and `/codeql` consume them at start alongside the persisted binaries; the audit pipeline consumes `dynamic` and `config` (repo-trust arms its trust-gated refutation witnesses — no per-run audit flag, the marker is the only control). Per-run flags always win in both directions where they exist (`--no-trust-repo` / `--no-traced-build` / `--no-dynamic` > positive flag > marker > off), a banner line prints whenever a marker affects a run, and `build` does NOT imply `config`.
+
+See `/project help` for full command list.
+
+---
+
+## DEFAULT TARGET DIRECTORY
+
+When a command like `/scan`, `/agentic`, `/validate`, `/codeql`, or `/fuzz` is run **without a path argument**, resolve the default target in this order:
+
+1. **Active project target:** the run lifecycle script resolves THIS SESSION's project (session binding first, then the last-activated `.active` default) and uses its target automatically
+2. **Caller's directory:** if `$RAPTOR_CALLER_DIR` is set (launcher saves the user's cwd before switching to the RAPTOR repo dir), use it
+3. **Ask the user** for the target path
+
+Do not use the current working directory as a fallback — it is always the RAPTOR repo dir, not the user's target. Do not use any of these if the user already specified a path.
+
+**Volatile-target sanity gate (default resolution only):** when the active project's target is scratch/volatile — the system temp dir itself (`/tmp`, `/var/tmp`), a nonexistent path, or an empty directory — the mechanical default resolution (`core.run.output.resolve_default_target`) refuses with a loud banner instead of steering the run at scratch space (a stale machine-generated `corpus-*` project once left `/tmp` as the active target). When you hit this banner on a no-path command, present a structured choice (see INTERACTIVE PROMPTS; gate with `libexec/raptor-may-ask` first):
+1. **Pick the real target (Recommended)** — ask for / confirm the intended codebase path and re-run the command with it explicitly; also offer `/project none` (or `/project use <right-project>`) to fix the session.
+2. **Proceed against the volatile target** — re-run with the volatile path passed explicitly (explicit paths always bypass the gate).
+
+**Non-interactive fallback:** refuse — report the banner and stop; do not pick a target on the operator's behalf.
+
+Machine-generated `corpus-*` projects also carry a creation-time auto-expiry marker consumed at active-project resolution on BOTH layers — an expired session binding re-binds to none (the machine-wide default is never collateral), an expired default unlinks. Expiry never applies to operator-named projects, and an explicit `/project use <name>` clears the marker (operator ownership).
+
+---
+
+## RUN LIFECYCLE
+
+When running any analysis command (`/scan`, `/validate`, `/understand`, `/codeql`, `/fuzz`, `/web`), use the run lifecycle stubs to create the output directory and track status:
+
+**Before starting work:**
+```bash
+libexec/raptor-run-lifecycle start <command> --target <resolved_target> [--out <dir>]
+```
+Always pass `--target` with the resolved target path (see DEFAULT TARGET DIRECTORY for resolution order). Optionally pass `--out <dir>` to use a specific output directory. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent output files.
+
+**After successful completion:**
+```bash
+libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
+```
+
+**On failure:**
+```bash
+libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
+```
+
+The `start` command automatically resolves the output directory using this session's project (session binding, then the last-activated default) or the default `out/` directory, and PINS the run to that project for its whole lifetime. Do not construct output paths manually.
+
+**If `start` fails (non-zero exit):** STOP. Report the error to the user. Do not proceed with the command.
+
+**Note:** `/validate` uses `libexec/raptor-validation-helper 0` instead of `raptor-run-lifecycle` — it bundles lifecycle management with inventory building.
+
+Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage lifecycle internally — do not call the stubs separately for those.
+
+### Coverage tracking
+
+The coverage tracking plugin (`plugins/coverage/`) tracks which source files the LLM reads during analysis via a PostToolUse hook. Loaded automatically by the launcher. The hook resolves THIS SESSION's live run via the session run ledger — project, `--out`, and standalone runs all get read-coverage (a project is no longer required) — logging file paths to a `.reads-manifest` in that run directory, converted to a `coverage-read.json` record when the run completes. Zero overhead when no run is active.
+
+---
+
+## SECURITY: UNTRUSTED REPOS
+
+When scanning untrusted repositories:
+
+- **Environment sanitisation**: `RaptorConfig.get_safe_env()` uses a strict allowlist (`SAFE_ENV_ALLOWLIST`) — only ~30 explicitly named variables plus `LC_*` prefixes are kept; everything else is dropped. A secondary blocklist (`DANGEROUS_ENV_VARS`) covers `TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER` as belt-and-braces. Always use `get_safe_env()` when spawning subprocesses.
+- **File path injection**: Never interpolate file paths from scanned repos into shell command strings. Use list-based `subprocess` arguments.
 
 ---
 
 ## OUTPUT STYLE
 
-**Human-readable status values (no underscores, no ALL_CAPS):**
-- `Exploitable` not `EXPLOITABLE`
-- `Confirmed` not `CONFIRMED`
-- `Ruled Out` not `RULED_OUT`
-- `Proven` / `Disproven` not `PROVEN` / `DISPROVEN`
+**Status values:**
+- In JSON: snake_case (`exploitable`, `confirmed`, `ruled_out`, `disproven`)
+- In human-readable output (reports, terminal): Title Case (`Exploitable`, `Confirmed`, `Ruled Out`)
+- Never ALL_CAPS (`EXPLOITABLE`, `CONFIRMED`, `RULED_OUT`)
 
 **No red/green status indicators:**
 - Do not use 🔴/🟢 - perspective-dependent (bad for defenders ≠ bad for researchers)
 - Other emojis are fine (⚠️, ✓, etc.)
+
+---
+
+## INTERACTIVE PROMPTS
+
+Some commands and skills define decision points where an interactive session presents a structured choice with the AskUserQuestion tool instead of prose. These are interactive-only enhancements layered on the existing behavior — never new pipeline stages.
+
+**The gate.** Before ANY AskUserQuestion, run `libexec/raptor-may-ask` (decision logic: `core/ux/interactivity.py`). Ask only when it prints `interactive` AND the AskUserQuestion tool is available to you. If it prints `non-interactive`, errors, or is missing — or the tool is absent — this session is a dispatched sub-agent, CI, or otherwise unattended: do NOT ask. Apply the instruction's documented non-interactive fallback (always the pre-existing default behavior) and say in your output which default you applied.
+
+**Doctrine for ask instructions:**
+- Every AskUserQuestion instruction in a command/skill file MUST name its non-interactive fallback.
+- Asks live at run boundaries only — completion forks, consent that changes a FUTURE run, destructive confirms. Never insert an ask mid-pipeline where an autonomous flow would block on it.
+- The first option carries the "(Recommended)" tag.
+- Fill option labels and descriptions with the run's actual facts (paths, warning text, findings, `cost_usd` values from the report) — never invent flags, artifacts, or estimates.
+- Never ask the operator to confirm or adjust an evidence-driven verdict — tool output is the verdict.
 
 ---
 
@@ -77,10 +240,9 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 **Usage:** `/oss-forensics <prompt> [--max-followups 3] [--max-retries 3]`
 
 **Agents:**
-- `oss-forensics-agent` - Main orchestrator
 - `oss-investigator-gh-archive-agent` - Queries GH Archive via BigQuery
-- `oss-investigator-gh-api-agent` - Queries live GitHub API
-- `oss-investigator-gh-recovery-agent` - Recovers deleted content (Wayback/commits)
+- `oss-investigator-github-agent` - Queries live GitHub API
+- `oss-investigator-wayback-agent` - Recovers deleted content (Wayback/commits)
 - `oss-investigator-local-git-agent` - Analyzes cloned repos for dangling commits
 - `oss-investigator-ioc-extractor-agent` - Extracts IOCs from vendor reports
 - `oss-hypothesis-former-agent` - Forms evidence-backed hypotheses
@@ -89,6 +251,7 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 - `oss-report-generator-agent` - Produces final forensic report
 
 **Skills** (in `.claude/skills/oss-forensics/`):
+- `orchestration` - Main orchestrator (coordinates the investigator agents)
 - `github-archive` - GH Archive BigQuery queries
 - `github-evidence-kit` - Evidence collection, storage, verification
 - `github-commit-recovery` - Recover deleted commits
@@ -96,15 +259,15 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 **Requirements:** `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery
 
-**Output:** `.out/oss-forensics-<timestamp>/forensic-report.md`
+**Output:** `.out/oss-forensics-<timestamp>/forensic-report.md` (note: hidden `.out/` directory, not the usual `out/`)
 
 ---
 
 ## HARDWARE SECURITY
 
-The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis.
+The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis. The `/firmware` command covers the analysis leg on its own: it runs `python3 raptor.py scan --firmware-root <extracted_root>` over an extracted firmware filesystem (ELF inventory + arch detection via `core/binary/firmware_inventory.py`, firmware-specific Semgrep rules in `engine/semgrep/rules/firmware/`), writing `firmware-inventory.json` alongside the SARIF results.
 
-**Usage:** `/hardware [--target <description>] [--firmware <path>] [--interface uart|spi|jtag|swd|i2c]`
+**Usage:** `/hardware` (interactive guided session) — enumeration itself is `python3 raptor.py hardware [--voltage <V>] [--pins <range>] [--jtag] [--baseline]`
 
 **Workflow:** Recon → Interface Enumeration → Extraction → Firmware Analysis
 
@@ -112,21 +275,19 @@ The `/hardware` command provides guided hardware security research from physical
 - `hardware-recon` - PCB inspection, chip ID, test point mapping, target map creation
 - `glasgow-interaction` - Glasgow Python API patterns, applet usage, scripted workflows
 - `jtag-exploitation` - JTAG chain enumeration, boundary scan, debug access, chain ID
-- `swd-exploitation` - ARM SWD: DAP/AP traversal, CoreSight, memory extraction, STM32 RDP/nRF52 APPROTECT/LPC CRP bypass
+- `swd-exploitation` - ARM SWD: DAP/AP traversal, CoreSight, memory extraction, RDP/APPROTECT/CRP bypass
 - `uart-exploitation` - UART discovery, baud detection, U-Boot exploitation, shell escape
 - `spi-flash-extraction` - SPI NOR flash ID, in-circuit/out-of-circuit read, verify, patch, write-back
 - `i2c-enumeration` - I2C bus scan, EEPROM read/write, secure element interaction
-- `fault-injection` - Methodology: characterise, glitch (Thomas Roth approach), EMFI
-- `chipwhisperer` - CW-Lite/Pro/Husky: voltage glitch, clock glitch, power trace, CPA (Colin O'Flynn)
-- `firmware-extraction` - Unpack/triage firmware, hand off to raptor analysis pipeline
+- `fault-injection` - Methodology: characterise, voltage glitch, EMFI
+- `chipwhisperer` - CW-Lite/Pro/Husky: voltage glitch, clock glitch, power trace, CPA
+- `firmware-extraction` - Unpack/triage firmware, hand off to the scan pipeline
 
-**Persona:** `tiers/personas/hardware_security_researcher.md` (Joe Grand + Joe FitzPatrick + Thomas Roth + Colin O'Flynn)
+**Persona:** `tiers/personas/hardware_security_researcher.md`
 
-**Requirements:** Glasgow Interface Explorer (`pip install glasgow`), physical access to target
+**Requirements:** Glasgow Interface Explorer installed from source (the `glasgow` pip package is a placeholder), physical access to target
 
-**Gap analysis:** `docs/hardware-gap-analysis.md` — what is missing and recommended build order
-
-**Output:** `.out/hardware-<timestamp>/`
+**Output:** enumeration → `out/hardware_<run>/hardware-report.json`; firmware scan → run output directory (`firmware-inventory.json`, `scan-manifest.json` with arch/kernel, SARIF)
 
 ---
 
@@ -136,13 +297,102 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 
 **Usage:** `/validate <target_path> [--vuln-type <type>] [--findings <file>]`
 
-**Stages:** 0 (Inventory) → A (One-Shot) → B (Process) → C (Sanity) → D (Ruling) → E (Feasibility)
+**Stages:** 0 → A → B → C → D → E → F → 1 (see `.claude/skills/exploitability-validation/PIPELINE.md`)
 
 **Skills** (in `.claude/skills/exploitability-validation/`):
+- `PIPELINE.md` - Stage naming convention (letters = LLM, numbers = mechanical)
 - `SKILL.md` - Shared context, gates, execution rules
-- `stage-0-inventory.md` through `stage-e-feasibility.md` - Stage instructions
+- `stage-0-inventory.md` through `stage-1-outputs.md` - Stage instructions
 
-**Output:** `.out/exploitability-validation-<timestamp>/validation-report.md`
+**Output:** `validation-report.md` in the run output directory (project dir or `out/validate_<timestamp>/`)
+
+**Pipeline handoff:** For `/understand` → `/validate` workflows, use the same `--out` directory so `context-map.json`, `checklist.json`, and `flow-trace-*.json` are shared automatically.
+
+---
+
+## SYSTEMATIC CODE REVIEW
+
+The `/audit` command runs a hypothesis-driven code audit with tool verification. The LLM forms hypotheses about assumption violations; deterministic tools (Semgrep, Coccinelle, CodeQL, SMT, Joern) validate. The LLM never directly classifies code as vulnerable — tool output is the verdict.
+
+**Usage:** `/audit <target> [--model <name>] [--max-cost <usd>] [--review-passes N] [--adversarial]`
+
+**Dispatch:** `dispatch: skill` — `.claude/commands/audit.md` contains execution steps including mode routing (`--model` → orchestrator, `--local` / default → in-session).
+
+See `docs/audit.md` for the full pipeline, gates, strategies, and tool menu. `/review` is the companion operator CLI for navigating results across all four layers (coverage, journal, context-map, annotations).
+
+---
+
+## CODE UNDERSTANDING
+
+The `/understand` command provides deep, adversarial code comprehension for security research.
+
+**Usage:** `/understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>] [--study <scope>] [--out <dir>]`
+
+**Modes:**
+- `--map` — Build context: entry points, trust boundaries, sinks → `context-map.json`
+- `--trace <entry>` — Follow one data flow source → sink with full call chain → `flow-trace-<id>.json`
+- `--hunt <pattern>` — Find all variants of a pattern across the codebase → `variants.json`
+- `--teach <subject>` — Explain a framework, library, or pattern in depth (inline)
+- `--study <scope>` — Extract semantic concepts (ownership, lifetime, contracts) → `domain-model.json`
+
+**Skills** (in `.claude/skills/code-understanding/`):
+- `SKILL.md` — Gates, config, output format
+- `map.md` — Entry point enumeration, trust boundary mapping, sink catalog
+- `trace.md` — Step-by-step data flow tracing with branch coverage
+- `hunt.md` — Structural, semantic, and root-cause variant analysis
+- `teach.md` — Framework/pattern explanation with security conclusion
+- `study.md` — Semantic concept extraction (separate study pipeline)
+
+**Output:** Resolved by `libexec/raptor-run-lifecycle start understand` (project dir or `out/understand_<timestamp>/`)
+
+**Pipeline integration:** `/validate` Stage 0 automatically imports `/understand` output via the bridge (`core/orchestration/understand_bridge.py`). No `--out` alignment needed — the bridge searches: (1) co-located files, (2) project siblings, (3) global `out/` by target path + SHA-256 freshness. When found, it pre-populates `attack-surface.json`, imports flow traces as attack paths, and marks entry points/sinks as high-priority in the checklist.
+
+---
+
+## DIAGRAM GENERATION
+
+The `/diagram` command generates Mermaid visual maps from `/understand` and `/validate` JSON outputs, giving researchers a visual representation of code flows, sources, sinks, trust boundaries, attack trees, and attack paths. Consider this 
+very much a WIP but it could be of use for those wanting to see relationships and flows better. 
+
+**Usage:** `/diagram <out-dir> [--target <name>]`
+
+**What gets rendered:**
+- `context-map.json` → flowchart LR: entry points → trust boundaries → sinks; unchecked flows as dashed edges
+- `attack-surface.json` → same layout (Stage B equivalent view)
+- `flow-trace-*.json` → flowchart TD per trace: each hop in the call chain, tainted variables, branches, attacker control summary
+- `attack-tree.json` → flowchart TD: knowledge graph nodes styled by status (confirmed/disproven/exploring/unexplored)
+- `attack-paths.json` → flowchart TD per path: step chain with proximity score and blocker annotations
+
+**Output:** `diagrams.md` written into the target directory (or `--stdout` to print)
+
+**Implementation:** `libexec/raptor-render-diagrams <out-dir> [--target <name>]`
+
+**When to run:** Diagrams are auto-generated at the end of `/validate` and `/understand --map`/`--trace`. Use `/diagram <dir>` to re-render after manual edits to JSON outputs.
+
+---
+
+## ANNOTATIONS
+
+The `/annotate` command attaches free-form prose to individual functions, stored as markdown mirroring the source tree. Operators write manual review notes via `/annotate add`.
+
+**Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
+
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead code) / `error`.
+
+**Provenance:** every add/edit stamps the invocation context (`tty=<which std fds were TTYs>`, `provenance=interactive-tty|non-tty`); `source` defaults to `human` when any std fd is a TTY, else `agent`. Readers grant human-grade weight (Reflexion veto, operator-tier FP primers, durable coverage evidence, IRIS spec promotion) only to `source=human` notes with an interactive-TTY stamp (or legacy pre-stamp notes). Never pass `--source human` from non-interactive calls — the non-tty stamp contradicts it and readers demote such notes to hint tier.
+
+**Staleness:** Annotations stamped with `--lines N-M` carry a `metadata.hash` short prefix of the function's source. `/annotate stale` re-computes and lists annotations whose source has drifted.
+
+**Operator workflow:**
+```
+/annotate add src/auth.py check_pw --status clean -m "Constant-time compare, no taint"
+/annotate ls --status finding              # cross-run view in active project
+/annotate show src/auth.py check_pw
+/annotate edit src/auth.py check_pw        # opens .md in $EDITOR
+/annotate stale --target ~/repos/myproj    # source drifted since note written
+```
+
+**Substrate:** `core/annotations/` — atomic write via tempfile + rename, path-traversal defended (rejects `..` segments and absolute paths), function-name and metadata-value validation prevents on-disk format corruption.
 
 ---
 
@@ -154,8 +404,8 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 **When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
-**When doing hardware security:** Load `tiers/personas/hardware_security_researcher.md` + `.claude/skills/hardware-research/SKILL.md`
-**When targeting ARM SWD:** Load `.claude/skills/hardware-research/swd-exploitation/SKILL.md`
+**When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, `teach.md`, or `study.md`
+**When doing hardware security:** Load `tiers/personas/hardware_security_researcher.md` + `.claude/skills/hardware-research/SKILL.md`, then the per-interface skill the findings call for (`uart-exploitation`, `swd-exploitation`, ...)
 
 ---
 
@@ -182,6 +432,67 @@ print(format_analysis_summary(result, verbose=True))
 - Full RELRO blocks .fini_array too (not just GOT)
 
 **The `exploitation_paths` section tells you if code execution is actually possible** given the system's mitigations (glibc version, RELRO, etc.).
+
+**SMT integration (optional, requires `pip install z3-solver`):**
+
+Two places Z3 is used — both degrade gracefully when absent:
+
+1. **Binary / one-gadget** (`packages/exploit_feasibility/smt_onegadget.py`): checks
+   whether a one-gadget's register/memory constraints are satisfiable given a crash
+   state. Result in `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
+
+2. **CodeQL dataflow** (`core/smt_solver/path_feasibility.py`, invoked from `packages/codeql/dataflow_validator.py`): checks whether the
+   branch conditions along a dataflow path are jointly satisfiable. `unsat` → false
+   positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
+   `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,
+   CWE-193, CWE-476.
+
+---
+
+## BINARY-ORACLE REACHABILITY
+
+Default behaviour (no flags): /agentic and /codeql auto-detect debug binaries under common build dirs, filter to **locally-built only** (untracked by git — committed binaries are dropped as unverified provenance), and use them to suppress dead-code findings. Pass `--no-binary-oracle` to opt out. When `--binary <path>` is passed explicitly, RAPTOR joins the source inventory with the debug binary via DWARF + nm and annotates each native (C/C++/Rust/Go) function with a per-binary verdict:
+
+- `symbol_present` / `inlined` / `folded` — the function survived compilation in some form
+- `absent` — the compiler / linker removed it from the analysed binary
+
+`absent` is corpus-earned for suppression: **1952/1952 absent verdicts correct across 6 iteratively-tuned corpora (consistency) + 187/187 absent verdicts correct on the held-out zstd v1.5.6 corpus with NO classifier tuning (generalization)** — rule-of-three 95% UB on miss rate ≤1.6% on first-contact-with-unseen-data. The held-out is non-vacuous: 473/1431 functions exercised by the workload, zero `absent` verdicts on actually-live functions. Conditional on full-DWARF evidence — a stripped binary in the analysed set downgrades to `tier="symbol_only"` and the chokepoint refuses to suppress.
+
+The verdict flows through the existing reachability chokepoint: /codeql + /agentic skip LLM analysis on absent-function findings (pre-LLM hard-suppress); /validate's demoter clamps attack-path proximity; /understand --map annotates entry-points and sinks with the per-binary verdict + tier.
+
+**Operator usage**:
+- (default, no flags) — auto-detect runs, filters to locally-built binaries (git-untracked) only, soft hint when nothing found. **Env build-on-demand:** when auto-detect AND the project binary store both find nothing and the project `build` trust marker authorises build execution, the oracle builds a debug binary itself (operator `build-command` slot first, detector synthesis second; network-isolated container; run-local artifact with a `/project binary add` persist hint). Suppression authority follows who chose the configuration: an operator-set build command earns `absent`-suppression like any declared binary; a detector-GUESSED command enriches (symbol_present/inlined, reachability promotion) but `earns_suppression` downgrades (`any_env_built_guessed` in the inventory summary) — a guessed container configuration can compile out features the real build includes.
+- `--binary <path>` — pass an explicit debug binary. Repeatable for hybrid targets. Path validated at parse time. Bypasses the git-tracked filter (operator asserts trust). Suppresses default auto-detect.
+- `--binary-auto` — same auto-detect + git-filter logic as the default-on path, but with a louder "nothing found" message. Honours `--target-kind`. Warns when the result cap (8) is reached. Auto-detected dirs: `build/`, `target/release/`, `cmake-build-*/`, `bazel-bin/`, `builddir/`, `Debug/`, `Release/`, `out/`, `dist/`, `bin/`, Rust `target/<triple>/release` cross-target globs, and the source root.
+- `--no-binary-oracle` — disable binary-oracle filtering entirely for this run. Use for library-only targets with no main binary, runs where you want every finding unfiltered for review, or when a build mismatch is causing over-suppression. Overrides `--binary` / `--binary-auto` with a stderr warning if combined.
+- `--binary-edges` — Inc 2b Tier 1/2: extract direct call edges + vtable resolution via r2 (single-invocation script-file mode; cached per-build-id with cross-target collision check). Slow (~10-30s per binary, then cached). Required for the `binary_call_edge` REACHABLE promote witness (rescues functions the source-graph thought were dead).
+- For `--target-kind=hybrid` deployments (library + application both shipped), declare MULTIPLE binaries — a function is `absent` only when EVERY declared binary lacks it. Tier-weighted combine: when full-DWARF and symbol-only disagree, full-DWARF wins (`alive-in-any` rule only applies same-tier).
+
+**Provenance-drop consent (interactive sessions only, after the run completes — never mid-pipeline):** when a run's output shows the `binary-oracle: N repo-committed binary(s) ignored (provenance unverified — could be planted or stale)` warning, offer the trust decision as a structured choice (see INTERACTIVE PROMPTS; gate with `libexec/raptor-may-ask` first). Options:
+1. **Stay safe (Recommended)** — keep the drop. Verdicts continue to come only from locally-built (git-untracked) binaries; a committed binary can be attacker-planted or stale and would steer `absent` verdicts toward suppressing real findings.
+2. **Trust for this run** — re-run with `--binary <path>` naming the dropped binary(s); list the exact paths from the warning in the description. Grants: bypasses the git-tracked provenance filter for that one run; the binary's DWARF/symbol data then drives `absent`-verdict suppression.
+3. **Persist via `/project binary add <path>`** — one add per dropped binary. Grants: auto-loaded by every subsequent `/agentic`, `/codeql`, `/validate` run on the active project — the same trust as option 2, standing.
+
+**Non-interactive fallback:** current behavior — the binaries stay dropped; surface the warning plus the `--binary <path>` / `/project binary add` escape hatches in the run summary.
+
+**Persistent per-project config**:
+- `/project binary add <path>` — persist a binary path on the active project. Auto-loaded by every subsequent /agentic / /codeql / /validate run. `is_file()`-validated at add time.
+- `/project binary list` / `remove` / `clear` — manage the persisted list.
+
+**Audit trail**:
+- `suppressions.jsonl` is written to the run's output directory whenever the chokepoint hard-suppresses a finding. One JSON record per suppression with `finding_id`, `rule_id`, `file_path`, `line`, `function`, `verdict`, `reason`, `dropped` (`false` marks records for findings that survived to the LLM; consumers must tolerate extra keys). Query with `jq -c . suppressions.jsonl`. /agentic, /codeql, and /audit (oracle-earned and vendored/generated triage decisions) write the same file shape.
+- The classifier's per-finding analysis record also carries `analysis.reachability_suppression: true` + `analysis.reachability_verdict: <verdict>` for per-finding inspection.
+
+**Defenses against hostile / wrong-binary scenarios**:
+- Provenance gate on auto-detect: binaries tracked by git (committed to the source tree) are dropped — only locally-built artifacts (untracked files under build/, target/release/, etc.) feed the oracle. Defends against attacker-planted binaries and stale committed pre-builds that would silently steer `absent` verdicts toward suppressing real findings. Operator can bypass via explicit `--binary <path>` when they know a tracked binary is trustworthy.
+- Source-coverage floor (≥5% of project source names matched, min 3 matched, kicks in at ≥8 project names) — a planted ELF unrelated to source gets dropped with a loud warning rather than driving every source function to `absent`.
+- Sandbox isolation: r2 runs under `core.sandbox.run` (namespace + Landlock + network deny); the oracle's binutils invocations (readelf, nm, objdump, c++filt) run under the full sandbox as well.
+
+**E2E + precision verification**:
+- `core/analysis/scripts/binary-oracle-e2e` — single-invocation audit that builds a real C target and walks 14 consumer surfaces (~50 assertions). No LLM calls. Run with `CLAUDECODE=1 core/analysis/scripts/binary-oracle-e2e`. (Verification harnesses live in a `scripts/` subdirectory beside the code they audit — never on the `libexec/` LLM dispatch surface.)
+- `core/analysis/scripts/binary-oracle-precision --corpus <name>` — re-measure absent-precision on any corpus driver (synthetic/zlib/libsodium/snappy/leveldb/regex-rust/zstd_holdout). Report includes per-corpus cross-tab (classifier × gcov live/dead), aggregate with rule-of-three UB, n-concentration dominator detection, and the toolchain block (cc/gcov/llvm-cov versions) so the precision number is reproducible.
+
+**Skill location**: `core/analysis/binary_oracle.py` (classifier), `core/analysis/binary_oracle_autodetect.py` (auto-detect), `core/analysis/binary_oracle_precision.py` (measurement harness — the `core/analysis/scripts/binary-oracle-precision` shim runs it). Design + validation writeup: `~/design/binary-oracle-reachability.md` §9-11.
 
 ---
 
@@ -214,3 +525,4 @@ See `tiers/exploit-guidance.md` for detailed constraint tables and technique alt
 Python orchestrates everything. Claude shows results concisely.
 Never circumvent Python execution flow.
 - never disclose remote OLLAMA server location in code, comments, logs etc
+- **Python path safety:** Never add anything to `sys.path` except `os.environ["RAPTOR_DIR"]`. Use the hard lookup (KeyError if unset) — no fallbacks, no `'.'`, no `os.getcwd()`, no hardcoded paths. The `libexec/` scripts handle their own path setup via `Path(__file__).resolve().parents[1]` and do not need `RAPTOR_DIR`.
