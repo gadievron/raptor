@@ -75,7 +75,19 @@ def main() -> int:
     checklist = load_json(understand_dir / "checklist.json") or {}
     target_path = checklist.get("target_path") if isinstance(checklist, dict) else None
 
-    normalize_context_map(context_map, checklist, target_path=target_path)
+    # Firmware runs carry an ELF inventory next to the map — feed it to
+    # the firmware-surface pass so shipped high-value binaries (which
+    # have no source for the LLM to read) still land as entry points.
+    from core.orchestration.firmware_enrichment import locate_firmware_inventory
+    firmware_inventory = None
+    inv_path = locate_firmware_inventory(understand_dir, target=target_path)
+    if inv_path is not None:
+        firmware_inventory = load_json(inv_path)
+        if not isinstance(firmware_inventory, dict):
+            firmware_inventory = None
+
+    normalize_context_map(context_map, checklist, target_path=target_path,
+                          firmware_inventory=firmware_inventory)
 
     # Writer-side provenance chokepoint for the in-session /understand
     # --map artifact: defang free-text fields and stamp the map as

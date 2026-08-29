@@ -2217,6 +2217,64 @@ def prepare_F(workdir, target=None):
 # 0: Start run + build inventory
 # ---------------------------------------------------------------------------
 
+def _bridge_firmware_inventory(out_dir, checklist, target):
+    """Import a firmware scan's ELF inventory into the validate run.
+
+    Runs AFTER the understand/audit bridges: the priority stamps defer
+    to markers those bridges already set, and firmware_hvt sources
+    merge into whatever attack-surface.json they produced (or create a
+    minimal one). Discovery mirrors the other bridges: co-located
+    scan/firmware-inventory.json first, then sibling/ledger/global runs
+    carrying the marker.
+    """
+    from core.json import load_json
+    from core.orchestration.firmware_enrichment import (
+        hvt_attack_surface_sources,
+        locate_firmware_inventory,
+        stamp_hvt_priority,
+    )
+
+    inv_path = locate_firmware_inventory(out_dir, target=target)
+    if inv_path is None:
+        return
+    inventory = load_json(inv_path)
+    if not isinstance(inventory, dict):
+        return
+
+    stamped = stamp_hvt_priority(checklist, inventory)
+    if stamped:
+        # Plain save, matching build_checklist/enrich_checklist — the
+        # checklist is a mechanical artifact, not LLM-derived, so the
+        # untrusted provenance stamp would mislabel it.
+        from core.json import save_json
+        save_json(out_dir / "checklist.json", checklist)
+
+    added = 0
+    sources = hvt_attack_surface_sources(inventory)
+    if sources:
+        surface_path = out_dir / "attack-surface.json"
+        surface = load_json(surface_path) if surface_path.exists() else None
+        if not isinstance(surface, dict):
+            surface = {"sources": [], "sinks": []}
+        existing = surface.setdefault("sources", [])
+        if isinstance(existing, list):
+            have = {
+                s.get("path") for s in existing
+                if isinstance(s, dict) and s.get("origin") == "firmware-inventory"
+            }
+            fresh = [s for s in sources if s["path"] not in have]
+            if fresh:
+                existing.extend(fresh)
+                surface.setdefault("sinks", [])
+                surface["_firmware_inventory"] = str(inv_path)
+                _save_artifact(surface_path, surface)
+                added = len(fresh)
+
+    print(f"  Bridge: firmware inventory {inv_path.name} — "
+          f"{stamped} checklist priority stamp(s), "
+          f"{added} attack-surface source(s)")
+
+
 def _bridge_understand_output(out_dir, checklist, target,
                               pre_rebuild_checklist=None):
     """Import /understand output into the validate run if available.
@@ -2562,6 +2620,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             _bridge_understand_output(out_dir, checklist, target,
                                       pre_rebuild_checklist=pre_rebuild_checklist)
             _bridge_audit_output(out_dir, target)
+            _bridge_firmware_inventory(out_dir, checklist, target)
 
         if rank:
             # Re-rank AFTER the bridge populated priority_targets;

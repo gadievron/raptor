@@ -18,6 +18,8 @@ and leaves the checklist unchanged.
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -131,3 +133,128 @@ def stamp_hvt_priority(
             "across %d high-value targets", stamped, len(targets),
         )
     return stamped
+
+
+_FW_ORIGIN = "firmware-inventory"
+
+
+def find_firmware_inventory(run_dir: Path) -> Path | None:
+    """Co-located firmware inventory for a run dir: the scan phase
+    writes ``scan/firmware-inventory.json``; a standalone scan run
+    has it at the top level."""
+    for rel in ("scan/firmware-inventory.json", "firmware-inventory.json"):
+        candidate = run_dir / rel
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def locate_firmware_inventory(
+    run_dir: Path, target: str | None = None,
+) -> Path | None:
+    """Firmware inventory for a run: co-located shapes first
+    (``scan/firmware-inventory.json`` for agentic-shaped runs, then
+    top-level for standalone scans), then sibling/ledger/global runs
+    carrying either shape — a standalone ``/scan --firmware-root``
+    followed by ``/validate`` lives in separate run dirs."""
+    found = find_firmware_inventory(run_dir)
+    if found is not None:
+        return found
+    from core.orchestration.run_discovery import find_sibling_run
+    for marker in ("scan/firmware-inventory.json", "firmware-inventory.json"):
+        run = find_sibling_run(
+            run_dir, marker, exclude=run_dir, target_path=target,
+        )
+        if run is not None:
+            return run / marker
+    return None
+
+
+def hvt_attack_surface_sources(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    """attack-surface.json ``sources`` records for the high-value
+    targets: each shipped daemon/CGI/credential-store binary parses
+    external input, so it is an attacker-controlled source. ``path``
+    is the stable identity — consumers dedup on it, never on the
+    rendered ``entry`` string (which embeds the mutable score)."""
+    sources: list[dict[str, Any]] = []
+    for entry in inventory.get("high_value_targets") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            continue
+        arch = entry.get("arch", "unknown")
+        score = entry.get("interest_score", "?")
+        sources.append({
+            "type": "firmware_hvt",
+            "entry": f"{entry['path']} ({arch}, interest {score})",
+            "path": entry["path"],
+            "trust_level": "attacker_controlled",
+            "origin": _FW_ORIGIN,
+        })
+    return sources
+
+
+def augment_firmware_surface(
+    context_map: dict[str, Any], inventory: dict[str, Any],
+) -> int:
+    """Deterministic context-map pass: backfill the firmware
+    inventory's high-value targets as entry points + sources the LLM
+    map may have missed (shipped binaries carry no source the LLM
+    reads). Idempotent — records are tagged ``origin`` and deduped by
+    file/entry, mirroring the library-surface pass. Returns the
+    number of entry points added.
+    """
+    targets = hvt_paths(inventory)
+    if not targets or not isinstance(context_map, dict):
+        return 0
+
+    sources = context_map.setdefault("sources", [])
+    if isinstance(sources, list):
+        # Dedup by binary path — the rendered entry string embeds the
+        # mutable interest score, and a rescan must not re-add the
+        # same binary under a new score.
+        have = {
+            s.get("path") for s in sources
+            if isinstance(s, dict) and s.get("origin") == _FW_ORIGIN
+        }
+        for record in hvt_attack_surface_sources(inventory):
+            if record["path"] not in have:
+                sources.append(record)
+
+    eps = context_map.setdefault("entry_points", [])
+    if not isinstance(eps, list):
+        return 0
+    seen_files = {
+        ep.get("file") for ep in eps
+        if isinstance(ep, dict) and ep.get("file")
+    }
+    # Continue numbering past any EP-FW ids a previous pass minted —
+    # restarting at 001 while skipping already-present files collides
+    # ids as soon as the inventory drifts between runs.
+    next_n = 1 + max(
+        (
+            int(m.group(1))
+            for ep in eps if isinstance(ep, dict)
+            if (m := re.match(r"EP-FW-(\d+)$", str(ep.get("id", ""))))
+        ),
+        default=0,
+    )
+    added = 0
+    for path in targets:
+        if path in seen_files:
+            continue
+        eps.append({
+            "id": f"EP-FW-{next_n:03d}",
+            "type": "firmware_service",
+            "file": path,
+            "origin": _FW_ORIGIN,
+            "notes": "high-value target from the firmware ELF inventory "
+                     "(network daemon / CGI handler / credential store)",
+        })
+        next_n += 1
+        seen_files.add(path)
+        added += 1
+    if added:
+        logger.debug(
+            "firmware_enrichment: %d entry points backfilled from the "
+            "firmware inventory", added,
+        )
+    return added

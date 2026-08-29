@@ -134,3 +134,106 @@ class TestGlobCompatibility:
         assert preferred("/work/fw/www/cgi-bin/handler.c")
         assert not preferred("lib/util.c")
         assert not preferred("/work/fw/lib/util.c")
+
+
+class TestAttackSurfaceSources:
+    def test_records_shape(self):
+        from core.orchestration.firmware_enrichment import (
+            hvt_attack_surface_sources,
+        )
+        sources = hvt_attack_surface_sources(_INVENTORY)
+        assert len(sources) == 2
+        assert sources[0] == {
+            "type": "firmware_hvt",
+            "entry": "usr/sbin/uhttpd (mips, interest 10)",
+            "path": "usr/sbin/uhttpd",
+            "trust_level": "attacker_controlled",
+            "origin": "firmware-inventory",
+        }
+
+
+class TestAugmentFirmwareSurface:
+    def test_backfills_and_is_idempotent(self):
+        from core.orchestration.firmware_enrichment import (
+            augment_firmware_surface,
+        )
+        context_map = {
+            "entry_points": [
+                # LLM already found the CGI — must not duplicate
+                {"id": "EP-001", "type": "http_route",
+                 "file": "www/cgi-bin/admin.cgi"},
+            ],
+            "sources": [],
+        }
+        added = augment_firmware_surface(context_map, _INVENTORY)
+        assert added == 1
+        fw_eps = [ep for ep in context_map["entry_points"]
+                  if ep.get("origin") == "firmware-inventory"]
+        assert [ep["file"] for ep in fw_eps] == ["usr/sbin/uhttpd"]
+        assert fw_eps[0]["type"] == "firmware_service"
+        assert len(context_map["sources"]) == 2
+        # Second run adds nothing (origin/file dedup).
+        assert augment_firmware_surface(context_map, _INVENTORY) == 0
+        assert len(context_map["sources"]) == 2
+        assert len(context_map["entry_points"]) == 2
+
+    def test_empty_inputs(self):
+        from core.orchestration.firmware_enrichment import (
+            augment_firmware_surface,
+        )
+        assert augment_firmware_surface({}, {}) == 0
+        assert augment_firmware_surface({"entry_points": "bad"}, _INVENTORY) == 0
+
+
+class TestFindInventory:
+    def test_scan_subdir_then_top_level(self, tmp_path):
+        from core.orchestration.firmware_enrichment import (
+            find_firmware_inventory,
+        )
+        assert find_firmware_inventory(tmp_path) is None
+        (tmp_path / "firmware-inventory.json").write_text("{}")
+        assert find_firmware_inventory(tmp_path).name == "firmware-inventory.json"
+        (tmp_path / "scan").mkdir()
+        (tmp_path / "scan" / "firmware-inventory.json").write_text("{}")
+        assert find_firmware_inventory(tmp_path).parent.name == "scan"
+
+
+class TestNormalizePassSeven:
+    def test_normalize_context_map_runs_firmware_pass(self):
+        from core.orchestration.understand_bridge import normalize_context_map
+        context_map = {"entry_points": [], "sources": [], "sinks": []}
+        normalize_context_map(context_map, {}, firmware_inventory=_INVENTORY)
+        assert any(ep.get("origin") == "firmware-inventory"
+                   for ep in context_map["entry_points"])
+
+    def test_no_inventory_no_pass(self):
+        from core.orchestration.understand_bridge import normalize_context_map
+        context_map = {"entry_points": [], "sources": [], "sinks": []}
+        normalize_context_map(context_map, {})
+        assert context_map["entry_points"] == []
+
+
+class TestInventoryDrift:
+    def test_rescan_with_new_hvt_no_id_collision_no_dup_source(self):
+        """A rescan that prepends a new HVT (or changes a score) must
+        extend ids past the existing max and must not re-add a source
+        for a binary already recorded."""
+        from core.orchestration.firmware_enrichment import (
+            augment_firmware_surface,
+        )
+        context_map = {"entry_points": [], "sources": []}
+        augment_firmware_surface(context_map, _INVENTORY)
+        drifted = {
+            "high_value_targets": [
+                {"path": "www/cgi-bin/login.cgi", "arch": "mips",
+                 "interest_score": 10},
+                # same binary, new score
+                {"path": "usr/sbin/uhttpd", "arch": "mips",
+                 "interest_score": 11},
+            ],
+        }
+        augment_firmware_surface(context_map, drifted)
+        ids = [ep["id"] for ep in context_map["entry_points"]]
+        assert len(ids) == len(set(ids)), ids
+        paths = [s["path"] for s in context_map["sources"]]
+        assert paths.count("usr/sbin/uhttpd") == 1

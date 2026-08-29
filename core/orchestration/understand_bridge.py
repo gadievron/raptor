@@ -574,7 +574,9 @@ def load_understand_context(
 
 
 def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any],
-                          target_path: str | None = None) -> dict[str, Any]:
+                          target_path: str | None = None,
+                          firmware_inventory: dict[str, Any] | None = None,
+                          ) -> dict[str, Any]:
     """Mechanically fix up an LLM-produced context-map using the checklist
     as ground truth.
 
@@ -611,6 +613,14 @@ def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any]
        attacker-controlled source, and backfills the exported functions as
        entry points the LLM missed. No-op for application/unknown.
 
+    7. **Firmware-surface augmentation** (``firmware_enrichment.
+       augment_firmware_surface``, only when ``firmware_inventory`` is
+       passed): backfills the inventory's high-value targets as
+       ``firmware_service`` entry points + ``firmware_hvt`` sources —
+       shipped binaries carry no source for the LLM to read, so the
+       map otherwise omits exactly the components the firmware scan
+       ranked highest.
+
     Returns the (mutated) context_map for caller convenience. Bails as a
     no-op if either input is missing or wrong-typed.
     """
@@ -642,6 +652,11 @@ def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any]
     _backfill_and_validate_locations(context_map, files_by_path,
                                      effective_target)
     _augment_library_surface(context_map, checklist)
+    if firmware_inventory:
+        from core.orchestration.firmware_enrichment import (
+            augment_firmware_surface,
+        )
+        augment_firmware_surface(context_map, firmware_inventory)
     return context_map
 
 
