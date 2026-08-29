@@ -99,3 +99,19 @@ class TestRecommendNext:
         ))
         commands = [r.command for r in recs]
         assert commands == ["/sca", "/codeql"]
+
+
+def test_firmware_like_recommends_firmware_first():
+    from packages.describe.recommendations import recommend_next
+    from packages.describe.target_shape import TargetShape
+    from pathlib import Path as _P
+    shape = TargetShape(
+        target_path=_P("/x"), languages={}, language_breakdown={},
+        primary_language=None, build_systems={}, target_type="generic",
+        total_files=0, total_lines=0, elf_count=12, firmware_like=True,
+    )
+    recs = recommend_next(shape)
+    assert recs[0].command == "/firmware"
+    assert "12" in recs[0].reason
+    # the generic /agentic fallback must not ALSO fire
+    assert all(r.command != "/agentic" for r in recs)
