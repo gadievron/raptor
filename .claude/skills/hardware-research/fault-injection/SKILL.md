@@ -1,6 +1,7 @@
 ---
 name: fault-injection
 description: Voltage glitching, clock glitching, and EMFI methodology to bypass secure boot, authentication checks, readout protection, and privilege controls on embedded targets. References Thomas Roth's systematic approach and Colin O'Flynn's ChipWhisperer tooling.
+user-invocable: false
 ---
 
 # Fault Injection Skill
@@ -60,7 +61,7 @@ Before touching the glitcher, understand what you are trying to bypass. Thomas R
 
 ```bash
 # Capture UART output at each stage
-glasgow run uart -V 3.3 --baud 115200 --pins-tx 0 --pins-rx 1 record boot.log
+glasgow run uart -V 3.3 --baud 115200 --tx A0 --rx A1 tty --stream > boot.log
 
 # Look for the check:
 # "Verifying signature..."  → secure boot verification
@@ -75,7 +76,7 @@ Use Glasgow logic analyser or CW to measure time from reset-release to the secur
 
 ```bash
 # Glasgow: capture reset line (pin 0) and UART TX (pin 1) simultaneously
-glasgow run logic-analyzer --pins 0,1 --sample-rate 100e6 record boot-timing.vcd
+glasgow run analyzer -V 3.3 --i A0,A1 boot-timing.vcd    # stop with Ctrl-C
 
 # Open in PulseView + UART decoder
 # Measure: reset release → first UART character → "Verifying" message
@@ -182,6 +183,7 @@ import serial
 import random
 import csv
 from datetime import datetime
+from pathlib import Path
 
 class GlasgowGlitcher:
     """
@@ -190,18 +192,20 @@ class GlasgowGlitcher:
     Use ChipWhisperer for sub-microsecond work.
     """
 
-    def __init__(self, power_pin: int = 4, reset_pin: int = 5,
+    def __init__(self, power_pin: str = "A4", reset_pin: str = "A5",
                  voltage: float = 3.3):
         self.power_pin = power_pin
         self.reset_pin = reset_pin
         self.voltage = voltage
 
     def _gpio(self, **settings):
-        pins = ",".join(str(k) for k in settings)
-        vals = [f"{k}={v}" for k, v in settings.items()]
+        # Pins are Glasgow names ("A4"); control-gpio takes the pin set
+        # via --pins and drives via bare PIN=VALUE positionals.
+        pins = ",".join(settings)
+        actions = [f"{pin}={val}" for pin, val in settings.items()]
         subprocess.run(
-            ["glasgow", "run", "gpio", "-V", str(self.voltage),
-             "--pins", pins, "set"] + vals,
+            ["glasgow", "run", "control-gpio", "-V", str(self.voltage),
+             "--pins", pins] + actions,
             capture_output=True
         )
 
@@ -234,7 +238,9 @@ class GlasgowGlitcher:
         ser = serial.Serial(uart_port, baud, timeout=0.3)
         log = []
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = f".out/hardware/glitch-log-{ts}.csv"
+        out_dir = Path("glitch-logs")
+        out_dir.mkdir(exist_ok=True)
+        log_path = f"{out_dir}/glitch-log-{ts}.csv"
 
         with open(log_path, "w", newline="") as f:
             writer = csv.writer(f)

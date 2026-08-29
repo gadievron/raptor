@@ -1,6 +1,7 @@
 ---
 name: firmware-extraction
 description: Firmware recovery pipeline — from raw binary blob through unpacking, filesystem extraction, and handoff to raptor analysis tools. Covers SPI flash, NAND, eMMC, and OTA update sources.
+user-invocable: false
 ---
 
 # Firmware Extraction Skill
@@ -56,8 +57,9 @@ binwalk -e firmware.bin
 # Recursive extraction (handles nested archives)
 binwalk -Me firmware.bin
 
-# Force raw LZMA extraction (if binwalk misses it)
-binwalk -e --run-as=root firmware.bin
+# If binwalk misses an embedded filesystem, find the offset and carve:
+binwalk firmware.bin                          # note the offset
+dd if=firmware.bin bs=1 skip=<OFFSET> of=carved.bin
 
 # Jefferson for JFFS2 filesystems
 pip install jefferson
@@ -168,13 +170,13 @@ Once the filesystem is extracted, feed it into raptor's existing analysis pipeli
 
 ```bash
 # Static analysis on extracted filesystem
-python3 raptor.py scan --path _firmware.bin.extracted/ --output .out/firmware-analysis-$(date +%s)/
+python3 raptor.py scan --firmware-root _firmware.bin.extracted/
 
 # LLM analysis of interesting binaries
-python3 raptor.py analyze --path _firmware.bin.extracted/usr/sbin/httpd
+python3 raptor.py binary investigate _firmware.bin.extracted/usr/sbin/httpd
 
 # If you have source (found in filesystem or OTA):
-python3 raptor.py scan --path _firmware.bin.extracted/usr/share/www/ --output .out/firmware-web-$(date +%s)/
+python3 raptor.py scan --repo _firmware.bin.extracted/usr/share/www/
 
 # For binary exploitation of specific ELF:
 # Use exploit_feasibility package on identified target binary
@@ -192,8 +194,9 @@ print(format_analysis_summary(result, verbose=True))
 NAND is harder than NOR — requires FTL (Flash Translation Layer) handling:
 
 ```bash
-# Dump raw NAND via Glasgow (if nand applet available)
-glasgow run nand -V 3.3 --pins-io 0,1,2,3,4,5,6,7 --pins-ctrl 8,9,10 read nand-dump.bin
+# Identify then dump raw NAND via Glasgow's ONFI applet
+glasgow run memory-onfi -V 3.3 --io A0:7 --cle B0 --ale B1 --re B2 --we B3 --r-b B4 --ce B5 identify
+glasgow run memory-onfi -V 3.3 --io A0:7 --cle B0 --ale B1 --re B2 --we B3 --r-b B4 --ce B5 read 0 65536 nand-dump.bin   # PAGE COUNT DATA-FILE
 
 # Process with nanddump / nand tools
 apt install mtd-utils
@@ -202,9 +205,9 @@ nandwrite /dev/mtd0 nand-dump.bin
 # Or use binwalk directly on raw NAND dump
 binwalk -Me nand-dump.bin
 
-# YAFFS2 (common on NAND)
-git clone https://github.com/dwrobel/yaffut
-python3 unyaffs.py nand-dump.bin yaffs2-extracted/
+# YAFFS2 (common on NAND) — yaffshiv extracts YAFFS/YAFFS2 images
+git clone https://github.com/devttys0/yaffshiv
+python3 yaffshiv/src/yaffshiv nand-dump.bin -d yaffs2-extracted/
 ```
 
 ---
