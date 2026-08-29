@@ -61,6 +61,20 @@ With no command, `/binary <path>` defaults to `investigate`.
 /binary diagram out/understand_JamfCheck_.../ --stdout
 ```
 
+## Firmware batch investigation
+
+When a firmware scan produced `firmware-inventory.json` (from `scan --firmware-root` or `/agentic --firmware-root`), investigate the top high-value targets one run each — `/binary` takes a single file per invocation, and each run gets its own lifecycle directory:
+
+```bash
+# Read the inventory — <run>/scan/firmware-inventory.json for /agentic
+# runs, <run>/firmware-inventory.json for standalone /scan runs; for
+# each of the top N high_value_targets (pre-sorted by interest, then
+# size):
+python3 raptor.py binary investigate <firmware_root>/<high_value_target.path>
+```
+
+Inventory paths are relative to the firmware root — join them before invoking. The analysis engine (radare2) is arch-agnostic, so MIPS/ARM firmware ELFs map and investigate normally. **Do not pass `--active`/`--fuzz` for cross-architecture binaries**: the fuzz phase executes the target under AFL++, which a MIPS/ARM ELF cannot do natively on this host — keep firmware batches static-only unless the binary's arch matches the host.
+
 ## Investigation Behaviour
 
 `investigate` is the normal operator path. It runs the static map, reads its
