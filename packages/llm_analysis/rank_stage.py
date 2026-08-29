@@ -73,6 +73,17 @@ def _render_finding(finding: Any) -> str:
         f"dataflow: {'yes' if get('has_dataflow') else 'no'}",
         f"message: {message}",
     ]
+    # Checklist-derived priority (understand-bridge entry points,
+    # firmware high-value targets, reachability demotions) — the
+    # ranker should see the same signal the analysis prompt renders.
+    meta = get("metadata") if isinstance(get("metadata"), dict) else {}
+    priority = get("priority") or meta.get("priority")
+    if priority:
+        reason = get("priority_reason") or meta.get("priority_reason")
+        line = f"priority: {_field(priority, cap=16)}"
+        if reason:
+            line += f" ({_field(reason, cap=80)})"
+        lines.append(line)
     return "\n".join(lines)
 
 

@@ -78,6 +78,12 @@ listed in the inventory step).
 
 ### Step 5 — Offer next steps
 
+For a full autonomous pass (scan → dedup → LLM analysis with
+high-value targets prioritized):
+```bash
+python3 raptor.py agentic --firmware-root <extracted_root>/
+```
+
 For each high-value finding:
 - Load `firmware-extraction` skill for manual binary triage
 - For identified CGI binaries and daemons: `/binary investigate <path>`

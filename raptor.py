@@ -302,9 +302,12 @@ def _extract_agentic_log_level(args: list) -> str | None:
 
 
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
-    """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
-    ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
-    flags = ("--repo", "--binary", "--url")
+    """Return ``args`` with the target-flag value ``old`` replaced by
+    ``new`` (both ``--flag value`` and ``--flag=value`` forms). Must
+    cover every flag ``_extract_target`` recognises — an extracted
+    archive target is otherwise forwarded as the archive path and the
+    child errors after the extraction cost is already paid."""
+    flags = ("--repo", "--firmware-root", "--binary", "--url")
     out: list = []
     i = 0
     while i < len(args):

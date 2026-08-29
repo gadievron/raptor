@@ -173,3 +173,24 @@ def test_ranking_failure_keeps_input_order(monkeypatch):
     assert ordered is findings
     assert cost == 0.0
     assert model == ""
+
+
+def test_render_includes_checklist_priority():
+    """The ranker must see the checklist-derived priority signal the
+    analysis prompt renders (firmware HVT stamps, understand-bridge
+    entry points)."""
+    from packages.llm_analysis.rank_stage import _render_finding
+
+    rendered = _render_finding({
+        "file_path": "www/cgi-bin/handler.c",
+        "start_line": 7,
+        "metadata": {
+            "priority": "high",
+            "priority_reason": "firmware: high-value target (www/cgi-bin)",
+        },
+    })
+    assert "priority: high" in rendered
+    assert "firmware: high-value target" in rendered
+
+    plain = _render_finding({"file_path": "a.c", "start_line": 1})
+    assert "priority:" not in plain

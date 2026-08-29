@@ -1503,6 +1503,16 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--firmware-root", dest="firmware_root", metavar="PATH",
+        help=(
+            "Extracted firmware filesystem root — runs the pipeline in "
+            "firmware mode: the scan phase does ELF inventory + firmware "
+            "rules, CodeQL and the host binary-oracle are skipped, and "
+            "findings in high-value targets are prioritized for analysis. "
+            "Takes precedence over --repo/$RAPTOR_CALLER_DIR."
+        ),
+    )
+    parser.add_argument(
         "--sarif", action="append", default=None, metavar="FILE",
         help=(
             "Import external SARIF file(s) instead of scanning. Repeatable. "
@@ -1536,7 +1546,13 @@ Examples:
             "skips scanning. Equivalent to --sarif <previous SARIFs> --repo <previous target>."
         ),
     )
-    parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
+    parser.add_argument(
+        "--policy-groups", default=None,
+        help="Comma-separated policy groups (default: all; in firmware "
+             "mode the default defers to the scanner's firmware "
+             "narrowing — an explicit value, including 'all', always "
+             "forwards as-is)",
+    )
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10; codeql-only default is 20, agentic is lower because each finding runs the full multi-pass LLM analysis chain at ~3-5x the per-finding cost)")
     parser.add_argument(
         "--prefer", action="append", default=None, metavar="GLOB",
@@ -2083,6 +2099,14 @@ Examples:
         prev_target = prev_meta.get("target_path")
         if not prev_target:
             parser.error("--reanalyze: previous run has no target_path in metadata")
+        if (not getattr(args, "firmware_root", None)
+                and (reanalyze_dir / "scan" / "firmware-inventory.json").exists()):
+            logger.warning(
+                "--reanalyze: previous run was a firmware run; pass "
+                "--firmware-root %s to reanalyze with firmware semantics "
+                "(binary oracle off, high-value-target prioritization)",
+                prev_target,
+            )
         if args.repo and str(Path(args.repo).resolve()) != str(Path(prev_target).resolve()):
             logger.warning(
                 "--reanalyze: explicit --repo %s differs from previous run's "
@@ -2169,6 +2193,27 @@ Examples:
     if _target_kind != "auto":
         os.environ[RaptorConfig.ENV_TARGET_KIND] = _target_kind
 
+    firmware_mode = bool(getattr(args, "firmware_root", None))
+    # Track defaulted-vs-explicit BEFORE normalising: an operator's
+    # explicit "--policy-groups all" must forward as-is even in
+    # firmware mode, where only the untouched default defers to the
+    # scanner's narrowing.
+    policy_groups_defaulted = args.policy_groups is None
+    if policy_groups_defaulted:
+        args.policy_groups = "all"
+    if firmware_mode:
+        _fw_root = Path(args.firmware_root)
+        if not _fw_root.is_dir():
+            parser.error(f"--firmware-root is not a directory: {args.firmware_root}")
+        # Firmware mode: the extracted root IS the analysis target.
+        # --repo, when also present, is almost always the launcher's
+        # $RAPTOR_CALLER_DIR default — the firmware root supersedes it.
+        args.repo = str(_fw_root)
+        # The binary oracle's absent-verdicts are earned on host-built
+        # binaries with DWARF; cross-compiled firmware ELFs are neither,
+        # and auto-detect must not treat them as debug binaries.
+        args.no_binary_oracle = True
+
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")
     if not Path(args.repo).exists():
@@ -2199,7 +2244,12 @@ Examples:
 
     # Check for .git directory (required for semgrep)
     git_dir = repo_path / ".git"
-    if not git_dir.exists():
+    if firmware_mode and not git_dir.exists():
+        # Extracted firmware roots are never git repos and can be
+        # multi-GB; the scanner's firmware mode runs Semgrep fine
+        # without git, so skip the whole-tree temp copy + commit.
+        logger.info("Firmware mode: skipping temp git copy for %s", repo_path)
+    elif not git_dir.exists():
         print(f"\n  No .git directory found in {repo_path}")
         print("    Semgrep requires a git repository. Creating a temporary copy...")
         logger.info("Target %s is not a git repo — creating temp copy", repo_path)
@@ -2719,6 +2769,11 @@ Examples:
     # Launch scanners in parallel when both are enabled
     run_semgrep = not args.codeql_only and not skip_scan
     run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan
+    if firmware_mode and run_codeql:
+        # CodeQL database creation needs a buildable source tree; an
+        # extracted firmware root is compiled artifacts + scripts.
+        print("[*] Firmware mode: skipping CodeQL (no buildable source tree)")
+        run_codeql = False
 
     # Defensive guard for the "no scanners enabled" case.
     if not skip_scan and not (run_semgrep or run_codeql):
@@ -2755,13 +2810,28 @@ Examples:
     if getattr(args, "audit_verbose", False):
         sandbox_passthrough.append("--audit-verbose")
 
+    firmware_prefer_globs: list[str] = []
+    firmware_hvt_stamped = 0
+
     if run_semgrep:
         print("\n[*] Running Semgrep analysis...")
+        _source_args = (
+            ["--firmware-root", str(repo_path)] if firmware_mode
+            else ["--repo", str(repo_path)]
+        )
+        # In firmware mode the untouched default defers to the
+        # scanner's own firmware narrowing (firmware,injection,secrets);
+        # any explicit operator selection — including "all" — is
+        # forwarded as-is.
+        _policy_args = (
+            [] if firmware_mode and policy_groups_defaulted
+            else ["--policy_groups", args.policy_groups]
+        )
         semgrep_cmd = [
             "python3",
             str(script_root / "packages/static-analysis/scanner.py"),
-            "--repo", str(repo_path),
-            "--policy_groups", args.policy_groups,
+            *_source_args,
+            *_policy_args,
             # Write into the run dir's scan/ subdir (mirrors codeql/) so the
             # scanner's coverage records (semgrep + cocci) are first-class run
             # artifacts the coverage store reads — no transient dir, no copy.
@@ -2974,6 +3044,40 @@ Examples:
             else:
                 semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
                 all_sarif_files.extend(semgrep_sarifs)
+
+            # Firmware mode: read the scanner's ELF inventory back and
+            # turn its high-value targets into analysis priority — an
+            # implicit prefer-glob set for finding ordering, plus
+            # checklist priority stamps the analysis prompts render.
+            fw_inventory_file = actual_scan_dir / "firmware-inventory.json"
+            if firmware_mode and fw_inventory_file.exists():
+                from core.orchestration.firmware_enrichment import (
+                    hvt_prefer_globs,
+                    stamp_hvt_priority,
+                )
+                fw_inventory = load_json(fw_inventory_file)
+                if isinstance(fw_inventory, dict):
+                    firmware_prefer_globs = hvt_prefer_globs(fw_inventory)
+                    _checklist_file = out_dir / "checklist.json"
+                    if _checklist_file.exists():
+                        _checklist = load_json(_checklist_file)
+                        firmware_hvt_stamped = stamp_hvt_priority(
+                            _checklist, fw_inventory,
+                        )
+                        if firmware_hvt_stamped:
+                            save_json(_checklist_file, _checklist)
+                            # Phase 4's orchestrate() receives the
+                            # in-memory checklist — refresh it so the
+                            # firmware priorities reach it too, not
+                            # just the on-disk copy the prep child
+                            # re-reads.
+                            scan_inventory = _checklist
+                    print(
+                        f"  - Firmware: {fw_inventory.get('total_elfs', 0)} ELFs, "
+                        f"{len(fw_inventory.get('high_value_targets') or [])} "
+                        f"high-value targets "
+                        f"({fw_inventory.get('detected_arch', 'unknown')})"
+                    )
         elif rc != -1:  # -1 is timeout, already reported
             print(f"✗ Semgrep scan failed (exit code {rc})", file=sys.stderr)
             if not run_codeql:
@@ -3356,6 +3460,11 @@ Examples:
             f"  Reachability: {reachability_prepass_result.marked_count} "
             f"dead-code marks"
         )
+    if firmware_hvt_stamped:
+        _enrichment_lines.append(
+            f"  Firmware: {firmware_hvt_stamped} functions in "
+            f"high-value targets boosted"
+        )
     suppression_file = out_dir / "suppressions.jsonl"
     if suppression_file.exists():
         with suppression_file.open(encoding="utf-8") as _fh:
@@ -3429,8 +3538,10 @@ Examples:
 
         # Forward --prefer GLOB(s) so the agent re-orders findings
         # before applying --max-findings. Each --prefer becomes a
-        # separate flag on the child argv.
-        for pref in (args.prefer or []):
+        # separate flag on the child argv. Operator globs win; the
+        # firmware high-value-target globs are the implicit default
+        # (same precedence rule as the target-type catalog's).
+        for pref in (args.prefer or firmware_prefer_globs):
             analysis_cmd += ["--prefer", pref]
         # Same forwarding for --exclude-dir; agent applies it before
         # the prefer/cap so excluded paths don't compete for slots.

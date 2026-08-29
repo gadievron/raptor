@@ -265,7 +265,7 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 ## HARDWARE SECURITY
 
-The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis. The `/firmware` command covers the analysis leg on its own: it runs `python3 raptor.py scan --firmware-root <extracted_root>` over an extracted firmware filesystem (ELF inventory + arch detection via `core/binary/firmware_inventory.py`, firmware-specific Semgrep rules in `engine/semgrep/rules/firmware/`), writing `firmware-inventory.json` alongside the SARIF results.
+The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis. The `/firmware` command covers the analysis leg on its own: it runs `python3 raptor.py scan --firmware-root <extracted_root>` over an extracted firmware filesystem (ELF inventory + arch detection via `core/binary/firmware_inventory.py`, firmware-specific Semgrep rules in `engine/semgrep/rules/firmware/`), writing `firmware-inventory.json` alongside the SARIF results. `/agentic --firmware-root <extracted_root>` runs the full scan → dedup → LLM analysis pipeline in firmware mode: CodeQL and the host binary-oracle are skipped, and findings in the inventory's high-value targets are prioritized (implicit prefer-globs + checklist priority stamps).
 
 **Usage:** `/hardware` (interactive guided session) — enumeration itself is `python3 raptor.py hardware [--voltage <V>] [--pins <range>] [--jtag] [--baseline]`
 
