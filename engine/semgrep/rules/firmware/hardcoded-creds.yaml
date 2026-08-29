@@ -27,10 +27,10 @@ rules:
     severity: HIGH
     patterns:
       - pattern-either:
-          - pattern: char $VAR[] = "..."
-          - pattern: char *$VAR = "..."
-          - pattern: const char *$VAR = "..."
-          - pattern: const char $VAR[] = "..."
+          - pattern: char $VAR[] = "...";
+          - pattern: char *$VAR = "...";
+          - pattern: const char *$VAR = "...";
+          - pattern: const char $VAR[] = "...";
       - metavariable-regex:
           metavariable: $VAR
           regex: (?i)(pass(word|wd)?|passwd|secret|pin|auth_key|api_key|admin_pass|default_pass)
