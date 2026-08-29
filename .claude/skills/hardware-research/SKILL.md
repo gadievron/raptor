@@ -1,5 +1,5 @@
 ---
-name: hardware-security
+name: hardware-research
 description: Hardware security research and exploitation using Glasgow Interface Explorer and complementary tools. Covers physical recon, protocol analysis, firmware extraction, fault injection, and side-channel attacks.
 ---
 
@@ -55,8 +55,9 @@ Any Glasgow interaction             → load glasgow-interaction first
 ## Prerequisites
 
 ```bash
-# Glasgow Interface Explorer
-pip install glasgow
+# Glasgow Interface Explorer — install from source; the PyPI
+# 'glasgow' package is a 0.0.0 placeholder that does nothing:
+#   https://glasgow-embedded.org/latest/install.html
 
 # Supporting tools (Linux - which really is the best approach when messing with hardware).
 pip install binwalk pyserial pwntools
@@ -65,17 +66,16 @@ apt install openocd flashrom stlink-tools
 brew install open-ocd flashrom stlink
 
 # Verify Glasgow device attached
-glasgow identify
+glasgow list
 ```
 
 ## Output convention
 
-All hardware session output goes to `.out/hardware-<timestamp>/`:
-- `recon/` - photos, component list, board annotations
-- `dumps/` - raw binary dumps from flash/EEPROM
-- `protocols/` - captured bus traffic (VCD, logic analyser exports)
-- `firmware/` - extracted and unpacked firmware
-- `glitch-logs/` - fault injection attempt logs
+Enumeration output goes to `out/hardware_<run>/` (or the directory
+passed via `--out`): `hardware-report.json`, `passive.vcd`,
+`noise-baseline.{vcd,json}`, `uart-<pin>-<baud>.bin`. Keep manual
+session artifacts (photos, dumps, captures, glitch logs) alongside in
+subdirectories of your choosing — nothing creates them automatically.
 
 ## Notice
 

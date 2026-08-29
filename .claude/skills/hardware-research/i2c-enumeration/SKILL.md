@@ -1,6 +1,7 @@
 ---
 name: i2c-enumeration
 description: I2C bus reconnaissance, device enumeration, EEPROM read/write, and attacks targeting I2C-connected security devices, configuration EEPROMs, and sensors.
+user-invocable: false
 ---
 
 # I2C Enumeration Skill
@@ -35,9 +36,9 @@ Special addresses:
 # Scan all I2C addresses
 glasgow run i2c-controller --voltage 3.3 --scl A0 --sda A1 scan
 
-# Expected output:
-# device 0x50: present
-# device 0x68: present
+# Hits are logger output (stderr), e.g.:
+# I: g.applet.interface.i2c_controller: scan found address 0b1010000/0x50
+# I: g.applet.interface.i2c_controller: scan found address 0b1101000/0x68
 
 # At 1.8V
 glasgow run i2c-controller --voltage 1.8 --scl A0 --sda A1 scan
@@ -73,8 +74,9 @@ def i2c_enumerate(voltage: float = 3.3, pin_scl: int = 0, pin_sda: int = 1) -> l
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     devices = []
-    for line in result.stdout.splitlines():
-        m = re.search(r'0x([0-9a-fA-F]{2})', line)
+    # Hits are logger output (stderr): "scan found address 0b1010000/0x50"
+    for line in (result.stdout + result.stderr).splitlines():
+        m = re.search(r'scan found address\s+\S*/0x([0-9a-fA-F]{2})', line)
         if m:
             addr = int(m.group(1), 16)
             device_type = "Unknown"
@@ -99,17 +101,17 @@ for d in devices:
 
 ```bash
 # Read full EEPROM (e.g. AT24C02 = 256 bytes at 0x50)
-glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 read eeprom.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 read 0 256 -f eeprom.bin   # -W = address width; read ADDRESS LENGTH
 
 # AT24C16 (multiple address pages: 0x50-0x57)
 for addr in 50 51 52 53 54 55 56 57; do
   glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 \
-    --i2c-address 0x$addr read eeprom-page-$addr.bin
+    --i2c-address 0x$addr -W 1 read 0 256 -f eeprom-page-$addr.bin
 done
 cat eeprom-page-*.bin > eeprom-full.bin
 
 # Write EEPROM
-glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 write new-eeprom.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 write 0 -f new-eeprom.bin
 ```
 
 ### Parse EEPROM contents
@@ -276,7 +278,7 @@ data = bytearray(open('eeprom.bin','rb').read())
 data[0x10:0x16] = bytes.fromhex('deadbeefcafe')
 open('eeprom-patched.bin','wb').write(data)
 "
-glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 write eeprom-patched.bin
+glasgow run memory-24x --voltage 3.3 --scl A0 --sda A1 --i2c-address 0x50 -W 1 write 0 -f eeprom-patched.bin
 ```
 
 ### License/serial spoofing

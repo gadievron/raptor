@@ -1,6 +1,7 @@
 ---
 name: spi-flash-extraction
 description: SPI and QSPI NOR flash identification, in-circuit and out-of-circuit extraction, verification, differential analysis between firmware versions, and write-back for patching.
+user-invocable: false
 ---
 
 # SPI Flash Extraction Skill
@@ -70,9 +71,10 @@ The chip remains soldered. Glasgow connects directly to its pins.
 ```bash
 # Option A: Hold CPU in reset while reading
 # Connect a GPIO pin to the RESET# pin of the SoC
-glasgow run control-gpio --voltage 3.3 A4=0    # Assert reset (active low)
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware.bin
-glasgow run control-gpio --voltage 3.3 A4=1    # Release reset
+glasgow run control-gpio --voltage 3.3 --pins A4 A4=0    # Assert reset (active low)
+# read takes ADDRESS LENGTH (bytes) — get the capacity from identify first
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware.bin
+glasgow run control-gpio --voltage 3.3 --pins A4 A4=1    # Release reset
 
 # Option B: Power device down, connect chip power directly
 # Use Glasgow to power just the flash (without the SoC)
@@ -103,7 +105,7 @@ If in-circuit fails, remove the chip and read it standalone.
 # Connect via test socket or direct wiring
 
 # Same Glasgow command, but cleaner bus:
-glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware-oot.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-oot.bin
 ```
 
 ### SOIC-8 clip (Pomona 5250 or equivalent)
@@ -120,8 +122,8 @@ glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware-oo
 
 ```bash
 # Always read twice and compare
-glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware-1.bin
-glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware-2.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-1.bin
+glasgow run memory-25x -V 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-2.bin
 
 # Compare reads
 md5sum firmware-1.bin firmware-2.bin
@@ -255,14 +257,14 @@ print('Patched firmware written')
 "
 
 # Erase then program in one step (preferred)
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-program firmware-patched.bin
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-program 0 -S 4096 -P 256 -f firmware-patched.bin
 
 # Or erase chip first, then program separately
 glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 erase-chip
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 program firmware-patched.bin
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 program 0 -P 256 -f firmware-patched.bin
 
 # Verify write
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 verify firmware-patched.bin
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 verify 0 -f firmware-patched.bin
 md5sum firmware-patched.bin firmware-verify.bin
 ```
 
@@ -273,11 +275,16 @@ md5sum firmware-patched.bin firmware-verify.bin
 Some devices use Quad SPI for higher throughput (4 data lines vs 1):
 
 ```bash
-# Glasgow memory-25x handles QSPI via the same --io flag with 4 pins
-# copi=A2, cipo=A3, wp/io2=A4, hold/io3=A5
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read firmware-qspi.bin
-# For true QSPI quad-mode reads, use fast-read subcommand:
-glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 fast-read firmware-qspi.bin
+# A QSPI-capable chip still answers single-I/O commands — memory-25x
+# reads it fine over one data line (--io wires all four pins so WP#
+# and HOLD# are held; fast-read is the single-I/O FAST READ command,
+# not quad mode):
+glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 read 0 16777216 -f firmware-qspi.bin
+
+# For true quad-mode transfers use the QSPI applets instead:
+#   glasgow run memory-25q ... / glasgow run qspi-controller ...
+# (memory-25x is marked deprecated upstream in favour of memory-25q —
+# note the different default pins before switching.)
 ```
 
 ---
@@ -304,5 +311,5 @@ spi-flash/
 | Reads all 0xFF | WP# or HOLD# floating | Pull both to VCC |
 | Inconsistent reads | SoC on bus | Hold SoC in reset |
 | JEDEC ID 0xFF 0xFF | CS not reaching chip | Check CS connection |
-| Wrong flash size | Wrong chip series | Check -25x vs -26x applet |
+| Wrong flash size | Chip not in database | Check JEDEC ID against the vendor datasheet |
 | Write verify fails | WP# still asserted | Ground WP# to VCC during write |
