@@ -57,11 +57,18 @@ _HIGH_VALUE_NAMES: tuple[str, ...] = (
 HIGH_VALUE_SCORE = 10
 
 
-def _arch_name(family: str, bits: int) -> str:
-    """Operator-facing arch name for a parsed (family, bits) pair."""
+def _arch_name(family: str, bits: int, endianness: str) -> str:
+    """Operator-facing arch name for a parsed (family, bits,
+    endianness) triple. MIPS and ARM are the families where firmware
+    toolchains name the endianness variant explicitly."""
     if family == "unknown":
         return "unknown"
-    return _ARCH_NAMES.get((family, bits), f"{family}{bits}")
+    name = _ARCH_NAMES.get((family, bits), f"{family}{bits}")
+    if endianness == "little" and family == "mips":
+        return name + "el"      # mipsel / mips64el
+    if endianness == "big" and family == "arm":
+        return "armeb" if bits == 32 else "aarch64_be"
+    return name
 
 
 def _interest_score(name: str) -> int:
@@ -117,7 +124,7 @@ def inventory_firmware(firmware_root: Path) -> dict[str, Any]:
         meta = parse_elf(p)
         if meta is None:
             continue
-        arch = _arch_name(meta.arch, meta.bits)
+        arch = _arch_name(meta.arch, meta.bits, meta.endianness)
         try:
             size = p.stat().st_size
         except OSError as e:
@@ -127,6 +134,7 @@ def inventory_firmware(firmware_root: Path) -> dict[str, Any]:
             "path": str(p.relative_to(firmware_root)),
             "size_bytes": size,
             "arch": arch,
+            "endianness": meta.endianness,
             "interest_score": _interest_score(p.name),
         })
         if arch != "unknown":
