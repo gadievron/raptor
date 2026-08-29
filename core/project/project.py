@@ -115,7 +115,7 @@ _TRUST_MARKER_HELP = {
 # rest persist in the ``settings`` dict. Identity fields (name,
 # target, output_dir, created) are NOT settable through this surface,
 # by design.
-VALID_TARGET_KINDS = ("library", "hybrid", "application", "auto")
+VALID_TARGET_KINDS = ("library", "hybrid", "application", "auto", "firmware")
 
 # VALID_SANDBOX_FLOORS (imported above from core/sandbox/tiers.py —
 # single source of truth, tiny and dependency-free): the untrusted
@@ -420,6 +420,15 @@ class Project:
         kind = raw.get("target-kind")
         if isinstance(kind, str) and kind in VALID_TARGET_KINDS:
             settings["target-kind"] = kind
+        elif kind is not None:
+            # Loud, not silent: a project written by a newer RAPTOR
+            # (e.g. target-kind added later) must not lose its setting
+            # invisibly when read by this checkout.
+            logger.warning(
+                "project settings: dropping unrecognised target-kind %r "
+                "(valid: %s) — written by a newer RAPTOR?",
+                kind, "|".join(VALID_TARGET_KINDS),
+            )
         build = raw.get("build-command")
         if isinstance(build, dict):
             clean = {

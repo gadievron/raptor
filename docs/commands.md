@@ -958,7 +958,14 @@ list (not an open KV store), and identity fields (name, target,
 output_dir, created) are not settable. `description` and `notes` map
 to the existing project fields; `threat-model` points at an existing
 threat-model JSON (updates `threat_model_path`); `target-kind` is one
-of `library|hybrid|application|auto`; `build-command` stores per-
+of `library|hybrid|application|auto|firmware` — `firmware` marks the
+project target as an extracted firmware root: bare `/scan` and
+`/agentic` (including the slash-command dispatch's explicit
+`--repo <target>` form) auto-route into firmware mode, and `/codeql`
+refuses before creating a run dir. Note this is a different vocabulary
+from the per-run `--target-kind` flag on /agentic//codeql (the
+library/application reachability axis), which does not accept
+`firmware`; `build-command` stores per-
 language commands (`build-command.<lang>`; the bare key writes the
 `default` slot). `get <key>` prints the bare value and exits 1 when
 unset, for scripting.
