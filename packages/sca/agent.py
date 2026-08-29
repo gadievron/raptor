@@ -118,6 +118,7 @@ def run_sca_subprocess(
     sandbox_args: Sequence[str] = (),
     env: dict | None = None,
     timeout: int = 600,
+    firmware_elf: bool = False,
 ) -> tuple:
     """Run the SCA agent as a sandboxed subprocess.
 
@@ -141,6 +142,7 @@ def run_sca_subprocess(
         sys.executable, str(agent_path),
         "--repo", str(target),
         "--out", str(output_dir),
+        *(["--firmware-elf"] if firmware_elf else []),
         *sandbox_args,
     ]
 
@@ -214,6 +216,9 @@ def main(argv=None) -> int:
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--sarif-dirs", nargs="*",
                     help="Sibling SARIF directories for cross-tool linking")
+    ap.add_argument("--firmware-elf", action="store_true", dest="firmware_elf",
+                    help="treat --repo as an extracted firmware root and scan "
+                         "its ELF binaries for component versions")
     # Dynamic choices from the profile registry — a hardcoded subset
     # silently excluded 'strict', the profile the threat model
     # recommends for exactly this workload (LLM analysis over hostile
@@ -252,6 +257,7 @@ def main(argv=None) -> int:
             profile=args.sandbox,
             audit=args.audit,
             audit_verbose=args.audit_verbose,
+            firmware_elf=args.firmware_elf,
         )
     else:
         result = analyse(
@@ -260,6 +266,7 @@ def main(argv=None) -> int:
             offline=args.offline,
             no_cache=args.no_cache,
             sarif_dirs=sarif_dirs,
+            firmware_elf=args.firmware_elf,
         )
 
     print(json.dumps(result))
@@ -269,6 +276,7 @@ def main(argv=None) -> int:
 def _run_sandboxed(
     *, target, output_dir, offline, no_cache, sarif_dirs, profile,
     audit: bool = False, audit_verbose: bool = False,
+    firmware_elf: bool = False,
 ):
     """Run analyse() inside a sandbox context.
 
@@ -307,6 +315,7 @@ def _run_sandboxed(
         return _analyse(
             target=target, output_dir=output_dir,
             offline=offline, no_cache=no_cache, sarif_dirs=sarif_dirs,
+            firmware_elf=firmware_elf,
         )
 
 
