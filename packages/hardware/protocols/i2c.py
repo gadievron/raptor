@@ -7,42 +7,42 @@ Looks for ACK responses indicating I2C devices are present.
 """
 
 import re
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from core.logging import get_logger
 from packages.hardware.glasgow_runner import GlasgowRunner
 
 logger = get_logger()
 
 
-def _parse_i2c_scan(stdout: str) -> list:
+def _parse_i2c_scan(output: str) -> list[str]:
     """
-    Parse 'glasgow run i2c-initiator scan' output for device addresses.
+    Parse 'glasgow run i2c-controller scan' output for device addresses.
 
-    Matches:  "0x48: present"  /  "device at 0x48"
+    Current upstream reports hits via the logger (stderr) as
+    "scan found address 0b0101000/0x28"; older releases printed
+    "0x48: present" / "device at 0x48". All three shapes are matched.
     Returns list of hex address strings.
     """
-    addresses = []
-    for line in stdout.splitlines():
-        m = re.search(r'(0x[0-9a-fA-F]{2})[:\s]+present', line, re.IGNORECASE)
-        if m:
-            addresses.append(m.group(1))
-        m2 = re.search(r'device\s+at\s+(0x[0-9a-fA-F]{2})', line, re.IGNORECASE)
-        if m2:
-            addr = m2.group(1)
-            if addr not in addresses:
-                addresses.append(addr)
+    addresses: list[str] = []
+    for line in output.splitlines():
+        for pattern in (
+            r'scan found address\s+\S*/(0x[0-9a-fA-F]{2})',
+            r'(0x[0-9a-fA-F]{2})[:\s]+present',
+            r'device\s+at\s+(0x[0-9a-fA-F]{2})',
+        ):
+            m = re.search(pattern, line, re.IGNORECASE)
+            if m and m.group(1) not in addresses:
+                addresses.append(m.group(1))
     return addresses
 
 
 def detect_i2c(
     glasgow: GlasgowRunner,
-    active_pins: list,
+    active_pins: list[int],
     out_dir: Path,
     voltage: float = 3.3,
-) -> list:
+) -> list[dict]:
     """
     Scan adjacent pin pairs from active_pins for I2C devices.
 
@@ -55,8 +55,9 @@ def detect_i2c(
     Returns:
         List of finding dicts for I2C buses with responding devices
     """
-    findings = []
-    tried: set = set()
+    findings: list[dict] = []
+    tried: set[tuple[int, int]] = set()
+    build_hinted = False
 
     # Try both orderings (SCL, SDA) and (SDA, SCL) for each adjacent pair
     for i in range(len(active_pins) - 1):
@@ -80,8 +81,24 @@ def detect_i2c(
                 timeout=8,
             )
 
-            addresses = _parse_i2c_scan(result["stdout"])
+            # Hits are logger output (stderr) on current glasgow; older
+            # releases printed to stdout. Parse both.
+            addresses = _parse_i2c_scan(result["stdout"] + "\n" + result["stderr"])
             if not addresses:
+                # A first-run bitstream build consumes the scan window —
+                # that pair's "no devices" is then meaningless. Say so
+                # once instead of leaving a silent false negative.
+                stderr = result["stderr"]
+                if not build_hinted and (
+                    "toolchain" in stderr or "bitstream" in stderr
+                    or "yosys" in stderr
+                ):
+                    print(
+                        "  [!] glasgow appears to be building the applet "
+                        "bitstream — this pair's scan window elapsed "
+                        "during the build; re-run, or use --warm-cache"
+                    )
+                    build_hinted = True
                 continue
 
             logger.info(f"I2C at SCL={scl} SDA={sda}: {addresses}")

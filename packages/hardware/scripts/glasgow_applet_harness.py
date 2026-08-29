@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
 """
-RAPTOR Glasgow Applet Integration Tests
-Kinda did this so I know all the applets are working as is the hardware. YMMV
-Also figured an arduino and pi are the best test targets since they have a good mix of interfaces and are easy to reflash if we mess up the wiring
+RAPTOR Glasgow applet hardware-in-the-loop harness.
+
+Verifies the Glasgow applet surface the hardware enumeration pipeline
+depends on (flag names, subcommands, capture behaviour) against real
+hardware. Arduino and Pi Pico are the reference targets: a good mix of
+interfaces, and easy to reflash if the wiring is wrong.
+
+NOT a pytest suite — it needs a Glasgow device plus wired targets, so
+it is operator-run only (the filename carries no test_ prefix so pytest
+never collects it).
 
 Usage:
-    # Run all tests (requires Glasgow connected + Arduino target):
-    python3 test/hardware/test_glasgow_applets.py
+    # Run all checks (requires Glasgow connected + Arduino target):
+    python3 packages/hardware/scripts/glasgow_applet_harness.py
 
     # Dry-run (checks Glasgow is present, skips actual hardware):
-    python3 test/hardware/test_glasgow_applets.py --dry-run
+    python3 packages/hardware/scripts/glasgow_applet_harness.py --dry-run
 
-    # Test specific applet:
-    python3 test/hardware/test_glasgow_applets.py --test uart
-    python3 test/hardware/test_glasgow_applets.py --test i2c
-    python3 test/hardware/test_glasgow_applets.py --test swd   # ARM target required
+    # Check a specific applet:
+    python3 packages/hardware/scripts/glasgow_applet_harness.py --test uart
+    python3 packages/hardware/scripts/glasgow_applet_harness.py --test i2c
+    python3 packages/hardware/scripts/glasgow_applet_harness.py --test swd   # ARM target required
 
 Wiring:
     UART test  → uart_target.ino on Arduino, Glasgow A0=RX A1=TX
     I2C test   → i2c_target.ino on Arduino, Glasgow A0=SCL A1=SDA
     SWD test   → Pi Pico or STM32 Blue Pill, Glasgow A0=SWCLK A1=SWDIO
 
-See test/hardware/arduino_sketches/ for target firmware.
+See packages/hardware/scripts/arduino_sketches/ for target firmware.
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -35,16 +43,20 @@ PASS = "PASS"
 FAIL = "FAIL"
 SKIP = "SKIP"
 
-# Known venv locations to search if 'glasgow' is not on PATH
+# Common install location checked when 'glasgow' is not on PATH.
+# A source-install venv elsewhere: set GLASGOW=/path/to/venv/bin/glasgow.
 GLASGOW_SEARCH_PATHS = [
-    Path.home() / "python_shit/glasgow-venv/bin/glasgow",
     Path.home() / ".local/bin/glasgow",
     Path("/opt/glasgow/bin/glasgow"),
 ]
 
 
 def find_glasgow() -> str:
-    """Return the glasgow binary path, checking PATH then known venv locations."""
+    """Return the glasgow binary path: $GLASGOW override, then PATH,
+    then known install locations."""
+    env_override = os.environ.get("GLASGOW")
+    if env_override:
+        return env_override
     if path := shutil.which("glasgow"):
         return path
     for candidate in GLASGOW_SEARCH_PATHS:
@@ -56,21 +68,29 @@ def find_glasgow() -> str:
 GLASGOW_BIN = find_glasgow()
 
 
-def run_glasgow(args: list, timeout: int = 10) -> dict:
-    """Run a glasgow command and return result."""
+def sanitize(text: str) -> str:
+    """Strip control characters before echoing device output to the
+    terminal — a hostile target could otherwise inject escape
+    sequences into the operator's session."""
+    return "".join(c if c.isprintable() or c in "\n\t" else "." for c in text)
+
+
+def run_glasgow(args: list[str], timeout: int = 10) -> dict:
+    """Run a glasgow command and return result. Pipes are binary and
+    decoded lossily — device output is arbitrary bytes and a strict
+    text-mode pipe would crash the harness on the first noisy capture."""
     cmd = [GLASGOW_BIN] + args
     print(f"  $ {' '.join(cmd)}")
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
             timeout=timeout,
         )
         return {
             "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": result.stdout.decode("utf-8", errors="replace"),
+            "stderr": result.stderr.decode("utf-8", errors="replace"),
         }
     except subprocess.TimeoutExpired:
         return {"returncode": -1, "stdout": "", "stderr": "timed out"}
@@ -88,7 +108,7 @@ def check_glasgow_present() -> bool:
     return True
 
 
-def test_uart(dry_run: bool = False) -> str:
+def check_uart(dry_run: bool = False) -> str:
     """
     Test: glasgow run uart --voltage 3.3 --rx A0 tty --stream
     Target: uart_target.ino at 115200 baud
@@ -130,14 +150,14 @@ def test_uart(dry_run: bool = False) -> str:
         return FAIL
 
     if any(kw in output for kw in ["U-Boot", "BusyBox", "root", "Linux", "raptor"]):
-        print(f"  PASS: Recognised UART output: {output[:60].strip()!r}")
+        print(f"  PASS: Recognised UART output: {sanitize(output[:60].strip())!r}")
         return PASS
 
-    print(f"  PASS: Printable UART data received: {output[:60].strip()!r}")
+    print(f"  PASS: Printable UART data received: {sanitize(output[:60].strip())!r}")
     return PASS
 
 
-def test_i2c(dry_run: bool = False) -> str:
+def check_i2c(dry_run: bool = False) -> str:
     """
     Test: glasgow run i2c-controller --voltage 3.3 --scl A0 --sda A1 scan
     Target: i2c_target.ino (slave at 0x50)
@@ -166,7 +186,7 @@ def test_i2c(dry_run: bool = False) -> str:
     ], timeout=15)
 
     output = result["stdout"] + result["stderr"]
-    print(f"  Scan output: {output.strip()[:120]}")
+    print(f"  Scan output: {sanitize(output.strip()[:120])}")
 
     if "0x50" in output or "0X50" in output.upper():
         print("  PASS: Found device at 0x50 (EEPROM target)")
@@ -184,7 +204,7 @@ def test_i2c(dry_run: bool = False) -> str:
     return FAIL
 
 
-def test_swd(dry_run: bool = False) -> str:
+def check_swd(dry_run: bool = False) -> str:
     """
     Test: glasgow run swd-probe --voltage 3.3 --swclk A0 --swdio A1 dump-memory 0x20000000 64
     Target: Pi Pico (RP2040) or STM32 Blue Pill
@@ -208,7 +228,9 @@ def test_swd(dry_run: bool = False) -> str:
     print("  Flag check: --swclk and dump-memory present in help output")
 
     # Dump 64 bytes from SRAM start (should work on any unlocked ARM target)
-    out_file = Path("/tmp/raptor-swd-test.bin")
+    import tempfile
+    tmp_dir = tempfile.mkdtemp(prefix="raptor-swd-")
+    out_file = Path(tmp_dir) / "dump.bin"
     result = run_glasgow([
         "run", "swd-probe",
         "--voltage", VOLTAGE,
@@ -219,10 +241,11 @@ def test_swd(dry_run: bool = False) -> str:
     ], timeout=15)
 
     output = result["stdout"] + result["stderr"]
-    print(f"  Output: {output.strip()[:120]}")
+    print(f"  Output: {sanitize(output.strip()[:120])}")
 
     if out_file.exists() and out_file.stat().st_size > 0:
         data = out_file.read_bytes()
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         if data == b'\xff' * len(data) or data == b'\x00' * len(data):
             print(f"  WARN: Dump is all-0xFF or all-0x00 — target may be protected")
             return PASS  # applet worked, protection is a finding
@@ -237,7 +260,7 @@ def test_swd(dry_run: bool = False) -> str:
     return FAIL
 
 
-def test_jtag_probe(dry_run: bool = False) -> str:
+def check_jtag_probe(dry_run: bool = False) -> str:
     """
     Test: glasgow run jtag-probe --voltage 3.3 --tck A0 --tdi A2 --tdo A3 --tms A1 scan
     Target: any JTAG-capable device (Arduino Due, STM32, FPGA dev board)
@@ -269,7 +292,7 @@ def test_jtag_probe(dry_run: bool = False) -> str:
     ], timeout=15)
 
     output = result["stdout"] + result["stderr"]
-    print(f"  Output: {output.strip()[:120]}")
+    print(f"  Output: {sanitize(output.strip()[:120])}")
 
     if "idcode" in output.lower() or "0x" in output.lower():
         print("  PASS: JTAG chain detected")
@@ -283,7 +306,7 @@ def test_jtag_probe(dry_run: bool = False) -> str:
     return FAIL
 
 
-def test_memory_25x(dry_run: bool = False) -> str:
+def check_memory_25x(dry_run: bool = False) -> str:
     """
     Test: glasgow run memory-25x --voltage 3.3 --cs A0 --sck A1 --io A2,A3,A4,A5 identify
     Target: W25Q or similar SPI NOR flash chip (manual wiring required)
@@ -316,7 +339,7 @@ def test_memory_25x(dry_run: bool = False) -> str:
     ], timeout=10)
 
     output = result["stdout"] + result["stderr"]
-    print(f"  Output: {output.strip()[:120]}")
+    print(f"  Output: {sanitize(output.strip()[:120])}")
 
     if any(chip in output for chip in ["W25Q", "GD25Q", "MX25L", "MT25Q", "SST25"]):
         print(f"  PASS: SPI flash identified")
@@ -351,11 +374,11 @@ def main():
             sys.exit(1)
 
     tests = {
-        "uart": test_uart,
-        "i2c": test_i2c,
-        "swd": test_swd,
-        "jtag": test_jtag_probe,
-        "spi": test_memory_25x,
+        "uart": check_uart,
+        "i2c": check_i2c,
+        "swd": check_swd,
+        "jtag": check_jtag_probe,
+        "spi": check_memory_25x,
     }
 
     if args.test:

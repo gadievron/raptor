@@ -13,6 +13,10 @@
     "count": 13,
     "kind": "literal"
   },
+  "packages/hardware/enumerator.py::report": {
+    "count": 10,
+    "kind": "literal"
+  },
   "core/analysis/binary_oracle.py::_BOILERPLATE_NAMES": {
     "count": 10,
     "kind": "literal"

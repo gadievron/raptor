@@ -4,6 +4,9 @@
     "artifacts:write_only_artifact::firmware-inventory.json": {
       "note": "operator/LLM-facing output: read by the /firmware command workflow and operator tooling, not by production code"
     },
+    "artifacts:write_only_artifact::hardware-report.json": {
+      "note": "operator/LLM-facing output: read by the /hardware command workflow and operator tooling, not by production code"
+    },
     "artifacts:orphan_reader::*-metadata.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },

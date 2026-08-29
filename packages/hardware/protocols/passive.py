@@ -8,12 +8,8 @@ Identifies which pins have signal transitions (active pins) by parsing the VCD.
 
 import json
 import re
-import sys
-import time
 from pathlib import Path
-from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from core.logging import get_logger
 from packages.hardware.glasgow_runner import GlasgowRunner
 
@@ -21,10 +17,9 @@ logger = get_logger()
 
 CAPTURE_DURATION = 10   # seconds
 BASELINE_DURATION = 5   # seconds for noise floor capture
-SAMPLE_RATE = "10e6"    # 10 MHz
 
 
-def _parse_vcd(vcd_path: Path) -> dict:
+def _parse_vcd(vcd_path: Path) -> dict[int, int]:
     """
     Parse a VCD file and return transition counts per pin.
 
@@ -37,8 +32,13 @@ def _parse_vcd(vcd_path: Path) -> dict:
     Returns:
         dict mapping pin_number -> transition_count for pins with any transitions
     """
-    counts: dict = {}
-    signal_map: dict = {}   # VCD signal-id character -> pin number
+    counts: dict[int, int] = {}
+    signal_map: dict[str, int] = {}   # VCD signal-id character -> pin number
+    # Signal names come from the --pin-names labels the capture passes
+    # ("pin<N>" by physical pin number). Without that flag the analyzer
+    # applet defaults to positional "pin[0]", "pin[1]", ... names, whose
+    # first integer is the LIST INDEX, not the pin — always capture with
+    # explicit labels.
 
     if not vcd_path.exists() or vcd_path.stat().st_size == 0:
         return counts
@@ -56,7 +56,7 @@ def _parse_vcd(vcd_path: Path) -> dict:
                     m = re.search(r'\$var\s+\S+\s+\d+\s+(\S+)\s+(\S+)', line)
                     if m:
                         sig_id = m.group(1)
-                        sig_name = m.group(2).rstrip("$end").strip()
+                        sig_name = m.group(2).strip().removesuffix("$end").strip()
                         nm = re.search(r'(\d+)', sig_name)
                         if nm:
                             signal_map[sig_id] = int(nm.group(1))
@@ -83,13 +83,63 @@ def _parse_vcd(vcd_path: Path) -> dict:
     return counts
 
 
+def _hint_if_bitstream_build(result: dict) -> None:
+    """On a fresh install glasgow synthesizes the applet's FPGA
+    bitstream INSIDE the first capture window (minutes vs a 5-10s
+    window) — the capture then looks empty. Tell the operator what
+    actually happened instead of leaving a silent false negative."""
+    stderr = result.get("stderr", "")
+    if "toolchain" in stderr or "bitstream" in stderr or "yosys" in stderr:
+        print(
+            "  [!] glasgow appears to be building the applet bitstream "
+            "(first run on this install) — the capture window elapsed "
+            "during the build. Re-run once, or pre-build with "
+            "`glasgow build --rev <rev> <applet> ...`"
+        )
+
+
+def _capture_vcd(
+    glasgow: GlasgowRunner,
+    pins: list[int],
+    vcd_path: Path,
+    voltage: float,
+    duration: int,
+) -> dict:
+    """Capture ``duration`` seconds of logic activity on ``pins`` into
+    ``vcd_path`` using the ``analyzer`` applet.
+
+    The applet streams until interrupted (it has no duration option), so
+    the capture runs under :meth:`GlasgowRunner.run_timed` — SIGINT after
+    the window lets the applet close the VCD file cleanly. Pins are
+    passed as one ``--i`` list in Glasgow ``A<n>`` notation, and
+    ``--pin-names`` labels each signal ``pin<n>`` by PHYSICAL pin number
+    so ``_parse_vcd`` recovers real pins (the applet's default names are
+    positional indices).
+
+    Success is judged by the caller on the VCD artifact, not the exit
+    code — an interrupted capture exits non-zero by design.
+    """
+    pin_list = ",".join(f"A{p}" for p in pins)
+    pin_names = ",".join(f"pin{p}" for p in pins)
+    return glasgow.run_timed(
+        [
+            "run", "analyzer",
+            "-V", str(voltage),
+            "--i", pin_list,
+            "--pin-names", pin_names,
+            str(vcd_path),
+        ],
+        duration=duration,
+    )
+
+
 def run_noise_baseline(
     glasgow: GlasgowRunner,
-    pins: list,
+    pins: list[int],
     out_dir: Path,
     voltage: float,
     duration: int = BASELINE_DURATION,
-) -> dict:
+) -> dict[int, int]:
     """
     Capture a noise floor baseline with the target powered OFF.
 
@@ -117,20 +167,12 @@ def run_noise_baseline(
     print(f"  Capturing {duration}-second baseline on pins {pins_str}...")
     print(f"  (Any transitions now are electrical noise)\n")
 
-    result = glasgow.run(
-        [
-            "run", "logic-analyzer",
-            f"-V{voltage}",
-            "--pins", pins_str,
-            "--sample-rate", SAMPLE_RATE,
-            "record", str(vcd_path),
-        ],
-        timeout=duration + 15,
-    )
+    result = _capture_vcd(glasgow, pins, vcd_path, voltage, duration)
 
-    if result["returncode"] != 0 or not vcd_path.exists():
+    if not vcd_path.exists() or vcd_path.stat().st_size == 0:
         logger.warning(f"Noise baseline capture failed: {result['stderr']}")
         print(f"  [!] Baseline capture failed — noise filtering disabled")
+        _hint_if_bitstream_build(result)
         return {}
 
     noise_counts = _parse_vcd(vcd_path)
@@ -149,10 +191,10 @@ def run_noise_baseline(
 
 
 def filter_pins_by_noise_floor(
-    signal_counts: dict,
-    noise_counts: dict,
+    signal_counts: dict[int, int],
+    noise_counts: dict[int, int],
     snr_threshold: float = 10.0,
-) -> tuple:
+) -> tuple[list[int], list[int]]:
     """
     Filter active pins by comparing signal transitions against noise baseline.
 
@@ -167,8 +209,8 @@ def filter_pins_by_noise_floor(
     Returns:
         (real_pins, noise_pins) — sorted lists of pin numbers
     """
-    real_pins = []
-    noise_pins = []
+    real_pins: list[int] = []
+    noise_pins: list[int] = []
 
     for pin, sig_count in signal_counts.items():
         floor = noise_counts.get(pin, 0)
@@ -187,7 +229,7 @@ def filter_pins_by_noise_floor(
 
 def run_passive_capture(
     glasgow: GlasgowRunner,
-    pins: list,
+    pins: list[int],
     out_dir: Path,
     voltage: float = 3.3,
 ) -> dict:
@@ -218,20 +260,12 @@ def run_passive_capture(
     print(f"    >>> POWER-CYCLE YOUR TARGET NOW <<<")
     print(f"    Capturing for {CAPTURE_DURATION} seconds...\n")
 
-    result = glasgow.run(
-        [
-            "run", "logic-analyzer",
-            f"-V{voltage}",
-            "--pins", pins_str,
-            "--sample-rate", SAMPLE_RATE,
-            "record", str(vcd_path),
-        ],
-        timeout=CAPTURE_DURATION + 15,
-    )
+    result = _capture_vcd(glasgow, pins, vcd_path, voltage, CAPTURE_DURATION)
 
-    if result["returncode"] != 0 or not vcd_path.exists():
+    if not vcd_path.exists() or vcd_path.stat().st_size == 0:
         logger.warning(f"Passive capture failed: {result['stderr']}")
         print(f"  [!] Passive capture failed — treating all pins as active")
+        _hint_if_bitstream_build(result)
         return {
             "active_pins": pins,
             "signal_counts": {},

@@ -1,25 +1,34 @@
-# Hardware Integration Tests
+# Hardware-in-the-loop harness
 
-How do you know RAPTOR is working? well why not make some basic rudimentary tests with hardware so you can see? 
-This ain't pretty, but it kinda works. 
+Operator-run verification that the Glasgow applet surface RAPTOR's
+hardware enumeration depends on (flag names, subcommands, capture
+behaviour) works against real hardware. Not collected by pytest — it
+needs a Glasgow device plus wired targets.
 
 ## Quick start
 
 ```bash
-# Check Glasgow is detected (no hardware target needed), you probably installed via venv so ensure you have that activated 
-python3 test/hardware/test_glasgow_applets.py --dry-run
+# Check Glasgow is detected (no hardware target needed). If glasgow
+# lives in a source-install venv, point at it: GLASGOW=/path/to/venv/bin/glasgow
+python3 packages/hardware/scripts/glasgow_applet_harness.py --dry-run
 
 # Test UART only (Arduino with uart_target.ino)
-python3 test/hardware/test_glasgow_applets.py --test uart
+python3 packages/hardware/scripts/glasgow_applet_harness.py --test uart
 
 # Test I2C only (Arduino with i2c_target.ino)
-python3 test/hardware/test_glasgow_applets.py --test i2c
+python3 packages/hardware/scripts/glasgow_applet_harness.py --test i2c
 
 # Test SWD (Pi Pico or STM32 Blue Pill)
-python3 test/hardware/test_glasgow_applets.py --test swd
+python3 packages/hardware/scripts/glasgow_applet_harness.py --test swd
+
+# Test JTAG (Arduino Due, STM32, or FPGA dev board)
+python3 packages/hardware/scripts/glasgow_applet_harness.py --test jtag
+
+# Test SPI flash identify (chip wired per the SPI section below)
+python3 packages/hardware/scripts/glasgow_applet_harness.py --test spi
 
 # Run everything
-python3 test/hardware/test_glasgow_applets.py
+python3 packages/hardware/scripts/glasgow_applet_harness.py
 ```
 
 ## What you need
@@ -44,8 +53,8 @@ python3 test/hardware/test_glasgow_applets.py
 ### UART (uart_target.ino)
 
 ```
-Glasgow A0 (RX) → Arduino pin 3 (SoftwareSerial TX)
-Glasgow A1 (TX) → Arduino pin 2 (SoftwareSerial RX)
+Glasgow A0 (RX) → Arduino pin 2 (SoftwareSerial TX)
+Glasgow A1 (TX) → Arduino pin 3 (SoftwareSerial RX)
 Glasgow GND     → Arduino GND
 Voltage: 3.3V (Glasgow output)
 ```
@@ -68,9 +77,9 @@ Upload `arduino_sketches/i2c_target/i2c_target.ino` first.
 ### SWD (Pi Pico)
 
 ```
-Glasgow A0 (SWCLK) → Pico SWCLK (pin 3 on debug header)
-Glasgow A1 (SWDIO) → Pico SWDIO (pin 2 on debug header)
-Glasgow GND        → Pico GND   (pin 1 on debug header)
+Glasgow A0 (SWCLK) → Pico SWCLK (debug header pin 1)
+Glasgow GND        → Pico GND   (debug header pin 2 — the middle pin)
+Glasgow A1 (SWDIO) → Pico SWDIO (debug header pin 3)
 Voltage: 3.3V
 ```
 
@@ -106,7 +115,7 @@ Glasgow GND        → Flash pin 4 (GND)
 ```
 [I2C] Testing i2c-controller applet...
   Flag check: --scl present in help output
-  Scan output: address 0x50: present
+  Scan output: scan found address 0b1010000/0x50
   PASS: Found device at 0x50 (EEPROM target)
 ```
 

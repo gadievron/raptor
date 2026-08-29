@@ -3,8 +3,8 @@
  *
  * Simulates a device with an active UART console.
  * Glasgow wiring:
- *   Glasgow A0 (RX) → Arduino TX (pin 1, or pin 3 if using SoftwareSerial)
- *   Glasgow A1 (TX) → Arduino RX (pin 0, or pin 2 if using SoftwareSerial)
+ *   Glasgow A0 (RX) → Arduino TX (pin 1, or pin 2 if using SoftwareSerial)
+ *   Glasgow A1 (TX) → Arduino RX (pin 0, or pin 3 if using SoftwareSerial)
  *   Glasgow GND     → Arduino GND
  *
  * On Uno: hardware UART (pins 0/1) is shared with USB.
@@ -20,7 +20,8 @@
 
 #include <SoftwareSerial.h>
 
-// SoftwareSerial: Glasgow A0 → pin 3 (RX), Glasgow A1 → pin 2 (TX)
+// SoftwareSerial(RX=3, TX=2): Arduino receives on 3 (from Glasgow
+// A1/TX) and transmits on 2 (to Glasgow A0/RX)
 SoftwareSerial targetSerial(3, 2);  // RX=3, TX=2
 
 const char* BOOT_LOG[] = {
