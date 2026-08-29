@@ -147,6 +147,13 @@ class RaptorConfig:
         # without perl, detected generators become loud coverage gaps
         # instead of enumerable generated kernels.
         "perl":         {"binary": "perl",        "severity": "degrades", "affects": "/scan, /agentic, /audit (perlasm generated-asm inventory)"},
+        # Hardware interface enumeration (packages/hardware/). The PyPI
+        # 'glasgow' package is a placeholder — install from source
+        # (https://glasgow-embedded.org/latest/install.html); the
+        # enumerator's Stage 0 additionally probes the applet CLI.
+        "glasgow":      {"binary": "glasgow",     "severity": "degrades", "affects": "/hardware (interface enumeration)"},
+        # Firmware image extraction ahead of `scan --firmware-root`.
+        "binwalk":      {"binary": "binwalk",     "severity": "degrades", "affects": "/firmware, /hardware (firmware image extraction)"},
         # SMT feasibility engine — a Python module, not a binary
         # (checked via importlib.util.find_spec). Consumers guard the
         # import and degrade: /audit path-feasibility, /codeql dataflow
