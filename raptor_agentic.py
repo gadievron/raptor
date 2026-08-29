@@ -3420,6 +3420,10 @@ def main() -> int:
                 original_repo_path,
                 sca_out,
                 sandbox_args=sandbox_passthrough,
+                # Firmware mode: no manifests to discover — the
+                # dependency inventory comes from the ELF binaries'
+                # component version strings.
+                firmware_elf=firmware_mode,
             )
             safe_stderr = ""
             if sca_stderr:
@@ -3610,6 +3614,8 @@ def main() -> int:
             sca_options = ScaRunOptions(
                 enable_llm_review=not args.skip_sca_review,
                 enable_triage=not args.skip_sca_triage,
+                firmware_root=(Path(original_repo_path)
+                               if firmware_mode else None),
             )
             sca_result = run_sca(
                 target=original_repo_path,
