@@ -345,7 +345,7 @@ class RaptorConfig:
     # Format: {local_dir_name: (pack_name, pack_identifier)}
     POLICY_GROUP_TO_SEMGREP_PACK: ClassVar[dict[str, tuple[str, str]]] = {
         # Only packs that exist on semgrep.dev and are cached in registry-cache/
-        # deserialisation, filesystem, logging: no registry pack exists, local rules only
+        # deserialisation, filesystem, logging, firmware: no registry pack exists, local rules only
         # crypto: p/crypto and category/crypto both 404 — local rules only
         # ssrf: p/ssrf 404; local coverage via POLICY_GROUP_RULE_FILES
         "secrets": ("semgrep_secrets", "p/secrets"),
