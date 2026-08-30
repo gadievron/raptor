@@ -134,8 +134,8 @@ def test_reproduce_witness_hash_mismatch(tmp_path):
     (d / "witness.bin").write_bytes(b"tampered witness")
     r = _run(["reproduce", str(d)])
     assert r.returncode == 2
-    assert "hash mismatch" in (r.stdout + r.stderr)
-    assert "Traceback" not in (r.stdout + r.stderr)
+    assert "hash mismatch" in r.stderr
+    assert "Traceback" not in r.stderr
 
 
 def test_reproduce_witness_len_mismatch(tmp_path):
@@ -154,8 +154,8 @@ def test_reproduce_witness_len_mismatch(tmp_path):
     (d / "witness.bin").write_bytes(data)
     r = _run(["reproduce", str(d)])
     assert r.returncode == 2
-    assert r.returncode != 0
-    assert "Traceback" not in (r.stdout + r.stderr)
+    assert "length mismatch" in r.stderr
+    assert "Traceback" not in r.stderr
 
 
 # ----------------------------------------------------------------------

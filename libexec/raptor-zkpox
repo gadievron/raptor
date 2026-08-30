@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """ZKPoX operator CLI — the single entry point for all tiers.
 
 Five subcommands, one per tier of the proving stack:
@@ -37,7 +39,8 @@ import sys
 from pathlib import Path
 
 # ─── trust-marker check (do not import; inline by design) ───
-import os
+# fmt: off
+import os  # noqa: E402
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
@@ -46,14 +49,20 @@ if not (os.environ.get("CLAUDECODE")
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
     sys.exit(2)
+# fmt: on
 # ─── end trust-marker check ─────────────────────────────────
 
-import argparse
+import argparse  # noqa: E402
 import json
 import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+import core.startup.process_init  # noqa: E402,F401
+from core.json import load_json, save_json  # noqa: E402
+
+# manifest.json is a small bundle descriptor.
+_MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 
 
 def _cmd_eligible(args) -> int:
@@ -133,8 +142,10 @@ def _cmd_reproduce(args) -> int:
         return 2
 
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        manifest = load_json(
+            manifest_path, strict=True, max_bytes=_MAX_MANIFEST_BYTES,
+        )
+    except ValueError as e:
         sys.stderr.write(f"manifest.json is not valid JSON: {e}\n")
         return 2
     if not isinstance(manifest, dict):
@@ -149,6 +160,29 @@ def _cmd_reproduce(args) -> int:
         sys.stderr.write(
             f"manifest.json missing required field(s): "
             f"{', '.join(missing)}\n"
+        )
+        return 2
+
+    # Verify witness.bin against the manifest before constructing the
+    # bundle — a swapped/truncated witness must not silently drive an
+    # N-run reproduction of the wrong bytes.
+    witness_bytes = witness_path.read_bytes()
+    from core.hash import sha256_bytes
+    actual_hash = sha256_bytes(witness_bytes)
+    if actual_hash != manifest["witness_hash"]:
+        sys.stderr.write(
+            f"witness.bin hash mismatch: file {actual_hash[:16]}... "
+            f"!= manifest witness_hash "
+            f"{str(manifest['witness_hash'])[:16]}...; "
+            f"refusing to reproduce a tampered/swapped witness\n"
+        )
+        return 2
+    if manifest.get("witness_len") is not None \
+            and len(witness_bytes) != manifest["witness_len"]:
+        sys.stderr.write(
+            f"witness.bin length mismatch: file is "
+            f"{len(witness_bytes)} bytes, manifest witness_len is "
+            f"{manifest['witness_len']}; refusing to reproduce\n"
         )
         return 2
 
@@ -169,7 +203,6 @@ def _cmd_reproduce(args) -> int:
         reproduction=manifest.get("reproduction"),
     )
 
-    witness_bytes = witness_path.read_bytes()
     binary_path = Path(args.binary) if args.binary else None
 
     result = reproduce_witness(
@@ -179,13 +212,24 @@ def _cmd_reproduce(args) -> int:
     attach_reproduction(bundle, result)
 
     # Re-persist the manifest with the reproduction block + tier bump.
-    manifest_path.write_text(
-        json.dumps(bundle.as_dict(), indent=2), encoding="utf-8",
-    )
+    # save_json writes atomically (tempfile + rename) — no partial
+    # writes.
+    save_json(manifest_path, bundle.as_dict())
 
     print(render_bundle(bundle))
     print(f"  reproduced: {result.reproduced} "
           f"(attempted={result.attempted}, {result.reason})")
+    # Per-run diagnostics: name the lane and shape of every run so a
+    # divergent run (isolation degradation, clean-exit-with-no-input)
+    # is diagnosable straight from the report/CI log.
+    for rec in result.run_details:
+        extras = ", ".join(
+            f"{k}={rec[k]!r}" for k in rec if k not in ("run", "outcome")
+        )
+        line = f"    run {rec.get('run', '?')}: {rec.get('outcome', '?')}"
+        if extras:
+            line += f" ({extras})"
+        print(line)
     # Exit 0 when it reproduced; 1 when attempted-but-not; 2 when
     # not attempted (couldn't run) — so scripts can branch.
     if result.reproduced:
