@@ -224,6 +224,25 @@ def _ingest_context_map(conn, snapshot_id: str, context_map: dict[str, Any]) -> 
                 confidence=str(flow.get("confidence") or flow.get("severity") or "candidate"),
             )
 
+    # Dependency imports — create dependency nodes + IMPORTS edges.
+    for imp in _list(context_map.get("imports")):
+        module = imp.get("module") or imp.get("name")
+        imp_file = imp.get("file") or ""
+        if not module:
+            continue
+        dep_id = _upsert_node(conn, snapshot_id, "dependency", module, {
+            "name": module, "file": imp_file,
+            "line": imp.get("line"),
+        })
+        file_key = stable_key("file", imp_file)
+        file_row = conn.execute(
+            "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
+            (file_key,),
+        ).fetchone()
+        if file_row:
+            _upsert_edge(conn, snapshot_id, "IMPORTS", file_row["id"], dep_id,
+                          evidence={"source": "context-map.json", "section": "imports"})
+
 
 def _ingest_flow_trace(conn, snapshot_id: str, trace: dict[str, Any]) -> None:
     trace_props = _with_graph_evidence("flow-trace", "flow_trace", trace)
@@ -648,3 +667,133 @@ def _int_or_none(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def ingest_annotations(
+    run_dir: Path, target: str,
+) -> Optional[Path]:
+    """Ingest annotation markdown into the graph as annotation nodes.
+
+    Walks the ``annotations/`` subtree under *run_dir* (or the
+    project output dir that contains *run_dir*). Creates one
+    ``annotation`` node per annotated function, linked via
+    ``ANNOTATED`` edges to existing ``function`` nodes.
+    """
+    run_dir = Path(run_dir)
+    ann_dir = run_dir / "annotations"
+    if not ann_dir.is_dir():
+        parent = run_dir.parent
+        if (parent / "annotations").is_dir():
+            ann_dir = parent / "annotations"
+        else:
+            return None
+
+    try:
+        from core.annotations.storage import iter_all_annotations
+    except ImportError:
+        return None
+
+    annotations = list(iter_all_annotations(ann_dir))
+    if not annotations:
+        return None
+
+    graph_path = graph_path_for_run(run_dir, target or None)
+    snap_id = make_snapshot_id(
+        target, _hash_json([a.function for a in annotations]),
+        str(run_dir.resolve()),
+    )
+    conn = open_graph(graph_path)
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _upsert_snapshot(conn, snap_id, target, run_dir, producer="annotate")
+        for ann in annotations:
+            key = f"{ann.file}::{ann.function}"
+            props: dict[str, Any] = {
+                "file": ann.file,
+                "name": ann.function,
+                "status": ann.metadata.get("status", ""),
+                "source": ann.metadata.get("source", ""),
+                "cwe": ann.metadata.get("cwe", ""),
+                "body": ann.body[:500] if ann.body else "",
+            }
+            ann_id = _upsert_node(conn, snap_id, "annotation", key, props)
+            fn_key = stable_key("function", key)
+            fn_row = conn.execute(
+                "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
+                (fn_key,),
+            ).fetchone()
+            if fn_row:
+                _upsert_edge(
+                    conn, snap_id, "ANNOTATED", fn_row["id"], ann_id,
+                    evidence={"source": "annotations", "status": props["status"]},
+                )
+        conn.execute("COMMIT")
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        print("graph: annotation ingest failed", file=sys.stderr)
+        return None
+    finally:
+        conn.close()
+    return graph_path
+
+
+def rebuild_graph(project_dir: Path) -> Optional[Path]:
+    """Delete and rebuild the graph from artefacts in *project_dir*.
+
+    Walks every run directory, sorted by lifecycle timestamp, calling
+    the appropriate ``ingest_*`` for each artefact type found.
+    Returns the graph path on success.
+    """
+    project_dir = Path(project_dir)
+    graph_path = graph_path_for_run(project_dir)
+
+    if graph_path.exists():
+        graph_path.unlink()
+
+    run_dirs: list[tuple[str, Path]] = []
+    for child in sorted(project_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in ("graph", "annotations"):
+            continue
+        lifecycle = load_json(child / "lifecycle.json")
+        ts = ""
+        if isinstance(lifecycle, dict):
+            ts = str(lifecycle.get("created_at") or lifecycle.get("started_at") or "")
+        run_dirs.append((ts, child))
+    run_dirs.sort(key=lambda x: x[0])
+
+    target = ""
+    for ts, d in run_dirs:
+        lifecycle = load_json(d / "lifecycle.json")
+        if isinstance(lifecycle, dict):
+            target = target or str(lifecycle.get("target") or "")
+
+        if (d / "checklist.json").exists() or (d / "context-map.json").exists():
+            ingest_run(d, target)
+
+        findings_path = d / "findings-deduped.json"
+        if not findings_path.exists():
+            findings_path = d / "findings.json"
+        if findings_path.exists():
+            ingest_scan_findings(d, target)
+
+        sarif_files = list(d.glob("*.sarif")) + list(d.glob("*.sarif.json"))
+        if sarif_files:
+            ingest_codeql_sarif(d, target)
+
+        if (d / "review-journal.jsonl").exists():
+            ingest_audit_hypotheses(d, target)
+
+        if (d / "validation-outcomes.json").exists():
+            ingest_validation_outcomes(d, target)
+
+    ann_dir = project_dir / "annotations"
+    if ann_dir.is_dir():
+        ingest_annotations(project_dir, target)
+
+    return graph_path if graph_path.exists() else None
