@@ -43,6 +43,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--head-snapshot", help="Head snapshot ID for --diff")
     p.add_argument("--threat-context", action="store_true", help="Emit compact graph-backed risk context for threat modelling")
     p.add_argument("--context-map", action="store_true", help="Emit graph as context-map-compatible JSON")
+    p.add_argument("--hypothesis-seeds", action="store_true", help="List functions connected to prior findings/hypotheses")
+    p.add_argument("--fuzz-targets", action="store_true", help="List graph-derived fuzz target candidates")
+    p.add_argument("--dedup-chains", action="store_true", help="Show finding→entry-point dedup chains")
+    p.add_argument("--coverage-residual", action="store_true", help="List functions not yet covered by findings")
+    p.add_argument("--dashboard", action="store_true", help="Show dashboard summary counts")
     p.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     return p
 
@@ -66,7 +71,9 @@ def main() -> int:
     args = _parser().parse_args()
     if not (
         args.summary or args.reachable_sinks or args.paths or args.context_map
-        or args.diff or args.threat_context
+        or args.diff or args.threat_context or args.hypothesis_seeds
+        or args.fuzz_targets or args.dedup_chains or args.coverage_residual
+        or args.dashboard
     ):
         args.summary = True
     db_path = _resolve_db(args)
@@ -74,13 +81,28 @@ def main() -> int:
     from core.understand_graph import (
         attack_paths,
         build_context_map,
+        coverage_residual,
+        dashboard_summary,
+        fuzz_targets,
         graph_diff,
         graph_summary,
+        hypothesis_seeds,
         reachable_sinks,
+        scan_dedup_chains,
         threat_model_graph_context,
     )
 
-    if args.context_map:
+    if args.hypothesis_seeds:
+        payload = {"seeds": hypothesis_seeds(db_path)}
+    elif args.fuzz_targets:
+        payload = {"fuzz_targets": fuzz_targets(db_path)}
+    elif args.dedup_chains:
+        payload = {"dedup_chains": scan_dedup_chains(db_path)}
+    elif args.coverage_residual:
+        payload = {"residual": coverage_residual(db_path, args.target)}
+    elif args.dashboard:
+        payload = dashboard_summary(db_path)
+    elif args.context_map:
         context_map, stale = build_context_map(db_path, args.target)
         payload = {"context_map": context_map, "stale_files": sorted(stale)}
     elif args.diff:
@@ -115,7 +137,7 @@ def main() -> int:
     else:
         payload = graph_summary(db_path)
 
-    if args.json or args.context_map or args.diff:
+    if args.json or args.context_map or args.diff or args.hypothesis_seeds or args.fuzz_targets or args.dedup_chains or args.coverage_residual or args.dashboard:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
