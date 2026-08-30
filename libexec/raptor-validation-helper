@@ -2239,6 +2239,7 @@ def _bridge_understand_output(out_dir, checklist, target,
         enrich_checklist,
         find_understand_output,
         load_understand_context,
+        load_understand_graph_context,
     )
 
 
