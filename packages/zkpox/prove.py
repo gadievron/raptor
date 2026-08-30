@@ -136,7 +136,7 @@ def run(
             readable_paths=[str(witness_dir)],
             tool_paths=[str(bin_path.parent)],
             caller_label="zkpox-prove",
-            capture_output=True, text=True, timeout=timeout, check=False,
+            capture_output=True, text=True, timeout=timeout,
         )
     finally:
         shutil.rmtree(sandbox_workdir, ignore_errors=True)
