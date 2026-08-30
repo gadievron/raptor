@@ -15,6 +15,8 @@ Turn `/understand`, `/validate`, and graph-memory JSON outputs into Mermaid diag
 
 Omit `--type` to render everything in the directory.
 
+Use `--stdout` for a read-only preview (no file written), or `--force` to overwrite an existing `diagrams.md`.
+
 ## What gets rendered
 
 | Source file | Diagram type | Shows |
@@ -25,8 +27,15 @@ Omit `--type` to render everything in the directory.
 | `attack-tree.json` | flowchart TD | Knowledge graph with nodes styled by status (confirmed/disproven/exploring/unexplored) |
 | `graph-priority-paths.json` | flowchart LR | Graph-derived entry → sink paths handed to `/validate` Stage 0, with risk/confidence and missing-boundary notes |
 | `attack-paths.json` | flowchart TD per path | Step chain with proximity score (0–10) and blocker annotations |
+| `hypotheses.json` | flowchart TD | Hypothesis states |
+| `findings.json` | pie | Verdict/type summary (rendered when 2+ findings) |
 | `graph-diff.json` / `understand-graph-diff.json` | flowchart TD | Added/removed graph reachability and newly introduced graph risks between snapshots |
 | `graph/raptor.graph.sqlite` | flowchart LR | Fallback context map from persistent `/understand` graph memory when local JSON is absent |
+
+
+Black-box binary `context-map.json` files (and `binary-context-map.json`) also render xref-backed candidate call
+edges as dotted grey edges labelled `candidate`. They are deliberately not
+drawn as unchecked flows because a binary xref is not taint proof.
 
 ## Examples
 
