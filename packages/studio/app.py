@@ -8,6 +8,8 @@ Read-write web UI for raptor projects.
 from __future__ import annotations
 
 import asyncio
+import shlex
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -28,6 +30,7 @@ from packages.studio.config import (
 from packages.studio.security import (
     CrossOriginProtection,
     RemoteAccessProtection,
+    SecurityHeaders,
     csrf_token,
     require_csrf_token,
 )
@@ -88,9 +91,21 @@ templates.env.filters["md"] = render_markdown
 # CSRF synchronizer token — every state-changing form embeds it and every
 # state-changing route validates it (see packages/studio/security.py).
 templates.env.globals["csrf_token"] = csrf_token
+# Shell-quoted argv display: `{{ job.argv | shlex_join }}` renders
+# arguments with proper quoting so paths containing spaces are unambiguous.
+templates.env.filters["shlex_join"] = shlex.join
 
-app = FastAPI(title=APP_TITLE)
-# Last-added runs first: host/auth gating, then cross-origin rejection.
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    worker_service.start()
+    yield
+    worker_service.stop(timeout=1.0)
+
+
+app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
+# Last-added runs first: security headers, host/auth gating, cross-origin.
+app.add_middleware(SecurityHeaders)
 app.add_middleware(CrossOriginProtection)
 app.add_middleware(RemoteAccessProtection)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -674,18 +689,6 @@ async def api_job_stream(job_id: str):
             "X-Accel-Buffering": "no",  # disable nginx buffering if proxied
         },
     )
-
-
-# --- Worker lifecycle ------------------------------------------------------
-
-@app.on_event("startup")
-def _start_worker():
-    worker_service.start()
-
-
-@app.on_event("shutdown")
-def _stop_worker():
-    worker_service.stop(timeout=1.0)
 
 
 # --- Per-run detail -------------------------------------------------------

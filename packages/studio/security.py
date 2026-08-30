@@ -18,6 +18,11 @@ without ever reading a response. The controls here close that class:
   page *read* responses — including the filesystem-browsing API), and
   requires an access token from non-loopback clients when the launcher
   provisioned one (``--allow-remote``).
+- ``SecurityHeaders`` (ASGI middleware) sets a restrictive
+  Content-Security-Policy on every response: ``script-src 'self'
+  'unsafe-inline'`` (inline scripts in Jinja templates need it, but
+  external script loading is blocked) plus ``frame-ancestors 'none'``
+  to prevent click-jacking.
 
 The layers are deliberate: fetch-metadata/Origin headers cover modern
 browsers cheaply, the token covers header-less or header-spoofing clients
@@ -198,9 +203,56 @@ class RemoteAccessProtection:
             url += "?" + urlencode(remaining)
         response = RedirectResponse(url, status_code=303)
         response.set_cookie(
-            ACCESS_TOKEN_COOKIE, expected, httponly=True, samesite="strict"
+            ACCESS_TOKEN_COOKIE,
+            expected,
+            httponly=True,
+            samesite="strict",
+            secure=(scope.get("scheme") == "https"),
         )
         return response
+
+
+# --- Content-Security-Policy ------------------------------------------------
+
+# Inline scripts live in Jinja templates and cannot be nonce'd without a
+# templating-layer change, so 'unsafe-inline' stays. The policy still
+# blocks external script loading, object/embed, and framing — limiting
+# the blast radius if an XSS vector is ever found.
+_CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+])
+
+
+class SecurityHeaders:
+    """Pure-ASGI middleware that sets CSP and X-Frame-Options on every response."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                has_csp = any(k == b"content-security-policy" for k, _ in headers)
+                if not has_csp:
+                    headers.append((b"content-security-policy", _CSP.encode()))
+                headers.append((b"x-frame-options", b"DENY"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 class CrossOriginProtection:
