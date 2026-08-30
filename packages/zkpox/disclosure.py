@@ -135,6 +135,7 @@ class DisclosureBundle:
     # :func:`disclosure_from_manifest` so the reproduction evidence
     # reaches the disclosure bundle instead of being dropped.
     provenance: dict[str, Any] | None = None
+    experimental: bool = True
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,7 @@ def _replace_timestamp(bundle: DisclosureBundle, ts: "Timestamp | None") -> Disc
         researcher=bundle.researcher,
         timestamp=ts,
         provenance=bundle.provenance,
+        experimental=bundle.experimental,
     )
 
 
@@ -448,6 +450,7 @@ def _to_dict(bundle: DisclosureBundle) -> dict[str, Any]:
     # binds the Tier 0/1 + 1.5 evidence too, not just the proof bytes.
     if bundle.provenance is not None:
         payload["provenance"] = dict(bundle.provenance)
+    payload["experimental"] = bundle.experimental
     return payload
 
 
@@ -460,6 +463,7 @@ def _from_dict(d: dict[str, Any]) -> DisclosureBundle:
     researcher_d = d.get("researcher")
     timestamp_d = d.get("timestamp")
     provenance_d = d.get("provenance")
+    experimental = d.get("experimental", True)
     return DisclosureBundle(
         version=d["version"],
         target=Target(
@@ -517,4 +521,5 @@ def _from_dict(d: dict[str, Any]) -> DisclosureBundle:
             )
         ),
         provenance=(None if provenance_d is None else dict(provenance_d)),
+        experimental=experimental,
     )
