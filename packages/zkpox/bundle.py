@@ -218,7 +218,7 @@ def render_bundle(bundle: ZKPoXBundle) -> str:
             else f"source {bundle.target_source_hash[:16]}..."
             if bundle.target_source_hash else "none"
         ),
-        f"   claim:    {bundle.attestation['claim']}",
+        f"   claim:    {bundle.attestation.get('claim', 'n/a')}",
     ]
     if bundle.reproduction is not None:
         rep = bundle.reproduction
