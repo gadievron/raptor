@@ -437,7 +437,7 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) ->
     Creates hypothesis and tool_verdict nodes.
     """
     run_dir = Path(run_dir)
-    journal_path = run_dir / "journal.jsonl"
+    journal_path = run_dir / "review-journal.jsonl"
     if not journal_path.exists():
         return None
 
