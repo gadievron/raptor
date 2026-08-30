@@ -257,6 +257,28 @@ def test_query_token_redirect_never_leaves_site(client, remote):
         assert not r.headers["location"].startswith("//")
 
 
+def test_auth_cookie_samesite_strict(client, remote):
+    r = client.get("/api/health?token=sekrit-token", follow_redirects=False)
+    cookie_hdr = r.headers.get("set-cookie", "")
+    assert "samesite=strict" in cookie_hdr.lower()
+
+
+# --- security headers -------------------------------------------------------
+
+def test_csp_header_present_on_pages(client):
+    r = client.get("/api/health")
+    csp = r.headers.get("content-security-policy", "")
+    assert "default-src 'self'" in csp
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "form-action 'self'" in csp
+
+
+def test_x_frame_options_header_present(client):
+    r = client.get("/api/health")
+    assert r.headers.get("x-frame-options") == "DENY"
+
+
 # --- run artifact serving ----------------------------------------------------
 
 def test_run_files_served_with_noscript_csp(client, tmp_path, monkeypatch):

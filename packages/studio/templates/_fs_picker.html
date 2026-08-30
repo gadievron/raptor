@@ -130,7 +130,11 @@
     const resp = await fetch(url);
     if (!resp.ok) {
       const body = await resp.text();
-      listEl.innerHTML = '<div style="padding: 24px; color: var(--crit); font-size: 12px;">' + body + '</div>';
+      listEl.textContent = '';
+      const errDiv = document.createElement('div');
+      errDiv.style.cssText = 'padding: 24px; color: var(--crit); font-size: 12px;';
+      errDiv.textContent = body;
+      listEl.appendChild(errDiv);
       return;
     }
     const data = await resp.json();
@@ -198,7 +202,13 @@
     if (data.parent && data.parent !== data.path) {
       const up = document.createElement('div');
       up.className = 'fs-entry dir';
-      up.innerHTML = '<span class="icon">↑</span><span>..</span>';
+      const upIcon = document.createElement('span');
+      upIcon.className = 'icon';
+      upIcon.textContent = '↑';
+      up.appendChild(upIcon);
+      const upLabel = document.createElement('span');
+      upLabel.textContent = '..';
+      up.appendChild(upLabel);
       up.addEventListener('click', () => loadPath(data.parent));
       listEl.appendChild(up);
     }
@@ -207,8 +217,13 @@
       row.className = 'fs-entry' + (e.is_dir ? ' dir' : '');
       row.dataset.path = e.path;
       row.dataset.isDir = e.is_dir ? '1' : '0';
-      row.innerHTML = '<span class="icon">' + (e.is_dir ? '📁' : '📄') + '</span><span></span>';
-      row.querySelector('span:last-child').textContent = e.name;
+      const icon = document.createElement('span');
+      icon.className = 'icon';
+      icon.textContent = e.is_dir ? '📁' : '📄';
+      row.appendChild(icon);
+      const label = document.createElement('span');
+      label.textContent = e.name;
+      row.appendChild(label);
       row.addEventListener('click', () => {
         selectedPath = e.path;
         updateCurrent();

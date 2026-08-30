@@ -33,7 +33,7 @@
 <div class="card" style="margin-bottom: 16px;">
   <dl style="display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 0; font-size: 13px;">
     <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Command</dt>
-    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all; color: var(--fg);">{{ job.argv|join(' ') }}</dd>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all; color: var(--fg);">{{ job.argv|shlex_join }}</dd>
 
     <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Target</dt>
     <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2); word-break: break-all;">{{ job.target }}</dd>
