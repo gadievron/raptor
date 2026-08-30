@@ -10,6 +10,11 @@ from .schema import json_loads
 from .store import graph_path_for_run, open_graph
 
 
+def _like_escape(value: str) -> str:
+    r"""Escape LIKE wildcards using backslash as escape char."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def graph_summary(db_path: Path) -> dict[str, Any]:
     if not Path(db_path).exists():
         return {"exists": False}
@@ -326,12 +331,12 @@ def prompt_context_for_location(db_path: Path, file_path: str, line: int | None 
                 """
                 SELECT kind, name, file, line_start, props_json
                 FROM nodes
-                WHERE stale=0 AND file LIKE ?
+                WHERE stale=0 AND file LIKE ? ESCAPE '\\'
                   AND kind IN ('entry_point', 'trust_boundary', 'sink', 'unchecked_flow', 'finding')
                 ORDER BY kind, line_start
                 LIMIT ?
                 """,
-                (f"%{Path(file_name).name}", limit),
+                (f"%{_like_escape(Path(file_name).name)}", limit),
             ).fetchall()
     if not rows:
         return ""

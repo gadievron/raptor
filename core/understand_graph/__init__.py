@@ -6,11 +6,13 @@ than querying SQLite directly.
 """
 
 from .ingest import (
+    ingest_annotations,
     ingest_audit_hypotheses,
     ingest_codeql_sarif,
     ingest_run,
     ingest_scan_findings,
     ingest_validation_outcomes,
+    rebuild_graph,
 )
 from .queries import (
     alternative_paths,
@@ -48,6 +50,7 @@ __all__ = [
     "graph_path_for_run",
     "graph_summary",
     "hypothesis_seeds",
+    "ingest_annotations",
     "ingest_audit_hypotheses",
     "ingest_codeql_sarif",
     "ingest_run",
@@ -58,6 +61,7 @@ __all__ = [
     "propagate_binary_verdicts",
     "query_graph",
     "reachable_sinks",
+    "rebuild_graph",
     "sca_reachability",
     "scan_dedup_chains",
     "threat_model_graph_context",
