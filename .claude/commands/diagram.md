@@ -10,7 +10,7 @@ Turn `/understand`, `/validate`, and graph-memory JSON outputs into Mermaid diag
 ## Usage
 
 ```
-/diagram <out-dir> [--target <name>] [--type context-map|flow-trace|attack-tree|attack-paths|all]
+/diagram <out-dir> [--target <name>] [--stdout] [--force] [--type context-map|flow-trace|attack-tree|attack-paths|all]
 ```
 
 Omit `--type` to render everything in the directory.
@@ -71,7 +71,7 @@ anything Mermaid-aware.
 ## Execution
 
 ```bash
-libexec/raptor-render-diagrams <out-dir> [--target <name>]
+libexec/raptor-render-diagrams <out-dir> [--target <name>] [--stdout] [--force]
 ```
 
 Parse `$ARGS` for `<out-dir>` and `--target`, then run the command. Show the output path.
