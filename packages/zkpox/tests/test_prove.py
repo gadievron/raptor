@@ -19,7 +19,6 @@ from packages.zkpox import prove
 
 import shutil
 import sys
-from pathlib import Path
 
 
 def _mount_ns_usable() -> bool:
