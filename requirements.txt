@@ -21,13 +21,6 @@ typer==0.25.1
 # raptor's install set, which is exactly what we want
 # (CVE-2025-69872 was the trigger; raptor doesn't use the cache
 # layer).
-# semgrep imports `mcp` unconditionally at startup (its MCP-server
-# feature is not optional at import time), but declares a pin (1.23.3)
-# that predates the decorator-API cleanup. 1.29.0 is the newest 1.x
-# semgrep runs against (verified by scan smoke test); 2.x removes the
-# low-level server decorator API some consumers still use.
-mcp==1.29.0
-
 instructor==1.15.4
 
 # instructor hard-requires openai>=2.0.0,<3.0.0, so openai is always
