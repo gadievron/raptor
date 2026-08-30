@@ -779,6 +779,28 @@ def build_inventory(
                 logger.warning("binary_oracle_edges extraction failed: %s",
                                exc)
 
+    # Propagate binary verdicts into the graph store so downstream
+    # consumers (coverage_residual, fuzz_targets) reflect dead-code status.
+    if bin_paths and output_dir:
+        import sqlite3 as _graph_sqlite3
+        try:
+            from core.understand_graph import graph_path_for_run, propagate_binary_verdicts
+            _gp = graph_path_for_run(Path(output_dir), target_path)
+            if _gp.exists():
+                _bo_verdicts: dict[str, str] = {}
+                for _f in (inventory.get("files") or []):
+                    _fp = _f.get("path", "")
+                    for _item in (_f.get("items") or []):
+                        _bo = ((_item.get("metadata") or {}).get("binary_oracle") or {})
+                        _cls = _bo.get("classification")
+                        _name = _item.get("name")
+                        if _cls and _name:
+                            _bo_verdicts[f"{_fp}::{_name}"] = _cls
+                if _bo_verdicts:
+                    propagate_binary_verdicts(_gp, _bo_verdicts)
+        except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+            logger.debug("graph propagate_binary_verdicts skipped", exc_info=True)
+
     # Perlasm generated-asm enrichment (asm option b): structurally
     # detect perlasm generators, run them under the strict sandbox
     # (fail-closed), and inventory the emitted assembly as

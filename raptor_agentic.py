@@ -4477,6 +4477,38 @@ Examples:
     except Exception as e:  # noqa: BLE001
         logger.debug("Run metadata: %s", e)  # Optional — don't fail the pipeline
 
+    # Graph store enrichment — ingest producers into the project graph.
+    # Best-effort: never fails the pipeline.
+    import sqlite3 as _graph_sqlite3
+    try:
+        from core.understand_graph import (
+            ingest_audit_hypotheses,
+            ingest_codeql_sarif,
+            ingest_scan_findings,
+            ingest_validation_outcomes,
+        )
+        _target_str = str(original_repo_path)
+        # Scan findings live under the validation subdirectory
+        _val_dir = out_dir / "validation"
+        if _val_dir.is_dir():
+            ingest_scan_findings(_val_dir, _target_str)
+        # CodeQL SARIF — check the output dir and any codeql subdirectory
+        if args.codeql or args.codeql_only:
+            ingest_codeql_sarif(out_dir, _target_str)
+            _cq_dir = out_dir / "codeql"
+            if _cq_dir.is_dir():
+                ingest_codeql_sarif(_cq_dir, _target_str)
+        # Validation outcomes from --validate post-pass
+        if postpass_result and postpass_result.ran and postpass_result.validate_dir:
+            ingest_validation_outcomes(
+                Path(postpass_result.validate_dir), _target_str,
+            )
+        # Audit hypotheses from --gap-audit
+        if audit_dir and audit_postpass.get("completed"):
+            ingest_audit_hypotheses(audit_dir, _target_str)
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        logger.debug("graph store enrichment skipped", exc_info=True)
+
     # Clean up temporary git copy (if we created one for a non-git target)
     if _git_temp_dir and _git_temp_dir.exists():
         import shutil

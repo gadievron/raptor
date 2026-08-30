@@ -708,6 +708,23 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                     print("\n" + summary)
             except Exception as e:  # noqa: BLE001
                 logging.getLogger(__name__).debug("coverage summary skipped: %s", e)
+
+        # Graph store enrichment for standalone /scan and /codeql.
+        # /agentic handles its own (raptor_agentic.py complete_run block).
+        if command in ("scan", "codeql"):
+            import sqlite3 as _graph_sqlite3
+            try:
+                _target_str = target or ""
+                if command == "scan":
+                    from core.understand_graph import ingest_scan_findings
+                    ingest_scan_findings(out_dir, _target_str)
+                if command == "codeql":
+                    from core.understand_graph import ingest_codeql_sarif
+                    ingest_codeql_sarif(out_dir, _target_str)
+            except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+                logging.getLogger(__name__).debug(
+                    "graph store enrichment skipped", exc_info=True,
+                )
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc

@@ -530,6 +530,15 @@ def load_understand_graph_context(
         validate_dir,
     )
 
+    # Coverage residual — functions not yet covered by any finding.
+    import sqlite3 as _graph_sqlite3
+    _residual: list = []
+    try:
+        from core.understand_graph import coverage_residual
+        _residual = coverage_residual(graph_path, target_path)
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        logger.debug("understand_bridge: coverage_residual skipped", exc_info=True)
+
     summary.update({
         "graph_loaded": True,
         "graph_db": str(graph_path),
@@ -539,6 +548,7 @@ def load_understand_graph_context(
         "map_smt_paths": map_smt_stats,
         "graph_attack_paths": graph_path_stats,
         "context_map": context_map,
+        "coverage_residual": _residual,
     })
     return summary
 

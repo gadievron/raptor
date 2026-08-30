@@ -2210,6 +2210,36 @@ def _print_status(project) -> None:
         else:
             print(f"\nDisk usage: {total_size}B")
 
+        # Graph store summary — best-effort, never breaks status
+        import sqlite3 as _graph_sqlite3
+        try:
+            from core.understand_graph import dashboard_summary, graph_path_for_run
+            _gp = graph_path_for_run(Path(project.output_dir))
+            if _gp.exists():
+                _gs = dashboard_summary(_gp)
+                totals = _gs.get("totals") or {}
+                if any(totals.values()):
+                    print(f"\nGraph store: {_gp.relative_to(Path(project.output_dir))}")
+                    parts = []
+                    for label, key in (
+                        ("entries", "entries"),
+                        ("sinks", "sinks"),
+                        ("findings", "scan_findings"),
+                        ("CodeQL", "codeql_results"),
+                        ("hypotheses", "hypotheses"),
+                        ("validated", "validated"),
+                    ):
+                        v = totals.get(key, 0)
+                        if v:
+                            parts.append(f"{v} {label}")
+                    if parts:
+                        print(f"  {', '.join(parts)}")
+                    cov = _gs.get("validation_coverage", 0.0)
+                    if cov > 0:
+                        print(f"  Validation coverage: {cov:.0%}")
+        except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+            pass
+
     else:
         print("\nNo runs.")
 

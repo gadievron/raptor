@@ -4213,6 +4213,28 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None):
     # between segments. Dispatches through the run's budget-governed
     # client (the _run_llm_client doctrine) so spend lands on the
     # --max-cost ledger.
+
+    # Graph store: boost gap-queue items connected to prior findings/hypotheses.
+    # Bumps priority_score so graph-connected items rank higher in the budget cut.
+    import sqlite3 as _graph_sqlite3
+    try:
+        from core.understand_graph import graph_path_for_run, hypothesis_seeds
+        _gp = graph_path_for_run(config.out_dir, str(config.target_path or ""))
+        if _gp.exists():
+            seeds = hypothesis_seeds(_gp)
+            if seeds:
+                _seed_keys = {(s["file"], s["function"]) for s in seeds}
+                _boosted = 0
+                for gap in gaps:
+                    if (gap.get("file", ""), gap.get("name", "")) in _seed_keys:
+                        gap["priority_score"] = gap.get("priority_score", 0) + 10
+                        _boosted += 1
+                if _boosted:
+                    logger.info("graph store: boosted %d/%d gaps from %d hypothesis seeds",
+                                _boosted, len(gaps), len(seeds))
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        logger.debug("graph hypothesis_seeds skipped", exc_info=True)
+
     if getattr(config, "rank_gaps", False):
         try:
             import zlib
@@ -8396,6 +8418,17 @@ def _run_audit_body(
             )
     except Exception:
         logger.debug("sandbox policy validation failed", exc_info=True)
+
+    # Graph store enrichment — ingest audit hypotheses + scan findings.
+    if config.out_dir:
+        import sqlite3 as _graph_sqlite3_end
+        try:
+            from core.understand_graph import ingest_audit_hypotheses, ingest_scan_findings
+            _tgt = str(config.target_path or "")
+            ingest_audit_hypotheses(config.out_dir, _tgt)
+            ingest_scan_findings(config.out_dir, _tgt)
+        except (ImportError, _graph_sqlite3_end.Error, KeyError, TypeError, ValueError):
+            logger.debug("graph store enrichment skipped", exc_info=True)
 
     return result
 

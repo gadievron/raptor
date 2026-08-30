@@ -2670,6 +2670,17 @@ def prepare_1(workdir, target=None, model=None):
                 if disproven_list:
                     store_validation_disproven(resolved_target, disproven_list)
 
+    # Graph store enrichment — ingest validation outcomes + scan findings.
+    import sqlite3 as _graph_sqlite3
+    try:
+        from core.understand_graph import ingest_scan_findings, ingest_validation_outcomes
+        _wdir = Path(workdir)
+        _tgt = target or ""
+        ingest_validation_outcomes(_wdir, _tgt)
+        ingest_scan_findings(_wdir, _tgt)
+    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+        print("graph: ingest skipped", file=sys.stderr)
+
     # Diagrams
     try:
         from packages.diagram import render_and_write
