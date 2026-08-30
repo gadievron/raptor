@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
@@ -97,6 +98,26 @@ def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def query_graph(path: Path, fn, *args, **kwargs):
+    """Run a read query with corruption guard.
+
+    On DatabaseError, delete the corrupt graph and return None — consumers
+    see 'no graph' and degrade gracefully.
+    """
+    if not Path(path).exists():
+        return None
+    try:
+        with graph_connection(path) as conn:
+            return fn(conn, *args, **kwargs)
+    except sqlite3.DatabaseError as exc:
+        print(f"graph: corrupt ({exc}), deleting {Path(path).name}", file=sys.stderr)
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if current > SCHEMA_VERSION:
@@ -109,6 +130,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     if current < 2:
         _migrate_2(conn)
         current = 2
+    if current < 3:
+        _migrate_3(conn)
+        current = 3
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -315,3 +339,15 @@ def _recover_interrupted_v2_migration(conn: sqlite3.Connection) -> None:
             conn.execute(f"DROP TABLE [{old_name}]")
         elif old_name in tables and "edges" not in tables:
             conn.execute(f"ALTER TABLE [{old_name}] RENAME TO edges")
+
+
+def _migrate_3(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_snap_kind_stale "
+        "ON nodes(snapshot_id, kind, stale)"
+    )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    if "producer" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN producer TEXT NOT NULL DEFAULT 'understand'"
+        )
