@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 NODE_KINDS = {
     "file",
@@ -24,6 +24,11 @@ NODE_KINDS = {
     "threat",
     "dependency",
     "verified_outcome",
+    "hypothesis",
+    "tool_verdict",
+    "scan_finding",
+    "codeql_result",
+    "annotation",
 }
 
 EDGE_KINDS = {
@@ -38,7 +43,12 @@ EDGE_KINDS = {
     "BLOCKED_BY",
     "DERIVED_FROM",
     "IMPORTS_DEP",
+    "IMPORTS",
     "AFFECTS",
+    "TESTED_BY",
+    "SUPPRESSED_BY",
+    "ANNOTATED",
+    "VALIDATES",
 }
 
 
@@ -85,3 +95,12 @@ def stable_edge_id(kind: str, src_id: str, dst_id: str, *parts: Any) -> str:
 
 def snapshot_id(target_path: str, checklist_hash: str, producer_run: str) -> str:
     return f"snap:{short_hash({'target': target_path, 'checklist': checklist_hash, 'run': producer_run})}"
+
+
+def content_hash(finding: dict[str, Any]) -> str:
+    parts = [
+        str(finding.get("rule_id") or finding.get("query_id") or ""),
+        str(finding.get("message") or finding.get("description") or ""),
+        str(finding.get("snippet") or ""),
+    ]
+    return short_hash("::".join(parts), length=12)
