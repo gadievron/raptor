@@ -18,7 +18,7 @@ pytest.importorskip("cbor2")
 import cbor2
 
 from packages.zkpox import (
-    Bundle,
+    ZKPoXBundle,
     BUNDLE_VERSION,
     Envelope,
     HarnessRef,
@@ -46,14 +46,14 @@ def _fresh_envelope() -> Envelope:
     )
 
 
-def _fresh_bundle(*, with_researcher: bool = False) -> Bundle:
+def _fresh_bundle(*, with_researcher: bool = False) -> ZKPoXBundle:
     env = _fresh_envelope()
     vendor_env = vendor_envelope_from(
         env,
         vendor_pubkey="age1exampleexampleexampleexampleexampleexamplekjzqplexample",
         drand_round_min=12345678,
     )
-    bundle = Bundle(
+    bundle = ZKPoXBundle(
         version=BUNDLE_VERSION,
         target=Target(
             kind="elf",
@@ -107,7 +107,7 @@ def test_round_trip_with_researcher():
 
 
 def test_blob_top_level_keys_match_proposal():
-    """Bundle binary form must include the §8-spec'd top-level fields,
+    """ZKPoXBundle binary form must include the §8-spec'd top-level fields,
     so external CBOR-only verifiers can be written without our types."""
     bundle = _fresh_bundle()
     decoded = cbor2.loads(to_cbor(bundle))
@@ -224,7 +224,7 @@ def test_pre_anchor_hash_changes_when_proof_changes():
     field. If you can mutate proof bytes without the hash changing,
     Rekor's anchor doesn't bind to what you claim it does."""
     a = _fresh_bundle()
-    b = Bundle(
+    b = ZKPoXBundle(
         version=a.version,
         target=a.target,
         vulnerability=a.vulnerability,
@@ -245,7 +245,7 @@ def test_pre_anchor_hash_changes_when_proof_changes():
 # ---------------------------------------------------------------------------
 
 def test_experimental_default_true_on_construct():
-    """Every Bundle this code writes is marked experimental by default —
+    """Every ZKPoXBundle this code writes is marked experimental by default —
     the Rust verifier reads the flag and prints a loud banner."""
     assert _fresh_bundle().experimental is True
 
@@ -260,7 +260,7 @@ def test_experimental_round_trip_true():
 def test_experimental_round_trip_false():
     """Once the proof system / bundle format / verifier stabilise, the
     producer will flip this to False. Round-trip must preserve it."""
-    bundle = Bundle(
+    bundle = ZKPoXBundle(
         version=_fresh_bundle().version,
         target=_fresh_bundle().target,
         vulnerability=_fresh_bundle().vulnerability,
