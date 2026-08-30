@@ -10,8 +10,24 @@ from pathlib import Path
 from typing import Optional
 
 from core.json import load_json as _load_json
+from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
 from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory
+
+
+
+def _fence(diagram: str) -> str:
+    """Defang a generated diagram string before embedding in ```mermaid.
+
+    The generators label-sanitise via ``packages.diagram.sanitize``, but
+    the renderer is the last hop before the string lands inside a
+    markdown fence — ``sanitise_code`` neutralises embedded 3+ backtick
+    runs (zero-width space after the second backtick) and escapes
+    ANSI/BIDI/control bytes so a crafted JSON value that survived a
+    generator cannot terminate the fence and spill live markdown.
+    Benign Mermaid text (no backtick runs, printable chars) is unchanged.
+    """
+    return sanitise_code(str(diagram), max_chars=200_000)
 
 
 _FLOW_TRACE_GLOB = "flow-trace-*.json"
@@ -82,8 +98,8 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             verdict = findings_summary.generate_verdict_pie(summary_findings)
             vtype = findings_summary.generate_type_pie(summary_findings)
             body = (
-                f"```mermaid\n{verdict}\n```\n\n"
-                f"```mermaid\n{vtype}\n```"
+                f"```mermaid\n{_fence(verdict)}\n```\n\n"
+                f"```mermaid\n{_fence(vtype)}\n```"
             )
             sections.append(_section("Findings Summary", body))
         except Exception as exc:
@@ -107,7 +123,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 data = dict(data)
                 data["meta"] = {"target": target}
             diagram = context_map.generate(data)
-            body = f"_Source: `{fname}`_\n\n```mermaid\n{diagram}\n```"
+            body = f"_Source: `{fname}`_\n\n```mermaid\n{_fence(diagram)}\n```"
             sections.append(_section(title, body))
             if fname.startswith("context-map"):
                 context_map_rendered = True
@@ -131,7 +147,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 for sub_title, sub_diagram in fr_blocks:
                     sub_sections.append(_section(
                         sub_title,
-                        f"```mermaid\n{sub_diagram}\n```",
+                        f"```mermaid\n{_fence(sub_diagram)}\n```",
                         level=3,
                     ))
                 sections.append(_section(
@@ -158,7 +174,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                     )
                     body = (
                         f"_Source: `{graph_path}` (persistent /understand graph)_"
-                        f"{stale_note}\n\n```mermaid\n{diagram}\n```"
+                        f"{stale_note}\n\n```mermaid\n{_fence(diagram)}\n```"
                     )
                     sections.append(_section(
                         "Context Map from Graph Memory",
@@ -182,7 +198,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 trace_id = data.get("id", tf.stem)
                 name = data.get("name", trace_id)
                 diagram = flow_trace.generate(data)
-                body = f"_Source: `{tf.name}`_\n\n```mermaid\n{diagram}\n```"
+                body = f"_Source: `{tf.name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 trace_sections.append(_section(f"{trace_id}: {name}", body, level=3))
             except Exception as exc:
                 trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {exc}", level=3))
@@ -210,7 +226,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 disproven=disproven_data,
                 hypotheses=hyp_data,
             )
-            body = f"_Source: `attack-tree.json`_{note}\n\n```mermaid\n{diagram}\n```"
+            body = f"_Source: `attack-tree.json`_{note}\n\n```mermaid\n{_fence(diagram)}\n```"
             sections.append(_section("Attack Tree", body))
         except Exception as exc:
             sections.append(_section("Attack Tree", f"> Could not render `attack-tree.json`: {exc}"))
@@ -225,7 +241,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             hyp_list = raw if isinstance(raw, list) else raw.get("hypotheses", [])
             if hyp_list:
                 diagram = hypotheses.generate(hyp_list)
-                body = f"_Source: `hypotheses.json`_\n\n```mermaid\n{diagram}\n```"
+                body = f"_Source: `hypotheses.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 sections.append(_section("Hypotheses,Evidence Chain", body))
         except Exception as exc:
             sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {exc}"))
@@ -241,7 +257,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 data = data.get("paths") or data.get("graph_paths") or data.get("items") or []
             if isinstance(data, list):
                 diagram = graph_memory.generate_priority_paths(data)
-                body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{diagram}\n```"
+                body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 sections.append(_section("Graph Priority Paths", body))
         except Exception as exc:
             sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {exc}"))
@@ -272,7 +288,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 raise ValueError("failed to parse JSON")
             if isinstance(data, dict):
                 diagram = graph_memory.generate_diff(data)
-                body = f"_Source: `{diff_name}`_\n\n```mermaid\n{diagram}\n```"
+                body = f"_Source: `{diff_name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
                 sections.append(_section("Graph Snapshot Diff", body))
         except Exception as exc:
             sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {exc}"))
